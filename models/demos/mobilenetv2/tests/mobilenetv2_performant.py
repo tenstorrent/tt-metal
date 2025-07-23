@@ -18,10 +18,12 @@ except ModuleNotFoundError:
 def run_mobilenetv2_inference(
     device,
     device_batch_size,
+    model_location_generator,
 ):
     test_infra = create_test_infra(
         device,
         device_batch_size,
+        model_location_generator,
     )
 
     tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
@@ -53,10 +55,12 @@ def run_mobilenetv2_inference(
 def run_mobilenetv2_trace_inference(
     device,
     device_batch_size,
+    model_location_generator,
 ):
     test_infra = create_test_infra(
         device=device,
         batch_size=device_batch_size,
+        model_location_generator=model_location_generator,
     )
     tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
 
@@ -99,10 +103,12 @@ def run_mobilenetv2_trace_inference(
 def run_mobilenetv2_trace_2cqs_inference(
     device,
     device_batch_size,
+    model_location_generator,
 ):
     test_infra = create_test_infra(
         device,
         device_batch_size,
+        model_location_generator,
     )
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)

@@ -3,17 +3,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import os
-import torch
 import pytest
+
 import ttnn
+from models.demos.mobilenetv2.load_model_utils import load_torch_model
 from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
 from models.demos.mobilenetv2.tests.mobilenetv2_common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
+from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
 from models.demos.mobilenetv2.tt.model_preprocessing import (
     create_mobilenetv2_input_tensors,
     create_mobilenetv2_model_parameters,
 )
-from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -33,22 +33,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         MOBILENETV2_BATCH_SIZE,
     ],
 )
-def test_mobilenetv2(device, use_pretrained_weight, batch_size, reset_seeds):
-    # Check if weights file exists, if not, download them
-    weights_path = "models/demos/mobilenetv2/mobilenet_v2-b0353104.pth"
-    if not os.path.exists(weights_path):
-        os.system("bash models/demos/mobilenetv2/weights_download.sh")
+def test_mobilenetv2(device, use_pretrained_weight, batch_size, reset_seeds, model_location_generator):
     if use_pretrained_weight:
-        state_dict = torch.load(weights_path)
-        ds_state_dict = {k: v for k, v in state_dict.items()}
-
         torch_model = Mobilenetv2()
-        new_state_dict = {
-            name1: parameter2
-            for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items())
-            if isinstance(parameter2, torch.FloatTensor)
-        }
-        torch_model.load_state_dict(new_state_dict)
+        torch_model = load_torch_model(torch_model, model_location_generator)
     else:
         torch_model = Mobilenetv2()
         state_dict = torch_model.state_dict()

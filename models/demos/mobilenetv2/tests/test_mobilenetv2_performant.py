@@ -17,10 +17,12 @@ from models.demos.mobilenetv2.tests.mobilenetv2_performant import (
 def test_run_mobilenetv2_inference(
     device,
     device_batch_size,
+    model_location_generator,
 ):
     run_mobilenetv2_inference(
         device,
         device_batch_size,
+        model_location_generator,
     )
 
 
@@ -31,10 +33,12 @@ def test_run_mobilenetv2_inference(
 def test_run_mobilenetv2_trace_inference(
     device,
     device_batch_size,
+    model_location_generator,
 ):
     run_mobilenetv2_trace_inference(
         device,
         device_batch_size,
+        model_location_generator,
     )
 
 
@@ -44,11 +48,9 @@ def test_run_mobilenetv2_trace_inference(
     indirect=True,
 )
 @pytest.mark.parametrize("device_batch_size", [(1)])
-def test_run_mobilenetv2_trace_2cq_inference(
-    device,
-    device_batch_size,
-):
+def test_run_mobilenetv2_trace_2cq_inference(device, device_batch_size, model_location_generator):
     run_mobilenetv2_trace_2cqs_inference(
         device=device,
         device_batch_size=device_batch_size,
+        model_location_generator=model_location_generator,
     )

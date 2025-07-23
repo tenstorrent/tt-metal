@@ -47,10 +47,7 @@ def test_mobilenetv2_imagenet_demo(
 
         profiler.start(f"compile")
         mobilenetv2_trace_2cq.initialize_mobilenetv2_trace_2cqs_inference(
-            device,
-            batch_size_per_device,
-            act_dtype,
-            weight_dtype,
+            device, batch_size_per_device, act_dtype, weight_dtype, model_location_generator=model_location_generator
         )
         profiler.end(f"compile")
         model_version = "microsoft/resnet-50"
