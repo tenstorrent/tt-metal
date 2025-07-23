@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import ttnn
 
+import ttnn
 from models.demos.blackhole.resnet50.tests.resnet_test_utils import skip_resnet_if_blackhole_p100
 from models.demos.ttnn_resnet.tests.resnet50_test_infra import create_test_infra
 from models.utility_functions import is_blackhole
