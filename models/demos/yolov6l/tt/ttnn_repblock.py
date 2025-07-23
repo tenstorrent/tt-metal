@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.yolov6l.tt.ttnn_bottlerep import TtBottleRep
+from models.demos.yolov6l.tt.ttnn_bottlerep import TtBottleRep
 
 
 class TtRepBlock:

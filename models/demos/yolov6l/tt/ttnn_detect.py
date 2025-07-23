@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.yolov6l.tt.common import Yolov6l_Conv2D
+from models.demos.yolov6l.tt.common import Yolov6l_Conv2D
 
 
 class TtDetect:

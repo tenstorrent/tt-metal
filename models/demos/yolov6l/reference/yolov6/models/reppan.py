@@ -4,7 +4,7 @@
 
 import torch
 from torch import nn
-from yolov6.layers.common import BottleRep, BepC3, ConvBNReLU, BiFusion
+from yolov6.layers.common import BepC3, BiFusion, BottleRep, ConvBNReLU
 
 
 class CSPRepBiFPANNeck(nn.Module):

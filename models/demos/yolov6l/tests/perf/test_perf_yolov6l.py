@@ -9,18 +9,14 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.experimental.yolov6l.runner.performant_runner import YOLOv6lPerformantRunner
+from models.demos.yolov6l.runner.performant_runner import YOLOv6lPerformantRunner
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
-from models.utility_functions import (
-    is_wormhole_b0,
-    run_for_wormhole_b0,
-)
-from models.utility_functions import disable_persistent_kernel_cache
+from models.utility_functions import disable_persistent_kernel_cache, is_wormhole_b0, run_for_wormhole_b0
 
 
 def get_expected_times(name):
-    base = {"yolov6l": (183.7, 0.017)}
+    base = {"yolov6l": (183.7, 0.015)}
     return base[name]
 
 
@@ -77,7 +73,7 @@ def test_perf_yolov6l(
 
     expected_compile_time, expected_inference_time = get_expected_times("yolov6l")
     prep_perf_report(
-        model_name="models/experimental/yolov6l",
+        model_name="models/demos/yolov6l",
         batch_size=batch_size,
         inference_and_compile_time=inference_and_compile_time,
         inference_time=inference_time,
@@ -92,7 +88,7 @@ def test_perf_yolov6l(
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 66],
+        [1, 77],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

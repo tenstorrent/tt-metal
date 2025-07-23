@@ -7,11 +7,11 @@ import pytest
 import torch
 
 import ttnn
-from models.experimental.yolov6l.tt.model_preprocessing import (
+from models.demos.yolov6l.tt.model_preprocessing import (
     create_yolov6l_model_parameters_detect,
     load_torch_model_yolov6l,
 )
-from models.experimental.yolov6l.tt.ttnn_detect import TtDetect
+from models.demos.yolov6l.tt.ttnn_detect import TtDetect
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 

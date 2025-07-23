@@ -3,10 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-
-from models.experimental.yolov6l.tt.ttnn_cspbep_backbone import TtCSPBepBackbone
-from models.experimental.yolov6l.tt.ttnn_csprep_bifpanneck import TtCSPRepBiFPANNeck
-from models.experimental.yolov6l.tt.ttnn_detect import TtDetect
+from models.demos.yolov6l.tt.ttnn_cspbep_backbone import TtCSPBepBackbone
+from models.demos.yolov6l.tt.ttnn_csprep_bifpanneck import TtCSPRepBiFPANNeck
+from models.demos.yolov6l.tt.ttnn_detect import TtDetect
 
 
 class TtYolov6l:

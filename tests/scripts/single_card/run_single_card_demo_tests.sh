@@ -289,6 +289,11 @@ run_yolov7_demo() {
 #
 #}
 
+run_yolov6l_demo() {
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov6l/demo/demo.py
+
+}
 
 
 main() {

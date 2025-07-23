@@ -7,12 +7,13 @@ import sys
 
 import torch
 import torch.nn as nn
-import ttnn
-from models.experimental.yolov6l.reference.yolov6l_utils import fuse_model
-from ttnn.model_preprocessing import preprocess_model_parameters, infer_ttnn_module_args
-from models.experimental.yolov6l.reference.yolov6l import Model
+from ttnn.model_preprocessing import infer_ttnn_module_args, preprocess_model_parameters
 
-sys.path.append("models/experimental/yolov6l/reference/")
+import ttnn
+from models.demos.yolov6l.reference.yolov6l import Model
+from models.demos.yolov6l.reference.yolov6l_utils import fuse_model
+
+sys.path.append("models/demos/yolov6l/reference/")
 
 
 def generate_anchors(
@@ -176,7 +177,7 @@ def create_yolov6l_model_parameters_sppf(model: Model, torch_input: torch.Tensor
 def load_torch_model_yolov6l():
     weights = "tests/ttnn/integration_tests/yolov6l/yolov6l.pt"
     if not os.path.exists(weights):
-        os.system("bash models/experimental/yolov6l/weights_download.sh")
+        os.system("bash models/demos/yolov6l/weights_download.sh")
 
     ckpt = torch.load(weights, map_location=torch.device("cpu"), weights_only=False)
     model = ckpt["ema" if ckpt.get("ema") else "model"].float()

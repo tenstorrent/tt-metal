@@ -66,7 +66,7 @@ jobs:
               - models/demos/metal_BERT_large_11/tests/
               - models/demos/yolov8s_world/tests/
               - models/demos/yolov8s/tests
-              - models/experimental/yolov6l/tests/
+              - models/demos/yolov6l/tests/
 
           - name: tt_transformers
             model-list:
