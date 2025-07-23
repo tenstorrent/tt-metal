@@ -42,7 +42,7 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: 120
         env:
-          CONTAINER_NAME: ${{ env.HOME }}
+          CONTAINER_NAME: "/home/ansible"
         with:
           docker_image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:c2417bb0778b77d3092bd2f4a4c4269123d25b05
           docker_password: ${{ secrets.GITHUB_TOKEN }}
