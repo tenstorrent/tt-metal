@@ -300,8 +300,7 @@ def test_arange_tile_layout(device, start, end, step):
     if (start > end and step > 0) or (start < end and step < 0) or (step == 0):
         pytest.skip(f"Skipping invalid case: start={start}, end={end}, step={step}")
 
-    golden_arange = ttnn.get_golden_function(ttnn.arange)
-    torch_output_tensor = golden_arange(start, end, step)
+    torch_output_tensor = torch.arange(start, end, step).bfloat16()
 
     output_tensor = ttnn.arange(start, end, step, device=device, layout=ttnn.TILE_LAYOUT)
     width_dim = int(((abs(end - start) + abs(step) - 1) // abs(step)))
