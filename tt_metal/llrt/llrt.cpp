@@ -421,7 +421,7 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
                 const auto return_registers_addr =
                     hal.get_dev_addr(k_CoreType, tt_metal::HalL1MemAddrType::ETH_FW_LIVE_LINK_STATUS);
                 auto return_registers =
-                    read_hex_vec_from_core(device_id, virtual_core, return_registers_addr, 13 * sizeof(uint32_t));
+                    read_hex_vec_from_core(device_id, virtual_core, return_registers_addr, 16 * sizeof(uint32_t));
                 TT_THROW(
                     "Device {}: Timed out while waiting for active ethernet core {} to become active again."
                     "Try resetting the board. Is the firmware updated? Minimum tt-firmware version is 18.2.0. Launch "

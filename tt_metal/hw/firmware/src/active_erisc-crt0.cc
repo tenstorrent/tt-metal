@@ -8,12 +8,11 @@
 
 void __attribute__((noinline)) Application();
 
-static std::jmp_buf gJumpBuf;
+static volatile std::jmp_buf gJumpBuf;
 
-// This function is noreturn, it will not return to the caller back to _start
 [[gnu::noreturn]] static void return_to_base_fw() {
     // NOLINTNEXTLINE(cert-err52-cpp)
-    longjmp(gJumpBuf, 1);
+    longjmp(const_cast<std::jmp_buf&>(gJumpBuf), 1);
     __builtin_unreachable();
 }
 
@@ -26,28 +25,26 @@ static std::jmp_buf gJumpBuf;
 extern "C" void wzerorange(uint32_t* start, uint32_t* end);
 
 extern "C" [[gnu::section(".start")]] void _start(void) {
-    // The C++ calling convention saves ra to the stack, but we can't rely on that
-    // because this is the entry point. We must save it manually before any C++
-    // function calls.
     std::jmp_buf jump_buf;
+    volatile uint32_t* const debug_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
+    for (int i = 0; i < 32; i++) {
+        debug_dump_addr[i] = 0;
+    }
+
     // NOLINTNEXTLINE(cert-err52-cpp)
     if (setjmp(jump_buf) == 0) {
-        volatile uint32_t* const reg_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
-        for (int i = 0; i < 13; i++) {
-            reg_dump_addr[i] = 0;
-        }
-        // Clear bss before using any globals
         extern uint32_t __ldm_bss_start[];
         extern uint32_t __ldm_bss_end[];
         wzerorange(__ldm_bss_start, __ldm_bss_end);
-        memcpy(gJumpBuf, jump_buf, sizeof(jump_buf));
+
+        memcpy(const_cast<std::jmp_buf&>(gJumpBuf), jump_buf, sizeof(jump_buf));
         erisc_exit = return_to_base_fw;
+
+        debug_dump_addr[15]++;
         Application();
     }
 
-    // Exit from return_to_base_fw
-    // Dump the RISCV registers to memory at address for debugging purposes
-    volatile uint32_t* const reg_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
+    // NOLINTNEXTLINE(hicpp-no-assembler)
     __asm__ volatile(
         "sw ra, 0 * 4(%0)\n\t"
         "sw s0, 1 * 4(%0)\n\t"
@@ -63,6 +60,6 @@ extern "C" [[gnu::section(".start")]] void _start(void) {
         "sw s10, 11 * 4(%0)\n\t"
         "sw s11, 12 * 4(%0)\n\t"
         : /* no output */
-        : "r"(reg_dump_addr)
+        : "r"(debug_dump_addr)
         : "memory");
 }
