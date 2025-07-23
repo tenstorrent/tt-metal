@@ -1333,6 +1333,12 @@ CoreCoord DeviceProfiler::getPhysicalAddressFromVirtual(chip_id_t device_id, con
     return c;
 }
 
+void DeviceProfiler::setLastFDDumpAsNotDone() { this->is_last_fd_dump_done = false; }
+
+void DeviceProfiler::setLastFDDumpAsDone() { this->is_last_fd_dump_done = true; }
+
+bool DeviceProfiler::isLastFDDumpDone() const { return this->is_last_fd_dump_done; }
+
 DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
 #if defined(TRACY_ENABLE)
     ZoneScopedC(tracy::Color::Green);
@@ -1344,6 +1350,7 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
         std::filesystem::remove(log_path);
     }
 
+    this->is_last_fd_dump_done = false;
     this->current_zone_it = device_events.begin();
     device_events.reserve(
         (MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC * device->compute_with_storage_grid_size().x *
