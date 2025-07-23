@@ -57,6 +57,24 @@ xt::xarray<float> dot(const xt::xarray<float>& A, const xt::xarray<float>& B) {
     return result;
 }
 
+xt::xarray<float> generate_mask(const xt::xarray<float>& query) {
+    auto shape = query.shape();
+    size_t B = shape[0], H = shape[1], S = shape[2], d = shape[3];
+    xt::xarray<float> mask = xt::zeros<float>({B, H, S, S});
+
+    for (size_t b = 0; b < B; ++b) {
+        for (size_t h = 0; h < H; ++h) {
+            for (size_t s = 0; s < S; ++s) {
+                for (size_t w = 0; w <= s; ++w) {
+                    mask(b, h, s, w) = 1.0F;  // upper triangular part
+                }
+            }
+        }
+    }
+
+    return mask;
+}
+
 xt::xarray<float> matmul_qk(
     const xt::xarray<float>& Q,  // shape: (B, H, S, d)
     const xt::xarray<float>& K)  // shape: (B, H, S, d)
@@ -80,10 +98,9 @@ xt::xarray<float> matmul_qk(
 }
 
 xt::xarray<float> compute_sdpa_without_softmax(
-    const xt::xarray<float>& Q,  // shape: (B, H, S, d)
-    const xt::xarray<float>& K,  // shape: (B, H, S, d)
-    const xt::xarray<float>& V)  // shape: (B, H, S, d)
-{
+    const xt::xarray<float>& Q,    // shape: (B, H, S, d)
+    const xt::xarray<float>& K,    // shape: (B, H, S, d)
+    const xt::xarray<float>& V) {  // shape: (B, H, S, d)
     assert(Q.dimension() == 4 && K.dimension() == 4 && V.dimension() == 4);
     assert(Q.shape() == K.shape());
     assert(Q.shape()[0] == V.shape()[0]);  // B
@@ -178,11 +195,55 @@ xt::xarray<float> xt_composite_sdpa_fw(
     return result;
 }
 
+ttnn::Tensor composite_sdpa_fw(
+    const ttnn::Tensor& query,
+    const ttnn::Tensor& key,
+    const ttnn::Tensor& value,
+    const std::optional<ttnn::Tensor>& attn_mask) {
+    // This is a placeholder for the actual SDPA forward implementation
+    // In practice, this would call the SDPA forward kernel
+
+    using namespace ttml;
+    auto [batch_num, heads, seq_len, embedding_dim] = query.logical_shape().to_array_4D();
+    auto groups = value.logical_shape().to_array_4D()[1];
+
+    const float scale = 1.0F / std::sqrt(static_cast<float>(embedding_dim));
+    constexpr auto none = ttsl::Span<const ttnn::operations::unary::UnaryWithParam>{};
+    auto q_scaled = ttnn::multiply(query, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
+    ttnn::Tensor qk_scaled = ttnn_fixed::matmul(q_scaled, key, /*transpose_a=*/false, /*transpose_b=*/true);
+
+    // σQ @ K
+    if (attn_mask.has_value()) {
+        ttnn::Tensor mask_tensor = attn_mask.value();
+        qk_scaled = ttnn::add(
+            ttnn::multiply(mask_tensor, qk_scaled, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+            ttnn::multiply(
+                ttnn::subtract(mask_tensor, 1.F, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
+                1e9F,
+                std::nullopt,
+                std::nullopt,
+                std::nullopt,
+                none,
+                none,
+                none,
+                false),
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
+            none,
+            none,
+            none,
+            false);
+    }
+
+    auto attention_qkv = ttnn_fixed::matmul(qk_scaled, value, /*transpose_a=*/false, /*transpose_b=*/false);
+    return attention_qkv;
+}
+
 TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
     using namespace ttml;
 
-    const uint32_t B = 2U, H = 1U, S = 1024U, d = 768U;
-    const auto shape = ttnn::SmallVector<uint32_t>{B, H, S, d};
+    const uint32_t B = 1U, H = 1U, S = 1024U, d = 768U;
     const float dropout_prob = 0.8F;
 
     std::random_device rd;
@@ -190,57 +251,48 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
     xt::xarray<float> query_tensor = xt::random::rand<float>({B, H, S, d}, -1.0F, 1.0F, gen);
     xt::xarray<float> key_tensor = xt::random::rand<float>({B, H, S, d}, -1.0F, 1.0F, gen);
     xt::xarray<float> value_tensor = xt::random::rand<float>({B, H, S, d}, -1.0F, 1.0F, gen);
-
-    // xt::xarray<float> query_tensor = xt::zeros<float>({B, H, S, d});
-    // xt::xarray<float> key_tensor = xt::zeros<float>({B, H, S, d});
-
-    // Fill Q with values row-wise: Q[b][h][i][j] = i * d + j
-    // for (size_t i = 0; i < S; ++i) {
-    //     for (size_t j = 0; j < d; ++j) {
-    //         query_tensor(0, 0, i, j) = static_cast<float>(i);
-    //         key_tensor(0, 0, i, j) = static_cast<float>(i);  // same as Q for simplicity
-    //     }
-    // }
-
-    // generate symetric K matrix
-    // assert(S == d);  // to make sure K can be transposed easily
-    // auto key_tensor = generate_tilewise_symmetric_K(B, H, S);
+    xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);
 
     auto query = core::from_xtensor(query_tensor, &autograd::ctx().get_device());
     auto key = core::from_xtensor(key_tensor, &autograd::ctx().get_device());
     auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
+    auto attn_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
 
-    auto result = ttml::metal::sdpa_fw(query, key, value, std::nullopt, dropout_prob, false);
+    auto result = ttml::metal::sdpa_fw(query, key, value, attn_mask, dropout_prob, false);
 
-    auto q_by_k_transpose = ttnn_fixed::matmul(query, key, false, true);
-    auto baseline_result = ttnn_fixed::matmul(q_by_k_transpose, value, false, false);
+    auto baseline_result = composite_sdpa_fw(query, key, value, attn_mask);
     xt::xarray<float> baseline_result_xtensor = core::to_xtensor(baseline_result);
-    // xt::xarray<float> expected_result = matmul_qk(query_tensor, key_tensor);
 
     xt::xarray<float> expected_result = compute_sdpa_without_softmax(query_tensor, key_tensor, value_tensor);
 
     xt::xarray<float> result_xtensor = core::to_xtensor(result[0].value());
     assert((result_xtensor.shape() == expected_result.shape()));
 
-    float mse_result = compute_mse(expected_result, result_xtensor);
-    float mse_baseline = compute_mse(expected_result, baseline_result_xtensor);
+    // float mse_result = compute_mse(expected_result, result_xtensor);
+    // float mse_baseline = compute_mse(expected_result, baseline_result_xtensor);
 
-    fmt::print("\n MSE result: {}, baseline MSE: {}\n", mse_result, mse_baseline);
+    // fmt::print("\n MSE result: {}, baseline MSE: {}\n", mse_result, mse_baseline);
 
-    // for (size_t i = 0; i < 1U /* S */; ++i) {
-    //     for (size_t j = 0; j < d; ++j) {
-    //         float expected_value = expected_result(0, 0, i, j);
-    //         float actual_value = result_xtensor(0, 0, i, j);
+    for (size_t i = 0; i < 1U /* S */; ++i) {
+        for (size_t j = 0; j < d; ++j) {
+            float expected_value = expected_result(0, 0, i, j);
+            float actual_value = result_xtensor(0, 0, i, j);
+            float baseline_value = baseline_result_xtensor(0, 0, i, j);
 
-    //         if (std::abs(actual_value - expected_value) >= 2e-2F + std::abs(expected_value) * 3e-2F) {
-    //             std::cout << "Mismatch at (" << i << ", " << j << "): "
-    //                       << "expected " << expected_value << ", got " << actual_value << ", baseline "
-    //                       << baseline_result_xtensor(0, 0, i, j) << '\n';
-    //         }
-    //     }
-    // }
+            // if (std::abs(actual_value - expected_value) >= 2e-2F + std::abs(expected_value) * 3e-2F) {
+            //     std::cout << "Mismatch at (" << i << ", " << j << "): "
+            //               << "expected " << expected_value << ", got " << actual_value << ", baseline "
+            //               << baseline_result_xtensor(0, 0, i, j) << '\n';
+            // }
 
-    EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 3e-1F, 1e-2F));
+            if (std::abs(actual_value - baseline_value) >= 2e-2F + std::abs(baseline_value) * 3e-2F) {
+                std::cout << "Mismatch at (" << i << ", " << j << "): "
+                          << "baseline " << baseline_value << ", got " << actual_value << '\n';
+            }
+        }
+    }
+
+    EXPECT_TRUE(xt::allclose(result_xtensor, baseline_result_xtensor, 3e-1F, 1e-2F));
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQK_Batch) {

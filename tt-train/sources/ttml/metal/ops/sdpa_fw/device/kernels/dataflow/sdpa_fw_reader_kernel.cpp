@@ -37,9 +37,11 @@ void kernel_main() {
     constexpr uint32_t cb_transpose_key = tt::CBIndex::c_6;
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);  // d / TILE_W
-    constexpr uint32_t Ht = get_compile_time_arg_val(2);  // S / TILE_W
-    constexpr uint32_t packed_scaler = get_compile_time_arg_val(3);
+    constexpr uint32_t Wt = get_compile_time_arg_val(1);  // (d / TILE_W)
+    constexpr uint32_t Ht = get_compile_time_arg_val(2);  // (S / TILE_H)
+    constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
+    constexpr uint32_t minus_one_bits = get_compile_time_arg_val(4);   // used to transform mask from 1/0 to 0/-1
+    constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(5);  // used to transform mask from 0/-1 to 0/-1e9F
 
     const uint32_t kv_chunks_number = Ht;
     const uint32_t q_chunk_size = Wt;
@@ -61,15 +63,22 @@ void kernel_main() {
     const InterleavedAddrGenFast</* is_dram */ true> value_address_generator = {
         .bank_base_address = value_address, .page_size = tile_bytes, .data_format = data_format};
 
-    // const InterleavedAddrGenFast</* is_dram */ true> mask_address_generator = {
-    //     .bank_base_address = mask_address, .page_size = tile_bytes, .data_format = data_format};
+    const InterleavedAddrGenFast</* is_dram */ true> mask_address_generator = {
+        .bank_base_address = mask_address, .page_size = tile_bytes, .data_format = data_format};
 
     constexpr uint16_t one = 0x00003F80;  // (bfloat16)1.0 -> uint16_t
     constexpr uint16_t zero = 0x0;
-    // TODO: check if I need the cb with scaler, or using mul_unary_tile(cb, scaler) will be better
-    generate_tile_with_packed_bfloat16_value(cb_scaler, packed_scaler);
+
     generate_tile_with_bfloat16_value(
         cb_reduction_scaler, one);  // generate tile with bfloat16 value 1.0 for reduction scaler
+
+    const float scaler = uint32_to_float(scaler_bits);
+    const float minus_one = uint32_to_float(minus_one_bits);
+    const float custom_inf = uint32_to_float(custom_inf_bits);
+
+    DPRINT << "SDPA FW: num_rows_to_process=" << num_rows_to_process << ", start_row=" << start_row << ", Wt=" << Wt
+           << ", Ht=" << Ht << ", scaler=" << scaler << ", minus_one=" << minus_one << ", custom_inf=" << custom_inf
+           << ENDL();
 
     // while we process one q_chunk (row of Q), we stream all K and V chunks (rows of K and V)
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
@@ -86,6 +95,21 @@ void kernel_main() {
         }
         noc_async_read_barrier();
         cb_push_back(cb_query, q_chunk_size);
+
+        // TODO[improve]: I can read attn_mask by tiles while I'm reading K and V, because I need one tile of attn_mask
+        // for one row of K and V row index of Q define the row index of (QK^T) matrix, so I need to read the same row
+        // of attn_mask
+        uint32_t attn_mask_idx = (start_row + i) * Ht;
+        cb_reserve_back(cb_attn_mask, Ht);
+        uint32_t attn_mask_l1_write_addr = get_write_ptr(cb_attn_mask);
+        for (uint32_t col = 0; col < Ht; ++col) {
+            noc_async_read_tile(attn_mask_idx + col, mask_address_generator, attn_mask_l1_write_addr);
+            attn_mask_l1_write_addr += tile_bytes;
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_attn_mask, Ht);
+
+        // print_tile(cb_attn_mask, 0, false);
 
         // stream K and V by rows while processing Q row
         for (uint32_t h = 0; h < kv_chunks_number; ++h) {  // read all

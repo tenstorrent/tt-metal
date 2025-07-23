@@ -4,6 +4,7 @@
 
 #include "sdpa_fw_program_factory.hpp"
 
+#include <bit>
 #include <cmath>
 
 #include "metal/ops/common/program_utils.hpp"
@@ -39,7 +40,7 @@ constexpr auto kTempAccumCbIndex = tt::CBIndex::c_7;     // used for accumulatin
 constexpr auto kOutputCbIndex = tt::CBIndex::c_8;
 
 constexpr uint32_t kNumScalerTiles = 1U;
-constexpr uint32_t kTempAccumTiles = 2U;
+constexpr uint32_t kTempAccumTiles = 1U;  //[Debug] should be 2U
 
 }  // namespace
 
@@ -223,8 +224,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t k_chunk_size = Wt;
     const uint32_t v_chunk_size = Wt;
 
-    const float scale = 1.0F / std::sqrt(static_cast<float>(Et));  // calculate scale factor
-    uint32_t packed_scaler = pack_two_bfloat16_to_uint32(scale);
+    uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(Et)));  // calculate scale factor
+    uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);  // used to transform mask from 1/0 to 0/-1
+    uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);  // used to transform mask from 0/-1 to 0/-1e9F
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -275,7 +277,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         create_circular_buffer(program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Wt);
 
     auto cb_attn_mask = create_circular_buffer(
-        program, all_cores, KAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+        program, all_cores, KAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Ht_);
 
     auto cb_scaler = create_circular_buffer(
         program, all_cores, kScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
@@ -338,7 +340,11 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     SDPAForwardKernels kernels;
     kernels.reader = create_reader_kernel(
-        program, all_cores, /* reader_compile_args */ {block_size, Wt, Ht_, packed_scaler}, defines, kReaderKernelPath);
+        program,
+        all_cores,
+        /* reader_compile_args */ {block_size, Wt, Ht_, scaler, minus_one, custom_inf},
+        defines,
+        kReaderKernelPath);
 
     kernels.writer = create_writer_kernel(
         program, all_cores, /* writer_compile_args */ {block_size, Wt, Ht_}, defines, kWriterKernelPath);
@@ -352,7 +358,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         num_rows_per_core_group_1,  // per_core_block_cnt
         block_size,                 // per_core_block_size
         Wt,                         // num_inner / TILE_W
-        Ht_                         // num_seq_len / TILE_H
+        Ht_,                        // num_seq_len / TILE_H
+        scaler,                     // sqrt(Et) - sdpa scaler factor
+        minus_one,                  // used to transform mask from 1/0 to 0/-1
+        custom_inf                  // used to transform mask from 0/-1 to 0/-1e9F
     };
 
     kernels.compute_group_1 =
@@ -364,7 +373,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             num_rows_per_core_group_2,  // per_core_block_cnt
             block_size,                 // per_core_block_size
             Wt,                         // num_inner / TILE_W
-            Ht_                         // num_seq_len / TILE_H
+            Ht_,                        // num_seq_len / TILE_H
+            scaler,                     // sqrt(Et) - sdpa scaler factor
+            minus_one,                  // used to transform mask from 1/0 to 0/-1
+            custom_inf                  // used to transform mask from 0/-1 to 0/-1e9F
         };
 
         kernels.compute_group_2 =

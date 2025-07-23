@@ -13,6 +13,8 @@ void kernel_main() {
 
     constexpr uint32_t cb_output = tt::CBIndex::c_8;
 
+    constexpr uint32_t cb_scaler = tt::CBIndex::c_4;
+
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);  // number of tiles in inner dimension
     constexpr uint32_t Ht = get_compile_time_arg_val(2);  // number of tiles in sequence dimension
@@ -28,6 +30,9 @@ void kernel_main() {
     uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; r++) {
         uint32_t idx = r * Wt;
+
+        // cb_wait_front(cb_scaler, onetile);
+        // print_tile(cb_scaler, 0, false);
 
         cb_wait_front(cb_output, Wt);
         uint32_t l1_read_addr = get_read_ptr(cb_output);
