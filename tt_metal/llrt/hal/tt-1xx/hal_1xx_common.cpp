@@ -149,7 +149,7 @@ std::vector<std::string> HalJitBuildQueryBase::srcs(const HalJitBuildQueryInterf
                     break;
                 case 1:
                     if (params.is_fw) {
-                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/subordinate_idle_erisc.cc");
+                        srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/subordinate_erisc.cc");
                     } else {
                         srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/idle_erisck.cc");
                     }

@@ -80,7 +80,7 @@ inline void run_subordinate_eriscs(dispatch_core_processor_masks enables) {
 }
 
 inline void service_base_fw() {
-    reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
+    // reinterpret_cast<void (*)()>((uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->service_eth_msg_ptr))();
     if (is_port_up()) {
         // Write to MEM_AERISC_LIVE_LINK_STATUS_BASE for debug
         reinterpret_cast<void (*)(uint32_t)>(
@@ -90,10 +90,11 @@ inline void service_base_fw() {
 
 inline void wait_subordinate_eriscs() {
     WAYPOINT("SEW");
-    while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
+    do {
         invalidate_l1_cache();
         service_base_fw();
-    }
+        __asm__ volatile("fence");
+    } while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
     WAYPOINT("SED");
 }
 
@@ -107,21 +108,7 @@ inline void initialize_local_memory() {
     l1_to_local_mem_copy(__ldm_data_start, data_image, ldm_data_size);
 }
 
-#if 0
-extern "C" [[gnu::section(".start")]]
-int _start() {
-#endif
-void Application() {
-#if 0
-    // Enable GPREL optimizations.
-    asm(R"ASM(
-	.option push
-	.option norelax
-	lui gp,%hi(__global_pointer$)
-	addi gp,gp,%lo(__global_pointer$)
-	.option pop
-	)ASM");
-#endif
+void __attribute__((noinline)) Application(void) {
     WAYPOINT("I");
     configure_csr();
     initialize_local_memory();
@@ -136,13 +123,6 @@ void Application() {
     mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
     mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
 
-    // Stall for the host to set this flag to 1 otherwise we could exit
-    // the base firmware while the host is still initializing
-    while (gEnableFwFlag[0] != 1) {
-        // Wait for sync from host
-        invalidate_l1_cache();
-    }
-
     set_deassert_addresses();
 
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
@@ -150,9 +130,6 @@ void Application() {
         noc_local_state_init(n);
     }
 
-    // There may be some random data from the base FW
-    // Using ncrisc_noc_full_sync() instead of noc_async_full_barrier() to avoid
-    // RECORD_NOC_EVENT()
     ncrisc_noc_full_sync();
 
     // #18384: This register was left dirty by eth training.
@@ -162,6 +139,7 @@ void Application() {
 
     deassert_all_reset();
     wait_subordinate_eriscs();
+    gEnableFwFlag[0] = 1;
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
 
@@ -174,7 +152,10 @@ void Application() {
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
-            if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
+            if (gEnableFwFlag[0] != 1) {
+                return;
+            } else if (
+                go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
                 // Set the rd_ptr on workers to specified value
                 mailboxes->launch_msg_rd_ptr = 0;
                 if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
@@ -183,10 +164,6 @@ void Application() {
                     // Notify dispatcher that this has been done
                     internal_::notify_dispatch_core_done(dispatch_addr);
                 }
-            } else if (gEnableFwFlag[0] != 1) {
-                internal_::disable_erisc_app();
-                mailboxes->go_messages[0].signal = RUN_MSG_DONE;
-                return;
             } else {
                 service_base_fw();
             }
@@ -212,8 +189,6 @@ void Application() {
             // one time here instead of setting it everytime in dataflow_api.
             NOC_CMD_BUF_WRITE_REG(0 /* noc */, NCRISC_WR_CMD_BUF, NOC_AT_LEN_BE_1, 0);
 
-            flush_erisc_icache();
-
             enum dispatch_core_processor_masks enables =
                 (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
 
@@ -224,6 +199,7 @@ void Application() {
 
                 constexpr int index =
                     static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
+                flush_erisc_icache();
                 uint32_t kernel_config_base =
                     firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
                 uint32_t kernel_lma =
@@ -247,5 +223,6 @@ void Application() {
         }
     }
 
-    internal_::disable_erisc_app();
+    // Getting here is an invalid state
+    __builtin_unreachable();
 }

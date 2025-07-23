@@ -8,6 +8,10 @@
 #include <tracy/Tracy.hpp>
 
 #include "metal_context.hpp"
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
+#include <string>
 #include <fmt/ranges.h>
 #include <umd/device/types/cluster_descriptor_types.h>
 #include "dispatch/dispatch_settings.hpp"
@@ -991,15 +995,18 @@ void MetalContext::initialize_firmware(
                     tt_cxy_pair(device_id, virtual_core),
                     jit_build_config.fw_launch_addr);
             } else {
-                tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, true);
-                // Active ethernet firmware launched immediately. Note, reset_cores (called before this),
-                // enable_fw_flag is set to 0. So we when launch, active_erisc.cc will stall until we set it to 1.
+                // Active ethernet firmware launched immediately. Set the enable flag to 1 so FW doesn't exit
+                // immediately.
+                // tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, true);
+                // Wait for ack not required because we wait for the done message
+                constexpr uint32_t mailbox_index = 0;
                 tt::llrt::internal_::send_msg_to_eth_mailbox(
                     device_id,
                     virtual_core,
                     tt_metal::FWMailboxMsg::ETH_MSG_RELEASE_CORE,
+                    mailbox_index,
                     {/*l1 addr to exec*/ jit_build_config.fw_launch_addr_value},
-                    true);  // Wait for ack is not needed because we will wait for cores to be ready
+                    false);
             }
 
             break;
@@ -1016,6 +1023,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     launch_msg_t launch_msg{};
     go_msg_t go_msg{};
     std::memset(&launch_msg, 0, sizeof(launch_msg_t));
+    go_msg.all = 0;
     go_msg.signal = RUN_MSG_INIT;
 
     // Populate core info, which will be written to device
@@ -1285,6 +1293,8 @@ bool MetalContext::erisc_app_still_running(chip_id_t device_id, CoreCoord virtua
 
 // Send exit_erisc_kernel to the launch message
 void MetalContext::erisc_send_exit_signal(chip_id_t device_id, CoreCoord virtual_core, bool is_idle_eth) {
+    go_msg_t go_msg{};
+    std::memset(&go_msg, 0, sizeof(go_msg_t));
     DeviceAddr launch_addr = hal_->get_dev_addr(
         is_idle_eth ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH,
         HalL1MemAddrType::LAUNCH);

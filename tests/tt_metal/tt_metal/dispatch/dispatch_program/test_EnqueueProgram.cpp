@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -1355,6 +1355,56 @@ TEST_F(UnitMeshCQFixture, ActiveEthEnqueueDummyProgram) {
     }
 }
 
+// Test to see we can launch a kernel at the same time on both active ethernet cores
+// If they can't handshake it means only 1 was able to launch
+TEST_F(UnitMeshCQFixture, ActiveEthTwoRiscsHandshake) {
+    const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        HalProgrammableCoreType::ACTIVE_ETH);
+    if (erisc_count < 2) {
+        GTEST_SKIP() << "Skipping test as this test requires 2 ethernet cores";
+    }
+    for (const auto& mesh_device : devices_) {
+        auto& cq = mesh_device->mesh_command_queue();
+        distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+
+        for (const auto& eth_core : mesh_device->get_devices()[0]->get_active_ethernet_cores(true)) {
+            auto program = tt::tt_metal::CreateProgram();
+            auto primary = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/local_handshake_2.cpp",
+                eth_core,
+                tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_0, .processor = DataMovementProcessor::RISCV_0}
+            );
+            auto secondary = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/local_handshake_2.cpp",
+                eth_core,
+                tt::tt_metal::EthernetConfig{.noc = tt::tt_metal::NOC::NOC_0, .processor = DataMovementProcessor::RISCV_1}
+            );
+
+            uint32_t unreserved_l1 = hal::get_erisc_l1_unreserved_base();
+            uint32_t init_value = rand();
+            log_info(tt::LogTest,
+                "Test active ethernet handshake for eth_core: {} DM0 and DM1, init value: {} unreserved_l1: 0x{:x}",
+                eth_core.str(),
+                init_value, unreserved_l1);
+
+            std::vector<uint32_t> primary_kernel_args = {1, unreserved_l1, init_value};
+            std::vector<uint32_t> secondary_kernel_args = {0, unreserved_l1, init_value};
+
+            tt::tt_metal::SetRuntimeArgs(program, primary, eth_core, primary_kernel_args);
+            tt::tt_metal::SetRuntimeArgs(program, secondary, eth_core, secondary_kernel_args);
+
+            distributed::MeshWorkload workload;
+            distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+            distributed::EnqueueMeshWorkload(cq, workload, false);
+        }
+
+        distributed::Finish(cq);
+    }
+}
+
 // Sanity test for setting and verifying common and unique runtime args to single cores via ERISC. Some arch may return
 // 0 active eth cores, that's okay.
 TEST_F(UnitMeshCQFixture, ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementErisc) {
@@ -1816,7 +1866,6 @@ TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesCompute) {
 TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesEth) {
     GTEST_SKIP() << "Mesh device does not support logical / relative coordinates on Eth";
     for (const auto& device : devices_) {
-        local_test_functions::test_my_coordinates(device, tt::RISCV::ERISC0);
         if (!does_device_have_active_eth_cores(device->get_devices()[0])) {
             GTEST_SKIP() << "Skipping test because device " << device->id()
                          << " does not have any active ethernet cores";
@@ -1826,8 +1875,7 @@ TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesEth) {
         for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
             log_info(tt::LogTest, "Test logical coordinates active ethernet DM{}", erisc_idx);
             local_test_functions::test_my_coordinates(
-                device,
-                local_test_functions::datamovement_processor_to_riscv(static_cast<DataMovementProcessor>(erisc_idx)));
+                device, {HalProgrammableCoreType::ACTIVE_ETH, HalProcessorClassType::DM, erisc_idx});
         }
     }
 }
@@ -1848,29 +1896,6 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesCompute)
         device_, {HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, 0});
     local_test_functions::test_my_coordinates(
         device_, {HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, 0}, 1);
-}
-
-// Ensure the eth core can access their own logical coordinate. Same binary enqueued to multiple cores.
-TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesEth) {
-    for (const auto& device : devices_) {
-        if (!does_device_have_active_eth_cores(device->get_devices()[0])) {
-            GTEST_SKIP() << "Skipping test because device " << device->id()
-                         << " does not have any active ethernet cores";
-        }
-
-        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
-            HalProgrammableCoreType::ACTIVE_ETH);
-        for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
-            for (uint32_t cq_id = 0; cq_id < device->num_hw_cqs(); cq_id++) {
-                log_info(tt::LogTest, "Test logical coordinates CQ{} active ethernet DM{}", cq_id, erisc_idx);
-                local_test_functions::test_my_coordinates(
-                    device,
-                    local_test_functions::datamovement_processor_to_riscv(
-                        static_cast<DataMovementProcessor>(erisc_idx)),
-                    cq_id);
-            }
-        }
-    }
 }
 
 }  // end namespace multicore_tests
