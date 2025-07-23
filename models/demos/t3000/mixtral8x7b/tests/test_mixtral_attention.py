@@ -1,18 +1,21 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import pytest
 import torch
 from loguru import logger
 
 import ttnn
 from models.demos.t3000.mixtral8x7b.reference.model import Attention, precompute_freqs_cis
 from models.demos.t3000.mixtral8x7b.tt.mixtral_attention import TtMixtralAttention
+from models.demos.t3000.mixtral8x7b.tt.mixtral_ccl import TT_CCL
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import get_single_rot_mat, prepare_inputs_ttnn
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 from models.utility_functions import comp_allclose, comp_pcc
 from ttnn import ConcatMeshToTensor
 
 
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mixtral_attention_inference(t3k_mesh_device, reset_seeds):
     pcc = 0.99
     dtype = ttnn.bfloat8_b
@@ -29,7 +32,8 @@ def test_mixtral_attention_inference(t3k_mesh_device, reset_seeds):
     reference_model = Attention(args=model_args)
     reference_model.load_state_dict(partial_state_dict)
 
-    tt_model = TtMixtralAttention(t3k_mesh_device, state_dict, args=model_args, layer_num=0, dtype=dtype)
+    tt_ccl = TT_CCL(t3k_mesh_device)
+    tt_model = TtMixtralAttention(t3k_mesh_device, tt_ccl, state_dict, args=model_args, layer_num=0, dtype=dtype)
 
     current_rot_mat, rot_matrix = get_single_rot_mat(
         model_args.head_dim,
