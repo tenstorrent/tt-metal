@@ -60,7 +60,7 @@ def f1_score(y_true, y_pred):
 
 def evaluation(device, res, model_type, model, input_dtype, input_memory_config=None, model_name=None, config=None):
     if model_name == "vanilla_unet":
-        from models.experimental.functional_vanilla_unet.demo import demo_utils
+        from models.demos.vanilla_unet.demo import demo_utils
         from collections import defaultdict
 
         root_dir = "models/experimental/segmentation_evaluation/imageset"
@@ -78,7 +78,7 @@ def evaluation(device, res, model_type, model, input_dtype, input_memory_config=
             args = argparse.Namespace(
                 device="cpu",
                 batch_size=1,
-                weights="models/experimental/functional_vanilla_unet/unet.pt",
+                weights="models/demos/vanilla_unet/unet.pt",
                 images=patient_path,
                 image_size=(480, 640),
                 predictions=patient_output_path,
@@ -96,10 +96,7 @@ def evaluation(device, res, model_type, model, input_dtype, input_memory_config=
                 if model_type == "torch_model":
                     y_pred = model(x)
                 else:
-                    ttnn_input_tensor = ttnn.from_torch(
-                        x.permute(0, 2, 3, 1), device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG
-                    )
-                    y_pred = model(device, ttnn_input_tensor)
+                    y_pred = model.run(x)
                     y_pred = ttnn.to_torch(y_pred)
                     y_pred = y_pred.permute(0, 3, 1, 2).to(torch.float32)
 
@@ -551,17 +548,19 @@ def evaluation(device, res, model_type, model, input_dtype, input_memory_config=
         ("torch_model"),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": (7 * 8192) + 1730, "trace_region_size": 1605632, "num_command_queues": 2}],
+    indirect=True,
+)
 @pytest.mark.parametrize("res", [(480, 640)])
-def test_vanilla_unet(device, model_type, res, model_location_generator, reset_seeds):
-    from models.experimental.functional_vanilla_unet.reference.unet import UNet
-    from models.experimental.functional_vanilla_unet.ttnn.ttnn_unet import TtUnet
-    from models.experimental.functional_vanilla_unet.demo.demo import create_custom_preprocessor
-    from ttnn.model_preprocessing import preprocess_model_parameters
+def test_vanilla_unet(device, model_type, res, model_location_generator, reset_seeds, batch_size=1):
+    from models.demos.vanilla_unet.reference.unet import UNet
+    from models.demos.vanilla_unet.runner.performant_runner import VanillaUNetPerformantRunner
 
-    weights_path = "models/experimental/functional_vanilla_unet/unet.pt"
+    weights_path = "models/demos/vanilla_unet/unet.pt"
     if not os.path.exists(weights_path):
-        os.system("bash models/experimental/functional_vanilla_unet/weights_download.sh")
+        os.system("bash models/demos/vanilla_unet/weights_download.sh")
 
     state_dict = torch.load(weights_path, map_location=torch.device("cpu"))
     ds_state_dict = {k: v for k, v in state_dict.items()}
@@ -577,10 +576,18 @@ def test_vanilla_unet(device, model_type, res, model_location_generator, reset_s
     reference_model.load_state_dict(new_state_dict)
     reference_model.eval()
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(None), device=None
+    # parameters = preprocess_model_parameters(
+    #     initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(None), device=None
+    # )
+    # ttnn_model = TtUnet(device=device, parameters=parameters, model=reference_model)
+
+    ttnn_model = VanillaUNetPerformantRunner(
+        device,
+        batch_size,
+        act_dtype=ttnn.bfloat8_b,
+        weight_dtype=ttnn.bfloat8_b,
+        model_location_generator=None,
     )
-    ttnn_model = TtUnet(device=device, parameters=parameters, model=reference_model)
 
     if not os.path.exists("models/experimental/segmentation_evaluation/imageset"):
         os.system("python models/experimental/segmentation_evaluation/dataset_download.py vanilla_unet")
