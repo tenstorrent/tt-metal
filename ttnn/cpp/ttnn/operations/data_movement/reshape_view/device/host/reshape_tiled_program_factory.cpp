@@ -299,7 +299,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    tt::tt_metal::IDevice* device = input_tensor.device();
+    tt::tt_metal::distributed::MeshDevice* device = input_tensor.device();
 
     tt::tt_metal::Buffer* input_buffer = input_tensor.buffer();
     tt::tt_metal::Buffer* output_buffer = output_tensor.buffer();

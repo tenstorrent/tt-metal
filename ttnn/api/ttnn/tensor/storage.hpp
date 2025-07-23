@@ -26,11 +26,9 @@ struct HostStorage {
 
 struct DeviceStorage {
     std::vector<distributed::MeshCoordinate> coords;
-    std::shared_ptr<Buffer> buffer;
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer;
 
     DeviceStorage() = default;
-    DeviceStorage(std::shared_ptr<Buffer> buffer_);
     DeviceStorage(
         std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> coords_);
 
@@ -42,7 +40,7 @@ struct DeviceStorage {
 
     bool is_allocated() const;
 
-    IDevice* get_device() const;
+    distributed::MeshDevice* get_device() const;
 
     // Returns true if the tensor spans across all devices in a mesh.
     bool is_uniform_storage() const;

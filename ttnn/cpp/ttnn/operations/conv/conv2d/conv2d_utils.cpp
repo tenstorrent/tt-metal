@@ -1096,17 +1096,6 @@ KernelStrideFoldingResult compute_kernel_stride_folding_params(
         .mm_conv = (kernel_size[0] == stride[0] && kernel_size[1] == stride[1])};
 }
 
-template std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config<IDevice>(
-    IDevice* device,
-    const ttnn::Tensor& input_tensor_,
-    const Conv2dConfig& conv_config,
-    uint32_t batch_size,
-    uint32_t height,
-    uint32_t width,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    bool is_mm_conv);
-
 template std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config<MeshDevice>(
     MeshDevice* device,
     const ttnn::Tensor& input_tensor_,
@@ -1117,18 +1106,6 @@ template std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input
     uint32_t in_channels,
     uint32_t out_channels,
     bool is_mm_conv);
-
-template std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor_if_required<IDevice>(
-    IDevice* device,
-    const ttnn::Tensor& input_tensor_,
-    const Conv2dConfig& conv_config,
-    uint32_t batch_size,
-    uint32_t height,
-    uint32_t width,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    bool is_mm_conv,
-    bool auto_shard);
 
 template std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor_if_required<MeshDevice>(
     MeshDevice* device,
@@ -1142,16 +1119,6 @@ template std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_resha
     bool is_mm_conv,
     bool auto_shard);
 
-template std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config<IDevice>(
-    const Conv2dConfig& conv_config,
-    uint32_t batch_size,
-    ttnn::Shape input_tensor_shape,
-    ttnn::Shape output_tensor_shape,
-    bool is_mm_conv,
-    IDevice* device,
-    Layout input_tensor_layout,
-    const std::optional<ParallelConfig>& input_tensor_parallel_config);
-
 template std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config<MeshDevice>(
     const Conv2dConfig& conv_config,
     uint32_t batch_size,
@@ -1162,17 +1129,7 @@ template std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_conf
     Layout input_tensor_layout,
     const std::optional<ParallelConfig>& input_tensor_parallel_config);
 
-template DeviceComputeKernelConfig get_conv_default_compute_kernel_config<tt::tt_metal::IDevice>(
-    tt::tt_metal::IDevice* device);
-
 template DeviceComputeKernelConfig get_conv_default_compute_kernel_config<ttnn::MeshDevice>(ttnn::MeshDevice* device);
-
-template ttnn::Tensor fold_tensor<IDevice>(
-    const ttnn::Tensor& tensor,
-    tt::tt_metal::IDevice* device,
-    std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 4> padding_n4);
 
 template ttnn::Tensor fold_tensor<MeshDevice>(
     const ttnn::Tensor& tensor,

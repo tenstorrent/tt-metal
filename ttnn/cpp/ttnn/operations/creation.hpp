@@ -67,7 +67,8 @@ Tensor arange_impl(
     TensorSpec spec{
         ttnn::Shape{static_cast<uint32_t>(size)}, TensorLayout{data_type, PageConfig{layout}, output_mem_config}};
 
-    return Tensor::from_vector(std::move(owned_buffer), spec, device.has_value() ? std::addressof(device->get()) : nullptr);
+    return Tensor::from_vector(
+        std::move(owned_buffer), spec, device.has_value() ? std::addressof(device->get()) : nullptr);
 }
 
 template <typename T>
@@ -281,9 +282,20 @@ struct EmptyLike {
         Layout layout_value = layout.value_or(tensor.layout());
         DataType dtype_value = dtype.value_or(tensor.dtype());
         MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
+
+        // Determine the device to use for allocation
+        MeshDevice* target_device = nullptr;
+        if (device.has_value()) {
+            target_device = &device->get();
+        } else if (tensor.storage_type() == StorageType::DEVICE) {
+            target_device = tensor.mesh_device();
+        } else {
+            TT_THROW("Tensor must be allocated on device when no device parameter is provided");
+        }
+
         return allocate_tensor_on_mesh(
             TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
-            device.has_value() ? &device->get() : tensor.mesh_device());
+            target_device);
     }
 };
 

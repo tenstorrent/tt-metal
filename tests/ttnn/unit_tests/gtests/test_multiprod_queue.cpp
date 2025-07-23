@@ -44,7 +44,7 @@ TEST_F(MultiProducerCommandQueueTest, DISABLED_Stress) {
     // Spawn 2 application level threads intefacing with the same device through the async engine.
     // This leads to shared access of the work_executor and host side worker queue.
     // Test thread safety.
-    IDevice* device = this->device_;
+    distributed::MeshDevice* device = this->device_;
 
     const ttnn::Shape tensor_shape{1, 1, 1024, 1024};
     const MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
