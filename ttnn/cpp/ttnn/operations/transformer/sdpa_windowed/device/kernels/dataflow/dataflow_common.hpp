@@ -31,10 +31,8 @@ void fill_zeros_async(uint32_t write_addr, uint32_t tile_bytes) {
 template <uint32_t tile_bytes>
 void fill_tile_zeros(uint32_t cb_id, uint32_t tile_id) {
     static_assert(tile_bytes % 4 == 0, "tile_bytes must be a multiple of 4");
-
     uint32_t write_addr = get_write_ptr(cb_id) + tile_id * tile_bytes;
     fill_zeros_async(write_addr, tile_bytes);
-    noc_async_read_barrier();
 }
 
 class TensorTileShape {
@@ -62,7 +60,7 @@ public:
 };
 
 template <bool is_dram = true, uint32_t tile_bytes>
-void read_chunk_with_padding(
+uint32_t async_read_chunk_with_padding(
     const InterleavedAddrGenFast<is_dram>& reader,
     const uint32_t cb_id,
     uint32_t start_tile_id,
@@ -112,8 +110,24 @@ void read_chunk_with_padding(
             fill_tile_zeros<tile_bytes>(cb_id, tile_id);
         }
     }
-    noc_async_read_barrier();
 
+    return num_tiles;
+}
+
+template <bool is_dram = true, uint32_t tile_bytes>
+void read_chunk_with_padding(
+    const InterleavedAddrGenFast<is_dram>& reader,
+    const uint32_t cb_id,
+    uint32_t start_tile_id,
+    const uint32_t src_rows,
+    const uint32_t src_cols,
+    const uint32_t dst_rows,
+    const uint32_t dst_cols,
+    const uint32_t barrier_threshold,
+    const bool transpose = false) {
+    auto num_tiles = async_read_chunk_with_padding<is_dram, tile_bytes>(
+        reader, cb_id, start_tile_id, src_rows, src_cols, dst_rows, dst_cols, barrier_threshold, transpose);
+    noc_async_read_barrier();
     cb_push_back(cb_id, num_tiles);
 }
 
