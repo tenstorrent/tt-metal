@@ -609,7 +609,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         num_remote_receiver_buffer_slots,
         num_downstream_sender_buffer_slots);
 
-    log_info(
+    log_trace(
         tt::LogOp,
         "is_dateline {} is_dateline_upstream {} is_dateline_upstream_adj_dev {}, is_dateline_upstream_adj_dev_upstream "
         "{}",
@@ -617,11 +617,11 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         is_dateline_upstream,
         is_dateline_upstream_adj_dev,
         is_dateline_upstream_adj_dev_upstream);
-    log_info(tt::LogOp, "num_sender_buffer_slots: {}", num_sender_buffer_slots);
-    log_info(tt::LogOp, "num_remote_sender_buffer_slots: {}", num_remote_sender_buffer_slots);
-    log_info(tt::LogOp, "num_receiver_buffer_slots: {}", num_receiver_buffer_slots);
-    log_info(tt::LogOp, "num_remote_receiver_buffer_slots: {}", num_remote_receiver_buffer_slots);
-    log_info(tt::LogOp, "num_downstream_sender_buffer_slots: {}", num_downstream_sender_buffer_slots);
+    log_trace(tt::LogOp, "num_sender_buffer_slots: {}", num_sender_buffer_slots);
+    log_trace(tt::LogOp, "num_remote_sender_buffer_slots: {}", num_remote_sender_buffer_slots);
+    log_trace(tt::LogOp, "num_receiver_buffer_slots: {}", num_receiver_buffer_slots);
+    log_trace(tt::LogOp, "num_remote_receiver_buffer_slots: {}", num_remote_receiver_buffer_slots);
+    log_trace(tt::LogOp, "num_downstream_sender_buffer_slots: {}", num_downstream_sender_buffer_slots);
 
     size_t total_sender_slots = std::accumulate(
         num_sender_buffer_slots.begin(), num_sender_buffer_slots.begin() + this->num_used_sender_channels, size_t{0});
@@ -630,26 +630,6 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         num_receiver_buffer_slots.begin() + this->num_used_receiver_channels,
         size_t{0});
     std::size_t total_slot_count = total_sender_slots + total_receiver_slots;
-
-    for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
-        log_info(
-            tt::LogOp,
-            "Sender Channel {}: {} buffers, {} bytes per buffer, {} total bytes",
-            i,
-            num_sender_buffer_slots[i],
-            channel_buffer_size_bytes,
-            this->sender_channels_size_bytes[i]);
-    }
-
-    for (uint32_t i = 0; i < this->num_used_receiver_channels; i++) {
-        log_info(
-            tt::LogOp,
-            "Receiver Channel {}: {} buffers, {} bytes per buffer, {} total bytes",
-            i,
-            num_receiver_buffer_slots[i],
-            channel_buffer_size_bytes,
-            this->receiver_channels_size_bytes[i]);
-    }
 
     TT_FATAL(
         total_slot_count * channel_buffer_size_bytes <= available_channel_buffering_space,
