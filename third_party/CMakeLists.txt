@@ -326,11 +326,17 @@ CPMAddPackage(
 # mlp-op-perf
 ####################################################################################################################
 if(BUILD_MLP_OP_PERF)
-    CPMAddPackage(NAME mlpack GITHUB_REPOSITORY mlpack/mlpack GIT_TAG 8fc23ba711075402c9cd77cfa0938a9d33256ca2)
+    CPMAddPackage(
+        NAME mlpack
+        GITHUB_REPOSITORY mlpack/mlpack
+        GIT_TAG 8fc23ba711075402c9cd77cfa0938a9d33256ca2
+        OPTIONS
+            "CMAKE_BUILD_PARALLEL_LEVEL 8"
+    )
 
     CPMAddPackage(
         NAME mlp-op-perf
         GIT_REPOSITORY git@github.com:xanderchin/mlp-op-perf.git
-        GIT_TAG b44aa830418b59cfe124bc77548238022f621259
+        GIT_TAG 8419cf26c2a369aac87e7636b92bde3e04880048
     )
 endif()
