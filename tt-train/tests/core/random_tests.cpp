@@ -15,7 +15,7 @@
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
 
-class InitTests : public ::testing::Test {
+class RandomGenerationTests : public ::testing::Test {
 protected:
     void SetUp() override {
         // Set a fixed seed for reproducible tests
@@ -26,7 +26,7 @@ protected:
     }
 };
 
-TEST_F(InitTests, ParallelUniformInitDeterminism) {
+TEST_F(RandomGenerationTests, ParallelUniformInitDeterminism) {
     // Test that parallel initialization produces deterministic results for a
     // fixed seed.
     constexpr size_t size = 1024 * 256 * 384;  // ~100M elements
@@ -45,7 +45,7 @@ TEST_F(InitTests, ParallelUniformInitDeterminism) {
     EXPECT_EQ(vec1, vec2);
 }
 
-TEST_F(InitTests, UniformInitsGoodMeanAndRange) {
+TEST_F(RandomGenerationTests, UniformInitsGoodMeanAndRange) {
     // Test that parallel and sequential produce different but valid results
     constexpr size_t size = 1024 * 256 * 384;  // ~100M elements
 
@@ -86,9 +86,9 @@ TEST_F(InitTests, UniformInitsGoodMeanAndRange) {
     EXPECT_NEAR(sequential_mean, 0.0, 0.01);
 }
 
-TEST_F(InitTests, ParallelGenerateRelativePerformance) {
-    constexpr size_t nano_gpt_size = 1024 * 256 * 384;  // ~100M elements
-    auto bench_it = [](auto& size) {
+TEST_F(RandomGenerationTests, ParallelGenerateRelativePerformance) {
+    auto bench_it = [](size_t expt, size_t max_threads) -> float {
+        size_t size = 1 << expt;
         std::vector<float> parallel_vec(size);
         std::vector<float> sequential_vec(size);
 
@@ -102,15 +102,17 @@ TEST_F(InitTests, ParallelGenerateRelativePerformance) {
         sequential_times.reserve(num_runs);
 
         auto uniform_factory = [&]() { return std::uniform_real_distribution<float>(range.a, range.b); };
-        // Run multiple times to get median
-        for (int run = 0; run < num_runs; ++run) {
+        // Run multiple times to get median (skip first run to warm up)
+        for (int run = 0; run < num_runs + 1; ++run) {
             // Time parallel initialization
             auto start = std::chrono::high_resolution_clock::now();
             ttml::core::random::parallel_generate(
-                std::span{parallel_vec.data(), parallel_vec.size()}, uniform_factory, 42);
+                std::span{parallel_vec.data(), parallel_vec.size()}, uniform_factory, 42, max_threads);
             auto end = std::chrono::high_resolution_clock::now();
 
-            parallel_times.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start));
+            if (run > 0) {
+                parallel_times.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start));
+            }
 
             // Time sequential initialization
             start = std::chrono::high_resolution_clock::now();
@@ -118,7 +120,9 @@ TEST_F(InitTests, ParallelGenerateRelativePerformance) {
                 std::span{sequential_vec.data(), sequential_vec.size()}, uniform_factory, 42);
             end = std::chrono::high_resolution_clock::now();
 
-            sequential_times.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start));
+            if (run > 0) {
+                sequential_times.push_back(std::chrono::duration_cast<std::chrono::nanoseconds>(end - start));
+            }
         }
 
         // Calculate median times
@@ -135,18 +139,36 @@ TEST_F(InitTests, ParallelGenerateRelativePerformance) {
         auto parallel_median = calculate_median(parallel_times);
         auto sequential_median = calculate_median(sequential_times);
 
-        // Print timing results for manual inspection
-        std::cout << "Size: " << size << std::endl;
-        std::cout << "Parallel initialization took: " << parallel_median.count() << " ns" << std::endl;
-        std::cout << "Sequential initialization took: " << sequential_median.count() << " ns" << std::endl;
-        std::cout << "Parallel initialization is "
-                  << ((float)sequential_median.count() / (float)parallel_median.count()) << "x faster" << std::endl;
+        float speedup = (float)sequential_median.count() / (float)parallel_median.count();
+        return speedup;
     };
 
-    bench_it(nano_gpt_size);
+    auto sizes = std::vector<size_t>();
+    for (int i = 0; i < 20; i++) {
+        sizes.push_back(i);
+    }
+
+    auto thread_limits = std::vector<size_t>();
+    for (int i = 2; i <= std::thread::hardware_concurrency(); i++) {
+        thread_limits.push_back(i);
+    }
+
+    auto speedup_map = std::map<size_t, std::pair<size_t, float>>();
+
+    for (auto size : sizes) {
+        for (auto thread_limit : thread_limits) {
+            auto speedup = bench_it(size, thread_limit);
+            if (speedup > 1.0) {
+                fmt::println("first speedup observed for expt: {}", size);
+                fmt::println("max_threads: {}, speedup: {}", thread_limit, speedup);
+                speedup_map[size] = {thread_limit, speedup};
+                break;
+            }
+        }
+    }
 }
 
-TEST_F(InitTests, ModelInitBench) {
+TEST_F(RandomGenerationTests, ModelInitBench) {
     tt::tt_metal::distributed::MeshShape mesh_shape{1, 2};
     std::vector<int> device_ids{0, 1};
     ttml::autograd::ctx().open_device(mesh_shape, device_ids);

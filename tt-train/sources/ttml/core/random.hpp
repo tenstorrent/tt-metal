@@ -28,8 +28,8 @@ void parallel_generate(
     uint32_t seed,
     uint32_t max_threads = std::thread::hardware_concurrency()) {
     auto rng = std::mt19937{seed};
-    constexpr size_t min_size = 1 << 16;  // determined empirically on loudbox that this is about where we start seeing
-                                          // gains; need to improve and measure it as a function of the processors too.
+    constexpr size_t min_size = 1 << 12;  // determined empirically that this is where we see an advantage over
+                                          // sequential generation even with 2 threads.
     if (seq.size() < min_size) {
         sequential_generate(seq, dist_factory, seed);
         return;
