@@ -30,8 +30,12 @@ uint32_t get_packed_value(const Tensor tensor, const ttnn::PadValue pad_value) {
                     return pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
                 } else {
                     TT_FATAL(
-                        tensor.dtype() == DataType::FLOAT32 or tensor.dtype() == DataType::UINT32,
-                        "only supporting bfloat16, float32, and uint32");
+                        tensor.dtype() == DataType::FLOAT32 or tensor.dtype() == DataType::UINT32 or
+                            tensor.dtype() == DataType::INT32,
+                        "only supporting bfloat16, float32, uint32, and int32");
+                    // if(tensor.dtype() == DataType::INT32) {
+                    //     return (int32_t)((pad_value));
+                    // }
                     return (uint32_t)((pad_value));
                 }
             } else if constexpr (std::is_same_v<T, uint32_t>) {

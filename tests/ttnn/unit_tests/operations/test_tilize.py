@@ -22,7 +22,7 @@ shapes = [[[1, 1, 32, 32]], [[3, 1, 320, 384]], [[1, 1, 128, 7328]]]
     "tilize_args",
     (
         {
-            "dtype": [ttnn.bfloat16],
+            "dtype": [ttnn.int32],
             "layout": [ttnn.ROW_MAJOR_LAYOUT],
             "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)],
             "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),

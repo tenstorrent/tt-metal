@@ -20,7 +20,7 @@ import ttnn
     "untilize_args",
     (
         {
-            "dtype": [ttnn.bfloat16],
+            "dtype": [ttnn.int32],
             "layout": [ttnn.TILE_LAYOUT],
             "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)],
             "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
