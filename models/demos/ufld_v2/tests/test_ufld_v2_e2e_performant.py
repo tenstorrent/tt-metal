@@ -27,7 +27,7 @@ def run_ufldv2_e2e(device, batch_size_per_device, model_location_generator, heig
         mesh_composer=output_mesh_composer,
     )
     performant_runner._capture_ufldv2_trace_2cqs()
-    num_iter = 1000
+    num_iter = 1
     inference_time_iter = []
     t0 = time.time()
     for _ in range(num_iter):

@@ -95,17 +95,19 @@ class UFLDPerformanceRunnerInfra:
         # print(f"Time after assigning: {time.time() - start:.6f} sec")
         start = time.time()
         n, c, h, w = torch_input_tensor.shape
-        print("Sudhanshu", n, self.num_devices)
+        print("batch size total", n, self.num_devices)
         if c == 3:  # for sharding config of padded input
             c = min_channels
         input_mem_config = ttnn.create_sharded_memory_config(
-            [n, c, h, w],
+            [n // self.num_devices, c, h, w],
             ttnn.CoreGrid(x=8, y=8),
             ttnn.ShardStrategy.HEIGHT,
         )
         # print(f"Time after creating shard config: {time.time() - start:.6f} sec")
         start = time.time()
-        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        tt_inputs_host = ttnn.from_torch(
+            torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.inputs_mesh_mapper
+        )
         print(f"Time after from_torch: {time.time() - start:.6f} sec")
         start = time.time()
         return tt_inputs_host, input_mem_config
