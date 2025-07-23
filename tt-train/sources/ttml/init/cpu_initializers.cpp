@@ -34,18 +34,14 @@ xt::xarray<float> constant_init(const ttnn::Shape& shape, float value) {
 
 void uniform_init(std::vector<float>& vec, UniformRange range) {
     auto& [a, b] = range;
-    std::function<std::uniform_real_distribution<float>(void)> dist_factory = [&]() {
-        return std::uniform_real_distribution<float>(a, b);
-    };
+    auto dist_factory = [&]() { return std::uniform_real_distribution<float>(a, b); };
     uint32_t seed = autograd::ctx().get_seed();
     core::random::parallel_generate(std::span{vec.data(), vec.size()}, dist_factory, seed);
 }
 
 void normal_init(std::vector<float>& vec, NormalParams params) {
     auto& [mean, stddev] = params;
-    std::function<std::normal_distribution<float>(void)> dist_factory = [&]() {
-        return std::normal_distribution<float>(mean, stddev);
-    };
+    auto dist_factory = [&]() { return std::normal_distribution<float>(mean, stddev); };
     uint32_t seed = autograd::ctx().get_seed();
     core::random::parallel_generate(std::span{vec.data(), vec.size()}, dist_factory, seed);
 }
