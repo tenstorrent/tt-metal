@@ -17,6 +17,7 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
@@ -59,6 +60,7 @@ void py_module_types(py::module& module) {
     py::class_<MeshMapperConfig::Shard>(module, "PlacementShard");
 
     py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice");
+    py::class_<MeshDeviceView>(module, "MeshDeviceView");
     py::class_<MeshShape>(module, "MeshShape", "Shape of a mesh device.");
     py::class_<MeshCoordinate>(module, "MeshCoordinate", "Coordinate within a mesh device.");
     py::class_<MeshCoordinateRange>(module, "MeshCoordinateRange", "Range of coordinates within a mesh device.");
@@ -322,6 +324,7 @@ void py_module(py::module& module) {
                    1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
                    2. For Grid-to-Grid or Line-to-Grid reshaping: physical connectivity must be possible with current devices
            )doc")
+        .def("get_view", &MeshDevice::get_view, py::return_value_policy::reference_internal)
         .def("__repr__", &MeshDevice::to_string)
         .def(
             "create_sub_device_manager",
@@ -409,6 +412,16 @@ void py_module(py::module& module) {
             "sfpu_inf",
             [](MeshDevice* device) { return tt::tt_metal::hal::get_inf(); },
             R"doc(Returns Infinity value for current architecture.)doc");
+
+    auto py_mesh_device_view = static_cast<py::class_<MeshDeviceView>>(module.attr("MeshDeviceView"));
+    py_mesh_device_view.def("shape", &MeshDeviceView::shape, py::return_value_policy::reference_internal)
+        .def("num_devices", &MeshDeviceView::num_devices)
+        .def("fully_local", &MeshDeviceView::fully_local)
+        .def("is_local", &MeshDeviceView::is_local, py::arg("coord"))
+        .def("contains", &MeshDeviceView::contains, py::arg("coord"))
+        .def("get_device", &MeshDeviceView::get_device, py::arg("coord"), py::return_value_policy::reference_internal)
+        .def("find_device", &MeshDeviceView::find_device, py::arg("device_id"))
+        .def("find_device_id", &MeshDeviceView::find_device_id, py::arg("coord"));
 
     auto py_tensor_to_mesh =
         static_cast<py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>>(module.attr("CppTensorToMesh"));
