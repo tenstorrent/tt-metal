@@ -57,6 +57,7 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
         state_dict=state_dict,
         state_dict_prefix=state_dict_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),
+        max_columns_per_device=model_args.max_columns_per_device_lm_head,
     )
 
     torch_input = torch.randn(1, 1, seq_len, model_args.dim)
