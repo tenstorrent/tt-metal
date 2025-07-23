@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -36,16 +36,20 @@ if square_matrices_only:
 
 # Create a combined dtype+fidelity+source label for legend and color
 df["legend_label"] = (
-    df["dtype"].str.replace("DataType.", "", regex=False) + "_" +
-    df["math_fidelity"].str.replace("MathFidelity.", "", regex=False) +
-    " (" + df["source"] + ")"
+    df["dtype"].str.replace("DataType.", "", regex=False)
+    + "_"
+    + df["math_fidelity"].str.replace("MathFidelity.", "", regex=False)
+    + " ("
+    + df["source"]
+    + ")"
 )
 df["dtype_source"] = df["legend_label"]  # for compatibility below
 
 # Create a column without source for pairing
 df["dtype_fidelity"] = (
-    df["dtype"].str.replace("DataType.", "", regex=False) + "_" +
-    df["math_fidelity"].str.replace("MathFidelity.", "", regex=False)
+    df["dtype"].str.replace("DataType.", "", regex=False)
+    + "_"
+    + df["math_fidelity"].str.replace("MathFidelity.", "", regex=False)
 )
 
 # Get unique values for dtype_fidelity and sources
@@ -67,22 +71,16 @@ n150_combinations = df[df["source"] == "n150"][["matrix_size", "dtype_fidelity"]
 p150_combinations = df[df["source"] == "p150"][["matrix_size", "dtype_fidelity"]].drop_duplicates()
 
 # Merge to find common combinations
-common_combinations = pd.merge(
-    n150_combinations, p150_combinations, 
-    on=["matrix_size", "dtype_fidelity"], 
-    how="inner"
-)
+common_combinations = pd.merge(n150_combinations, p150_combinations, on=["matrix_size", "dtype_fidelity"], how="inner")
 
 # Filter dataset to only include matching combinations
-df = pd.merge(
-    df, common_combinations, 
-    on=["matrix_size", "dtype_fidelity"], 
-    how="inner"
-)
+df = pd.merge(df, common_combinations, on=["matrix_size", "dtype_fidelity"], how="inner")
 
 # If dataframe is empty after filtering, raise an error
 if len(df) == 0:
-    raise ValueError("No matching data between n150 and p150 after filtering! Check if matrices sizes and dtypes align between datasets.")
+    raise ValueError(
+        "No matching data between n150 and p150 after filtering! Check if matrices sizes and dtypes align between datasets."
+    )
 
 # Determine matrix elements (m×k×n) for sorting
 df["total_elements"] = df["m"] * df["k"] * df["n"]
@@ -97,7 +95,7 @@ for matrix_size in matrix_sizes:
     if not group.empty:
         total_elements = group["total_elements"].iloc[0]
         matrix_elements_dict[matrix_size] = total_elements
-        
+
 # Sort matrix sizes by their total elements
 matrix_sizes_sorted = sorted(matrix_elements_dict.keys(), key=lambda x: matrix_elements_dict[x])
 
@@ -114,10 +112,10 @@ for matrix_size in matrix_sizes_sorted:
     group = df[df["matrix_size"] == matrix_size]
     dtype_count = 0
     cluster_start = current_pos
-    
+
     # Get unique dtype_fidelity combos for this matrix size
     combos = group["dtype_fidelity"].unique()
-    
+
     # Sort combos based on utilization from n150 (or p150 if n150 doesn't exist)
     def get_sort_value(combo):
         n150_entry = group[(group["dtype_fidelity"] == combo) & (group["source"] == "n150")]
@@ -127,37 +125,37 @@ for matrix_size in matrix_sizes_sorted:
         if not p150_entry.empty:
             return p150_entry["Utilization (vs 8x8 full grid)"].values[0]
         return 0
-    
+
     sorted_combos = sorted(combos, key=get_sort_value)
-    
+
     # Process each dtype_fidelity combo, placing all sources side by side
     for combo in sorted_combos:
         # Process each source for this combo
         for source in unique_sources:
             source_entry = group[(group["dtype_fidelity"] == combo) & (group["source"] == source)]
-            
+
             if not source_entry.empty:
                 entry = source_entry.iloc[0]
                 pos = current_pos
                 # Use Utilization instead of TFLOPs
                 height = entry["Utilization (vs 8x8 full grid)"]
                 # Convert from percentage string to float if needed
-                if isinstance(height, str) and '%' in height:
-                    height = float(height.strip('%'))
+                if isinstance(height, str) and "%" in height:
+                    height = float(height.strip("%"))
                 positions.append(pos)
                 heights.append(height)
-                
+
                 # Get base color for this dtype_fidelity and adjust for source
                 base_color = dtype_fidelity_colors[combo]
                 adjusted_color = mcolors.to_rgba(base_color, alpha=source_shade[source])
                 dtype_colors.append(adjusted_color)
-                
+
                 dtype_count += 1
                 current_pos += bar_width
-        
+
         # Add gap between different dtype_fidelity combos within the cluster
         current_pos += 0.02  # Reduce spacing to minimum
-            
+
     if dtype_count > 0:
         # Center label under the cluster
         cluster_center = cluster_start + (dtype_count - 1) * bar_width / 2
@@ -179,7 +177,7 @@ if positions:
     rightmost = max(positions) + bar_width * 2
     plt.xlim(leftmost, rightmost)
 
-plt.xticks(cluster_centers, labels, rotation=45, ha='right')
+plt.xticks(cluster_centers, labels, rotation=45, ha="right")
 plt.ylabel("Utilization (vs 8x8 full grid) %")
 plt.xlabel("Matrix Size")
 plt.title(f"Grid Utilization by Matrix Size and Data Type ({sources_text})")
@@ -191,22 +189,23 @@ legend_labels = []
 # Create a custom legend that shows the different shades by source
 for dtype_fidelity in unique_dtype_fidelity:
     base_color = dtype_fidelity_colors[dtype_fidelity]
-    
+
     for source in unique_sources:
-        legend_handles.append(plt.Rectangle(
-            (0, 0), 1, 1, 
-            color=mcolors.to_rgba(base_color, alpha=source_shade[source])
-        ))
+        legend_handles.append(
+            plt.Rectangle((0, 0), 1, 1, color=mcolors.to_rgba(base_color, alpha=source_shade[source]))
+        )
         legend_labels.append(f"{dtype_fidelity} ({source})")
 
 # Even tighter margins with much less bottom space
 plt.subplots_adjust(left=0.03, right=0.97, bottom=0.15)  # Reduce bottom margin significantly from 0.3 to 0.15
 
 plt.legend(
-    legend_handles, legend_labels, title="DType_Fidelity (Source)",
-    loc='lower center',
+    legend_handles,
+    legend_labels,
+    title="DType_Fidelity (Source)",
+    loc="lower center",
     bbox_to_anchor=(0.5, -0.25),  # Move legend way up from -0.6 to -0.25
-    ncol=min(len(legend_labels), 4)
+    ncol=min(len(legend_labels), 4),
 )
 
 filename = "tech_reports/GEMM_FLOPS/utilization_by_matrix_size_and_type"
