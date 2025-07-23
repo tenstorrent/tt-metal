@@ -85,8 +85,18 @@ struct Conv2dConfig {
     // Kernel Stride Folding (Issue: #22378)
     // Enables tensor folding optimization where:
     // - Input tensor (NHWC) is reshaped to (N, H/stride[0], W/stride[1], C * stride[0] * stride[1])
-    // - Weight tensor (OC, IC, kernel[0], kernel[1]) is reshaped and permuted to (1, 1, IC * kernel[0] * kernel[1], OC)
-    // Currently only applied when strides match kernel dimensions
+    // - Weight tensor (OC, IC, kernel[0], kernel[1]) is reshaped and permuted to (1, 1, IC * (kernel[0] + pad_h) *
+    // (kernel[1] + pad_w), OC).
+    //     Note: The zero padding applied to the weight tensor is implicit and not passed by the user via the padding
+    //     argument, where pad_h = kernel[0] % stride[0] and pad_w = kernel[1] % stride[1].
+    //
+    // Note: This optimization is currently only applied when all of the following conditions are met:
+    //    1. The input tensor is stored in DRAM memory.
+    //    2. The input tensor's height and width are divisible by the stride dimensions.
+    //    3. Stride values are equal to or less than the kernel dimensions.
+    //    4. Input tensor's padding must be zero.
+    //    5. Input tensor data type is not BFLOAT8_B.
+
     bool enable_kernel_stride_folding = false;
     // ===============================================================
 
