@@ -54,7 +54,10 @@ BINARY_MULT_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(
 
 def run_all_gather_replicate_impl(
     mesh_device,
-    input_shape,
+    B_in,
+    M_in,
+    K_in,
+    N_in,
     cluster_axis,
     input_dtype,
     num_links,
@@ -95,14 +98,14 @@ def run_all_gather_replicate_impl(
     num_buffers = 8
     ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, SUB_DEVICE_CRS, 0) for _ in range(num_buffers)]
 
-    logger.info(f"Input shape: {input_shape}")
+    logger.info(f"Input B, M, K, N: {B_in}, {M_in}, {K_in}, {N_in}")
 
     ##################################
     ##### Set up input tensors/configs
     ##################################
 
     # Input shapes
-    M, N = input_shape[2:]
+    M, N = M_in, K_in // cluster_shape[cluster_axis]
     N_per_shard = round_up(math.ceil(N / input_num_cores), ttnn.TILE_SIZE)
     input_shape = [*cluster_shape, M, N]
 
@@ -210,7 +213,6 @@ def run_all_gather_replicate_impl(
     ##################################
     ##### Run the op
     ##################################
-
     def run_op(n_iters, store_all_results=True):
         outs = []
         for i in range(n_iters):

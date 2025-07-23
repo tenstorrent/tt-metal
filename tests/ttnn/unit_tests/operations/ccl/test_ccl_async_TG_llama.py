@@ -305,10 +305,9 @@ def test_all_reduce_tg_llama(
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "input_shape, cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
+    "cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
     [
         (
-            [1, 1, 32, 960],
             1,
             3,
             30,
@@ -371,7 +370,6 @@ def test_all_reduce_tg_llama(
 )
 def test_all_gather_replicate_tg_llama(
     mesh_device,
-    input_shape,
     cluster_axis,
     in0_dtype,
     in1_dtype,
@@ -399,7 +397,10 @@ def test_all_gather_replicate_tg_llama(
 ):
     run_all_gather_replicate_impl(
         mesh_device,
-        input_shape,
+        B,
+        M,
+        K,
+        N,
         cluster_axis,
         in0_dtype,
         num_links,
