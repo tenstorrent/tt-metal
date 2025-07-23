@@ -29,7 +29,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_multidevice_scatter_t3000 import 
 @pytest.mark.parametrize("per_device_output_shape, dim", [((1, 1, 8, 7168), 2)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("cluster_axis", [0, 1])
+@pytest.mark.parametrize("cluster_axis", [0, 1, None])
 @pytest.mark.parametrize("mesh_axes", [[0, 1]])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG])
