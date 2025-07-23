@@ -15,7 +15,21 @@ on:
         default: "22.04"
         type: string
       tests-to-run:
-        description: "Comma-separated list of test job names to run (e.g., 'sd-unit-tests,ttnn-unit-tests') or 'all'"
+        description: |
+          Comma-separated list of test job names to run, or 'all' to run everything.
+          Possible values:
+            - sd-unit-tests
+            - fast-dispatch-unit-tests
+            - fabric-unit-tests
+            - ttnn-unit-tests
+            - models-unit-tests
+            - cpp-unit-tests
+            - tt-train-cpp-unit-tests
+            - run-profiler-regression
+            - t3000-fast-tests
+            - build-docs
+            - build
+          Example: 'sd-unit-tests,ttnn-unit-tests'
         required: false
         type: string
         default: "all"
