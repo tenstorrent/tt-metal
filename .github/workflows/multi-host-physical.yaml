@@ -38,10 +38,8 @@ jobs:
         uses: ./.github/actions/docker-run
         timeout-minutes: 120
         env:
-          LOGURU_LEVEL: "INFO"
-          PYTHONPATH: "/work"
-          CONTAINER_HOME: "/work"
           RUNNER_UID: 0
+          RUNNER_GID: 0
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!'}}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -54,7 +52,7 @@ jobs:
             -v ${{ github.workspace }}/docker-job:/work
             -v /dev/hugepages-1G:/dev/hugepages-1G
             -v /etc/rankfile:/etc/rankfile:ro
-            -v /etc/ssh/multihost:/root/.ssh:ro
+            -v ${{ env.HOME }}/.ssh:${{ env.HOME }}/.ssh:ro
             --device /dev/tenstorrent
             --privileged
           install_wheel: true
