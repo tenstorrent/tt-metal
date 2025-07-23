@@ -13,7 +13,6 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
     get_lib_dtype,
 )
-from models.utility_functions import skip_for_grayskull
 from collections import Counter
 from loguru import logger
 from scipy import stats
@@ -100,7 +99,6 @@ def run_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc=False, comput
     ), f"P-value ({p_value_from_test:.6f}) is less than alpha ({alpha}). Rejecting H₀: The sampler appears to be biased."
 
 
-@skip_for_grayskull("Requires wormhole_b0 or blackhole to run")
 @pytest.mark.parametrize("p_value", [0.5])
 @pytest.mark.parametrize(
     "shape",
@@ -117,7 +115,6 @@ def test_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc, p_value):
     run_bernoulli(shape, in_dtype, out_dtype, device, is_out_alloc=is_out_alloc, p_value=p_value)
 
 
-@skip_for_grayskull("Requires wormhole_b0 or blackhole to run")
 @pytest.mark.parametrize(
     "shape",
     [[512, 512], [5, 8, 70, 40]],
