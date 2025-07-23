@@ -207,15 +207,15 @@ class LlamaRotaryEmbedding(RotaryEmbedding):
     def _set_cos_sin_cache(self, seq_len: int, device: Any, dtype: torch.dtype) -> None:
         self.max_seq_len_cached = seq_len
         freqs = 1.0 / (self.base ** (torch.arange(0, self.dim, 2)[: (self.dim // 2)].float() / self.dim))
-        t = torch.arange(seq_len)
+        t = torch.arange(seq_len * 2.0)
         freqs = self.apply_scaling(freqs)
         freqs = torch.outer(t, freqs).float()
         cos = torch.cos(freqs)
         sin = torch.sin(freqs)
-        cos, sin = gather_cos_sin(torch.arange(seq_len // 2), cos, sin)
+        cos, sin = gather_cos_sin(torch.arange(seq_len), cos, sin)
 
-        self.register_buffer("cos_cached", (torch.cos(freqs)).to(dtype), persistent=False)
-        self.register_buffer("sin_cached", (torch.sin(freqs)).to(dtype), persistent=False)
+        self.register_buffer("cos_cached", cos.to(dtype), persistent=False)
+        self.register_buffer("sin_cached", sin.to(dtype), persistent=False)
 
 
 def rotary_embedding_factory(
