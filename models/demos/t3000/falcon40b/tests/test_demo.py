@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+import ttnn
 from models.demos.t3000.falcon40b.demo.demo import run_falcon_demo_kv
 from models.demos.t3000.falcon40b.tt.model_config import model_config_entries
 
@@ -41,6 +42,7 @@ def test_demo_generate_reference_output(
 
 
 @pytest.mark.parametrize("max_seq_len", (128,))
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_demo(
     max_seq_len,
     model_location_generator,
