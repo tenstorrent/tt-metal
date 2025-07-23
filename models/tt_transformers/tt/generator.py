@@ -80,7 +80,7 @@ class Generator:
             last_token_idx = seq_len - 1
             prefill_seq_len = get_padded_prefill_len(seq_len)
 
-            logger.info(f"Prefilling User {user_id + 1} up to {prefill_seq_len} tokens")
+            logger.info(f"Prefilling User {user_id + 1} up to {seq_len} tokens")
 
             # Extracting data for the current user
             # If page_table is not provided, we keep track of the relative/model user_id through group_user_id
