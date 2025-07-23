@@ -37,8 +37,7 @@ void TTProfiler::call_device_noop(
         return;
     }
 
-    auto fake_tensor =
-        ttml::core::from_vector({1.F}, ttml::core::create_shape({1, 1, 1, 1}), device, ttnn::Layout::ROW_MAJOR);
+    auto fake_tensor = ttml::core::from_vector({1.F}, ttnn::Shape({1, 1, 1, 1}), device, ttnn::Layout::ROW_MAJOR);
     for (size_t i = 0; i < count; ++i) {
         [[maybe_unused]] auto _ = ttml::metal::profiler_no_op(fake_tensor, noop_identifier);
     }
