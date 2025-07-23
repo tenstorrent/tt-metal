@@ -70,7 +70,7 @@
             "op_name": "ReduceScatter_FF3",
             "kernel_duration": 9456.963068181818,
             "op_to_op": 911.3131313131312,
-            "first_to_last_start": 723.1111111111111,
+            "first_to_last_start": 2042,
             "non-overlapped-dispatch-time": 7952.344444444445,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,

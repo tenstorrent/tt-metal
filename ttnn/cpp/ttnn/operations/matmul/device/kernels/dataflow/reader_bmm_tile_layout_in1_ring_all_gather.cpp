@@ -36,6 +36,32 @@ void read_block_from_dram(
     noc_async_read_barrier();
 }
 
+void do_signaling(uint32_t& rt_args_idx) {
+    const uint32_t pv_core_x = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t pv_core_y = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t pv_semaphore = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
+    volatile tt_l1_ptr uint32_t* pv_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pv_semaphore);
+    const bool is_privilaged = get_arg_val<uint32_t>(rt_args_idx++) == 1;
+    if (is_privilaged) {
+        const uint32_t target_sem_value = get_arg_val<uint32_t>(rt_args_idx++);
+        const uint32_t multicast_start_x = get_arg_val<uint32_t>(rt_args_idx++);
+        const uint32_t multicast_start_y = get_arg_val<uint32_t>(rt_args_idx++);
+        const uint32_t multicast_end_x = get_arg_val<uint32_t>(rt_args_idx++);
+        const uint32_t multicast_end_y = get_arg_val<uint32_t>(rt_args_idx++);
+        const uint32_t num_signalling_semaphores = get_arg_val<uint32_t>(rt_args_idx++);
+        const uint32_t signalling_semaphore = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
+        const uint64_t signalling_semaphore_address =
+            get_noc_multicast_addr(multicast_start_x, multicast_start_y, multicast_end_x, multicast_end_y, 0) |
+            signalling_semaphore;
+        noc_semaphore_wait(pv_semaphore_ptr, target_sem_value);
+        noc_semaphore_set(pv_semaphore_ptr, 1);
+        noc_semaphore_set_multicast(pv_semaphore, signalling_semaphore_address, num_signalling_semaphores);
+    } else {
+        const uint64_t sem_addr = get_noc_addr(pv_core_x, pv_core_y, pv_semaphore);
+        noc_semaphore_inc(sem_addr, 1);
+    }
+}
+
 void kernel_main() {
     // Compile time args
     constexpr const bool in1_is_dram_interleaved = get_compile_time_arg_val(0);
@@ -55,34 +81,7 @@ void kernel_main() {
     uint32_t core_type = get_arg_val<uint32_t>(rt_args_idx++);
     if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE || core_type == (uint32_t)CORE_TYPE::HOP_CORE) {
         if constexpr (needs_signaler) {
-            const uint32_t pv_core_x = get_arg_val<uint32_t>(rt_args_idx++);
-            const uint32_t pv_core_y = get_arg_val<uint32_t>(rt_args_idx++);
-            const uint32_t pv_semaphore = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
-            volatile tt_l1_ptr uint32_t* pv_semaphore_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pv_semaphore);
-            const bool is_privilaged = get_arg_val<uint32_t>(rt_args_idx++) == 1;
-            if (is_privilaged) {
-                // Get parameters
-                const uint32_t target_sem_value = get_arg_val<uint32_t>(rt_args_idx++);
-                const uint32_t mc_sx = get_arg_val<uint32_t>(rt_args_idx++);
-                const uint32_t mc_sy = get_arg_val<uint32_t>(rt_args_idx++);
-                const uint32_t mc_ex = get_arg_val<uint32_t>(rt_args_idx++);
-                const uint32_t mc_ey = get_arg_val<uint32_t>(rt_args_idx++);
-                const uint32_t num_rs_semaphores = get_arg_val<uint32_t>(rt_args_idx++);
-                const uint32_t rs_semaphore = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
-                // Find the rs semaphore multicast address
-                const uint64_t rs_semaphore_address =
-                    get_noc_multicast_addr(mc_sx, mc_sy, mc_ex, mc_ey, 0) | rs_semaphore;
-                // Wait for privilage core to reach value
-                noc_semaphore_wait(pv_semaphore_ptr, target_sem_value);
-                // Set the memory address to 1 for broadcast to RS cores
-                noc_semaphore_set(pv_semaphore_ptr, 1);
-                // Broadcast to RS cores
-                noc_semaphore_set_multicast(pv_semaphore, rs_semaphore_address, num_rs_semaphores);
-            } else {
-                // Increment the privilage core semaphore by 1
-                noc_semaphore_inc(get_noc_addr(pv_core_x, pv_core_y, pv_semaphore), 1);
-            }
+            do_signaling(rt_args_idx);
         }
         return;
     }
@@ -186,35 +185,7 @@ void kernel_main() {
         // Signal Here
         if constexpr (needs_signaler) {
             if (b == 0) {
-                const uint32_t pv_core_x = get_arg_val<uint32_t>(rt_args_idx++);
-                const uint32_t pv_core_y = get_arg_val<uint32_t>(rt_args_idx++);
-                const uint32_t pv_semaphore = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
-                volatile tt_l1_ptr uint32_t* pv_semaphore_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pv_semaphore);
-                const bool is_privilaged = get_arg_val<uint32_t>(rt_args_idx++) == 1;
-                if (is_privilaged) {
-                    // Get parameters
-                    const uint32_t target_sem_value = get_arg_val<uint32_t>(rt_args_idx++);
-                    const uint32_t mc_sx = get_arg_val<uint32_t>(rt_args_idx++);
-                    const uint32_t mc_sy = get_arg_val<uint32_t>(rt_args_idx++);
-                    const uint32_t mc_ex = get_arg_val<uint32_t>(rt_args_idx++);
-                    const uint32_t mc_ey = get_arg_val<uint32_t>(rt_args_idx++);
-                    const uint32_t num_rs_semaphores = get_arg_val<uint32_t>(rt_args_idx++);
-                    const uint32_t rs_semaphore = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
-                    // Find the rs semaphore multicast address
-                    const uint64_t rs_semaphore_address =
-                        get_noc_multicast_addr(mc_sx, mc_sy, mc_ex, mc_ey, 0) | rs_semaphore;
-                    // Wait for privilage core to reach value
-                    noc_semaphore_wait(pv_semaphore_ptr, target_sem_value);
-                    // Set the memory address to 1 for broadcast to RS cores
-                    noc_semaphore_set(pv_semaphore_ptr, 1);
-                    // Broadcast to RS cores
-                    noc_semaphore_set_multicast(pv_semaphore, rs_semaphore_address, num_rs_semaphores);
-                } else {
-                    // Increment the privilage core semaphore by 1
-                    uint64_t sem_addr = get_noc_addr(pv_core_x, pv_core_y, pv_semaphore);
-                    noc_semaphore_inc(sem_addr, 1);
-                }
+                do_signaling(rt_args_idx);
             }
         }
     }
