@@ -41,6 +41,8 @@ jobs:
       - name: Run tests on multiple hosts
         uses: ./.github/actions/docker-run
         timeout-minutes: 120
+        env:
+          CONTAINER_NAME: ${{ env.HOME }}
         with:
           docker_image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:c2417bb0778b77d3092bd2f4a4c4269123d25b05
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -53,7 +55,7 @@ jobs:
             -v ${{ github.workspace }}/docker-job:/work
             -v /dev/hugepages-1G:/dev/hugepages-1G
             -v /etc/rankfile:/etc/rankfile:ro
-            -v "${{ env.HOME }}/.ssh:${{ env.HOME }}/.ssh:ro"
+            -v "${{ env.CONTAINER_NAME }}/.ssh:${{ env.CONTAINER_NAME }}/.ssh:ro"
             --device /dev/tenstorrent
             --privileged
           install_wheel: true
