@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <ttnn/tensor/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <tt-metalium/device.hpp>
-#include <ttnn/tensor/types.hpp>
 
 namespace tt::tt_metal {
 
@@ -28,10 +27,7 @@ void append_sharded_args(
 
     size_t rank = tensor_shape.size();
     size_t n_banks = bank_coords.size();
-    TT_FATAL(
-        rank <= tt::tt_metal::MAX_NUM_DIMENSIONS,
-        "Rank must be less than or equal to {} for rank",
-        tt::tt_metal::MAX_NUM_DIMENSIONS);
+    TT_FATAL(rank <= 8, "Rank must be less than or equal to 8");
 
     size_t n_args =
         add_rank + add_num_banks + rank * add_tensor_shape + rank * add_shard_shape + n_banks * add_bank_coords;
