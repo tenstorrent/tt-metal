@@ -279,7 +279,7 @@ class DropInVisionTransformer(torch.nn.Module):
             rot_mats = [cos, sin]
 
             # 5. Prepare input tensor for the TT model using window_index
-            tt_input = self.tt_model.prepare_input(patch_input, window_index, seq_len)
+            tt_input = self.tt_model.prepare_input(patch_input, window_index, target_seq_len)
 
             # --- TT Model Execution ---
             tt_out = self.tt_model(
@@ -329,6 +329,25 @@ class DropInVisionTransformer(torch.nn.Module):
                 logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
 
             final_outputs.append(final_output)
+
+            if profiler is not None:
+                profiler.end(f"vision_model_loop_postprocess", iteration=num_iters)
+                num_iters += 1
+
+        signpost("dropin_vision_transformer_forward", "end")
+
+        if profiler is not None:
+            # print the total time for each iteration
+            for i in range(num_iters):
+                logger.info(
+                    f"vision_model_loop_preprocess at {i}: {profiler.get_duration('vision_model_loop_preprocess', iteration=i)}"
+                )
+                logger.info(
+                    f"vision_model_loop_tt_model at {i}: {profiler.get_duration('vision_model_loop_tt_model', iteration=i)}"
+                )
+                logger.info(
+                    f"vision_model_loop_postprocess at {i}: {profiler.get_duration('vision_model_loop_postprocess', iteration=i)}"
+                )
 
         # concatenate all the outputs
         return torch.cat(final_outputs, dim=0)
