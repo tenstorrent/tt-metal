@@ -1,9 +1,7 @@
 name: "Issue Notification"
-
 on:
   issues:
     types: [opened]
-
 jobs:
   gh-slack-bridge:
     runs-on: ubuntu-latest
