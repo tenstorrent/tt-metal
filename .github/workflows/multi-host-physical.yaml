@@ -37,9 +37,6 @@ jobs:
       - name: Run tests on multiple hosts
         uses: ./.github/actions/docker-run
         timeout-minutes: 120
-        env:
-          RUNNER_UID: 0
-          RUNNER_GID: 0
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!'}}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
