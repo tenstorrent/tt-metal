@@ -144,7 +144,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(ARCH)
 
-    if len(test_vectors) > 1:
+    if len(test_vectors) > 1 and not DRY_RUN:
         p = Process(target=run, args=(test_module, input_queue, output_queue))
         p.start()
 
@@ -153,6 +153,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
         logger.info(f"Executing test: Module='{module_name}', Suite='{suite_name}', Vector ID='{vector_id}'")
         if DRY_RUN:
             print(f"Would have executed test for vector {test_vector}")
+            suite_pbar.update()
             continue
         result = dict()
 
@@ -718,20 +719,34 @@ def run_multiple_modules_json(module_names, suite_name, run_contents=None, vecto
         logger.error("No vector files found for any of the specified modules")
         return
 
-    # Initialize database if needed
-    initialize_postgres_database()
+    total_vectors_run = 0
 
-    initiated_by = get_initiated_by()
-    host = get_hostname()
-    git_author = get_git_author()
-    git_branch_name = get_git_branch()
-    git_commit_hash = git_hash()
-    status = "success"
-    run_start_time = dt.datetime.now()
-    device = ttnn.get_arch_name()
-    run_id = push_run(
-        initiated_by, host, git_author, git_branch_name, git_commit_hash, run_start_time, status, run_contents, device
-    )
+    # Initialize database if needed
+    if not DRY_RUN:
+        initialize_postgres_database()
+
+        initiated_by = get_initiated_by()
+        host = get_hostname()
+        git_author = get_git_author()
+        git_branch_name = get_git_branch()
+        git_commit_hash = git_hash()
+        status = "success"
+        run_start_time = dt.datetime.now()
+        device = ttnn.get_arch_name()
+        run_id = push_run(
+            initiated_by,
+            host,
+            git_author,
+            git_branch_name,
+            git_commit_hash,
+            run_start_time,
+            status,
+            run_contents,
+            device,
+        )
+    else:
+        run_id = None
+        status = "success"
 
     should_continue = True
 
@@ -773,6 +788,9 @@ def run_multiple_modules_json(module_names, suite_name, run_contents=None, vecto
                 if not should_continue:
                     break
 
+                if DRY_RUN:
+                    total_vectors_run += len(vectors)
+
                 # Verify the module name matches
                 if vectors and vectors[0]["sweep_name"] != module_name:
                     logger.warning(f"Module name mismatch: expected {module_name}, got {vectors[0]['sweep_name']}")
@@ -784,26 +802,28 @@ def run_multiple_modules_json(module_names, suite_name, run_contents=None, vecto
                     header_info, test_vectors = sanitize_inputs(vectors)
                     logger.info(f"Executing tests for module {module_name}, suite {suite}")
                     results = execute_suite(test_module, test_vectors, pbar_manager, suite, module_name, header_info)
-                    test_end_time = dt.datetime.now()
-                    logger.info(f"Completed tests for module {module_name}, suite {suite}.")
-                    logger.info(f"Tests Executed - {len(results)}")
+                    if not DRY_RUN:
+                        test_end_time = dt.datetime.now()
+                        logger.info(f"Completed tests for module {module_name}, suite {suite}.")
+                        logger.info(f"Tests Executed - {len(results)}")
 
-                    try:
-                        test_status = push_test(run_id, header_info, results, test_start_time, test_end_time)
-                        if test_status == "failure":
-                            status = "failure"
-                    except Exception as e:
-                        logger.error("Stopping execution due to database error")
-                        should_continue = False
-                        break
+                        try:
+                            test_status = push_test(run_id, header_info, results, test_start_time, test_end_time)
+                            if test_status == "failure":
+                                status = "failure"
+                        except Exception as e:
+                            logger.error("Stopping execution due to database error")
+                            should_continue = False
+                            break
 
                 except ImportError as e:
                     logger.error(f"Failed to import module {module_name}: {e}")
                     continue
                 except Exception as e:
                     logger.error(f"Failed to execute module {module_name}: {e}")
-                    test_end_time = dt.datetime.now()
-                    push_failed_test(run_id, module_name, test_start_time, test_end_time, "failure")
+                    if not DRY_RUN:
+                        test_end_time = dt.datetime.now()
+                        push_failed_test(run_id, module_name, test_start_time, test_end_time, "failure")
                     continue
         except FileNotFoundError:
             logger.error(f"Vector file not found: {vector_file}")
@@ -815,9 +835,14 @@ def run_multiple_modules_json(module_names, suite_name, run_contents=None, vecto
             logger.error(f"Error processing file {vector_file}: {e}")
             continue
 
-    run_end_time = dt.datetime.now()
-    update_run(run_id, run_end_time, status)
-    logger.info(f"Run status: {status}")
+    if not DRY_RUN:
+        run_end_time = dt.datetime.now()
+        update_run(run_id, run_end_time, status)
+        logger.info(f"Run status: {status}")
+    else:
+        logger.info("--- DRY RUN SUMMARY ---")
+        logger.info(f"Total tests (modules) that would have been run: {len(module_files)}")
+        logger.info(f"Total test cases (vectors) that would have been run: {total_vectors_run}")
 
 
 def run_sweeps_json(module_names, suite_name, run_contents=None, vector_id=None):
@@ -852,22 +877,30 @@ def run_sweeps_json(module_names, suite_name, run_contents=None, vector_id=None)
                     vectors = list(suite_content.values())
                     suites_to_process.append((suite_key, vectors))
 
+            total_vectors_run = 0
             for suite, vectors in suites_to_process:
+                if DRY_RUN:
+                    total_vectors_run += len(vectors)
                 module_name = vectors[0]["sweep_name"]
                 test_module = importlib.import_module("sweeps." + module_name)
                 header_info, test_vectors = sanitize_inputs(vectors)
                 logger.info(f"Executing tests for module {module_name}, suite {suite}")
                 results = execute_suite(test_module, test_vectors, pbar_manager, suite, module_name, header_info)
-                logger.info(f"Completed tests for module {module_name}, suite {suite}.")
-                logger.info(f"Tests Executed - {len(results)}")
-                if DATABASE_BACKEND == "postgres":
-                    logger.info("Dumping results to PostgreSQL database.")
-                    export_test_results_postgres(
-                        header_info, results, dt.datetime.now(), dt.datetime.now(), run_contents
-                    )
-                else:
-                    logger.info("Dumping results to JSON file.")
-                    export_test_results_json(header_info, results)
+                if not DRY_RUN:
+                    logger.info(f"Completed tests for module {module_name}, suite {suite}.")
+                    logger.info(f"Tests Executed - {len(results)}")
+                    if DATABASE_BACKEND == "postgres":
+                        logger.info("Dumping results to PostgreSQL database.")
+                        export_test_results_postgres(
+                            header_info, results, dt.datetime.now(), dt.datetime.now(), run_contents
+                        )
+                    else:
+                        logger.info("Dumping results to JSON file.")
+                        export_test_results_json(header_info, results)
+            if DRY_RUN:
+                logger.info("--- DRY RUN SUMMARY ---")
+                logger.info(f"Total tests (modules) that would have been run: 1")
+                logger.info(f"Total test cases (vectors) that would have been run: {total_vectors_run}")
     else:
         # Multiple modules
         run_multiple_modules_json(module_names, suite_name, run_contents, vector_id=vector_id)
@@ -878,13 +911,19 @@ def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, run_conten
     pbar_manager = enlighten.get_manager()
 
     sweeps_path = pathlib.Path(__file__).parent / "sweeps"
+    total_modules_run = 0
+    total_vectors_run = 0
 
     if not module_name:
-        for file in sorted(sweeps_path.glob("**/*.py")):
+        all_modules = sorted(sweeps_path.glob("**/*.py"))
+        if DRY_RUN:
+            logger.info(f"DRY RUN: Found {len(all_modules)} modules to process.")
+        for file in all_modules:
             sweep_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3].replace("/", ".")
             if skip_modules and sweep_name in skip_modules:
                 logger.info(f"Skipping module {sweep_name} due to --skip-modules flag.")
                 continue
+            total_modules_run += 1
             test_module = importlib.import_module("sweeps." + sweep_name)
             vector_index = VECTOR_INDEX_PREFIX + sweep_name
             logger.info(f"Executing tests for module {sweep_name}...")
@@ -925,10 +964,12 @@ def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, run_conten
                 for suite in suites:
                     logger.info(f"Executing tests for module {sweep_name}, suite {suite}.")
                     header_info, test_vectors = get_suite_vectors(client, vector_index, suite)
+                    total_vectors_run += len(test_vectors)
                     results = execute_suite(test_module, test_vectors, pbar_manager, suite, sweep_name, header_info)
                     logger.info(f"Completed tests for module {sweep_name}, suite {suite}.")
-                    logger.info(f"Tests Executed - {len(results)}")
-                    export_test_results(header_info, results)
+                    if not DRY_RUN:
+                        logger.info(f"Tests Executed - {len(results)}")
+                        export_test_results(header_info, results)
                     module_pbar.update()
                 module_pbar.close()
             except NotFoundError as e:
@@ -939,6 +980,7 @@ def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, run_conten
                 continue
 
     else:
+        total_modules_run = 1
         try:
             test_module = importlib.import_module("sweeps." + module_name)
         except ModuleNotFoundError as e:
@@ -950,8 +992,10 @@ def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, run_conten
             test_vector = client.get(index=vector_index, id=vector_id)["_source"]
             test_vector["vector_id"] = vector_id
             header_info, test_vectors = sanitize_inputs([test_vector])
+            total_vectors_run += len(test_vectors)
             results = execute_suite(test_module, test_vectors, pbar_manager, "Single Vector", module_name, header_info)
-            export_test_results(header_info, results)
+            if not DRY_RUN:
+                export_test_results(header_info, results)
         else:
             try:
                 if not suite_name:
@@ -971,24 +1015,31 @@ def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, run_conten
                     for suite in suites:
                         logger.info(f"Executing tests for module {module_name}, suite {suite}.")
                         header_info, test_vectors = get_suite_vectors(client, vector_index, suite)
+                        total_vectors_run += len(test_vectors)
                         results = execute_suite(
                             test_module, test_vectors, pbar_manager, suite, module_name, header_info
                         )
                         logger.info(f"Completed tests for module {module_name}, suite {suite}.")
-                        logger.info(f"Tests Executed - {len(results)}")
-                        export_test_results(header_info, results)
+                        if not DRY_RUN:
+                            logger.info(f"Tests Executed - {len(results)}")
+                            export_test_results(header_info, results)
                 else:
                     logger.info(f"Executing tests for module {module_name}, suite {suite_name}.")
                     header_info, test_vectors = get_suite_vectors(client, vector_index, suite_name)
+                    total_vectors_run += len(test_vectors)
                     results = execute_suite(
                         test_module, test_vectors, pbar_manager, suite_name, module_name, header_info
                     )
                     logger.info(f"Completed tests for module {module_name}, suite {suite_name}.")
-                    logger.info(f"Tests Executed - {len(results)}")
-                    export_test_results(header_info, results)
+                    if not DRY_RUN:
+                        logger.info(f"Tests Executed - {len(results)}")
+                        export_test_results(header_info, results)
             except Exception as e:
                 logger.info(e)
-
+    if DRY_RUN:
+        logger.info("--- DRY RUN SUMMARY ---")
+        logger.info(f"Total tests (modules) that would have been run: {total_modules_run}")
+        logger.info(f"Total test cases (vectors) that would have been run: {total_vectors_run}")
     client.close()
 
 
