@@ -52,7 +52,6 @@ jobs:
             -v /etc/rankfile:/etc/rankfile:ro
             -v /etc/ssh/multihost:/root/.ssh:ro
             --device /dev/tenstorrent
-            --network host
             --privileged
           install_wheel: true
           run_args: |
