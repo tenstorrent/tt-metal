@@ -64,15 +64,16 @@ concept Spannable = requires(TSeq seq) {
 
 template <Spannable TSeq, typename DistGenFunc>
 void parallel_generate(
-    TSeq seq,
+    TSeq& seq,
     DistGenFunc dist_factory,
     uint32_t seed = autograd::AutoContext::get_instance().get_seed(),
     uint32_t max_threads = std::thread::hardware_concurrency()) {
+    using T = typename TSeq::value_type;
     auto rng = std::mt19937{seed};
     constexpr size_t min_size = 1 << 16;  // determined empirically on loudbox that this is about where we start seeing
                                           // gains; need to improve and measure it as a function of the processors too.
     if (seq.size() < min_size) {
-        sequential_generate(std::span(seq), dist_factory, seed);
+        sequential_generate(std::span<T>{seq.data(), seq.size()}, dist_factory, seed);
         return;
     }
 
@@ -91,7 +92,6 @@ void parallel_generate(
     for (size_t i = 0; i < num_threads; ++i) {
         auto adjusted_chunk_size = chunk_size + (i == num_threads - 1 ? remainder : 0);
         threads.emplace_back([=, &dist_factory, &seq]() {
-            using T = typename TSeq::value_type;
             std::span<T> chunk{seq.data() + offset, adjusted_chunk_size};
             sequential_generate(chunk, dist_factory, seed_base + i);
         });
