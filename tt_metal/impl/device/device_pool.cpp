@@ -814,9 +814,10 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         }
     }
 
+    // TODO(MO): Remove when legacy non-mesh device is removed
     for (const chip_id_t device_id : devices_to_close) {
         IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
-        detail::DumpDeviceProfileResults(device);
+        detail::DumpDeviceProfileResults(device, ProfilerDumpState::LAST_FD_DUMP);
     }
 
     dispatch_firmware_active_ = false;
