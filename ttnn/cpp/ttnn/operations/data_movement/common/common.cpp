@@ -362,7 +362,41 @@ int common_tm_bw_model(
             num_cores = num_cores_;
         }
     }
+    uint32_t total_read_cycles_not_local = 0xFFFFFFFF;
+    uint32_t total_write_cycles_not_local = 0xFFFFFFFF;
+    if (is_local) {
+        // sometimes more cores (even if not local) is better
+        // computes both and takes the minimum value between the two
+        if (num_cores > output_tensor.memory_config().shard_spec().value().grid.num_cores()) {
+            auto read_cycles_not_local = get_cycles_for_transaction_size(
+                input_transaction_size,
+                input_is_dram,
+                false,
+                std::ceil((float)num_read_transactions / (float)num_cores),
+                num_cores,
+                index,
+                true,
+                l1_local_bw,
+                l1_read_bw,
+                l1_write_bw,
+                dram_bw);
 
+            auto write_cycles_not_local = get_cycles_for_transaction_size(
+                output_transaction_size,
+                output_is_dram,
+                false,
+                std::ceil((float)num_write_transactions / (float)num_cores),
+                num_cores,
+                index,
+                false,
+                l1_local_bw,
+                l1_read_bw,
+                l1_write_bw,
+                dram_bw);
+            total_read_cycles_not_local = read_cycles_not_local[0] + read_cycles_not_local[1];
+            total_write_cycles_not_local = write_cycles_not_local[0] + write_cycles_not_local[1];
+        }
+    }
     num_cores = is_local ? output_tensor.memory_config().shard_spec().value().grid.num_cores() : num_cores;
     uint32_t compute_cores = std::max(num_read_transactions, num_write_transactions);
     // parallelize work over cores
@@ -399,11 +433,16 @@ int common_tm_bw_model(
     uint32_t total_write_cycles = write_cycles[0] + write_cycles[1];
 
     int ideal_dev_clock_cycles = 1;
+    int ideal_dev_clock_cycles_not_local = 0xFFFFFFFF;
     if ((input_is_dram && output_is_dram) || bcast_local) {
         ideal_dev_clock_cycles =
             output_only ? total_write_cycles : std::ceil((float)(total_read_cycles + write_cycles[0]));
     } else {
+        ideal_dev_clock_cycles_not_local = output_only
+                                               ? total_write_cycles_not_local
+                                               : std::max(total_read_cycles_not_local, total_write_cycles_not_local);
         ideal_dev_clock_cycles = output_only ? total_write_cycles : std::max(total_read_cycles, total_write_cycles);
+        ideal_dev_clock_cycles = std::min(ideal_dev_clock_cycles, ideal_dev_clock_cycles_not_local);
     }
     // latency for llk compute kernels
     int total_compute_cycles = 0;
