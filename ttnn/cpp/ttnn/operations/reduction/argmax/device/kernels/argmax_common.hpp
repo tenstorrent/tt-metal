@@ -6,9 +6,13 @@
 #include "utils/bfloat16.h"
 #include "utils/float32.h"
 #include "utils/int32.h"
-#include "utils/uint32.h"
 
 #include <cstdint>
+
+inline constexpr uint32_t MIN_UINT32 = 0x00000000;  // Representation of minimum uint32 value
+inline constexpr uint32_t MAX_UINT32 = 0xFFFFFFFF;  // Representation of maximum uint32 value
+inline constexpr uint16_t MIN_UINT16 = 0x0000;      // Representation of minimum uint16 value
+inline constexpr uint16_t MAX_UINT16 = 0xFFFF;      // Representation of maximum uint16 value
 
 /**
  * @brief Returns a typed volatile L1 memory pointer based on the specified data format.
@@ -72,7 +76,7 @@ auto get_default_value() {
     if constexpr (data_format == DataFormat::Float16_b) {
         return uint16_t{NEG_INF_BFLOAT16};
     } else if constexpr (data_format == DataFormat::UInt16) {
-        return uint16_t{NEG_INF_BFLOAT16};  // NEG_INF_BFLOAT16 is saved as uint16_t
+        return uint16_t{MIN_UINT16};
     } else if constexpr (data_format == DataFormat::Float32) {
         return uint32_t{NEG_INF_FLOAT32};
     } else if constexpr (data_format == DataFormat::Int32) {
@@ -175,7 +179,7 @@ void compare_values(
     } else if constexpr (data_format == DataFormat::Int32) {
         update_max_if_greater(max_val, max_idx, val, index, int32_greater);
     } else if constexpr (data_format == DataFormat::UInt32) {
-        update_max_if_greater(max_val, max_idx, val, index, uint32_greater);
+        update_max_if_greater(max_val, max_idx, val, index, [](auto a, auto b) { return a > b; });
     } else {
         static_assert(data_format != data_format, "Unsupported data format in compare_values");
     }

@@ -92,7 +92,7 @@ inline void find_argmax_for_core(
                 uint32_t val = in_vals[i - red_dim_offset];
                 process_value_comparison<data_format, uint32_t, reduce_all>(
                     val, max_val, max_idx, i, outer_idx, j, inner_dim_units, red_dim_units, [](uint32_t a, uint32_t b) {
-                        return uint32_greater(a, b);
+                        return a > b;
                     });
 
             } else {
@@ -188,9 +188,7 @@ inline uint32_t find_argmax_from_intermediate_outputs(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(red_val_cb_local_base_addr + i * red_val_size_per_core);
 
             process_core_data<data_format>(
-                inner_idx, i_red_vals, i_red_idxs, max_val, max_idx, [](uint32_t a, uint32_t b) {
-                    return uint32_greater(a, b);
-                });
+                inner_idx, i_red_vals, i_red_idxs, max_val, max_idx, [](uint32_t a, uint32_t b) { return a > b; });
 
         } else {
             static_assert(
