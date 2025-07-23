@@ -29,7 +29,7 @@ void dprint_cb_tile(uint32_t cb_id, uint32_t tile_id) {
 
 template <uint32_t tile_bytes>
 void clear_mantissa_range(
-    ArrayView<uint32_t, CBAccessType::CB_BACK_RW> uint32_arr,
+    ArrayView<uint32_t, CBAccessType::CB_BACK_RW>& uint32_arr,
     uint32_t face_offset,
     uint32_t row_start_idx,
     uint32_t row_end_idx,
@@ -58,6 +58,7 @@ void clear_mantissa_range(
         uint32_t end_mask = 0xFFFFFFFF << (end_pos_in_group * nbits_per_datum);
 
         if (start_col_group_idx == end_col_group_idx) {
+            // handle corner case where the range is a single uint32
             uint32_arr[face_offset + row_offset + start_col_group_idx] &= (start_mask | end_mask);
             continue;
         }
@@ -68,7 +69,7 @@ void clear_mantissa_range(
         for (uint32_t col_group_idx = start_col_group_idx + 1; col_group_idx < end_col_group_idx; ++col_group_idx) {
             uint32_arr[face_offset + row_offset + col_group_idx] = 0;
         }
-        // Clear bits before end position in the last uint32 (if different from start)
+        // Clear bits before end position in the last uint32
         // [INFO] end_pos_in_group == 0 means that the next uint32 is not part of the range to be cleared
         if (end_pos_in_group > 0) {
             uint32_arr[face_offset + row_offset + end_col_group_idx] &= end_mask;
@@ -316,7 +317,7 @@ void kernel_main() {
                     const uint32_t k_start_tile_id = k_tile_shape.id_of(nb, kv_head, k_row_start_tile, 0);
 
                     // Read K chunk
-                    read_chunk_with_padding<is_dram, k_tile_bytes>(
+                    auto k_chunk_ntiles = async_read_chunk_with_padding<is_dram, k_tile_bytes>(
                         k_reader,
                         cb_k_in,
                         k_start_tile_id,
@@ -324,7 +325,7 @@ void kernel_main() {
                         DHt,
                         Sk_chunk_t,
                         DHt,
-                        barrier_threshold,
+                        64,   // optimized for Sq_chunk_t = 8 and Sk_chunk_t = 8
                         true  // transpose=true for K reads
                     );
 
@@ -433,8 +434,8 @@ void kernel_main() {
                         }
                     }
                     // sync up the read and writes, push back the mask cb, after processing each chunk
-                    noc_async_read_barrier();  // todo)) use this to remove the previous barrier on k (q too?)
-                    noc_async_write_barrier();
+                    noc_async_read_barrier();  // syncs up the reads of k_chunk and the ones used by mask generation
+                    cb_push_back(cb_k_in, k_chunk_ntiles);
                     cb_push_back(cb_mask_in, mask_chunk_tiles);
 
                     // Read V chunk
