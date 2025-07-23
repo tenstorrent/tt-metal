@@ -1374,7 +1374,7 @@ class ModelArgs:
 
         hidden_activation = hidden_activation.lower()
         if hidden_activation not in activation_map:
-            logger.warning(f"Warning: Unsupported activation '{hidden_activation}', defaulting to SILU")
+            raise NotImplementedError(f"Unsupported activation '{hidden_activation}'")
 
         return activation_map.get(hidden_activation, ttnn.UnaryOpType.SILU)
 
