@@ -903,6 +903,8 @@ struct CommonMemoryMap {
     uint32_t local_args_size;
     uint32_t result_buffer_base;
     uint32_t result_buffer_size;
+    uint32_t kernel_config_base;
+    uint32_t kernel_config_size;
 
 private:
     CommonMemoryMap(size_t& arg_idx) {
@@ -914,6 +916,8 @@ private:
         // Then parse the rest
         result_buffer_base = get_arg_val<uint32_t>(arg_idx++);
         result_buffer_size = get_arg_val<uint32_t>(arg_idx++);
+        kernel_config_base = get_arg_val<uint32_t>(arg_idx++);
+        kernel_config_size = get_arg_val<uint32_t>(arg_idx++);
     }
 };
 
@@ -923,7 +927,9 @@ struct SenderKernelMemoryMap {
 
     SenderKernelMemoryMap() {}
 
-    static SenderKernelMemoryMap build_from_args(size_t& rt_args_idx) { return SenderKernelMemoryMap(rt_args_idx); }
+    static SenderKernelMemoryMap build_from_args(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
+        return SenderKernelMemoryMap(common_map, rt_args_idx);
+    }
 
     uint32_t get_packet_header_address() {
         uint32_t addr = curr_packet_header_address_;
@@ -942,13 +948,9 @@ struct SenderKernelMemoryMap {
     }
 
 private:
-    SenderKernelMemoryMap(size_t& rt_args_idx) {
-        // Parse all memory map arguments from runtime args:
-        // [local_args_base, local_args_size, result_buffer_base, result_buffer_size, packet_header_base,
-        // payload_buffer_base, highest_usable_address]
-
-        // Parse common memory map
-        common = CommonMemoryMap::build_from_args(rt_args_idx);
+    SenderKernelMemoryMap(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
+        // Use pre-parsed common memory map and parse only sender-specific args
+        common = common_map;
         packet_header_region_base_ = get_arg_val<uint32_t>(rt_args_idx++);
         payload_buffer_region_base_ = get_arg_val<uint32_t>(rt_args_idx++);
         highest_usable_address_ = get_arg_val<uint32_t>(rt_args_idx++);
@@ -982,7 +984,10 @@ template <
     uint8_t NUM_LOCAL_SYNC_CORES>
 struct SenderKernelConfig {
     static constexpr bool MASTER_SYNC_CORE = false;
-    static SenderKernelConfig build_from_args(size_t& rt_args_idx) { return SenderKernelConfig(rt_args_idx); }
+
+    static SenderKernelConfig build_from_args(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
+        return SenderKernelConfig(common_map, rt_args_idx);
+    }
 
     void open_connections() {
         for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
@@ -1031,12 +1036,12 @@ struct SenderKernelConfig {
     uint32_t get_result_buffer_size() const { return memory_map.common.result_buffer_size; }
 
 private:
-    SenderKernelConfig(size_t& rt_args_idx) {
+    SenderKernelConfig(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
         // Use separate indices for runtime args vs local args
         size_t local_args_idx = 0;  // Start from 0 for local args
 
-        // Parse memory map args from runtime args
-        this->memory_map = SenderKernelMemoryMap::build_from_args(rt_args_idx);
+        // Parse memory map args from runtime args using pre-parsed common map
+        this->memory_map = SenderKernelMemoryMap::build_from_args(common_map, rt_args_idx);
 
         // Initialize fabric connections using placement new - these use normal runtime args
         for (uint8_t i = 0; i < NUM_FABRIC_CONNECTIONS; i++) {
@@ -1394,7 +1399,9 @@ struct ScatterWriteValidationConfig : public TrafficValidationConfigBase {
 */
 template <uint8_t NUM_TRAFFIC_CONFIGS>
 struct ReceiverKernelConfig {
-    static ReceiverKernelConfig build_from_args(size_t& rt_args_idx) { return ReceiverKernelConfig(rt_args_idx); }
+    static ReceiverKernelConfig build_from_args(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
+        return ReceiverKernelConfig(common_map, rt_args_idx);
+    }
 
     // Result buffer convenience methods
     uint32_t get_result_buffer_address() const { return common_memory_map.result_buffer_base; }
@@ -1411,12 +1418,12 @@ struct ReceiverKernelConfig {
     std::array<TrafficValidationConfigBase*, NUM_TRAFFIC_CONFIGS> traffic_configs;
 
 private:
-    ReceiverKernelConfig(size_t& rt_args_idx) {
+    ReceiverKernelConfig(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
         // Receivers only use local args (no fabric connections)
         size_t local_args_idx = 0;  // Start from 0 for local args
 
-        // Parse memory map args
-        this->common_memory_map = CommonMemoryMap::build_from_args(rt_args_idx);
+        // Use pre-parsed common memory map
+        this->common_memory_map = common_map;
 
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
             traffic_configs[i] = nullptr;
@@ -1464,7 +1471,9 @@ template <
     bool USE_DYNAMIC_ROUTING,
     uint8_t NUM_LOCAL_SYNC_CORES>
 struct SyncKernelConfig {
-    static SyncKernelConfig build_from_args(size_t& rt_args_idx) { return SyncKernelConfig(rt_args_idx); }
+    static SyncKernelConfig build_from_args(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
+        return SyncKernelConfig(common_map, rt_args_idx);
+    }
 
     void global_sync(uint8_t sync_iter) {
         for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
@@ -1504,12 +1513,12 @@ struct SyncKernelConfig {
     }
 
 private:
-    SyncKernelConfig(size_t& rt_args_idx) {
+    SyncKernelConfig(const CommonMemoryMap& common_map, size_t& rt_args_idx) {
         // Use separate indices for runtime args vs local args
         size_t local_args_idx = 0;  // Start from 0 for local args
 
-        // Parse memory map args from runtime args
-        this->memory_map = SenderKernelMemoryMap::build_from_args(rt_args_idx);
+        // Parse memory map args from runtime args using pre-parsed common map
+        this->memory_map = SenderKernelMemoryMap::build_from_args(common_map, rt_args_idx);
 
         // Initialize sync fabric connections using placement new - these use normal runtime args
         for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
