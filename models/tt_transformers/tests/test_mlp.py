@@ -37,7 +37,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128, cache_hf=True)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 

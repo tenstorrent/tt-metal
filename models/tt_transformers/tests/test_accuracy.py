@@ -137,7 +137,9 @@ def test_tt_model_acc(
         optimizations = request.config.getoption("--optimizations") or optimizations
 
     # Load model args and tokenizer
-    model_args = ModelArgs(mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = ModelArgs(
+        mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True
+    )
     logger.info(f"Optimizations: {model_args.optimizations._full_name}")
 
     tokenizer = model_args.tokenizer
