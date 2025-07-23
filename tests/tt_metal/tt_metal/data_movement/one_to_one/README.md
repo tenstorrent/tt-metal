@@ -2,12 +2,26 @@
 
 This test suite implements tests that measure the functionality and performance (i.e. bandwidth) of data movement transactions between two Tensix cores.
 
+## Dispatch Mode Compatibility
+This test suite supports both fast dispatch (default) and slow dispatch modes. Fast dispatch mode provides better performance and is recommended for most use cases.
+
 ## Test Flow
 Sharded L1 buffers are created on two Tensix cores: one sender and one receiver core. Data is written into the L1 buffer on the sender core. The sender kernel issues NOC transactions to transfer this data into the L1 buffer on the receiver core. Once data is transferred, the sender kernel signals to the receiver kernel that it is done by incrementing a semaphore. Receiver kernel waits on/polls this semaphore and completes its execution when it is incremented.
 
 Test attributes such as transaction sizes and number of transactions as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is cross-checked with original data and validated through a pcc check.
 
 Test expectations are that pcc checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
+
+## Running the Tests
+**Fast Dispatch Mode (Recommended):**
+```
+./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*OneToOne*"
+```
+
+**Slow Dispatch Mode:**
+```
+TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*OneToOne*"
+```
 
 ## Test Parameters
 | Parameter                 | Data Type             | Description |

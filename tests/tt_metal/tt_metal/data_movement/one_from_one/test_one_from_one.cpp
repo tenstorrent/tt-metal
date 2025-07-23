@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device_fixture.hpp"
+#include "../../common/dispatch_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -33,8 +33,9 @@ struct OneFromOneConfig {
 /// @brief Does Requestor Core --> L1 Responder Core --> L1 Requestor Core
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
+/// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
-bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
+bool run_dm(IDevice* device, const OneFromOneConfig& test_config, DispatchFixture* fixture) {
     // Program
     Program program = CreateProgram();
 
@@ -104,7 +105,8 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
     // Launch program and record outputs
     detail::WriteToDeviceL1(device, test_config.subordinate_core_coord, l1_base_address, packed_input);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
-    detail::LaunchProgram(device, program);
+    // Launch the program - Use dispatch-aware method
+    fixture->RunProgram(device, program);
     vector<uint32_t> packed_output;
     detail::ReadFromDeviceL1(
         device, test_config.master_core_coord, l1_base_address, transaction_size_bytes, packed_output);
@@ -126,7 +128,7 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
 }  // namespace unit_tests::dm::core_to_core
 
 /* ========== Test case for one from one data movement; Test id = 5 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
+TEST_F(DispatchFixture, TensixDataMovementOneFromOnePacketSizes) {
     // Physical Constrains
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
@@ -159,15 +161,15 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromOnePacketSizes) {
             };
 
             // Run
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            for (unsigned int id = 0; id < NumDevices(); id++) {
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config, this));
             }
         }
     }
 }
 
 /* ========== Test case for one from one data movement; Test id = 51 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneFromOneDirectedIdeal) {
+TEST_F(DispatchFixture, TensixDataMovementOneFromOneDirectedIdeal) {
     uint32_t test_id = 51;  // Arbitrary test ID
 
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
@@ -196,8 +198,8 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromOneDirectedIdeal) {
     };
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    for (unsigned int id = 0; id < NumDevices(); id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config, this));
     }
 }
 
