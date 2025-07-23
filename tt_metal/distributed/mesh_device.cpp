@@ -523,11 +523,7 @@ bool MeshDevice::close() {
     ZoneScoped;
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
-    // We only dump profile results for mesh devices that don't have any submeshes as they have active mesh command
-    // queues, whereas mesh devices with submeshes don't.
-    if (this->submeshes_.empty()) {
-        DumpMeshDeviceProfileResults(*this);
-    }
+    DumpMeshDeviceProfileResults(*this, ProfilerDumpState::LAST_FD_DUMP);
 
     // TODO #20966: Remove these calls
     for (auto device : view_->get_devices()) {
