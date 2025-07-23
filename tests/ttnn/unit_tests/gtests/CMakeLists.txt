@@ -23,8 +23,6 @@ TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_smoke)
 target_sources(
     unit_tests_ttnn_smoke
     PRIVATE
-        test_multiprod_queue.cpp
-        test_multi_cq_multi_dev.cpp
         test_reflect.cpp
         test_to_and_from_json.cpp
         test_sliding_window_infra.cpp
@@ -72,6 +70,8 @@ target_sources(
     PRIVATE
         test_async_runtime.cpp # TODO: Fix memory leak (LSan) then shift-left
         test_conv2d.cpp # TODO: Fix misaligned memory load (UBSan) then shift-left
+        test_multi_cq_multi_dev.cpp
+        test_multiprod_queue.cpp
 )
 target_include_directories(unit_tests_ttnn_slow PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(
@@ -116,7 +116,12 @@ target_link_libraries(
 # unit_tests_ttnn_ccl_ops
 
 add_executable(unit_tests_ttnn_ccl_ops)
-target_sources(unit_tests_ttnn_ccl_ops PRIVATE ccl/test_persistent_fabric_ccl_ops.cpp)
+target_sources(
+    unit_tests_ttnn_ccl_ops
+    PRIVATE
+        ccl/test_persistent_fabric_ccl_ops.cpp
+        ccl/test_send_recv_ops.cpp
+)
 setup_ttnn_test_target(unit_tests_ttnn_ccl_ops)
 
 # unit_tests_ttnn_fabric_edm
@@ -143,6 +148,7 @@ add_executable(unit_tests_ttnn_accessor)
 target_sources(
     unit_tests_ttnn_accessor
     PRIVATE
+        accessor/common.cpp
         accessor/test_accessor_benchmarks.cpp
         accessor/test_tensor_accessor.cpp
         accessor/test_tensor_accessor_on_device.cpp
@@ -151,15 +157,17 @@ setup_ttnn_test_target(unit_tests_ttnn_accessor)
 
 # unit_tests_ttnn_tensor
 
-add_executable(unit_tests_ttnn_tensor)
+add_library(unit_tests_ttnn_tensor_lib OBJECT)
+add_library(TTNN::Test::Basic::Tensor ALIAS unit_tests_ttnn_tensor_lib)
 target_sources(
-    unit_tests_ttnn_tensor
+    unit_tests_ttnn_tensor_lib
     PRIVATE
         tensor/common_tensor_test_utils.cpp
         tensor/test_create_tensor.cpp
         tensor/test_create_tensor_multi_device.cpp
         tensor/test_create_tensor_with_layout.cpp
         tensor/test_distributed_tensor.cpp
+        tensor/test_tensor_topology.cpp
         tensor/test_mesh_tensor.cpp
         tensor/test_partition.cpp
         tensor/test_tensor_layout.cpp
@@ -170,8 +178,11 @@ target_sources(
         tensor/test_xtensor_adapter.cpp
         tensor/test_xtensor_conversion.cpp
 )
-setup_ttnn_test_target(unit_tests_ttnn_tensor)
-target_link_libraries(unit_tests_ttnn_tensor PRIVATE xtensor)
+setup_ttnn_test_target(unit_tests_ttnn_tensor_lib)
+target_link_libraries(unit_tests_ttnn_tensor_lib PRIVATE xtensor)
+
+add_executable(unit_tests_ttnn_tensor)
+target_link_libraries(unit_tests_ttnn_tensor PRIVATE TTNN::Test::Basic::Tensor)
 
 # test_ccl_multi_cq_multi_device
 

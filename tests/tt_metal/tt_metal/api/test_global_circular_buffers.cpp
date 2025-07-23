@@ -57,7 +57,7 @@ TEST_F(DispatchFixture, TensixCreateGlobalCircularBuffers) {
     }
 }
 
-TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffers) {
+TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
     CoreCoord sender_core = CoreCoord(0, 0);
     CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
     CoreRangeSet receiver_cores(CoreRange({1, 1}, {2, 2}));

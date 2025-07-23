@@ -28,7 +28,6 @@ class SubDeviceManagerTracker;
 // A physical PCIexpress Tenstorrent device
 class Device : public IDevice {
 public:
-    // friend void tt_gdb(IDevice* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
     Device () = delete;
     Device(
         chip_id_t device_id,
@@ -200,7 +199,6 @@ private:
         size_t worker_l1_unreserved_start,
         tt::stl::Span<const std::uint32_t> l1_bank_remap);
 
-    void compile_command_queue_programs();
     void configure_command_queue_programs();
 
     void mark_allocations_unsafe();

@@ -90,7 +90,7 @@ tt::tt_metal::Program initialize_program_data_movement_rta(
 
     uint32_t rta_base_dm = get_runtime_arg_addr(
         device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1), tt::RISCV::BRISC, common_rtas);
-    std::map<string, string> dm_defines = {
+    std::map<std::string, std::string> dm_defines = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_unique_rt_args)},
         {"RESULTS_ADDR", std::to_string(rta_base_dm)}};
@@ -426,6 +426,7 @@ TEST_F(DeviceFixture, TensixSetRuntimeArgsVaryingLengthPerCore) {
                     uint32_t val_offset = x * 100 + y * 10;
                     uint32_t num_rt_args = 2 + x + y;
                     std::vector<uint32_t> initial_runtime_args;
+                    initial_runtime_args.reserve(num_rt_args);
                     for (uint32_t i = 0; i < num_rt_args; i++) {
                         initial_runtime_args.push_back(101 + val_offset + (i * 66));
                     }

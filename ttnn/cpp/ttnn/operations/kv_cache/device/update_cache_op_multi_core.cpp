@@ -70,7 +70,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
 
     CoreRangeSet all_cores, core_group_1, core_group_2;
 
-    std::optional<ShardSpec> shard_spec = input_tensor.shard_spec();
+    const std::optional<ShardSpec>& shard_spec = input_tensor.shard_spec();
 
     uint32_t num_input_tiles;
     if (shard_spec.has_value()) {
@@ -169,7 +169,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
         (std::uint32_t)granularity,
         (std::uint32_t)u_count};
 
-    std::map<string, string> reader_kernel_defines;
+    std::map<std::string, std::string> reader_kernel_defines;
     if (shard_spec.has_value()) {
         reader_kernel_defines["INPUT_SHARDED"] = "1";
     }
@@ -346,7 +346,7 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
 
     CoreRangeSet all_cores, core_group_1, core_group_2;
 
-    std::optional<ShardSpec> shard_spec = input_tensor.shard_spec();
+    const std::optional<ShardSpec>& shard_spec = input_tensor.shard_spec();
 
     uint32_t num_input_tiles;
     if (shard_spec.has_value()) {
@@ -394,7 +394,7 @@ operation::ProgramWithCallbacks fill_cache_multi_core(
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
-    std::map<string, string> reader_kernel_defines;
+    std::map<std::string, std::string> reader_kernel_defines;
     if (shard_spec.has_value()) {
         reader_kernel_defines["INPUT_SHARDED"] = "1";
     }

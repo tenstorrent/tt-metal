@@ -4,7 +4,7 @@
 ```bash
     export TT_METAL_HOME=$(pwd)
     ./build_metal.sh --build-programming-examples
-    ./build/programming_examples/add_2_integers_in_compute
+    ./build/programming_examples/metal_example_add_2_integers_in_compute
 ```
 
 2. Setup the host program:

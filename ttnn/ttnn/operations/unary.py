@@ -404,6 +404,8 @@ def _golden_function_bitwise_left_shift(input_tensor_a, shift_amt, *args, **kwar
 
 ttnn.attach_golden_function(ttnn.bitwise_left_shift, golden_function=_golden_function_bitwise_left_shift)
 
+ttnn.attach_golden_function(ttnn.logical_left_shift, golden_function=_golden_function_bitwise_left_shift)
+
 
 def _golden_function_bitwise_right_shift(input_tensor_a, shift_amt, *args, **kwargs):
     import torch

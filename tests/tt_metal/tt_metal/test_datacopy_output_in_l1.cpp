@@ -35,7 +35,6 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "umd/device/tt_core_coordinates.h"
-// #include "tt_metal/tools/tt_gdb/tt_gdb.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

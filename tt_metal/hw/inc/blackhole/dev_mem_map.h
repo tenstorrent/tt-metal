@@ -113,11 +113,13 @@
 
 // Tensix fabric connection metadata for workers
 #define MEM_TENSIX_FABRIC_CONNECTIONS_BASE (MEM_TENSIX_ROUTING_TABLE_BASE + MEM_TENSIX_ROUTING_TABLE_SIZE)
-#define MEM_TENSIX_FABRIC_CONNECTIONS_SIZE 592  // sizeof(tensix_fabric_connections_l1_info_t)
+#define MEM_TENSIX_FABRIC_CONNECTIONS_SIZE 1040  // sizeof(tensix_fabric_connections_l1_info_t)
 #if (MEM_TENSIX_FABRIC_CONNECTIONS_BASE % 16 != 0) || (MEM_TENSIX_FABRIC_CONNECTIONS_SIZE % 16 != 0)
 #error "Tensix fabric connections base and size must be 16-byte aligned"
 #endif
 
+// Read-only reserved memory boundary for watcher checks
+#define MEM_MAP_READ_ONLY_END MEM_TENSIX_FABRIC_CONNECTIONS_BASE
 #define MEM_MAP_END (MEM_TENSIX_FABRIC_CONNECTIONS_BASE + MEM_TENSIX_FABRIC_CONNECTIONS_SIZE)
 
 // Every address after MEM_MAP_END is a "scratch" address

@@ -76,7 +76,9 @@ static inline bool verify_single_core_cost(const std::vector<Tensor>& input_tens
 namespace ttnn::operations::reduction {
 
 void TopK::validate_with_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<Tensor>>& output_tensors) const {
     auto input_shape = input_tensors.at(0).padded_shape();
     TT_FATAL(input_shape.rank() == 4, "Input shape must be 4D, got {}", input_shape.rank());
 
@@ -129,7 +131,7 @@ std::vector<TensorSpec> TopK::compute_output_specs(
     const auto& input_tensor = input_tensors.at(0);
     auto output_shape = input_tensors.at(0).logical_shape();
     output_shape[-1] = this->k;
-    ttnn::Shape input_shape = input_tensors.at(0).get_padded_shape();
+    ttnn::Shape input_shape = input_tensors.at(0).padded_shape();
     bool uint16_output = (input_shape[this->dim] < 65536);
 
     auto values_spec =
@@ -156,12 +158,15 @@ std::vector<Tensor> TopK::create_output_tensors(
 }
 
 operation::ProgramWithCallbacks TopK::create_program(
-    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
+    const auto& indices_tensor = optional_input_tensors.at(0);
     bool multicore_supported = true;
     multicore_supported &= (input_tensor.padded_shape()[dim] >= topk::constants::multi_core_min_width);
 
-    ttnn::Shape input_shape = input_tensors.at(0).get_padded_shape();
+    ttnn::Shape input_shape = input_tensors.at(0).padded_shape();
     bool uint16_output = (input_shape[this->dim] < 65536);
     multicore_supported &= uint16_output;    // for now multicore does not support uint32 output, so if uint16 is not
                                              // supported, we default to single core
@@ -179,6 +184,7 @@ operation::ProgramWithCallbacks TopK::create_program(
     if (multicore_supported) {
         return detail::topk_multicore_interleaved(
             input_tensor,
+            indices_tensor,
             this->k,
             this->dim,
             this->largest,

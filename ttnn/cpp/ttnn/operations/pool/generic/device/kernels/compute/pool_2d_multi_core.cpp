@@ -44,7 +44,7 @@ inline void reduce_h_fused(
     cb_pop_front(curr_in_cb_id, 1);
     tile_regs_wait();
     tile_regs_commit();
-    pack_untilize_dst<num_output_tiles>(
+    pack_untilize_dest<num_output_tiles>(
         out_cb_id, 1 /*out_subblock_h*/, 0, num_out_rows, num_output_faces); /* pack 1 row (1x16 or 1x32) */
     tile_regs_release();
     cb_push_back(out_cb_id, num_output_tiles);
@@ -54,24 +54,21 @@ namespace NAMESPACE {
 
 void MAIN {
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet.
-    constexpr uint32_t in_ntiles_hw = get_compile_time_arg_val(0);
-    constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(1);
-    constexpr uint32_t window_size_hw = get_compile_time_arg_val(2);
-    constexpr uint32_t out_h = get_compile_time_arg_val(3);
-    constexpr uint32_t out_w = get_compile_time_arg_val(4);
+    constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(0);
+    constexpr uint32_t window_size_hw = get_compile_time_arg_val(1);
 
-    constexpr uint32_t split_reader = get_compile_time_arg_val(5);
+    constexpr uint32_t split_reader = get_compile_time_arg_val(2);
 
-    constexpr uint32_t nsticks_per_core = get_compile_time_arg_val(6);
-    constexpr uint32_t in_c = get_compile_time_arg_val(7);
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(8);
+    constexpr uint32_t nsticks_per_core = get_compile_time_arg_val(3);
+    constexpr uint32_t in_c = get_compile_time_arg_val(4);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(5);
 
-    constexpr uint32_t in_cb_id_0 = get_compile_time_arg_val(10);
-    constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(11);
-    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(12);
-    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(13);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(14);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(17);
+    constexpr uint32_t in_cb_id_0 = get_compile_time_arg_val(7);
+    constexpr uint32_t in_cb_id_1 = get_compile_time_arg_val(8);
+    constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(9);
+    constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(10);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
+    constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -97,7 +94,7 @@ void MAIN {
     constexpr uint32_t face_r_dim = window_size_hw > 16 ? 16 : window_size_hw;
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
         in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_tile, face_r_dim);
-    pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_tile);
+    pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_tile);
 
     // tilize reconfiguration is needed if we have more than one block and the number of tiles
     // is not a multiple of MAX_TILES_PER_REDUCTION

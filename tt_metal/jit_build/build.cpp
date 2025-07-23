@@ -210,6 +210,9 @@ void JitBuildEnv::init(
     if (rtoptions.get_watcher_noinline()) {
         this->defines_ += "-DWATCHER_NOINLINE ";
     }
+    if (rtoptions.get_watcher_noc_sanitize_linked_transaction()) {
+        this->defines_ += "-DWATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION ";
+    }
     for (auto& feature : rtoptions.get_watcher_disabled_features()) {
         this->defines_ += "-DWATCHER_DISABLE_" + feature + " ";
     }
@@ -876,6 +879,12 @@ void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSet
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {
     events.emplace_back(detail::async(build_func));
+}
+
+void sync_build_steps(std::vector<std::shared_future<void>>& events) {
+    for (auto& event : events) {
+        event.wait();
+    }
 }
 
 }  // namespace tt::tt_metal

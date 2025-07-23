@@ -73,7 +73,7 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         CircularBufferConfig(rounded_input_unit_size, {{src_cb_index, input_data_format}})
             .set_page_size(src_cb_index, rounded_input_unit_size);
     CreateCircularBuffer(program, all_cores, cb_src_config);
-    std::map<string, string> reader_defines;
+    std::map<std::string, std::string> reader_defines;
 
     switch (dtype) {
         case DataType::BFLOAT16: reader_defines["OUTPUT_DTYPE_BFLOAT16"] = "1"; break;

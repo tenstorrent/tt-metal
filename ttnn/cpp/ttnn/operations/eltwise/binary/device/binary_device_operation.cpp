@@ -46,7 +46,8 @@ namespace utils {
         case BinaryOpType::GCD:
         case BinaryOpType::LCM:
         case BinaryOpType::LEFT_SHIFT:
-        case BinaryOpType::RIGHT_SHIFT: return (a == DataType::INT32 && b == DataType::INT32);
+        case BinaryOpType::RIGHT_SHIFT:
+        case BinaryOpType::LOGICAL_RIGHT_SHIFT: return ((a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT32 && b == DataType::UINT32));
         case BinaryOpType::BITWISE_XOR:
         case BinaryOpType::BITWISE_OR:
         case BinaryOpType::BITWISE_AND: return ((a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT16 && b == DataType::UINT16));
@@ -297,9 +298,9 @@ tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
 
     if (input_tensor_b.has_value()) {
         TT_ASSERT(
-            std::holds_alternative<DeviceStorage>(input_tensor_b->get_storage()),
+            std::holds_alternative<DeviceStorage>(input_tensor_b->storage()),
             "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(input_tensor_b->get_storage()));
+            tt::stl::get_active_type_name_in_variant(input_tensor_b->storage()));
 
         return operation::hash_operation<BinaryDeviceOperation>(
             attributes,

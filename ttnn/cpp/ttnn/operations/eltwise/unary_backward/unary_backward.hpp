@@ -476,7 +476,7 @@ struct ExecuteUnaryBackwardRdiv {
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
         float parameter_a,
-        const std::optional<string>& parameter_b = std::nullopt,
+        const std::optional<std::string>& parameter_b = std::nullopt,
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
@@ -578,7 +578,7 @@ struct ExecuteUnaryBackwardGelu {
         QueueId queue_id,
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        const string& parameter_a,
+        const std::string& parameter_a,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> input_grad = std::nullopt);
 };

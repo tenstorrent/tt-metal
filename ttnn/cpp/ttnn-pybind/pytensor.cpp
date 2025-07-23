@@ -21,7 +21,9 @@
 #include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <pybind11/numpy.h>
 
+#include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/common/queue_id.hpp"
@@ -448,14 +450,14 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
 
     return convert_to_logical(std::visit(
         tt::stl::overloaded{
-            [](const HostStorage& storage) { return storage.buffer; },
-            [](const MultiDeviceHostStorage& storage) {
+            [](const HostStorage& storage) {
                 std::vector<HostBuffer> buffers;
-                storage.distributed_buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
+                storage.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
                 TT_FATAL(
                     buffers.size() == 1,
-                    "Can't get a single buffer from multi device host storage of size: {}",
-                    buffers.size());
+                    "Can't convert a tensor distributed on {} mesh to row-major logical tensor. Supply a mesh composer "
+                    "to concatenate multi-device shards.",
+                    storage.buffer().shape());
                 return buffers.front();
             },
             [&tt_tensor](auto&&) -> HostBuffer {
@@ -1063,6 +1065,40 @@ void pytensor_module(py::module& m_tensor) {
                 tt_tensor = tt_tensor.cpu()
         )doc")
         .def(
+            "item",
+            [](const Tensor& self) -> py::object {
+                switch (self.dtype()) {
+                    case DataType::FLOAT32: return py::cast(self.item<float>());
+                    case DataType::BFLOAT16: return py::cast(self.item<bfloat16>().to_float());
+                    case DataType::BFLOAT8_B:
+                    case DataType::BFLOAT4_B: return py::cast(self.item<float>());
+                    case DataType::INT32: return py::cast(self.item<int32_t>());
+                    case DataType::UINT32: return py::cast(self.item<uint32_t>());
+                    case DataType::UINT16: return py::cast(self.item<uint16_t>());
+                    case DataType::UINT8: return py::cast(self.item<uint8_t>());
+                    case DataType::INVALID: TT_THROW("Unsupported DataType");
+                }
+                TT_THROW("Unreachable");
+            },
+            R"doc(
+                 Extract the scalar value from a tensor containing exactly one element.
+
+                 Similar to PyTorch's tensor.item(), this method returns the value of this tensor as a standard Python number.
+                 This only works for tensors with one element.
+
+                 Returns:
+                     Python scalar: The scalar value contained in the tensor.
+
+                 Raises:
+                     RuntimeError: If the tensor doesn't contain exactly one element.
+
+                 .. code-block:: python
+
+                     # Create a tensor with one element
+                     scalar_tensor = ttnn.from_torch(torch.tensor([3.14]), device=device)
+                     value = scalar_tensor.item()  # Returns 3.14
+             )doc")
+        .def(
             "to",
             py::overload_cast<Layout>(&Tensor::to_layout, py::const_),
             py::arg("target_layout").noconvert(),
@@ -1482,8 +1518,17 @@ void pytensor_module(py::module& m_tensor) {
             [](const Tensor& self) -> HostBuffer {
                 return std::visit(
                     tt::stl::overloaded{
-                        [](const HostStorage& s) -> HostBuffer { return s.buffer; },
-                        [&](auto&&) -> HostBuffer {
+                        [](const HostStorage& s) -> HostBuffer {
+                            std::vector<HostBuffer> buffers;
+                            s.buffer().apply([&buffers](const HostBuffer& shard) { buffers.push_back(shard); });
+                            TT_FATAL(
+                                buffers.size() == 1,
+                                "Can't get a single buffer from host storage distributed over mesh shape {}. Did you "
+                                "forget to use mesh composer to concatenate tensor shards?",
+                                s.buffer().shape());
+                            return buffers.front();
+                        },
+                        [&](const DeviceStorage& s) -> HostBuffer {
                             TT_THROW(
                                 "{} doesn't support buffer method",
                                 tt::stl::get_active_type_name_in_variant(self.storage()));
@@ -1614,6 +1659,29 @@ void pytensor_module(py::module& m_tensor) {
                 .. code-block:: python
 
                     reshaped_tensor = tt_tensor.reshape((4, -1, 32))
+            )doc")
+        .def(
+            "to_list",
+            [](Tensor& self) {
+                using namespace tt::tt_metal::tensor_impl;
+                return dispatch(self.dtype(), [&]<typename T>() -> py::list {
+                    const auto& logical_shape = self.logical_shape();
+                    std::vector<uint32_t> shape{logical_shape.cbegin(), logical_shape.cend()};
+
+                    if constexpr (
+                        std::is_same_v<T, bfloat8_b> || std::is_same_v<T, bfloat4_b> || std::is_same_v<T, bfloat16>) {
+                        return py::array(shape, self.to_vector<float>().data()).attr("tolist")();
+                    } else {
+                        return py::array(shape, self.to_vector<T>().data()).attr("tolist")();
+                    }
+                });
+            },
+            R"doc(
+                Return TT tensor values as python list
+
+                .. code-block:: python
+
+                    py_list = tt_tensor.to_list()
             )doc")
         .def_property(
             "tensor_id",

@@ -477,10 +477,6 @@ void matmul_multicore_reuse_mcast(
 int main() {
     bool pass = true;
 
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        TT_THROW("Test not supported w/ slow dispatch, exiting");
-    }
-
     try {
         /* Silicon accelerator setup */
         constexpr int device_id = 0;

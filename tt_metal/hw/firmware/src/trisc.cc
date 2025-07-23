@@ -45,8 +45,15 @@ enum class ttRiscCores : std::uint32_t { Unpack = 0, Math = 1, Pack = 2, Brisc =
 
 volatile tt_reg_ptr uint *reg_base = reinterpret_cast<volatile uint *>(0xFFB10000);
 volatile tt_reg_ptr uint *pc_buf_base = reinterpret_cast<volatile uint *>(PC_BUF_BASE);
-volatile tt_reg_ptr uint *regfile = reinterpret_cast<volatile uint *>(REGFILE_BASE);
-volatile tt_reg_ptr uint *instrn_buffer = reinterpret_cast<volatile uint *>(INSTRN_BUF_BASE);
+volatile tt_reg_ptr uint* regfile = reinterpret_cast<volatile uint*>(REGFILE_BASE);
+#if !defined(INSTRN_BUFFER_TNG)
+// Once tt_llk is using an instrn_buffer array, this definition can be
+// deleted.
+}  // namespace ckernel
+extern volatile uint __instrn_buffer[];
+namespace ckernel {
+volatile tt_reg_ptr uint* instrn_buffer = &__instrn_buffer[0];
+#endif  // INSTRN_BUF_TNG
 tt_reg_ptr uint *regmem = reinterpret_cast<tt_reg_ptr uint *>(REGFILE_BASE);
 
 uint32_t cfg_state_id __attribute__((used)) = 0;    // Flip between 0 and 1 to keep state between kernel calls
@@ -136,11 +143,11 @@ int main(int argc, char *argv[]) {
 #if !defined(UCK_CHLKC_MATH)
         uint32_t tt_l1_ptr* cb_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
-        uint32_t end_cb_index = launch_msg->kernel_config.max_local_cb_end_index;
-        setup_local_cb_read_write_interfaces(cb_l1_base, 0, end_cb_index, cb_init_read, cb_init_write, cb_init_write);
+        uint32_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
+        setup_local_cb_read_write_interfaces<cb_init_read, cb_init_write, cb_init_write>(cb_l1_base, 0, local_cb_mask);
 
         cb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.remote_cb_offset);
-        end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;
+        uint32_t end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;
         // NOC argument is unused
         experimental::setup_remote_cb_interfaces<false>(cb_l1_base, end_cb_index, 0, 0, 0, 0);
 #endif

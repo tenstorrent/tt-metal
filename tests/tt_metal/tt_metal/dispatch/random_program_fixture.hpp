@@ -254,7 +254,7 @@ private:
         const uint32_t kernel_runtime_microseconds =
             this->generate_random_num(min_kernel_runtime_microseconds, max_kernel_runtime_microseconds);
 
-        const std::map<string, string> defines = {
+        const std::map<std::string, std::string> defines = {
             {"KERNEL_SIZE_BYTES", std::to_string(kernel_size_bytes)},
             {"KERNEL_RUNTIME_MICROSECONDS", std::to_string(kernel_runtime_microseconds)}};
 

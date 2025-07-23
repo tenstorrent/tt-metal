@@ -22,6 +22,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/pad_multi_core)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/shard_data_rm)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/vecadd_sharding)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/vecadd_multi_core)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/NoC_tile_transfer)
 
 add_custom_target(
     programming_examples
@@ -42,6 +43,7 @@ install(
         loopback
         matmul
         shard_data_rm
+        NoC_tile_transfer
     # DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples
     # FIXME(afuller): Something funky is happening when installing files into
     # /usr/share/doc on a default Docker image. Speculation: some dependency for
@@ -65,6 +67,7 @@ install(
         loopback
         matmul
         shard_data_rm
+        NoC_tile_transfer
     DESTINATION "${CMAKE_INSTALL_DATADIR}/tenstorrent/kernels"
     COMPONENT metalium-examples
     FILES_MATCHING

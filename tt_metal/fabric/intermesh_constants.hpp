@@ -6,6 +6,7 @@
 
 namespace tt::tt_fabric {
 namespace intermesh_constants {
+// TODO: remove once UMD can provide all intermesh links
 
 // Constants used to derive the intermesh ethernet links config
 static constexpr uint32_t MULTI_MESH_ENABLED_VALUE = 0x2;

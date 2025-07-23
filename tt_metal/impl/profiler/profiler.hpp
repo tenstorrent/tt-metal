@@ -124,6 +124,9 @@ private:
     // Device frequency
     int device_core_frequency;
 
+    // Last fast dispatch dump performed flag
+    bool is_last_fd_dump_done;
+
     // Smallest timestamp
     uint64_t smallest_timestamp = (1lu << 63);
 
@@ -335,6 +338,8 @@ public:
         ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
+    void dumpRoutingInfo();
+
     // Push device results to tracy
     void pushTracyDeviceResults();
 
@@ -343,6 +348,13 @@ public:
 
     // Get zone details for the zone corresponding to the given timer id
     ZoneDetails getZoneDetails(uint16_t timer_id) const;
+
+    // setter and getter on last fast dispatch dump
+    void setLastFDDumpAsDone();
+
+    void setLastFDDumpAsNotDone();
+
+    bool isLastFDDumpDone() const;
 };
 
 bool useFastDispatchForControlBuffers(const IDevice* device, ProfilerDumpState state);
@@ -353,8 +365,6 @@ void writeToCoreControlBuffer(
 bool onlyProfileDispatchCores(ProfilerDumpState state);
 
 bool isGalaxyMMIODevice(const IDevice* device);
-
-void waitForDeviceCommandsToFinish(IDevice* device);
 
 }  // namespace tt_metal
 

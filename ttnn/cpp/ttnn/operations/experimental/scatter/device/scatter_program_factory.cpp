@@ -117,10 +117,10 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t source_page_size_bytes = ceil32(source_chunk_size_bytes);
     const uint32_t output_page_size_bytes = ceil32(input_and_output_chunk_size_bytes);
 
-    create_cb(program, input_tensor.get_dtype(), ScatterCB::INPUT, all_cores, input_page_size_bytes);
-    create_cb(program, index_tensor.get_dtype(), ScatterCB::INDEX, all_cores, index_page_size_bytes);
-    create_cb(program, src_tensor.get_dtype(), ScatterCB::SRC, all_cores, source_page_size_bytes);
-    create_cb(program, output_tensor.get_dtype(), ScatterCB::DST, all_cores, output_page_size_bytes);
+    create_cb(program, input_tensor.dtype(), ScatterCB::INPUT, all_cores, input_page_size_bytes);
+    create_cb(program, index_tensor.dtype(), ScatterCB::INDEX, all_cores, index_page_size_bytes);
+    create_cb(program, src_tensor.dtype(), ScatterCB::SRC, all_cores, source_page_size_bytes);
+    create_cb(program, output_tensor.dtype(), ScatterCB::DST, all_cores, output_page_size_bytes);
 
     constexpr const char* reader_kernel_path =
         "ttnn/cpp/ttnn/operations/experimental/scatter/device/kernels/dataflow/reader_scatter.cpp";

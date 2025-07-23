@@ -105,6 +105,7 @@ jobs:
             hw-topology: blackhole_llmbox
             build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+            techdebt-install-ttt-reqs: true
     runs-on: tt-beta-ubuntu-2204-large
     steps:
       - uses: actions/checkout@v4
@@ -192,8 +193,8 @@ jobs:
       - name: Run image
         timeout-minutes: 30
         env:
-          LLAMA_DIR: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
-        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
+          LLAMA_DIR: ${{ contains(runner.name, 'tt-metal-ci-vm') && '/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct' || '/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct' }}
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
   test-bh-image:
     needs:
       - get-image-tags

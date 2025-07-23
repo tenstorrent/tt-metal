@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <string>
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
@@ -22,7 +23,7 @@ struct Conv2dConfig {
     std::optional<tt::tt_metal::DataType> weights_dtype = std::nullopt;
 
     // Either "relu" or ""
-    string activation = "";
+    std::string activation = "";
 
     // If user tensor will be deallocated if it's on device.
     bool deallocate_activation = false;
@@ -84,8 +85,18 @@ struct Conv2dConfig {
     // Kernel Stride Folding (Issue: #22378)
     // Enables tensor folding optimization where:
     // - Input tensor (NHWC) is reshaped to (N, H/stride[0], W/stride[1], C * stride[0] * stride[1])
-    // - Weight tensor (OC, IC, kernel[0], kernel[1]) is reshaped and permuted to (1, 1, IC * kernel[0] * kernel[1], OC)
-    // Currently only applied when strides match kernel dimensions
+    // - Weight tensor (OC, IC, kernel[0], kernel[1]) is reshaped and permuted to (1, 1, IC * (kernel[0] + pad_h) *
+    // (kernel[1] + pad_w), OC).
+    //     Note: The zero padding applied to the weight tensor is implicit and not passed by the user via the padding
+    //     argument, where pad_h = kernel[0] % stride[0] and pad_w = kernel[1] % stride[1].
+    //
+    // Note: This optimization is currently only applied when all of the following conditions are met:
+    //    1. The input tensor is stored in DRAM memory.
+    //    2. The input tensor's height and width are divisible by the stride dimensions.
+    //    3. Stride values are equal to or less than the kernel dimensions.
+    //    4. Input tensor's padding must be zero.
+    //    5. Input tensor data type is not BFLOAT8_B.
+
     bool enable_kernel_stride_folding = false;
     // ===============================================================
 
@@ -193,7 +204,7 @@ struct OptimizedConvNew {
     const uint32_t output_channels;
     const uint32_t groups;
     bool untilize_out, has_bias;
-    string activation = "";
+    std::string activation = "";
     tt::tt_metal::MemoryConfig memory_config;
     const tt::tt_metal::DataType dtype;
     std::array<std::uint32_t, 4> input_tensor_shape;  // For sharded input, input tensor shape is nonsense
@@ -209,7 +220,7 @@ struct OptimizedConvNew {
         uint32_t groups,
         bool untile_out,
         bool has_bias,
-        string activation,
+        std::string activation,
         const OptimizedConvParallelizationConfig& p_config,
         const OptimizedConvBlockConfig& b_config,
         tt::tt_metal::MemoryConfig memory_config,
@@ -295,7 +306,7 @@ Tensor optimized_conv_new(
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
-    const string& activation,
+    const std::string& activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     const tt::tt_metal::MemoryConfig& memory_config,
@@ -332,7 +343,8 @@ conv_op_l1_usage calculate_L1_usage(
     tt::tt_metal::DataType input_datatype,
     tt::tt_metal::DataType output_datatype,
     bool enable_bias,
-    bool is_1d_depthwise_conv);
+    bool is_1d_depthwise_conv,
+    bool skip_act_cb_create = false);
 
 }  // namespace conv2d
 
