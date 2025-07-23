@@ -114,6 +114,26 @@ def visualize_mesh_device(mesh_device: "ttnn.MeshDevice", tensor: "ttnn.Tensor" 
     Console().print(mesh_table)
 
 
+def visualize_system_mesh():
+    """
+    Print SystemMesh global and local shapes.
+    """
+    from rich.console import Console
+    from loguru import logger
+
+    try:
+        system_mesh_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()
+        global_shape = system_mesh_desc.shape()
+        local_shape = system_mesh_desc.local_shape()
+    except Exception as e:
+        logger.error(f"Error accessing SystemMesh: {e}")
+        return
+
+    console = Console()
+    console.print(f"\n[bold blue]SystemMesh Global Shape: {global_shape}[/bold blue]")
+    console.print(f"\n[bold green]SystemMesh Local Shape: {local_shape}[/bold green]")
+
+
 def get_num_devices() -> List[int]:
     return ttnn._ttnn.device.GetNumAvailableDevices()
 
