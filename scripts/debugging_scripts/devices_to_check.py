@@ -15,7 +15,7 @@ Description:
 """
 
 from inspector_data import run as get_inspector_data, InspectorData
-from triage import triage_cache, ScriptConfig, run_script
+from triage import triage_singleton, ScriptConfig, run_script
 from ttexalens.context import Context
 from ttexalens.device import Device
 from utils import ORANGE, RST
@@ -45,7 +45,7 @@ def get_devices(devices: list[str], inspector_data: InspectorData | None, contex
     return [context.devices[id] for id in device_ids]
 
 
-@triage_cache
+@triage_singleton
 def run(args, context: Context):
     devices = args["--dev"]
     inspector_data = get_inspector_data(args, context)

@@ -15,7 +15,7 @@ Description:
 from dataclasses import dataclass
 import os
 from inspector_data import run as get_inspector_data, InspectorData
-from triage import triage_cache, ScriptConfig, run_script
+from triage import triage_singleton, ScriptConfig, run_script
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.firmware import ELF
 from ttexalens.parse_elf import mem_access
@@ -222,7 +222,7 @@ class DispatcherData:
         return os.path.realpath(firmware_elf_path)
 
 
-@triage_cache
+@triage_singleton
 def run(args, context: Context):
     inspector_data = get_inspector_data(args, context)
     return DispatcherData(inspector_data, context)

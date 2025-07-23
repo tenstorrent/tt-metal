@@ -17,7 +17,7 @@ Description:
 from collections.abc import Callable
 from dataclasses import dataclass
 from devices_to_check import run as get_devices_to_check
-from triage import triage_cache, ScriptConfig, triage_field, recurse_field, run_script
+from triage import triage_singleton, ScriptConfig, triage_field, recurse_field, run_script
 from ttexalens.context import Context
 from ttexalens.device import Device
 
@@ -53,7 +53,7 @@ class PerDeviceCheck:
         return result
 
 
-@triage_cache
+@triage_singleton
 def run(args, context: Context):
     devices = get_devices_to_check(args, context)
     return PerDeviceCheck(devices)

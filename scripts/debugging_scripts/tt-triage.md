@@ -1,3 +1,7 @@
+# tt-triage
+
+`tt-triage` is a tool that runs a series of checks/scripts to either diagnose a failure or provide insight into state of the system... It consists of the main program and a set of discoverable, user-defined scripts (python files)...
+
 # Running tt-triage
 
 You can run `tt-triage` by executing `scripts/debugging_scripts/tt-triage.py`.
@@ -16,7 +20,7 @@ There are two types of scripts:
 
 Data provider scripts return data from their `run` method. `run` should return a data object, which is usually a class that can be queried for information.
 
-If the data object is slow to generate (such as when parsing long log files), it should use the `@triage_cache` decorator to make it a singleton. Making it a singleton does not mean that the data inside is cached.
+If the data object is slow to generate (such as when parsing long log files), it should use the `@triage_singleton` decorator to make it a singleton. If the data being processed is not changing, it is up to the developer to cache their data if needed.
 
 If a data provider script fails, all scripts that depend on it will also fail.
 
@@ -26,32 +30,77 @@ A state checker script can only check state (see `check_noc_locations` for an ex
 
 To log a check failure but continue execution, use the `log_check` method. It will log failures after the script has finished executing.
 
-If a check is critical (such as a missing ELF file), the script should raise a `TTTriageError` exception.
+If a check is critical (such as a missing ELF file), the script should raise a `TTTriageError` exception. Critical error means that script cannot advance without that check and that all dependent scrips shouldn't be executed.
 
-### Data serialization
+### Data visualization
 
-`tt-triage` will try to visualize data returned by scripts, so it is important to describe the data accordingly. See `dump_callstacks` for an example — `tt-triage` would generate a table with all callstacks.
+`tt-triage` will try to visualize data returned by scripts, so it is important to describe the data accordingly. For example, see `dump_callstacks` — `tt-triage` would generate a table with all callstacks.
 
-To describe data, a checker script should return data as a tagged `@dataclass` or a list of tagged `@dataclass` objects of the same type. Each field of that class should also describe its fields by initializing its value with different tagging methods:
-- `triage_field(serialized_name, serializer)` – The field will be serialized as `serialized_name` (or the original field name if not provided) using the specified `serializer` (or `default_serializer`).
-- `combined_field(additional_fields, serialized_name, serializer)` – The field will be serialized together with `additional_fields` under `serialized_name` using `serializer`. If none of the parameters are provided, serialization will be ignored, as it will be serialized with a different field. Example:
+To enable rich visualization, a checker script should return data as a tagged `@dataclass` or a list of tagged `@dataclass` objects of the same type. Visualization in `tt-triage` is achieved by serializing data fields in a way that describes how they should appear in the output. You control this by using tagging methods and their arguments to specify how each field should be serialized and thus visualized:
+- `triage_field(serialized_name, serializer)` – The field will be serialized (and visualized) as `serialized_name` (or the original field name if not provided) using the specified `serializer` (or `default_serializer`). This controls how the field appears in the visualization.
+- `combined_field(additional_fields, serialized_name, serializer)` – The field will be serialized together with `additional_fields` under `serialized_name` using `serializer`. If none of the parameters are provided, visualization will be ignored, as it will be visualized with a different field. Example:
   ```python
   @dataclass
   class Chip:
-    # This field will trigger serialization
+    # This field will trigger visualization
     id: int = combined_field("arch", "ID:Arch", collection_serializer(":"))
-    # This will be ignored by serialization
+    # This will be ignored by visualization
     arch: str = combined_field()
   ```
-- `recurse_field()` – This will cause expansion of a field that is tagged as a `@dataclass`.
+- `recurse_field()` – This will cause expansion of a field that is tagged as a `@dataclass`, so its internal fields are visualized as part of the parent.
   ```python
   @dataclass
   class ChipCheck:
-    # Regular field that will be serialized under the `Check` name
+    # Regular field that will be visualized under the `Check` name
     check: str = triage_field("Check")
-    # Field that will be expanded and serialized as its internal fields (see previous example)
+    # Field that will be expanded and visualized as its internal fields (see previous example)
     chip: Chip = recurse_field()
   ```
+
+By carefully specifying these serialization options, you control how your data will be visualized in the `tt-triage` output.
+
+#### Example: Full Visualization
+
+Below is a representative example showing how to define data classes for visualization, including all three field tagging methods:
+
+```python
+from dataclasses import dataclass
+from triage import triage_field, combined_field, recurse_field, collection_serializer
+
+@dataclass
+class Chip:
+    # This field will be visualized as "ID:Arch" with value "id:arch"
+    id: int = combined_field("arch", "ID:Arch", collection_serializer(":"))
+    # This field is only used for combination above, not visualized separately
+    arch: str = combined_field()
+
+@dataclass
+class ChipCheck:
+    # This field will be visualized as "Check"
+    check: str = triage_field("Check")
+    # This field will be expanded and its fields visualized as part of ChipCheck
+    chip: Chip = recurse_field()
+
+# Example usage in a script's run() function:
+def run(args, context):
+    # Return a list of ChipCheck objects for visualization
+    return [
+        ChipCheck(check="Power OK", chip=Chip(id=1, arch="A0")),
+        ChipCheck(check="Temp High", chip=Chip(id=2, arch="B1")),
+    ]
+```
+
+When this data is returned from your script, `tt-triage` will visualize it as a table with columns "Check" and "ID:Arch", and rows for each `ChipCheck` instance.
+
+For example, the output might look like:
+```
+╭───────────┬─────────╮
+│  Check    │ ID:Arch │
+├───────────┼─────────┤
+│ Power OK  │  1:A0   │
+│ Temp High │  2:B1   │
+╰───────────┴─────────╯
+```
 
 ## Script configuration
 

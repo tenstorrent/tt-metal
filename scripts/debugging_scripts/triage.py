@@ -68,7 +68,7 @@ class ScriptArguments:
 T = TypeVar("T")
 
 
-def triage_cache(run_method: Callable[[ScriptArguments, Context], T], /) -> Callable[[ScriptArguments, Context], T]:
+def triage_singleton(run_method: Callable[[ScriptArguments, Context], T], /) -> Callable[[ScriptArguments, Context], T]:
     # Check that run method has two arguments (args, context)
     assert callable(run_method), "run_method must be a callable function."
     signature = inspect.signature(run_method)
