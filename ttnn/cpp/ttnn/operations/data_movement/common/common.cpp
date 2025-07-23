@@ -362,8 +362,8 @@ int common_tm_bw_model(
             num_cores = num_cores_;
         }
     }
-    uint32_t total_read_cycles_not_local = 0xFFFFFFFF;
-    uint32_t total_write_cycles_not_local = 0xFFFFFFFF;
+    uint32_t total_read_cycles_not_local = 0x7FFFFFFF;
+    uint32_t total_write_cycles_not_local = 0x7FFFFFFF;
     if (is_local) {
         // sometimes more cores (even if not local) is better
         // computes both and takes the minimum value between the two
@@ -433,16 +433,17 @@ int common_tm_bw_model(
     uint32_t total_write_cycles = write_cycles[0] + write_cycles[1];
 
     int ideal_dev_clock_cycles = 1;
-    int ideal_dev_clock_cycles_not_local = 0xFFFFFFFF;
     if ((input_is_dram && output_is_dram) || bcast_local) {
         ideal_dev_clock_cycles =
-            output_only ? total_write_cycles : std::ceil((float)(total_read_cycles + write_cycles[0]));
+            output_only ? total_write_cycles : (int)std::ceil((float)(total_read_cycles + write_cycles[0]));
     } else {
-        ideal_dev_clock_cycles_not_local = output_only
-                                               ? total_write_cycles_not_local
-                                               : std::max(total_read_cycles_not_local, total_write_cycles_not_local);
+        auto ideal_dev_clock_cycles_not_local =
+            output_only ? total_write_cycles_not_local
+                        : std::max(total_read_cycles_not_local, total_write_cycles_not_local);
         ideal_dev_clock_cycles = output_only ? total_write_cycles : std::max(total_read_cycles, total_write_cycles);
-        ideal_dev_clock_cycles = std::min(ideal_dev_clock_cycles, ideal_dev_clock_cycles_not_local);
+        if (ideal_dev_clock_cycles_not_local < ideal_dev_clock_cycles) {
+            ideal_dev_clock_cycles = ideal_dev_clock_cycles_not_local;
+        }
     }
     // latency for llk compute kernels
     int total_compute_cycles = 0;
