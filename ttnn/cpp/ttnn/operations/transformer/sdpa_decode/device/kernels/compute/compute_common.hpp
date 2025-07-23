@@ -214,9 +214,8 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, boo
     PACK((llk_pack_reconfig_l1_acc(pack_accumulate)));
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, rows);
-    if (!pack_accumulate) {
-        cb_reserve_back(out_cb, num_tiles);
-    }
+    cb_reserve_back(out_cb, num_tiles);
+    cb_wait_front(out_cb, num_tiles);
     uint32_t in0_index = 0;
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; ++u) {
@@ -236,13 +235,8 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, boo
     PACK((llk_pack_reconfig_l1_acc(false)));
     cb_pop_front(in1_cb, rows);
     cb_pop_front(in0_cb, num_tiles);
-    if (!pack_accumulate) {
-        cb_push_back(out_cb, num_tiles);
-    } else {
-        cb_pop_front(out_cb, num_tiles);
-        cb_reserve_back(out_cb, num_tiles);
-        cb_push_back(out_cb, num_tiles);
-    }
+    cb_push_back(out_cb, num_tiles);
+    cb_pop_front(out_cb, num_tiles);
 }
 
 void mul_block_bcast_scalar_inplace(uint32_t in0_cb, uint32_t in1_scalar_cb, uint32_t num_tiles) {

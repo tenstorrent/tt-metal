@@ -468,12 +468,6 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
                             .set_tile_dims(CBIndex::c_3, mask_tile);
     auto cb_in3_id = CreateCircularBuffer(program, core_grid, c_in3_config);
 
-    // scale input
-    auto c_in4_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{CBIndex::c_4, scalar_df}})
-                            .set_page_size(CBIndex::c_4, scalar_tile_size)
-                            .set_tile_dims(CBIndex::c_4, scalar_tile);
-    auto cb_in4_id = CreateCircularBuffer(program, core_grid, c_in4_config);
-
     // identity scale input
     auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{CBIndex::c_5, scalar_df}})
                             .set_page_size(CBIndex::c_5, scalar_tile_size)
