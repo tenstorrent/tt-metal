@@ -14,6 +14,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "init/cpu_initializers.hpp"
 #include "metal/operations.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -33,9 +34,9 @@ TEST_F(ProfilerNoOpTest, ProfilerNoOpTest_Batch) {
 
     const uint32_t N = 1U, C = 1U, H = 91U, W = 187U;
 
-    std::random_device rd;
-    std::mt19937 gen(42);
-    xt::xarray<float> input_tensor = xt::random::rand<float>({N, C, H, W}, -10.0F, 10.0F, gen);
+    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
+    ttml::init::parallel_generate(
+        input_tensor, []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); }, 42);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
     std::cout << "Input Logits:\n";
@@ -56,9 +57,9 @@ TEST_F(ProfilerNoOpTest, ProfilerNoOpTest_Huge_Batch) {
 
     const uint32_t N = 64U, C = 1U, H = 32U, W = 128000U;
 
-    std::random_device rd;
-    std::mt19937 gen(42);
-    xt::xarray<float> input_tensor = xt::random::rand<float>({N, C, H, W}, -10.0F, 10.0F, gen);
+    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
+    ttml::init::parallel_generate(
+        input_tensor, []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); }, 42);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
     std::cout << "Input Logits:\n";

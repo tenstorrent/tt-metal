@@ -12,6 +12,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "init/cpu_initializers.hpp"
 #include "ops/losses.hpp"
 
 class RMSNormOpTest : public ::testing::Test {
@@ -51,6 +52,40 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Forward) {
     auto result_xtensor = core::to_xtensor(result->get_value());
     xt::xarray<float> expected_result = {{0.3652F, 0.7305F, 1.0938F, 1.4609F, 0.3652F, 0.7305F, 1.0938F, 1.4609F}};
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 1e-2F));
+}
+
+TEST_F(RMSNormOpTest, RMSNorm_Compare_Kernel_Composite) {
+    std::vector<std::vector<uint32_t>> shapes = {
+        {1U, 1U, 1U, 1024U},
+        {1U, 1U, 1U, 1U << 20U},
+        {32U, 1U, 1024U, 4096U},
+        {32U, 1U, 1024U, 4091U},
+        {32U, 1U, 1024U, 4079U},
+        {1U, 1U, 1U, (1U << 20U) - 1U},
+        {1U, 1U, 1U, (1U << 20U) - 18U}};
+
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    constexpr uint32_t iterations = 2U;
+    for (const auto& shape : shapes) {
+        for (uint32_t iter = 0; iter < iterations; ++iter) {
+            xt::xarray<float> x_data = xt::empty<float>(shape);
+            ttml::init::parallel_generate(x_data, []() { return std::uniform_real_distribution<float>(0.F, 1.F); }, 42);
+            auto x = ttml::autograd::create_tensor(ttml::core::from_xtensor(x_data, device));
+            auto gamma =
+                ttml::autograd::create_tensor(ttml::core::ones(ttml::core::create_shape({1, 1, 1, shape[3]}), device));
+
+            auto result = ttml::ops::rmsnorm(x, gamma, 0.0078125F);
+            auto result_xtensor = ttml::core::to_xtensor(result->get_value());
+
+            auto expected_result = ttml::ops::rmsnorm_composite(x, gamma, 0.0078125F);
+            auto expected_result_xtensor = ttml::core::to_xtensor(expected_result->get_value());
+
+            EXPECT_TRUE(xt::allclose(result_xtensor, expected_result_xtensor, 1.0e-3F, 3e-2F));
+
+            ttml::autograd::ctx().reset_graph();
+        }
+    }
 }
 
 TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
