@@ -1149,7 +1149,12 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
     // Fabric Route will terminate at the exit node if the host does not own the destination node. i.e. dest is not on a
     // mesh or coordinte range owned by the host.
     bool end_route_at_exit_node =
-        !(this->is_local_mesh(dst_fabric_node_id.mesh_id) and host_local_coord_range.contains(dst_mesh_coord));
+        ((dst_fabric_node_id.mesh_id != src_fabric_node_id.mesh_id) and
+         !(this->is_local_mesh(dst_fabric_node_id.mesh_id)) and (host_local_coord_range.contains(dst_mesh_coord)));
+    // If getting route within mesh, but the dest is not local, we stop at the last local node in the mesh.
+    bool end_route_at_edge_of_local_mesh =
+        ((dst_fabric_node_id.mesh_id == src_fabric_node_id.mesh_id) and
+         !(host_local_coord_range.contains(dst_mesh_coord)));
 
     TT_FATAL(
         valid_src,
@@ -1159,20 +1164,11 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
         this->local_mesh_binding_.host_rank,
         src_fabric_node_id.mesh_id);
 
-    std::vector<FabricNodeId> candidate_end_nodes;
-    if (end_route_at_exit_node) {
-        // If routing to a mesh remote to the host, we need to generate a path to a local exit node that can direct
-        // traffic to the remote mesh.
-        candidate_end_nodes = routing_table_generator_->get_exit_nodes_routing_to_mesh(dst_fabric_node_id.mesh_id);
-    } else {
-        // If routing to a mesh local to the host, we can route directly to the destination chip.
-        candidate_end_nodes.push_back(dst_fabric_node_id);
-    }
-
-    std::vector<std::pair<FabricNodeId, chan_id_t>> route;
+    const auto& local_ethernet_connections =
+        tt::tt_metal::MetalContext::instance().get_cluster().get_ethernet_connections();
+    std::vector<std::pair<FabricNodeId, chan_id_t>> route{{src_fabric_node_id, src_chan_id}};
     int i = 0;
-    while (std::find(candidate_end_nodes.begin(), candidate_end_nodes.end(), src_fabric_node_id) ==
-           candidate_end_nodes.end()) {
+    while (src_fabric_node_id != dst_fabric_node_id) {
         i++;
         auto src_mesh_id = src_fabric_node_id.mesh_id;
         auto src_chip_id = src_fabric_node_id.chip_id;
@@ -1202,15 +1198,31 @@ std::vector<std::pair<FabricNodeId, chan_id_t>> ControlPlane::get_fabric_route(
             route.push_back({src_fabric_node_id, next_chan_id});
         }
 
-        std::tie(src_fabric_node_id, src_chan_id) =
-            this->get_connected_mesh_chip_chan_ids(src_fabric_node_id, next_chan_id);
-        route.push_back({src_fabric_node_id, src_chan_id});
-    }
-    if (end_route_at_exit_node) {
-        // When routing to a remote mesh, append the exit node to the route.
-        route.push_back(
-            {src_fabric_node_id,
-             this->inter_mesh_routing_tables_.at(src_fabric_node_id)[src_chan_id][*dst_fabric_node_id.mesh_id]});
+        auto physical_chip_id = logical_mesh_chip_id_to_physical_chip_id_mapping_.at(src_fabric_node_id);
+        if (local_ethernet_connections.find(physical_chip_id) != local_ethernet_connections.end() and
+            local_ethernet_connections.at(physical_chip_id).find(next_chan_id) !=
+                local_ethernet_connections.at(physical_chip_id).end()) {
+            std::tie(src_fabric_node_id, src_chan_id) =
+                this->get_connected_mesh_chip_chan_ids(src_fabric_node_id, next_chan_id);
+            route.push_back({src_fabric_node_id, src_chan_id});
+        } else {
+            TT_ASSERT(
+                end_route_at_exit_node or end_route_at_edge_of_local_mesh,
+                "ControlPlane: route between {} and {} should not end at exit node or edge of local mesh",
+                src_fabric_node_id,
+                dst_fabric_node_id);
+            if (end_route_at_exit_node) {
+                std::vector<FabricNodeId> candidate_end_nodes =
+                    routing_table_generator_->get_exit_nodes_routing_to_mesh(dst_fabric_node_id.mesh_id);
+                // Check that the current node is a valid exit node
+                TT_ASSERT(
+                    std::find(candidate_end_nodes.begin(), candidate_end_nodes.end(), src_fabric_node_id) !=
+                        candidate_end_nodes.end(),
+                    "ControlPlane: src_fabric_node_id {} not found in candidate_end_nodes",
+                    src_fabric_node_id);
+            }
+            break;
+        }
     }
     return route;
 }
