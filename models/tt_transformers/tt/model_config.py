@@ -1456,9 +1456,6 @@ class ModelArgs:
 
         # RoPE params
         self.rope_theta = text_config.get("rope_theta")
-        # If use_scaled_rope is not present, assume setting rope_scaling means use scaled rope
-        # If it is present and is set to false, do not use scaled rope
-        # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
         rope_scaling_params = text_config.get("rope_scaling", None)
         self.rope_scaling = rope_scaling_model_factory(rope_scaling_params) if rope_scaling_params else None
 
@@ -1492,7 +1489,7 @@ class ModelArgs:
 
     @property
     def use_scaled_rope(self):
-        return self.rope_scaling_factor is not None
+        return self.rope_scaling is not None
 
     @property
     def base_model_name(self):
@@ -1522,29 +1519,37 @@ class ModelArgs:
 
         # Meta-style config dicts don't specity model name or rope_scaling_factor so hard-code these
         # Set the model name based on the checkpoint directory being loaded
-        if "3.2-1B" in checkpoint_dir:
-            self.model_name = "Llama-3.2-1B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 32
-        elif "3.2-3B" in checkpoint_dir:
-            self.model_name = "Llama-3.2-3B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 32
-        elif "3.1-8B" in checkpoint_dir:
-            self.model_name = "Llama-3.1-8B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 8
-        elif "3.2-11B" in checkpoint_dir:
-            self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 8  # shared with 3.1-8B
-        elif "3.1-70B" in checkpoint_dir:
-            self.model_name = "Llama-3.1-70B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 8
-            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-        elif "3.2-90B" in checkpoint_dir:
-            self.model_name = "Llama-3.2-90B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 8
-            self.is_90b = True
+        if "Llama-3.2" or "Llama-3.1" in checkpoint_dir:
+            orig_context_len = 8192
+            if "3.2-1B" in checkpoint_dir:
+                self.model_name = "Llama-3.2-1B" + ("-Instruct" if self.instruct else "")
+                rope_scaling_factor = 32
+            elif "3.2-3B" in checkpoint_dir:
+                self.model_name = "Llama-3.2-3B" + ("-Instruct" if self.instruct else "")
+                rope_scaling_factor = 32
+            elif "3.1-8B" in checkpoint_dir:
+                self.model_name = "Llama-3.1-8B" + ("-Instruct" if self.instruct else "")
+                rope_scaling_factor = 8
+            elif "3.2-11B" in checkpoint_dir:
+                self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
+                rope_scaling_factor = 8  # shared with 3.1-8B
+            elif "3.1-70B" in checkpoint_dir:
+                self.model_name = "Llama-3.1-70B" + ("-Instruct" if self.instruct else "")
+                rope_scaling_factor = 8
+                self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
+            elif "3.2-90B" in checkpoint_dir:
+                self.model_name = "Llama-3.2-90B" + ("-Instruct" if self.instruct else "")
+                rope_scaling_factor = 8
+                self.is_90b = True
+            self.rope_scaling = rope_scaling_model_factory(
+                {
+                    "rope_type": "llama3",
+                    "factor": rope_scaling_factor,
+                    "original_max_position_embeddings": orig_context_len,
+                }
+            )
         else:
             logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
-        self.orig_context_len = 8192
 
     def _set_hf_params(self, checkpoint_dir):
         if self.from_hf_url:
@@ -1576,7 +1581,7 @@ class ModelArgs:
     ffn_dim_multiplier={self.ffn_dim_multiplier},
     norm_eps={self.norm_eps},
     rope_theta={self.rope_theta},
-    rope_scaling_factor={self.rope_scaling_factor},
+    rope_scaling_factor={self.rope_scaling.factor},
     max_batch_size={self.max_batch_size},
     max_seq_len={self.max_seq_len},
     vision_chunk_size={self.vision_chunk_size},

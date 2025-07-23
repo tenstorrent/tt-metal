@@ -68,7 +68,7 @@ class RopeScalingYarn(RopeScaling):
 def rope_scaling_model_factory(rope_scaling_params: dict) -> RopeScaling:
     if rope_scaling_params.get("rope_type") == RopeScalingType.LLAMA3:
         return RopeScalingLlama3(**rope_scaling_params)
-    elif rope_scaling_params.get("rope_type") == RopeScalingType.YARN or rope_scaling_params.get("rope_type") == "yarn":
+    elif rope_scaling_params.get("rope_type") == RopeScalingType.YARN:
         return RopeScalingYarn(**rope_scaling_params)
     else:
         raise ValueError(f"Invalid RoPE scaling type: {rope_scaling_params.get('rope_type')}")
