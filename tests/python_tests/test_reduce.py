@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
 import torch
 
 from helpers.device import (
@@ -18,10 +17,8 @@ from helpers.format_arg_mapping import (
 from helpers.format_config import DataFormat
 from helpers.golden_generators import ReduceGolden, get_golden_generator
 from helpers.param_config import (
-    clean_params,
-    generate_param_ids,
-    generate_params,
     input_output_formats,
+    parametrize,
 )
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import run_test
@@ -35,49 +32,22 @@ mathop_mapping = {
     ReduceDimension.Scalar: MathOperation.ReduceScalar,
 }
 
-# SUPPORTED FORMATS FOR TEST
-supported_formats = [
-    DataFormat.Float16_b,
-    DataFormat.Float16,
-    DataFormat.Float32,
-    DataFormat.Bfp8_b,
-]
 
-#   INPUT-OUTPUT FORMAT SWEEP
-#   input_output_formats(supported_formats)
-
-#   FULL FORMAT SWEEP
-#   format_combination_sweep(formats=supported_formats, all_same=False, same_src_reg_format=True)
-
-#   SPECIFIC FORMAT COMBINATION
-#   generate_combination(
-#       [(DataFormat.Float16_b,  # index 0 is for unpack_A_src
-#         DataFormat.Float16_b,  # index 1 is for unpack_A_dst
-#         DataFormat.Float16_b,  # index 2 is for pack_src (if src registers have same formats)
-#         DataFormat.Bfp8_b,  # index 3 is for pack_dst
-#         DataFormat.Float16_b,  # index 4 is for math format)])
-
-#   SPECIFIC INPUT-OUTPUT COMBINATION
-#   [InputOutputFormat(DataFormat.Float16, DataFormat.Float32)]
-
-formats = input_output_formats(supported_formats)
-all_params = generate_params(
-    ["reduce_test"],
-    formats,
+@parametrize(
+    test_name="reduce_test",
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+            DataFormat.Float16,
+            DataFormat.Float32,
+            DataFormat.Bfp8_b,
+        ]
+    ),
     dest_acc=[DestAccumulation.No],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type=[ReducePool.Max, ReducePool.Average, ReducePool.Sum],
 )
-
-param_ids = generate_param_ids(all_params)
-
-
-@pytest.mark.parametrize(
-    "testname, formats, dest_acc, reduce_dim, pool_type",
-    clean_params(all_params),
-    ids=param_ids,
-)
-def test_reduce(testname, formats, dest_acc, reduce_dim, pool_type):
+def test_reduce(test_name, formats, dest_acc, reduce_dim, pool_type):
 
     input_dimensions = [32, 32]
 
@@ -107,7 +77,7 @@ def test_reduce(testname, formats, dest_acc, reduce_dim, pool_type):
 
     test_config = {
         "formats": formats,
-        "testname": testname,
+        "testname": test_name,
         "dest_acc": dest_acc,
         "reduce_dim": reduce_dim,
         "pool_type": pool_type,
@@ -121,11 +91,5 @@ def test_reduce(testname, formats, dest_acc, reduce_dim, pool_type):
 
     res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
     res_tensor = untilize(res_tensor, formats.output_format)
-
-    # run_shell_command(f"cd .. && make clean") -> TODO: Investigate
-
-    # E           RuntimeError: Build failed: cd .. && make clean
-    # E           rm: cannot remove 'build/elf': Directory not empty
-    # E           make: *** [Makefile:129: clean] Error 1
 
     assert passed_test(golden_tensor, res_tensor, formats.output_format)

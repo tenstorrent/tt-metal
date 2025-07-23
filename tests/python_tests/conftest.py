@@ -17,6 +17,7 @@ from ttexalens.tt_exalens_lib import (
 
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import reset_mailboxes
+from helpers.format_config import InputOutputFormat
 from helpers.log_utils import _format_log
 from helpers.target_config import TestTargetConfig, initialize_test_target_from_pytest
 
@@ -131,30 +132,45 @@ def pytest_runtest_logreport(report):
         logging.error(f"Test {report.nodeid} failed: {report.longrepr}\n")
 
 
-# Modify how the nodeid is generated
-def pytest_collection_modifyitems(items):
-    for item in items:
-        # Modify the test item to hide the function name and only show parameters
-        # item.nodeid is immutable, so we should modify how the test is represented
-        if "::" in item.nodeid and "[" in item.nodeid:
-            file_part, params_part = item.nodeid.split("::", 1)
-            param_only = params_part.split("[", 1)[1]  # Extract parameters
-            item._nodeid = f"{file_part}[{param_only}]"
+def _stringify_params(params):
+    parts = []
+    for name, value in params.items():
+        # todo: handle FormatConfig?
+        if name == "test_name":
+            continue
+        elif isinstance(value, InputOutputFormat):
+            parts.append(f"{name}.input={value.input}")
+            parts.append(f"{name}.output={value.output}")
+        elif isinstance(value, str):
+            parts.append(f'{name}="{value}"')
+        elif hasattr(value, "repr"):
+            parts.append(f"{name}={value.repr()}")
+        else:
+            parts.append(f"{name}={str(value)}")
+
+    return f"[{' | '.join(parts)}]"
 
 
-def pytest_runtest_protocol(item, nextitem):
-    """
-    This hook can modify the test item before it's executed.
-    We're going to set the test function name to an empty string.
-    """
-    # Modify the nodeid to show only the parameters, not the function name
-    if "::" in item.nodeid and "[" in item.nodeid:
-        _, param_part = item.nodeid.split("::", 1)
-        param_only = param_part.split("[", 1)[1]  # Extract parameters
-        item.name = f"[{param_only}]"
+def pytest_runtest_logreport(report):
+    if report.when != "call":
+        return
 
-    # Continue the test execution as usual
-    return None
+    callspec = getattr(report.item, "callspec", None)
+    if callspec is None:
+        return
+
+    print(f"\nParameters: {_stringify_params(callspec.params)}")
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    # Execute all other hooks to obtain the report object
+    outcome = yield
+    report = outcome.get_result()
+
+    # Attach the item to the report so it's available in logreport
+    report.item = item
+    return report
 
 
 def pytest_sessionstart(session):
