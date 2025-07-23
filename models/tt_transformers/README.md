@@ -300,8 +300,8 @@ model_args = ModelArgs(
 
 **When to keep caching enabled (`cache_hf=True`, default):**
 - Sufficient memory available
-- Multiple inference runs or comparisons needed
-- Performance is prioritized over memory usage
+- Comparisons with torch model is needed
+- Minimizing test duration is prioritized over memory usage
 - Running reference model tests
 
 The `cache_hf` parameter affects:
@@ -311,4 +311,4 @@ The `cache_hf` parameter affects:
 **Memory Impact:**
 - Disabling caching saves approximately the full model size in memory
 - For a 70B model, this can save ~140GB+ of memory usage
-- Slight performance cost as model needs to be reloaded for reference operations
+- Increased test duration as model needs to be reloaded for reference operations
