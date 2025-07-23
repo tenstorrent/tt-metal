@@ -233,7 +233,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasAllGather) {
 
     auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor, {0, 1, 3, 2}));
     if (has_bias) {
-        expected_output += bias_xtensor[0];
+        expected_output += bias_xtensor;
     }
 
     EXPECT_TRUE(xt::allclose(expected_output, output_xtensor[0], /* rtol */ 1e-2, /* atol */ 1e-2));
@@ -309,7 +309,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNoAllGather) {
     auto expected_output = xt::linalg::dot(test_data, xt::transpose(weight_xtensor, {0, 1, 3, 2}));
     expected_output = expected_output.reshape({1U, 1U, 1U, out_features});
     if (has_bias) {
-        expected_output += bias_xtensor[0];
+        expected_output += bias_xtensor;
     }
 
     EXPECT_TRUE(xt::allclose(
@@ -432,9 +432,9 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
         replicate_layer_input_gradients[1], row_parallel_input_gradients[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[0], row_parallel_weight_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients[0], row_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[1], row_parallel_weight_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients[1], row_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
@@ -500,9 +500,9 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
         replicate_layer_input_gradients[1], column_parallel_input_gradients[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[0], column_parallel_weight_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients[0], column_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[1], column_parallel_weight_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients[1], column_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
 };
 
 TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
@@ -569,7 +569,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
         replicate_layer_input_gradients[1], column_parallel_input_gradients[1], /* rtol */ 1e-2, /* atol */ 1e-2));
 
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[0], column_parallel_weight_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients[0], column_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(
-        replicate_layer_weight_gradients[1], column_parallel_weight_gradients[0], /* rtol */ 1e-2, /* atol */ 1e-2));
+        replicate_layer_weight_gradients[1], column_parallel_weight_gradients, /* rtol */ 1e-2, /* atol */ 1e-2));
 };
