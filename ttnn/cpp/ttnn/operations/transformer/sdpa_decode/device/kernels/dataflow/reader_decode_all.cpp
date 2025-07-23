@@ -8,6 +8,7 @@
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
+#include "debug/dprint.h"
 
 void kernel_main() {
     /*
@@ -57,6 +58,8 @@ void kernel_main() {
     const uint32_t core_num_in_reduce = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t core_num_in_output = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t cur_pos_arg = get_arg_val<uint32_t>(arg_idx++);
+
+    DPRINT << "reader kernel start" << ENDL();
 
     // idle core
     if (q_addr == 0) {
@@ -323,4 +326,5 @@ void kernel_main() {
                 PSt);
         }
     }
+    DPRINT << "reader kernel done" << ENDL();
 }

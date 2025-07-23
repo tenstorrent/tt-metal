@@ -386,7 +386,6 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     const bool use_half_tile =
         (is_causal and num_q_heads <= 16 and q_df == tt::DataFormat::Float16_b and
          device->arch() == tt::ARCH::WORMHOLE_B0);
-
     if (use_half_tile) {
         q_tile = half_tile;
         mask_tile = half_tile;
@@ -500,13 +499,6 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     auto cb_in8_id = CreateCircularBuffer(program, core_grid, c_in8_config);
 
     // cb_col_identity
-    /*
-    auto c_in11_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{CBIndex::c_11, scalar_df}})
-                             .set_page_size(CBIndex::c_11, scalar_tile_size)
-                             .set_tile_dims(CBIndex::c_11, scalar_tile);
-    auto c_in11_id = CreateCircularBuffer(program, core_grid, c_in11_config);
-    */
-    // cb_col_identity - use appropriate tile size based on use_half_tile
     auto col_identity_tile = full_tile;
     auto col_identity_tile_size = col_identity_tile.get_tile_size(scalar_df);
 
