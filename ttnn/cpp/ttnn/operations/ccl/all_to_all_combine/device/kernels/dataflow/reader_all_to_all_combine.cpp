@@ -69,8 +69,6 @@ void kernel_main() {
     const auto start_idx = get_arg_val<uint32_t>(3);
     const auto end_idx = get_arg_val<uint32_t>(4);
 
-    DPRINT << "READER -1 " << "\n";
-
     InterleavedAddrGen<metadata_is_dram> metadata_addrgen{
         .bank_base_address = metadata_tensor_addr, .page_size = metadata_page_size_bytes};
 
@@ -81,24 +79,17 @@ void kernel_main() {
     // this gets sent to writer
     cb_reserve_back(local_experts_cb_id,1);
     auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(local_experts_cb_id));
-    DPRINT << "READER 0 " << "\n";
 
     // temp buffer just used here
     cb_reserve_back(mapping_cb_id,1);
     uint32_t mapping_buffer_addr = get_write_ptr(mapping_cb_id);
     cb_push_back(mapping_cb_id, 1);
 
-    DPRINT << "READER 0.5 " << "\n";
-
     detail::get_device_expert_indices<src_chip_id, num_mapping_pages, mapping_page_size_bytes, mapping_is_dram>(
         mapping_addrgen, mapping_buffer_addr, mapping_page_size_bytes, local_experts_ptr);
     cb_push_back(local_experts_cb_id,1);
 
-    DPRINT << "READER 0.75 " << "\n";
-
     for (uint32_t bs = start_idx; bs < end_idx; ++bs) {
-        // DPRINT << "READER 1 "<<bs<<"\n";
-
         cb_reserve_back(metadata_cb_id,1);
         const uint32_t metadata_l1_addr = get_read_ptr(metadata_cb_id);
         const uint64_t metadata_noc_addr = get_noc_addr(bs, metadata_addrgen);
@@ -111,9 +102,7 @@ void kernel_main() {
             const auto & expert_idx = local_experts_ptr[e];
             if (find_if<uint16_t, selected_experts_k, false>(metadata_ptr, expert_idx)) {
                 const uint32_t data_page_idx = detail::get_data_page_idx<batch_size, seq_size, locally_reduced>(e, bs);
-                // DPRINT << "READER 2 bs: "<<bs<<" e: "<<e<<"\n";
-                cb_reserve_back(data_cb_id,1);
-                // DPRINT << "READER 2.5 bs: "<<bs<<" e: "<<e<<"\n";
+                cb_reserve_back(data_cb_id, 1);
 
                 const uint32_t data_l1_addr=get_write_ptr(data_cb_id);
                 const uint64_t data_noc_addr = get_noc_addr(data_page_idx, data_addrgen);
@@ -127,7 +116,6 @@ void kernel_main() {
                 }
             }
         }
-        cb_push_back(metadata_cb_id,1);
-        // DPRINT << "READER 3 "<<bs<<"\n";
+        cb_push_back(metadata_cb_id, 1);
     }
 }

@@ -59,6 +59,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     Program program{};
 
     // todo maybe, subdevice
+    auto mesh_device = topk_tensor.mesh_device();
     const auto grid = mesh_device->compute_with_storage_grid_size();
     // CoreCoord grid = {1,1};
 
@@ -112,7 +113,6 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
             .set_page_size(output_cb_id, output_page_size_bytes);
     const auto output_cb_handle = CreateCircularBuffer(program, total_cores, cb_output_config);
 
-    auto mesh_device = topk_tensor.mesh_device();
     const auto& mesh_view = mesh_device->get_view();
     const uint32_t flat_mesh_idx = mesh_coordinate[0] * mesh_view.num_cols() + mesh_coordinate[1];
     const bool topk_is_dram = topk_tensor.buffer()->buffer_type() == BufferType::DRAM;
