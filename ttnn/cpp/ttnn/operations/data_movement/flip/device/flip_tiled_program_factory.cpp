@@ -83,12 +83,15 @@ FlipDeviceOperation::MultiCoreTiled::cached_program_t FlipDeviceOperation::Multi
         dims_to_flip[d] = 1;
     }
 
+    // ------------------------------------------------------------------------
+    // 1) Split work to all available cores
+    // ------------------------------------------------------------------------
     auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         split_work_to_cores(core_grid, num_tiles);
 
     // ------------------------------------------------------------------------
-    // 5) Create circular buffer
+    // 2) Create circular buffer
     // ------------------------------------------------------------------------
     DataFormat input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t tile_size = tt::tt_metal::detail::TileSize(input_data_format);
@@ -103,14 +106,14 @@ FlipDeviceOperation::MultiCoreTiled::cached_program_t FlipDeviceOperation::Multi
             .set_page_size(CBIndex::c_0, input_page_size));
 
     // ------------------------------------------------------------------------
-    // 5) Set compile time arguments for kernels
+    // 3) Set compile time arguments for kernels
     // ------------------------------------------------------------------------
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)src_is_dram, rank, element_size, tile_shape[0], tile_shape[1], face_shape[0], face_shape[1]};
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
 
     // ------------------------------------------------------------------------
-    // 5) Create kernels
+    // 4) Create kernels
     // ------------------------------------------------------------------------
     KernelHandle reader_id = CreateKernel(
         program,

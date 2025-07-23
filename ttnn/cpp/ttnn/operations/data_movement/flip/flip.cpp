@@ -29,24 +29,10 @@ bool is_flip_nop(const ttnn::Tensor& input_tensor, const ttnn::SmallVector<uint3
 
 ttnn::Tensor flip_impl(
     const ttnn::Tensor& input_tensor, const ttnn::SmallVector<uint32_t>& dims, const MemoryConfig& memory_config) {
-    //    // For tensors with rank < 4, pad to 4D for device operation compatibility
-    //    const auto rank = input_tensor.get_logical_shape().rank();
-
-    // Execute device operation
-    auto formatted_input_tensor = input_tensor;
-
-    // uint32_t N = dims[0], C = dims[1], H = dims[2], W = dims[3];
-    // // WH and CN should be supported without typecast
-    // bool wh = N == 0 && C == 1 && H == 3 && W == 2;
-    // bool cn = N == 1 && C == 0 && H == 2 && W == 3;
-    // bool cnwh = N == 1 && C == 0 && H == 3 && W == 2;
-    // bool bfloat8_supported = wh || cn || cnwh;
-    // bool typecast = formatted_input_tensor.dtype() == DataType::BFLOAT8_B and !bfloat8_supported &&
-    // !input_tensor.is_sharded(); formatted_input_tensor = typecast ? ttnn::typecast(formatted_input_tensor,
-    // DataType::BFLOAT16) : formatted_input_tensor;
+    // For tensors with rank < 4, pad to 4D for device operation compatibility
+    // const auto rank = input_tensor.get_logical_shape().rank();
     log_debug(tt::LogOp, "flip_impl");
-    auto output = ttnn::prim::flip(formatted_input_tensor, dims, memory_config, std::nullopt);
-
+    auto output = ttnn::prim::flip(input_tensor, dims, memory_config, std::nullopt);
     return output;
 }
 
