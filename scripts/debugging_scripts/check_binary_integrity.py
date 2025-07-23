@@ -267,9 +267,6 @@ def check_binary_integrity(device: Device, dispatcher_data: DispatcherData):
             for risc_name in noc_block.risc_names:
                 dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
 
-                if noc_block.block_type == "eth":
-                    print(location.to_user_str())
-
                 # Check firmware ELF binary state on the device
                 log_check(
                     os.path.exists(dispatcher_core_data.firmware_path),
