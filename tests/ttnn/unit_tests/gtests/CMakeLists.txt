@@ -23,6 +23,7 @@ TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_smoke)
 target_sources(
     unit_tests_ttnn_smoke
     PRIVATE
+        common_test_utils.cpp
         test_reflect.cpp
         test_to_and_from_json.cpp
         test_sliding_window_infra.cpp
@@ -45,7 +46,6 @@ TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_basic)
 target_sources(
     unit_tests_ttnn_basic
     PRIVATE
-        common_test_utils.cpp
         test_add.cpp
         test_broadcast_to.cpp
         test_generic_op.cpp
