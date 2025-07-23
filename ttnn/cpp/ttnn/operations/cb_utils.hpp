@@ -19,6 +19,8 @@ std::tuple<std::array<uint32_t, N>, CBHandle> create_cb(
     Buffer* buffer = nullptr) {
     std::map<uint8_t, tt::DataFormat> data_format_spec = {};
     for (auto cb : cbs) {
+        fprintf(stderr, "++ Creating CB %u: pageSize %u nPages %u\n", cb, page_size, num_pages);
+
         data_format_spec[cb] = data_format;
     }
 
