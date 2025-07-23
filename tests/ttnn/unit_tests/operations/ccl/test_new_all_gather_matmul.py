@@ -19,12 +19,6 @@ def create_global_semaphores(t3k_mesh_device, num_devices, cores, initial_value)
     return ccl_semaphore_handles
 
 
-def create_global_sync_semaphores(t3k_mesh_device, num_devices, cores, initial_value):
-    # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(t3k_mesh_device, cores, initial_value) for _ in range(1)]
-    return ccl_semaphore_handles
-
-
 def run_all_gather_impl(
     t3k_mesh_device,
     num_devices,
@@ -46,6 +40,7 @@ def run_all_gather_impl(
     mem_config_weights=None,
     num_iters=1,
     enable_trace=True,
+    use_barrier=False,
 ):
     torch.manual_seed(0)
 
@@ -88,7 +83,7 @@ def run_all_gather_impl(
             create_global_semaphores(t3k_mesh_device, num_devices, ccl_sub_device_crs, 0) for _ in range(num_iters)
         ]
 
-        sync_semaphores = [
+        barrier_semaphore_handles = [
             ttnn.create_global_semaphore(t3k_mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
         ]
 
@@ -216,7 +211,7 @@ def run_all_gather_impl(
                     memory_config=mem_config_ag,
                     topology=all_gather_topology,
                     subdevice_id=worker_sub_device_id,
-                    sync_semaphore=sync_semaphores[i],
+                    barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
                 )
 
             tt_matmul_out_tensor = ttnn.linear(
@@ -251,6 +246,7 @@ def run_all_gather_impl(
                     dim=dim,
                     multi_device_global_semaphore=ccl_semaphore_handles[i],
                     all_gather_core_grid_offset=(0, 6),
+                    barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
                     bias=bias_tt,
                     num_links=num_links,
                     memory_config_ag=mem_config_ag,
@@ -343,32 +339,40 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
     [
-        # (True, 10),
+        (True, 10),
         (False, 1),
     ],
-    # ids=["perf", "check"],
+    ids=["perf", "check"],
 )
 @pytest.mark.parametrize(
     "use_non_fused",
     [
         True,
-        # False,
+        False,
     ],
-    # ids=["separate", "fused"],
+    ids=["separate", "fused"],
+)
+@pytest.mark.parametrize(
+    "use_barrier",
+    [
+        True,
+        False,
+    ],
+    ids=["barrier_active", "barrier_inactive"],
 )
 @pytest.mark.parametrize(
     "device_params, use_legacy_allgather, all_gather_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, False, ttnn.Topology.Ring),
-        # ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, False, ttnn.Topology.Linear),
-        # (
-        #     {"trace_region_size": 90112},
-        #     True,
-        #     ttnn.Topology.Ring,
-        # ),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, False, ttnn.Topology.Linear),
+        (
+            {"trace_region_size": 90112},
+            True,
+            ttnn.Topology.Ring,
+        ),
     ],
     indirect=["device_params"],
-    # ids=["fabric_ring", "fabric_linear", "legacy_ring"],
+    ids=["fabric_ring", "fabric_linear", "legacy_ring"],
 )
 def test_all_gather_matmul_async(
     t3k_mesh_device,
@@ -387,12 +391,16 @@ def test_all_gather_matmul_async(
     mem_config_mm,
     enable_trace,
     use_non_fused,
+    use_barrier,
     use_legacy_allgather,
     all_gather_topology,
     num_iters,
 ):
     if use_non_fused == False and all_gather_topology == ttnn.Topology.Linear:
         pytest.skip("linear is not supported when using fused for all-gather")
+
+    if use_barrier == True and use_legacy_allgather == True:
+        pytest.skip("barrier not used for legacy all-gather")
 
     run_all_gather_impl(
         t3k_mesh_device,
@@ -414,4 +422,5 @@ def test_all_gather_matmul_async(
         use_non_fused=use_non_fused,
         use_legacy_allgather=use_legacy_allgather,
         num_iters=num_iters,
+        use_barrier=use_barrier,
     )
