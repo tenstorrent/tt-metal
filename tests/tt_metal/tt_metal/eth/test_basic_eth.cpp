@@ -549,4 +549,6 @@ TEST_F(BlackholeSingleCardFixture, ActiveEthKernelNocsOnBothActiveEriscs) {
     unit_tests::erisc::kernels::RunBlackholeBasicEthKernelMixedNocTest(this, device_, HalProgrammableCoreType::ACTIVE_ETH, tt_metal::DataMovementProcessor::RISCV_0, tt_metal::DataMovementProcessor::RISCV_1);
 }
 
+TEST_F(BlackholeSingleCardFixture, Nop) {}
+
 }  // namespace tt::tt_metal
