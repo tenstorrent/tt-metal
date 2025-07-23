@@ -69,8 +69,8 @@ def get_shard_grid_from_num_cores(device, ncores: Union[int, Tuple[int, int]]) -
         [1, 512, 14, 14],
     ],
 )
-@pytest.mark.parametrize("scale_h", [2])
-@pytest.mark.parametrize("scale_w", [2])
+@pytest.mark.parametrize("scale_h", [2, 3])
+@pytest.mark.parametrize("scale_w", [2, 3])
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("math_approx_mode", [True, False])
 def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, math_fidelity, math_approx_mode):
