@@ -27,18 +27,9 @@ extern "C" void wzerorange(uint32_t *start, uint32_t *end);
 // usage.
 
 extern "C" [[gnu::section(".start"), gnu::naked, gnu::optimize("Os")]] void _start(void) {
-    // Allocate required stack space
-#if defined(ARCH_BLACKHOLE)
-    // Application() was found to have inherited the gnu::naked attribute
-    // Callee saves below needs 64B, Application needs 32B
-    // Servicing base firmware functions needs 64B + 16B
-    __asm__ volatile("addi sp, sp, -16 * 16\n\t");
-#else
-    __asm__ volatile("addi sp, sp, -16 * 4\n\t");
-#endif
-
     // Save callee saves.
     __asm__ volatile(
+        "addi sp, sp, -16 * 4\n\t"
         "sw ra, 0 * 4(sp)\n\t"
         "sw s0, 1 * 4(sp)\n\t"
         "sw s1, 2 * 4(sp)\n\t"
@@ -87,12 +78,6 @@ static void do_erisc_exit() {
         "lw s8, 9 * 4(sp)\n\t"
         "lw s9, 10 * 4(sp)\n\t"
         "lw s10, 11 * 4(sp)\n\t"
-        "lw s11, 12 * 4(sp)\n\t");
-
-    // Free stack
-#if defined(ARCH_BLACKHOLE)
-    __asm__ volatile("addi sp, sp, 16 * 16\n\t");
-#else
-    __asm__ volatile("addi sp, sp, 16 * 4\n\t");
-#endif
+        "lw s11, 12 * 4(sp)\n\t"
+        "addi sp, sp, 4 * 16\n\t");
 }
