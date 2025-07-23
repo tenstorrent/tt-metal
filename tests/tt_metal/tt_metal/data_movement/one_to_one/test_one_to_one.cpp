@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device_fixture.hpp"
+#include "../../common/dispatch_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -35,8 +35,9 @@ struct OneToOneConfig {
 /// @brief Does L1 Sender Core --> L1 Receiver Core
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
+/// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
-bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
+bool run_dm(IDevice* device, const OneToOneConfig& test_config, DispatchFixture* fixture) {
     /* ================ SETUP ================ */
 
     // Program
@@ -126,8 +127,8 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     tt_metal::detail::WriteToDeviceL1(device, test_config.master_core_coord, l1_base_address, packed_input);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
-    // LAUNCH THE PROGRAM
-    detail::LaunchProgram(device, program);
+    // LAUNCH THE PROGRAM - Use dispatch-aware method
+    fixture->RunProgram(device, program);
 
     // Record Output from Subordinate L1
     std::vector<uint32_t> packed_output;
@@ -244,7 +245,7 @@ void packet_sizes_test(
     CoreCoord subordinate_core_coord = {1, 1}) {
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_[0]);
 
     // Parameters
     uint32_t max_transactions = 256;
@@ -271,8 +272,8 @@ void packet_sizes_test(
             };
 
             // Run
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            for (unsigned int id = 0; id < devices_.size(); id++) {
+                EXPECT_TRUE(run_dm(devices_[id], test_config, this));
             }
         }
     }
@@ -290,7 +291,7 @@ void custom_test(
     uint32_t num_virtual_channels = 4) {
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_[0]);
 
     // Test config
     unit_tests::dm::core_to_core::OneToOneConfig test_config = {
@@ -303,8 +304,9 @@ void custom_test(
         .l1_data_format = DataFormat::Float16_b,
         .num_virtual_channels = num_virtual_channels};
 
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    // Run
+    for (unsigned int id = 0; id < devices_.size(); id++) {
+        EXPECT_TRUE(run_dm(devices_[id], test_config, this));
     }
 }
 
