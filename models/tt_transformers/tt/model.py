@@ -80,7 +80,6 @@ class Transformer(LightweightModule):
         self.norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
-                tt_ccl=self.tt_ccl,
                 dim=args.dim,
                 eps=args.norm_eps,
                 state_dict=state_dict,
@@ -93,6 +92,7 @@ class Transformer(LightweightModule):
                 sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
+                tt_ccl=self.tt_ccl,
             ),
             args,
             self.tt_ccl,

@@ -54,7 +54,6 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         self.attention_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
-                tt_ccl=self.tt_ccl,
                 dim=self.hidden_size,
                 state_dict=state_dict,
                 state_dict_prefix=state_dict_prefix,
@@ -63,6 +62,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
                 is_distributed=configuration.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+                tt_ccl=self.tt_ccl,
             ),
             configuration,
             self.tt_ccl,
@@ -79,6 +79,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
 
         self.feed_forward = MLP(
             mesh_device=mesh_device,
+            tt_ccl=self.tt_ccl,
             args=configuration,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
@@ -91,7 +92,6 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         self.ffn_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
-                tt_ccl=self.tt_ccl,
                 dim=self.hidden_size,
                 state_dict=state_dict,
                 state_dict_prefix=state_dict_prefix,
@@ -100,6 +100,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
                 is_distributed=configuration.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
+                tt_ccl=self.tt_ccl,
             ),
             configuration,
             self.tt_ccl,

@@ -116,6 +116,7 @@ class TtLlamaCrossAttention(LightweightModule):
             weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
             weight_key="q_norm",
             eps=self.norm_eps,
+            tt_ccl=self.tt_ccl,
         )
 
         self.k_norm = RMSNorm(
@@ -126,6 +127,7 @@ class TtLlamaCrossAttention(LightweightModule):
             weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
             weight_key="k_norm",
             eps=self.norm_eps,
+            tt_ccl=self.tt_ccl,
         )
 
     def compute_xattn_kv_cache(self, xattn_tokens, user_id, xattn_cache, cross_page_table=None):
