@@ -33,7 +33,7 @@ jobs:
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /etc/rankfile:/etc/rankfile:ro
         - /etc/ssh/multihost:/root/.ssh:ro
-      options: --device /dev/tenstorrent
+      options: --device /dev/tenstorrent --network host --privileged
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
@@ -45,5 +45,4 @@ jobs:
         run: |
           sleep 10s
           echo "Running mpirun command on multiple hosts"
-          mpirun --allow-run-as-root --rankfile /etc/rankfile --mca btl_tcp_if_exclude docker0,lo --tag-output -n 1 bash -c "export TT_MESH_ID=0; export TT_HOST_RANK=0; export LD_LIBRARY_PATH=/work/build/lib; export TT_METAL_HOME=/work; export PYTHONPATH=/work; export ARCH_NAME=wormhole_b0; ./build/test/tt_metal/multi_host_fabric_tests" : -n 1 bash -c "export TT_MESH_ID=1; export TT_HOST_RANK=0; export LD_LIBRARY_PATH=/work/build/lib; export TT_METAL_HOME=/work; export PYTHONPATH=/work; export ARCH_NAME=wormhole_b0; ./build/test/tt_metal/multi_host_fabric_tests"
-          tt-run
+          mpirun --allow-run-as-root --rankfile /etc/rankfile --mca btl_tcp_if_exclude docker0,lo --tag-output hostname
