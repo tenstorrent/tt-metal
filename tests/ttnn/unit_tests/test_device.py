@@ -61,3 +61,34 @@ def test_worker_l1_fail(device, layout, dtype):
             device,
             memory_config=memory_config,
         )
+
+
+def helper_test_large_tensor(device):
+    shape = (1023, 2**10, 2**11)
+    torch_input = torch.full(shape, 1).bfloat16()
+    torch_output = torch_input
+
+    input_tensor = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    output_tensor = ttnn.from_device(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor).bfloat16()
+
+    print("shapes", torch_output.shape, output_tensor.shape)
+    print("tensors", torch_output, output_tensor)
+
+    assert torch_output.shape == output_tensor.shape
+    assert torch.all(torch_output == output_tensor)
+
+
+def test_large_tensor(device):
+    try:
+        helper_test_large_tensor(device)
+    finally:
+        ttnn.close_device(device)
+
+
+def test_readback(device):
+    torch.manual_seed(0)
+    torch_tensor = torch.full([96 * 96, 1, 32 * 228], 1.0).bfloat16()
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    output_tensor = ttnn.to_torch(input_tensor).bfloat16()
+    assert torch.all(torch_tensor == output_tensor)

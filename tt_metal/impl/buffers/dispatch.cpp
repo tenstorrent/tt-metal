@@ -50,8 +50,8 @@ struct BufferDispatchConstants {
 struct BufferWriteDispatchParams {
     tt::stl::Span<const uint32_t> expected_num_workers_completed;
     uint32_t address = 0;
-    uint32_t page_size_to_write = 0;
-    uint32_t data_size_to_copy = 0;
+    DeviceAddr page_size_to_write = 0;
+    DeviceAddr data_size_to_copy = 0;
     uint32_t total_pages_to_write = 0;
     uint32_t total_pages_written = 0;
     uint32_t pages_per_txn = 0;

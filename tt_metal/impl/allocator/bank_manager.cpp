@@ -134,11 +134,12 @@ uint64_t BankManager::allocate_buffer(
     if (not address.has_value()) {
         TT_THROW(
             "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
-            "store {} B",
+            "store {} B, but bank size is only {} B",
             size,
             magic_enum::enum_name(buffer_type_),
             num_banks,
-            size_per_bank);
+            size_per_bank,
+            bank_size());
     }
     allocated_buffers_.insert(address.value());
     return address.value();
