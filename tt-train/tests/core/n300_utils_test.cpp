@@ -12,6 +12,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "init/cpu_initializers.hpp"
 
 using namespace ttml;
 
@@ -115,7 +116,10 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
-    xt::xarray<float> xtensor = xt::random::rand({32 * 32}, -0.05, 0.05).reshape({1, 1, 32, 32});
+    xt::xarray<float> xtensor_data = xt::empty<float>({32 * 32});
+    ttml::init::parallel_generate(
+        xtensor_data, []() { return std::uniform_real_distribution<float>(-0.05, 0.05); }, 42);
+    xt::xarray<float> xtensor = xtensor_data.reshape({1, 1, 32, 32});
 
     const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tensor = ttml::core::from_xtensor(xtensor, device, ttnn::Layout::TILE, mapper.get());
@@ -137,7 +141,9 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
-    xt::xarray<float> xtensor = xt::random::rand({32}, -1.F, 1.F).reshape({1, 1, 4, 8});
+    xt::xarray<float> xtensor_data = xt::empty<float>({32});
+    ttml::init::parallel_generate(xtensor_data, []() { return std::uniform_real_distribution<float>(-1.F, 1.F); }, 42);
+    xt::xarray<float> xtensor = xtensor_data.reshape({1, 1, 4, 8});
 
     const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tensor = ttml::core::from_xtensor(xtensor, device, ttnn::Layout::TILE, mapper.get());
@@ -172,12 +178,18 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis2AddScalar) {
 }
 
 TEST_F(N300UtilsTest, TestXTensorShardAxis3Matmul) {
-    xt::random::seed(42);
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
-    xt::xarray<float> xtensor_a = xt::random::rand({128 * 64}, -0.005, 0.005).reshape({1, 1, 128, 64});
-    xt::xarray<float> xtensor_b = xt::random::rand({256 * 64}, -0.005, 0.005).reshape({1, 1, 64, 256});
+    xt::xarray<float> xtensor_a_data = xt::empty<float>({128 * 64});
+    ttml::init::parallel_generate(
+        xtensor_a_data, []() { return std::uniform_real_distribution<float>(-0.005, 0.005); }, 42);
+    xt::xarray<float> xtensor_a = xtensor_a_data.reshape({1, 1, 128, 64});
+
+    xt::xarray<float> xtensor_b_data = xt::empty<float>({256 * 64});
+    ttml::init::parallel_generate(
+        xtensor_b_data, []() { return std::uniform_real_distribution<float>(-0.005, 0.005); }, 42);
+    xt::xarray<float> xtensor_b = xtensor_b_data.reshape({1, 1, 64, 256});
 
     const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
     auto tensor_a = ttml::core::from_xtensor(xtensor_a, device, ttnn::Layout::TILE, mapper.get());
@@ -210,7 +222,6 @@ TEST_F(N300UtilsTest, DropoutDifferentSeed) {
     uint32_t dropout_seed1 = 42;
     float scale = 2.0F;
     float prob = 0.5F;
-    xt::random::seed(42);
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
     auto shapes = {std::vector<int>{64, 1, 256, 384}, std::vector<int>{1, 1, 32, 32}};

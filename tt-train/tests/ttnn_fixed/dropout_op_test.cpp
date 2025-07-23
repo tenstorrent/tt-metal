@@ -10,6 +10,7 @@
 #include "autograd/auto_context.hpp"
 #include "core/device.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "init/cpu_initializers.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 class DropoutTest : public ::testing::Test {
@@ -28,13 +29,14 @@ TEST_F(DropoutTest, TestSeed) {
     uint32_t dropout_seed2 = 32;
     float scale = 2.0F;
     float prob = 0.5F;
-    xt::random::seed(42);
     auto* device = &ttml::autograd::ctx().get_device();
 
     auto shapes = {std::vector<int>{64, 1, 256, 384}, std::vector<int>{1, 1, 32, 32}};
     for (auto& shape : shapes) {
         fmt::println("Testing shape: {}", shape);
-        xt::xarray<float> xtensor_a = xt::random::rand(shape, -0.5, 0.5);
+        xt::xarray<float> xtensor_a = xt::empty<float>(shape);
+        ttml::init::parallel_generate(
+            xtensor_a, []() { return std::uniform_real_distribution<float>(-0.5f, 0.5f); }, 42);
 
         auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
         auto num_cache_before = device->num_program_cache_entries();
@@ -84,7 +86,8 @@ xt::xarray<float> golden_dropout(
     // 1) Create a random engine seeded for reproducibility
     std::mt19937_64 rng(seed);
 
-    auto rand_vals = xt::random::rand<float>(input.shape(), 0.0f, 1.0f, rng);
+    auto rand_vals = xt::empty<float>(input.shape());
+    ttml::init::parallel_generate(rand_vals, []() { return std::uniform_real_distribution<float>(0.0f, 1.0f); }, seed);
     auto mask = xt::cast<float>(rand_vals >= p);
 
     float scale_factor = (scale && (1.0f - p) > 1e-7f) ? (1.0f / (1.0f - p)) : 1.0f;
