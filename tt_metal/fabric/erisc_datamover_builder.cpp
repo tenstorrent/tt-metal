@@ -807,9 +807,10 @@ void append_worker_to_fabric_edm_sender_rt_args(
     // copy "only" connections[eth_channel] to L1, not the whole tensix_fabric_connections_l1_info_t
     // because this function is called several times for same device which overwrites info written by previous calls
     tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_connections = {};
-    auto& connection_info = fabric_connections.connections[eth_channel];
+    auto& connection_info = fabric_connections.read_only[eth_channel];
     connection_info.edm_direction = connection.edm_direction;
-    connection_info.edm_noc_xy = tt::tt_fabric::WorkerXY(connection.edm_noc_x, connection.edm_noc_y).to_uint32();
+    connection_info.edm_noc_x = connection.edm_noc_x;
+    connection_info.edm_noc_y = connection.edm_noc_y;
     connection_info.edm_buffer_base_addr = connection.edm_buffer_base_addr;
     connection_info.num_buffers_per_channel = connection.num_buffers_per_channel;
     connection_info.edm_l1_sem_addr = connection.edm_l1_sem_addr;
@@ -822,7 +823,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
     //       we want to reduce the number of write_core calls
     fabric_connections.valid_connections_mask |= (1u << eth_channel);
 
-    size_t connection_offset = offsetof(tt::tt_fabric::tensix_fabric_connections_l1_info_t, connections) +
+    size_t connection_offset = offsetof(tt::tt_fabric::tensix_fabric_connections_l1_info_t, read_only) +
                                eth_channel * sizeof(tt::tt_fabric::fabric_connection_info_t);
     // Write to Tensix cores
     std::vector<CoreCoord> worker_core_coords = corerange_to_cores(worker_cores, std::nullopt, true);
