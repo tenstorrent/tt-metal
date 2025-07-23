@@ -292,8 +292,6 @@ class UnitMeshMultiCQMultDeviceEventFixture : public UnitMeshMultiCQMultiDeviceF
 
 class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiDeviceFixture {};
 
-class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDeviceFixture {};
-
 class DISABLED_MultiCQMultiDeviceOnFabricFixture : public UnitMeshMultiCQMultiDeviceFixture,
                                                    public ::testing::WithParamInterface<tt::tt_fabric::FabricConfig> {
 private:
