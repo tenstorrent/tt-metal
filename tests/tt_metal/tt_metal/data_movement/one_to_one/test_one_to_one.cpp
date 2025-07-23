@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device_fixture.hpp"
+#include "../../common/dispatch_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -35,8 +35,9 @@ struct OneToOneConfig {
 /// @brief Does L1 Sender Core --> L1 Receiver Core
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
+/// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
-bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
+bool run_dm(IDevice* device, const OneToOneConfig& test_config, DispatchFixture* fixture) {
     /* ================ SETUP ================ */
 
     // Program
@@ -119,8 +120,8 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     tt_metal::detail::WriteToDeviceL1(device, test_config.master_core_coord, l1_base_address, packed_input);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
-    // LAUNCH THE PROGRAM
-    detail::LaunchProgram(device, program);
+    // LAUNCH THE PROGRAM - Use dispatch-aware method
+    fixture->RunProgram(device, program);
 
     // Record Output from Subordinate L1
     std::vector<uint32_t> packed_output;
@@ -145,13 +146,13 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
 }  // namespace unit_tests::dm::core_to_core
 
 /* ========== Test case for one to one data movement; Test id = 4 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
+TEST_F(DispatchFixture, TensixDataMovementOneToOnePacketSizes) {
     // Test ID
     uint32_t test_id = 4;
 
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_[0]);
 
     // Parameters
     uint32_t max_transactions = 256;
@@ -182,8 +183,8 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
             };
 
             // Run
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            for (unsigned int id = 0; id < devices_.size(); id++) {
+                EXPECT_TRUE(run_dm(devices_[id], test_config, this));
             }
         }
     }
@@ -198,13 +199,13 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
         3. Core locations with minimal number of hops
 */
 
-TEST_F(DeviceFixture, TensixDataMovementOneToOneDirectedIdeal) {
+TEST_F(DispatchFixture, TensixDataMovementOneToOneDirectedIdeal) {
     // Test ID (Arbitrary)
     uint32_t test_id = 50;
 
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_[0]);
 
     // Adjustable Parameters
     // Ideal: Less transactions, more data per transaction
@@ -229,8 +230,8 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOneDirectedIdeal) {
     };
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    for (unsigned int id = 0; id < devices_.size(); id++) {
+        EXPECT_TRUE(run_dm(devices_[id], test_config, this));
     }
 }
 
