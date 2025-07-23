@@ -402,7 +402,7 @@ def create_tt_model(
     ids=[
         "batch-32",  # throughput
         "batch-1",  # latency
-        "repeat2",  # latency with 5 repeat batches
+        "repeat2",  # latency with 2 repeat batches
         "long-4k-b1",  # 4k context for 1 user
         "long-8k-b1",  # 4k context for 1 user
         "long-16k-b32",  # 16K context for 32 users
