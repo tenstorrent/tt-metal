@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import time
+
 import torch
 import torch.nn.functional as F
 from loguru import logger
@@ -95,6 +97,7 @@ def load_segformer_torch_model(device, model_location_generator=None):
 
 class SegformerTestInfra:
     def __init__(self, device, model_location_generator=None, batch_size=1, mesh_mapper=None, mesh_composer=None):
+        infra_time = time.time()
         super().__init__()
         torch.manual_seed(0)
         self.batch_size = batch_size
@@ -112,8 +115,10 @@ class SegformerTestInfra:
         self.torch_input = torch.randn((self.batch_size, 3, 512, 512))
         self.torch_output_tensor = self.reference_model(self.torch_input)
         input_pixels_permuted = torch.permute(self.torch_input, (0, 2, 3, 1))
+        print(f"Time for init of traceinfra: {time.time() - infra_time:.6f} sec")
 
     def run(self):
+        run_time = time.time()
         self.output_tensor = self.ttnn_segformer_model(
             self.device,
             self.input_tensor,
@@ -122,8 +127,10 @@ class SegformerTestInfra:
             return_dict=None,
             parameters=self.parameters,
         )
+        print(f"Time for run tracce infra: {time.time() - run_time:.6f} sec")
 
     def setup_l1_sharded_input(self, device, torch_input_tensor=None):
+        setupl1 = time.time()
         if is_wormhole_b0():
             core_grid = ttnn.CoreGrid(y=8, x=8)
         else:
@@ -148,9 +155,11 @@ class SegformerTestInfra:
         tt_inputs_host = ttnn.from_torch(
             torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self.mesh_mapper
         )
+        print(f"Time for setup l1: {time.time() - setupl1:.6f} sec")
         return tt_inputs_host, input_mem_config
 
     def setup_dram_sharded_input(self, device, torch_input_tensor=None, mesh_mapper=None, mesh_composer=None):
+        setupdram = time.time()
         tt_inputs_host, input_mem_config = self.setup_l1_sharded_input(device)
         dram_grid_size = device.dram_grid_size()
         dram_shard_spec = ttnn.ShardSpec(
@@ -166,10 +175,11 @@ class SegformerTestInfra:
         sharded_mem_config_DRAM = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
         )
-
+        print(f"Time for dram setup: {time.time() - setupdram:.6f} sec")
         return tt_inputs_host, sharded_mem_config_DRAM, input_mem_config
 
     def validate(self, output_tensor=None):
+        validtime = time.time()
         output_tensor = self.output_tensor if output_tensor is None else output_tensor
         output_tensor = ttnn.to_torch(self.output_tensor.logits, mesh_composer=self.mesh_composer)
         output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
@@ -179,7 +189,7 @@ class SegformerTestInfra:
         self.pcc_passed, self.pcc_message = assert_with_pcc(
             self.torch_output_tensor.logits, output_tensor, pcc=valid_pcc
         )
-
+        print(f"Time for validation pcc: {time.time() - validtime:.6f} sec")
         logger.info(f"Segformer, PCC={self.pcc_message}")
 
     def dealloc_output(self):

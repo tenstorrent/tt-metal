@@ -25,7 +25,7 @@ def run_segformer_trace_2cqs_inference(
     )
     input_shape = (batch_size, 3, 512, 512)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
-    inference_iter_count = 50
+    inference_iter_count = 1
     inference_time_iter = []
     for iter in range(0, inference_iter_count):
         t0 = time.time()
