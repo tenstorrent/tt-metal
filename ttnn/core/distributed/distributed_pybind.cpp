@@ -18,6 +18,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/system_mesh.hpp>
 #include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -31,6 +32,20 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::distributed {
+
+class SystemMeshDescriptor {
+private:
+    MeshShape global_shape_;
+    MeshShape local_shape_;
+
+public:
+    SystemMeshDescriptor() :
+        global_shape_(tt::tt_metal::distributed::SystemMesh::instance().shape()),
+        local_shape_(tt::tt_metal::distributed::SystemMesh::instance().local_shape()) {}
+
+    const MeshShape& shape() const { return global_shape_; }
+    const MeshShape& local_shape() const { return local_shape_; }
+};
 
 namespace py = pybind11;
 
@@ -49,6 +64,7 @@ void py_module_types(py::module& module) {
     py::class_<MeshCoordinateRange>(module, "MeshCoordinateRange", "Range of coordinates within a mesh device.");
     py::class_<MeshCoordinateRangeSet>(
         module, "MeshCoordinateRangeSet", "Set of coordinate ranges within a mesh device.");
+    py::class_<SystemMeshDescriptor>(module, "SystemMeshDescriptor");
 }
 
 void py_module(py::module& module) {
@@ -148,6 +164,11 @@ void py_module(py::module& module) {
             str << mcrs;
             return str.str();
         });
+
+    static_cast<py::class_<SystemMeshDescriptor>>(module.attr("SystemMeshDescriptor"))
+        .def(py::init([]() { return SystemMeshDescriptor(); }))
+        .def("shape", &SystemMeshDescriptor::shape)
+        .def("local_shape", &SystemMeshDescriptor::local_shape);
 
     auto py_mesh_device = static_cast<py::class_<MeshDevice, std::shared_ptr<MeshDevice>>>(module.attr("MeshDevice"));
     py_mesh_device
