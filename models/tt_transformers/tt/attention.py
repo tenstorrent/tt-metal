@@ -265,6 +265,7 @@ class Attention(LightweightModule):
                 is_distributed=False,
                 sharded_program_config=None,  # FIXME: add height-sharded support. self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=None,  # FIXME: add height-sharded support. self.model_config["CREATE_QKV_DECODE_SHARD"]
+                tt_ccl=self.tt_ccl,
             )
             self.q_norm = lambda x, mode: norm_reshard(x, fn_q_norm, mode)
         else:
@@ -284,6 +285,7 @@ class Attention(LightweightModule):
                 is_distributed=False,
                 sharded_program_config=None,  # FIXME: add height-sharded support. self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=None,  # FIXME: add height-sharded support. self.model_config["CREATE_QKV_DECODE_SHARD"],
+                tt_ccl=self.tt_ccl,
             )
             self.k_norm = lambda x, mode: norm_reshard(x, fn_k_norm, mode)
         else:

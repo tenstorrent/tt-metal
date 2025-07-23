@@ -71,7 +71,6 @@ class TransformerBlock(LightweightModule):
         self.attention_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
-                tt_ccl=self.tt_ccl,
                 dim=args.dim,
                 eps=args.norm_eps,
                 state_dict=state_dict,
@@ -84,6 +83,7 @@ class TransformerBlock(LightweightModule):
                 sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
+                tt_ccl=self.tt_ccl,
             ),
             args,
             tt_ccl=self.tt_ccl,
@@ -104,6 +104,7 @@ class TransformerBlock(LightweightModule):
                 sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
+                tt_ccl=self.tt_ccl,
             ),
             args,
             TG=args.is_galaxy,

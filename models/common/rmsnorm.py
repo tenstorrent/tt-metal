@@ -40,7 +40,6 @@ class RMSNorm(LightweightModule):
         dim,
         state_dict,
         weight_key,
-        tt_ccl=None,
         layer_num=None,
         state_dict_prefix=None,
         weight_cache_path=None,
@@ -57,10 +56,6 @@ class RMSNorm(LightweightModule):
     ):
         super().__init__()
         self.device = device
-<<<<<<< HEAD
-=======
-        self.tt_ccl = tt_ccl
->>>>>>> 02390c1471 (RMSNorm)
         self.eps = eps
         self.is_distributed = is_distributed
         self.ccl_topology = ccl_topology
