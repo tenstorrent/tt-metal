@@ -34,15 +34,14 @@ jobs:
       #   timeout-minutes: 10
       #   with:
       #     name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      - name: Print environment variables in shell
-        shell: bash
-        run: |
-          env|sort
+      - name: Capture runner's home directory
+        id: capture-home
+        run: echo "home=${HOME}" >> $GITHUB_OUTPUT
       - name: Run tests on multiple hosts
         uses: ./.github/actions/docker-run
         timeout-minutes: 120
         env:
-          CONTAINER_NAME: "/home/ansible"
+          CONTAINER_HOME: "/home/ansible"
         with:
           docker_image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:c2417bb0778b77d3092bd2f4a4c4269123d25b05
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -55,10 +54,10 @@ jobs:
             -v ${{ github.workspace }}/docker-job:/work
             -v /dev/hugepages-1G:/dev/hugepages-1G
             -v /etc/rankfile:/etc/rankfile:ro
-            -v ${{ env.CONTAINER_NAME }}/.ssh:${{ env.CONTAINER_NAME }}/.ssh:ro
+            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --privileged
-          install_wheel: true
+          install_wheel: false
           run_args: |
             sleep 10s
             echo "Running mpirun command on multiple hosts"
