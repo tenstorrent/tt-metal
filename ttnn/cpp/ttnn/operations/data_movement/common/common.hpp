@@ -43,7 +43,8 @@ int common_tm_bw_model(
     int compute_cycles = 0,
     bool per_faceline = false,
     bool split_op = false,
-    bool bcast_local = false);
+    bool bcast_local = false,
+    bool concat_op = false);
 
 uint32_t get_estimated_size_of_cbs(
     const Tensor& input_tensor_a,

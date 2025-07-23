@@ -168,7 +168,8 @@ int common_tm_bw_model(
     int compute_cycles,
     bool per_faceline,
     bool split_op,
-    bool bcast_local) {
+    bool bcast_local,
+    bool concat_op) {
     // the bw maps assigns a measured bandwidth per transaction size for each device architecture
     std::map<uint32_t, std::array<float, 2>> dram_bw = {
         {16, {0.436, 0.387}},
@@ -230,7 +231,7 @@ int common_tm_bw_model(
         {32768, {27.805, 50.123}},
         {65536, {27.84, 50.21}}};
 
-    const auto& input_shape = input_tensor.padded_shape();
+    const auto& input_shape = concat_op ? output_tensor.padded_shape() : input_tensor.padded_shape();
     auto element_size_bytes = input_tensor.element_size();
     bool input_is_sharded = input_tensor.memory_config().is_sharded();
     bool input_is_dram = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
