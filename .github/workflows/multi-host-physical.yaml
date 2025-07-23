@@ -17,9 +17,10 @@ jobs:
   deploy:
     runs-on:
       - multi-host
-    needs: build-artifact
+    needs:
+      - build-artifact
     container:
-      image: ${{ needs.build-artifact.outputs.docker-image || 'docker-image-unresolved!'}}
+      image: ${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!'}}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
