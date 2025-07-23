@@ -119,7 +119,6 @@ void kernel_main() {
     constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
 
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
-    constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_11;
 
@@ -129,7 +128,6 @@ void kernel_main() {
 
     // generate and send scaler to compute
     // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
-    generate_bcast_unary_scalar(cb_scale_in, scale_val);
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
