@@ -200,8 +200,8 @@ void MAIN {
                      * Partial reduce_sum is used to push the final row_reduction within a tile
                      * outside of the loop over K chunks.
                      */
-                    sub_exp_block_bcast_cols_inplace_constant_offset<cb_qk_im, Sq_chunk_t, Sk_chunk_t, scale_fp32>(
-                        cb_constant_offset_in, alias_cur_sum);
+                    sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, Sk_chunk_t, scale_fp32>(
+                        cb_constant_offset_in, alias_cur_sum, true);
 
                     cb_wait_front(cb_qk_im, qk_chunk_tiles);
                     /* OUT_IM = QK @ V_CHUNK */
