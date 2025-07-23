@@ -947,13 +947,7 @@ chip_id_t GetPCIeDeviceID(chip_id_t device_id) {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
 }
 
-ClusterType GetClusterType() {
-    // Get the cluster type from LLRT and convert to public API type
-    tt::tt_metal::ClusterType llrt_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
-
-    // Direct cast since the enum values are identical
-    return static_cast<ClusterType>(llrt_type);
-}
+ClusterType GetClusterType() { return tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type(); }
 
 std::string SerializeClusterDescriptor() {
     std::filesystem::path path = tt::umd::Cluster::create_cluster_descriptor()->serialize_to_file();
