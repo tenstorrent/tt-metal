@@ -173,9 +173,9 @@ def test_llama_TG_perf_device(
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
-    step_name = f"tg-llama-prefill-device-perf-{seqlen}-noTrace"
+    step_name = f"tg-llama-prefill-device-{galaxy_type}-perf-{seqlen}"
     batch_size = 1
-    subdir = f"tg-llama-prefill-device-perf-{seqlen}-noTrace"
+    subdir = f"tg-llama-prefill-device-{galaxy_type}-perf-{seqlen}"
     num_iterations = 1
     num_layers = 1
 
