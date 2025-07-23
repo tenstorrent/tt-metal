@@ -19,7 +19,6 @@ using Tag = tt::tt_metal::distributed::multihost::Tag;
 
 ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor);
 
-// ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor);
 void synchronize_parameters(const serialization::NamedParameters& parameters);
 
 void send_tensor(const autograd::DistributedContext& ctx, const ttnn::Tensor& tensor, Rank dest, Tag tag = Tag{0});
