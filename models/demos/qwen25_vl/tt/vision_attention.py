@@ -16,24 +16,25 @@ class VisionAttention(LightweightModule):
         kwargs["causal_mask"] = False
         self.__init(*args, **kwargs)
 
-    def forward(self, x, cu_seqlens, rot_mats, user_id=0, page_table=None, chunk_page_table=None, chunk_start_idx=None):
-        seq_len = x.shape[-2]
-        attention_mask = torch.full([1, 1, seq_len, seq_len], -1e9, dtype=torch.float32)
-        for i in range(1, len(cu_seqlens)):
-            attention_mask[..., cu_seqlens[i - 1] : cu_seqlens[i], cu_seqlens[i - 1] : cu_seqlens[i]] = 0
-        tt_mask = ttnn.from_torch(
-            attention_mask, dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT, device=self.mesh_device
-        )
-
+    def forward(
+        self,
+        x,
+        rot_mats,
+        cu_seqlens,
+        user_id=0,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+    ):
         return self.forward_prefill(
             x,
+            cu_seqlens=cu_seqlens,
             rot_mats=rot_mats,
             user_id=user_id,
             page_table=page_table,
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             kv_cache=None,
-            mask=tt_mask,
         )
 
     def __init(
@@ -360,13 +361,13 @@ class VisionAttention(LightweightModule):
     def forward_prefill(
         self,
         x_11SH,
+        cu_seqlens,
         rot_mats,
         user_id: int = 0,
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
-        mask=None,
     ):
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
@@ -478,12 +479,11 @@ class VisionAttention(LightweightModule):
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
         else:
-            attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
+            attn_output_84SD = ttnn.transformer.windowed_scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
                 v_heads_1VSD_8b,
-                is_causal=self.causal_mask,
-                attn_mask=mask,
+                cu_seqlens,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
