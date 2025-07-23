@@ -334,7 +334,9 @@ void send_msg_to_eth_mailbox(
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(timenow - start).count();
             if (elapsed > timeout_ms) {
                 TT_THROW(
-                    "Device {}: Eth mailbox timeout ({} ms) waiting for active eth core {} mailbox {:#x}. Retrain "
+                    "Device {}: While trying to launch Metal ethernet firmware, the base firmware mailbox timed out "
+                    "({} ms) waiting for the done message on active ethernet core {}. The mailbox value was {:#x}. "
+                    "Retrain "
                     "count: {}. "
                     "Is the firmware updated? Minimum tt-firmware version is 18.2.0",
                     device_id,
