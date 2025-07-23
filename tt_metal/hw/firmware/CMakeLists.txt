@@ -18,6 +18,7 @@ target_sources(
             src/blackhole/noc.c
             src/wormhole/noc.c
             src/active_erisc.cc
+            src/active_erisc-crt0.cc
             src/active_erisck.cc
             src/brisc.cc
             src/brisck.cc
