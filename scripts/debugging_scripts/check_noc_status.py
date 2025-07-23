@@ -30,7 +30,10 @@ try:
     from ttexalens import util
     from ttexalens.parse_elf import decode_symbols
     from ttexalens.context import Context
-except:
+    from ttexalens.tt_exalens_lib import parse_elf
+    from ttexalens.parse_elf import mem_access
+    from ttexalens.firmware import ELF
+except Exception as e:
     print("No tt-exalens detected. Please install tt-exalens with:\n ./scripts/install_debugger.sh")
     sys.exit(1)
 
@@ -48,7 +51,7 @@ def get_symbols_from_elf(elf_path: str, context: Context) -> dict[str, int]:
     return decode_symbols(elf)
 
 
-def check_noc_status(symbols: dict[str, int], context: Context, risc_id: int = 0, noc_id: int = 0) -> dict:
+def check_noc_status(fw_elf, context: Context, risc_name: str = "brisc", noc_id: int = 0) -> dict:
     """
     Checks for mismatches between variables and registers that store number of NOC transactions
     and stores them in dictionary creating summary of checking process
@@ -73,14 +76,15 @@ def check_noc_status(symbols: dict[str, int], context: Context, risc_id: int = 0
             passed = True
             error = False
 
+            loc_mem_reader = ELF.get_mem_reader(context, device_id, loc, risc_name)
+
             # Check if variables match with corresponding register
             for var in VAR_TO_REG_MAP:
                 reg = VAR_TO_REG_MAP[var]
-                address = symbols[var]
                 # If reading fails, write error message and skip to next core
                 try:
-                    reg_val = read_tensix_register(loc, reg, device_id, context)
-                    var_val = read_riscv_memory(loc, address, noc_id, risc_id, device_id, context)
+                    reg_val = read_tensix_register(core_loc=loc, register=reg, noc_id=noc_id, context=context)
+                    var_val = mem_access(fw_elf, var, loc_mem_reader)[0][0]
                 except Exception as e:
                     summary[(device_id, loc)] = str(e)
                     error = True
@@ -97,7 +101,7 @@ def check_noc_status(symbols: dict[str, int], context: Context, risc_id: int = 0
 
             # If core passed the inspection, write passed
             if passed and not error:
-                summary[(device_id, loc)] = "PASSED"
+                summary[(device_id, loc)] = f"PASSED"
 
     return summary
 
@@ -138,13 +142,14 @@ def main():
         return
 
     context = init_ttexalens()
-    # Get symbols in order to obtain variable addresses
-    symbols = get_symbols_from_elf(elf_path, context)
+    # # Get symbols in order to obtain variable addresses
+    # symbols = get_symbols_from_elf(elf_path, context)
+    fw_elf = parse_elf(elf_path)
 
-    risc_id = 0  # For now only works on BRISC
+    risc_name = "brisc"  # For now only works on BRISC
     noc_id = 0  # For now we only use noc0
 
-    summary = check_noc_status(symbols, context, risc_id, noc_id)
+    summary = check_noc_status(fw_elf, context, risc_name, noc_id)
     print_summary(summary, verbose)
 
 
