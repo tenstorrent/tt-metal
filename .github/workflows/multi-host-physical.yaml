@@ -16,7 +16,7 @@ jobs:
       build-wheel: true
   deploy:
     runs-on: multi-host
-    # needs: build-artifact
+    needs: build-artifact
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
