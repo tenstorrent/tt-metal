@@ -103,6 +103,11 @@ private:
 
         const std::vector<MaybeRemote<IDevice*>>& root_devices() const;
     };
+
+    // THREAD SAFETY: Enqueueing work on the device should be thread safe. Operations that modify state should be
+    // protected by api_mutex_. Operations that reconfigure global state (e.g. setting subdevices or enabling tracing)
+    // on the device may not be thread safe.
+    std::mutex api_mutex_;
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
@@ -128,6 +133,8 @@ private:
     std::vector<IDevice*> get_row_major_devices(const MeshShape& new_shape) const;
 
     std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
+
+    std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
 
 public:
     MeshDevice(
