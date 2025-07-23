@@ -119,6 +119,9 @@ class VisionTransformer(LightweightModule):
         cu_seqlens,
         cu_window_seqlens,
         rot_mats,
+        cu_seqlens,
+        cu_window_seqlens,
+        profiler=None,
     ):
         """
         Forward pass through the Vision Transformer blocks.
@@ -240,10 +243,6 @@ class DropInVisionTransformer(torch.nn.Module):
                 patch_size=self.model_args.hf_config.vision_config.patch_size,
             )
 
-            # Ensure cu_seqlens and cu_window_seqlens are tensors on the correct device
-            cu_seqlens = cu_seqlens.to(pixel_values.device)
-            cu_window_seqlens = cu_window_seqlens.to(pixel_values.device)
-
             # 3. Use reference model's patch embedding
             patch_input = self.reference_model.patch_embed(pixel_values)
 
@@ -283,7 +282,7 @@ class DropInVisionTransformer(torch.nn.Module):
             rot_mats = [cos, sin]
 
             # 5. Prepare input tensor for the TT model using window_index
-            tt_input = self.tt_model.prepare_input(patch_input, window_index, seq_len)
+            tt_input = self.tt_model.prepare_input(patch_input, window_index, target_seq_len)
 
             # --- TT Model Execution ---
             tt_out = self.tt_model(
@@ -292,6 +291,16 @@ class DropInVisionTransformer(torch.nn.Module):
                 cu_seqlens=cu_seqlens,
                 cu_window_seqlens=cu_window_seqlens,
                 rot_mats=rot_mats,  # Use rot_mats generated in this forward pass
+                cu_seqlens=ttnn.from_torch(
+                    cu_seqlens, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.model_args.mesh_device
+                ),
+                cu_window_seqlens=ttnn.from_torch(
+                    cu_window_seqlens,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.model_args.mesh_device,
+                ),
+                profiler=profiler,
             )
 
             # deallocate device tensors that are not needed by decode
@@ -326,6 +335,25 @@ class DropInVisionTransformer(torch.nn.Module):
                 logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
 
             final_outputs.append(final_output)
+
+            if profiler is not None:
+                profiler.end(f"vision_model_loop_postprocess", iteration=num_iters)
+                num_iters += 1
+
+        signpost("dropin_vision_transformer_forward", "end")
+
+        if profiler is not None:
+            # print the total time for each iteration
+            for i in range(num_iters):
+                logger.info(
+                    f"vision_model_loop_preprocess at {i}: {profiler.get_duration('vision_model_loop_preprocess', iteration=i)}"
+                )
+                logger.info(
+                    f"vision_model_loop_tt_model at {i}: {profiler.get_duration('vision_model_loop_tt_model', iteration=i)}"
+                )
+                logger.info(
+                    f"vision_model_loop_postprocess at {i}: {profiler.get_duration('vision_model_loop_postprocess', iteration=i)}"
+                )
 
         # concatenate all the outputs
         return torch.cat(final_outputs, dim=0)
