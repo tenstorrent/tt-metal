@@ -31,7 +31,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /etc/rankfile
+        - /etc/rankfile:/etc/rankfile:ro
       options: --device /dev/tenstorrent
     steps:
       - name: ⬇️  Setup Job
