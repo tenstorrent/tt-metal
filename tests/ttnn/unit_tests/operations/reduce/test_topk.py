@@ -17,7 +17,9 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
 
     if pass_indices_tensor:
-        indices_tensor = torch.arange(W).view(1, 1, 1, -1).expand(N, C, H, -1)
+        indices_tensor_torch = torch.zeros(shape, dtype=torch.int32)
+        for i in range(W):
+            indices_tensor_torch[:, :, :, i] = i
         indices_tensor = ttnn.from_torch(indices_tensor, ttnn.uint32, layout=ttnn.Layout.TILE, device=device)
     else:
         indices_tensor = None
@@ -154,20 +156,11 @@ def test_topk(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids
         ttnn.CoreRangeSet(
             [
                 ttnn.CoreRange(
-                    ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)
+                    ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7)
                 ),  # Note: for TG llama we use 1,0 to 3,9 but this requires TGs (non-harvested) and "dispatch_core_axis": ttnn.DispatchCoreAxis.COL
             ]
         ),
     ],
-)
-@pytest.mark.parametrize(  # Worker size is selected to give 120kB ringbuffer size
-    "device_params",
-    [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-        }
-    ],
-    indirect=True,
 )
 def test_topk_sub_core_grids(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids, pass_indices_tensor):
     if dim == 0 or dim == 1:
