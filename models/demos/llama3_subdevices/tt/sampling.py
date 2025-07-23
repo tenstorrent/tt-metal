@@ -73,6 +73,19 @@ class TTSampling(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+        assert per_device_vocab_size == 16 * 1024, "Per device vocab size is incorrect (should be 16k)"
+        indices_tensor_torch = torch.zeros(1, 1, self.max_batch_size, per_device_vocab_size, dtype=torch.int32)
+        for i in range(per_device_vocab_size):
+            indices_tensor_torch[:, :, :, i] = i
+        self.tt_indices_tensor = ttnn.from_torch(
+            indices_tensor_torch,
+            dtype=ttnn.uint16,
+            layout=ttnn.Layout.TILE,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.args.cluster_shape),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     def forward(
         self,
         x: ttnn.Tensor,
@@ -99,9 +112,12 @@ class TTSampling(LightweightModule):
 
         # Local top k
         topk_values, topk_indices = ttnn.topk(
-            x_bf16, k=self.max_top_k, dim=-1, sub_core_grids=self.args.sub_core_grid_topk
+            x_bf16,
+            k=self.max_top_k,
+            dim=-1,
+            sub_core_grids=self.args.sub_core_grid_topk,
+            indices_tensor=self.tt_indices_tensor,
         )
-
         # Gather values
         # Note: Persistent output buffer used, do not deallocate output!
         topk_values_gathered = self.tt_ccl.line_all_gather(
