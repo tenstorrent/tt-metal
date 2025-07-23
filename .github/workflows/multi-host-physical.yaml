@@ -15,34 +15,46 @@ jobs:
       version: 22.04
       build-wheel: true
   deploy:
-    runs-on:
-      - multi-host
-    needs:
-      - build-artifact
-    container:
-      image: ${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!'}}
-      env:
-        TT_METAL_HOME: /work
-        PYTHONPATH: /work
-        LD_LIBRARY_PATH: /work/build/lib
-        LOGURU_LEVEL: INFO
-        TT_METAL_ENABLE_ERISC_IRAM: 1
-        GTEST_OUTPUT: xml:/work/generated/test_reports/
-      volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - /dev/hugepages-1G:/dev/hugepages-1G
-        - /etc/rankfile:/etc/rankfile:ro
-        - /etc/ssh/multihost:/root/.ssh:ro
-      options: --device /dev/tenstorrent --network host --privileged
+    runs-on: multi-host
+    needs: build-artifact
     steps:
-      - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-          wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Run tests on multiple hosts
-        run: |
-          sleep 10s
-          echo "Running mpirun command on multiple hosts"
-          mpirun --allow-run-as-root --rankfile /etc/rankfile --mca btl_tcp_if_exclude docker0,lo --tag-output hostname
+        uses: ./.github/actions/docker-run
+        timeout-minutes: 120
+        with:
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved!'}}
+          docker_opts: |
+            -e TT_METAL_HOME="/work"
+            -e PYTHONPATH="/work"
+            -e LD_LIBRARY_PATH="/work/build/lib"
+            -e LOGURU_LEVEL="INFO"
+            -e TT_METAL_ENABLE_ERISC_IRAM="1"
+            -e GTEST_OUTPUT="xml:/work/generated/test_reports/"
+            -v ${{ github.workspace }}/docker-job:/work
+            -v /dev/hugepages-1G:/dev/hugepages-1G
+            -v /etc/rankfile:/etc/rankfile:ro
+            -v /etc/ssh/multihost:/root/.ssh:ro
+            --device /dev/tenstorrent
+            --network host
+            --privileged
+          install_wheel: true
+          run_args: |
+            sleep 10s
+            echo "Running mpirun command on multiple hosts"
+            mpirun --allow-run-as-root --rankfile /etc/rankfile --mca btl_tcp_if_exclude docker0,lo --tag-output hostname
