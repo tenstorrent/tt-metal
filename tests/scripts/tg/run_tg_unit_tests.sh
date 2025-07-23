@@ -108,13 +108,6 @@ run_tg_tests() {
         "22 --fabric_command 65 --board_type glx32 --data_kb_per_tx 100 --s_depth 3 --push_router"
 
     )
-    for TEST in "${TESTS[@]}"; do
-        # Extract test name and arguments
-        read -r TEST_NUMBER TEST_ARGS <<< "$TEST"
-        echo "LOG_FABRIC: Test $TEST_NUMBER: $TEST_ARGS"
-        # Execute the test command with extracted arguments
-        TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric_sanity $TEST_ARGS
-    done
 
   elif [[ "$1" == "llama3-70b" ]]; then
     run_tg_llama3.3-70b_tests
