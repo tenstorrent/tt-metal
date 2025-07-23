@@ -11,11 +11,9 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
     get_lib_dtype,
 )
-from models.utility_functions import skip_for_grayskull
 from loguru import logger
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("shape", [[1, 512, 2, 256]])
 @pytest.mark.parametrize("in_dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("out_dtype", ["bfloat16", "float32"])
@@ -32,7 +30,6 @@ def test_bernoulli_p_zero(shape, in_dtype, out_dtype, device):
     assert torch.all(tt_output == 0), "Output must be all zeros when p=0"
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("shape", [[1, 512, 2, 256]])
 @pytest.mark.parametrize("in_dtype", ["bfloat16", "float32"])
 @pytest.mark.parametrize("out_dtype", ["bfloat16", "float32"])
@@ -49,7 +46,6 @@ def test_bernoulli_p_one(shape, in_dtype, out_dtype, device):
     assert torch.all(tt_output == 1), "Output must be all ones when p=1"
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -90,7 +86,6 @@ def test_bernoulli_api_contract(shape, in_dtype, out_dtype, device, is_out_alloc
     assert torch.all((tt_output == 0) | (tt_output == 1)), "Output tensor must only contain 0s and 1s"
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -121,7 +116,6 @@ def test_bernoulli_callback(shape, seed, in_dtype, out_dtype, device):
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
-@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "shape",
     [[512, 512], [5, 8, 70, 40]],
