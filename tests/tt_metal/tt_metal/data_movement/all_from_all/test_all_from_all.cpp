@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device_fixture.hpp"
+#include "../../common/dispatch_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -49,7 +49,7 @@ struct AllFromAllConfig {
 /// @param device The device on which the test is executed.
 /// @param test_config Configuration of the test, defined by a specific struct.
 /// @return Status of the test execution (e.g., success or failure).
-bool run_dm(IDevice* device, const AllFromAllConfig& test_config) {
+bool run_dm(IDevice* device, const AllFromAllConfig& test_config, DispatchFixture* fixture) {
     /* ================ SETUP ================ */
 
     // Program
@@ -162,7 +162,8 @@ bool run_dm(IDevice* device, const AllFromAllConfig& test_config) {
     }
 
     // LAUNCH PROGRAM
-    detail::LaunchProgram(device, program);
+    // Launch the program - Use dispatch-aware method
+    fixture->RunProgram(device, program);
 
     vector<uint32_t> packed_output;
 
@@ -239,7 +240,8 @@ void packet_sizes_test(
     CoreCoord mst_start_coord,
     CoreCoord sub_start_coord,
     CoreCoord mst_grid_size,
-    CoreCoord sub_grid_size) {
+    CoreCoord sub_grid_size,
+    DispatchFixture* fixture) {
     NOC noc_id = NOC::NOC_1;
 
     auto [bytes_per_page, max_reservable_bytes, max_reservable_pages] =
@@ -282,7 +284,7 @@ void packet_sizes_test(
 
             // Run
             for (unsigned int id = 0; id < num_devices_; id++) {
-                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config, fixture));
             }
         }
     }
@@ -353,7 +355,10 @@ void custom_test(
     CoreCoord sub_grid_size,
     uint32_t num_of_transactions_per_subordinate,
     uint32_t pages_per_transaction,
-    uint32_t num_virtual_channels) {
+    uint32_t num_virtual_channels,
+    DispatchFixture* fixture) {
+    NOC noc_id = NOC::NOC_1;
+
     // Physical Constraints
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
         unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
@@ -380,7 +385,7 @@ void custom_test(
 
     // Run
     for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config, fixture));
     }
 }
 
@@ -398,7 +403,7 @@ TO-DO:
 /* ======== DIRECTED IDEAL ======== */
 
 /* ======== All from All ======== */
-TEST_F(DeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
+TEST_F(DispatchFixture, TensixDataMovementAllFromAllDirectedIdeal) {
     if (arch_ == tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test on Blackhole, Issue #24584";
     }
@@ -420,7 +425,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
 
 /* ======== PACKET SIZES ======== */
 
-TEST_F(DeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
+TEST_F(DispatchFixture, TensixDataMovementAllFromAllPacketSizes) {
     if (arch_ == tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test on Blackhole, Issue #24584";
     }
@@ -442,7 +447,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
 }
 
 /* ======== 2x2 to 1x1 ======== */
-TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From1x1DirectedIdeal) {
+TEST_F(DispatchFixture, TensixDataMovementAllFromAll2x2From1x1DirectedIdeal) {
     uint32_t test_case_id = 312;
 
     /* Parameters */
@@ -454,11 +459,19 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From1x1DirectedIdeal) {
     CoreCoord sub_grid_size = {1, 1};
 
     unit_tests::dm::all_from_all::directed_ideal_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
+        arch_,
+        devices_,
+        NumDevices(),
+        test_case_id,
+        mst_start_coord,
+        sub_start_coord,
+        mst_grid_size,
+        sub_grid_size,
+        this);
 }
 
 /* ======== 4x4 to 1x1 ======== */
-TEST_F(DeviceFixture, TensixDataMovementAllFromAll4x4From1x1DirectedIdeal) {
+TEST_F(DispatchFixture, TensixDataMovementAllFromAll4x4From1x1DirectedIdeal) {
     uint32_t test_case_id = 313;
 
     /* Parameters */
@@ -470,11 +483,19 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll4x4From1x1DirectedIdeal) {
     CoreCoord sub_grid_size = {1, 1};
 
     unit_tests::dm::all_from_all::directed_ideal_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
+        arch_,
+        devices_,
+        NumDevices(),
+        test_case_id,
+        mst_start_coord,
+        sub_start_coord,
+        mst_grid_size,
+        sub_grid_size,
+        this);
 }
 
 /* ======== 1x1 to 2x2 ======== */
-TEST_F(DeviceFixture, TensixDataMovementAllFromAll1x1From2x2DirectedIdeal) {
+TEST_F(DispatchFixture, TensixDataMovementAllFromAll1x1From2x2DirectedIdeal) {
     uint32_t test_case_id = 314;
 
     /* Parameters */
@@ -486,11 +507,19 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll1x1From2x2DirectedIdeal) {
     CoreCoord sub_grid_size = {2, 2};
 
     unit_tests::dm::all_from_all::directed_ideal_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
+        arch_,
+        devices_,
+        NumDevices(),
+        test_case_id,
+        mst_start_coord,
+        sub_start_coord,
+        mst_grid_size,
+        sub_grid_size,
+        this);
 }
 
 /* ======== 1x1 to 4x4 ======== */
-TEST_F(DeviceFixture, TensixDataMovementAllFromAll1x1From4x4DirectedIdeal) {
+TEST_F(DispatchFixture, TensixDataMovementAllFromAll1x1From4x4DirectedIdeal) {
     uint32_t test_case_id = 315;
 
     /* Parameters */
@@ -502,11 +531,19 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll1x1From4x4DirectedIdeal) {
     CoreCoord sub_grid_size = {4, 4};
 
     unit_tests::dm::all_from_all::directed_ideal_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
+        arch_,
+        devices_,
+        NumDevices(),
+        test_case_id,
+        mst_start_coord,
+        sub_start_coord,
+        mst_grid_size,
+        sub_grid_size,
+        this);
 }
 
 /* ======== 2x2 to 2x2 ======== */
-TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From2x2DirectedIdeal) {
+TEST_F(DispatchFixture, TensixDataMovementAllFromAll2x2From2x2DirectedIdeal) {
     uint32_t test_case_id = 316;
 
     /* Parameters */
@@ -518,7 +555,15 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From2x2DirectedIdeal) {
     CoreCoord sub_grid_size = {2, 2};
 
     unit_tests::dm::all_from_all::directed_ideal_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
+        arch_,
+        devices_,
+        NumDevices(),
+        test_case_id,
+        mst_start_coord,
+        sub_start_coord,
+        mst_grid_size,
+        sub_grid_size,
+        this);
 }
 
 /* ======== VIRTUAL CHANNELS ======== */
@@ -557,7 +602,8 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAllCustom) {
         sub_grid_size,
         num_of_transactions_per_subordinate,
         pages_per_transaction,
-        num_virtual_channels);
+        num_virtual_channels,
+        this);
 }
 
 }  // namespace tt::tt_metal

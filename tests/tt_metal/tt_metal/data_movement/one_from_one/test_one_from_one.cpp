@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device_fixture.hpp"
+#include "../../common/dispatch_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -35,8 +35,9 @@ struct OneFromOneConfig {
 /// @brief Does Requestor Core --> L1 Responder Core --> L1 Requestor Core
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
+/// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
-bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
+bool run_dm(IDevice* device, const OneFromOneConfig& test_config, DispatchFixture* fixture) {
     // Program
     Program program = CreateProgram();
 
@@ -106,7 +107,8 @@ bool run_dm(IDevice* device, const OneFromOneConfig& test_config) {
     // Launch program and record outputs
     detail::WriteToDeviceL1(device, test_config.subordinate_core_coord, l1_base_address, packed_input);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
-    detail::LaunchProgram(device, program);
+    // Launch the program - Use dispatch-aware method
+    fixture->RunProgram(device, program);
     vector<uint32_t> packed_output;
     detail::ReadFromDeviceL1(
         device, test_config.master_core_coord, l1_base_address, transaction_size_bytes, packed_output);
@@ -198,8 +200,8 @@ void packet_sizes_test(
             };
 
             // Run
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            for (unsigned int id = 0; id < NumDevices(); id++) {
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config, this));
             }
         }
     }
@@ -289,8 +291,8 @@ void custom_test(
     };
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    for (unsigned int id = 0; id < NumDevices(); id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config, this));
     }
 }
 

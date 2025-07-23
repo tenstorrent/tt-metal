@@ -2,12 +2,26 @@
 
 This test suite implements tests that measure the functionality and performance (i.e. bandwidth) of data movement transactions between DRAM and a single Tensix core.
 
+## Dispatch Mode Compatibility
+This test suite supports both fast dispatch (default) and slow dispatch modes. Fast dispatch mode provides better performance and is recommended for most use cases.
+
 ## Test Flow
 Data is loaded into an L1 circular buffer by the reader kernel and written out to DRAM from the same L1 buffer by the writer kernel. A compute kernel is omitted as these tests are purely for data movement.
 Test attributes such as transaction sizes and number of transactions as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler.
 Resulting data is cross-checked with original data and validated through a pcc check.
 
 Test expectations are that pcc checks pass and sufficient test attribute data is captured by the profiler for higher level bandwidth/regression checks.
+
+## Running the Tests
+**Fast Dispatch Mode (Recommended):**
+```
+./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*DRAM*"
+```
+
+**Slow Dispatch Mode:**
+```
+TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*DRAM*"
+```
 
 ## Test Parameters
 | Parameter                 | Data Type             | Description |

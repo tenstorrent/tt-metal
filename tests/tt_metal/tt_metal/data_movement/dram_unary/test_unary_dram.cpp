@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device_fixture.hpp"
+#include "../../common/dispatch_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -30,8 +30,9 @@ struct DramConfig {
 /// @brief Does Dram --> Reader --> L1 CB --> Writer --> Dram.
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
+/// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
-bool run_dm(IDevice* device, const DramConfig& test_config) {
+bool run_dm(IDevice* device, const DramConfig& test_config, DispatchFixture* fixture) {
     // SETUP
 
     // Program
@@ -115,8 +116,8 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
     detail::WriteToDeviceDRAMChannel(device, test_config.dram_channel, input_dram_address, packed_input);
     MetalContext::instance().get_cluster().dram_barrier(device->id());
 
-    // Launch the program
-    detail::LaunchProgram(device, program);
+    // Launch the program - Use dispatch-aware method
+    fixture->RunProgram(device, program);
 
     // Read Intermediate Output from L1 (for debugging purposes)
     vector<uint32_t> packed_intermediate_output;
@@ -147,6 +148,7 @@ void directed_ideal_test(
     std::vector<IDevice*>& devices_,
     uint32_t num_devices_,
     uint32_t test_case_id,
+    DispatchFixture* fixture,
     CoreCoord core_coord = {0, 0},
     uint32_t dram_channel = 0,
     uint32_t virtual_channel = 0) {
@@ -171,7 +173,7 @@ void directed_ideal_test(
 
     // Run
     for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config, fixture));
     }
 }
 
@@ -180,6 +182,7 @@ void packet_sizes_test(
     std::vector<IDevice*>& devices_,
     uint32_t num_devices_,
     uint32_t test_case_id,
+    DispatchFixture* fixture,
     CoreCoord core_coord = {0, 0},
     uint32_t dram_channel = 0) {
     auto [bytes_per_page, max_reservable_bytes, max_reservable_pages] =
@@ -208,7 +211,7 @@ void packet_sizes_test(
 
             // Run
             for (unsigned int id = 0; id < num_devices_; id++) {
-                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config, fixture));
             }
         }
     }
@@ -217,18 +220,19 @@ void packet_sizes_test(
 }  // namespace unit_tests::dm::dram
 
 /* ========== Test case for varying transaction numbers and sizes; Test id = 0 ========== */
-TEST_F(DeviceFixture, TensixDataMovementDRAMPacketSizes) {
+TEST_F(DispatchFixture, TensixDataMovementDRAMPacketSizes) {
     unit_tests::dm::dram::packet_sizes_test(
         arch_,
         devices_,
-        num_devices_,
+        NumDevices(),
         0,      // Test case ID
+        this,   // DispatchFixture
         {0, 0}  // Core coordinates (default)
     );
 }
 
 /* ========== Test case for varying core locations; Test id = 1 ========== */
-TEST_F(DeviceFixture, TensixDataMovementDRAMCoreLocations) {
+TEST_F(DispatchFixture, TensixDataMovementDRAMCoreLocations) {
     uint32_t test_case_id = 1;
 
     CoreCoord core_coord;
@@ -243,7 +247,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMCoreLocations) {
             core_coord = {x, y};
 
             unit_tests::dm::dram::directed_ideal_test(
-                arch_, devices_, num_devices_, test_case_id, core_coord, dram_channel);
+                arch_, devices_, NumDevices(), test_case_id, this, core_coord, dram_channel);
         }
     }
 }
@@ -251,7 +255,7 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMCoreLocations) {
 // DRAM channels
 
 /* ========== Test case for varying DRAM channels; Test id = 2 ========== */
-TEST_F(DeviceFixture, TensixDataMovementDRAMChannels) {
+TEST_F(DispatchFixture, TensixDataMovementDRAMChannels) {
     uint32_t test_case_id = 2;
 
     CoreCoord core_coord = {0, 0};
@@ -259,17 +263,17 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMChannels) {
     for (unsigned int dram_channel = 0; dram_channel < devices_.at(0)->num_dram_channels(); dram_channel++) {
         for (unsigned int vc = 0; vc < 4; vc++) {
             unit_tests::dm::dram::directed_ideal_test(
-                arch_, devices_, num_devices_, test_case_id, core_coord, dram_channel, vc);
+                arch_, devices_, NumDevices(), test_case_id, this, core_coord, dram_channel, vc);
         }
     }
 }
 
 /* ========== Directed ideal test case; Test id = 3 ========== */
-TEST_F(DeviceFixture, TensixDataMovementDRAMDirectedIdeal) {
+TEST_F(DispatchFixture, TensixDataMovementDRAMDirectedIdeal) {
     // Test ID (Arbitrary)
     uint32_t test_id = 3;
 
-    unit_tests::dm::dram::directed_ideal_test(arch_, devices_, num_devices_, test_id);
+    unit_tests::dm::dram::directed_ideal_test(arch_, devices_, NumDevices(), test_id, this);
 }
 
 }  // namespace tt::tt_metal

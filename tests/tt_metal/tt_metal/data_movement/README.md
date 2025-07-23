@@ -2,6 +2,9 @@
 
 This test suite addresses the functionality and performance (i.e. bandwidth) of various data movement scenarios.
 
+## Dispatch Mode Compatibility
+All test suites in this directory support both fast dispatch (default) and slow dispatch modes. Fast dispatch mode provides better performance and is recommended for most use cases. Each individual test suite includes specific instructions for running in both modes.
+
 ## Tests in the Test Suite
 
 | Name                        | ID(s)        | Description                                                                          |
@@ -23,12 +26,24 @@ This test suite addresses the functionality and performance (i.e. bandwidth) of 
 ## Running Tests
 ### C++ Gtests
 Before running any tests, build the repo with tests: ```./build_metal.sh --build-tests```
-Then, to run the whole test suite execute the following command:
+
+**Fast Dispatch Mode (Recommended):**
+To run the whole test suite in fast dispatch mode (default):
+```
+./build/test/tt_metal/unit_tests_data_movement
+```
+
+**Slow Dispatch Mode:**
+To run the whole test suite in slow dispatch mode:
 ```
 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement
 ```
 
 To run a single test, add a gtest filter with the name of the test. Example:
+```
+./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*TensixDataMovementDRAMInterleavedPacketSizes*"
+```
+Or in slow dispatch mode:
 ```
 TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*TensixDataMovementDRAMInterleavedPacketSizes*"
 ```

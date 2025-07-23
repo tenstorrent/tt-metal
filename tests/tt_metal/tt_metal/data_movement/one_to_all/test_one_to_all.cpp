@@ -5,7 +5,7 @@
 // Note: The sender kernels in One To All write the same transaction_size_bytes amount of data to the same location
 // num_of_transactions times
 
-#include "device_fixture.hpp"
+#include "../../common/dispatch_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -49,7 +49,7 @@ struct OneToAllConfig {
     //  response packets) (60, 45, 23, vs 60, 60, 60 at posted)
 };
 
-bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
+bool run_dm(IDevice* device, const OneToAllConfig& test_config, DispatchFixture* fixture) {
     /* ================ SETUP ================ */
 
     // Program
@@ -201,7 +201,8 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
     // LAUNCH THE PROGRAM
-    detail::LaunchProgram(device, program);
+    // Launch the program - Use dispatch-aware method
+    fixture->RunProgram(device, program);
 
     // Read output from subordinate L1 buffers (implement a loop)
     vector<uint32_t> packed_output;
@@ -230,7 +231,6 @@ bool run_dm(IDevice* device, const OneToAllConfig& test_config) {
 void directed_ideal_test(
     ARCH arch_,
     vector<IDevice*>& devices_,
-    uint32_t num_devices_,
     uint32_t test_case_id,
     bool is_multicast,
     bool is_linked,
@@ -239,7 +239,8 @@ void directed_ideal_test(
     CoreCoord sub_grid_size,
     bool loopback,
     NOC noc_id,
-    uint32_t multicast_scheme_type) {
+    uint32_t multicast_scheme_type,
+    DispatchFixture* fixture) {
     // Physical Constraints
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
         unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
@@ -269,8 +270,8 @@ void directed_ideal_test(
     };
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    for (unsigned int id = 0; id < fixture->NumDevices(); id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config, fixture));
     }
 }
 
@@ -283,7 +284,8 @@ void packet_sizes_test(
     bool is_linked,
     CoreCoord mst_core_coord,
     CoreCoord sub_start_core_coord,
-    CoreCoord sub_grid_size) {
+    CoreCoord sub_grid_size,
+    DispatchFixture* fixture) {
     // Parameters
     NOC noc_id = NOC::NOC_0;
     auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
@@ -326,8 +328,8 @@ void packet_sizes_test(
                 };
 
                 // Run
-                for (unsigned int id = 0; id < num_devices_; id++) {
-                    EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+                for (unsigned int id = 0; id < fixture->NumDevices(); id++) {
+                    EXPECT_TRUE(run_dm(devices_.at(id), test_config, fixture));
                 }
             }
         }
@@ -463,7 +465,7 @@ void custom_test(
 /* ========== UNICAST ========== */
 
 /* ========== 2x2 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicast2x2PacketSizes) {
+TEST_F(DispatchFixture, TensixDataMovementOneToAllUnicast2x2PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 0;
 
@@ -477,17 +479,18 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicast2x2PacketSizes) {
     unit_tests::dm::core_to_all::packet_sizes_test(
         arch_,
         devices_,
-        num_devices_,
+        NumDevices(),
         test_case_id,
         is_multicast,
         is_linked,
         mst_core_coord,
         sub_start_core_coord,
-        sub_grid_size);
+        sub_grid_size,
+        this);
 }
 
 /* ========== 5x5 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicast5x5PacketSizes) {
+TEST_F(DispatchFixture, TensixDataMovementOneToAllUnicast5x5PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 1;
 
@@ -501,17 +504,18 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicast5x5PacketSizes) {
     unit_tests::dm::core_to_all::packet_sizes_test(
         arch_,
         devices_,
-        num_devices_,
+        NumDevices(),
         test_case_id,
         is_multicast,
         is_linked,
         mst_core_coord,
         sub_start_core_coord,
-        sub_grid_size);
+        sub_grid_size,
+        this);
 }
 
 /* ========== All ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastPacketSizes) {
+TEST_F(DispatchFixture, TensixDataMovementOneToAllUnicastPacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 2;
 
@@ -526,19 +530,20 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastPacketSizes) {
     unit_tests::dm::core_to_all::packet_sizes_test(
         arch_,
         devices_,
-        num_devices_,
+        NumDevices(),
         test_case_id,
         is_multicast,
         is_linked,
         mst_core_coord,
         sub_start_core_coord,
-        sub_grid_size);
+        sub_grid_size,
+        this);
 }
 
 /* ========== MULTICAST ========== */
 
 /* ========== 2x2 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticast2x2PacketSizes) {
+TEST_F(DispatchFixture, TensixDataMovementOneToAllMulticast2x2PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 3;
 
@@ -552,17 +557,18 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticast2x2PacketSizes) {
     unit_tests::dm::core_to_all::packet_sizes_test(
         arch_,
         devices_,
-        num_devices_,
+        NumDevices(),
         test_case_id,
         is_multicast,
         is_linked,
         mst_core_coord,
         sub_start_core_coord,
-        sub_grid_size);
+        sub_grid_size,
+        this);
 }
 
 /* ========== 5x5 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticast5x5PacketSizes) {
+TEST_F(DispatchFixture, TensixDataMovementOneToAllMulticast5x5PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 4;
 
@@ -576,17 +582,18 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticast5x5PacketSizes) {
     unit_tests::dm::core_to_all::packet_sizes_test(
         arch_,
         devices_,
-        num_devices_,
+        NumDevices(),
         test_case_id,
         is_multicast,
         is_linked,
         mst_core_coord,
         sub_start_core_coord,
-        sub_grid_size);
+        sub_grid_size,
+        this);
 }
 
 /* ========== All ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastPacketSizes) {
+TEST_F(DispatchFixture, TensixDataMovementOneToAllMulticastPacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 5;
 
@@ -601,19 +608,20 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastPacketSizes) {
     unit_tests::dm::core_to_all::packet_sizes_test(
         arch_,
         devices_,
-        num_devices_,
+        NumDevices(),
         test_case_id,
         is_multicast,
         is_linked,
         mst_core_coord,
         sub_start_core_coord,
-        sub_grid_size);
+        sub_grid_size,
+        this);
 }
 
 /* ========== MULTICAST LINKED ========== */
 
 /* ========== 2x2 ========= */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinked2x2PacketSizes) {
+TEST_F(DispatchFixture, TensixDataMovementOneToAllMulticastLinked2x2PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 6;
 
@@ -627,17 +635,18 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinked2x2PacketSizes) {
     unit_tests::dm::core_to_all::packet_sizes_test(
         arch_,
         devices_,
-        num_devices_,
+        NumDevices(),
         test_case_id,
         is_multicast,
         is_linked,
         mst_core_coord,
         sub_start_core_coord,
-        sub_grid_size);
+        sub_grid_size,
+        this);
 }
 
 /* ========== 5x5 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinked5x5PacketSizes) {
+TEST_F(DispatchFixture, TensixDataMovementOneToAllMulticastLinked5x5PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 7;
 
@@ -651,17 +660,18 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinked5x5PacketSizes) {
     unit_tests::dm::core_to_all::packet_sizes_test(
         arch_,
         devices_,
-        num_devices_,
+        NumDevices(),
         test_case_id,
         is_multicast,
         is_linked,
         mst_core_coord,
         sub_start_core_coord,
-        sub_grid_size);
+        sub_grid_size,
+        this);
 }
 
 /* ========== 11x10 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinkedPacketSizes) {
+TEST_F(DispatchFixture, TensixDataMovementOneToAllMulticastLinkedPacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 8;
 
@@ -676,19 +686,20 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinkedPacketSizes) {
     unit_tests::dm::core_to_all::packet_sizes_test(
         arch_,
         devices_,
-        num_devices_,
+        NumDevices(),
         test_case_id,
         is_multicast,
         is_linked,
         mst_core_coord,
         sub_start_core_coord,
-        sub_grid_size);
+        sub_grid_size,
+        this);
 }
 
 /* ========== DIRECTED IDEAL ========== */
 
 /* ========== UNICAST ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal) {
+TEST_F(DispatchFixture, TensixDataMovementOneToAllUnicastDirectedIdeal) {
     // Parameters
     uint32_t test_case_id = 52;  // Arbitrary test id
 
@@ -706,7 +717,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal) {
     unit_tests::dm::core_to_all::directed_ideal_test(
         arch_,
         devices_,
-        num_devices_,
+
         test_case_id,
         is_multicast,
         is_linked,
@@ -714,11 +725,13 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal) {
         sub_start_core_coord,
         sub_grid_size,
         loopback,
-        noc_id);
+        noc_id,
+        0,  // multicast_scheme_type (not used for unicast)
+        this);
 }
 
 /* ========== MULTICAST ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdeal) {
+TEST_F(DispatchFixture, TensixDataMovementOneToAllMulticastDirectedIdeal) {
     // Parameters
     uint32_t test_case_id = 53;  // Arbitrary test id
 
@@ -736,7 +749,6 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdeal) {
     unit_tests::dm::core_to_all::directed_ideal_test(
         arch_,
         devices_,
-        num_devices_,
         test_case_id,
         is_multicast,
         is_linked,
@@ -744,11 +756,13 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdeal) {
         sub_start_core_coord,
         sub_grid_size,
         loopback,
-        noc_id);
+        noc_id,
+        0,  // multicast_scheme_type (not used here)
+        this);
 }
 
 /* ========== MULTICAST LINKED ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal) {
+TEST_F(DispatchFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal) {
     // Parameters
     uint32_t test_case_id = 54;  // Arbitrary test id
 
@@ -766,7 +780,6 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal) {
     unit_tests::dm::core_to_all::directed_ideal_test(
         arch_,
         devices_,
-        num_devices_,
         test_case_id,
         is_multicast,
         is_linked,
@@ -774,7 +787,9 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal) {
         sub_start_core_coord,
         sub_grid_size,
         loopback,
-        noc_id);
+        noc_id,
+        0,  // multicast_scheme_type (not used here)
+        this);
 }
 
 /* ========== VIRTUAL CHANNELS ========== */
