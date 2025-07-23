@@ -9,7 +9,7 @@ void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t stick_size = get_arg_val<uint32_t>(1);
     uint32_t num_sticks = get_arg_val<uint32_t>(2);
-    uint32_t start_id = get_arg_val<uint32_t>(7);
+    uint32_t start_id = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
 
