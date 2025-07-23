@@ -555,15 +555,20 @@ void py_bind_conv2d(py::module& module) {
 
         * Input tensor (NHWC format):
           - From: (N, H, W, IC)
-          - To: (N, H/stride[0], W/stride[1], IC * kernel[0] * kernel[1])
+          - To: (N, H / stride[0], W / stride[1], IC * stride[0] * stride[1])
 
         * Weight tensor:
           - From: (OC, IC, kernel[0], kernel[1])
-          - To: (1, 1, IC * kernel[0] * kernel[1], OC)
+          - To: (1, 1, IC * (kernel[0] + pad_h) * (kernel[1] + pad_w), OC)
+          Note: The zero padding applied to the weight tensor is implicit and not passed by the user via the padding argument,
+          where pad_h = kernel[0] % stride[0] and pad_w = kernel[1] % stride[1].
 
         Note: This optimization is currently only applied when all of the following conditions are met:
-        1. The stride dimensions exactly match the kernel dimensions (stride[0] == kernel[0] and stride[1] == kernel[1])
-        2. The input tensor is stored in DRAM memory
+        1. The input tensor is stored in DRAM memory.
+        2. The input tensor's height and width are divisible by the stride dimensions.
+        3. Stride values are equal to or less than the kernel dimensions.
+        4. Input tensor's padding must be zero.
+        5. Input tensor data type is not BFLOAT8_B.
 
         ===============================================================
         )doc");
