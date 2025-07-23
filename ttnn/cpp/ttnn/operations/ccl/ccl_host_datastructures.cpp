@@ -56,6 +56,7 @@ uint32_t EriscDatamoverConfig::compute_buffer_size(
     return buffer_size;
 }
 
+// TODO: #24600
 CCLOpConfig::CCLOpConfig(
     std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, Topology topology) :
     input_tensors(&input_tensors),
