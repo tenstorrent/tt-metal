@@ -14,6 +14,12 @@ template <class T, std::size_t Extent>
 class SpanBase : public std::span<T, Extent> {
 public:
     using std::span<T, Extent>::span;
+
+    // Conversion constructor from std::span
+    template <std::size_t OtherExtent>
+    explicit(Extent != std::dynamic_extent && OtherExtent == std::dynamic_extent) constexpr SpanBase(
+        const std::span<T, OtherExtent>& other) noexcept :
+        std::span<T, Extent>(other.data(), other.size()) {}
 };
 
 template <class T, std::size_t Extent>
@@ -24,6 +30,12 @@ public:
     // expose constructor from initializer_list for const-qualified element_type
     explicit(Extent != std::dynamic_extent) constexpr SpanBase(std::initializer_list<T> ilist) noexcept :
         std::span<const T, Extent>(ilist.begin(), ilist.size()) {}
+
+    // Conversion constructor from std::span
+    template <std::size_t OtherExtent>
+    explicit(Extent != std::dynamic_extent && OtherExtent == std::dynamic_extent) constexpr SpanBase(
+        const std::span<const T, OtherExtent>& other) noexcept :
+        std::span<const T, Extent>(other.data(), other.size()) {}
 };
 
 }  // namespace detail
