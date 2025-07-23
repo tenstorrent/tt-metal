@@ -335,7 +335,8 @@ void send_msg_to_eth_mailbox(
             if (elapsed > timeout_ms) {
                 TT_THROW(
                     "Device {}: While trying to launch Metal ethernet firmware, the base firmware mailbox timed out "
-                    "({} ms) waiting for the done message on active ethernet core {}. The mailbox value was {:#x}. "
+                    "({} ms) waiting for the done message on active ethernet core {}. Trying resetting the board.The "
+                    "mailbox value was {:#x}. "
                     "Retrain "
                     "count: {}. "
                     "Is the firmware updated? Minimum tt-firmware version is 18.2.0",
@@ -416,13 +417,19 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
                     hal.get_programmable_core_type_index(tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
                 const auto run_flag_addr = hal.get_dev_addr(k_CoreType, tt_metal::HalL1MemAddrType::ETH_METAL_RUN_FLAG);
                 auto run_flag_val = read_hex_vec_from_core(device_id, virtual_core, run_flag_addr, sizeof(uint32_t))[0];
+
+                const auto return_registers_addr =
+                    hal.get_dev_addr(k_CoreType, tt_metal::HalL1MemAddrType::ETH_FW_LIVE_LINK_STATUS);
+                auto return_registers =
+                    read_hex_vec_from_core(device_id, virtual_core, return_registers_addr, 13 * sizeof(uint32_t));
                 TT_THROW(
-                    "Device {}: Eth mailbox timeout waiting for active eth core {} to become active again. Is "
-                    "the "
-                    "firmware updated? Minimum tt-firmware version is 18.2.0. Launch erisc val: {}",
+                    "Device {}: Timed out while waiting for active ethernet core {} to become active again."
+                    "Try resetting the board. Is the firmware updated? Minimum tt-firmware version is 18.2.0. Launch "
+                    "erisc val: {:#x}. Dumped return registers: {}",
                     device_id,
                     virtual_core.str(),
-                    run_flag_val);
+                    run_flag_val,
+                    fmt::to_string(fmt::join(return_registers, ", ")));
             }
         }
     }
