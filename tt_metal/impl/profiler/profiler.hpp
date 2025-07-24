@@ -183,28 +183,23 @@ private:
     std::vector<std::unordered_map<RuntimeID, nlohmann::json::array_t>> noc_trace_data;
 
     // Read all control buffers
-    void readControlBuffers(
-        IDevice* device, const std::vector<CoreCoord>& virtual_cores, ProfilerDumpState state);
+    void readControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
 
     // Read control buffer for a single core
-    void readControlBufferForCore(IDevice* device, const CoreCoord& virtual_core, ProfilerDumpState state);
+    void readControlBufferForCore(IDevice* device, const CoreCoord& virtual_core);
 
     // Reset all control buffers
-    void resetControlBuffers(
-        IDevice* device, const std::vector<CoreCoord>& virtual_cores, ProfilerDumpState state);
+    void resetControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
 
     // Read all L1 data buffers
-    void readL1DataBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores, ProfilerDumpState state);
+    void readL1DataBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
 
     // Read L1 data buffer for a single core
     void readL1DataBufferForCore(
-        IDevice* device,
-        const CoreCoord& virtual_core,
-        ProfilerDumpState state,
-        std::vector<uint32_t>& core_l1_data_buffer);
+        IDevice* device, const CoreCoord& virtual_core, std::vector<uint32_t>& core_l1_data_buffer);
 
     // Read device profiler buffer
-    void readProfilerBuffer(IDevice* device, ProfilerDumpState state);
+    void readProfilerBuffer(IDevice* device);
 
     // Read data from profiler buffer using fast dispatch
     void issueFastDispatchReadFromProfilerBuffer(IDevice* device);
@@ -224,7 +219,6 @@ private:
     void readRiscProfilerResults(
         IDevice* device,
         const CoreCoord& worker_core,
-        ProfilerDumpState state,
         ProfilerDataBufferSource data_source,
         const std::optional<ProfilerOptionalMetadata>& metadata);
 
@@ -326,14 +320,9 @@ public:
     bool isLastFDDumpDone() const;
 };
 
-bool useFastDispatchForControlBuffers(const IDevice* device, ProfilerDumpState state);
+bool useFastDispatch(IDevice* device);
 
-void writeToCoreControlBuffer(
-    IDevice* device, const CoreCoord& virtual_core, ProfilerDumpState state, const std::vector<uint32_t>& data);
-
-bool onlyProfileDispatchCores(ProfilerDumpState state);
-
-bool isGalaxyMMIODevice(const IDevice* device);
+void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, const std::vector<uint32_t>& data);
 
 }  // namespace tt_metal
 
