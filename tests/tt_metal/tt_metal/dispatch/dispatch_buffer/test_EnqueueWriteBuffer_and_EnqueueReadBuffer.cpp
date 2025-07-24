@@ -144,12 +144,6 @@ vector<uint32_t> generate_arange_vector(uint32_t size_bytes) {
     return src;
 }
 
-void clear_buffer(CommandQueue& cq, Buffer& buffer) {
-    TT_FATAL(buffer.size() % sizeof(uint32_t) == 0, "Error");
-    vector<uint32_t> zeroes(buffer.size() / sizeof(uint32_t), 0);
-    EnqueueWriteBuffer(cq, buffer, zeroes, true);
-}
-
 void clear_buffer(distributed::MeshCommandQueue& cq, std::shared_ptr<distributed::MeshBuffer> buffer) {
     TT_FATAL(buffer->size() % sizeof(uint32_t) == 0, "Error");
     vector<uint32_t> zeroes(buffer->size() / sizeof(uint32_t), 0);
