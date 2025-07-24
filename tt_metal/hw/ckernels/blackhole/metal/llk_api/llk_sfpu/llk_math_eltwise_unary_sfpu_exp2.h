@@ -14,7 +14,7 @@ namespace ckernel {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_exp2_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::exp2, APPROXIMATE>(sfpu::exp2_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::exp2, APPROXIMATE>();
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
