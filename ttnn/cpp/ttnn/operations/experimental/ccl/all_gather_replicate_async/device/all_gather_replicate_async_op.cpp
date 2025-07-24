@@ -390,16 +390,27 @@ void LlamaAllGatherMatmulAsync::validate_with_output_tensors(
 
 std::vector<ttnn::TensorSpec> LlamaAllGatherMatmulAsync::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
+    // All Gather shape
+    ttnn::TensorSpec all_gather_output_shape =
+        this->all_gather_replicate_async_struct.compute_output_specs({input_tensors[0]})[0];
+
     // Matmul shape
     ttnn::TensorSpec matmul_output_specs =
-        this->matmul_struct.compute_output_specs({input_tensors[1], input_tensors[2]}, {})[0];
+        this->matmul_struct.compute_output_specs({input_tensors[0], input_tensors[1]}, {})[0];
 
-    return {matmul_output_specs};
+    return {all_gather_output_shape, matmul_output_specs};
 }
 
 std::vector<Tensor> LlamaAllGatherMatmulAsync::create_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
-    return tt::tt_metal::operation::default_create_output_tensors(*this, input_tensors, optional_output_tensors);
+    // All Gather output tensor
+    auto& all_gather_output_tensor = optional_output_tensors.at(0).value();
+
+    // Matmul output tensor
+    ttnn::Tensor matmul_output_tensor =
+        this->matmul_struct.create_output_tensors({all_gather_output_tensor, input_tensors[1]})[0];
+
+    return {all_gather_output_tensor, matmul_output_tensor};
 }
 
 /* LlamaAllGatherMatmulAsync Implementation ends here*/
@@ -449,53 +460,55 @@ Tensor llama_all_gather_matmul_async_impl(
         rank,
         rank - 1,
         dim);
-    return tt::tt_metal::operation::run(
-               ttnn::AllGatherReplicateAsync{
-                   {},
-                   gather_dim,
-                   num_preferred_links.has_value() ? num_preferred_links.value() : 1,
-                   num_devices,
-                   memory_config.value_or(input_tensor.memory_config()),
-                   topology,
-                   multi_device_global_semaphore,
-                   sub_device_id,
-                   cluster_axis},
-               {input_tensor, intermediate_tensor, aggregated_tensor})
-        .at(0);
+    // return tt::tt_metal::operation::run(
+    //            ttnn::AllGatherReplicateAsync{
+    //                {},
+    //                gather_dim,
+    //                num_preferred_links.has_value() ? num_preferred_links.value() : 1,
+    //                num_devices,
+    //                memory_config.value_or(input_tensor.memory_config()),
+    //                topology,
+    //                multi_device_global_semaphore,
+    //                sub_device_id,
+    //                cluster_axis},
+    //            {input_tensor, intermediate_tensor, aggregated_tensor})
+    //     .at(0);
 
-    // ttnn::AllGatherReplicateAsync all_gather_struct = ttnn::AllGatherReplicateAsync{
-    //     {},
-    //     gather_dim,
-    //     num_preferred_links.has_value() ? num_preferred_links.value() : 1,
-    //     num_devices,
-    //     memory_config.value_or(input_tensor.memory_config()),
-    //     topology,
-    //     multi_device_global_semaphore,
-    //     sub_device_id,
-    //     cluster_axis};
+    ttnn::AllGatherReplicateAsync all_gather_struct = ttnn::AllGatherReplicateAsync{
+        {},
+        gather_dim,
+        num_preferred_links.has_value() ? num_preferred_links.value() : 1,
+        num_devices,
+        memory_config.value_or(input_tensor.memory_config()),
+        topology,
+        multi_device_global_semaphore,
+        sub_device_id,
+        cluster_axis};
 
-    // operations::matmul::Matmul matmul_struct = operations::matmul::create_matmul_struct(
-    //     input_tensor,
-    //     input_tensor_b,
-    //     /*parameters=*/
-    //     operations::matmul::Matmul{
-    //         program_config,
-    //         /*bcast_batch=*/std::nullopt,
-    //         memory_config.value_or(input_tensor.memory_config()),
-    //         dtype.value_or(input_tensor.get_dtype()),
-    //         compute_kernel_config,
-    //         /*untilize_out=*/false,
-    //         /*user_core_coord=*/std::nullopt,
-    //         /*activation=*/std::nullopt,
-    //         /*user_run_batched=*/false,
-    //         /*transpose_a=*/false,
-    //         /*transpose_b=*/false,
-    //         /*output_tile=*/std::nullopt,
-    //         /*global_cb=*/std::nullopt});
+    operations::matmul::Matmul matmul_struct = operations::matmul::create_matmul_struct(
+        input_tensor,
+        input_tensor_b,
+        /*parameters=*/
+        operations::matmul::Matmul{
+            program_config,
+            /*bcast_batch=*/std::nullopt,
+            memory_config.value_or(input_tensor.memory_config()),
+            dtype.value_or(input_tensor.dtype()),
+            compute_kernel_config,
+            /*untilize_out=*/false,
+            /*user_core_coord=*/std::nullopt,
+            /*activation=*/std::nullopt,
+            /*user_run_batched=*/false,
+            /*transpose_a=*/false,
+            /*transpose_b=*/false,
+            /*output_tile=*/std::nullopt,
+            /*global_cb=*/std::nullopt});
 
-    // LlamaAllGatherMatmulAsync llama_all_gather_matmul_async_struct{
-    //     all_gather_struct, matmul_struct, mesh_device.get_devices()};
+    LlamaAllGatherMatmulAsync llama_all_gather_matmul_async_struct{
+        all_gather_struct, matmul_struct, mesh_device.get_devices()};
     // return input_tensor;  // TODO: Implement the actual logic
+    return tt::tt_metal::operation::run(all_gather_struct, {input_tensor, intermediate_tensor, aggregated_tensor})
+        .at(0);
 }
 }  // namespace
 
