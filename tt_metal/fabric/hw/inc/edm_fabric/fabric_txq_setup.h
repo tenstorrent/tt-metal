@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
+#include "tt_metal/hw/tt-1.x.x/inc/ethernet/tt_eth_api.h"
 
 constexpr uint64_t BCAST_MAC_ADDR = 0xFFFF'FFFF'FFFF;
 constexpr uint64_t UNICAST_MAC_ADDR = 0x0000'0000'0000;

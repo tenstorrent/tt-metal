@@ -10,7 +10,7 @@
 #include "mod_div_lib.h"
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
+#include "tt_metal/fabric/hw/tt-1.x.x/inc/edm_fabric/compile_time_arg_tmp.hpp"
 
 namespace NAMESPACE {
 

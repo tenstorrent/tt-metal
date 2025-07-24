@@ -5,8 +5,8 @@
 #include <stdint.h>
 #include <cstdint>
 #include "dataflow_api.h"
-#include "hw/inc/dataflow_api.h"
-#include "hw/inc/dataflow_api_addrgen.h"
+#include "hw/tt-1.x.x/inc/dataflow_api.h"
+#include "hw/tt-1.x.x/inc/dataflow_api_addrgen.h"
 #include "debug/dprint.h"
 #include "ckernel_defs.h"
 #include "tt-metalium/constants.hpp"

@@ -25,7 +25,7 @@
 #include "debug_helpers.hpp"
 #include "dispatch_core_common.hpp"
 #include "hal_types.hpp"
-#include "hw/inc/debug/ring_buffer.h"
+#include "hw/tt-1.x.x/inc/debug/ring_buffer.h"
 #include "llrt.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/arch.h>

@@ -9,7 +9,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
+#include "tt_metal/fabric/hw/tt-1.x.x/inc/edm_fabric/fabric_stream_regs.hpp"
 
 #include <cstddef>
 // clang-format on

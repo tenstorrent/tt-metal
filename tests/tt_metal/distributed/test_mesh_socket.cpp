@@ -14,7 +14,7 @@
 #include <tt-metalium/control_plane.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "impl/context/metal_context.hpp"
-#include "tt_metal/hw/inc/socket.h"
+#include "tt_metal/hw/tt-1.x.x/inc/socket.h"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"

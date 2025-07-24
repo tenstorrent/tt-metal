@@ -12,7 +12,7 @@
 #include "eth_l1_address_map.h"
 #include "ethernet/dataflow_api.h"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake.hpp"
+#include "tt_metal/fabric/hw/tt-1.x.x/inc/edm_fabric/edm_handshake.hpp"
 
 using ttnn::ccl::EriscDataMoverBufferSharingMode;
 using ttnn::ccl::EriscDataMoverTerminationMode;

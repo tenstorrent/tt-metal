@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "dataflow_api.h"
-#include "tt_metal/hw/inc/accessor/tensor_accessor.h"
+#include "tt_metal/hw/tt-1.x.x/inc/accessor/tensor_accessor.h"
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS

@@ -4,9 +4,9 @@
 
 #pragma once
 
-#include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp"
-#include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
-#include "tt_metal/hw/inc/ethernet/tunneling.h"
+#include "tt_metal/fabric/hw//inc/edm_fabric/1d_fabric_constants.hpp"
+#include "tt_metal/hw/tt-1.x.x/inc/ethernet/tt_eth_api.h"
+#include "tt_metal/hw/tt-1.x.x/inc/ethernet/tunneling.h"
 
 struct ReceiverChannelCounterBasedResponseCreditSender {
     ReceiverChannelCounterBasedResponseCreditSender() = default;

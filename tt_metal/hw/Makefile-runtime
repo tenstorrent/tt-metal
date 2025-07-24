@@ -1,4 +1,4 @@
-include $(TT_METAL_HOME)/tt_metal/hw/toolchain/module.mk
+include $(TT_METAL_HOME)/tt_metal/hw/tt-1.x.x/toolchain/module.mk
 
 prepare: hw/toolchain
 

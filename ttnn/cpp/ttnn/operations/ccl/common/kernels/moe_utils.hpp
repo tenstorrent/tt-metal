@@ -4,7 +4,7 @@
 
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/tt-1.x.x/inc/edm_fabric/fabric_connection_manager.hpp"
 
 namespace ttnn::operations::ccl::common {
 

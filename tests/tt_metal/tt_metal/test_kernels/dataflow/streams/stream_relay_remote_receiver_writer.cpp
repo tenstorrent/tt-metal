@@ -6,7 +6,7 @@
 
 #include "dataflow_api.h"
 
-#include "tt_metal/hw/inc/wormhole/noc/noc_overlay_parameters.h"
+#include "tt_metal/hw/tt-1.x.x/inc/wormhole/noc/noc_overlay_parameters.h"
 
 void kernel_main() {
     uint32_t arg_idx = 0;

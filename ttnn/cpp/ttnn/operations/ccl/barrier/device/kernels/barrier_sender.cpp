@@ -4,8 +4,8 @@
 
 #include "dataflow_api.h"
 #include <array>
-#include "tt_metal/hw/inc/ethernet/dataflow_api.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake.hpp"
+#include "tt_metal/hw/tt-1.x.x/inc/ethernet/dataflow_api.h"
+#include "tt_metal/fabric/hw/tt-1.x.x/inc/edm_fabric/edm_handshake.hpp"
 
 #define MIN_WAIT 100000
 

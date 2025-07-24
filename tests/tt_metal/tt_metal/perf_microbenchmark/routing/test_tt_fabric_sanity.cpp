@@ -52,7 +52,7 @@
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
-#include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
+#include "tt_metal/fabric/hw//inc/fabric_routing_mode.h"
 
 using std::vector;
 using namespace tt;

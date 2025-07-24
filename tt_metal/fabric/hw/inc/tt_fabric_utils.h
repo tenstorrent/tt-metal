@@ -5,12 +5,12 @@
 #pragma once
 
 #include "eth_chan_noc_mapping.h"
-#include "tt_metal/hw/inc/ethernet/tunneling.h"
-#include "tt_metal/hw/inc/dataflow_api.h"
-#include "tt_metal/hw/inc/dataflow_api_addrgen.h"
+#include "tt_metal/hw/tt-1.x.x/inc/ethernet/tunneling.h"
+#include "tt_metal/hw/tt-1.x.x/inc/dataflow_api.h"
+#include "tt_metal/hw/tt-1.x.x/inc/dataflow_api_addrgen.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
+#include "tt_metal/fabric/hw//inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw//inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 
 namespace tt::tt_fabric {
 
@@ -20,7 +20,7 @@ FORCE_INLINE bool got_graceful_termination_signal(volatile tt::tt_fabric::Termin
 }
 
 FORCE_INLINE bool got_immediate_termination_signal(volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
-    // mailboxes defined in tt_metal/hw/inc/ethernet/tunneling.h
+    // mailboxes defined in tt_metal/hw/tt-1.x.x/inc/ethernet/tunneling.h
     invalidate_l1_cache();
     uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
     tt_l1_ptr launch_msg_t* const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_msg_rd_ptr]);

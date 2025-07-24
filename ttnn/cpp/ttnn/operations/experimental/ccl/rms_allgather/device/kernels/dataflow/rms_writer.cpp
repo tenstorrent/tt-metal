@@ -6,8 +6,8 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/buffer_types.hpp>
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
-#include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/tt-1.x.x/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/tt-1.x.x/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"

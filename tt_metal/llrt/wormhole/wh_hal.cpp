@@ -11,7 +11,7 @@
 #include "core_config.h"  // ProgrammableCoreType
 #include "dev_mem_map.h"  // MEM_LOCAL_BASE
 #include "hal_types.hpp"
-#include "hw/inc/wormhole/eth_l1_address_map.h"
+#include "hw/tt-1.x.x/inc/wormhole/eth_l1_address_map.h"
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"

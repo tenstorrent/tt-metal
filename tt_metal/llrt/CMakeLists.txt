@@ -23,8 +23,8 @@ target_include_directories(
     BEFORE
     PRIVATE
         ${HAL_INCLUDE_DIRS}
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/wormhole/wormhole_b0_defines
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/tt-1.x.x/inc/wormhole
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/tt-1.x.x/inc/wormhole/wormhole_b0_defines
         ${PROJECT_SOURCE_DIR}/tt_metal/api/wormhole/tt-metalium
 )
 target_link_libraries(
@@ -52,7 +52,7 @@ target_include_directories(
     BEFORE
     PRIVATE
         ${HAL_INCLUDE_DIRS}
-        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/blackhole
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/tt-1.x.x/inc/blackhole
         ${PROJECT_SOURCE_DIR}/tt_metal/api/blackhole/tt-metalium
 )
 target_link_libraries(

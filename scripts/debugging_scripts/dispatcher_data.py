@@ -150,7 +150,7 @@ class DispatcherData:
         launch_msg_rd_ptr = mem_access(fw_elf, "mailboxes->launch_msg_rd_ptr", loc_mem_reader)[0][0]
 
         try:
-            # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
+            # Indexed with enum ProgrammableCoreType - tt_metal/hw/tt-1.x.x/inc/*/core_config.h
             kernel_config_base = mem_access(
                 fw_elf,
                 f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.kernel_config_base[{programmable_core_type}]",

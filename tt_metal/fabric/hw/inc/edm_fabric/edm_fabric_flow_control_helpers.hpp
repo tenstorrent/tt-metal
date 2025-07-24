@@ -7,9 +7,9 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "tt_metal/fabric/hw/inc/edm_fabric/named_types.hpp"
+#include "tt_metal/fabric/hw//inc/edm_fabric/named_types.hpp"
 
-#include "tt_metal/hw/inc/utils/utils.h"
+#include "tt_metal/hw/tt-1.x.x/inc/utils/utils.h"
 #include "risc_attribs.h"
 
 namespace tt::tt_fabric {

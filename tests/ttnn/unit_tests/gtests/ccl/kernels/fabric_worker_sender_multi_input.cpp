@@ -6,7 +6,7 @@
 
 #include "dataflow_api.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/tt-1.x.x/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "ttnn/operations/ccl/common/kernels/ccl_send_utils.hpp"
 
 struct unicast_mode {

@@ -5,7 +5,7 @@
 #pragma once
 
 #include "dataflow_api.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw//inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 
 namespace tt::tt_fabric {

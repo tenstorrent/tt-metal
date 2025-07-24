@@ -16,7 +16,7 @@
 
 #include <ttnn/tensor/tensor_accessor_args.hpp>
 
-// Defines to include tt_metal/hw/inc/accessor/tensor_accessor.h but won't need these
+// Defines to include tt_metal/hw/tt-1.x.x/inc/accessor/tensor_accessor.h but won't need these
 #if !(defined(KERNEL_BUILD) || defined(FW_BUILD))
 
 template <int N>
@@ -49,7 +49,7 @@ static uint32_t my_y[1] = {0};
 #define NOC_UNICAST_ADDR_Y(addr) addr
 #endif
 
-#include "tt_metal/hw/inc/accessor/tensor_accessor.h"
+#include "tt_metal/hw/tt-1.x.x/inc/accessor/tensor_accessor.h"
 
 #undef get_compile_time_arg_val
 #undef noc_index

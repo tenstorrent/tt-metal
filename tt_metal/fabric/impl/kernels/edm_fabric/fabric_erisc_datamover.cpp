@@ -4,7 +4,7 @@
 
 #include "dataflow_api.h"
 #include "debug/assert.h"
-#include "tt_metal/hw/inc/ethernet/tunneling.h"
+#include "tt_metal/hw/tt-1.x.x/inc/ethernet/tunneling.h"
 
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/api/tt-metalium/edm_fabric_counters.hpp"
@@ -24,7 +24,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp"
 
 #include "noc_overlay_parameters.h"
-#include "tt_metal/hw/inc/utils/utils.h"
+#include "tt_metal/hw/tt-1.x.x/inc/utils/utils.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
 #include <fabric_host_interface.h>
 

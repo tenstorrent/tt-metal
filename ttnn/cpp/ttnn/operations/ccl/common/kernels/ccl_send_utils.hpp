@@ -5,8 +5,8 @@
 #include "dataflow_api.h"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/tt-1.x.x/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
+#include "tt_metal/fabric/hw/tt-1.x.x/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 
 #include "debug/dprint.h"
 #include <cstdint>

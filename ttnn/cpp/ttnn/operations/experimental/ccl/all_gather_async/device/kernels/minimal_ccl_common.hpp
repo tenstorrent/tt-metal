@@ -4,9 +4,9 @@
 
 #include "dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/tt-1.x.x/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/tt-1.x.x/inc/noc_addr.h"
 #include <tt-metalium/fabric_edm_packet_header.hpp>
 #include <cstdint>
 #include <utility>

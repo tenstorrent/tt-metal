@@ -2,7 +2,7 @@
 
 ## Overview
 
-The [TensorAccessor](../../tt_metal/hw/inc/accessor/tensor_accessor.h) is a utility for efficiently accessing all tensors distributed across multiple memory banks. It provides an abstraction that handles the mapping from logical tensor indices to physical memory locations.
+The [TensorAccessor](../../tt_metal/hw/tt-1.x.x/inc/accessor/tensor_accessor.h) is a utility for efficiently accessing all tensors distributed across multiple memory banks. It provides an abstraction that handles the mapping from logical tensor indices to physical memory locations.
 
 The main thing to keep in mind when working with it is that developer can choose which arguments of accessor are passed through compile time arguments, which through common-runtime arguments.
 Parameters may consist of rank, number of banks, tensor shape, shard shape, banks coordinates, etc.

@@ -7,7 +7,7 @@
 #include "dataflow_api.h"
 #include "stream_interface.h"
 #include "tests/tt_metal/tt_metal/test_kernels/dataflow/streams/stream_io_kernel_helpers.hpp"
-#include "tt_metal/hw/inc/wormhole/noc/noc_overlay_parameters.h"
+#include "tt_metal/hw/tt-1.x.x/inc/wormhole/noc/noc_overlay_parameters.h"
 
 //////////
 ///  FUTURE OPTIMIZATIONS

@@ -4,8 +4,8 @@
 
 #include "dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
-#include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/tt-1.x.x/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "tt_metal/fabric/hw/tt-1.x.x/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "minimal_ccl_common.hpp"

@@ -4,9 +4,9 @@
 
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "dataflow_api.h"
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/tt-1.x.x/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp"
+#include "tt_metal/fabric/hw/tt-1.x.x/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp"
 
 #include <cstdint>
 #include <cstddef>

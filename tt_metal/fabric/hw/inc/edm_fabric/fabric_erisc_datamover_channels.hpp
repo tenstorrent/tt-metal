@@ -12,9 +12,9 @@
 
 #include "dataflow_api.h"
 #if defined(COMPILE_FOR_ERISC)
-#include "tt_metal/hw/inc/ethernet/tunneling.h"
+#include "tt_metal/hw/tt-1.x.x/inc/ethernet/tunneling.h"
 #endif
-#include "tt_metal/hw/inc/utils/utils.h"
+#include "tt_metal/hw/tt-1.x.x/inc/utils/utils.h"
 #include "risc_attribs.h"
 #include "fabric_edm_packet_header.hpp"
 #include "fabric_edm_types.hpp"
