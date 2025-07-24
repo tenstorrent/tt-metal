@@ -486,6 +486,51 @@ tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_
                 this->all_gather_replicate_async_struct.sub_device_id);
     }
 }
+
+tt::tt_metal::operation::Hash LlamaAllGatherMatmulAsync::compute_program_hash(
+    const std::vector<Tensor>& input_tensors) const {
+    log_trace(tt::LogOp, "compute_program_hash is called");
+    AllGatherReplicateAsyncVersion version = this->all_gather_replicate_async_struct.select_version(input_tensors[0]);
+    log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
+
+    // Input tensor
+    auto input_shape = input_tensors[0].padded_shape();
+    auto input_memory_layout = input_tensors[0].layout();
+    auto input_dtype = input_tensors[0].dtype();
+    auto input_memory_config = input_tensors[0].memory_config();
+
+    auto input2_shape = input_tensors[1].padded_shape();
+    auto input2_memory_layout = input_tensors[1].layout();
+    auto input2_dtype = input_tensors[1].dtype();
+    auto input2_memory_config = input_tensors[1].memory_config();
+
+    // Intermediate tensor
+    auto intermediate_shape = input_tensors[1].padded_shape();
+    auto intermediate_memory_layout = input_tensors[1].layout();
+    auto intermediate_dtype = input_tensors[1].dtype();
+    auto intermediate_memory_config = input_tensors[1].memory_config();
+
+    uint32_t semaphore_address = this->all_gather_replicate_async_struct.semaphore.address();
+    return tt::tt_metal::operation::hash_operation<AllGatherReplicateAsync>(
+        this->all_gather_replicate_async_struct.dim,
+        this->all_gather_replicate_async_struct.num_links,
+        this->all_gather_replicate_async_struct.ring_size,
+        this->all_gather_replicate_async_struct.output_mem_config,
+        this->all_gather_replicate_async_struct.topology,
+        this->all_gather_replicate_async_struct.cluster_axis,
+        input_shape,
+        input_memory_layout,
+        input_dtype,
+        input_memory_config,
+        input2_shape,
+        input2_memory_layout,
+        input2_dtype,
+        input2_memory_config,
+        intermediate_shape,
+        intermediate_memory_layout,
+        intermediate_dtype,
+        intermediate_memory_config);
+}
 /* LlamaAllGatherMatmulAsync Implementation ends here*/
 
 namespace operations {
