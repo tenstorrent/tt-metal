@@ -190,10 +190,10 @@ jobs:
         bh_box:
           - name: BH-LLMBox
             num_devices: 4
+          - name: BH-DeskBox
+            num_devices: 2
           # - name: BH-RackBox
           #   num_devices: 8
-          # - name: BH-DeskBox
-          #   num_devices: 2
     runs-on:
       - ${{ matrix.bh_box.name }}
       - in-service
