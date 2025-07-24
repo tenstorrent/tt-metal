@@ -82,8 +82,20 @@ float get_transaction_noc_bw(
 
     uint32_t upper_pow2 = std::pow(2, std::ceil(std::log2(transaction_size)));
 
-    float lower_bw = dict.lower_bound(lower_pow2)->second[index];
-    float upper_bw = dict.lower_bound(upper_pow2)->second[index];
+    auto lower_it = dict.lower_bound(lower_pow2);
+    auto upper_it = dict.lower_bound(upper_pow2);
+
+    // If lower bound not found, use first entry
+    if (lower_it == dict.end()) {
+        lower_it = dict.begin();
+    }
+
+    // If upper bound not found, use last entry
+    if (upper_it == dict.end()) {
+        upper_it = std::prev(dict.end());
+    }
+    float lower_bw = lower_it->second[index];
+    float upper_bw = upper_it->second[index];
 
     if (transaction_size - lower_pow2 < upper_pow2 - transaction_size) {
         return lower_bw;
@@ -256,7 +268,7 @@ int common_tm_bw_model(
     uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
     uint32_t single_tile_size = tile_width * tile_height * element_size_bytes;
     uint32_t input_transaction_size = input_is_tiled ? single_tile_size : input_shape[-1] * element_size_bytes;
-    const uint32_t max_transaction_size = 65536u;
+    const uint32_t max_transaction_size = 2048u;  // size with highest bw
 
     if (input_is_sharded) {
         const auto& input_shard_shape = input_tensor.memory_config().shard_spec().value().shape;
