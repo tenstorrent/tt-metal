@@ -8,7 +8,6 @@
 - **Batch Inference**: Supports up to 32 users per batch
 - **Flexible Sequence Lengths**: Up to 128k tokens
 - **Performance Benchmarking**: Built-in profiler and throughput analysis
-- **Stress Testing**: Long-context and high-throughput stress test modes
 - **Sampling Controls**: Supports temperature, top-p, and top-k sampling
 - **vLLM-compatible**: Can be used with as an inferencer server engine.
 
@@ -48,19 +47,24 @@ Note: if using HuggingFace weights (`.safetensors` format), please use `HF_MODEL
 The full Llama-3.3-70B demo can be run with the following command.
 
 ```
-pytest tt-metal/models/demos/llama3_subdevices/demo/text_demo.py -k "peformance-batch-32"
+pytest tt-metal/models/demos/llama3_subdevices/demo/text_demo.py -k "performance-batch-32"
 ```
 
-The above run command will execute a short prompt file with 32 users each with up to 128 tokens. It will prefill said users and execute 128 decode iterations, i.e. it will generate 128 new tokens.
+The above run command will execute a short prompt file with 32 users each with up to 128 tokens in length. It will prefill said users and execute 128 decode iterations, i.e. it will generate 128 new tokens.
 
 We also provide other input prompt files with longer sequence lengths. They can be found at `models/demos/llama3_subdevices/demo/sample_prompts/`.
 
 For convenience we also have some of this parametrized in the demo. These are the current pre-configs we have:
-- `performance-long-4k-b1`,  # 4k context for 1 user
-- `performance-long-8k-b1`,  # 4k context for 1 user
-- `performance-long-16k-b32`, # 16K context for 32 users
-- `performance-long-32k-b1`,  # 32k context for 1 user
-- `performance-long-64k-b1`,  # 64k context for 1 user
+- `performance-long-4k-b1`,  # 4k input prompt context for 1 user
+- `performance-long-8k-b1`,  # 8k input prompt context for 1 user
+- `performance-long-16k-b32`, # 16K input prompt context for 32 users
+- `performance-long-32k-b1`,  # 32k input prompt context for 1 user
+- `performance-long-64k-b1`,  # 64k input prompt context for 1 user
+- `performance-long-128k-b1`, # 64k input prompt context for 1 user
+
+All of the above will run the input prompt prefill (up to their specified sequence lengths) and run 128 decode iterations.
+
+We also support any arbitrary sequence input sequence length up to 128K tokens. You can test with your own input prompts. Check the next section for more information on the input prompt file format.
 
 Below is a list of all the parameters that can be configure in the demo. For convenience you can override most of these by adding it's command name to your run.
 
@@ -88,7 +92,9 @@ This would run the same test as 64K but with a 128K input prompt instead.
 
 ### Input Prompts
 
-Input prompts should be provided as a JSON file, with each entry containing a prompt and optionally a context and max_length. Please refer to the ones already provided in `models/demos/llama3_subdevices/demo/sample_prompts/`.
+Input prompts should be provided as a JSON file, with each entry containing a prompt and optionally a context and max_length (equivalent to the number of characters in the prompt, not tokens!). Please refer to the ones already provided in `models/demos/llama3_subdevices/demo/sample_prompts/`.
+
+You can try and change the `max_length` parameter on the provided prompt files to test different input sequence lengths, as long as they don't surpass 128K tokens.
 
 ```
 [
@@ -102,6 +108,38 @@ Input prompts should be provided as a JSON file, with each entry containing a pr
   }
 ]
 ```
+
+## vLLM Model Serving
+
+Ensure first you have a proper TT-Metal installation. (Optional check: `python -c "import tt_lib"`).
+
+vLLM can be install from the TT fork over at https://github.com/tenstorrent/vllm/tree/dev (make sure you're at `dev` branch).
+
+Please follow the [README from vLLM](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md) for the latest instructions on how to build vLLM.
+
+
+### Running the vLLM server
+
+To run a vLLM server on a Galaxy system with Llama-3.3-70B you can execute the following command:
+```
+VLLM_RPC_TIMEOUT=900000 python examples/server_example_tt.py --model "meta-llama/Llama-3.3-70B-Instruct" --override_tt_config '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 95693824}' --num_scheduler_steps 30
+```
+
+After the server is up and running you can interact with it by sending prompt files.
+
+For convenience you can use the official [tt-inference-server](https://github.com/tenstorrent/tt-inference-server/tree/dev) and run the following command:
+
+```
+export HF_MODEL_REPO_ID='meta-llama/Llama-3.3-70B-Instruct'
+
+cd tt-inference-server/vllm-tt-metal-llama3/src
+python example_requests_client.py --num_concurrent 32 --prompt_json_path "vllm_server_prompts.json"
+```
+
+You can find an example server_prompts file in tt-metal at `models/demos/llama3_subdevices/demo/sample_prompts/vllm_server_prompts.json`.
+
+
+## Dev-only and debugging
 
 ### Decode-only Demo
 
@@ -129,56 +167,6 @@ It supports the following parameters:
 - **optimizations (str)**: Optimization level (performance, accuracy)
 
 
-
-## vLLM Model Serving
-
-Ensure first you have a proper TT-Metal installation. (Optional check: `python -c "import tt_lib"`).
-
-vLLM can be install from the TT fork over at https://github.com/tenstorrent/vllm/tree/dev (make sure you're at `dev` branch).
-
-Please follow the [README from vLLM](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md) for the latest instructions on how to build vLLM.
-
-A typical install would look like the following:
-```
-# Installing from within `tt-metal`
-git clone https://github.com/tenstorrent/vllm.git
-cd vllm
-git checkout dev
-pip install --upgrade pip
-pip install -e . --extra-index-url https://download.pytorch.org/whl/cpu
-```
-
-### Extra variables for vLLM
-
-```
-export VLLM_TARGET_DEVICE="tt"
-export MESH_DEVICE=TG
-export TT_LLAMA_TEXT_VER="llama3_subdevices"
-export PYTHONPATH=<path_to_tt_metal>:<path_to_vllm>:$PYTHONPATH
-```
-
-### Running the vLLM server
-
-To run a vLLM server with Llama-3.3-70B you can execute the following command:
-```
-VLLM_RPC_TIMEOUT=900000 python examples/server_example_tt.py --model "meta-llama/Llama-3.3-70B-Instruct" --override_tt_config '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 95693824}' --num_scheduler_steps 30
-```
-
-After the server is up and running you can interact with it by sending prompt files.
-
-For convenience you can use the official [tt-inference-server](https://github.com/tenstorrent/tt-inference-server/tree/dev) and run the following command:
-
-```
-export HF_MODEL_REPO_ID='meta-llama/Llama-3.3-70B-Instruct'
-
-cd tt-inference-server/vllm-tt-metal-llama3/src
-python example_requests_client.py --num_concurrent 32 --prompt_json_path "vllm_server_prompts.json"
-```
-
-You can find an example server_prompts file in tt-metal at `models/demos/llama3_subdevices/demo/sample_prompts/vllm_server_prompts.json`.
-
-
-## Dev-only and debugging
 ### Mixing topologies in prefill ccl ops
 When running `text_demo.py` on a machine with torus, all ops will by default use ring topology. To use line implementation of ops you can set enviroment variables:
 - LINE_RS = 1: to use line for all ReduceScatter ops
