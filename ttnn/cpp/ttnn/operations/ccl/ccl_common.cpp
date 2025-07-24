@@ -1562,7 +1562,7 @@ std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backwar
                 backward_device_fabric_node_id.chip_id,   // dst_chip_id
             };
         }
-    } else {
+    } else if (tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
         if (forward_device) {
             forward_args = {
                 0,  // dst_mesh_id, unused
@@ -1575,6 +1575,8 @@ std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backwar
                 1,  // distance_in_hops
             };
         }
+    } else {
+        TT_THROW("Unsupported fabric config");
     }
     return std::make_tuple(forward_args, backward_args);
 }
@@ -1642,7 +1644,7 @@ std::tuple<std::array<uint32_t, 4>, std::array<uint32_t, 4>> get_forward_backwar
                 num_targets_backward - 1                      // range_hops
             };
         }
-    } else {
+    } else if (tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig())) {
         if (forward_device) {
             forward_args = {
                 0,                    // routing direction, unused
@@ -1659,6 +1661,8 @@ std::tuple<std::array<uint32_t, 4>, std::array<uint32_t, 4>> get_forward_backwar
                 num_targets_backward,  // range_hops
             };
         }
+    } else {
+        TT_THROW("Unsupported fabric config");
     }
     return std::make_tuple(forward_args, backward_args);
 }

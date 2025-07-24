@@ -215,4 +215,8 @@ private:
 std::optional<eth_chan_directions> get_eth_forwarding_direction(
     FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id);
 
+bool is_1d_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
+
+bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
+
 }  // namespace tt::tt_fabric

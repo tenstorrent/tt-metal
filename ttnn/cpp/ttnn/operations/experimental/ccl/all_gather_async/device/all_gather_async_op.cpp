@@ -124,6 +124,12 @@ void AllGatherAsync::validate_with_output_tensors(
                 "We don't support input DRAM block sharding");
         }
     }
+    AllGatherAsyncVersion version = select_version(input_tensors[0]);
+    if (version == AllGatherAsyncVersion::GENERIC) {
+        TT_FATAL(
+            tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+            "Only 1D fabric config is supported for generic all gather");
+    }
 }
 
 std::vector<ttnn::TensorSpec> AllGatherAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
@@ -278,11 +284,6 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
         }
     }
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
-    if (version == AllGatherAsyncVersion::GENERIC) {
-        TT_FATAL(
-            tt::tt_fabric::GetFabricConfig() != tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
-            "2D not supported for generic all gather");
-    }
 
     switch (version) {
         case AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED:
