@@ -343,6 +343,8 @@ target_sources(
             inc/risc_common.h
             inc/tensix_functions.h
             inc/utils/bfloat16.h
+            inc/utils/float32.h
+            inc/utils/int32.h
             inc/utils/utils.h
             inc/vptr_uint.h
             inc/wormhole/c_tensix_core.h
