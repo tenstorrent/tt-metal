@@ -279,9 +279,80 @@ void MatmulFusedOpSignaler::push_matmul_fused_op_rt_args(std::vector<uint32_t>& 
     out_rt_args.push_back(static_cast<uint32_t>(this->fused_op_receiver_signal_semaphores[1]));
 }
 
+void MatmulFusedOpSignaler::init_llama_rs_cores_rs(const CoreRangeSet& rs_cores, tt::tt_metal::Program& program) {
+    // Copy the cores and create the semaphore and set the signaler type
+    TT_FATAL(
+        this->fused_op_type == MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER,
+        "attempted to initialize signaler to llama rs which has a different type");
+    this->initialized_llama_reduce_scatter_part1 = true;
+    this->rs_cores = rs_cores;
+    auto rs_cores_superset = rs_cores.bounding_box();
+    this->rs_semaphore = tt::tt_metal::CreateSemaphore(program, rs_cores_superset, INVALID);
+}
+
+void MatmulFusedOpSignaler::init_llama_rs_cores_mm(
+    const CoreRangeSet& matmul_cores,
+    tt::tt_metal::Program& program,
+    const tt::tt_metal::IDevice* device,
+    int privilaged_index) {
+    // pick the privilaged core, record the number of matmul cores
+    TT_FATAL(initialized_llama_reduce_scatter_part1, "reduce scatter half needs to be initialized first");
+    auto cores = corerange_to_cores(matmul_cores);
+    TT_FATAL(cores.size() > privilaged_index, "Privilaged index is out of range of the matmul cores");
+    this->privilaged_core = cores.at(privilaged_index);
+    this->privilaged_core_physical = device->worker_core_from_logical_core(this->privilaged_core);
+    this->matmul_privilaged_semaphore = tt::tt_metal::CreateSemaphore(program, privilaged_core, 0);
+    this->matmul_semaphore_target = cores.size() - 1;
+}
+
+void MatmulFusedOpSignaler::push_llama_rs_rt_args_for_rs(std::vector<uint32_t>& out_rt_args) const {
+    out_rt_args.push_back(static_cast<uint32_t>(this->rs_semaphore));
+}
+
+void MatmulFusedOpSignaler::push_llama_rs_rt_args_for_mm(
+    std::vector<uint32_t>& out_rt_args,
+    CoreCoord current_core,
+    tt::tt_metal::NOC writer_noc,
+    const tt::tt_metal::IDevice* device) const {
+    out_rt_args.push_back(static_cast<uint32_t>(this->privilaged_core_physical.x));
+    out_rt_args.push_back(static_cast<uint32_t>(this->privilaged_core_physical.y));
+    out_rt_args.push_back(static_cast<uint32_t>(this->matmul_privilaged_semaphore));
+    if (current_core.x == this->privilaged_core.x && current_core.y == this->privilaged_core.y) {
+        out_rt_args.push_back(1);
+        out_rt_args.push_back(this->matmul_semaphore_target);
+        // coordinates of the bounding box
+        auto rs_cores_superset = this->rs_cores.bounding_box();
+        const CoreRange rs_cores_superset_physical = CoreRange(
+            device->worker_core_from_logical_core(rs_cores_superset.start_coord),
+            device->worker_core_from_logical_core(rs_cores_superset.end_coord));
+        if (writer_noc == NOC::NOC_1) {
+            out_rt_args.push_back(rs_cores_superset_physical.end_coord.x);
+            out_rt_args.push_back(rs_cores_superset_physical.end_coord.y);
+            out_rt_args.push_back(rs_cores_superset_physical.start_coord.x);
+            out_rt_args.push_back(rs_cores_superset_physical.start_coord.y);
+        } else {
+            out_rt_args.push_back(rs_cores_superset_physical.start_coord.x);
+            out_rt_args.push_back(rs_cores_superset_physical.start_coord.y);
+            out_rt_args.push_back(rs_cores_superset_physical.end_coord.x);
+            out_rt_args.push_back(rs_cores_superset_physical.end_coord.y);
+        }
+        // Size of the bounding box
+        uint32_t rs_cores_superset_size = (rs_cores_superset.end_coord.y - rs_cores_superset.start_coord.y + 1) *
+                                          (rs_cores_superset.end_coord.x - rs_cores_superset.start_coord.x + 1);
+        out_rt_args.push_back(rs_cores_superset_size);
+        out_rt_args.push_back(static_cast<uint32_t>(this->rs_semaphore));
+    } else {
+        out_rt_args.push_back(0);
+    }
+}
+
 bool MatmulFusedOpSignaler::is_all_gather() { return fused_op_type == MatmulFusedOpSignalerType::ALL_GATHER; }
 
 bool MatmulFusedOpSignaler::is_reduce_scatter() { return fused_op_type == MatmulFusedOpSignalerType::REDUCE_SCATTER; }
+
+bool MatmulFusedOpSignaler::is_llama_reduce_scatter() {
+    return fused_op_type == MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER;
+}
 
 }  // namespace ccl
 }  // namespace experimental
