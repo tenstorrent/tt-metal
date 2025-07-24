@@ -155,13 +155,14 @@ def assert_with_ulp(
         - ULP-Delta(4, 0) = 128
         - ULP-Delta(0, 4) = 4.36e+40
 
+        Generally, if the ULP error exceeds the 2**(#mantissa bits) (128-ULP for bfloat16, 8388608 for float32), then it means that both outputs are different by more than an order of magnitude.
+        For these cases, functions such as `assert_allclose(golden, calculated, rtol, atol)` should be used instead.
+
         To measure the accuracy in ULP of operations on bfloat8_b data type, the ttnn bfloat8_b tensor should be either passed directly to the
         function, or converted to bfloat16 beforehand (bfloat16 has the 'same' resolution as bfloat8_b).
         Indeed, ttnn.to_torch() converts bfloat8_b to float32 by default, which would lead to assert_with_ulp() measuring ULP error as if
         data type was computed as float32.
 
-        Generally, if the ULP error exceeds the 2**(#mantissa bits) (128-ULP for bfloat16, 8388608 for float32), then it means that both outputs are different by more than an order of magnitude.
-        For these cases, functions such as `assert_allclose(golden, calculated, rtol, atol)` should be used instead.
     Returns:
         tuple: A tuple containing:
             - ulp_passed (bool): True if ulp check passed, False otherwise
