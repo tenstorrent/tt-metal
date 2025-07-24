@@ -286,6 +286,7 @@ void kernel_main() {
         if (q_low_idx_in_tokens >= window_start && q_low_idx_in_tokens < window_end) {
             mask_windows_low_idx = w;
             found_mask_windows = true;
+            break;
         }
     }
 
