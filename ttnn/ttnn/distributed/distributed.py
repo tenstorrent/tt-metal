@@ -68,13 +68,13 @@ def _get_rich_table(
                 device_id = None
 
             try:
-                device_id = f"Dev. ID: {device_id}" if device_id is not None else "Empty"
-                coords = f"({row_idx}, {col_idx})"
-                annotation = annotate_cell(device_id) if annotate_cell and device_id is not None else ""
                 coord = ttnn.MeshCoordinate(row_idx, col_idx)
                 locality = "Local" if view.is_local(coord) else "Remote"
+                device_id = f"Dev. ID: {device_id}" if view.is_local(coord) else "Empty"
+                coords = f"({row_idx}, {col_idx})"
+                annotation = annotate_cell(device_id) if annotate_cell and device_id is not None else ""
 
-                cell_content = Text(f"{device_id}\n{coords}\n{annotation}\n{locality}", justify="center")
+                cell_content = Text(f"{locality}\n{device_id}\n{coords}\n{annotation}", justify="center")
                 cell_content.truncate(CELL_SIZE * 3, overflow="ellipsis")  # 3 lines max
             except AttributeError as e:
                 logger.error("Error formatting cell content at row {}, col {}: {}.", row_idx, col_idx, e)
