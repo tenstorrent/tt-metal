@@ -96,8 +96,10 @@ template <bool APPROXIMATION_MODE, uint8_t data_format>
 inline void calculate_where() {
     if (data_format == 0) {
         calculate_where_fp32<APPROXIMATION_MODE>();
+        // _calculate_where_<APPROXIMATION_MODE, DataFormat::Float32>();
     } else if (data_format == 1) {
         calculate_where_fp16_b<APPROXIMATION_MODE>();
+        // _calculate_where_<APPROXIMATION_MODE, DataFormat::Float16_b>();
     } else if (data_format == 2) {
         calculate_where_int32<APPROXIMATION_MODE>();
     }
