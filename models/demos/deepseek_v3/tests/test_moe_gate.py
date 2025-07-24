@@ -9,8 +9,8 @@ from loguru import logger
 import ttnn
 
 # Import from local reference files instead of HuggingFace
-from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate
-from models.demos.deepseek_v3.tt.moe_gate import TTMoEGate
+from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
+from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.utility_functions import comp_pcc
 
@@ -18,7 +18,7 @@ from models.utility_functions import comp_pcc
 @pytest.fixture
 def reference_model(hf_config):
     """Get the actual DeepSeek MLP model using local implementation."""
-    return MoEGate(hf_config)
+    return ReferenceMoEGate(hf_config)
 
 
 @pytest.mark.parametrize(
@@ -47,16 +47,16 @@ def test_forward_pass(
     hf_state_dict = reference_model.state_dict()
 
     # Setup: Convert weights and get weight_config
-    weight_config = TTMoEGate.convert_weights(hf_config_single_layer, hf_state_dict, temp_dir, mesh_device)
+    weight_config = MoEGate.convert_weights(hf_config_single_layer, hf_state_dict, temp_dir, mesh_device)
 
     # Generate appropriate config
     if mode == "prefill":
-        model_config = TTMoEGate.prefill_model_config(hf_config_single_layer, mesh_device)
+        model_config = MoEGate.prefill_model_config(hf_config_single_layer, mesh_device)
     else:
-        model_config = TTMoEGate.decode_model_config(hf_config_single_layer, mesh_device)
+        model_config = MoEGate.decode_model_config(hf_config_single_layer, mesh_device)
 
     # Create a new model state
-    model_state = TTMoEGate.create_state(hf_config_single_layer, mesh_device=mesh_device)
+    model_state = MoEGate.create_state(hf_config_single_layer, mesh_device=mesh_device)
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state)
@@ -80,11 +80,11 @@ def test_forward_pass(
     # TTNN forward pass
     if mode == "prefill":
         tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-        tt_topk_weights, tt_topk_indices = TTMoEGate.forward_prefill(tt_input, run_config)
+        tt_topk_weights, tt_topk_indices = MoEGate.forward_prefill(tt_input, run_config)
         expected_output_memory_config = run_config["output_memory_config"]
     else:
         tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-        tt_topk_weights, tt_topk_indices = TTMoEGate.forward_decode(tt_input, run_config)
+        tt_topk_weights, tt_topk_indices = MoEGate.forward_decode(tt_input, run_config)
         expected_output_memory_config = run_config["output_memory_config"]
 
     # Verify output memory config matches expected

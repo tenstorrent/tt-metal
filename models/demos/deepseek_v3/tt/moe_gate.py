@@ -33,7 +33,7 @@ from models.demos.deepseek_v3.utils.run_config import (
 )
 
 
-class TTMoEGate(AbstractModule):
+class MoEGate(AbstractModule):
     """MoE gate module from DeepSeek-R1.
     See the `AbstractModule` docstring for usage info.
     """
@@ -45,9 +45,10 @@ class TTMoEGate(AbstractModule):
         state_dict: dict[str, torch.Tensor],
         output_path: Path,
         mesh_device: ttnn.Device,
+        prefix: str = "",
     ) -> WeightConfig:
         tt_gate_proj_weight = ttnn.from_torch(
-            state_dict["weight"].T.unsqueeze(0).unsqueeze(0),
+            state_dict[f"{prefix}weight"].T.unsqueeze(0).unsqueeze(0),
             device=mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             dtype=ttnn.bfloat16,
@@ -55,7 +56,7 @@ class TTMoEGate(AbstractModule):
             layout=ttnn.TILE_LAYOUT,
         )
         tt_e_score_correction_bias = ttnn.from_torch(
-            state_dict["e_score_correction_bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0),
+            state_dict[f"{prefix}e_score_correction_bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0),
             device=mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             dtype=ttnn.bfloat16,
