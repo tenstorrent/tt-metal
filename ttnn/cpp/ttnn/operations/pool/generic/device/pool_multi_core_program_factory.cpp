@@ -470,19 +470,19 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
      * output cb
      */
     std::vector<uint32_t> compute_ct_args = {
-        params.in_ntiles_c,
-        kernel_h * kernel_w,
-        params.split_reader,
-        out_nhw_per_core,
-        input_shape[3] / num_shards_c,
-        in_nblocks_c,
-        params.max_rows_for_reduction,
-        in_cb_id_0,
-        in_cb_id_1,
-        in_scalar_cb_id_0,
-        in_scalar_cb_id_1,
-        out_cb_id,
-        one_scalar_per_core};
+        params.in_ntiles_c,                    // 0
+        kernel_h * kernel_w,                 // 1
+        params.split_reader,                   // 2
+        out_nhw_per_core,               // 3
+        input_shape[3] / num_shards_c,  // 4
+        in_nblocks_c,                   // 5
+        params.max_rows_for_reduction,         // 6
+        in_cb_id_0,                     // 7
+        in_cb_id_1,                     // 8
+        in_scalar_cb_id_0,              // 9
+        in_scalar_cb_id_1,              // 10
+        out_cb_id,                      // 11
+        one_scalar_per_core};           // 12
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,

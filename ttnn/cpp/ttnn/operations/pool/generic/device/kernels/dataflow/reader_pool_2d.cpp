@@ -67,7 +67,7 @@ template <
     uint32_t window_h,
     uint32_t window_w,
     uint32_t in_w_padded,
-    uint32_t in_nbytes_leftover,
+    uint32_t in_nbytes_leftover,  // in_aligned_nbytes_c
     uint32_t in_c,
     uint32_t max_sticks_for_reduction,
     uint32_t total_elems_to_reduce,
@@ -105,7 +105,7 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
             auto process_h = [&](uint32_t w_offset, uint32_t w_multiple) __attribute__((always_inline)) {
                 const uint32_t stick_offset = ind + w_offset + h * in_w_padded;
                 const uint32_t read_offset =
-                    in_l1_read_base_addr + (stick_offset * in_nbytes_leftover + c_i * MAX_BYTES_PER_REDUCTION);
+                    in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_BYTES_PER_REDUCTION);
                 noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes * w_multiple);
                 // if compute is using tilize_reconfig we will only untilize the needed number of tiles rather
                 // than the entire MAX_TILES_PER_REDUCTION, thus we use a different offset for the write address
@@ -235,6 +235,9 @@ void kernel_main() {
     constexpr uint32_t in_nbytes_padded_c = get_compile_time_arg_val(26);
     constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(27);
     constexpr uint32_t stride_w = get_compile_time_arg_val(28);
+    DPRINT << "in_aligned_nbytes_c" << in_aligned_nbytes_c << ENDL();
+    DPRINT << "in_nbytes_padded_c" << in_nbytes_padded_c << ENDL();
+    DPRINT << "in_nbytes_c" << in_nbytes_c << ENDL();
 
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
@@ -377,7 +380,7 @@ void kernel_main() {
             wide_reduction,
             clear_value_cb_id,
             in_cb_ntiles,
-            in_nbytes_c,
+            in_nbytes_padded_c,
             is_large_kernel>(0, in_l1_read_base_addr);
     }
 }  // kernel_main()
