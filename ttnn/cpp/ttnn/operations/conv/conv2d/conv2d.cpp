@@ -559,6 +559,16 @@ Result conv2d_L1(
         kernel_size = folding_result.kernel_size;
         mm_conv = folding_result.mm_conv;
     }
+
+    if (conv_config.enable_activation_reuse) {
+        if (conv_config.enable_act_double_buffer) {
+            conv_config.enable_act_double_buffer = false;
+            log_warning(
+                tt::LogOp,
+                "Activation double buffering is currently not supported when activation reuse optimization is enabled, "
+                "disabling double buffering.");
+        }
+    }
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
@@ -649,6 +659,7 @@ Result conv2d_L1(
         true,  // parameters_on_device
         conv_config.enable_kernel_stride_folding,
         conv_config.full_inner_dim,
+        conv_config.enable_activation_reuse,
         kernel_size,
         orig_stride,
         padding_n4);
@@ -778,7 +789,8 @@ Result conv2d_L1(
             conv_config.enable_act_double_buffer,
             conv_config.enable_weights_double_buffer,
             conv_config.full_inner_dim,
-            enable_split_reader);
+            enable_split_reader,
+            conv_config.enable_activation_reuse);
 
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);

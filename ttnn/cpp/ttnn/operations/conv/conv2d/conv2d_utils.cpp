@@ -351,8 +351,10 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     uint32_t act_block_w_div,
     uint32_t window_h,
     uint32_t window_w,
+    uint32_t output_width,
     bool fp32_accum,
-    bool full_inner_dim) {
+    bool full_inner_dim,
+    bool enable_activation_reuse) {
     if (act_block_h_override > 0) {
         TT_ASSERT(
             act_block_h_override % 32 == 0,
@@ -383,11 +385,23 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
         }
     }
 
+    if (enable_activation_reuse) {
+        const uint32_t output_image_width_ntiles = div_up(output_width, tt::constants::TILE_HEIGHT);
+        TT_FATAL(
+            act_block_h_ntiles > output_image_width_ntiles,
+            "Activation reuse needs act block h ({}) to be bigger than output image width in tiles ({}) for the "
+            "optimization to give boost",
+            act_block_h_ntiles,
+            output_image_width_ntiles);
+    }
+
     uint32_t act_c_num_blocks = get_num_cores_channels_from_parallel_config(parallel_config);
     TT_ASSERT(padded_in_channels % act_c_num_blocks == 0);
     uint32_t act_block_w = 0;
     if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
-        act_block_w = round_up(padded_in_channels * window_w, tt::constants::TILE_WIDTH);
+        act_block_w = enable_activation_reuse
+                          ? round_up(padded_in_channels * window_h * window_w, tt::constants::TILE_WIDTH)
+                          : round_up(padded_in_channels * window_w, tt::constants::TILE_WIDTH);
     } else if (parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
         act_block_w = round_up(
             padded_in_channels / act_c_num_blocks * window_w * (full_inner_dim ? window_h : 1),
@@ -832,9 +846,9 @@ Conv2dConfig determine_conv_config_for_auto_shard(
                                          const Conv2dConfig& conv_config_in) -> core_count_and_size {
         Conv2dConfig conv_config = conv_config_in;
         conv_config.shard_layout = shard_layout;
-        if (conv_config.act_block_h_override == 0) {
-            // Set act_block_h_override to min value to
-            // be conservative with L1 memory usage.
+        // Set act_block_h_override to min value to be conservative with L1 memory usage;
+        // With activation reuse, the CB usage is constant regardless of the act block h, so we can keep override to 0
+        if (conv_config.act_block_h_override == 0 && !conv_config.enable_activation_reuse) {
             conv_config.act_block_h_override = constants::TILE_HEIGHT;
             // Split reader is currently only supported for height sharded convs that are not 1d deptwise.
             if (conv_config.enable_split_reader && shard_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
@@ -906,6 +920,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             conv_config,
             input_datatype,
             output_datatype,
+            output_width,
             enable_bias,
             conv_is_1d_deptwise);
 
@@ -1009,8 +1024,10 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
         conv_config.act_block_w_div,
         kernel_size[0],
         kernel_size[1],
+        output_width,
         get_fp32_dest_acc_en(compute_config),
-        conv_config.full_inner_dim);
+        conv_config.full_inner_dim,
+        conv_config.enable_activation_reuse);
     return {opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config};
 }
 
@@ -1152,7 +1169,8 @@ uint32_t calculate_conv_dram_slice_L1_usage(
             conv_config,
             params.input_datatype,
             params.output_datatype,
-            params.enable_bias,
+            output_slice_width,
+        params.enable_bias,
             false);
 
         auto shard_shape = sliced_input_tensor_memory_config.shard_spec().value().shape;
@@ -1310,6 +1328,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     const Conv2dConfig& conv_config,
     const DataType input_datatype,
     const DataType output_datatype,
+    const uint32_t output_image_width,
     const bool enable_bias,
     bool is_1d_depthwise_conv,
     bool skip_act_cb_create) {
@@ -1325,6 +1344,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         input_datatype,
         output_datatype,
         dummy_input_shard_shape,
+        output_image_width,
         enable_bias,
         is_1d_depthwise_conv,
         skip_act_cb_create);
