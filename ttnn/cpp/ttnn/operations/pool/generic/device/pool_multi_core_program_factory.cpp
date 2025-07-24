@@ -618,12 +618,14 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_cb_id_1,
         in_scalar_cb_id_0,
         in_scalar_cb_id_1,
-        tmp_out_cb_id,  // modified 2: replace tmp_out_cb_id by out_cb_id
+        out_cb_id,  // modified 2: replace tmp_out_cb_id by out_cb_id
         max_pool_partials_cb_id,
         in_one_cb_id,
         one_scalar_per_core,
         sync_cb_id1,
-        sync_cb_id2};
+        sync_cb_id2,
+        tmp_out_cb_id,
+        op_attr.is_out_tiled_};
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,

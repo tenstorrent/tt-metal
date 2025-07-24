@@ -67,7 +67,12 @@ template <
     uint32_t unpA_face_r_dim,
     bool neginf_srca_maxpool,
     bool zero_srca_avgpool>
-inline void reduce_h_fused(const uint32_t interm_cb_id, const uint32_t in_scalar_cb_id, const uint32_t out_cb_id) {
+inline void reduce_h_fused(
+    const uint32_t interm_cb_id,
+    const uint32_t in_scalar_cb_id,
+    const uint32_t out_cb_id,
+    const uint32_t tmp_cb_id,
+    const uint32_t is_out_tiled) {
     constexpr uint32_t num_faces_in_input_tile = is_partial_tile ? 1 : max_rows_for_reduction < 32 ? 2 : 4;
     constexpr uint32_t num_faces_in_output_tile = is_partial_tile ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
@@ -91,7 +96,10 @@ inline void reduce_h_fused(const uint32_t interm_cb_id, const uint32_t in_scalar
     pack_untilize_dst<num_output_tiles>(
         out_cb_id, 1 /*out_subblock_h*/, 0, num_out_rows, num_faces_in_output_tile); /* pack 1 row (1x16 or 1x32) */
     tile_regs_release();
-    cb_push_back(out_cb_id, num_output_tiles);
+    if (is_out_tiled) {
+        tilize_block(out_cb_id, num_output_tiles, tmp_cb_id);
+    }
+    cb_push_back(tmp_cb_id, num_output_tiles);
 }
 
 namespace NAMESPACE {
@@ -122,6 +130,8 @@ void MAIN {
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(17);
     constexpr uint32_t sync_cb_id1 = get_compile_time_arg_val(18);
     constexpr uint32_t sync_cb_id2 = get_compile_time_arg_val(19);
+    constexpr uint32_t tmp_cb_id = get_compile_time_arg_val(20);
+    constexpr uint32_t is_out_tiled = get_compile_time_arg_val(21);
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -182,6 +192,7 @@ void MAIN {
             // perform the final reduction over the first N - 1 whole chunks // Reduction of final 2 sticks.
             pack_untilize_uninit(out_cb_id);
             pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_output_tile);
+            constexpr uint32_t writen_id = is_out_tiled ? out_cb_id : tmp_cb_id;
             reduce_h_fused<
                 max_tiles_per_iter,
                 is_partial_tile,
@@ -189,7 +200,11 @@ void MAIN {
                 face_r_dim,
                 neginf_srca_maxpool,
                 zero_srca_avgpool>(
-                interm_cb_id, REDUCE_OP == PoolType::MAX ? in_scalar_cb_id_0 : in_one_cb_id, out_cb_id);
+                interm_cb_id,
+                REDUCE_OP == PoolType::MAX ? in_scalar_cb_id_0 : in_one_cb_id,
+                writen_id,
+                tmp_cb_id,
+                is_out_tiled);
         }
 
         // perform the intermediate reduction over chunk N (across the whole chunk even if the last chunk is
@@ -212,13 +227,19 @@ void MAIN {
         // perform the reduction over the either whole or partial chunk N
         pack_untilize_uninit(out_cb_id);
         pack_untilize_dst_init_short<partial_iter_output_tiles>(out_cb_id, num_out_rows, num_faces_in_output_tile);
+        constexpr uint32_t writen_id = is_out_tiled ? out_cb_id : tmp_cb_id;
         reduce_h_fused<
             partial_iter_output_tiles,
             is_partial_tile,
             max_rows_for_reduction,
             face_r_dim,
             neginf_srca_maxpool,
-            zero_srca_avgpool>(interm_cb_id, REDUCE_OP == PoolType::MAX ? in_scalar_cb_id_0 : in_one_cb_id, out_cb_id);
+            zero_srca_avgpool>(
+            interm_cb_id,
+            REDUCE_OP == PoolType::MAX ? in_scalar_cb_id_0 : in_one_cb_id,
+            writen_id,
+            tmp_cb_id,
+            is_out_tiled);
         if constexpr (!one_scalar_per_core) {
             cb_pop_front(curr_scalar_cb_id, 1);
         }
