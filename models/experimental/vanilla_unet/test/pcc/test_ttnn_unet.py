@@ -10,9 +10,8 @@ from models.utility_functions import skip_for_grayskull
 from models.experimental.vanilla_unet.reference.unet import UNet
 from models.experimental.vanilla_unet.ttnn.ttnn_unet import TtUnet
 from tests.ttnn.utils_for_testing import assert_with_pcc
-import os
-import torch.nn.functional as F
 from loguru import logger
+from models.experimental.vanilla_unet.load_model_utils import load_torch_model
 
 
 def create_custom_preprocessor(device):
@@ -175,26 +174,7 @@ def create_custom_preprocessor(device):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": (7 * 8192) + 1730}], indirect=True)
 @skip_for_grayskull()
 def test_unet(device, reset_seeds, model_location_generator):
-    weights_path = "models/experimental/vanilla_unet/unet.pt"
-    if not os.path.exists(weights_path):
-        os.system("bash models/experimental/vanilla_unet/weights_download.sh")
-
-    state_dict = torch.load(
-        weights_path,
-        map_location=torch.device("cpu"),
-    )
-    ds_state_dict = {k: v for k, v in state_dict.items()}
-
-    reference_model = UNet()
-
-    new_state_dict = {}
-    keys = [name for name, parameter in reference_model.state_dict().items()]
-    values = [parameter for name, parameter in ds_state_dict.items()]
-    for i in range(len(keys)):
-        new_state_dict[keys[i]] = values[i]
-
-    reference_model.load_state_dict(new_state_dict)
-    reference_model.eval()
+    reference_model = load_torch_model(model_location_generator)
 
     torch_input_tensor = torch.randn(1, 3, 480, 640)
     torch_output_tensor = reference_model(torch_input_tensor)

@@ -29,6 +29,7 @@ from models.utility_functions import run_for_wormhole_b0
         (480, 640),
     ],
 )
+@pytest.mark.models_device_performance_bare_metal
 def test_e2e_performant(
     device,
     batch_size,
@@ -43,7 +44,7 @@ def test_e2e_performant(
         act_dtype,
         weight_dtype,
         resolution=resolution,
-        model_location_generator=None,
+        model_location_generator=model_location_generator,
     )
 
     inference_times = []

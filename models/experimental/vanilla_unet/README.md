@@ -24,7 +24,7 @@ To obtain the perf reports through profiler, please build with following command
 Command to run the inference pipeline with random tensor:
 
 ```sh
-pytest tests/ttnn/integration_tests/vanilla_unet/test_ttnn_unet.py
+pytest models/experimental/vanilla_unet/test/pcc/test_ttnn_unet.py
 ```
 
 ### Model performant running with Trace+2CQ

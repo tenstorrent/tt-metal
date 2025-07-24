@@ -1,1 +1,1 @@
-../../../ttnn/integration_tests/vanilla_unet/test_ttnn_unet.py
+../../../../models/experimental/vanilla_unet/test/pcc/test_ttnn_unet.py
