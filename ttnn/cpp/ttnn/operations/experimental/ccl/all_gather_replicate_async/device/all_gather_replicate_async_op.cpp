@@ -10,7 +10,7 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 
 namespace ttnn {
-
+/*AllGatherReplicateAsync Implementation starts here*/
 void AllGatherReplicateAsync::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 3, "Error, Input tensor size should be 3 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
@@ -299,6 +299,97 @@ tt::tt_metal::operation::Hash AllGatherReplicateAsync::compute_program_hash(
         intermediate_memory_config);
 }
 
+/*AllGatherReplicateAsync Implementation ends here*/
+
+/* LlamaAllGatherMatmulAsync Implementation starts here*/
+void LlamaAllGatherMatmulAsync::validate_with_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    TT_FATAL(input_tensors.size() == 4, "Error, Input tensor size should be 4 but has {}", input_tensors.size());
+    const auto& input_tensor = input_tensors[0];
+    const auto& layout = input_tensors[0].layout();
+    const auto& dtype = input_tensors[0].dtype();
+    const auto& page_size = input_tensors[0].buffer()->page_size();
+    TT_FATAL(
+        page_size % input_tensors[0].buffer()->alignment() == 0,
+        "All Gather Replicate currently requires aligned pages");
+
+    TT_FATAL(
+        input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather_replicate need to be on device!");
+    TT_FATAL(
+        input_tensor.buffer() != nullptr,
+        "Operands to all_gather_replicate need to be allocated in buffers on device!");
+    TT_FATAL(
+        this->all_gather_replicate_async_struct.num_links > 0,
+        "Error, num_links should be more than 0 but has {}",
+        this->all_gather_replicate_async_struct.num_links);
+    TT_FATAL(
+        this->all_gather_replicate_async_struct.num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
+        "Worker cores used by links are parallelizaed over rows");
+
+    TT_FATAL(
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+        "Unsupported memory layout {}.",
+        input_tensor.memory_config().memory_layout());
+
+    if (input_tensors.size() > 1) {
+        const auto& intermediate_tensor = input_tensors[2];
+
+        TT_FATAL(
+            intermediate_tensor.storage_type() == StorageType::DEVICE,
+            "Operands to all_gather_replicate need to be on device!");
+        TT_FATAL(
+            intermediate_tensor.layout() == layout,
+            "Error, intermediate tensor layout should be same as input tensor layout but has {}",
+            intermediate_tensor.layout());
+        TT_FATAL(
+            intermediate_tensor.dtype() == dtype,
+            "Error, intermediate tensor dtype should be same as input tensor dtype but has {}",
+            intermediate_tensor.dtype());
+        TT_FATAL(
+            intermediate_tensor.tensor_spec().page_config() == input_tensor.tensor_spec().page_config(),
+            "Error, intermediate tensor page config should be same as input tensor page config but has {}",
+            intermediate_tensor.tensor_spec().page_config());
+
+        // check the intermediate tensor size
+        auto intermediate_shape = intermediate_tensor.padded_shape();
+        auto input_shape = input_tensor.padded_shape();
+        TT_FATAL(
+            intermediate_shape.size() == input_shape.size(),
+            "Error, intermediate tensor shape should have same number of dimensions as input tensor but has {}",
+            intermediate_shape.size());
+        for (size_t i = 0; i < input_shape.size(); ++i) {
+            if (i == this->all_gather_replicate_async_struct.dim) {
+                TT_FATAL(
+                    intermediate_shape[i] <= input_shape[i] * this->all_gather_replicate_async_struct.ring_size,
+                    "Error, intermediate tensor shape at dimension {} should be {} but has {}",
+                    i,
+                    input_shape[i] * this->all_gather_replicate_async_struct.ring_size,
+                    intermediate_shape[i]);
+            } else {
+                TT_FATAL(
+                    intermediate_shape[i] == input_shape[i],
+                    "Error, intermediate tensor shape at dimension {} should be {} but has {}",
+                    i,
+                    input_shape[i],
+                    intermediate_shape[i]);
+            }
+        }
+
+        // check memory layout
+        TT_FATAL(
+            intermediate_tensor.memory_config().memory_layout() == input_tensor.memory_config().memory_layout(),
+            "Error, intermediate tensor memory layout should be same as input tensor memory layout but has {}",
+            intermediate_tensor.memory_config().memory_layout());
+    }
+
+    // TODO: Add validation for output_mem_config
+}
+
+/* LlamaAllGatherMatmulAsync Implementation ends here*/
+
 namespace operations {
 namespace experimental {
 namespace ccl {
@@ -344,7 +435,7 @@ Tensor llama_all_gather_matmul_async_impl(
         rank,
         rank - 1,
         dim);
-
+    /*
     return tt::tt_metal::operation::run(
                ttnn::AllGatherReplicateAsync{
                    {},
@@ -358,6 +449,40 @@ Tensor llama_all_gather_matmul_async_impl(
                    cluster_axis},
                {input_tensor, intermediate_tensor, aggregated_tensor})
         .at(0);
+    */
+    ttnn::AllGatherReplicateAsync all_gather_struct = ttnn::AllGatherReplicateAsync{
+        {},
+        gather_dim,
+        num_preferred_links.has_value() ? num_preferred_links.value() : 1,
+        num_devices,
+        memory_config.value_or(input_tensor.memory_config()),
+        topology,
+        multi_device_global_semaphore,
+        sub_device_id,
+        cluster_axis};
+
+    operations::matmul::Matmul matmul_struct = operations::matmul::create_matmul_struct(
+        input_tensor,
+        input_tensor_b,
+        /*parameters=*/
+        operations::matmul::Matmul{
+            program_config,
+            /*bcast_batch=*/std::nullopt,
+            memory_config.value_or(input_tensor.memory_config()),
+            dtype.value_or(input_tensor.get_dtype()),
+            compute_kernel_config,
+            /*untilize_out=*/false,
+            /*user_core_coord=*/std::nullopt,
+            /*activation=*/std::nullopt,
+            /*user_run_batched=*/false,
+            /*transpose_a=*/false,
+            /*transpose_b=*/false,
+            /*output_tile=*/std::nullopt,
+            /*global_cb=*/std::nullopt});
+
+    LlamaAllGatherMatmulAsync llama_all_gather_matmul_async_struct{
+        all_gather_struct, matmul_struct, mesh_device.get_devices()};
+    return input_tensor;  // TODO: Implement the actual logic
 }
 }  // namespace
 
