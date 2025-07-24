@@ -35,7 +35,7 @@ xt::xarray<float> constant_init(const ttnn::Shape& shape, float value) {
 void uniform_init(std::vector<float>& vec, UniformRange range) {
     auto& gen = autograd::ctx().get_generator();
     uint32_t seed = gen();
-    core::random::sequential_generate(
+    core::random::parallel_generate(
         std::span{vec.data(), vec.size()},
         [range]() { return std::uniform_real_distribution<float>(range.a, range.b); },
         seed);
@@ -44,7 +44,7 @@ void uniform_init(std::vector<float>& vec, UniformRange range) {
 void normal_init(std::vector<float>& vec, NormalParams params) {
     auto& gen = autograd::ctx().get_generator();
     uint32_t seed = gen();
-    core::random::sequential_generate(
+    core::random::parallel_generate(
         std::span{vec.data(), vec.size()},
         [params]() { return std::uniform_real_distribution<float>(params.mean, params.stddev); },
         seed);
