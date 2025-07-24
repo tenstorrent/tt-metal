@@ -34,27 +34,27 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     const auto& mapping_tensor = tensor_args.mapping_tensor;
     const auto& topk_tensor = tensor_args.topk_tensor;
 
-    const auto& metadata_tensor_shape = metadata_tensor.get_logical_shape();
+    const auto& metadata_tensor_shape = metadata_tensor.logical_shape();
     const auto batch_size = metadata_tensor_shape[1];
     const auto seq_size = metadata_tensor_shape[2];
     const auto selected_experts_k = metadata_tensor_shape[3];
-    const auto experts = mapping_tensor.get_logical_shape()[-2];
+    const auto experts = mapping_tensor.logical_shape()[-2];
 
-    const auto experts_per_device = tensor_return_value.get_logical_shape()[-1];
+    const auto experts_per_device = tensor_return_value.logical_shape()[-1];
 
     const auto l1_alignment = hal::get_l1_alignment();
     const auto dram_alignment = hal::get_dram_alignment();
 
-    const auto mapping_page_size_bytes = mapping_tensor.get_tensor_spec().compute_page_size_bytes();
+    const auto mapping_page_size_bytes = mapping_tensor.tensor_spec().compute_page_size_bytes();
     const auto aligned_mapping_page_size_bytes = tt::align(mapping_page_size_bytes, l1_alignment);
 
-    const auto metadata_page_size_bytes = metadata_tensor.get_tensor_spec().compute_page_size_bytes();
+    const auto metadata_page_size_bytes = metadata_tensor.tensor_spec().compute_page_size_bytes();
     const auto aligned_metadata_page_size_bytes = tt::align(metadata_page_size_bytes, l1_alignment);
 
-    const auto topk_page_size_bytes = topk_tensor.get_tensor_spec().compute_page_size_bytes();
+    const auto topk_page_size_bytes = topk_tensor.tensor_spec().compute_page_size_bytes();
     const auto aligned_topk_page_size_bytes = tt::align(topk_page_size_bytes, l1_alignment);
 
-    const auto output_page_size_bytes = tensor_return_value.get_tensor_spec().compute_page_size_bytes();
+    const auto output_page_size_bytes = tensor_return_value.tensor_spec().compute_page_size_bytes();
 
     Program program{};
 
@@ -68,7 +68,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
     // full mapping buffer
-    const auto mapping_data_format = datatype_to_dataformat_converter(mapping_tensor.get_dtype());
+    const auto mapping_data_format = datatype_to_dataformat_converter(mapping_tensor.dtype());
     const auto mapping_tensor_cb_id = tt::CBIndex::c_0;
     CircularBufferConfig cb_mapping_tensor_config =
         CircularBufferConfig(aligned_mapping_page_size_bytes, {{mapping_tensor_cb_id, mapping_data_format}})
@@ -88,7 +88,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
 
     // metadata page buffer
     constexpr uint32_t metadata_buffer_factor = 1;
-    const auto metadata_data_format = datatype_to_dataformat_converter(metadata_tensor.get_dtype());
+    const auto metadata_data_format = datatype_to_dataformat_converter(metadata_tensor.dtype());
     const auto metadata_cb_id = tt::CBIndex::c_2;
     CircularBufferConfig cb_metadata_config =
         CircularBufferConfig(
@@ -98,7 +98,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
 
     // topk page buffer
     constexpr uint32_t topk_buffer_factor = 2;
-    const auto topk_data_format = datatype_to_dataformat_converter(topk_tensor.get_dtype());
+    const auto topk_data_format = datatype_to_dataformat_converter(topk_tensor.dtype());
     const auto topk_cb_id = tt::CBIndex::c_3;
     CircularBufferConfig cb_topk_config =
         CircularBufferConfig(topk_buffer_factor * aligned_topk_page_size_bytes, {{topk_cb_id, topk_data_format}})
@@ -106,7 +106,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     const auto topk_cb_handle = CreateCircularBuffer(program, total_cores, cb_topk_config);
 
     // output staging buffer
-    const auto output_data_format = datatype_to_dataformat_converter(tensor_return_value.get_dtype());
+    const auto output_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
     const auto output_cb_id = tt::CBIndex::c_4;
     CircularBufferConfig cb_output_config =
         CircularBufferConfig(output_page_size_bytes, {{output_cb_id, output_data_format}})

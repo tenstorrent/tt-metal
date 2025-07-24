@@ -22,24 +22,23 @@ void MoeExpertTokenRemapDeviceOperation::validate_on_program_cache_miss(
     const auto& metadata_tensor = tensor_args.metadata_tensor;
     const auto& mapping_tensor = tensor_args.mapping_tensor;
 
-    TT_FATAL(topk_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR, "topk tensor must be in row major layout");
+    TT_FATAL(topk_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "topk tensor must be in row major layout");
     TT_FATAL(
-        metadata_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR, "Metadata tensor must be in row major layout");
+        metadata_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Metadata tensor must be in row major layout");
 
-    TT_FATAL(metadata_tensor.get_dtype() == tt::tt_metal::DataType::UINT16, "Metadata tensor must be uint16");
+    TT_FATAL(metadata_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Metadata tensor must be uint16");
 
-    TT_FATAL(mapping_tensor.get_dtype() == tt::tt_metal::DataType::UINT16, "Mapping tensor must be uint16");
-    TT_FATAL(
-        mapping_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR, "Mapping tensor must be in row major layout");
+    TT_FATAL(mapping_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Mapping tensor must be uint16");
+    TT_FATAL(mapping_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Mapping tensor must be in row major layout");
 
     auto mesh_device = tensor_args.topk_tensor.mesh_device();
     const auto& mesh_view = mesh_device->get_view();
 
     const auto num_devices = mesh_view.num_devices();
 
-    const auto& topk_shape = topk_tensor.get_logical_shape();
-    const auto& metadata_shape = metadata_tensor.get_logical_shape();
-    const auto& mapping_shape = mapping_tensor.get_logical_shape();
+    const auto& topk_shape = topk_tensor.logical_shape();
+    const auto& metadata_shape = metadata_tensor.logical_shape();
+    const auto& mapping_shape = mapping_tensor.logical_shape();
 
     TT_FATAL(
         mapping_shape[-1] == num_devices,
@@ -83,8 +82,7 @@ MoeExpertTokenRemapDeviceOperation::spec_return_value_t MoeExpertTokenRemapDevic
     const auto mem_config = operation_attributes.output_mem_config.value_or(MemoryConfig());
     return TensorSpec(
         Shape(output_shape),
-        TensorLayout(
-            tensor_args.topk_tensor.get_dtype(), PageConfig(tensor_args.topk_tensor.get_layout()), mem_config));
+        TensorLayout(tensor_args.topk_tensor.dtype(), PageConfig(tensor_args.topk_tensor.layout()), mem_config));
 }
 
 MoeExpertTokenRemapDeviceOperation::tensor_return_value_t MoeExpertTokenRemapDeviceOperation::create_output_tensors(
