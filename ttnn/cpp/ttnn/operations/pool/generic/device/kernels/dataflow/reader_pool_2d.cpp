@@ -235,6 +235,7 @@ void kernel_main() {
     constexpr uint32_t in_nbytes_padded_c = get_compile_time_arg_val(26);
     constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(27);
     constexpr uint32_t stride_w = get_compile_time_arg_val(28);
+    constexpr bool last_tile_is_partial = in_c % 32 != 0 && in_c % 32 < 17;
     DPRINT << "in_aligned_nbytes_c" << in_aligned_nbytes_c << ENDL();
     DPRINT << "in_nbytes_padded_c" << in_nbytes_padded_c << ENDL();
     DPRINT << "in_nbytes_c" << in_nbytes_c << ENDL();
