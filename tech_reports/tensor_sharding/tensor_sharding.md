@@ -64,7 +64,6 @@ memory_config = ttnn.MemoryConfig(
     ttnn.ShardSpec(
         core_ranges=ttnn.num_cores_to_corerangeset(8, [8, 7], True),
         shard_shape=[64, 128],  # Each shard: 64 rows x 128 columns
-        shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
     ),
 )
 
@@ -130,8 +129,7 @@ memory_config = ttnn.MemoryConfig(
         core_ranges=ttnn.CoreRangeSet({
             ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 1))
         }),
-        shard_shape=[32, 64],  # Each shard: 32 rows x 64 columns
-        shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_shape=[32, 64]  # Each shard: 32 rows x 64 columns
     ),
 )
 
@@ -199,8 +197,7 @@ memory_config = ttnn.MemoryConfig(
         core_ranges=ttnn.CoreRangeSet({
             ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))
         }),
-        shard_shape=[64, 64],
-        shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_shape=[64, 64]
     ),
 )
 
@@ -215,7 +212,7 @@ block_sharded_tensor = ttnn.from_torch(
 )
 ```
 
-> **Note:** When using physical shard shapes, ensure compatibility with tile layouts and memory alignment requirements.
+> **Note:** Ensure that the tensor dimensions are compatible with the specified shard shapes and core ranges.
 
 </details>
 
@@ -328,9 +325,7 @@ nd_memory_config = ttnn.MemoryConfig(
     ttnn.BufferType.L1,
     ttnn.NdShardSpec(
         shard_shape=[1, 1, 64, 128],  # Shard size in each dimension
-        core_ranges=core_ranges,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+        core_ranges=core_ranges
     ),
 )
 
