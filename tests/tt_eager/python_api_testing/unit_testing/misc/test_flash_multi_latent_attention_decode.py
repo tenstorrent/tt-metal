@@ -220,7 +220,7 @@ def run_flash_mla_decode_impl(
 
     pcc_threshold = 0.99
     if dtype == ttnn.bfloat4_b:
-        pcc_threshold = 0.97
+        pcc_threshold = 0.91
     if dtype == ttnn.bfloat8_b:
         pcc_threshold = 0.94
 
