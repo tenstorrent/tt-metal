@@ -19,7 +19,6 @@
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <impl/debug/dprint_server.hpp>
-#include <impl/debug/watcher_server.hpp>
 
 #include <array>
 #include <unordered_set>
@@ -60,7 +59,6 @@ public:
         return inspector_data_.get();
     }
     std::unique_ptr<DPrintServer>& dprint_server() { return dprint_server_; }
-    std::unique_ptr<WatcherServer>& watcher_server() { return watcher_server_; }
 
     void initialize(
         const DispatchCoreConfig& dispatch_core_config,
@@ -142,7 +140,6 @@ private:
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;
     std::unique_ptr<inspector::Data> inspector_data_;
     std::unique_ptr<DPrintServer> dprint_server_;
-    std::unique_ptr<WatcherServer> watcher_server_;
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;

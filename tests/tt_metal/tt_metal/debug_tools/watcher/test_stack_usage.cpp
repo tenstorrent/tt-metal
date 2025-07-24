@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
+#include <watcher_server.hpp>
 #include <fmt/base.h>
 #include <string>
 #include <vector>

@@ -12,6 +12,7 @@
 #include "dispatch_core_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/debug/noc_logging.hpp"
+#include "impl/debug/watcher_server.hpp"
 #include "impl/dispatch/debug_tools.hpp"
 #include "impl/dispatch/system_memory_manager.hpp"
 
@@ -44,6 +45,13 @@ void dump_data(
     std::filesystem::path cq_dir(parent_dir.string() + "command_queue_dump/");
     std::filesystem::create_directories(cq_dir);
 
+    if (dump_cqs) {
+        cout << "Dumping Command Queues into: " << cq_dir.string() << endl;
+    }
+    if (dump_watcher) {
+        cout << "Dumping Watcher Log into: " << watcher_get_log_file_name() << endl;
+    }
+
     // Only look at user-specified devices
     vector<IDevice*> devices;
     for (chip_id_t id : device_ids) {
@@ -60,12 +68,16 @@ void dump_data(
             std::unique_ptr<SystemMemoryManager> sysmem_manager = std::make_unique<SystemMemoryManager>(id, num_hw_cqs);
             internal::dump_cqs(cq_file, iq_file, *sysmem_manager, dump_cqs_raw_data);
         }
+        // Watcher attach wthout watcher init - to avoid clearing mailboxes.
+        if (dump_watcher) {
+            watcher_attach(device->id());
+        }
     }
 
     // Watcher doesn't have kernel ids since we didn't create them here, need to read from file.
     if (dump_watcher) {
-        cout << "Dumping Watcher Log into: " << MetalContext::instance().watcher_server()->log_file_name() << endl;
-        MetalContext::instance().watcher_server()->isolated_dump(device_ids);
+        watcher_read_kernel_ids_from_file();
+        watcher_dump();
     }
 
     // Dump noc data if requested
