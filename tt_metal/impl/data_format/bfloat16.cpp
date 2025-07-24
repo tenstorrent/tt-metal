@@ -348,6 +348,8 @@ bool packed_uint32_t_vector_comparison(
 
 static inline uint16_t fp32_to_bf16_bits_round_to_nearest_even(float val) {
     if (std::isnan(val)) {
+        // NaN is represented when all exponent bits are 1 and mantissa is non-zero.
+        // 0x7FC0  = 0 (sign) 11111111 (exponent) 1000000 (mantissa)
         return UINT16_C(0x7FC0);
     } else {
         union {
@@ -356,6 +358,9 @@ static inline uint16_t fp32_to_bf16_bits_round_to_nearest_even(float val) {
         };
 
         F32 = val;
+        // Rounding bias = 0111 1111 1111 1111 (0x7FFF) if last bit of mantissa ((U32 >> 16) & 1)
+        // is 0, otherwise 1000 0000 0000 0000 (0x8000).
+        // This ensures that we round to the nearest even number.
         uint32_t rounding_bias = ((U32 >> 16) & 1) + UINT32_C(0x7FFF);
         return static_cast<uint16_t>((U32 + rounding_bias) >> 16);
     }
