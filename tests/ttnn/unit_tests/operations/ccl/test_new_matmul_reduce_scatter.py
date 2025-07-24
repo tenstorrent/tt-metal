@@ -13,7 +13,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
 
-def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
+def create_global_semaphores(mesh_device, cores, initial_value):
     # create global semaphore handles
     ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(3)]
     return ccl_semaphore_handles
@@ -67,9 +67,7 @@ def run_reduce_scatter_impl(
     t3k_mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = [
-        create_global_semaphores(t3k_mesh_device, num_devices, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
+    ccl_semaphore_handles = [create_global_semaphores(t3k_mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
 
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
