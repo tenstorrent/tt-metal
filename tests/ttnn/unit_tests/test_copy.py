@@ -34,7 +34,7 @@ def test_copy(shape, layout, dtype, device):
 
 
 # Test for block sharding
-@pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.bfloat16, ttnn.int32])
 @pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
 @pytest.mark.parametrize("shape", [[128, 64]])
 @pytest.mark.parametrize(
@@ -89,7 +89,7 @@ def test_copy_block_sharded(device, layout, shape, shard_scheme, dtype):
 
 
 # Test for width sharding
-@pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.bfloat16, ttnn.int32])
 @pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
 @pytest.mark.parametrize("shape", [[1, 2, 96, 128]])
 @pytest.mark.parametrize(
@@ -148,7 +148,7 @@ def test_copy_width_sharded(device, layout, shape, shard_scheme, dtype):
 
 
 # Test for height sharding
-@pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.bfloat16, ttnn.int32])
 @pytest.mark.parametrize("layout", [ttnn.Layout.TILE, ttnn.Layout.ROW_MAJOR])
 @pytest.mark.parametrize("shape", [[512, 64]])
 @pytest.mark.parametrize(
