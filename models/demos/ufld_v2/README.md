@@ -26,7 +26,7 @@ Resource link - [source](https://github.com/cfzd/Ultra-Fast-Lane-Detection-v2)
 
 - The entry point to the UFLD_v2 is located at:`models/demos/ufld_v2/ttnn/ttnn_ufld_v2.py`
 - The model picks up trained weights from the **tusimple_res34.pth** file located at:`models/demos/ufld_v2/reference/tusimple_res34.pth`
-- Batch Size :1
+- Batch Size : `1` (Single Device), `2` (Multi Device).
 - Supported Input Resolution - (320,800) (Height,Width)
 
 ### How to Run:
@@ -38,20 +38,36 @@ pytest --disable-warnings tests/ttnn/integration_tests/ufld_v2/test_ttnn_ufld_v2
 ```
 
 ### Performant Model with Trace+2CQ
-- end-2-end perf is 255 FPS
+
+#### Single Device (BS=1):
+- end-2-end perf is `202` FPS
+Use the following command to run the performant Model with Trace+2CQs:
+
+```
+pytest --disable-warnings models/demos/ufld_v2/tests/test_ufld_v2_e2e_performant.py::test_ufldv2_e2e_performant
+```
+#### Multi Device (DP=2, N300):
+- end-2-end perf is `97` FPS, #ToDo: To fix this
 
 Use the following command to run the performant Model with Trace+2CQs:
 
 ```
-pytest --disable-warnings models/demos/ufld_v2/tests/test_ufld_v2_e2e_performant.py
+pytest --disable-warnings models/demos/ufld_v2/tests/test_ufld_v2_e2e_performant.py::test_ufldv2_e2e_performant_dp
 ```
-
 ### Performant Demo with Trace+2CQ
 
+#### Single Device (BS=1):
 Use the following command to run the performant Demo with Trace+2CQs:
 
 ```
-pytest --disable-warnings models/demos/ufld_v2/demo/demo.py
+pytest --disable-warnings models/demos/ufld_v2/demo/demo.py::test_ufld_v2_demo
+```
+
+#### Multi Device (DP=2, N300):
+Use the following command to run the DP performant Demo with Trace+2CQs:
+
+```
+pytest --disable-warnings models/demos/ufld_v2/demo/demo.py::test_ufld_v2_demo_dp
 ```
 
 To run the demo on your data:
@@ -64,8 +80,18 @@ To run the demo on your data:
 - dataset source: [TuSimple](https://www.kaggle.com/datasets/manideep1108/tusimple)
 - Adjust the `num_of_images` parameter to control the number of dataset samples used during evaluation. (default number of images taken - 100)
 
+#### Single Device (BS=1):
+
 Use the following command to run the performant data evaluation with Trace+2CQs:
 
 ```
-pytest --disable-warnings models/demos/ufld_v2/demo/dataset_evaluation.py
+pytest --disable-warnings models/demos/ufld_v2/demo/dataset_evaluation.py::test_ufld_v2_dataset_inference
+```
+
+#### Multi Device (DP=2, N300):
+
+Use the following command to run the DP performant data evaluation with Trace+2CQs:
+
+```
+pytest --disable-warnings models/demos/ufld_v2/demo/dataset_evaluation.py::test_ufld_v2_dataset_inference_dp
 ```

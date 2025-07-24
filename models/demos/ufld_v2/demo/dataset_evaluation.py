@@ -17,28 +17,8 @@ from models.demos.ufld_v2.reference.ufld_v2_model import TuSimple34
 from models.demos.ufld_v2.runner.performant_runner import UFLDPerformantRunner
 
 
-@pytest.mark.parametrize(
-    "batch_size,input_channels,height,width,num_of_images,is_overlay",
-    [
-        (1, 3, 320, 800, 100, False),
-    ],
-)
-@pytest.mark.parametrize(
-    "use_pretrained_weight",
-    [
-        # False,
-        True
-    ],
-    ids=[
-        # "pretrained_weight_false",
-        "pretrained_weight_true",
-    ],
-)
-@pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
-)
-def test_ufld_v2_dataset_inference(
-    batch_size,
+def run_ufld_v2_dataset_inference(
+    batch_size_per_device,
     input_channels,
     height,
     width,
@@ -47,7 +27,11 @@ def test_ufld_v2_dataset_inference(
     device,
     use_pretrained_weight,
     reset_seeds,
+    exp_name_1,
+    exp_name_2,
 ):
+    num_devices = device.get_num_devices()
+    batch_size = batch_size_per_device * num_devices
     reference_model = TuSimple34(input_height=height, input_width=width)
     if use_pretrained_weight:
         logger.info(f"Demo Inference using Pre-trained Weights")
@@ -74,7 +58,7 @@ def test_ufld_v2_dataset_inference(
         reference_model,
         cfg.data_root,
         cfg.data_root,
-        "reference_model_results_dataset",
+        exp_name_1,
         False,
         cfg.crop_ratio,
         cfg.train_width,
@@ -91,7 +75,7 @@ def test_ufld_v2_dataset_inference(
         UFLDPerformantRunner,
         cfg.data_root,
         cfg.data_root,
-        "ttnn_model_results_dataset",
+        exp_name_2,
         False,
         cfg.crop_ratio,
         cfg.train_width,
@@ -113,16 +97,110 @@ def test_ufld_v2_dataset_inference(
                 break
             outfile.write(line)
 
-    res = LaneEval.bench_one_submit(
-        os.path.join(cfg.data_root, "reference_model_results_dataset" + ".txt"), gt_file_path
-    )
+    res = LaneEval.bench_one_submit(os.path.join(cfg.data_root, exp_name_1 + ".txt"), gt_file_path)
     res = json.loads(res)
     for r in res:
         if r["name"] == "F1":
             logger.info(f"F1 Score for Reference Model is {r['value']}")
 
-    res1 = LaneEval.bench_one_submit(os.path.join(cfg.data_root, "ttnn_model_results_dataset" + ".txt"), gt_file_path)
+    res1 = LaneEval.bench_one_submit(os.path.join(cfg.data_root, exp_name_2 + ".txt"), gt_file_path)
     res1 = json.loads(res1)
     for r in res1:
         if r["name"] == "F1":
             logger.info(f"F1 Score for ttnn Model is {r['value']}")
+
+
+@pytest.mark.parametrize(
+    "batch_size,input_channels,height,width,num_of_images,is_overlay,exp_name_1,exp_name_2",
+    [
+        (1, 3, 320, 800, 100, False, "reference_model_results_dataset", "ttnn_model_results_dataset"),
+    ],
+)
+@pytest.mark.parametrize(
+    "use_pretrained_weight",
+    [
+        # False,
+        True
+    ],
+    ids=[
+        # "pretrained_weight_false",
+        "pretrained_weight_true",
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
+)
+def test_ufld_v2_dataset_inference(
+    batch_size,
+    input_channels,
+    height,
+    width,
+    num_of_images,
+    is_overlay,
+    use_pretrained_weight,
+    exp_name_1,
+    exp_name_2,
+    device,
+    reset_seeds,
+):
+    run_ufld_v2_dataset_inference(
+        batch_size,
+        input_channels,
+        height,
+        width,
+        num_of_images,
+        is_overlay,
+        device,
+        use_pretrained_weight,
+        reset_seeds,
+        exp_name_1,
+        exp_name_2,
+    )
+
+
+@pytest.mark.parametrize(
+    "batch_size_per_device,input_channels,height,width,num_of_images,is_overlay,exp_name_1,exp_name_2",
+    [
+        (1, 3, 320, 800, 100, False, "reference_model_results_dataset_dp", "ttnn_model_results_dataset_dp"),
+    ],
+)
+@pytest.mark.parametrize(
+    "use_pretrained_weight",
+    [
+        # False,
+        True
+    ],
+    ids=[
+        # "pretrained_weight_false",
+        "pretrained_weight_true",
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
+)
+def test_ufld_v2_dataset_inference_dp(
+    batch_size_per_device,
+    input_channels,
+    height,
+    width,
+    num_of_images,
+    is_overlay,
+    use_pretrained_weight,
+    exp_name_1,
+    exp_name_2,
+    mesh_device,
+    reset_seeds,
+):
+    run_ufld_v2_dataset_inference(
+        batch_size_per_device,
+        input_channels,
+        height,
+        width,
+        num_of_images,
+        is_overlay,
+        mesh_device,
+        use_pretrained_weight,
+        reset_seeds,
+        exp_name_1,
+        exp_name_2,
+    )
