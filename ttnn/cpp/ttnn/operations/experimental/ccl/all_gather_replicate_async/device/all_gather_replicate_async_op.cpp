@@ -397,6 +397,11 @@ std::vector<ttnn::TensorSpec> LlamaAllGatherMatmulAsync::compute_output_specs(
     return {matmul_output_specs};
 }
 
+std::vector<Tensor> LlamaAllGatherMatmulAsync::create_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
+    return tt::tt_metal::operation::default_create_output_tensors(*this, input_tensors, optional_output_tensors);
+}
+
 /* LlamaAllGatherMatmulAsync Implementation ends here*/
 
 namespace operations {
