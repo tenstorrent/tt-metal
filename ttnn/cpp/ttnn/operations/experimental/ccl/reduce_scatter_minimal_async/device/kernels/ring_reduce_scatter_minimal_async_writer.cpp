@@ -58,6 +58,10 @@ void kernel_main() {
     uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
     int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
+    bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+    size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr uint32_t ct_idx = 15;
 
@@ -140,6 +144,22 @@ void kernel_main() {
 
     auto* fabric_direction_connection =
         direction ? &fabric_connection.get_forward_connection() : &fabric_connection.get_backward_connection();
+
+    // Due to the existing direction of fabric connections, forward writers will signal to backward writers
+    // and backward writers will signal to forward writers
+    if (use_barrier_sem) {
+        uint64_t barrier_sem_noc_addr_in_pkt =
+            safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
+        pkt_hdr_seminc->to_noc_unicast_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
+        fabric_direction_connection->wait_for_empty_write_slot();
+        pkt_hdr_seminc->to_chip_unicast(1);
+        fabric_direction_connection->send_payload_flush_blocking_from_address(
+            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+    }
 
     for (uint32_t b = 0; b < num_batches; b++) {
         int slice_idx = direction ? my_chip_id - 1 : my_chip_id + 1;

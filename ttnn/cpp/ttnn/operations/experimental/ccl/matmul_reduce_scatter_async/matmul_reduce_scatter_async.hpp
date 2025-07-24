@@ -21,6 +21,7 @@ struct ExecuteMatmulReduceScatterAsync {
         uint32_t dim,
         const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
         CoreCoord reduce_scatter_core_grid_offset,
+        const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
         const std::optional<const Tensor>& bias = std::nullopt,
         uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config_rs = std::nullopt,

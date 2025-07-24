@@ -50,6 +50,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     const uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
@@ -66,6 +67,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
         ring_index,
         topology,
         semaphore,
+        barrier_semaphore,
         sub_device_id,
         empty_fused_op_signaler);
 }
@@ -83,6 +85,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     const uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset) {
@@ -416,22 +419,27 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
             mesh_device->worker_core_from_logical_core(sender_worker_cores[0 + 2 * link]);
 
         std::vector<uint32_t> writer_forward_rt_args = {
-            output_tensor.buffer()->address(),                        // output_tensor_address
-            input_tensor_Wt,                                          // width in tiles of the output shard
-            input_tensor_Ht,                                          // height in tiles of the output shard
-            output_tensor_Wt,                                         // width in tiles of entire output
-            output_tensor_Ht,                                         // height in tiles of entire output
-            dim,                                                      // dim to gather on
-            batch_head_size,                                          // product of the first two dims
-            input_tile_id_start,                                      //
-            input_tile_id_end,                                        //
-            sender_forward_worker_core.x,                             // out_ready_sem_noc0_x
-            sender_forward_worker_core.y,                             // out_ready_sem_noc0_y
-            ring_size,                                                // ring_size
-            semaphore.at(1).address(),                                // out_ready_semaphore_forward
-            input_tile_id_start % input_tensor_Wt,                    // start_pages_read_in_row
-            input_tile_id_start / input_tensor_Wt * output_tensor_Wt  // start_row_offset
-        };
+            output_tensor.buffer()->address(),                         // output_tensor_address
+            input_tensor_Wt,                                           // width in tiles of the output shard
+            input_tensor_Ht,                                           // height in tiles of the output shard
+            output_tensor_Wt,                                          // width in tiles of entire output
+            output_tensor_Ht,                                          // height in tiles of entire output
+            dim,                                                       // dim to gather on
+            batch_head_size,                                           // product of the first two dims
+            input_tile_id_start,                                       //
+            input_tile_id_end,                                         //
+            sender_forward_worker_core.x,                              // out_ready_sem_noc0_x
+            sender_forward_worker_core.y,                              // out_ready_sem_noc0_y
+            ring_size,                                                 // ring_size
+            semaphore.at(1).address(),                                 // out_ready_semaphore_forward
+            input_tile_id_start % input_tensor_Wt,                     // start_pages_read_in_row
+            input_tile_id_start / input_tensor_Wt * output_tensor_Wt,  // start_row_offset
+            barrier_semaphore.has_value(),                             // use synchronize barrier semaphore
+            barrier_semaphore.has_value()                              // synchronize barrier semaphore
+                ? barrier_semaphore.value().address()
+                : 0,
+            sender_backward_worker_core.x,
+            sender_backward_worker_core.y};
         if (output_is_sharded) {
             shard_builder::extend_sharding_run_time_args(output_tensor, writer_forward_rt_args);
         }
@@ -457,22 +465,27 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
             program, worker_sender_writer_forward_kernel_id, sender_worker_cores[1 + 2 * link], writer_forward_rt_args);
 
         std::vector<uint32_t> writer_backward_rt_args = {
-            output_tensor.buffer()->address(),                        // output_tensor_address
-            input_tensor_Wt,                                          // width in tiles of the output shard
-            input_tensor_Ht,                                          // height in tiles of the output shard
-            output_tensor_Wt,                                         // width in tiles of entire output
-            output_tensor_Ht,                                         // height in tiles of entire output
-            dim,                                                      // dim to gather on
-            batch_head_size,                                          // product of the first two dims
-            input_tile_id_start,                                      //
-            input_tile_id_end,                                        //
-            sender_backward_worker_core.x,                            // out_ready_sem_noc0_x
-            sender_backward_worker_core.y,                            // out_ready_sem_noc0_y
-            ring_size,                                                // ring_size
-            semaphore.at(0).address(),                                // out_ready_semaphore_backward
-            input_tile_id_start % input_tensor_Wt,                    // start_pages_read_in_row
-            input_tile_id_start / input_tensor_Wt * output_tensor_Wt  // start_row_offset
-        };
+            output_tensor.buffer()->address(),                         // output_tensor_address
+            input_tensor_Wt,                                           // width in tiles of the output shard
+            input_tensor_Ht,                                           // height in tiles of the output shard
+            output_tensor_Wt,                                          // width in tiles of entire output
+            output_tensor_Ht,                                          // height in tiles of entire output
+            dim,                                                       // dim to gather on
+            batch_head_size,                                           // product of the first two dims
+            input_tile_id_start,                                       //
+            input_tile_id_end,                                         //
+            sender_backward_worker_core.x,                             // out_ready_sem_noc0_x
+            sender_backward_worker_core.y,                             // out_ready_sem_noc0_y
+            ring_size,                                                 // ring_size
+            semaphore.at(0).address(),                                 // out_ready_semaphore_backward
+            input_tile_id_start % input_tensor_Wt,                     // start_pages_read_in_row
+            input_tile_id_start / input_tensor_Wt * output_tensor_Wt,  // start_row_offset
+            barrier_semaphore.has_value(),                             // use synchronize barrier semaphore
+            barrier_semaphore.has_value()                              // synchronize barrier semaphore
+                ? barrier_semaphore.value().address()
+                : 0,
+            sender_forward_worker_core.x,
+            sender_forward_worker_core.y};
         if (output_is_sharded) {
             shard_builder::extend_sharding_run_time_args(output_tensor, writer_backward_rt_args);
         }
@@ -527,6 +540,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                 GetRuntimeArgs(program, worker_sender_writer_backward_kernel_id);
             auto out_ready_semaphore_forward = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore.at(0);
             auto out_ready_semaphore_backward = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore.at(1);
+            auto barrier_semaphore = static_cast<const ttnn::AllGatherAsync*>(operation)->barrier_semaphore;
             for (int link = 0; link < num_links; link++) {
                 // sender reader
                 auto& worker_reader_sender_forward_runtime_args =
@@ -541,6 +555,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                                                                      [sender_worker_cores[1 + link * 2].y];
                 worker_writer_sender_forward_runtime_args[0] = output.buffer()->address();
                 worker_writer_sender_forward_runtime_args[12] = out_ready_semaphore_forward.address();
+                if (barrier_semaphore.has_value()) {
+                    worker_writer_sender_forward_runtime_args[16] = barrier_semaphore.value().address();
+                }
                 // sender reader
                 auto& worker_reader_sender_backward_runtime_args =
                     worker_reader_sender_backward_runtime_args_by_core[sender_worker_cores[0 + link * 2].x]
@@ -554,6 +571,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                                                                       [sender_worker_cores[0 + link * 2].y];
                 worker_writer_sender_backward_runtime_args[0] = output.buffer()->address();
                 worker_writer_sender_backward_runtime_args[12] = out_ready_semaphore_backward.address();
+                if (barrier_semaphore.has_value()) {
+                    worker_writer_sender_backward_runtime_args[16] = barrier_semaphore.value().address();
+                }
             }
         };
 

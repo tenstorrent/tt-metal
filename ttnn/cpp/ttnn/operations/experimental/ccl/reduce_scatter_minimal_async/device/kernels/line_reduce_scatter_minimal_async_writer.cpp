@@ -60,6 +60,9 @@ void kernel_main() {
     uint32_t fwd_bwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     uint32_t opposite_core_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t opposite_core_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+    bool signal_on_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+    bool wait_on_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+    size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
 
     constexpr uint32_t ct_idx = 21;
 
@@ -147,6 +150,24 @@ void kernel_main() {
         fabric_connection.is_logically_connected()
             ? (is_forward ? &fabric_connection.get_forward_connection() : &fabric_connection.get_backward_connection())
             : nullptr;  // Null connection if not connected
+
+    // Due to the existing direction of fabric connections, forward writers will signal to backward writers
+    // and backward writers will signal to forward writers
+    if (signal_on_barrier_sem) {
+        uint64_t sync_sem_noc_addr_in_pkt =
+            safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, barrier_sem, 0);
+        auto* pkt_hdr_sem_sync = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
+        pkt_hdr_sem_sync->to_noc_unicast_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sync_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
+        dir_fabric_connection->wait_for_empty_write_slot();
+        pkt_hdr_sem_sync->to_chip_unicast(1);
+        dir_fabric_connection->send_payload_flush_blocking_from_address(
+            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+    }
+    if (wait_on_barrier_sem) {
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+    }
 
     for (uint32_t b = 0; b < num_batches; b++) {
         int slice_idx = is_forward ? ring_size - 1 : 0;

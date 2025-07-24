@@ -35,6 +35,7 @@ def run_reduce_scatter_impl(
     ones_tensor=False,
     mem_config_intermediate=None,
     cluster_axis=None,
+    use_barrier=False,
 ):
     torch.manual_seed(0)
 
@@ -65,6 +66,10 @@ def run_reduce_scatter_impl(
     ccl_semaphore_handles = [
         create_global_semaphores(t3k_mesh_device, num_devices, ccl_sub_device_crs, 0, num_links)
         for _ in range(num_iters)
+    ]
+
+    barrier_semaphore_handles = [
+        ttnn.create_global_semaphore(t3k_mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
     ]
 
     ### Create persistent output buffers
@@ -147,6 +152,7 @@ def run_reduce_scatter_impl(
             persistent_output_buffers=[persistent_intermediate_buffers[i], persistent_output_buffers[i]],
             dim=dim,
             multi_device_global_semaphore=ccl_semaphore_handles[i],
+            barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
             num_links=num_links,
             memory_config=mem_config_rs,
             topology=rs_topology,
@@ -252,6 +258,15 @@ def run_reduce_scatter_impl(
         True,
         False,
     ],
+    ids=["ones", "random"],
+)
+@pytest.mark.parametrize(
+    "use_barrier",
+    [
+        True,
+        False,
+    ],
+    ids=["barrier_active", "barrier_inactive"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -275,6 +290,7 @@ def test_reduce_scatter_async(
     enable_trace,
     num_iters,
     ones_tensor,
+    use_barrier,
     rs_topology,
 ):
     if t3k_mesh_device.get_num_devices() != 8:
@@ -294,6 +310,7 @@ def test_reduce_scatter_async(
         enable_trace=enable_trace,
         num_iters=num_iters,
         ones_tensor=ones_tensor,
+        use_barrier=use_barrier,
     )
 
 

@@ -150,6 +150,7 @@ tt::tt_metal::operation::ProgramWithCallbacks MatmulReduceScatterAsync::create_p
         device_index,
         this->reduce_scatter_minimal_async_struct.topology,
         this->reduce_scatter_minimal_async_struct.semaphore,
+        this->reduce_scatter_minimal_async_struct.barrier_semaphore,
         this->reduce_scatter_minimal_async_struct.sub_device_id,
         this->reduce_scatter_core_grid_offset,
 
@@ -198,6 +199,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const CoreCoord reduce_scatter_core_grid_offset,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<const Tensor>& bias,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config_rs,
@@ -266,6 +268,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
         memory_config_rs.value_or(input_tensor.memory_config()),
         topology,
         multi_device_global_semaphore,
+        barrier_semaphore,
         sub_device_id);
 
     std::vector<ttnn::Tensor> full_output = tt::tt_metal::operation::run(
