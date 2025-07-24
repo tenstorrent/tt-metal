@@ -42,7 +42,7 @@ from .tt.parallel_config import StableDiffusionParallelManager, EncoderParallelM
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192, "trace_region_size": 20000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 20000000}],
     indirect=True,
 )
 @pytest.mark.parametrize("traced", [True, False], ids=["yes_traced", "no_traced"])
