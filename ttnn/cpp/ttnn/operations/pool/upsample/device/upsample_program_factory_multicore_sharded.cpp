@@ -202,7 +202,7 @@ static Tensor create_config_tensor(
     return Tensor(std::move(config_buffer), config_shape, DataType::UINT16, Layout::ROW_MAJOR);
 }
 
-operation::ProgramWithCallbacks upsample_multi_core(
+operation::ProgramWithCallbacks upsample_multi_core_sharded(
     const Tensor& input, Tensor& output, const uint32_t scale_factor_h, const uint32_t scale_factor_w) {
     Program program = CreateProgram();
     IDevice* device = input.device();
