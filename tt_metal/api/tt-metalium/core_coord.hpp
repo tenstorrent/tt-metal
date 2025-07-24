@@ -220,8 +220,12 @@ std::vector<CoreCoord> grid_to_cores_with_noop(
 std::vector<CoreCoord> corerange_to_cores(
     const CoreRangeSet& crs, std::optional<uint32_t> max_cores = std::nullopt, bool row_wise = false);
 
-CoreRangeSet select_from_corerange(
+// Select a CoreRangeSet of cores from a CoreRangeSet.
+CoreRangeSet select_from_corerangeset(
     const CoreRangeSet& crs, uint32_t start_index, uint32_t end_index, bool row_wise = false);
+
+// Select a contiguous CoreRange of cores from a CoreRangeSet.
+std::optional<CoreRange> select_contiguous_range_from_corerangeset(const CoreRangeSet& crs, uint32_t x, uint32_t y);
 
 bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b);
 
