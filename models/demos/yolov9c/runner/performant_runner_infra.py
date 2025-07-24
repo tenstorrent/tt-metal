@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.yolov9c.demo.demo_utils import load_torch_model
+from models.demos.yolov9c.load_model_utils import load_torch_model
 from models.demos.yolov9c.tt.model_preprocessing import create_yolov9c_model_parameters
 from models.demos.yolov9c.tt.ttnn_yolov9c import YoloV9
 from models.utility_functions import divup, is_wormhole_b0
@@ -39,7 +39,9 @@ class YOLOv9PerformanceRunnerInfra:
         self.enable_segment = self.model_task == "segment"
         self.torch_input_tensor = torch_input_tensor
 
-        self.torch_model = load_torch_model(model_task=self.model_task)
+        self.torch_model = load_torch_model(
+            model_task=self.model_task, model_location_generator=model_location_generator
+        )
 
         self.torch_input_tensor = (
             torch.randn((1, 3, 640, 640), dtype=torch.float32)

@@ -8,7 +8,7 @@ import pytest
 from loguru import logger
 
 import ttnn
-from models.demos.yolov9c.demo.demo_utils import load_torch_model
+from models.demos.yolov9c.load_model_utils import load_torch_model
 from models.demos.yolov9c.tt import ttnn_yolov9c
 from models.demos.yolov9c.tt.model_preprocessing import create_yolov9c_input_tensors, create_yolov9c_model_parameters
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
@@ -36,12 +36,10 @@ def dealloc_output(output_tensor):
 
 
 @run_for_wormhole_b0()
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
-    "use_weights_from_ultralytics",
+    "use_pretrained_weights",
     [
-        # "False",
         "True",
     ],
 )
@@ -53,14 +51,14 @@ def dealloc_output(output_tensor):
     ],
     ids=["segment", "detect"],
 )
-def test_perf(device, model_task, use_weights_from_ultralytics):
+def test_perf(device, model_task, use_pretrained_weights, model_location_generator):
     disable_persistent_kernel_cache()
     enable_segment = model_task == "segment"
 
     torch_input, ttnn_input = create_yolov9c_input_tensors(device, model=True)
 
     batch_size = torch_input.shape[0]
-    torch_model = load_torch_model(use_weights_from_ultralytics=use_weights_from_ultralytics, model_task=model_task)
+    torch_model = load_torch_model(model_task, model_location_generator)
     parameters = create_yolov9c_model_parameters(torch_model, torch_input, device=device)
     ttnn_model = ttnn_yolov9c.YoloV9(device, parameters, enable_segment=enable_segment)
 
@@ -108,15 +106,14 @@ def test_perf(device, model_task, use_weights_from_ultralytics):
     ],
     ids=["segment", "detect"],
 )
-@pytest.mark.models_device_performance_bare_metal
-def test_perf_device_bare_metal_yolov9c(model_task, batch_size):
+def test_perf_device_yolov9c(model_task, batch_size):
     subdir = "ttnn_yolov9c"
     num_iterations = 1
     margin = 0.03
     enable_segment = model_task == "segment"
-    expected_perf = 30.6 if enable_segment else 30.7
+    expected_perf = 31.6 if enable_segment else 31.7
 
-    command = f"pytest tests/ttnn/integration_tests/yolov9c/test_ttnn_yolov9c.py::test_yolov9c"
+    command = f"pytest models/demos/yolov9c/tests/pcc/test_ttnn_yolov9c.py::test_yolov9c"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
