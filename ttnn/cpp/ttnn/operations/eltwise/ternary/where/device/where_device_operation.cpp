@@ -19,6 +19,14 @@ WhereDeviceOperation::program_factory_t WhereDeviceOperation::select_program_fac
     }
 }
 
+DataType WhereDeviceOperation::operation_attributes_t::get_dtype() const {
+    return this->dtype.value_or(this->input_dtype);
+}
+
+tt::stl::hash::hash_t WhereDeviceOperation::operation_attributes_t::to_hash() const {
+    return tt::stl::hash::hash_objects_with_default_seed(where_variant, memory_config, get_dtype());
+}
+
 void WhereDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     validate_on_program_cache_miss(args, tensor_args);
@@ -110,22 +118,19 @@ tt::stl::hash::hash_t WhereDeviceOperation::compute_program_hash(
     const auto& value_true = tensor_args.value_true;
     const auto& value_false = tensor_args.value_false;
     const auto& predicate_shape = predicate_tensor.padded_shape();
+    const auto& value_true_shape = value_true.padded_shape();
+    const auto& value_false_shape = value_false.padded_shape();
     WhereVariant variant = args.where_variant;
 
     auto program_factory = select_program_factory(args, tensor_args);
 
     tt::stl::hash::hash_t hash = tt::tt_metal::operation::hash_operation<WhereDeviceOperation>(
-        args,
-        program_factory.index(),
-        predicate_tensor.dtype(),
-        predicate_tensor.memory_config(),
-        predicate_shape.volume());
+        args, predicate_tensor.dtype(), predicate_tensor.memory_config(), predicate_shape.volume());
 
     if (variant == WhereVariant::TTT) {
         hash = tt::tt_metal::operation::hash_operation<WhereDeviceOperation>(
             args,
-            program_factory.index(),
-            predicate_tensor.dtype(),
+            args.where_variant,
             predicate_tensor.memory_config(),
             value_true.dtype(),
             value_true.memory_config(),
@@ -133,7 +138,9 @@ tt::stl::hash::hash_t WhereDeviceOperation::compute_program_hash(
             value_true.memory_config(),
             value_false.dtype(),
             value_false.memory_config(),
-            predicate_shape.volume());
+            predicate_shape.volume(),
+            value_true_shape.volume(),
+            value_false_shape.volume());
     }
 
     return hash;
@@ -159,7 +166,7 @@ WhereDeviceOperation::invoke(
         .memory_config = memory_config.value_or(predicate.memory_config()),
         .input_dtype = predicate.dtype(),
         .dtype = output_dtype.value_or(value_true.dtype()),
-        .compute_kernel_config = std::nullopt,
+        // .compute_kernel_config = std::nullopt,
     };
 
     tensor_args_t args{

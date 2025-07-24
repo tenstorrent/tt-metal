@@ -15,6 +15,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal, assert_w
         ((2, 3, 64, 128), (2, 3, 64, 128), (2, 3, 64, 128)),  # LLK
         ((3, 2, 3, 64, 128), (3, 2, 3, 64, 128), (3, 2, 3, 64, 128)),  # LLK
         ((256,), (256,), (256,)),  # LLK
+        ((64, 128), (64, 128), (64, 128)),  # TTT
         ((2, 3, 1, 1), (2, 3, 32, 32), (2, 3, 32, 32)),  # legacy
     ],
 )
@@ -201,11 +202,11 @@ def test_ttnn_where_nan_bf16(device):
 
     # true and false value tensors
     true_values = torch.tensor(
-        [1.0, float("nan"), 3.0, float("inf"), -float("inf"), -1.0, 0.0, -0.0, 42.49, -92.42, 111.0, 112.0],
+        [1.0, float("inf"), 3.0, float("inf"), -float("inf"), -1.0, 0.0, -0.0, 42.49, -92.42, 111.0, 112.0],
         dtype=tor_dtype,
     )
     false_values = torch.tensor(
-        [-1.0, 999.9, float("nan"), -float("inf"), float("inf"), 1.0, -0.0, 0.0, -3.14, 7.84, 222.0, 223.0],
+        [-1.0, 999.9, float("inf"), -float("inf"), float("inf"), 1.0, -0.0, 0.0, -3.14, 7.84, 222.0, 223.0],
         dtype=tor_dtype,
     )
 

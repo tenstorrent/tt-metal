@@ -11,9 +11,10 @@
 
 namespace NAMESPACE {
 void MAIN {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);
+    // uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
-    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);
+    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+    uint32_t per_core_block_dim = get_compile_time_arg_val(1);
 
     constexpr auto cb_pre_in1 = tt::CBIndex::c_0;
     constexpr auto cb_pre_in2 = tt::CBIndex::c_1;
@@ -22,55 +23,55 @@ void MAIN {
 
     unary_op_init_common(cb_pre_in1, cb_out);
 
-    for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        cb_wait_front(cb_pre_in1, num_tiles_per_cycle);
-        cb_wait_front(cb_pre_in2, num_tiles_per_cycle);
-        cb_wait_front(cb_pre_in3, num_tiles_per_cycle);
+    // for (uint32_t tile_id = 0; tile_id < num_tiles_per_cycle; ++tile_id) {
+    for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
+        cb_reserve_back(tt::CBIndex::c_2, per_core_block_dim);
+        for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
+            cb_wait_front(cb_pre_in1, 1);
+            cb_wait_front(cb_pre_in2, 1);
+            cb_wait_front(cb_pre_in3, 1);
 
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
+            // DPRINT << "cb_condition" << ENDL();
+            // DPRINT << TSLICE(tt::CBIndex::c_0, 0, SliceRange::h0_w0_32()) << ENDL();
 
-        // DPRINT << "cb_condition" << ENDL();
-        // DPRINT << TSLICE(tt::CBIndex::c_0, 0, SliceRange::h0_w0_32()) << ENDL();
+            // DPRINT << "cb_true" << ENDL();
+            // DPRINT << TSLICE(tt::CBIndex::c_1, 0, SliceRange::h0_w0_32()) << ENDL();
 
-        // DPRINT << "cb_true" << ENDL();
-        // DPRINT << TSLICE(tt::CBIndex::c_1, 0, SliceRange::h0_w0_32()) << ENDL();
+            // DPRINT << "cb_false" << ENDL();
+            // DPRINT << TSLICE(tt::CBIndex::c_2, 0, SliceRange::h0_w0_32()) << ENDL();
 
-        // DPRINT << "cb_false" << ENDL();
-        // DPRINT << TSLICE(tt::CBIndex::c_2, 0, SliceRange::h0_w0_32()) << ENDL();
+            tile_regs_acquire();
 
-        tile_regs_acquire();
-
-        copy_tile_to_dst_init_short(cb_pre_in1);
-        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_pre_in1, i, i * 2);  // Copy to dst reg 0
-        }
-        copy_tile_to_dst_init_short(cb_pre_in2);
-        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_pre_in2, i, i * 2 + 1);  // Copy to dst reg 1
-        }
-        copy_tile_to_dst_init_short(cb_pre_in3);
-        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_pre_in3, i, i * 2 + 2);  // Copy to dst reg 2
-            // TODO: Use the where op LLK API here
+            copy_tile_to_dst_init_short(cb_pre_in1);
+            // for (uint32_t i = 0; i < per_core_block_dim; ++i) {
+            copy_tile(cb_pre_in1, 0, 0);  // Copy to dst reg 0
+            // }
+            copy_tile_to_dst_init_short(cb_pre_in2);
+            // for (uint32_t i = 0; i < per_core_block_dim; ++i) {
+            copy_tile(cb_pre_in2, 0, 1);  // Copy to dst reg 1
+            // }
+            copy_tile_to_dst_init_short(cb_pre_in3);
+            // for (uint32_t i = 0; i < per_core_block_dim; ++i) {
+            copy_tile(cb_pre_in3, 0, 2);  // Copy to dst reg 2
+                                          // TODO: Use the where op LLK API here
             where_tile_init();
-            WHERE_LLK(i * 2, i * 2 + 1, i * 2 + 2);
-        }
-        tile_regs_commit();
-        tile_regs_wait();
+            WHERE_LLK(0, 1, 2);
 
-        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
+            tile_regs_commit();
+            tile_regs_wait();
+
             pack_tile(0, cb_out);
+
+            tile_regs_release();
+
+            // DPRINT << "cb_out" << ENDL();
+            // DPRINT << TSLICE(tt::CBIndex::c_3, 0, SliceRange::h0_w0_32()) << ENDL();
+
+            cb_pop_front(cb_pre_in1, 1);
+            cb_pop_front(cb_pre_in2, 1);
+            cb_pop_front(cb_pre_in3, 1);
         }
-
-        tile_regs_release();
-
-        DPRINT << "cb_out" << ENDL();
-        DPRINT << TSLICE(tt::CBIndex::c_3, 0, SliceRange::h0_w0_32()) << ENDL();
-
-        cb_push_back(cb_out, num_tiles_per_cycle);
-        cb_pop_front(cb_pre_in1, num_tiles_per_cycle);
-        cb_pop_front(cb_pre_in2, num_tiles_per_cycle);
-        cb_pop_front(cb_pre_in3, num_tiles_per_cycle);
+        cb_push_back(cb_out, per_core_block_dim);
     }
 }
 }  // namespace NAMESPACE

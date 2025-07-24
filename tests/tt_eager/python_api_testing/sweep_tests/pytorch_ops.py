@@ -90,7 +90,7 @@ def sum(x, *args, dim, **kwargs):
 
 
 def where(x, y, z, *args, **kwargs):
-    return torch.where(x > 0, y, z)
+    return torch.where(x.bool(), y, z)
 
 
 def where_scalar(x, *args, **kwargs):

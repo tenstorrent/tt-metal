@@ -26,8 +26,8 @@ struct WhereDeviceOperation {
         tt::tt_metal::MemoryConfig memory_config;
         DataType input_dtype;
         std::optional<DataType> dtype;
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config;
-
+        // std::optional<DeviceComputeKernelConfig> compute_kernel_config;
+        tt::stl::hash::hash_t to_hash() const;
         DataType get_dtype() const;
     };
 
@@ -42,8 +42,10 @@ struct WhereDeviceOperation {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle reader_kernel_id;
             tt::tt_metal::KernelHandle writer_kernel_id;
-            tt::tt_metal::KernelHandle compute_kernel_id;
-            CoreCoord compute_with_storage_grid_size;
+            // tt::tt_metal::KernelHandle compute_kernel_id;
+            // CoreCoord compute_with_storage_grid_size;
+            uint32_t num_cores;
+            uint32_t num_cores_y;
         };
 
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;

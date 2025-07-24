@@ -341,6 +341,7 @@ Tensor ExecuteDiv::invoke(
     if (accurate_mode) {
         float t_nan = std::nanf("");
         float t_inf = std::numeric_limits<float>::infinity();
+        result = typecast(queue_id, result, input_dtype, std::nullopt, output_tensor);
         result = where(
             queue_id,
             ttnn::eqz(queue_id, input_b, output_mem_config),
