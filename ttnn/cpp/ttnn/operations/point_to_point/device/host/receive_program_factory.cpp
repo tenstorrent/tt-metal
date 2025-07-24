@@ -61,7 +61,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
 
     const std::vector<uint32_t> reader_ct_args = {
         intermediate_is_dram, packet_cb_id, receiver_cb_id, l1_alignment, nullop};
-    tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::KernelHandle receive_unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/reader_receive.cpp",
         all_cores,
@@ -70,13 +70,14 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const bool output_is_dram = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     // And the writer
-    tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::KernelHandle receive_unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/writer_unary_interleaved_start_id_gen.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig({output_is_dram, receiver_cb_id, nullop}));
 
     uint32_t page_idx_start = 0, page_idx_end = 0;
+    std::vector<CoreCoord> receiver_cores;
     for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
         uint32_t increment = 0;
         if (core_group_1.contains(c)) {
@@ -99,7 +100,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             num_page_segments,
             operation_attributes.receiver_semaphore.address()};
 
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, c, reader_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, receive_unary_reader_kernel_id, c, reader_runtime_args);
 
         const std::vector<uint32_t> writer_runtime_args = {
             output_tensor.mesh_buffer()->get_device_buffer(receive_coord)->address(),
@@ -107,12 +108,17 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             page_idx_start,
             output_page_size_bytes};
 
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, c, writer_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, receive_unary_writer_kernel_id, c, writer_runtime_args);
 
         page_idx_start += increment;
+        receiver_cores.push_back(c);
     }
 
-    // !TODO implement program cache #23425
-    return {std::move(program), PointToPointOp::SendReceive::shared_variables_t{}};
+    return {
+        std::move(program),
+        PointToPointOp::SendReceive::shared_variables_t{
+            .receive_unary_reader_kernel_id = receive_unary_reader_kernel_id,
+            .receive_unary_writer_kernel_id = receive_unary_writer_kernel_id,
+            .receiver_cores = receiver_cores}};
 }
 }  // namespace ttnn::operations::point_to_point

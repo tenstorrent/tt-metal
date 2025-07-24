@@ -140,7 +140,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const bool input_is_dram = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     // basic reader kernel set up
-    tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::KernelHandle send_unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/reader_unary_interleaved_start_id_gen.cpp",
         all_cores,
@@ -157,7 +157,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const std::vector<uint32_t> writer_ct_args = {
         sender_cb_id, packet_cb_id, packet_header_cb_id, output_is_dram, l1_alignment};
 
-    tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::KernelHandle send_unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/writer_send.cpp",
         all_cores,
@@ -166,6 +166,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     constexpr auto link_idx = 0;  // equivalent to num_links = 0
 
     uint32_t page_idx_start = 0, page_idx_end = 0;
+    std::vector<CoreCoord> sender_cores;
     for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
         uint32_t increment = 0;
         if (core_group_1.contains(c)) {
@@ -183,7 +184,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             increment,
             page_idx_start,
             input_page_size_bytes};
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, c, reader_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, send_unary_reader_kernel_id, c, reader_runtime_args);
 
         std::vector<uint32_t> writer_runtime_args = {
             output_tensors.at(0).mesh_buffer()->get_device_buffer(receive_coord)->address(),
@@ -208,12 +209,18 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
                 this_fabric_id, next_fabric_id, link_idx, program, c, writer_runtime_args);
         }
 
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, c, writer_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, send_unary_writer_kernel_id, c, writer_runtime_args);
 
         page_idx_start += increment;
+        sender_cores.push_back(c);
     }
 
     // !TODO implement program cache #23425
-    return {std::move(program), PointToPointOp::SendReceive::shared_variables_t{}};
+    return {
+        std::move(program),
+        PointToPointOp::SendReceive::shared_variables_t{
+            .send_unary_reader_kernel_id = send_unary_reader_kernel_id,
+            .send_unary_writer_kernel_id = send_unary_writer_kernel_id,
+            .sender_cores = sender_cores}};
 }
 }  // namespace ttnn::operations::point_to_point
