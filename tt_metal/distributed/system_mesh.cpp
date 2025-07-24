@@ -72,14 +72,14 @@ MappedDevice SystemMesh::Impl::get_system_mapped_device(const MeshCoordinate& co
             LogDistributed,
             "Mesh coordinate: {} is local, Physical device ID: {}, Fabric node ID: {}",
             coord,
-            *system_mesh_device.device_id,
-            system_mesh_device.fabric_node_id);
+            *system_mapped_device.device_id,
+            system_mapped_device.fabric_node_id);
     } else {
         log_debug(
             LogDistributed,
             "Mesh coordinate: {} is remote, Fabric node ID: {}",
             coord,
-            system_mesh_device.fabric_node_id);
+            system_mapped_device.fabric_node_id);
     }
 
     return system_mapped_device;
