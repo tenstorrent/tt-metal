@@ -27,7 +27,7 @@ extern "C" void wzerorange(uint32_t* start, uint32_t* end);
 extern "C" [[gnu::section(".start"), gnu::optimize("Os")]] void _start(void) {
     volatile uint32_t* const debug_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
     for (int i = 0; i < 32; i++) {
-        debug_dump_addr[i] = 0;
+        debug_dump_addr[i] = 0xdeadbeef;
     }
     extern uint32_t __ldm_bss_start[];
     extern uint32_t __ldm_bss_end[];
