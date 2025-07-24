@@ -337,19 +337,19 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             const distributed::ReplicatedBufferConfig buffer_config{.size = buf_size};
 
             if (config.sharding_args.has_value()) {
-                distributed::DeviceLocalBufferConfig dram_config{
+                distributed::DeviceLocalBufferConfig local_config{
                     .page_size = config.page_size,
                     .buffer_type = config.buftype,
                     .sharding_args = config.sharding_args.value(),
                     .bottom_up = false};
-                bufa = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+                bufa = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
             } else {
-                distributed::DeviceLocalBufferConfig dram_config{
+                distributed::DeviceLocalBufferConfig local_config{
                     .page_size = config.page_size,
                     .buffer_type = config.buftype,
                     .bottom_up = false,
                 };
-                bufa = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+                bufa = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
             }
 
             vector<uint32_t> src = generate_arange_vector(bufa->size());
@@ -409,18 +409,15 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             buftype = BufferType::L1;
         }
 
-        distributed::DeviceLocalBufferConfig dram_config{
-            .page_size = config.page_size,
-            .buffer_type = buftype,
-            .bottom_up = false
-        };
+        distributed::DeviceLocalBufferConfig local_config{
+            .page_size = config.page_size, .buffer_type = buftype, .bottom_up = false};
         const distributed::ReplicatedBufferConfig buffer_config {
             .size = buf_size
         };
 
         std::shared_ptr<distributed::MeshBuffer> buf;
         try {
-            buf = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+            buf = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
         } catch (...) {
             Finish(cq);
             size_t i = 0;
@@ -430,7 +427,7 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
             srcs.clear();
             dsts.clear();
             buffers.clear();
-            buf = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+            buf = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
         }
         auto coord = distributed::MeshCoordinate(0, 0);
         distributed::WriteShard(cq, buf, src, coord);
@@ -491,11 +488,11 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                     src.at(i) = i;
                 }
 
-                distributed::DeviceLocalBufferConfig dram_config{
+                distributed::DeviceLocalBufferConfig local_config{
                     .page_size = config.page_size(), .buffer_type = buftype, .bottom_up = false};
                 const distributed::ReplicatedBufferConfig buffer_config{.size = buf_size};
 
-                auto buf = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+                auto buf = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
 
                 auto slow_dispatch_buffer =
                     Buffer::create(device, buf->address(), buf->size(), config.page_size(), buftype);
@@ -535,12 +532,12 @@ std::pair<std::shared_ptr<distributed::MeshBuffer>, std::vector<uint32_t>> Enque
     const TestBufferConfig& config) {
     size_t buf_size = config.num_pages * config.page_size;
 
-    distributed::DeviceLocalBufferConfig dram_config{
+    distributed::DeviceLocalBufferConfig local_config{
         .page_size = config.page_size, .buffer_type = config.buftype, .bottom_up = false};
 
     const distributed::ReplicatedBufferConfig buffer_config{.size = buf_size};
 
-    auto buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+    auto buffer = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
 
     std::vector<uint32_t> src =
         create_random_vector_of_bfloat16(buf_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
@@ -1571,10 +1568,10 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestReadWriteShardedSubBufferForL1) {
                 config.page_shape,
                 config.tensor2d_shape_in_pages);
 
-            distributed::DeviceLocalBufferConfig dram_config{
+            distributed::DeviceLocalBufferConfig l1_config{
                 .page_size = config.page_size, .buffer_type = BufferType::L1, .bottom_up = false};
             const distributed::ReplicatedBufferConfig buffer_config{.size = config.buffer_size};
-            auto buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+            auto buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
 
             local_test_functions::clear_buffer(mesh_device->mesh_command_queue(), buffer);
 
@@ -1607,13 +1604,13 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestMultipleNonOverlappingWritesSharde
             {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
             {16, 1});
 
-        distributed::DeviceLocalBufferConfig dram_config{
+        distributed::DeviceLocalBufferConfig l1_config{
             .page_size = page_size,
             .buffer_type = BufferType::L1,
             .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::WIDTH_SHARDED),
             .bottom_up = false};
         const distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
-        auto buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+        auto buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
 
         local_test_functions::clear_buffer(mesh_device->mesh_command_queue(), buffer);
 
@@ -1751,13 +1748,13 @@ TEST_F(
             {tt::constants::TILE_HEIGHT / 2, tt::constants::TILE_WIDTH},
             {16, 2});
 
-        distributed::DeviceLocalBufferConfig dram_config{
+        distributed::DeviceLocalBufferConfig l1_config{
             .page_size = page_size,
             .buffer_type = BufferType::L1,
             .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED),
             .bottom_up = false};
         const distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
-        auto buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+        auto buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
 
         local_test_functions::clear_buffer(mesh_device->mesh_command_queue(), buffer);
 
@@ -1789,13 +1786,13 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestMultipleNonOverlappingReadsSharded
             {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
             {8, 2});
 
-        distributed::DeviceLocalBufferConfig dram_config{
+        distributed::DeviceLocalBufferConfig l1_config{
             .page_size = page_size,
             .buffer_type = BufferType::L1,
             .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::BLOCK_SHARDED),
             .bottom_up = false};
         const distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
-        auto buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+        auto buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
 
         vector<uint32_t> expected = local_test_functions::generate_arange_vector(buffer_size);
         distributed::WriteShard(
@@ -1854,13 +1851,13 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestReadWriteShardedSubBufferMultipleP
             {tt::constants::TILE_HEIGHT / 4, tt::constants::TILE_WIDTH / 2},
             {8, 2});
 
-        distributed::DeviceLocalBufferConfig dram_config{
+        distributed::DeviceLocalBufferConfig l1_config{
             .page_size = page_size,
             .buffer_type = BufferType::L1,
             .sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::BLOCK_SHARDED),
             .bottom_up = false};
         const distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
-        auto buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+        auto buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
         local_test_functions::clear_buffer(mesh_device->mesh_command_queue(), buffer);
         const BufferRegion region(buffer_region_offset, buffer_region_size);
         local_test_functions::EnqueueWriteMeshSubBuffer(mesh_device->mesh_command_queue(), buffer, src, region, false);
@@ -1878,10 +1875,10 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestReadWriteSubBufferForL1) {
         auto device = mesh_device->get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
 
-        distributed::DeviceLocalBufferConfig dram_config{
+        distributed::DeviceLocalBufferConfig l1_config{
             .page_size = page_size, .buffer_type = BufferType::L1, .bottom_up = false};
         const distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
-        auto buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+        auto buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
         auto src = local_test_functions::generate_arange_vector(region.size);
         local_test_functions::EnqueueWriteMeshSubBuffer(mesh_device->mesh_command_queue(), buffer, src, region, false);
         vector<uint32_t> result(region.size / sizeof(uint32_t));
@@ -1898,10 +1895,10 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestReadWriteSubBufferLargeOffsetForL1
         auto device = mesh_device->get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
 
-        distributed::DeviceLocalBufferConfig dram_config{
+        distributed::DeviceLocalBufferConfig l1_config{
             .page_size = page_size, .buffer_type = BufferType::L1, .bottom_up = false};
         const distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
-        auto buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
+        auto buffer = distributed::MeshBuffer::create(buffer_config, l1_config, mesh_device.get());
         auto src = local_test_functions::generate_arange_vector(region.size);
         local_test_functions::EnqueueWriteMeshSubBuffer(mesh_device->mesh_command_queue(), buffer, src, region, false);
         vector<uint32_t> result(region.size / sizeof(uint32_t));
@@ -1962,18 +1959,16 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestBackToBackNon32BAlignedPageSize) {
 
     for (const auto& mesh_device : devices_) {
         auto device = mesh_device->get_devices()[0];
-        distributed::DeviceLocalBufferConfig dram_config1{
-            .page_size = 100, .buffer_type = buff_type, .bottom_up = false};
+        distributed::DeviceLocalBufferConfig l1_config1{.page_size = 100, .buffer_type = buff_type, .bottom_up = false};
         const distributed::ReplicatedBufferConfig buffer_config1{.size = 125000};
-        auto bufa = distributed::MeshBuffer::create(buffer_config1, dram_config1, mesh_device.get());
+        auto bufa = distributed::MeshBuffer::create(buffer_config1, l1_config1, mesh_device.get());
         auto src_a = local_test_functions::generate_arange_vector(bufa->size());
         distributed::WriteShard(
             mesh_device->mesh_command_queue(), bufa, src_a, distributed::MeshCoordinate(0, 0), false);
 
-        distributed::DeviceLocalBufferConfig dram_config2{
-            .page_size = 152, .buffer_type = buff_type, .bottom_up = false};
+        distributed::DeviceLocalBufferConfig l1_config2{.page_size = 152, .buffer_type = buff_type, .bottom_up = false};
         const distributed::ReplicatedBufferConfig buffer_config2{.size = 152000};
-        auto bufb = distributed::MeshBuffer::create(buffer_config2, dram_config2, mesh_device.get());
+        auto bufb = distributed::MeshBuffer::create(buffer_config2, l1_config2, mesh_device.get());
         auto src_b = local_test_functions::generate_arange_vector(bufb->size());
         distributed::WriteShard(
             mesh_device->mesh_command_queue(), bufb, src_b, distributed::MeshCoordinate(0, 0), false);
@@ -2124,18 +2119,18 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestNonblockingReads) {
 
     for (const auto& mesh_device : devices_) {
         auto device = mesh_device->get_devices()[0];
-        distributed::DeviceLocalBufferConfig dram_config1{
+        distributed::DeviceLocalBufferConfig l1_config1{
             .page_size = 2048, .buffer_type = buff_type, .bottom_up = false};
         const distributed::ReplicatedBufferConfig buffer_config1{.size = 2048};
-        auto bufa = distributed::MeshBuffer::create(buffer_config1, dram_config1, mesh_device.get());
+        auto bufa = distributed::MeshBuffer::create(buffer_config1, l1_config1, mesh_device.get());
         auto src_a = local_test_functions::generate_arange_vector(bufa->size());
         distributed::WriteShard(
             mesh_device->mesh_command_queue(), bufa, src_a, distributed::MeshCoordinate(0, 0), false);
 
-        distributed::DeviceLocalBufferConfig dram_config2{
+        distributed::DeviceLocalBufferConfig l1_config2{
             .page_size = 2048, .buffer_type = buff_type, .bottom_up = false};
         const distributed::ReplicatedBufferConfig buffer_config2{.size = 2048};
-        auto bufb = distributed::MeshBuffer::create(buffer_config2, dram_config2, mesh_device.get());
+        auto bufb = distributed::MeshBuffer::create(buffer_config2, l1_config2, mesh_device.get());
 
         auto src_b = local_test_functions::generate_arange_vector(bufb->size());
         distributed::WriteShard(
