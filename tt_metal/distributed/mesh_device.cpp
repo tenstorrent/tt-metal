@@ -143,7 +143,6 @@ MeshDevice::ScopedDevices::ScopedDevices(
     for (auto device_id : device_ids) {
         if (device_id.is_local()) {
             auto* device = opened_local_devices_.at(*device_id);
-            local_devices_.push_back(device);
             devices_.push_back(MaybeRemoteDevice::local(device));
         } else {
             devices_.push_back(MaybeRemoteDevice::remote());
@@ -161,8 +160,6 @@ MeshDevice::ScopedDevices::~ScopedDevices() {
         tt::DevicePool::instance().close_devices(devices_to_close, /*skip_synchronize=*/true);
     }
 }
-
-const std::vector<IDevice*>& MeshDevice::ScopedDevices::local_root_devices() const { return local_devices_; }
 
 const std::vector<MaybeRemote<IDevice*>>& MeshDevice::ScopedDevices::root_devices() const { return devices_; }
 
@@ -200,8 +197,8 @@ MeshDevice::MeshDevice(
     mesh_id_(generate_unique_mesh_id()),
     parent_mesh_(std::move(parent_mesh)),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()),
-    dispatch_thread_pool_(create_default_thread_pool(scoped_devices_->local_root_devices())),
-    reader_thread_pool_(create_default_thread_pool(scoped_devices_->local_root_devices())) {
+    dispatch_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))),
+    reader_thread_pool_(create_default_thread_pool(extract_locals(scoped_devices_->root_devices()))) {
     Inspector::mesh_device_created(this, parent_mesh_ ? std::make_optional(parent_mesh_->mesh_id_) : std::nullopt);
 }
 
@@ -216,30 +213,26 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     std::shared_ptr<ScopedDevices> scoped_devices;
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
     if (config.physical_device_ids().empty()) {
-        auto system_devices = SystemMesh::instance().get_mapped_devices(config.mesh_shape(), config.offset());
-        std::vector<MaybeRemote<int>> device_ids;
-        std::transform(
-            system_devices.values().begin(),
-            system_devices.values().end(),
-            std::back_inserter(device_ids),
-            [](const auto& d) { return d.device_id; });
-        std::transform(
-            system_devices.values().begin(),
-            system_devices.values().end(),
-            std::back_inserter(fabric_node_ids),
-            [](const auto& d) { return d.fabric_node_id; });
+        auto mapped_devices = SystemMesh::instance().get_mapped_devices(config.mesh_shape(), config.offset());
+        fabric_node_ids = std::move(mapped_devices.fabric_node_ids);
         scoped_devices = std::make_shared<ScopedDevices>(
-            device_ids, l1_small_size, trace_region_size, num_command_queues, worker_l1_size, dispatch_core_config);
+            mapped_devices.device_ids,
+            l1_small_size,
+            trace_region_size,
+            num_command_queues,
+            worker_l1_size,
+            dispatch_core_config);
     } else {
         // Initialize fabric node ids manually.
         // TODO: #22087 - Remove this code path.
-        for (int i = 0; i < config.physical_device_ids().size(); i++) {
-            auto fabric_node_id = MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
-                config.physical_device_ids()[i]);
+        const auto& supplied_ids = config.physical_device_ids();
+        for (int i = 0; i < supplied_ids.size(); i++) {
+            auto fabric_node_id =
+                MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(supplied_ids[i]);
             fabric_node_ids.push_back(fabric_node_id);
         }
         scoped_devices = std::make_shared<ScopedDevices>(
-            wrap_to_maybe_remote(config.physical_device_ids()),
+            wrap_to_maybe_remote(supplied_ids),
             l1_small_size,
             trace_region_size,
             num_command_queues,
@@ -247,7 +240,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
             dispatch_core_config);
     }
 
-    auto local_root_devices = scoped_devices->local_root_devices();
+    auto local_root_devices = extract_locals(scoped_devices->root_devices());
 
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices),
@@ -293,7 +286,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices),
         std::make_unique<MeshDeviceView>(
-            MeshShape(1, device_ids.size()), scoped_devices->local_root_devices(), fabric_node_ids),
+            MeshShape(1, device_ids.size()), extract_locals(scoped_devices->root_devices()), fabric_node_ids),
         std::shared_ptr<MeshDevice>());
 
     auto submeshes = mesh_device->create_submeshes(MeshShape(1, 1));
@@ -532,9 +525,11 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
         }
     } else {
         auto new_mapped_devices = SystemMesh::instance().get_mapped_devices(new_shape);
+        new_fabric_node_ids = std::move(new_mapped_devices.fabric_node_ids);
 
-        for (const auto& [_, system_device] : new_mapped_devices) {
-            if (physical_device_id_to_linearized_index.find(*system_device.device_id) ==
+        for (const auto maybe_remote_device_id : new_mapped_devices.device_ids) {
+            TT_FATAL(maybe_remote_device_id.is_local(), "Device is not local");
+            if (physical_device_id_to_linearized_index.find(*maybe_remote_device_id) ==
                 physical_device_id_to_linearized_index.end()) {
                 TT_THROW(
                     "User has requested a reshape of the MeshDevice to shape: {}, but it is not possible to form a "
@@ -542,11 +537,7 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
                     new_shape,
                     view_->shape());
             }
-        }
-
-        for (const auto& [_, system_device] : new_mapped_devices) {
-            new_device_order.push_back(get_device(*system_device.device_id));
-            new_fabric_node_ids.push_back(system_device.fabric_node_id);
+            new_device_order.push_back(get_device(*maybe_remote_device_id));
         }
     }
 

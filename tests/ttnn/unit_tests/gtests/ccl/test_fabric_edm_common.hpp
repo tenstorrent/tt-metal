@@ -147,14 +147,12 @@ public:
 
         const MeshShape cluster_shape = GetDeterminedMeshShape();
 
-        const auto system_mesh_devices = SystemMesh::instance().get_mapped_devices(cluster_shape);
+        auto mapped_devices = SystemMesh::instance().get_mapped_devices(cluster_shape);
 
         std::vector<int> physical_device_ids;
-        std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
-        for (const auto& device : system_mesh_devices.values()) {
-            TT_FATAL(device.device_id.is_local(), "Device is not local");
-            physical_device_ids.push_back(device.device_id.value());
-            fabric_node_ids.push_back(device.fabric_node_id);
+        for (const auto maybe_remote_device_id : mapped_devices.device_ids) {
+            TT_FATAL(maybe_remote_device_id.is_local(), "Device is not local");
+            physical_device_ids.push_back(*maybe_remote_device_id);
         }
 
         physical_devices_ = tt::tt_metal::detail::CreateDevices(physical_device_ids);
@@ -165,7 +163,7 @@ public:
             devices.push_back(physical_devices_.at(device_id));
         }
 
-        view_ = std::make_shared<MeshDeviceView>(cluster_shape, devices, fabric_node_ids);
+        view_ = std::make_shared<MeshDeviceView>(cluster_shape, devices, mapped_devices.fabric_node_ids);
         device_open = true;
     }
 

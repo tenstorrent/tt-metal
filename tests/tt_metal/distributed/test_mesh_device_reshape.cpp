@@ -89,7 +89,7 @@ TEST_P(MeshConfigurationTest, GetPhysicalDeviceIds) {
     const auto& shape = GetParam();
 
     auto& system_mesh = SystemMesh::instance();
-    EXPECT_THAT(system_mesh.get_mapped_devices(shape).values(), SizeIs(shape.mesh_size()));
+    EXPECT_THAT(system_mesh.get_mapped_devices(shape).device_ids, SizeIs(shape.mesh_size()));
 }
 
 // Test all possible mesh configurations on T3000
@@ -243,9 +243,9 @@ TEST_F(MeshDeviceReshapeTest, From1x4To2x2Valid) {
 
     // Fetch the device ids for a physically connected 2x2 mesh.
     std::vector<chip_id_t> physical_device_ids;
-    for (const auto& [_, system_device] : system_mesh.get_mapped_devices(MeshShape(2, 2))) {
-        TT_FATAL(system_device.device_id.is_local(), "Device is not local");
-        physical_device_ids.push_back(*system_device.device_id);
+    for (const auto device_id : system_mesh.get_mapped_devices(MeshShape(2, 2)).device_ids) {
+        TT_FATAL(device_id.is_local(), "Device is not local");
+        physical_device_ids.push_back(*device_id);
     }
 
     // Supply the physical device ids to the mesh constructor that we know we know is 2x2 physically connected.

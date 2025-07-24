@@ -29,17 +29,22 @@
 namespace tt::tt_metal::distributed {
 namespace {
 
-// Initializes a mesh container with SystemMeshDevice objects, with configured fabric node IDs.
-MeshContainer<SystemMesh::SystemMeshDevice> make_system_mesh_devices(
-    const tt::tt_fabric::MeshId mesh_id, const MeshShape& shape) {
-    std::vector<SystemMesh::SystemMeshDevice> system_mesh_devices;
+// Helper type to keep track of device ID and fabric node ID for a given mesh coordinate.
+struct MappedDevice {
+    MaybeRemote<int> device_id;
+    tt::tt_fabric::FabricNodeId fabric_node_id;
+};
+
+// Initializes a mesh container with MappedDevice objects, with configured fabric node IDs.
+MeshContainer<MappedDevice> initialize_mapped_devices(const tt::tt_fabric::MeshId mesh_id, const MeshShape& shape) {
+    std::vector<MappedDevice> system_mesh_devices;
     system_mesh_devices.reserve(shape.mesh_size());
     for (int linear_index = 0; linear_index < shape.mesh_size(); ++linear_index) {
-        system_mesh_devices.push_back(SystemMesh::SystemMeshDevice{
+        system_mesh_devices.push_back(MappedDevice{
             .device_id = MaybeRemote<int>::remote(),
             .fabric_node_id = tt::tt_fabric::FabricNodeId(mesh_id, linear_index)});
     }
-    return MeshContainer<SystemMesh::SystemMeshDevice>(shape, std::move(system_mesh_devices));
+    return MeshContainer<MappedDevice>(shape, std::move(system_mesh_devices));
 }
 
 }  // namespace
@@ -47,27 +52,27 @@ class SystemMesh::Impl {
 private:
     tt::tt_fabric::MeshId mesh_id_;
     DistributedCoordinateTranslator coordinate_translator_;
-    MeshContainer<SystemMesh::SystemMeshDevice> system_mesh_devices_;
+    MeshContainer<MappedDevice> system_mapped_devices_;
 
-    SystemMesh::SystemMeshDevice get_system_mesh_device(const MeshCoordinate& coord) const;
+    MappedDevice get_system_mapped_device(const MeshCoordinate& coord) const;
 
 public:
     Impl();
 
     const DistributedCoordinateTranslator& coordinate_translator() const;
 
-    MeshContainer<SystemMesh::SystemMeshDevice> get_mapped_physical_device_ids(
+    MappedDevices get_mapped_devices(
         const MeshShape& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
 };
 
-SystemMesh::SystemMeshDevice SystemMesh::Impl::get_system_mesh_device(const MeshCoordinate& coord) const {
-    auto system_mesh_device = system_mesh_devices_.at(coord);
-    if (system_mesh_device.device_id.is_local()) {
+MappedDevice SystemMesh::Impl::get_system_mapped_device(const MeshCoordinate& coord) const {
+    auto system_mapped_device = system_mapped_devices_.at(coord);
+    if (system_mapped_device.device_id.is_local()) {
         log_debug(
             LogDistributed,
             "Mesh coordinate: {} is local, Physical device ID: {}, Fabric node ID: {}",
             coord,
-            system_mesh_device.device_id.local(),
+            *system_mesh_device.device_id,
             system_mesh_device.fabric_node_id);
     } else {
         log_debug(
@@ -77,7 +82,7 @@ SystemMesh::SystemMeshDevice SystemMesh::Impl::get_system_mesh_device(const Mesh
             system_mesh_device.fabric_node_id);
     }
 
-    return system_mesh_device;
+    return system_mapped_device;
 }
 
 // Implementation of public methods
@@ -91,7 +96,7 @@ SystemMesh::Impl::Impl() :
             mesh_id_,  //
             tt::tt_fabric::MeshScope::LOCAL),
         MetalContext::instance().get_control_plane().get_local_mesh_offset()),
-    system_mesh_devices_(make_system_mesh_devices(mesh_id_, coordinate_translator_.global_shape())) {
+    system_mapped_devices_(initialize_mapped_devices(mesh_id_, coordinate_translator_.global_shape())) {
     log_debug(
         LogDistributed,
         "SystemMesh: Global shape: {}, Local shape: {}, Local offset: {}",
@@ -123,7 +128,7 @@ SystemMesh::Impl::Impl() :
             global_coord,
             local_physical_translation_map.at(local_coord),
             local_coord);
-        system_mesh_devices_.at(global_coord).device_id =
+        system_mapped_devices_.at(global_coord).device_id =
             MaybeRemote<int>::local(local_physical_translation_map.at(local_coord).chip_id());
     }
 }
@@ -132,9 +137,9 @@ const DistributedCoordinateTranslator& SystemMesh::Impl::coordinate_translator()
     return coordinate_translator_;
 }
 
-MeshContainer<SystemMesh::SystemMeshDevice> SystemMesh::Impl::get_mapped_physical_device_ids(
+SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
     const MeshShape& shape, const std::optional<MeshCoordinate>& offset) const {
-    std::vector<SystemMesh::SystemMeshDevice> system_mesh_devices;
+    MappedDevices mapped_devices;
 
     const MeshShape& system_shape = coordinate_translator_.global_shape();
     TT_FATAL(
@@ -172,9 +177,11 @@ MeshContainer<SystemMesh::SystemMeshDevice> SystemMesh::Impl::get_mapped_physica
         auto line_length = shape.mesh_size();
         for (const auto& logical_coordinate :
              MeshDeviceView::get_line_coordinates(line_length, system_mesh_2d, system_offset_2d)) {
-            system_mesh_devices.push_back(get_system_mesh_device(logical_coordinate));
+            const auto mapped_device = get_system_mapped_device(logical_coordinate);
+            mapped_devices.device_ids.push_back(mapped_device.device_id);
+            mapped_devices.fabric_node_ids.push_back(mapped_device.fabric_node_id);
         }
-        return MeshContainer<SystemMesh::SystemMeshDevice>(shape, std::move(system_mesh_devices));
+        return mapped_devices;
     }
 
     TT_FATAL(
@@ -221,17 +228,21 @@ MeshContainer<SystemMesh::SystemMeshDevice> SystemMesh::Impl::get_mapped_physica
         // Iterate through user-requested shape, transposing the rows and columns
         for (int i = 0; i < shape[0]; i++) {
             for (int j = 0; j < shape[1]; j++) {
-                auto system_coord = MeshCoordinate(j, i);
-                system_mesh_devices.push_back(get_system_mesh_device(system_coord));
+                const auto system_coord = MeshCoordinate(j, i);
+                const auto mapped_device = get_system_mapped_device(system_coord);
+                mapped_devices.device_ids.push_back(mapped_device.device_id);
+                mapped_devices.fabric_node_ids.push_back(mapped_device.fabric_node_id);
             }
         }
     } else {
         for (const auto& system_coord : system_range) {
-            system_mesh_devices.push_back(get_system_mesh_device(system_coord));
+            const auto mapped_device = get_system_mapped_device(system_coord);
+            mapped_devices.device_ids.push_back(mapped_device.device_id);
+            mapped_devices.fabric_node_ids.push_back(mapped_device.fabric_node_id);
         }
     }
 
-    return MeshContainer<SystemMesh::SystemMeshDevice>(shape, std::move(system_mesh_devices));
+    return mapped_devices;
 }
 
 SystemMesh::SystemMesh() : pimpl_(std::make_unique<Impl>()) {}
@@ -244,9 +255,9 @@ SystemMesh& SystemMesh::instance() {
 const MeshShape& SystemMesh::shape() const { return pimpl_->coordinate_translator().global_shape(); }
 const MeshShape& SystemMesh::local_shape() const { return pimpl_->coordinate_translator().local_shape(); }
 
-MeshContainer<SystemMesh::SystemMeshDevice> SystemMesh::get_mapped_devices(
+SystemMesh::MappedDevices SystemMesh::get_mapped_devices(
     const MeshShape& shape, const std::optional<MeshCoordinate>& offset) const {
-    return pimpl_->get_mapped_physical_device_ids(shape, offset);
+    return pimpl_->get_mapped_devices(shape, offset);
 }
 
 }  // namespace tt::tt_metal::distributed
