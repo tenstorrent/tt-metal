@@ -59,13 +59,22 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
             end_expert = start_expert + num_experts_per_device
             expert_indices = range(start_expert, end_expert)
 
-            # TODO: check for quantized weights
             # Process each weight type
             for weight_key in weight_key_to_expert.keys():
                 # Collect tensors for this weight type and device
-                weight_tensors = [
-                    state_dict[f"experts.{expert_idx}.{weight_key}.weight"] for expert_idx in expert_indices
-                ]
+                weight_tensors = []
+                for expert_idx in expert_indices:
+                    weight_tensor = state_dict[f"experts.{expert_idx}.{weight_key}.weight"]
+                    inv_scale_key = f"experts.{expert_idx}.{weight_key}.weight_scale_inv"
+                    if inv_scale_key in state_dict:
+                        # Dequantize the tensor before using it
+                        inv_scale_tensor = state_dict[inv_scale_key]
+                        weight_tensor = dequantize(
+                            weight_tensor, inv_scale_tensor, hf_config.quantization_config["weight_block_size"]
+                        )
+
+                    weight_tensors.append(weight_tensor)
+
                 # Stack and permute, then add to the corresponding weight group
                 weight_groups[weight_key].append(torch.stack(weight_tensors, dim=0).permute(0, 2, 1))
 

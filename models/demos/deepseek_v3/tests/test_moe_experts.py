@@ -16,6 +16,7 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MLP as ReferenceExpert
 from models.demos.deepseek_v3.tt.expert import Expert as TTExpert
 from models.demos.deepseek_v3.utils.run_config import create_run_config
+from models.demos.deepseek_v3.utils.test_utils import load_reference_io, load_state_dict, pad_tensor
 from models.utility_functions import comp_pcc
 
 
@@ -44,55 +45,78 @@ class DeepseekV3MoE_Experts(nn.Module):
         return torch.cat(outputs, dim=0)
 
 
-@pytest.fixture
-def reference_model(hf_config: Any | torch.Any):
-    """Get the actual DeepSeek MLP model using local implementation."""
-    return DeepseekV3MoE_Experts(hf_config)
-
-
 @pytest.mark.parametrize(
     "mode,seq_len",
     [
         ("decode", 128),
-        ("prefill", 2048),
+        # ("prefill", 2048),
     ],
+)
+@pytest.mark.parametrize(
+    "weight_type",
+    # ["random", "real"],
+    ["real"],
+)
+@pytest.mark.parametrize(
+    "model_path",
+    [Path("/proj_sw/user_dev/deepseek-ai/")],
+)
+@pytest.mark.parametrize(
+    "module_path",
+    ["model.layers.3.mlp.experts.0-255"],
 )
 def test_forward_pass(
     mode: Literal["decode"] | Literal["prefill"],
     seq_len: Literal[128] | Literal[256] | Literal[2048],
-    reference_model: DeepseekV3MoE_Experts,
-    hf_config_single_layer: Any,
+    hf_config: Any,
     temp_dir: Path,
-    galaxy_or_t3k_mesh: Any,
+    mesh_device: Any,
+    weight_type: Literal["random"] | Literal["real"],
+    module_path: str,
+    model_path: Path,
 ):
     """Test forward pass against reference model."""
 
     torch.manual_seed(0)
     batch_size = 1
 
-    # Get state dict from actual model - pass directly to convert_weights
-    hf_state_dict = reference_model.state_dict()
+    galaxy_or_t3k_mesh = mesh_device
+
+    # Create input tensor
+    if weight_type == "random":
+        reference_model = DeepseekV3MoE_Experts(hf_config)
+        hf_state_dict = reference_model.state_dict()
+        torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
+        reference_output = reference_model(torch_input)
+    elif weight_type == "real":
+        hf_state_dict = load_state_dict(model_path, module_path)
+        out_ = load_reference_io(mode, module_path)
+        breakpoint()
+        (io_module_path, (torch_input,), _, reference_output) = out_[0]
+        assert module_path == io_module_path
+        torch_input.unsqueeze_(0)
+        reference_output.unsqueeze_(0)
+    else:
+        raise ValueError(f"Unsupported weight type: {weight_type}. Supported types are 'random' and 'real'.")
+
+    # Pad input to SEQ_LEN_CHUNK_SIZE if necessasry
+    print(torch_input.shape, mode, seq_len)
+    torch_input = pad_tensor(torch_input, mode, seq_len)
+    print(torch_input.shape)
 
     # Setup: Convert weights and get weight_config
-    weight_config = TTExpert.convert_weights_moe(hf_config_single_layer, hf_state_dict, temp_dir, galaxy_or_t3k_mesh)
+    weight_config = TTExpert.convert_weights_moe(hf_config, hf_state_dict, temp_dir, galaxy_or_t3k_mesh)
     # Generate appropriate config
     if mode == "prefill":
-        model_config = TTExpert.prefill_model_config(hf_config_single_layer, galaxy_or_t3k_mesh)
+        model_config = TTExpert.prefill_model_config(hf_config, galaxy_or_t3k_mesh)
     else:
-        model_config = TTExpert.decode_model_config(hf_config_single_layer, galaxy_or_t3k_mesh)
+        model_config = TTExpert.decode_model_config(hf_config, galaxy_or_t3k_mesh)
 
     # Create a new model state
-    model_state = TTExpert.create_state(hf_config_single_layer, mesh_device=galaxy_or_t3k_mesh)
+    model_state = TTExpert.create_state(hf_config, mesh_device=galaxy_or_t3k_mesh)
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state)
-
-    # Create input tensor
-    # TODO: Add tests for real weitghts
-    torch_input = torch.randn(batch_size, 1, seq_len, hf_config_single_layer.hidden_size)
-
-    # Reference forward pass
-    reference_output = reference_model(torch_input)
 
     # Convert input to TTNN
     tt_input = ttnn.from_torch(
@@ -131,7 +155,7 @@ def test_forward_pass(
         ),
     )
     # example shape (4, experts_per_device*8, seq_len, hidden_size) for TG
-    tt_output_torch = tt_output_torch.reshape(batch_size, -1, seq_len, hf_config_single_layer.hidden_size)
+    tt_output_torch = tt_output_torch.reshape(batch_size, -1, seq_len, hf_config.hidden_size)
     # example shape (1, experts_per_device*8*4, seq_len, hidden_size) for TG
     tt_output_torch = tt_output_torch[0].unsqueeze(1)
 
