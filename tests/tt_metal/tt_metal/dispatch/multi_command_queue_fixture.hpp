@@ -165,8 +165,8 @@ protected:
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     }
 
-    void CreateDevices(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
-        this->create_devices(trace_region_size);
+    void CreateDevice(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
+        this->create_device(trace_region_size);
     }
 };
 
