@@ -123,8 +123,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             configuration.head_dim,
             configuration.max_seq_len,
             configuration.rope_theta,
-            configuration.rope_scaling.factor if configuration.rope_scaling else None,
-            configuration.rope_scaling.original_max_position_embeddings if configuration.rope_scaling else None,
+            configuration.rope_scaling,
         )
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
