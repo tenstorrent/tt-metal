@@ -313,7 +313,6 @@ class StableDiffusionParallelManager:
             for sems in self.cfg_semaphores[cfg_idx].values():
                 if isinstance(sems, list):
                     for sem in sems:
-                        print(f"Semaphore: {sem}")
                         ttnn.reset_global_semaphore_value(sem, 0)
                 else:
                     ttnn.reset_global_semaphore_value(sems, 0)
