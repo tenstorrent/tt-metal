@@ -26,7 +26,7 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition
     UNet2DConditionModel as UNet2D,
 )
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae import Vae
-from models.utility_functions import enable_persistent_kernel_cache, is_blackhole, profiler
+from models.utility_functions import enable_persistent_kernel_cache, profiler
 
 
 def load_inputs(input_path):
@@ -192,12 +192,7 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
         )
         ttnn.copy_host_to_device_tensor(ttnn_text_embeddings, ttnn_text_embeddings_device, cq_id=0)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-        if not is_blackhole():
-            image = ttnn.to_torch(output.cpu(blocking=True))
-        else:
-            # on blackhole, we use the original vae decoder until #20760 is fixed
-            latents = ttnn.to_torch(output).to(torch.float32)
-            image = vae.decode(latents).sample
+        image = ttnn.to_torch(output.cpu(blocking=True))
         ttnn.synchronize_device(device)
         profiler.end(f"inference_prompt_{i}")
 
@@ -351,12 +346,7 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
 
         ttnn.copy_host_to_device_tensor(ttnn_text_embeddings, ttnn_text_embeddings_device, cq_id=0)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-        if not is_blackhole():
-            image = ttnn.to_torch(output.cpu(blocking=True))
-        else:
-            # on blackhole, we use the original vae decoder until #20760 is fixed
-            latents = ttnn.to_torch(output).to(torch.float32)
-            image = vae.decode(latents).sample
+        image = ttnn.to_torch(output.cpu(blocking=True))
         ttnn.synchronize_device(device)
         ttnn.release_trace(device, tid)
 
@@ -500,12 +490,7 @@ def run_demo_inference_diffusiondb(
         ttnn_text_embeddings = ttnn.from_torch(ttnn_text_embeddings, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         ttnn.copy_host_to_device_tensor(ttnn_text_embeddings, ttnn_text_embeddings_device, cq_id=0)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-        if not is_blackhole():
-            image = ttnn.to_torch(output.cpu(blocking=True))
-        else:
-            # on blackhole, we use the original vae decoder until #20760 is fixed
-            latents = ttnn.to_torch(output).to(torch.float32)
-            image = vae.decode(latents).sample
+        image = ttnn.to_torch(output.cpu(blocking=True))
         ttnn.synchronize_device(device)
         ttnn.release_trace(device, tid)
 
@@ -536,7 +521,7 @@ def run_demo_inference_diffusiondb(
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 11 * 8192, "trace_region_size": 789321728}],
+    [{"l1_small_size": 11 * 8192, "trace_region_size": 789835776}],
     indirect=True,
 )
 @pytest.mark.parametrize(
