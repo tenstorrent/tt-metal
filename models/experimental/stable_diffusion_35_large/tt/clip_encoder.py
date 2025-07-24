@@ -137,7 +137,7 @@ class TtCLIPMLP:
         hidden_states = self._fc1(hidden_states)
 
         if self._hidden_act == "gelu":
-            hidden_states = gelu(hidden_states)  # HF default / standard GELU
+            hidden_states = gelu(hidden_states)  # HF default gelu
         else:  # quick gelu
             hidden_states = hidden_states * ttnn.sigmoid(1.702 * hidden_states)
 
@@ -146,7 +146,7 @@ class TtCLIPMLP:
 
 
 def gelu(x: ttnn.Tensor) -> ttnn.Tensor:
-    # GELU(x) = 0.5 * x * (1 + erf(x / sqrt(2)))
+    # GELU(x) = 0.5 * x * (1 + erf(x / sqrt(2))) - ttnn.gelu is the same, but avoiding for potential issues (see ttnn.layernorm)
     sqrt_2 = math.sqrt(2.0)
     x_div_sqrt2 = ttnn.multiply(x, 1.0 / sqrt_2)
     erf_x = ttnn.erf(x_div_sqrt2)
@@ -298,7 +298,7 @@ class TtCLIPEmbeddingParameters:
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
     ) -> TtCLIPEmbeddingParameters:
-        # weights must be BFLOAT16 for ttnn.embedding ops
+        # weights must be bfloat16 for ttnn.embedding ops
         embedding_dtype = ttnn.bfloat16
         return cls(
             token_embedding=from_torch_fast(
@@ -385,7 +385,9 @@ class TtCLIPTextTransformer:
         self._final_layer_norm_bias = parameters.final_layer_norm_bias
         self._layer_norm_eps = config.layer_norm_eps
 
-    def __call__(self, input_ids: ttnn.Tensor, device: ttnn.Device) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    def __call__(
+        self, input_ids: ttnn.Tensor, device: ttnn.Device, eos_token_id: int = None
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         batch_size, seq_length = input_ids.shape
 
         hidden_states = self._embeddings(input_ids, device)
@@ -399,9 +401,45 @@ class TtCLIPTextTransformer:
         sequence_embeddings = ttnn.layer_norm(
             hidden_states, weight=self._final_layer_norm, bias=self._final_layer_norm_bias, epsilon=self._layer_norm_eps
         )
-        pooled_output = sequence_embeddings[:, -1, :]
+
+        # pool based on the eos_token_id strategy (same as HF)
+        # if eos_token_id not provided, use a fallback
+        if eos_token_id is None:
+            # fallback: assume eos_token_id = 2 (common for clip models based on logs)
+            eos_token_id = 2
+
+        pooled_output = self._gather_eos(sequence_embeddings, input_ids, eos_token_id, device)
 
         return sequence_embeddings, pooled_output
+
+    def _gather_eos(
+        self, seq_emb: ttnn.Tensor, input_ids: ttnn.Tensor, eos_token_id: int, device: ttnn.Device
+    ) -> ttnn.Tensor:
+        """Return tensor of shape [B, hidden] pooled exactly like HuggingFace CLIP."""
+        ids_t = ttnn.to_torch(input_ids)
+
+        # print(f"DEBUG: Token sequence: {ids_t[0].tolist()}")
+
+        # from HF - if self.eos_token_id == 2: use argmax, else: search for eos_token_id
+        if eos_token_id == 2:
+            # use argmax (highest token ID position)
+            eos_idx = ids_t.to(dtype=torch.int, device=ids_t.device).argmax(dim=-1)
+            # print(f"DEBUG: Using argmax strategy, position: {eos_idx.tolist()}")
+        else:
+            # search for specific eos_token_id
+            eos_mask = (ids_t.to(dtype=torch.int, device=ids_t.device) == eos_token_id).int()
+            eos_idx = eos_mask.argmax(dim=-1)
+            # print(f"DEBUG: Searching for EOS token {eos_token_id}, position: {eos_idx.tolist()}")
+
+        # print(f"DEBUG: Token at selected position: {ids_t[0, eos_idx[0]].item()}")
+
+        seq_t = ttnn.to_torch(seq_emb)  # [B, S, H]
+        b = torch.arange(seq_t.size(0))
+        pooled_t = seq_t[b, eos_idx]  # [B, H]
+
+        # print(f"DEBUG: Pooled output mean: {pooled_t.mean().item():.6f}, std: {pooled_t.std().item():.6f}")
+
+        return ttnn.from_torch(pooled_t, dtype=seq_emb.get_dtype(), layout=ttnn.TILE_LAYOUT, device=device)
 
 
 # adapted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/clip/modeling_clip.py
