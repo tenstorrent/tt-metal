@@ -148,7 +148,7 @@ public:
     void SetUp(
         const std::string& mesh_graph_desc_file,
         const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
-        tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(
+        tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
             mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
         BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
     }
@@ -158,7 +158,7 @@ private:
 
     void TearDown() override {
         BaseFabricFixture::DoTearDownTestSuite();
-        tt::tt_metal::MetalContext::instance().set_default_control_plane_mesh_graph();
+        tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
     }
 };
 

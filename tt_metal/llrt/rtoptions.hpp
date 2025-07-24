@@ -110,6 +110,9 @@ class RunTimeOptions {
     bool is_visible_devices_env_var_set = false;
     std::vector<uint32_t> visible_devices;
 
+    bool is_custom_fabric_mesh_graph_desc_path_set = false;
+    std::string custom_fabric_mesh_graph_desc_path;
+
     bool build_map_enabled = false;
 
     WatcherSettings watcher_settings;
@@ -458,6 +461,11 @@ public:
     // Feature flag to specify if fabric is enabled in 2-erisc mode or not.
     // if true, then the fabric router is parallelized across two eriscs in the Ethernet core
     inline bool get_is_fabric_2_erisc_mode_enabled() const { return enable_2_erisc_mode_with_fabric; }
+
+    inline bool is_custom_fabric_mesh_graph_desc_path_specified() const {
+        return is_custom_fabric_mesh_graph_desc_path_set;
+    }
+    inline std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.
