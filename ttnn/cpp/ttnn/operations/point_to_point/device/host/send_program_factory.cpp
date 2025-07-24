@@ -3,52 +3,80 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "point_to_point_device_op.hpp"
 
-namespace ttnn::operations::point_to_point::detail {
+using ttnn::operations::ccl::common::get_linearized_index;
 
-std::tuple<uint32_t, bool, IDevice*> calculate_fabric_connection(
+using tt::tt_fabric::FabricNodeId;
+using tt::tt_fabric::get_fabric_node_id_from_physical_chip_id;
+
+namespace ttnn::operations::point_to_point {
+namespace detail {
+
+auto one_d_fabric_routing_vector(const MeshCoordinate& src_coord, const MeshCoordinate& dest_coord) {
+    // transmit along row
+    if (src_coord[0] == dest_coord[0]) {
+        constexpr auto dim = 1;
+        const int hops = dest_coord[dim] - src_coord[dim];
+        bool is_fwd = (hops > 0);
+
+        return std::make_tuple(std::abs(hops), is_fwd, dim);
+    }
+    // transmit along col
+    else if (src_coord[1] == dest_coord[1]) {
+        constexpr auto dim = 0;
+        const int hops = dest_coord[dim] - src_coord[dim];
+        bool is_fwd = (hops > 0);
+
+        return std::make_tuple(std::abs(hops), is_fwd, dim);
+    } else {
+        TT_THROW("Routing coordinates {} and {} invalid for 1D fabric", src_coord, dest_coord);
+        return std::make_tuple(0, false, 0);
+    }
+}
+
+auto one_d_fabric_routing(
     const MeshDevice* mesh_device,
     const MeshCoordinate& src_coord,
     const MeshCoordinate& dest_coord,
-    const ccl::Topology& topology) {
-    auto devices = mesh_device->get_devices();
-    auto begin_it = devices.cbegin();
-
-    auto src_it =
-        std::find_if(begin_it, devices.cend(), [&](auto& d) { return d == mesh_device->get_device(src_coord); });
-    TT_FATAL(src_it != devices.cend(), "Invalid source coordinate");
-    int src_idx = src_it - begin_it;
-
-    auto dest_it =
-        std::find_if(begin_it, devices.cend(), [&](auto& d) { return d == mesh_device->get_device(dest_coord); });
-    TT_FATAL(dest_it != devices.cend(), "Invalid dest coordinate");
-
-    int dest_idx = dest_it - begin_it;
+    const ::ttnn::ccl::Topology& topology) {
+    const auto& mesh_shape = mesh_device->get_view().shape();
 
     // sign indicates direction, however fabrics' forward/backward concept is reversed
-    int line_hops = dest_idx - src_idx;
+    const auto [line_hops, line_is_forward, dim] = one_d_fabric_routing_vector(src_coord, dest_coord);
 
     TT_FATAL(line_hops != 0, "Should not be send/receiving to the same device");
 
-    if (topology == ccl::Topology::Ring) {
-        int ring_hops = line_hops + (line_hops < 0 ? -1 : 1) * mesh_device->get_devices().size();
+    auto get_neighbor_id = [&src_coord, &mesh_device, &mesh_shape, dim](
+                               bool is_forward, MeshCoordinate::BoundaryMode boundary_mode) {
+        const auto neighbor_coord = src_coord.get_neighbor(mesh_shape, (is_forward ? 1 : -1), dim, boundary_mode);
+
+        TT_FATAL(neighbor_coord.has_value(), "Can't find neighbor for {}", src_coord);
+        auto next_device = mesh_device->get_device(neighbor_coord.value());
+        const auto next_fabric_id = get_fabric_node_id_from_physical_chip_id(next_device->id());
+
+        TT_FATAL(next_device != nullptr, "Did not find next device");
+        return next_fabric_id;
+    };
+
+    if (topology == ::ttnn::ccl::Topology::Ring) {
+        int ring_hops = line_hops + (line_hops < 0 ? -1 : 1) * mesh_shape[dim];
 
         if (std::abs(ring_hops) < std::abs(line_hops)) {
-            bool dst_is_forward = (ring_hops > 0);
-            auto next_device = devices.at(src_idx + (dst_is_forward ? 1 : -1));
-            TT_FATAL(next_device != nullptr, "Did not find next device");
-            return std::make_tuple(std::abs(ring_hops), !dst_is_forward, next_device);
+            bool ring_is_forward = (ring_hops > 0);
+
+            const auto next_fabric_id = get_neighbor_id(ring_is_forward, MeshCoordinate::BoundaryMode::WRAP);
+            return std::make_tuple(std::abs(ring_hops), !ring_is_forward, next_fabric_id);
         }
     }
-
-    bool dst_is_forward = (line_hops > 0);
-    auto next_device = devices.at(src_idx + (dst_is_forward ? 1 : -1));
-    TT_FATAL(next_device != nullptr, "Did not find next device");
-    return std::make_tuple(std::abs(line_hops), !dst_is_forward, next_device);
+    const auto next_fabric_id = get_neighbor_id(line_is_forward, MeshCoordinate::BoundaryMode::NONE);
+    return std::make_tuple(line_hops, !line_is_forward, next_fabric_id);
 }
+}  // namespace detail
 
 ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> send_program_factory(
     const PointToPointOp::tensor_args_t& tensor_args,
@@ -68,9 +96,9 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
 
     // figure out packets
     const auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
-        compute_aligned_packet_dims(input_tensor.get_dtype(), input_page_size_bytes, input_num_pages, l1_alignment);
+        detail::compute_aligned_packet_dims(input_tensor.dtype(), input_page_size_bytes, input_num_pages, l1_alignment);
 
-    // In principal this should work on multiple cores but fabric does not seem to support multiple cores/link
+    // eventually add more cores for multi-link
     const CoreCoord use_cores = {1, 1};
     const auto
         [num_cores, all_cores, core_group_1, core_group_2, num_packets_per_core_group_1, num_packets_per_core_group_2] =
@@ -84,7 +112,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     constexpr auto sender_cb_id = tt::CBIndex::c_0;
     constexpr auto cb_num_pages = 2;
 
-    tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::tt_metal::CircularBufferConfig cb_sender_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * input_page_size_bytes, {{sender_cb_id, input_dataformat}})
             .set_page_size(sender_cb_id, input_page_size_bytes);
@@ -119,9 +147,10 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         tt::tt_metal::ReaderDataMovementConfig({input_is_dram}));
 
     auto this_device = mesh_device->get_device(send_coord);
+    const auto this_fabric_id = get_fabric_node_id_from_physical_chip_id(this_device->id());
 
-    const auto [num_hops, dst_is_forward, next_device] =
-        calculate_fabric_connection(mesh_device, send_coord, receive_coord, topology);
+    const auto [num_hops, dst_is_forward, next_fabric_id] =
+        detail::one_d_fabric_routing(mesh_device, send_coord, receive_coord, topology);
 
     const bool output_is_dram = output_tensors.at(0).buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
@@ -171,12 +200,12 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
 
         if (dst_is_forward) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                this_device->id(), next_device->id(), link_idx, program, c, writer_runtime_args);
+                this_fabric_id, next_fabric_id, link_idx, program, c, writer_runtime_args);
         }
         writer_runtime_args.emplace_back(!dst_is_forward);
         if (!dst_is_forward) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                this_device->id(), next_device->id(), link_idx, program, c, writer_runtime_args);
+                this_fabric_id, next_fabric_id, link_idx, program, c, writer_runtime_args);
         }
 
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, c, writer_runtime_args);
@@ -187,4 +216,4 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     // !TODO implement program cache #23425
     return {std::move(program), PointToPointOp::SendReceive::shared_variables_t{}};
 }
-}  // namespace ttnn::operations::point_to_point::detail
+}  // namespace ttnn::operations::point_to_point

@@ -11,6 +11,11 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr bool nullop = get_compile_time_arg_val(2);
+
+    if constexpr (nullop) {
+        return;
+    }
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;

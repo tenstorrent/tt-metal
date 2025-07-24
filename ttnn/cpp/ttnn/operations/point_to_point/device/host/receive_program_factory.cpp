@@ -6,11 +6,12 @@
 #include <tt-metalium/work_split.hpp>
 #include "point_to_point_device_op.hpp"
 
-namespace ttnn::operations::point_to_point::detail {
+namespace ttnn::operations::point_to_point {
 
 ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> receive_program_factory(
     const PointToPointOp::operation_attributes_t& operation_attributes,
-    PointToPointOp::tensor_return_value_t& output_tensors) {
+    PointToPointOp::tensor_return_value_t& output_tensors,
+    const bool nullop) {
     auto mesh_device = dynamic_cast<MeshDevice*>(output_tensors.at(0).device());
 
     const auto& receive_coord = operation_attributes.receive_coord;
@@ -24,7 +25,8 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
 
     // figure out packets
     const auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
-        compute_aligned_packet_dims(output_tensor.get_dtype(), output_page_size_bytes, output_num_pages, l1_alignment);
+        detail::compute_aligned_packet_dims(
+            output_tensor.dtype(), output_page_size_bytes, output_num_pages, l1_alignment);
 
     // distribute work
     const CoreCoord use_cores = {1, 1};
@@ -36,7 +38,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     // program!
     tt::tt_metal::Program program{};
 
-    tt::DataFormat inter_dataformat = tt::tt_metal::datatype_to_dataformat_converter(intermediate_tensor.get_dtype());
+    tt::DataFormat inter_dataformat = tt::tt_metal::datatype_to_dataformat_converter(intermediate_tensor.dtype());
 
     // Scratch CB for loading up pages that are collected into packets
     constexpr auto packet_cb_id = tt::CBIndex::c_0;
@@ -49,7 +51,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     constexpr auto receiver_cb_id = tt::CBIndex::c_1;
     const uint32_t cb_num_pages = 3 * num_pages_per_packet;
 
-    tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(intermediate_tensor.get_dtype());
+    tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(intermediate_tensor.dtype());
     tt::tt_metal::CircularBufferConfig cb_receiver_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * output_page_size_bytes, {{receiver_cb_id, inter_dataformat}})
             .set_page_size(receiver_cb_id, output_page_size_bytes);
@@ -57,7 +59,8 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
 
     const bool intermediate_is_dram = output_tensors.at(0).buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    const std::vector<uint32_t> reader_ct_args = {intermediate_is_dram, packet_cb_id, receiver_cb_id, l1_alignment};
+    const std::vector<uint32_t> reader_ct_args = {
+        intermediate_is_dram, packet_cb_id, receiver_cb_id, l1_alignment, nullop};
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/reader_receive.cpp",
@@ -71,7 +74,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         program,
         "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/writer_unary_interleaved_start_id_gen.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig({output_is_dram, receiver_cb_id}));
+        tt::tt_metal::WriterDataMovementConfig({output_is_dram, receiver_cb_id, nullop}));
 
     uint32_t page_idx_start = 0, page_idx_end = 0;
     for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
@@ -112,4 +115,4 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     // !TODO implement program cache #23425
     return {std::move(program), PointToPointOp::SendReceive::shared_variables_t{}};
 }
-}  // namespace ttnn::operations::point_to_point::detail
+}  // namespace ttnn::operations::point_to_point

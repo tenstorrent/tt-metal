@@ -52,7 +52,7 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
     TT_FATAL(mesh_device != nullptr, "Point to point expected input tensor on mesh device");
 
     const auto&& device_ids = mesh_device->get_device_ids();
-    TT_FATAL(device_ids.size() == 2, "Point to point expects MeshDevice of size 2 but got {}", device_ids.size());
+    // TT_FATAL(device_ids.size() == 2, "Point to point expects MeshDevice of size 2 but got {}", device_ids.size());
 
     TT_FATAL(
         operation_attributes.send_coord != operation_attributes.receive_coord, "Can't send/receive to the same device");
@@ -83,13 +83,13 @@ PointToPointOp::spec_return_value_t PointToPointOp::compute_output_specs(
 
     const auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
         detail::compute_aligned_packet_dims(
-            input_tensor.get_dtype(),
+            input_tensor.dtype(),
             final_output_spec.compute_page_size_bytes(),
             input_num_pages,
             ::hal::get_l1_alignment());
 
     const uint32_t packet_page_dim =
-        packet_size_bytes / tt::datum_size(datatype_to_dataformat_converter(input_tensor.get_dtype()));
+        packet_size_bytes / tt::datum_size(datatype_to_dataformat_converter(input_tensor.dtype()));
 
     Shape intermediate_shape{total_packets, packet_page_dim};
 
@@ -138,14 +138,13 @@ cached_program_t PointToPointOp::SendReceive::create_at(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     if (mesh_coordinate == send_coordinate) {
-        return detail::send_program_factory(
+        return send_program_factory(
             tensor_args, operation_attributes, send_coordinate, receive_coordinate, tensor_return_value);
 
     } else if (mesh_coordinate == receive_coordinate) {
-        return detail::receive_program_factory(operation_attributes, tensor_return_value);
+        return receive_program_factory(operation_attributes, tensor_return_value);
     }
 
-    TT_FATAL(false, "Bad coordinate in point_to_point");
-    return cached_program_t{tt::tt_metal::Program{}, shared_variables_t{}};
+    return receive_program_factory(operation_attributes, tensor_return_value, true);
 }
 }  // namespace ttnn::operations::point_to_point
