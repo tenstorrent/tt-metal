@@ -98,6 +98,12 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_mesh_workload(
     auto mesh_device = tensor_args.input_tensor.mesh_device();
 
     for (const auto& coord : tensor_coords.coords()) {
+        std::cout << "Creating program for mesh coordinate: " << coord << std::endl;
+        if (!mesh_device->is_local(coord)) {
+            std::cout << " skipped " << std::endl;
+            // Skip coordinates that are not local to this device
+            continue;
+        }
         auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value, tensor_coords);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
@@ -127,10 +133,11 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto src_device = mesh_device->get_device(mesh_coordinate);
     auto src_physical_device_id = src_device->id();
 
-    auto fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_device->id());
+    // auto fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_device->id());
+    uint32_t linearized_mesh_coord = common::get_linearized_index(mesh_coordinate, mesh_view);
+    tt::tt_fabric::FabricNodeId fabric_node_id{tt::tt_fabric::MeshId{0}, linearized_mesh_coord};
     uint32_t src_mesh_id = *fabric_node_id.mesh_id;
     uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
-    uint32_t linearized_mesh_coord = common::get_linearized_index(mesh_coordinate, mesh_view);
     std::cout << "linearized_mesh_coord " << linearized_mesh_coord << " fabric " << fabric_node_id << std::endl;
 
     log_debug(
@@ -146,6 +153,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     const auto [neighbors, directions] =
         common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
+    std::cout << " here " << std::endl;
 
     auto input_shape = input_tensor.tensor_spec().logical_shape();
     auto indices_shape = indices_tensor.tensor_spec().logical_shape();
@@ -298,14 +306,17 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
     for (const auto& coord : tensor_coords.coords()) {
-        auto device = mesh_device->get_device(coord);
-        auto fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
-        dest_mesh_id.push_back(*fabric_node_id.mesh_id);
-        dest_chip_id.push_back((uint32_t)fabric_node_id.chip_id);
+        // auto device = mesh_device->get_device(coord);
+        uint32_t linearized_mesh_coord = common::get_linearized_index(coord, mesh_view);
+        tt::tt_fabric::FabricNodeId dest_fabric_node_id{tt::tt_fabric::MeshId{0}, linearized_mesh_coord};
+        //   std::cout << " adding tensor " << coord << " fabric node " << dest_fabric_node_id << std::endl;
+        // auto fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
+        dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
+        dest_chip_id.push_back((uint32_t)dest_fabric_node_id.chip_id);
     }
-    log_debug(tt::LogOp, "dest_chip_id: {}", common::stringify(dest_chip_id));
-    log_debug(tt::LogOp, "dest_mesh_id: {}", common::stringify(dest_mesh_id));
-    log_debug(tt::LogOp, "directions: {}", common::stringify(directions));
+    log_info(tt::LogOp, "dest_chip_id: {}", common::stringify(dest_chip_id));
+    log_info(tt::LogOp, "dest_mesh_id: {}", common::stringify(dest_mesh_id));
+    log_info(tt::LogOp, "directions: {}", common::stringify(directions));
 
     auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
@@ -440,6 +451,9 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         tokens_per_core_start = reader_runtime_args[7];
         for (auto& neighbor : neighbors) {
             auto neighbor_coordinate = mesh_view.find_device(neighbor->id());
+            uint32_t linearized_mesh_coord = common::get_linearized_index(neighbor_coordinate, mesh_view);
+            tt::tt_fabric::FabricNodeId neighbor_node_id{tt::tt_fabric::MeshId{0}, linearized_mesh_coord};
+            std::cout << " adding neighbor " << neighbor_coordinate << " fabric node " << neighbor_node_id << std::endl;
             log_debug(
                 tt::LogOp,
                 "Connection between mesh coord ({}, {}) and ({}, {}) at core {} will choose link_id: {} and handles "
@@ -453,8 +467,10 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
                 reader_runtime_args[6],
                 reader_runtime_args[7]);
             tt::tt_fabric::append_fabric_connection_rt_args(
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_physical_device_id),
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(neighbor->id()),
+                fabric_node_id,
+                neighbor_node_id,
+                // tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_physical_device_id),
+                // tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(neighbor->id()),
                 link_id,
                 program,
                 sender_cores.at(i),
