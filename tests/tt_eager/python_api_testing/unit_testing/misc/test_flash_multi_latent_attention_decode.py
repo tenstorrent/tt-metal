@@ -165,6 +165,7 @@ def run_flash_mla_decode_impl(
     q_dtype,
     dtype,
     use_paged_attention=False,
+    block_size=ttnn.TILE_SIZE,
 ):
     # Can't run too many iters, or run out of L1
     num_iters = 5
@@ -184,7 +185,6 @@ def run_flash_mla_decode_impl(
     # Paged attention configuration
     paged_attention_cfg = None
     if use_paged_attention:
-        block_size = ttnn.TILE_SIZE
         assert seq_len % block_size == 0, f"Sequence length must be a multiple of {block_size=} for paged attention."
 
         max_num_blocks = seq_len // block_size * batch
@@ -374,7 +374,7 @@ def run_flash_mla_decode_impl(
 
         start_indices = [x + 1 for x in start_indices]
 
-    pcc_threshold = 0.99
+    pcc_threshold = 0.999
     if dtype == ttnn.bfloat4_b:
         pcc_threshold = 0.91
     if dtype == ttnn.bfloat8_b:
@@ -429,6 +429,13 @@ def run_flash_mla_decode_impl(
         True,
     ],
 )
+@pytest.mark.parametrize(
+    "block_size",
+    [
+        32,
+        128,
+    ],
+)
 def test_flash_mla_decode(
     device,
     batch,
@@ -441,6 +448,7 @@ def test_flash_mla_decode(
     q_dtype,
     dtype,
     use_paged_attention,
+    block_size,
     function_level_defaults,
     reset_seeds,
 ):
@@ -456,6 +464,7 @@ def test_flash_mla_decode(
         q_dtype,
         dtype,
         use_paged_attention,
+        block_size,
     )
 
 
@@ -525,6 +534,13 @@ def test_flash_mla_decode(
         True,
     ],
 )
+@pytest.mark.parametrize(
+    "block_size",
+    [
+        32,
+        128,
+    ],
+)
 def test_flash_mla_decode_stress(
     device,
     batch,
@@ -537,6 +553,7 @@ def test_flash_mla_decode_stress(
     q_dtype,
     dtype,
     use_paged_attention,
+    block_size,
     function_level_defaults,
     reset_seeds,
 ):
@@ -569,4 +586,5 @@ def test_flash_mla_decode_stress(
         q_dtype,
         dtype,
         use_paged_attention,
+        block_size,
     )
