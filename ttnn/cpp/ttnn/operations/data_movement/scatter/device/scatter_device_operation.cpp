@@ -7,7 +7,7 @@
 
 #include <magic_enum/magic_enum.hpp>
 
-namespace ttnn::operations::experimental::scatter {
+namespace ttnn::operations::data_movement::scatter {
 
 ScatterDeviceOperation::program_factory_t ScatterDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
@@ -117,4 +117,4 @@ operation::Hash ScatterDeviceOperation::compute_program_hash(
         tensor_args.src_tensor.layout());
 }
 
-}  // namespace ttnn::operations::experimental::scatter
+}  // namespace ttnn::operations::data_movement::scatter

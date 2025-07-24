@@ -13,7 +13,11 @@ namespace {
 // this function is supposed to load either a whole stick or part of it (76800 elements)
 template <bool is_dram, typename AddrGen>
 FORCE_INLINE void load_to_cb(
-    const uint32_t& cb, const AddrGen& addr_gtor, const uint32_t& offset_bytes, const uint32_t& chunk_size_bytes, const uint32_t& stick_id) {
+    const uint32_t& cb,
+    const AddrGen& addr_gtor,
+    const uint32_t& offset_bytes,
+    const uint32_t& chunk_size_bytes,
+    const uint32_t& stick_id) {
     cb_reserve_back(cb, ONE_PAGE);
     const uint64_t source_noc_address = get_noc_addr(stick_id, addr_gtor);
     const uint32_t l1_write_address = get_write_ptr(cb);

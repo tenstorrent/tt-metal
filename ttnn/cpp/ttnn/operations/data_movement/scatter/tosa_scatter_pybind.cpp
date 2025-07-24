@@ -9,9 +9,9 @@
 #include "tosa_scatter.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::experimental::tosa_scatter::detail {
+namespace ttnn::operations::data_movement::detail {
 
-void bind_tosa_scatter_operation(py::module& module) {
+void bind_tosa_scatter(py::module& module) {
     auto doc =
         R"doc(
             Scatters the source tensor's values along a given dimension according
@@ -24,7 +24,6 @@ void bind_tosa_scatter_operation(py::module& module) {
 
             Keyword Arguments:
                 * `memory_config` (MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
-                * `out` (Tensor, optional): Preallocated output tensor where scatter result should go to (should be the same shape as the input tensor). Defaults to `None`.
 
             Example:
 
@@ -43,13 +42,13 @@ void bind_tosa_scatter_operation(py::module& module) {
                 index_ttnn = ttnn.from_torch(index_torch, dtype=ttnn.int32, device=device, layout=ttnn.Layout.TILE)
                 source_ttnn = ttnn.from_torch(source_torch, dtype=ttnn.float32, device=device, layout=ttnn.Layout.TILE)
 
-                output = ttnn.experimental.tosa_scatter(input_ttnn, index_ttnn, source_ttnn)
+                output = ttnn.tosa_scatter(input_ttnn, index_ttnn, source_ttnn)
         )doc";
 
-    using OperationType = decltype(ttnn::experimental::tosa_scatter);
+    using OperationType = decltype(ttnn::tosa_scatter);
     bind_registered_operation(
         module,
-        ttnn::experimental::tosa_scatter,
+        ttnn::tosa_scatter,
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
@@ -68,4 +67,4 @@ void bind_tosa_scatter_operation(py::module& module) {
             py::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace ttnn::operations::experimental::tosa_scatter::detail
+}  // namespace ttnn::operations::data_movement::detail
