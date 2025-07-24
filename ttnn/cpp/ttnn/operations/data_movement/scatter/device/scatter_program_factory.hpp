@@ -14,7 +14,7 @@
 
 #include "ttnn/device_operation.hpp"
 
-namespace ttnn::operations::experimental::scatter {
+namespace ttnn::operations::data_movement::scatter {
 
 enum class ScatterCB : std::underlying_type_t<tt::CBIndex> {
     INPUT = CBIndex::c_0,
@@ -55,4 +55,4 @@ struct ScatterProgramFactory {
         const std::vector<uint32_t>& runtime_args = {});
 };
 
-}  // namespace ttnn::operations::experimental::scatter
+}  // namespace ttnn::operations::data_movement::scatter

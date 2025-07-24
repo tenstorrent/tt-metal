@@ -18,7 +18,7 @@
 
 #include "scatter_program_factory.hpp"
 
-namespace ttnn::operations::experimental::scatter {
+namespace ttnn::operations::data_movement::scatter {
 
 using namespace tt::tt_metal;
 
@@ -50,9 +50,9 @@ struct ScatterDeviceOperation {
         const QueueId& queue_id = DefaultQueueId);
 };
 
-}  // namespace ttnn::operations::experimental::scatter
+}  // namespace ttnn::operations::data_movement::scatter
 
 namespace ttnn::prim {
 constexpr auto scatter =
-    ttnn::register_operation<"ttnn::prim::scatter", ttnn::operations::experimental::scatter::ScatterDeviceOperation>();
+    ttnn::register_operation<"ttnn::prim::scatter", ttnn::operations::data_movement::scatter::ScatterDeviceOperation>();
 }
