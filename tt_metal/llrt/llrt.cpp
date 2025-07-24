@@ -350,7 +350,6 @@ void send_msg_to_eth_mailbox(
             if (cond(mailbox_val)) {
                 break;
             }
-            tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
             std::this_thread::sleep_for(k_sleep_time);
         }
     };
@@ -360,6 +359,7 @@ void send_msg_to_eth_mailbox(
     auto write_arg = [&](int index, uint32_t val) {
         uint32_t arg_addr = hal.get_eth_fw_mailbox_arg_addr(index);
         write_hex_vec_to_core(device_id, virtual_core, std::vector<uint32_t>{val}, arg_addr);
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
     };
 
     const auto max_args = hal.get_eth_fw_mailbox_arg_count();
@@ -369,9 +369,6 @@ void send_msg_to_eth_mailbox(
     for (int i = 0; i < max_args; ++i) {
         write_arg(i, args[i]);
     }
-
-    // Barrier to ensure args are written before call
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
 
     const auto msg_val = hal.get_eth_fw_mailbox_val(msg_type);
     const uint32_t msg = call | msg_val;
@@ -383,6 +380,7 @@ void send_msg_to_eth_mailbox(
         mailbox_addr,
         msg);
     write_hex_vec_to_core(device_id, virtual_core, std::vector<uint32_t>{msg}, mailbox_addr);
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
 
     // Wait for ack
     if (wait_for_ack) {
