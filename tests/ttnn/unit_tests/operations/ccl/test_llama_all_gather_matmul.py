@@ -75,7 +75,7 @@ def num_cores_to_rectangle_grid(num_cores, device):
     return (x, y)
 
 
-def run_all_gather_replicate_impl(
+def run_llama_all_gather_matmul_impl(
     mesh_device,
     # shape params shared by AG and MM
     B_in,

@@ -22,8 +22,8 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     QKV_CRS,
     FF1_CRS,
 )
-from tests.ttnn.unit_tests.operations.ccl.test_all_gather_replicate import (
-    run_all_gather_replicate_impl,
+from tests.ttnn.unit_tests.operations.ccl.test_llama_all_gather_matmul import (
+    run_llama_all_gather_matmul_impl,
     BINARY_MULT_CRS,
 )
 from models.demos.llama3_subdevices.tt.model_config import (
@@ -613,7 +613,7 @@ def test_all_reduce_6U_llama(
         "ff2",
     ],
 )
-def test_all_gather_replicate_tg_llama(
+def test_llama_all_gather_matmul(
     mesh_device,
     cluster_axis,
     in0_dtype,
@@ -639,7 +639,7 @@ def test_all_gather_replicate_tg_llama(
     function_level_defaults,
     ensure_devices_tg,
 ):
-    run_all_gather_replicate_impl(
+    run_llama_all_gather_matmul_impl(
         mesh_device,
         # shape params shared by AG and MM
         B,
