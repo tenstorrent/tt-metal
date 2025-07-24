@@ -145,13 +145,15 @@ void kernel_main() {
     auto* fabric_direction_connection =
         direction ? &fabric_connection.get_forward_connection() : &fabric_connection.get_backward_connection();
 
+    // Due to the existing direction of fabric connections, forward writers will signal to backward writers
+    // and backward writers will signal to forward writers
     if (use_barrier_sem) {
-        uint64_t sync_sem_noc_addr_in_pkt = safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
-        auto* pkt_hdr_sem_sync = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
-        pkt_hdr_sem_sync->to_noc_unicast_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sync_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
+        uint64_t barrier_sem_noc_addr_in_pkt =
+            safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
+        pkt_hdr_seminc->to_noc_unicast_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
         fabric_direction_connection->wait_for_empty_write_slot();
-        pkt_hdr_sem_sync->to_chip_unicast(1);
+        pkt_hdr_seminc->to_chip_unicast(1);
         fabric_direction_connection->send_payload_flush_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
 

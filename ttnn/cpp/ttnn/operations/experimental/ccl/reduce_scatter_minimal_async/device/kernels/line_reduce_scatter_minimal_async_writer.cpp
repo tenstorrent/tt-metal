@@ -151,7 +151,6 @@ void kernel_main() {
             ? (is_forward ? &fabric_connection.get_forward_connection() : &fabric_connection.get_backward_connection())
             : nullptr;  // Null connection if not connected
 
-    // NOTE
     // Due to the existing direction of fabric connections, forward writers will signal to backward writers
     // and backward writers will signal to forward writers
     if (signal_on_barrier_sem) {
