@@ -503,7 +503,7 @@ TEST_F(LightMetalBasicTest, TwoProgramTraceCapture) {
 
     // Done
     Finish(command_queue);
-    ReleaseTrace(device_, tid);
+    // ReleaseTrace(device_, tid);
 }
 
 }  // namespace
