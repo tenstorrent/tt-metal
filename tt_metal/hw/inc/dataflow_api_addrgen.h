@@ -413,7 +413,7 @@ FORCE_INLINE uint64_t get_noc_addr(
     uint8_t noc = noc_index,
     decltype(addrgen.get_noc_addr())* resolver = nullptr) {
     /* Do not use "resolver" argument. It is added as SFINAE mechanism to correctly resolve calls to this API */
-    static_assert(has_get_noc_addr<AddrGen>::value, "AddrGen must have get_noc_addr() method");
+    static_assert(has_get_noc_addr_v<AddrGen>, "AddrGen must have get_noc_addr() method");
     return addrgen.get_noc_addr(id, offset, noc);
 }
 

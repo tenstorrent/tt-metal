@@ -936,11 +936,11 @@ FORCE_INLINE void noc_async_read_page(
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
     static_assert(
-        has_required_addrgen_traits<AddrGen>::value,
+        has_required_addrgen_traits_v<AddrGen>,
         "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
 
     uint32_t page_size;
-    if constexpr (has_page_size<AddrGen>::value) {
+    if constexpr (has_page_size_v<AddrGen>) {
         page_size = addrgen.page_size;
     } else {
         page_size = (1 << addrgen.log_base_2_of_page_size);
@@ -1068,11 +1068,11 @@ FORCE_INLINE void noc_async_write_page(
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
     static_assert(
-        has_required_addrgen_traits<AddrGen>::value,
+        has_required_addrgen_traits_v<AddrGen>,
         "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
 
     uint32_t page_size;
-    if constexpr (has_page_size<AddrGen>::value) {
+    if constexpr (has_page_size_v<AddrGen>) {
         page_size = addrgen.page_size;
     } else {
         page_size = (1 << addrgen.log_base_2_of_page_size);
