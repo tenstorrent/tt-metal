@@ -31,7 +31,7 @@ void py_module(pybind11::module& module) {
     ccl::py_bind_all_gather_matmul_async(module);
     ccl::py_bind_all_reduce(module);
     ccl::py_bind_all_gather_async(module);
-    ccl::py_bind_all_gather_replicate_async(module);
+    ccl::py_bind_llama_all_gather_matmul_async(module);
     ccl::py_bind_all_broadcast_async(module);
     ccl::py_bind_all_to_all_async(module);
     ccl::py_bind_all_gather_concat(module);

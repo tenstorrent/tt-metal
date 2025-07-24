@@ -12,7 +12,7 @@
 namespace ttnn {
 namespace operations::experimental::ccl {
 
-struct ExecuteAllGatherReplicateAsync {
+struct ExecuteAllGatherMatmulAsync {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& input_tensor_b,
@@ -35,9 +35,9 @@ struct ExecuteAllGatherReplicateAsync {
 
 namespace experimental {
 
-constexpr auto all_gather_replicate_async = ttnn::register_operation<
-    "ttnn::experimental::all_gather_replicate_async",
-    ttnn::operations::experimental::ccl::ExecuteAllGatherReplicateAsync>();
+constexpr auto llama_all_gather_matmul_async = ttnn::register_operation<
+    "ttnn::experimental::llama_all_gather_matmul_async",
+    ttnn::operations::experimental::ccl::ExecuteAllGatherMatmulAsync>();
 
 }  // namespace experimental
 }  // namespace ttnn

@@ -342,7 +342,7 @@ def run_all_gather_replicate_impl(
     def run_op(n_iters, store_all_results=True):
         outs = []
         for i in range(n_iters):
-            out = ttnn.experimental.all_gather_replicate_async(
+            out = ttnn.experimental.llama_all_gather_matmul_async(
                 tt_input_tensor,
                 tt_in1_tensor,
                 intermediate_tensor=tt_intermediate_tensors[i % num_buffers],

@@ -304,6 +304,14 @@ namespace experimental {
 namespace ccl {
 
 namespace {
+
+LlamaAllGatherMatmulAsync create_llama_all_gather_matmul_async_struct(
+    const ttnn::AllGatherReplicateAsync& all_gather_replicate_async_struct,
+    const operations::matmul::Matmul& matmul_struct,
+    const std::vector<IDevice*>& devices) {
+    return LlamaAllGatherMatmulAsync{all_gather_replicate_async_struct, matmul_struct, devices};
+}
+
 Tensor llama_all_gather_matmul_async_impl(
     const Tensor& input_tensor,
     const Tensor& input_tensor_b,

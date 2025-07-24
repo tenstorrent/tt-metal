@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-ttnn::Tensor ExecuteAllGatherReplicateAsync::invoke(
+ttnn::Tensor ExecuteAllGatherMatmulAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& input_tensor_b,
     const ttnn::Tensor& intermediate_tensor,

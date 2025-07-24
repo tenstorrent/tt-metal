@@ -19,7 +19,7 @@ namespace ttnn::operations::experimental::ccl {
 namespace {
 
 template <typename ccl_operation_t>
-void bind_all_gather_replicate_async(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
+void bind_llama_all_gather_matmul_async(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
     bind_registered_operation(
         module,
         operation,
@@ -79,10 +79,10 @@ void bind_all_gather_replicate_async(pybind11::module& module, const ccl_operati
 
 }  // namespace
 
-void py_bind_all_gather_replicate_async(pybind11::module& module) {
-    bind_all_gather_replicate_async(
+void py_bind_llama_all_gather_matmul_async(pybind11::module& module) {
+    bind_llama_all_gather_matmul_async(
         module,
-        ttnn::experimental::all_gather_replicate_async,
+        ttnn::experimental::llama_all_gather_matmul_async,
         R"doc(
 
         Performs an all-gather-replicate operation on multi-device :attr:`input_tensor` across all devices.

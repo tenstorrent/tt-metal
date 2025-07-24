@@ -174,6 +174,11 @@ Tensor llama_all_gather_matmul_async(
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<const DataType> dtype = std::nullopt);
 
+LlamaAllGatherMatmulAsync create_llama_all_gather_matmul_async_struct(
+    const ttnn::AllGatherReplicateAsync& all_gather_replicate_async_struct,
+    const operations::matmul::Matmul& matmul_struct,
+    const std::vector<IDevice*>& devices);
+
 }  // namespace ccl
 }  // namespace experimental
 }  // namespace operations

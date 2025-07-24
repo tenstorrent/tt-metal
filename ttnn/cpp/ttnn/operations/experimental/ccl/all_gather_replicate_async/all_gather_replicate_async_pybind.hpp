@@ -8,6 +8,6 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-void py_bind_all_gather_replicate_async(pybind11::module& module);
+void py_bind_llama_all_gather_matmul_async(pybind11::module& module);
 
 }  // namespace ttnn::operations::experimental::ccl
