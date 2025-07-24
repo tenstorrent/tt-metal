@@ -142,6 +142,7 @@ class UNetConv2D:
         reallocate_halo_output=False,
         override_core_grid=None,
         mesh_mapper=None,
+        enable_activation_reuse=False,
     ):
         assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on WH or 10x13/10x11 on BH"
 
@@ -173,15 +174,14 @@ class UNetConv2D:
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=True,
-            enable_act_double_buffer=(
-                conv.use_activation_double_buffer if "use_activation_double_buffer" in conv else False
-            ),
+            enable_act_double_buffer=False,
             enable_split_reader=(conv.use_split_reader if "use_split_reader" in conv else False),
             activation=activation,
             output_layout=output_layout,
             reshard_if_not_optimal=reshard_if_not_optimal,
             reallocate_halo_output=reallocate_halo_output,
             enable_weights_double_buffer=True,
+            enable_activation_reuse=enable_activation_reuse,
         )
 
         if override_core_grid is not None:
@@ -275,6 +275,8 @@ class UNetDownblock:
         mesh_mapper=None,
         reshard_if_not_optimal=True,
         override_core_grid=None,
+        first_conv_reuse=False,
+        second_conv_reuse=False,
     ):
         self.conv1 = UNetConv2D(
             conv1,
@@ -283,8 +285,11 @@ class UNetDownblock:
             reshard_if_not_optimal=reshard_if_not_optimal,
             mesh_mapper=mesh_mapper,
             override_core_grid=override_core_grid,
+            enable_activation_reuse=first_conv_reuse,
         )
-        self.conv2 = UNetConv2D(conv2, bn=bn2, device=device, mesh_mapper=mesh_mapper)
+        self.conv2 = UNetConv2D(
+            conv2, bn=bn2, device=device, mesh_mapper=mesh_mapper, enable_activation_reuse=second_conv_reuse
+        )
         self.pool1 = UNetMaxPool2D(pool, conv2.out_channels, device=device)
 
     def __call__(self, x):
@@ -317,6 +322,9 @@ class UNetUpblock:
         reshard_if_not_optimal=True,
         final_block=False,
         override_core_grid=None,
+        first_conv_reuse=False,
+        second_conv_reuse=False,
+        third_conv_reuse=False,
     ):
         self.final_block = final_block
         self.device = device
@@ -329,9 +337,10 @@ class UNetUpblock:
             mesh_mapper=mesh_mapper,
             reallocate_halo_output=True,
             override_core_grid=override_core_grid,
+            enable_activation_reuse=first_conv_reuse,
         )
-        self.conv2 = UNetConv2D(conv2, bn2, device, mesh_mapper=mesh_mapper)
-        self.conv3 = UNetConv2D(conv3, bn3, device, mesh_mapper=mesh_mapper)
+        self.conv2 = UNetConv2D(conv2, bn2, device, mesh_mapper=mesh_mapper, enable_activation_reuse=second_conv_reuse)
+        self.conv3 = UNetConv2D(conv3, bn3, device, mesh_mapper=mesh_mapper, enable_activation_reuse=third_conv_reuse)
 
         self.batch_size = conv1.batch_size
         self.input_height = conv1.input_height
@@ -413,6 +422,7 @@ class UNet:
             override_core_grid=63 if is_wormhole_b0(self.device) else None,
             reshard_if_not_optimal=not is_wormhole_b0(self.device),
             mesh_mapper=mesh_mapper,
+            first_conv_reuse=True,
         )
         self.downblock2 = UNetDownblock(
             parameters.c2,
@@ -423,6 +433,8 @@ class UNet:
             device,
             reshard_if_not_optimal=False,
             mesh_mapper=mesh_mapper,
+            first_conv_reuse=True,
+            second_conv_reuse=True,
         )
         self.downblock3 = UNetDownblock(
             parameters.c3,
@@ -432,6 +444,7 @@ class UNet:
             parameters.p3,
             device,
             mesh_mapper=mesh_mapper,
+            first_conv_reuse=True,
         )
         self.downblock4 = UNetDownblock(
             parameters.c4,
@@ -441,6 +454,8 @@ class UNet:
             parameters.p4,
             device,
             mesh_mapper=mesh_mapper,
+            first_conv_reuse=True,
+            second_conv_reuse=True,
         )
 
         self.bnc = UNetConv2D(
@@ -491,6 +506,8 @@ class UNet:
             reshard_if_not_optimal=not is_wormhole_b0(self.device),
             final_block=False,
             mesh_mapper=mesh_mapper,
+            second_conv_reuse=True,
+            third_conv_reuse=True,
         )
         self.upblock4 = UNetUpblock(
             parameters.c8,

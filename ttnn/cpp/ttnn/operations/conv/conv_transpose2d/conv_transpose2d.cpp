@@ -211,6 +211,7 @@ Result conv_transpose2d(
         conv_config.act_block_w_div,
         kernel_size[0],
         kernel_size[1],
+        output_width,
         get_fp32_dest_acc_en(compute_config),
         conv_config.full_inner_dim);
 

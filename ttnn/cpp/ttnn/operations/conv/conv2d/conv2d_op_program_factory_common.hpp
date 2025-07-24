@@ -70,6 +70,7 @@ std::vector<CBInfo> get_cb_info(
     DataType input_datatype,
     DataType output_datatype,
     std::array<uint32_t, 2> conv_input_shard_shape,
+    uint32_t output_image_width,
     bool enable_bias,
     bool is_1d_depthwise_conv,
     bool skip_act_cb_create);
