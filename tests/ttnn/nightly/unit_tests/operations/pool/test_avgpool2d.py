@@ -78,6 +78,14 @@ def run_avg_pool2d(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         applied_shard_scheme=shard_scheme,
     )
+
+    # for n in range(ttnn_output.shape[0]):
+    #     for c in range(ttnn_output.shape[1]):
+    #         for h in range(ttnn_output.shape[2]):
+    #             for w in range(ttnn_output.shape[3]):
+    #                 value = ttnn_output[n, c, h, w]
+    #                 print(f"ttnn_output[{n}, {c}, {h}, {w}] = {value}")
+
     if run_twice:
         ttnn_output = ttnn.avg_pool2d(
             input_tensor=ttnn_input,
