@@ -304,7 +304,7 @@ namespace experimental {
 namespace ccl {
 
 namespace {
-Tensor all_gather_replicate_async_impl(
+Tensor llama_all_gather_matmul_async_impl(
     const Tensor& input_tensor,
     const Tensor& input_tensor_b,
     const Tensor& intermediate_tensor,
@@ -353,7 +353,7 @@ Tensor all_gather_replicate_async_impl(
 }
 }  // namespace
 
-Tensor all_gather_replicate_async(
+Tensor llama_all_gather_matmul_async(
     const Tensor& input_tensor,
     const Tensor& input_tensor_b,
     const Tensor& intermediate_tensor,
@@ -369,7 +369,7 @@ Tensor all_gather_replicate_async(
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const DataType> dtype) {
-    return all_gather_replicate_async_impl(
+    return llama_all_gather_matmul_async_impl(
         input_tensor,
         input_tensor_b,
         intermediate_tensor,

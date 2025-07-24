@@ -26,7 +26,7 @@ ttnn::Tensor ExecuteAllGatherReplicateAsync::invoke(
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const DataType> dtype) {
-    return ttnn::operations::experimental::ccl::all_gather_replicate_async(
+    return ttnn::operations::experimental::ccl::llama_all_gather_matmul_async(
         input_tensor,
         input_tensor_b,
         intermediate_tensor,

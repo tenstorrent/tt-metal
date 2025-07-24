@@ -97,6 +97,45 @@ struct AllGatherReplicateAsync {
     AllGatherReplicateAsyncVersion select_version(const Tensor& input_tensor) const;
 };
 
+struct LlamaAllGatherMatmulAsync {
+    /* All Gather Replicate Params */
+    const ttnn::AllGatherReplicateAsync all_gather_replicate_async_struct;
+
+    /* Matmul Params */
+    const operations::matmul::Matmul matmul_struct;
+
+    /* Physical Devices this op runs on*/
+    std::vector<IDevice*> devices;
+
+    /* General */
+    void validate_with_output_tensors(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        const std::vector<std::optional<Tensor>>& output_tensors) const;
+    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
+    std::vector<Tensor> create_output_tensors(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<Tensor>>& optional_output_tensors) const;
+    tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload(
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        std::vector<Tensor>& output_tensors) const;
+    tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
+        const ttnn::MeshCoordinate& mesh_coordinate,
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        std::vector<Tensor>& output_tensors) const;
+    tt::tt_metal::operation::Hash compute_program_hash(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+
+    static constexpr auto attribute_names = std::forward_as_tuple("all_gather_replicate_async_struct", "matmul_struct");
+    auto attribute_values() const {
+        return std::forward_as_tuple(this->all_gather_replicate_async_struct, this->matmul_struct);
+    }
+};
+
 // All Gather Replicate Variants
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded(
     const Tensor& input_tensor,
@@ -118,7 +157,7 @@ namespace operations {
 namespace experimental {
 namespace ccl {
 
-Tensor all_gather_replicate_async(
+Tensor llama_all_gather_matmul_async(
     const Tensor& input_tensor,
     const Tensor& input_tensor_b,
     const Tensor& intermediate_tensor,
