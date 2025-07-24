@@ -459,13 +459,6 @@ def run_llama3_demo(
             current_iteration = iteration
             all_outputs.append(encoded_prompts[0][iteration])  # Update list of TT outputs
 
-            # tt_out_toks_cpu += [tt_out_tok.cpu(blocking=block_host, cq_id=0)]
-            # read_events += [ttnn.record_event(mesh_device, 0)]
-            # if prefill_iteration >= trace_exec_offset:
-            #     current_prefill_iteration = prefill_iteration - trace_exec_offset
-            #     ttnn.event_synchronize(read_events[current_prefill_iteration])
-            # prefill_iteration += 1
-
             tt_out_tok_reset = ttnn.from_torch(
                 encoded_prompts_tensor_whole_sequence[:, iteration].reshape(1, 1, 1, batch_size),
                 dtype=ttnn.uint32,
@@ -473,20 +466,20 @@ def run_llama3_demo(
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
             )
             ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
-            profiler.start(f"log_printing_iter_{iteration}", iteration=iteration)
-            if not is_ci_env:
-                # Print out generated outputs for each user at the end of every iteration
-                logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
+            # profiler.start(f"log_printing_iter_{iteration}", iteration=iteration)
+            # if not is_ci_env:
+            #     # Print out generated outputs for each user at the end of every iteration
+            #     logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
 
             iteration_time_ends = time()
             iteration_time = iteration_time_ends - iteration_time_start
             tokens_per_second_per_user = 1 / iteration_time
 
-            if not is_ci_env or iteration < 200 or iteration % 1000 == 0:
-                logger.info(
-                    f"Iteration : {iteration}, Prefill Iteration : {iteration}, tok/s/user : {tokens_per_second_per_user:.2f}, Throughput : {batch_size/iteration_time:.2f} tok/s, Iteration Time : {1000*iteration_time:.2f} ms"
-                )
-            profiler.end(f"log_printing_iter_{iteration}", iteration=iteration)
+            # if not is_ci_env or iteration < 200 or iteration % 1000 == 0:
+            #     logger.info(
+            #         f"Iteration : {iteration}, Prefill Iteration : {iteration}, tok/s/user : {tokens_per_second_per_user:.2f}, Throughput : {batch_size/iteration_time:.2f} tok/s, Iteration Time : {1000*iteration_time:.2f} ms"
+            #     )
+            # profiler.end(f"log_printing_iter_{iteration}", iteration=iteration)
             iteration_time_start = time()
         else:
             tt_out_toks_cpu += [tt_out_tok.cpu(blocking=block_host, cq_id=0)]
@@ -500,6 +493,8 @@ def run_llama3_demo(
                 tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out_toks_cpu[current_decode_iteration])[0])[
                     0, 0, 0, :batch_size
                 ]
+                iteration_time_ends = time()
+                iteration_time = iteration_time_ends - iteration_time_start
                 all_outputs.append(tt_output_torch.tolist()[0])  # Update generated token to list of TT outputs
 
                 # profiler.start(f"log_printing_iter_{current_iteration}", iteration=current_iteration)
@@ -507,10 +502,7 @@ def run_llama3_demo(
                 #     # Print out generated outputs for each user at the end of every iteration
                 #     logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
 
-                iteration_time_ends = time()
-                iteration_time = iteration_time_ends - iteration_time_start
-
-                tokens_per_second_per_user = 1 / iteration_time
+                # tokens_per_second_per_user = 1 / iteration_time
 
                 # all_tokens_per_second_per_user.append(tokens_per_second_per_user)
                 all_iteration_time.append(iteration_time)
@@ -521,8 +513,8 @@ def run_llama3_demo(
                 #     )
                 # profiler.end(f"log_printing_iter_{current_iteration}", iteration=current_iteration)
 
-                if current_iteration == 127:
-                    tokens_per_second_per_user_token127 = tokens_per_second_per_user
+                # if current_iteration == 127:
+                #     tokens_per_second_per_user_token127 = tokens_per_second_per_user
 
                 # if not stress_test:
                 #     # Increment failure count if throughput is too low
@@ -569,8 +561,9 @@ def run_llama3_demo(
 
         for i in range(len(all_iteration_time)):
             if not is_ci_env or i < 200 or i % 1000 == 0:
+                decode_iteration = i + len(encoded_prompts[0])
                 logger.info(
-                    f"Iteration : {i}, tok/s/user : {1 / all_iteration_time[i]:.2f}, Throughput : {batch_size/all_iteration_time[i]:.2f} tok/s, Iteration Time : {1000*all_iteration_time[i]:.2f} ms"
+                    f"Iteration : {decode_iteration}, tok/s/user : {1 / all_iteration_time[i]:.2f}, Throughput : {batch_size/all_iteration_time[i]:.2f} tok/s, Iteration Time : {1000*all_iteration_time[i]:.2f} ms"
                 )
 
         # logger.info(f"Min tsu throughput: {min(all_tokens_per_second_per_user)}")
