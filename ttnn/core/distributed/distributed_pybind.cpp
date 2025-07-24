@@ -98,14 +98,7 @@ void py_module(py::module& module) {
             [](const MeshShape& ms) { return py::make_iterator(ms.view().begin(), ms.view().end()); },
             py::keep_alive<0, 1>())
         .def(
-            "__getitem__",
-            [](const MeshShape& ms, size_t index) {
-                if (index >= ms.mesh_size()) {
-                    throw py::index_error("Index out of bounds");
-                }
-                return ms.view()[index];
-            },
-            py::arg("index"))
+            "__getitem__", [](const MeshShape& ms, int index) { return ms[index]; }, py::arg("index"))
         .def("dims", &MeshShape::dims)
         .def("mesh_size", &MeshShape::mesh_size);
 
@@ -139,14 +132,7 @@ void py_module(py::module& module) {
             [](const MeshCoordinate& mc) { return py::make_iterator(mc.coords().begin(), mc.coords().end()); },
             py::keep_alive<0, 1>())
         .def(
-            "__getitem__",
-            [](const MeshCoordinate& mc, size_t index) {
-                if (index >= mc.dims()) {
-                    throw py::index_error("Index out of bounds");
-                }
-                return mc.coords()[index];
-            },
-            py::arg("index"))
+            "__getitem__", [](const MeshCoordinate& mc, int index) { return mc[index]; }, py::arg("index"))
         .def("dims", &MeshCoordinate::dims);
 
     static_cast<py::class_<MeshCoordinateRange>>(module.attr("MeshCoordinateRange"))
