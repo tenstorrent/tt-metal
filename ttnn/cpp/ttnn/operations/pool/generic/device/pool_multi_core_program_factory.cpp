@@ -278,8 +278,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     // Hardware can do reduction of 8 tiles at a time.
     // CB sizes can be restricted to this in case input channels are more than 256 to perform reduction iteratively.
-    const bool is_large_kernel = last_tile_is_partial ? kernel_size_hw > tt::constants::TILE_HEIGHT / 2
-                                                      : kernel_size_hw > tt::constants::TILE_HEIGHT;
+    const bool is_large_kernel = kernel_size_hw > tt::constants::TILE_HEIGHT;
 
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
     // For large kernel avg pool, we need to use fp32 accumulation to avoid precision error buildup over multiple
@@ -298,8 +297,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // TODO: enable 32 sticks per tile for reduction for all cases, we can only support 16 row reductions for
     // partial tiles, and there is currently a bug forcing us to use 16 row reductions for avg pool when there
     // is 1 remainder C tile
-    const uint32_t max_rows_for_reduction =
-        !last_tile_is_partial ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
+    const uint32_t max_rows_for_reduction = tt::constants::TILE_HEIGHT;
 
     // distributing out_hw across the grid
     auto grid_size = device->compute_with_storage_grid_size();
@@ -530,19 +528,19 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
      * output cb
      */
     std::vector<uint32_t> compute_ct_args = {
-        in_ntiles_c,
-        kernel_size_hw,
-        split_reader,
-        out_nhw_per_core,
-        input_shape[3] / num_shards_c,
-        in_nblocks_c,
-        max_rows_for_reduction,
-        in_cb_id_0,
-        in_cb_id_1,
-        in_scalar_cb_id_0,
-        in_scalar_cb_id_1,
-        out_cb_id,
-        one_scalar_per_core};
+        in_ntiles_c,                    // 0
+        kernel_size_hw,                 // 1
+        split_reader,                   // 2
+        out_nhw_per_core,               // 3
+        input_shape[3] / num_shards_c,  // 4
+        in_nblocks_c,                   // 5
+        max_rows_for_reduction,         // 6
+        in_cb_id_0,                     // 7
+        in_cb_id_1,                     // 8
+        in_scalar_cb_id_0,              // 9
+        in_scalar_cb_id_1,              // 10
+        out_cb_id,                      // 11
+        one_scalar_per_core};           // 12
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,

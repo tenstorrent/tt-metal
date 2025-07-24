@@ -19,13 +19,13 @@ template <
     uint32_t in_cb_id,
     uint32_t MAX_BYTES_PER_REDUCTION,
     bool full_dest_width,
-    uint32_t in_nbytes_leftover,
+    uint32_t in_nbytes_leftover,  // in_aligned_nbytes_c
     uint32_t clear_value_cb_id,
     uint32_t leftover_num_tiles,
     uint32_t window_h,
     uint32_t window_w,
     uint32_t in_w_padded,
-    uint32_t in_nbytes_c>
+    uint32_t in_nbytes_c>  // in_nbytes_padded_c
 FORCE_INLINE void read_window_with_top_left_index(
     uint64_t clear_value_addr, uint64_t in_l1_read_base_addr, uint64_t ind) {
     if constexpr (is_wide_reduction) {
@@ -161,6 +161,9 @@ void kernel_main() {
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
 
     constexpr uint32_t in_nbytes_leftover = (in_c % (TILE_WIDTH * MAX_TILES_PER_REDUCTION)) * BYTES_PER_DATUM;
+    DPRINT << "in_aligned_nbytes_c" << in_aligned_nbytes_c << ENDL();
+    DPRINT << "in_nbytes_padded_c" << in_nbytes_padded_c << ENDL();
+    DPRINT << "in_nbytes_c" << in_nbytes_c << ENDL();
     uint32_t scalar_index = 0;
     uint32_t scalar_start = 0;
     uint32_t scalar_end = 1;

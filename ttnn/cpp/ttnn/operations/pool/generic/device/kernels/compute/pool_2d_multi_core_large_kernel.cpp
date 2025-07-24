@@ -47,15 +47,15 @@ void MAIN {
     constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(10);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
-
+    DPRINT << "in_c " << in_c << ENDL();
+    DPRINT << "in_ntiles_c " << in_ntiles_c << ENDL();
     constexpr bool last_tile_is_partial = in_c % 32 != 0 && in_c % 32 < 17;
     constexpr uint32_t num_faces_in_input_tile = max_rows_for_reduction < 32 ? 2 : 4;
-    constexpr uint32_t num_faces_in_output_tile = 2;
+    constexpr uint32_t num_faces_in_output_tile = last_tile_is_partial ? 1 : 2;
     constexpr uint32_t num_faces_in_last_output_tile = last_tile_is_partial ? 1 : 2;
-    constexpr uint32_t num_faces_in_last_input_tile = last_tile_is_partial ? 1 : num_faces_in_input_tile;
     constexpr uint32_t num_out_rows = 1;
-    constexpr uint32_t num_tiles_c = last_tile_is_partial ? in_ntiles_c - 1 : in_ntiles_c;
-
+    constexpr uint32_t num_tiles_c = last_tile_is_partial ? in_ntiles_c : in_ntiles_c;
+    DPRINT << "max_rows_for_reduction" << max_rows_for_reduction << ENDL();
     constexpr bool is_avg_pool = REDUCE_OP == PoolType::SUM;
     // average pool requires fp32 accumulation so we can only reduce 4 tiles at a time, otherwise we can reduce 8 tiles
     // at a time.
@@ -71,7 +71,7 @@ void MAIN {
 
     constexpr uint32_t face_r_dim = 16;
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
-        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_last_input_tile, face_r_dim);
+        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_input_tile, face_r_dim);
     pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_output_tile);
 
     constexpr uint32_t remaining_elems = window_size_hw % max_rows_for_reduction;
@@ -101,7 +101,9 @@ void MAIN {
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 cb_wait_front(curr_in_cb_id, 1);
-                print_full_tile(curr_in_cb_id, 0);
+                if (chunk == 0) {
+                    print_full_tile(curr_in_cb_id, 0);
+                }
                 unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                     curr_in_cb_id,
                     curr_scalar_cb_id,
@@ -110,47 +112,47 @@ void MAIN {
                     0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
                     num_faces_in_input_tile,
                     face_r_dim);
+                DPRINT << "tiles_to_reduce " << tiles_to_reduce << ENDL();
                 for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                     reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
                 }
-                if constexpr (last_tile_is_partial) {
-                    if (last_c_block) {
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        DPRINT << "partial_iter_output_tiles" << partial_iter_output_tiles << ENDL();
-                        pack_untilize_dest<partial_iter_output_tiles>(
-                            out_cb_id, 1, 0, num_out_rows, num_faces_in_output_tile);
-                        cb_push_back(out_cb_id, tiles_to_reduce * num_faces_in_output_tile);
-                        tile_regs_release();
-                        cb_reserve_back(out_cb_id, 1 * num_faces_in_last_output_tile);
-                        tile_regs_acquire();
-                        unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                            curr_in_cb_id,
-                            curr_scalar_cb_id,
-                            1,
-                            partial_iter_output_tiles,
-                            0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
-                            num_faces_in_last_input_tile,
-                            face_r_dim);
-                        reduce_tile_math(0, num_faces_in_last_input_tile);
-                    }
-                }
+                // if constexpr (last_tile_is_partial) {
+                //     if (last_c_block) {
+                //         tile_regs_commit();
+                //         tile_regs_wait();
+                //         DPRINT << "partial_iter_output_tiles" << partial_iter_output_tiles << ENDL();
+                //         pack_untilize_dest<partial_iter_output_tiles>(
+                //             out_cb_id, 1, 0, num_out_rows, num_faces_in_output_tile);
+                //         cb_push_back(out_cb_id, tiles_to_reduce * num_faces_in_output_tile);
+                //         tile_regs_release();
+                //         cb_reserve_back(out_cb_id, 1 * num_faces_in_last_output_tile);
+                //         tile_regs_acquire();
+                //         unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                //             curr_in_cb_id,
+                //             curr_scalar_cb_id,
+                //             1,
+                //             partial_iter_output_tiles,
+                //             0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
+                //             num_faces_in_last_input_tile,
+                //             face_r_dim);
+                //         reduce_tile_math(0, num_faces_in_last_input_tile);
+                //     }
+                // }
                 cb_pop_front(curr_in_cb_id, 1);
             }
             tile_regs_commit();
             tile_regs_wait();
             if (last_c_block) {
-                if constexpr (!last_tile_is_partial) {
-                    DPRINT << "last block" << ENDL();
-                    pack_untilize_dest<partial_iter_output_tiles>(
-                        out_cb_id, 1, 0, num_out_rows, num_faces_in_output_tile);
-                    cb_push_back(out_cb_id, tiles_to_reduce * num_faces_in_output_tile);
-                } else {
-                    DPRINT << "partial pack" << ENDL();
-                    DPRINT << "num_faces_in_last_output_tile " << num_faces_in_last_output_tile << ENDL();
-                    pack_untilize_dest<1>(out_cb_id, 1, 0, num_out_rows, num_faces_in_last_output_tile);
-                    cb_push_back(out_cb_id, 1 * num_faces_in_last_output_tile);
-                }
+                // if constexpr (!last_tile_is_partial) {
+                DPRINT << "last block" << ENDL();
+                pack_untilize_dest<partial_iter_output_tiles>(out_cb_id, 1, 0, num_out_rows, num_faces_in_output_tile);
+                cb_push_back(out_cb_id, tiles_to_reduce * num_faces_in_output_tile);
+                // } else {
+                //     DPRINT << "partial pack" << ENDL();
+                //     DPRINT << "num_faces_in_last_output_tile " << num_faces_in_last_output_tile << ENDL();
+                //     pack_untilize_dest<1>(out_cb_id, 1, 0, num_out_rows, num_faces_in_last_output_tile);
+                //     cb_push_back(out_cb_id, 1 * num_faces_in_last_output_tile);
+                // }
             } else {
                 DPRINT << "rest of the cases" << ENDL();
                 pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_rows, num_faces_in_output_tile);

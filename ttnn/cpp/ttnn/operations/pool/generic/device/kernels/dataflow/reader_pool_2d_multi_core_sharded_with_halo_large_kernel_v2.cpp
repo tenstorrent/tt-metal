@@ -27,7 +27,7 @@ template <
     uint32_t window_h,
     uint32_t window_w,
     uint32_t in_w_padded,
-    uint32_t in_nbytes_leftover,
+    uint32_t in_nbytes_leftover,  // in_aligned_nbytes_c
     uint32_t in_c,
     uint32_t max_rows_for_reduction,
     uint32_t total_elems_to_reduce,
@@ -35,7 +35,7 @@ template <
     bool wide_reduction,
     uint32_t clear_value_cb_id,
     uint32_t in_cb_ntiles,
-    uint32_t in_nbytes_c>
+    uint32_t in_nbytes_c>  // in_nbytes_padded_c
 FORCE_INLINE void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
     // average pool requires fp32 accumulation so we can only reduce 4 tiles at a time, otherwise we can reduce 8 tiles
@@ -45,13 +45,18 @@ FORCE_INLINE void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_r
     constexpr uint32_t in_write_inc = wide_reduction
                                           ? MAX_ELE_PER_REDUCTION
                                           : in_nbytes_leftover;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
-
+    DPRINT << "in_write_inc" << in_write_inc << ENDL();
+    DPRINT << "ind" << ind << ENDL();
     uint32_t in_l1_write_addr_base = get_write_ptr(in_cb_id);
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
-        const uint32_t read_bytes = !wide_reduction ? in_nbytes_leftover
+        if (wide_reduction) {
+            DPRINT << "It is a wide reduction case" << ENDL();
+        }
+        const uint32_t read_bytes = !wide_reduction ? in_nbytes_c
                                     : c_i != in_nblocks_c - 1
                                         ? MAX_ELE_PER_REDUCTION
                                         : (in_c - c_i * MAX_ELE_PER_REDUCTION / BYTES_PER_ELEM) * BYTES_PER_ELEM;
+        DPRINT << "read_bytes" << read_bytes << ENDL();
         uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
         uint32_t processed_rows = 0;
         uint32_t chunk = 0;
@@ -60,7 +65,7 @@ FORCE_INLINE void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_r
             for (uint32_t w = 0; w < window_w; w++) {
                 const uint32_t stick_offset = ind + w + h * in_w_padded;
                 const uint32_t read_offset =
-                    in_l1_read_base_addr + (stick_offset * in_nbytes_leftover + c_i * MAX_ELE_PER_REDUCTION);
+                    in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_ELE_PER_REDUCTION);
                 noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes);
                 in_l1_write_addr += in_write_inc;
                 processed_rows++;
@@ -164,6 +169,9 @@ void kernel_main() {
     constexpr uint32_t in_nbytes_padded_c = get_compile_time_arg_val(26);
     constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(27);
     constexpr uint32_t stride_w = get_compile_time_arg_val(28);
+    DPRINT << "in_aligned_nbytes_c" << in_aligned_nbytes_c << ENDL();
+    DPRINT << "in_nbytes_padded_c" << in_nbytes_padded_c << ENDL();
+    DPRINT << "in_nbytes_c" << in_nbytes_c << ENDL();
 
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
@@ -296,6 +304,6 @@ void kernel_main() {
             wide_reduction,
             clear_value_cb_id,
             in_cb_ntiles,
-            in_nbytes_c>(0, in_l1_read_base_addr);
+            in_nbytes_padded_c>(0, in_l1_read_base_addr);
     }
 }  // kernel_main()
