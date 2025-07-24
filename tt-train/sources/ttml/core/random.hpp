@@ -14,9 +14,9 @@ namespace ttml::core::random {
 
 template <typename T, typename DistGenFunc>
 void sequential_generate(std::span<T> seq, const DistGenFunc& dist_factory, uint32_t seed) {
-    auto rng = std::mt19937{seed};
     auto dist = dist_factory();
-    std::generate(seq.begin(), seq.end(), [&]() { return dist(rng); });
+    auto rng = std::mt19937{seed};
+    std::generate(seq.begin(), seq.end(), [&dist, &rng]() { return dist(rng); });
 }
 
 template <typename T, typename DistGenFunc>
@@ -25,7 +25,6 @@ void parallel_generate(
     DistGenFunc dist_factory,
     uint32_t seed,
     uint32_t max_threads = std::thread::hardware_concurrency()) {
-    auto rng = std::mt19937{seed};
     constexpr size_t min_size = 1 << 12;  // determined empirically that this is where we see an advantage over
                                           // sequential generation even with 2 threads.
     if (seq.size() < min_size) {
@@ -37,19 +36,15 @@ void parallel_generate(
     std::vector<std::thread> threads;
     threads.reserve(num_threads);
 
-    std::vector<uint32_t> thread_seeds;  // NOTE: can move these out to autocontext to avoid re-seeding each time
-    thread_seeds.reserve(num_threads);
-
-    uint32_t seed_base = rng();
     size_t chunk_size = seq.size() / num_threads;
     size_t remainder = seq.size() % num_threads;
 
     size_t offset = 0;
     for (size_t i = 0; i < num_threads; ++i) {
         auto adjusted_chunk_size = chunk_size + (i == num_threads - 1 ? remainder : 0);
-        threads.emplace_back([&dist_factory, &seq, offset, adjusted_chunk_size, seed_base, i]() {
+        threads.emplace_back([&dist_factory, &seq, offset, adjusted_chunk_size, seed, i]() {
             std::span<T> chunk{seq.data() + offset, adjusted_chunk_size};
-            sequential_generate(chunk, dist_factory, seed_base + i);
+            sequential_generate(chunk, dist_factory, seed + i);
         });
         offset += adjusted_chunk_size;
     }

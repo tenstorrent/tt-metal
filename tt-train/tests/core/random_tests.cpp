@@ -35,11 +35,10 @@ TEST_F(RandomGenerationTests, ParallelUniformInitDeterminism) {
     std::vector<float> vec1(size);
     std::vector<float> vec2(size);
 
-    ttml::init::UniformRange range{-1.0f, 1.0f};
-
-    auto uniform_factory = [&]() { return std::uniform_real_distribution<float>(range.a, range.b); };
-    ttml::core::random::parallel_generate(std::span{vec1.data(), vec1.size()}, uniform_factory, 42);
-    ttml::core::random::parallel_generate(std::span{vec2.data(), vec2.size()}, uniform_factory, 42);
+    ttml::core::random::parallel_generate(
+        std::span{vec1.data(), vec1.size()}, []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); }, 42);
+    ttml::core::random::parallel_generate(
+        std::span{vec2.data(), vec2.size()}, []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); }, 42);
 
     // Results should be identical
     EXPECT_EQ(vec1, vec2);
@@ -52,21 +51,23 @@ TEST_F(RandomGenerationTests, UniformInitsGoodMeanAndRange) {
     std::vector<float> parallel_vec(size);
     std::vector<float> sequential_vec(size);
 
-    ttml::init::UniformRange range{-1.0f, 1.0f};
-
-    auto uniform_factory = [&]() { return std::uniform_real_distribution<float>(range.a, range.b); };
-    ttml::core::random::parallel_generate(std::span{parallel_vec.data(), parallel_vec.size()}, uniform_factory, 42);
+    ttml::core::random::parallel_generate(
+        std::span{parallel_vec.data(), parallel_vec.size()},
+        []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
+        42);
 
     // Initialize with sequential method
     ttml::core::random::sequential_generate(
-        std::span{sequential_vec.data(), sequential_vec.size()}, uniform_factory, 42);
+        std::span{sequential_vec.data(), sequential_vec.size()},
+        []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
+        42);
 
     // Results will be different due to different generation patterns
     // But both should be valid uniform distributions
 
     // Check that both vectors contain values in the expected range
-    auto check_range = [&](const std::vector<float>& vec) {
-        return std::all_of(vec.begin(), vec.end(), [&](float val) { return val >= range.a && val <= range.b; });
+    auto check_range = [](const std::vector<float>& vec) {
+        return std::all_of(vec.begin(), vec.end(), [](float val) { return val >= -1.0f && val <= 1.0f; });
     };
 
     EXPECT_TRUE(check_range(parallel_vec));
