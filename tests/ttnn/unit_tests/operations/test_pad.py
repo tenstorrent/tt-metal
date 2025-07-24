@@ -14,6 +14,18 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
+from loguru import logger
+
+
+def random_torch_tensor(dtype, shape):
+    if dtype == ttnn.uint16:
+        return torch.randint(0, 100, shape).to(torch.int16)
+    if dtype == ttnn.int32:
+        return torch.randint(-(5), 5, shape, dtype=torch.int32)
+    if dtype == ttnn.uint32:
+        return torch.randint(0, 5, shape, dtype=torch.int32)
+    return torch.rand(shape).bfloat16().float()
 
 
 @pytest.mark.parametrize("n", [16])
@@ -52,6 +64,8 @@ def run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, va
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
     output_tensor = ttnn.to_torch(output_tensor)
+    print("output_tensor shape:", output_tensor.shape)
+    print("torch_output_tensor shape:", torch_output_tensor.shape)
 
     assert output_tensor.shape == torch_output_tensor.shape
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
@@ -82,12 +96,12 @@ def test_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, v
 def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.int32)
     torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
 
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor,
-        dtype=ttnn.DataType.BFLOAT16,
+        dtype=ttnn.DataType.int32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -226,9 +240,9 @@ def test_pad_rm_sharded_stickwise(
 
     input_shard_memory_config = ttnn.create_sharded_memory_config(input_shape, **input_sharded_memory_config_args)
 
-    torch_input_tensor = torch.ones(input_shape, dtype=torch.float32)
+    torch_input_tensor = torch.ones(input_shape, dtype=torch.int32)
     ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        torch_input_tensor, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
     )
     # Still relay on keep_l1_aligned = True to make it work with the current implementation
     ttnn_sharded_input_tensor = ttnn.interleaved_to_sharded(
@@ -270,7 +284,7 @@ def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttnn.from_torch(
             py_dummy_tensor,
-            dtype=ttnn.DataType.BFLOAT16,
+            dtype=ttnn.DataType.int32,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -329,7 +343,7 @@ def test_pad_padding_validation_length(device, h, w, padding, torch_padding, val
     return
 
 
-@pytest.mark.skip(reason="ttnn.pad does not support row_major tensors because the kernel currently causes a PCC error")
+# @pytest.mark.skip(reason="ttnn.pad does not support row_major tensors because the kernel currently causes a PCC error")
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (0, 2)), (0, 2, 0, 1)), (((1, 1), (4, 2)), (4, 2, 1, 1))])
@@ -489,3 +503,44 @@ def test_pad_tile(shape, padding, device):
     out_tt = ttnn.to_torch(output)
 
     assert_with_pcc(out_tt, torch_output, 0.9999)
+
+
+@pytest.mark.parametrize("h", [4])
+@pytest.mark.parametrize("w", [4])
+@pytest.mark.parametrize("padding", [((0, 0), (0, 2), (0, 2))])
+@pytest.mark.parametrize("value", [3])
+# @pytest.mark.parametrize("value", [0])
+# @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.uint32])
+def test_pad_pcc(device, h, w, padding, value, layout, dtype):
+    shape = [1, 1, h, w]
+    torch_input = random_torch_tensor(dtype, shape)
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=dtype)
+
+    # print(padding)
+    torch_padding = []
+    for i in range(len(padding) - 1, -1, -1):  # go through each dim of padding
+        for p in padding[i]:
+            torch_padding.append(p)  # each dim has 2 padding values
+    # print(torch_padding)
+    padding = tuple(padding)
+
+    # Measure performance of the embedding operation in ttnn
+    # start_time = start_measuring_time()
+
+    ttnn_output_tensor = ttnn.pad(ttnn_input, padding=padding, value=value)
+
+    # e2e_perf = stop_measuring_time(start_time)
+
+    torch_output_tensor = torch.nn.functional.pad(torch_input, torch_padding, mode="constant", value=value)
+
+    # Convert the ttnn tensor back to PyTorch for comparison
+    ttnn_output_tensor = ttnn.to_torch(ttnn_output_tensor)
+
+    # Compare the results and return performance and accuracy check
+    result = check_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
+    print(torch_output_tensor)
+    print(ttnn_output_tensor)
+    logger.info(f"Pad PCC check result: {result[0]}, {result[1]}")
+    assert result[0], f"PCC check failed: {result[1]}"

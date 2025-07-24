@@ -1426,7 +1426,10 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     if (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16) {
         uint16_t bfloat_pad_value_bits = bfloat16(pad_value).to_uint16();
         padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&bfloat_pad_value_bits);
-    } else if (input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) {
+    } else if (
+        input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32 or
+        input_tensor.dtype() == tt::tt_metal::DataType::INT32 or
+        input_tensor.dtype() == tt::tt_metal::DataType::UINT32) {
         padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&pad_value);
     } else {
         TT_THROW("ttnn.pad: unsupported data type for pad_rm_sharded_stickwise");

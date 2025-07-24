@@ -17,14 +17,24 @@ random.seed(0)
 
 parameters = {
     "nightly": {
-        "shape": [
-            [16, 3, 224, 224],
-            [1, 1, 31, 31],
+        "shape": [[16, 3, 224, 224], [1, 1, 31, 31], [16, 3, 230, 224], [20, 3, 224, 256], [32, 64]],
+        "padding": [
+            ((0, 0), (0, 32), (0, 32)),  # +[0, 0, 32, 32]
+            ((0, 0), (0, 15), (0, 31)),  # +[0, 0, 15, 31]
+            ((0, 1), (3, 25), (32, 32)),
+            ((0, 1), (3, 25), (4, 6)),
+            ((0, 1), (3, 25), (4, 7)),
+            ((0, 1), (0, 32), (0, 32)),
+            ((1, 1), (2, 32), (0, 0)),
+            [(32, 32)],
+            ((0, 1), (0, 2)),
+            ((1, 1), (4, 2)),
+            ((0, 1), (0, 2)),
+            ((1, 1), (4, 2)),
         ],
-        "padding": [((0, 0), (0, 32), (0, 32)), ((0, 0), (0, 15), (0, 31))],  # +[0, 0, 32, 32]  # +[0, 0, 15, 31]
-        "value": [0],
+        "value": [0, 3],
         # "dtype": [ttnn.bfloat16],
-        "dtype": [ttnn.uint32, ttnn.int32],
+        "dtype": [ttnn.int32],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     }
 }
@@ -38,6 +48,23 @@ def random_torch_tensor(dtype, shape):
     if dtype == ttnn.uint32:
         return torch.randint(0, 2**31, shape, dtype=torch.int32)
     return torch.rand(shape).bfloat16().float()
+
+
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT:
+        if test_vector["dtype"] == ttnn.bfloat8_b:
+            return True, "bfloat8_b not supported with ROW_MAJOR_LAYOUT"
+    if len(test_vector["shape"]) < len(test_vector["padding"]):
+        return True, "Padding must be less than or equal to length of shape"
+    front_padding = False
+    for pad in test_vector["padding"]:
+        if pad[0] > 0:
+            front_padding = True
+            break
+    if front_padding and test_vector["layout"] == ttnn.TILE_LAYOUT:
+        return True, "Front padding not supported with TILE_LAYOUT"
+
+    return False, None
 
 
 def run(
@@ -58,6 +85,7 @@ def run(
         for p in padding[i]:
             torch_padding.append(p)  # each dim has 2 padding values
     # print(torch_padding)
+    padding = tuple(padding)
 
     # Measure performance of the embedding operation in ttnn
     start_time = start_measuring_time()
