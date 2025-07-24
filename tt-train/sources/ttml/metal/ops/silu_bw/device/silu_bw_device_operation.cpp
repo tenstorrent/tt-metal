@@ -88,18 +88,13 @@ spec_return_value_t SiLUBackwardDeviceOperation::compute_output_specs(
 
 tensor_return_value_t SiLUBackwardDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    tensor_return_value_t output_tensors;
-    output_tensors.reserve(2U);
-
     spec_return_value_t output_specs = compute_output_specs(args, tensor_args);
 
     if (tensor_args.preallocated_da.has_value()) {
-        output_tensors.push_back(tensor_args.preallocated_da.value());
+        return tensor_args.preallocated_da.value();
     } else {
-        output_tensors.push_back(create_device_tensor(output_specs[0], tensor_args.input.device()));
+        return create_device_tensor(output_specs[0], tensor_args.input.device());
     }
-
-    return output_tensors;
 }
 
 ttsl::hash::hash_t SiLUBackwardDeviceOperation::compute_program_hash(

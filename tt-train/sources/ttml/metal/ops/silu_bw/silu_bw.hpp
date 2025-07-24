@@ -9,8 +9,7 @@
 namespace ttml::metal::ops::silu_bw {
 
 struct SiLUBackwardOperation {
-    static std::vector<std::optional<ttnn::Tensor>> invoke(
-        const ttnn::Tensor& input_tensor, const ttnn::Tensor& dL_dout_tensor);
+    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::Tensor& dL_dout_tensor);
 };
 
 }  // namespace ttml::metal::ops::silu_bw

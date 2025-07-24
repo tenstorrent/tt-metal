@@ -20,6 +20,6 @@ struct tensor_args_t {
 
 // Output tensor specs and tensors
 using spec_return_value_t = std::vector<ttnn::TensorSpec>;
-using tensor_return_value_t = std::vector<ttnn::Tensor>;
+using tensor_return_value_t = ttnn::Tensor;
 
 }  // namespace ttml::metal::ops::silu_bw::device
