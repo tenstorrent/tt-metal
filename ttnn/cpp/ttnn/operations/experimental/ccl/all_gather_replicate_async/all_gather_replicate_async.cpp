@@ -28,6 +28,7 @@ ttnn::Tensor ExecuteAllGatherReplicateAsync::invoke(
     const std::optional<const DataType> dtype) {
     return ttnn::operations::experimental::ccl::all_gather_replicate_async(
         input_tensor,
+        input_tensor_b,
         intermediate_tensor,
         aggregated_tensor,
         dim,
@@ -37,7 +38,10 @@ ttnn::Tensor ExecuteAllGatherReplicateAsync::invoke(
         multi_device_global_semaphore,
         memory_config,
         num_preferred_links,
-        subdevice_id);
+        subdevice_id,
+        program_config,
+        compute_kernel_config,
+        dtype);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

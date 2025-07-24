@@ -120,6 +120,7 @@ namespace ccl {
 
 Tensor all_gather_replicate_async(
     const Tensor& input_tensor,
+    const Tensor& input_tensor_b,
     const Tensor& intermediate_tensor,
     const Tensor& aggregated_tensor,
     const int32_t dim,
@@ -129,7 +130,10 @@ Tensor all_gather_replicate_async(
     const GlobalSemaphore& multi_device_global_semaphore,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config = std::nullopt,
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    const std::optional<const DataType> dtype = std::nullopt);
 
 }  // namespace ccl
 }  // namespace experimental

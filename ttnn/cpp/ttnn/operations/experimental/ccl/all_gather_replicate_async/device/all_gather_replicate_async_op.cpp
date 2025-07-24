@@ -306,6 +306,7 @@ namespace ccl {
 namespace {
 Tensor all_gather_replicate_async_impl(
     const Tensor& input_tensor,
+    const Tensor& input_tensor_b,
     const Tensor& intermediate_tensor,
     const Tensor& aggregated_tensor,
     const int32_t dim,
@@ -315,7 +316,10 @@ Tensor all_gather_replicate_async_impl(
     const GlobalSemaphore& multi_device_global_semaphore,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const DataType> dtype) {
     const auto mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(),
@@ -351,6 +355,7 @@ Tensor all_gather_replicate_async_impl(
 
 Tensor all_gather_replicate_async(
     const Tensor& input_tensor,
+    const Tensor& input_tensor_b,
     const Tensor& intermediate_tensor,
     const Tensor& aggregated_tensor,
     const int32_t dim,
@@ -360,9 +365,13 @@ Tensor all_gather_replicate_async(
     const GlobalSemaphore& multi_device_global_semaphore,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const DataType> dtype) {
     return all_gather_replicate_async_impl(
         input_tensor,
+        input_tensor_b,
         intermediate_tensor,
         aggregated_tensor,
         dim,
@@ -372,7 +381,10 @@ Tensor all_gather_replicate_async(
         multi_device_global_semaphore,
         memory_config,
         num_preferred_links,
-        sub_device_id);
+        sub_device_id,
+        program_config,
+        compute_kernel_config,
+        dtype);
 }
 
 }  // namespace ccl
