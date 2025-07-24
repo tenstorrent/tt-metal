@@ -330,10 +330,8 @@ void MAIN {
 
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 pack_reconfig_data_format(cb_cur_sum);
-                uint32_t cb_sum_dest = k_chunk > k_chunk_start ? cb_cur_sum : cb_prev_sum;
-
                 reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
-                    cb_sum_dest, cb_sum_dest, Sk_chunk_t_dynamic, false);
+                    cb_cur_sum, cb_cur_sum, Sk_chunk_t_dynamic, false);
 
                 /* OUT_IM = QK @ V_CHUNK */
                 reconfig_data_format(cb_qk_im, cb_v_in);  // DEBUG
@@ -441,6 +439,11 @@ void MAIN {
                 }
             }
             /* cb_cur_sum = 1.0 / cb_cur_sum */
+            cb_push_back(cb_cur_sum, Sq_chunk_t);
+
+            reconfig_data_format(cb_cur_sum, cb_cur_sum);  // DEBUG
+            pack_reconfig_data_format(cb_cur_sum);
+            recip_block_inplace<vector_mode>(cb_cur_sum, Sq_chunk_t);
 
             reconfig_data_format(cb_prev_sum, cb_prev_sum);  // DEBUG
             pack_reconfig_data_format(cb_prev_sum);
