@@ -67,6 +67,8 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     uint32_t num_cores_y = grid.y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
+    using tt::tt_metal::CircularBufferConfig;
+
     // full mapping buffer
     const auto mapping_data_format = datatype_to_dataformat_converter(mapping_tensor.dtype());
     const auto mapping_tensor_cb_id = tt::CBIndex::c_0;
