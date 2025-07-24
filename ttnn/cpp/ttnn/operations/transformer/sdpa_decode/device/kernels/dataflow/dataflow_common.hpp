@@ -422,7 +422,7 @@ void read_kv_mask_chunks(
                 PSt, Sk_chunk_t, mask_chunk_tiles, mask_start_tile_id, mask_reader);
         }
 
-        // Read V chunk (tranpose of K)
+        // Read V chunk (tranpose of K), from K's L1 buffer
         if constexpr (reuse_k) {
             cb_reserve_back(cb_v_in, v_chunk_tiles);
             uint32_t v_write_ptr = get_write_ptr(cb_v_in);
@@ -437,9 +437,6 @@ void read_kv_mask_chunks(
                     k_read_ptr += Sk_chunk_t * k_tile_bytes;  // Strid across K's width
                 }
             }
-
-            noc_async_read_barrier();
-            cb_push_back(cb_v_in, v_chunk_tiles);
         } else {
             cb_reserve_back(cb_v_in, v_chunk_tiles);
             uint32_t v_write_ptr = get_write_ptr(cb_v_in);
@@ -457,9 +454,8 @@ void read_kv_mask_chunks(
                 }
                 v_tile_id += (DHt - vDHt);  // Skip the padding!
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_v_in, v_chunk_tiles);
-            v_start_tile_id += v_chunk_tiles;
         }
+        noc_async_read_barrier();
+        cb_push_back(cb_v_in, v_chunk_tiles);
     }
 }

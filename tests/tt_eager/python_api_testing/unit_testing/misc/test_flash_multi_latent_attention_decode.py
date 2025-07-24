@@ -152,7 +152,7 @@ def run_flash_mla_decode_impl(
     q_num_cores,
     q_dtype,
     dtype,
-    paged_attention_cfg=None,
+    use_paged_attention=False,
 ):
     # Can't run too many iters, or run out of L1
     num_iters = 5
@@ -168,6 +168,18 @@ def run_flash_mla_decode_impl(
     logger.info(f"Number of Cores for Q Sharding: {q_num_cores}")
     logger.info(f"Query Data Type: {q_dtype}")
     logger.info(f"Key-Value Data Type: {dtype}")
+
+    # Paged attention configuration
+    paged_attention_cfg = None
+    if use_paged_attention:
+        block_size = ttnn.TILE_SIZE
+        assert seq_len % block_size == 0, f"Sequence length must be a multiple of {block_size=} for paged attention."
+
+        max_num_blocks = seq_len // block_size * batch
+        paged_attention_cfg = PagedAttentionConfig(
+            block_size=block_size,
+            max_num_blocks=max_num_blocks,
+        )
 
     ######################
     ### Torch Setup
@@ -420,18 +432,6 @@ def test_flash_mla_decode(
     function_level_defaults,
     reset_seeds,
 ):
-    # Paged attention configuration
-    paged_attention_cfg = None
-    if use_paged_attention:
-        block_size = ttnn.TILE_SIZE
-        assert seq_len % block_size == 0, f"Sequence length must be a multiple of {block_size=} for paged attention."
-
-        max_num_blocks = seq_len // block_size * batch
-        paged_attention_cfg = PagedAttentionConfig(
-            block_size=block_size,
-            max_num_blocks=max_num_blocks,
-        )
-
     run_flash_mla_decode_impl(
         device,
         batch,
@@ -443,7 +443,7 @@ def test_flash_mla_decode(
         q_num_cores,
         q_dtype,
         dtype,
-        paged_attention_cfg=paged_attention_cfg,
+        use_paged_attention,
     )
 
 
@@ -451,7 +451,7 @@ def test_flash_mla_decode(
     "batch",
     [
         1,  # Single batch
-        2,  # Multiple batches
+        # 2,  # Multiple batches # Removing to reduce CI load
         8,  # Even larger batch size
     ],
 )
@@ -473,7 +473,7 @@ def test_flash_mla_decode(
     "nkv",
     [
         1,
-        8,
+        # 8, # Removing to reduce CI load
         16,
     ],
 )
@@ -506,6 +506,13 @@ def test_flash_mla_decode(
         (ttnn.bfloat16, ttnn.bfloat8_b),
     ],
 )
+@pytest.mark.parametrize(
+    "use_paged_attention",
+    [
+        False,
+        True,
+    ],
+)
 def test_flash_mla_decode_stress(
     device,
     batch,
@@ -517,6 +524,7 @@ def test_flash_mla_decode_stress(
     q_num_cores,
     q_dtype,
     dtype,
+    use_paged_attention,
     function_level_defaults,
     reset_seeds,
 ):
@@ -548,4 +556,5 @@ def test_flash_mla_decode_stress(
         q_num_cores,
         q_dtype,
         dtype,
+        use_paged_attention,
     )
