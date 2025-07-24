@@ -236,7 +236,7 @@ class Transformer(LightweightModule):
         """
         Concatenate the output of the devices into a single tensor.
         """
-        torch_out_tensors = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(tt_out)]
+        torch_out_tensors = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(tt_out.cpu())]
         if self.args.is_galaxy:
             row_dim, col_dim = (3, 1)
         else:
