@@ -74,8 +74,9 @@ def test_forward_pass(
     hf_state_dict = reference_model.state_dict()
 
     # Setup: Convert weights and get weight_config
-    weight_config = TTExpert.convert_weights_moe(hf_config_single_layer, hf_state_dict, temp_dir, galaxy_or_t3k_mesh)
+    weight_config = TTExpert.convert_weights(hf_config_single_layer, hf_state_dict, temp_dir, galaxy_or_t3k_mesh)
     # Generate appropriate config
+
     if mode == "prefill":
         model_config = TTExpert.prefill_model_config(hf_config_single_layer, galaxy_or_t3k_mesh)
     else:
