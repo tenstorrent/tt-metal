@@ -55,11 +55,16 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     // Calculate memory layout parameters
     auto stick_nbytes =
         output_padded_shape[3] * tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(output.dtype()));
-    uint32_t ntiles_per_row = tt::div_up(input_padded_shape[-1], TILE_WIDTH);
     uint32_t ntiles = input_tensor.physical_volume() / TILE_HW;
-    uint32_t num_blocks = std::ceil(static_cast<float>(ntiles) / ntiles_per_row);
+    uint32_t tiles_per_channel_dim = tt::div_up(input_padded_shape[-1], TILE_WIDTH);
+    uint32_t tiles_per_width_dim = tt::div_up(input_padded_shape[-2], TILE_HEIGHT);
+    uint32_t tiles_per_complete_row = tiles_per_width_dim * tiles_per_channel_dim;
+    uint32_t num_blocks =
+        std::ceil(static_cast<float>(ntiles) / (tiles_per_complete_row));  // Total number of blocks for batch * height
 
-    log_debug(tt::LogOp, "ntiles_per_row: {}, ntiles: {}, num_blocks: {}", ntiles_per_row, ntiles, num_blocks);
+    uint32_t aligned_stick_nbytes = tt::align(stick_nbytes, TILE_WIDTH * tt::datum_size(cb_data_format));
+    log_debug(
+        tt::LogOp, "tiles_per_channel_dim: {}, ntiles: {}, num_blocks: {}", tiles_per_channel_dim, ntiles, num_blocks);
 
     // Split work across cores for parallel processing
     auto grid_size = device->compute_with_storage_grid_size();
@@ -73,39 +78,37 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         nblocks_per_core,
         nblocks_per_core_cliff);
     uint32_t src0_cb_index = tt::CBIndex::c_0;
-    uint32_t num_input_tiles = ntiles_per_row;
-    uint32_t double_buffer = 2;  // Double buffering for improved performance
+    uint32_t num_input_tiles = tiles_per_channel_dim;
 
     // Create circular buffer configurations for source and destination
     tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_input_tiles * single_tile_size * double_buffer, {{src0_cb_index, cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig cb_src1_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_input_tiles * single_tile_size * double_buffer, {{src1_cb_index, cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     // Configure compile-time arguments for reader kernel
     std::vector<uint32_t> reader_compile_time_args = {
-        ntiles_per_row,
+        tiles_per_channel_dim,
+        tiles_per_width_dim,
         src0_cb_index,
     };
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     // Configure compile-time arguments for writer kernel
     std::vector<uint32_t> writer_compile_time_args = {
-        batch_size,
-        input_height,
         input_width,
         stride_h,
         stride_w,
         stick_nbytes,
-        ntiles_per_row,
+        aligned_stick_nbytes,
+        tiles_per_channel_dim,
+        tiles_per_width_dim,
         datum_size(cb_data_format),
         src1_cb_index,
     };
@@ -127,15 +130,15 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
 
     // Configure compute kernel arguments
     std::vector<uint32_t> compute_compile_time_args = {
-        nblocks_per_core,
-        ntiles_per_row,
+        nblocks_per_core * tiles_per_width_dim,
+        tiles_per_channel_dim,
         src0_cb_index,
         src1_cb_index,
     };
 
     std::vector<uint32_t> compute_compile_time_args_cliff = {
-        nblocks_per_core_cliff,
-        ntiles_per_row,
+        nblocks_per_core_cliff * tiles_per_width_dim,
+        tiles_per_channel_dim,
         src0_cb_index,
         src1_cb_index,
     };
@@ -143,7 +146,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32;
     std::string compute_kernel_name =
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp";
-    if (ntiles_per_row > MAX_PACK_UNTILIZE_WIDTH) {
+    if (tiles_per_channel_dim > MAX_PACK_UNTILIZE_WIDTH) {
         compute_kernel_name = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
     }
 
@@ -180,46 +183,62 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     }
 
     // Set up runtime arguments for each core
-    uint32_t tile_start_id = 0;
+    uint32_t block_start_id = 0;
     auto ncores_x = grid_size.x;
     auto ncores_y = std::ceil(static_cast<float>(ncores) / ncores_x);
     auto cores = grid_to_cores(ncores_x * ncores_y, ncores_x, ncores_y, true);
     std::vector<CoreCoord> cores_with_rtargs;
 
+    const uint32_t patch_size = stride_h * stride_w;          // Size of each patch
+    const uint32_t output_height = input_height / stride_h;   // Output height
+    const uint32_t output_width = input_width / stride_w;     // Output width
     // Configure runtime arguments for each core
     for (auto i = 0; i < cores.size(); i++) {
+        uint32_t curr_input_height_idx = block_start_id;
+        uint32_t curr_output_height_idx = curr_input_height_idx / stride_h;
+        uint32_t patch_height_offset = curr_input_height_idx % stride_h;
+        uint32_t output_offset = patch_size * curr_output_height_idx * output_width +
+                                 patch_height_offset * stride_w;  // Total output height * width
         CoreCoord core = cores[i];
         if (!full_cores.contains(core)) {
             continue;
         }
         std::vector<uint32_t> reader_runtime_args = {
             src0_buffer->address(),
-            tile_start_id,
+            block_start_id,
             nblocks_per_core,
         };
         std::vector<uint32_t> writer_runtime_args = {
             dst_buffer->address(),
-            tile_start_id,
+            block_start_id,
             nblocks_per_core,
+            patch_height_offset,
+            output_offset,
         };
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
-        tile_start_id += nblocks_per_core;
+        block_start_id += nblocks_per_core;
         cores_with_rtargs.push_back(core);
     }
 
     // Handle edge case for cliff cores
     if (ncores_full < ncores) {
+        uint32_t curr_input_height_idx = block_start_id;
+        uint32_t curr_output_height_idx = curr_input_height_idx / stride_h;
+        uint32_t patch_height_offset = curr_input_height_idx % stride_h;
+        uint32_t output_offset = patch_size * curr_output_height_idx * output_width + patch_height_offset * stride_w;
         CoreCoord core = CoreCoord{ncores_full % ncores_x, ncores_full / ncores_x};
         std::vector<uint32_t> reader_runtime_args = {
             src0_buffer->address(),
-            tile_start_id,
+            block_start_id,
             nblocks_per_core_cliff,
         };
         std::vector<uint32_t> writer_runtime_args = {
             dst_buffer->address(),
-            tile_start_id,
+            block_start_id,
             nblocks_per_core_cliff,
+            patch_height_offset,
+            output_offset,
         };
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
