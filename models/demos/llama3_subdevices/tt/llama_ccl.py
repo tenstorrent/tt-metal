@@ -881,7 +881,7 @@ class TT_CCL:
         )
         persistent_buffers_list = list(persistent_buffers.values()) if persistent_buffers else None
         num_links = 4
-        num_semaphores = 3 * num_links
+        num_semaphores = 3
         ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor=input_tensor_mesh,
             persistent_output_buffers=persistent_buffers_list,
