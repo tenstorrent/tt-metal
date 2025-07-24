@@ -155,8 +155,8 @@ def assert_with_ulp(
         - ULP-Delta(4, 0) = 128
         - ULP-Delta(0, 4) = 4.36e+40
 
-        To measure the accuracy in ULP of operations on bfloat8_b data type, make sure to either pass the ttnn bfloat8_b tensor directly to the
-        function, or convert torch tensor to bfloat16 beforehand (bfloat16 has the 'same' resolution as bfloat8_b).
+        To measure the accuracy in ULP of operations on bfloat8_b data type, the ttnn bfloat8_b tensor should be either passed directly to the
+        function, or converted to bfloat16 beforehand (bfloat16 has the 'same' resolution as bfloat8_b).
         Indeed, ttnn.to_torch() converts bfloat8_b to float32 by default, which would lead to assert_with_ulp() measuring ULP error as if
         data type was computed as float32.
 
