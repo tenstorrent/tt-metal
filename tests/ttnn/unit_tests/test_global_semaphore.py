@@ -28,9 +28,6 @@ def run_global_semaphore(device):
     global_sem0 = ttnn.create_global_semaphore(device, tensix_cores0, 1)
     global_sem1 = ttnn.create_global_semaphore(device, tensix_cores1, 2)
 
-    print(type(global_sem0))
-    print(global_sem1)
-
     assert ttnn.get_global_semaphore_address(global_sem0) != ttnn.get_global_semaphore_address(global_sem1)
 
     ttnn.reset_global_semaphore_value(global_sem0, 3)

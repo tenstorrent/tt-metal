@@ -11,8 +11,7 @@ from ...reference.vae_decoder import VaeDecoder
 from ...tt.fun_vae_decoder.fun_vae_decoder import sd_vae_decode, TtVaeDecoderParameters
 from ...tt.utils import assert_quality, to_torch
 from models.utility_functions import comp_allclose, comp_pcc
-from ...tt.parallel_config import StableDiffusionParallelManager, create_vae_parallel_config
-import tracy
+from ...tt.parallel_config import StableDiffusionParallelManager
 
 
 def print_stats(label, data: torch.Tensor, device=None):
@@ -26,14 +25,14 @@ def print_stats(label, data: torch.Tensor, device=None):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, cfg, sp, tp, topology, num_links",
+    "mesh_device, cfg, sp, tp, topology",
     [
-        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
-        [(8, 4), (2, 0), (4, 0), (4, 1), ttnn.Topology.Linear, 4],
+        [(1, 2), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear],
+        # [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear],
     ],
     ids=[
         "t3k_cfg2_sp2_tp2",
-        "tg_cfg2_sp4_tp4",
+        #    "tg_cfg2_sp4_tp4",
     ],
     indirect=["mesh_device"],
 )
@@ -55,7 +54,6 @@ def print_stats(label, data: torch.Tensor, device=None):
     ),
     [
         (1, 16, 3, 2, 128, 128, 32, (128, 256, 512, 512)),  # slice 128, output blocks 32. Need to parametize
-        # (1, 16, 3, 2, 128, 128, 32, (128, 256, 512, 512)),  # slice 128, output blocks 32. Need to parametize
     ],
 )
 # @pytest.mark.usefixtures("use_program_cache")
@@ -74,7 +72,6 @@ def test_vae_decoder(
     sp,
     tp,
     topology,
-    num_links,
 ) -> None:
     cfg_factor, cfg_axis = cfg
     sp_factor, sp_axis = sp
@@ -90,13 +87,14 @@ def test_vae_decoder(
         cfg_axis=cfg_axis,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        num_links=num_links,
     )
     # mesh_device = device
     # torch_dtype = torch.float32
     torch_dtype = torch.bfloat16
     ttnn_dtype = ttnn.bfloat16
     torch.manual_seed(0)
+    mesh_device = parallel_manager.vae_parallel_config.device
+    logger.info(f"Device: {mesh_device}, {mesh_device.core_grid}")
 
     torch_model = VaeDecoder(
         block_out_channels=block_out_channels,
@@ -106,26 +104,13 @@ def test_vae_decoder(
         norm_num_groups=norm_num_groups,
     )
 
-    # print(torch_model)
-    # logger.info(summary(torch_model, input_size=(batch, in_channels, height, width), depth=10,row_settings=("ascii_only","var_names",)))
-    # return
-
     # sd_vae = AutoencoderKL.from_pretrained("stabilityai/stable-diffusion-3.5-large", subfolder="vae")
     # print(sd_vae.decoder)
     # torch_model = sd_vae.decoder
     torch_model.eval()
 
-    vae_device = parallel_manager.submesh_devices[0]
-
-    if parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape[1] != 4:
-        cfg_shape = parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape
-        assert cfg_shape[0] * cfg_shape[1] == 4, f"Cannot reshape {cfg_shape} to a 1x4 mesh"
-        print(f"Reshaping submesh device 0 from {cfg_shape} to (1, 4) for CLIP + T5")
-        vae_device.reshape(ttnn.MeshShape(1, 4))
-    vae_parallel_config = create_vae_parallel_config(vae_device, parallel_manager)
-
     parameters = TtVaeDecoderParameters.from_torch(
-        torch_vae_decoder=torch_model, dtype=ttnn_dtype, parallel_config=vae_parallel_config
+        torch_vae_decoder=torch_model, dtype=ttnn_dtype, parallel_config=parallel_manager.vae_parallel_config
     )
 
     # inp = torch.randn(batch, in_channels, height, width)
@@ -136,37 +121,34 @@ def test_vae_decoder(
     tt_inp = ttnn.from_torch(
         inp.permute(0, 2, 3, 1),
         dtype=ttnn_dtype,
-        device=vae_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(vae_device),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     # ttnn.visualize_mesh_device(mesh_device, tensor=tt_inp)
     # breakpoint(0)
 
     logger.info(print_stats("torch_input", inp))
-    logger.info(print_stats("tt_input", tt_inp, device=vae_device))
+    logger.info(print_stats("tt_input", tt_inp, device=mesh_device))
 
     # tt_inp = allocate_tensor_on_device_like(tt_inp_host, device=mesh_device)
     logger.info(f" input shape TT: {tt_inp.shape}, Torch: {inp.shape}")
     with torch.no_grad():
         out = torch_model(inp)
 
-    tracy.signpost("Compilation/Cache pass")
     tt_out = sd_vae_decode(tt_inp, parameters)
 
-    tracy.signpost("Performance pass")
-    for i in range(10):
-        start_time = time.time()
-        tt_out = sd_vae_decode(tt_inp, parameters)
-        ttnn.synchronize_device(vae_device)
-        end_time = time.time()
-        logger.info(f"vae_decode {i} time: {end_time-start_time}")
+    start_time = time.time()
+    tt_out = sd_vae_decode(tt_inp, parameters)
+    end_time = time.time()
 
-        tt_out_torch = to_torch(tt_out).permute(0, 3, 1, 2)
+    logger.info(f"vae_decode time{end_time-start_time}")
 
-        logger.info(print_stats("torch", out))
-        logger.info(print_stats("tt", tt_out_torch, device=vae_device))
-        assert_quality(out, tt_out_torch, pcc=0.99, ccc=0.99)
-        print(comp_allclose(out, tt_out_torch))
-        result, output = comp_pcc(out, tt_out_torch)
-        logger.info(f"Comparison result Pass:{result}, Output {output}, in: {torch.count_nonzero(tt_out_torch)}")
+    tt_out_torch = to_torch(tt_out).permute(0, 3, 1, 2)
+
+    logger.info(print_stats("torch", out))
+    logger.info(print_stats("tt", tt_out_torch, device=mesh_device))
+    assert_quality(out, tt_out_torch, pcc=0.99, ccc=0.99)
+    print(comp_allclose(out, tt_out_torch))
+    result, output = comp_pcc(out, tt_out_torch)
+    logger.info(f"Comparison result Pass:{result}, Output {output}, in: {torch.count_nonzero(tt_out_torch)}")

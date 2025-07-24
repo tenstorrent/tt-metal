@@ -11,7 +11,6 @@ import ttnn
 from ..parallel_config import VAEParallelConfig
 
 
-# Assumptions: If input is sharded, output will be sharded. If input is not sharded, output will be replicated across mesh.
 @dataclass
 class TtLinearParameters:
     weight: ttnn.Tensor
@@ -27,7 +26,6 @@ class TtLinearParameters:
         dtype: ttnn.DataType | None = None,
         parallel_config: VAEParallelConfig,
         is_conv=False,
-        mesh_sharded_output: bool = True,
     ) -> TtLinearParameters:
         if not len(torch_linear.state_dict().keys()):
             breakpoint()
@@ -46,30 +44,12 @@ class TtLinearParameters:
             packer_l1_acc=False,
         )
 
-        shard_dims = [None, -1]  # TP on columns of mesh
-
         return cls(
             weight=ttnn.from_torch(
-                weight.permute(-1, -2),
-                dtype=dtype,
-                device=parallel_config.device,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    parallel_config.device, tuple(parallel_config.device.shape), dims=shard_dims
-                )
-                if mesh_sharded_output
-                else None,
+                weight.permute(-1, -2), dtype=dtype, device=parallel_config.device, layout=ttnn.TILE_LAYOUT
             ),
             bias=ttnn.from_torch(
-                bias.reshape((1, 1, 1, -1)),
-                dtype=dtype,
-                device=parallel_config.device,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    parallel_config.device, tuple(parallel_config.device.shape), dims=shard_dims
-                )
-                if mesh_sharded_output
-                else None,
+                bias.reshape((1, 1, 1, -1)), dtype=dtype, device=parallel_config.device, layout=ttnn.TILE_LAYOUT
             ),
             compute_config=compute_config,
             parallel_config=parallel_config,
@@ -77,9 +57,8 @@ class TtLinearParameters:
 
 
 def vae_linear(x, parameters):
-    # in_layout = x.layout
-    # x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-
+    in_layout = x.layout
+    x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.linear(
         input_tensor_a=x,
         input_tensor_b=parameters.weight,
@@ -87,5 +66,5 @@ def vae_linear(x, parameters):
         core_grid=parameters.parallel_config.device.core_grid,
         compute_kernel_config=parameters.compute_config,
     )
-    # output_tensor = ttnn.to_layout(output_tensor, in_layout)
+    output_tensor = ttnn.to_layout(output_tensor, in_layout)
     return output_tensor

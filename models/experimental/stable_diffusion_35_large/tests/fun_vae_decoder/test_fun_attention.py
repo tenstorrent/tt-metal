@@ -24,26 +24,10 @@ def print_stats(label, data: torch.Tensor, device=None):
     return f"{label}: mean:{data_.mean()} , std:{data_.std()} , range:[{data_.min()}, {data_.max()}]"
 
 
-# TODO: Move to parallel manager
-def gn_all_gather(x, parallel_config):
-    x_g = ttnn.experimental.all_gather_async(
-        input_tensor=x,
-        dim=3,
-        multi_device_global_semaphore=parallel_config.new_gather_handles,
-        topology=ttnn.Topology.Linear,
-        mesh_device=parallel_config.device,
-        cluster_axis=1,
-        num_links=1,
-    )
-    ttnn.synchronize_device(parallel_config.device)
-    return x_g
-
-
 @pytest.mark.parametrize(
-    ("batch", "in_channels", "height", "width", "num_groups", "num_heads", "sharded_input"),
+    ("batch", "in_channels", "height", "width", "num_groups", "num_heads", "cores_y", "cores_x"),
     [
-        (1, 512, 128, 128, 32, 4, True),  # slice 128, output blocks 32. Need to parametize
-        (1, 512, 128, 128, 32, 4, False),  # slice 128, output blocks 32. Need to parametize
+        (1, 512, 256, 256, 32, 4, 8, 8),  # slice 128, output blocks 32. Need to parametize
     ],
 )
 @pytest.mark.parametrize(
@@ -72,7 +56,8 @@ def test_attention(
     width: int,
     num_groups: int,
     num_heads: int,
-    sharded_input: bool,
+    cores_y: int,
+    cores_x: int,
     cfg,
     sp,
     tp,
@@ -109,22 +94,13 @@ def test_attention(
     torch_model.eval()
 
     parameters = TtAttentionParameters.from_torch(
-        torch_attention=torch_model,
-        dtype=ttnn_dtype,
-        parallel_config=parallel_manager.vae_parallel_config,
-        mesh_sharded_input=sharded_input,
+        torch_attention=torch_model, dtype=ttnn_dtype, parallel_config=parallel_manager.vae_parallel_config
     )
 
     # inp = torch.randn(batch, in_channels, height, width)
     inp = torch.normal(1, 2, (batch, in_channels, height, width))
 
-    tt_inp = ttnn.from_torch(
-        inp.permute(0, 2, 3, 1),
-        dtype=ttnn_dtype,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=-1) if sharded_input else None,
-    )
+    tt_inp = ttnn.from_torch(inp.permute(0, 2, 3, 1), dtype=ttnn_dtype, device=device)
     # ttnn.visualize_mesh_device(device, tensor=tt_inp)
 
     logger.info(print_stats("torch_input", inp))
@@ -136,9 +112,6 @@ def test_attention(
         out = torch_model(inp)
 
     tt_out = vae_attention(tt_inp, parameters)
-
-    if sharded_input:
-        tt_out = gn_all_gather(tt_out, parallel_manager.vae_parallel_config)
 
     tt_out_torch = to_torch(tt_out).permute(0, 3, 1, 2)
 
