@@ -454,6 +454,10 @@ void read_kv_mask_chunks(
                 }
                 v_tile_id += (DHt - vDHt);  // Skip the padding!
             }
+
+            // ASSUMPTION: We don't support different V chunk size than K chunk size
+            // Execept for FlashMLA, however, V is a subset of K, so we still need to strid with k_chunk_tiles
+            v_start_tile_id += k_chunk_tiles;
         }
         noc_async_read_barrier();
         cb_push_back(cb_v_in, v_chunk_tiles);
