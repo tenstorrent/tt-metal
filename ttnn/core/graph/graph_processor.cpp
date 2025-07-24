@@ -479,7 +479,13 @@ bool ProcessorHooks::hook_deallocate(tt::tt_metal::Buffer* buffer) { return do_b
 
 bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::Buffer* buffer) { return do_block; }
 
+bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) { return do_block; }
+
 bool ProcessorHooks::hook_read_from_device(tt::tt_metal::Buffer* buffer) { return do_block; }
+
+bool ProcessorHooks::hook_read_from_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) {
+    return do_block;
+}
 
 bool ProcessorHooks::hook_program(tt::tt_metal::Program*) { return do_block; }
 

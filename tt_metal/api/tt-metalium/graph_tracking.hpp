@@ -19,6 +19,7 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -79,6 +80,10 @@ public:
     virtual bool hook_write_to_device(const tt::tt_metal::Buffer* buffer) = 0;
 
     virtual bool hook_read_from_device(tt::tt_metal::Buffer* buffer) = 0;
+
+    virtual bool hook_read_from_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) = 0;
+
+    virtual bool hook_write_to_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) = 0;
 
     virtual ~IGraphHooks() = default;
 };
@@ -152,7 +157,11 @@ public:
 
     bool hook_write_to_device(const Buffer* buffer);
 
+    bool hook_write_to_device(const distributed::MeshBuffer* mesh_buffer);
+
     bool hook_read_from_device(Buffer* buffer);
+
+    bool hook_read_from_device(const distributed::MeshBuffer* mesh_buffer);
 
     bool hook_program(tt::tt_metal::Program* program);
 
