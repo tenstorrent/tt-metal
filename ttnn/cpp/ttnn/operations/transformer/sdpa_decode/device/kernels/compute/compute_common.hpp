@@ -28,7 +28,6 @@
  ******************************************************************************/
 template <int vector_mode = (int)VectorMode::RC>
 void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) {
-    DeviceZoneScopedN("max_block");
     // inputs come in full, outputs go out full
     copy_tile_to_dst_init_short(in0);
     max_tile_init();
@@ -57,7 +56,6 @@ template <
     uint32_t rows,
     int vector_mode = (int)VectorMode::RC>
 void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_max = false) {
-    DeviceZoneScopedN("reduce_c");
     // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
     // Precondition: out_cb has rows free
@@ -95,7 +93,6 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
 
 template <int vector_mode = (int)VectorMode::RC>
 void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
-    DeviceZoneScopedN("recip_block_inplace");
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
     copy_tile_to_dst_init_short(in_cb);
@@ -115,7 +112,6 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
 
 template <uint32_t in0_cb, uint32_t rows, uint32_t scale_fp32, int vector_mode = (int)VectorMode::RC>
 void sub_exp_block_bcast_cols_inplace_reduce(uint32_t in1_cb, uint32_t reduce_cb, uint32_t cols) {
-    DeviceZoneScopedN("sub_exp_block_bcast_cols_inplace_reduce");
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -175,7 +171,6 @@ void sub_exp_block_bcast_cols_inplace_reduce(uint32_t in1_cb, uint32_t reduce_cb
 }
 
 void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols) {
-    DeviceZoneScopedN("mul_block_bcast_cols_inplace");
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -200,7 +195,6 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
 }
 
 void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t rows, uint32_t cols) {
-    DeviceZoneScopedN("mul_block_bcast_cols");
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: out_cb has rows*cols produced
@@ -227,7 +221,6 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uin
 
 template <bool pop_in1>
 void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
-    DeviceZoneScopedN("add_block_inplace");
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles consumed
@@ -250,7 +243,6 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
 }
 
 void add_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
-    DeviceZoneScopedN("add_block");
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles consumed
@@ -272,7 +264,6 @@ void add_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_t
 }
 
 void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
-    DeviceZoneScopedN("mul_block_inplace");
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
@@ -294,7 +285,6 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
 
 template <uint32_t M>
 void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
-    DeviceZoneScopedN("matmul_reduce");
     // precondition: in0_cb has M*K produced
     // precondition: in1_cb has K*1 produced
     // postcondition: out_cb has M*1 produced
@@ -346,7 +336,6 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
 
 template <uint32_t scale_fp32, int vector_mode = (int)VectorMode::RC>
 void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
-    DeviceZoneScopedN("sub_exp_block");
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: out_cb has num_tiles produced
     // Postcondition: in0_cb and in1_cb has num_tiles produced
@@ -372,7 +361,6 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 
 template <bool pop_in_cb>
 void move_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
-    DeviceZoneScopedN("move_block");
     // Precondition: in_cb has num_tiles produced
     // Precondition: out_cb has num_tiles free
     // Postcondition: in_cb has num_tiles consumed
@@ -410,7 +398,6 @@ ALWI void cb_matmul_blocks(
     const uint32_t& subblock_h,
     const uint32_t& subblock_w,
     const bool& transpose) {
-    DeviceZoneScopedN("cb_matmul_blocks");
     // precondition: in0_cb has M*K produced
     // preconditino: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
