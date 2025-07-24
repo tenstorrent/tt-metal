@@ -25,6 +25,10 @@ __attribute__((section(".noinit"))) static std::jmp_buf gJumpBuf;
 extern "C" void wzerorange(uint32_t* start, uint32_t* end);
 
 extern "C" [[gnu::section(".start"), gnu::optimize("Os")]] void _start(void) {
+    volatile uint32_t* const debug_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
+    for (int i = 0; i < 32; i++) {
+        debug_dump_addr[i] = 0;
+    }
     extern uint32_t __ldm_bss_start[];
     extern uint32_t __ldm_bss_end[];
     wzerorange(__ldm_bss_start, __ldm_bss_end);
@@ -42,7 +46,6 @@ extern "C" [[gnu::section(".start"), gnu::optimize("Os")]] void _start(void) {
     Application();
 #endif
 
-    volatile uint32_t* const debug_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
     // Dump values to debug buffer
     // NOLINTNEXTLINE(hicpp-no-assembler)
     __asm__ volatile(
