@@ -239,7 +239,9 @@ RunTimeOptions::RunTimeOptions() {
         }
     }
 
-    enable_fabric_telemetry = (getenv("TT_METAL_FABRIC_TELEMETRY") != nullptr);
+    if (getenv("TT_METAL_FABRIC_TELEMETRY")) {
+        enable_fabric_telemetry = true;
+    }
 
     if (getenv("TT_METAL_FORCE_REINIT")) {
         force_context_reinit = true;
