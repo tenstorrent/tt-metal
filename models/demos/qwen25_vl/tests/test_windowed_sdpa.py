@@ -49,6 +49,7 @@ def timer(description="Operation"):
     [
         # basic cases
         (1, 16, 32, 96, 32, [0, 32]),
+        # (1, 16, 32, 96, 32, [16, 32]), # todo)) add support for this case
         (1, 16, 32, 96, 32, [0, 4, 20, 32]),
         (1, 16, 32, 96, 32, [0, 4, 9, 24, 32]),
         (1, 16, 32, 96, 32, [0, 16, 20]),
@@ -112,10 +113,6 @@ def test_windowed_sdpa_basic(mesh_device, batch_size, num_heads, seq_len, head_d
 
     print(f"pt_cu_window_seqlens:\n {pt_cu_window_seqlens}")
 
-    cu_window_seqlens_tt = ttnn.from_torch(
-        pt_cu_window_seqlens, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32
-    )
-
     # Create input tensors
     torch.manual_seed(42)  # For reproducible results
     q = torch.randn(batch_size, num_heads, seq_len, head_dim, dtype=torch.bfloat16)
@@ -176,6 +173,9 @@ def test_windowed_sdpa_basic(mesh_device, batch_size, num_heads, seq_len, head_d
     # Run windowed SDPA
     with timer("Windowed SDPA: run windowed SDPA"):
         print("-------------------- Running windowed SDPA --------------------")
+        cu_window_seqlens_tt = ttnn.from_torch(
+            pt_cu_window_seqlens, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32
+        )
         output_tt = ttnn.transformer.windowed_scaled_dot_product_attention(
             q_tt,
             k_tt,

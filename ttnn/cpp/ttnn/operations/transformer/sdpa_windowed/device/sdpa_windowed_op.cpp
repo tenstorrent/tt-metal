@@ -10,6 +10,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include <tt-metalium/constants.hpp>
+#include "ttnn/distributed/api.hpp"
 
 using namespace tt::tt_metal;
 
@@ -32,13 +33,9 @@ void WindowedScaledDotProductAttention::validate(const std::vector<Tensor>& inpu
     TT_FATAL(
         cu_window_seqlens.dtype() == DataType::UINT32 || cu_window_seqlens.dtype() == DataType::INT32,
         "cu_window_seqlens must be uint32 or int32");
-    if (cu_window_seqlens.dtype() == DataType::UINT32) {
-        const auto cu_window_seqlens_host = cu_window_seqlens.cpu().to_vector<uint32_t>();
-        TT_FATAL(cu_window_seqlens_host.at(0) == 0, "First element of cu_window_seqlens must be 0");
-    } else {
-        const auto cu_window_seqlens_host = cu_window_seqlens.cpu().to_vector<int32_t>();
-        TT_FATAL(cu_window_seqlens_host.at(0) == 0, "First element of cu_window_seqlens must be 0");
-    }
+    const auto cu_window_seqlens_host =
+        ttnn::distributed::get_device_tensors(cu_window_seqlens)[0].cpu().to_vector<uint32_t>();
+    TT_FATAL(cu_window_seqlens_host.at(0) == 0, "First element of cu_window_seqlens must be 0");
 
     // Check storage and dtype
     for (size_t i = 0; i < 4; ++i) {
