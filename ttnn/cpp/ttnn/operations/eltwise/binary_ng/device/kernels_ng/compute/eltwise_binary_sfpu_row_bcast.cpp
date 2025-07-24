@@ -43,8 +43,13 @@ void MAIN {
     constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_src_lhs;
 #endif
 
+    unary_op_init_common(cb_post_lhs, cb_out);
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+#endif
+
+#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS))
+    BINARY_SFPU_INIT
 #endif
 
     for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
@@ -63,9 +68,6 @@ void MAIN {
 
         cb_pop_front(cb_llk_pre, 1);
 
-        unary_op_init_common(cb_post_lhs, cb_out);
-        BINARY_SFPU_INIT
-
         PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, num_tiles_per_cycle);
         cb_wait_front(cb_post_lhs, num_tiles_per_cycle);
 
@@ -74,6 +76,9 @@ void MAIN {
 
         cb_reserve_back(cb_out, num_tiles_per_cycle);
 
+#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)
+        BINARY_SFPU_INIT
+#endif
         tile_regs_acquire();
         copy_tile_to_dst_init_short_with_dt(cb_post_rhs, cb_post_lhs);
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {

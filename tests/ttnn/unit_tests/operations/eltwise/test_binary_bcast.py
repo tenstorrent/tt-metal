@@ -1947,9 +1947,11 @@ def test_binary_subtile_row_bcast(a_shape, b_shape, device):
     torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device)
     torch_input_tensor_b, input_tensor_b = rand_bf16_gen(b_shape, device)
 
-    torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
+    torch_output_tensor = torch_input_tensor_a - torch_input_tensor_b
 
-    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None)
+    output_tensor = ttnn.subtract(
+        input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None
+    )
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape

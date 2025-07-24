@@ -26,13 +26,16 @@ void MAIN {
 
 #if SRC_BCAST
     constexpr auto cb_bcast = cb_post_lhs;
-    constexpr auto cb_no_bcast = cb_post_rhs;
+    constexpr auto cb_left = tt::CBIndex::c_6;
+    constexpr auto cb_right = cb_post_rhs;
 #endif
 #if SRC_BCAST_B
     constexpr auto cb_bcast = cb_post_rhs;
-    constexpr auto cb_no_bcast = cb_post_lhs;
+    constexpr auto cb_left = cb_post_lhs;
+    constexpr auto cb_right = tt::CBIndex::c_6;
 #endif
 
+    binary_op_init_common(cb_left, cb_right, cb_out);
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 #endif
@@ -57,15 +60,12 @@ void MAIN {
         tile_regs_release();
 
         cb_pop_front(cb_bcast, 1);
-
-        binary_op_init_common(cb_no_bcast, tt::CBIndex::c_6, cb_out);
-        binary_tiles_init<true, BINARY_OP_TYPE>(cb_no_bcast, tt::CBIndex::c_6);
-
+        binary_tiles_init<true, BINARY_OP_TYPE>(cb_left, cb_right);
         cb_reserve_back(cb_out, num_tiles_per_cycle);
         cb_wait_front(tt::CBIndex::c_6, 1);
 
         tile_regs_acquire();
-        BINARY_OP(cb_no_bcast, tt::CBIndex::c_6, 0, 0, 0);
+        BINARY_OP(cb_left, cb_right, 0, 0, 0);
         PROCESS_POST_ACTIVATIONS(0);
         tile_regs_commit();
 
@@ -74,8 +74,8 @@ void MAIN {
         tile_regs_release();
 
         cb_push_back(cb_out, num_tiles_per_cycle);
-        cb_pop_front(cb_no_bcast, num_tiles_per_cycle);
-        cb_pop_front(tt::CBIndex::c_6, num_tiles_per_cycle);
+        cb_pop_front(cb_left, num_tiles_per_cycle);
+        cb_pop_front(cb_right, num_tiles_per_cycle);
     }
 }
 }  // namespace NAMESPACE
