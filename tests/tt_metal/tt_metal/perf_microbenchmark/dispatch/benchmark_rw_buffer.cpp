@@ -102,21 +102,6 @@ static void BM_read(benchmark::State& state) {
     state.SetBytesProcessed(transfer_size * state.iterations());
 }
 
-std::vector<chip_id_t> setup_device_pool() {
-    auto available_device_ids = MetalContext::instance().get_cluster().all_chip_ids();
-    TT_ASSERT(available_device_ids.contains(0));
-
-    std::vector<chip_id_t> device_ids = {0};
-    log_info(tt::LogTest, "Device 1 available, enable testing on device 1 assuming it's a remote device");
-    if (available_device_ids.contains(1)) {
-        device_ids.push_back(1);
-    }
-
-    DevicePool::initialize(device_ids, 1, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, DispatchCoreConfig{});
-
-    return device_ids;
-}
-
 int main(int argc, char** argv) {
     benchmark::Initialize(&argc, argv);
 
