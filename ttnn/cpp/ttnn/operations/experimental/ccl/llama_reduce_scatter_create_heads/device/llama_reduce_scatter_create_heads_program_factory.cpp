@@ -683,7 +683,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     auto num_packet_worker_cores = packet_worker_cores.size();
 
     std::vector<uint32_t> writer_compile_time_args = {
-        input_tensor_cb_id,
         fabric_sender_cb_index,
         packet_header_cb_index,
         fabric_receiver_cb_index,
