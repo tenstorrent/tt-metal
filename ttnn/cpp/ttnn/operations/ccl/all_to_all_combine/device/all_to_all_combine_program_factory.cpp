@@ -94,15 +94,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto aligned_mapping_page_size_bytes = tt::align(mapping_page_size_bytes, l1_alignment);
     const auto aligned_metadata_page_size_bytes = tt::align(metadata_page_size_bytes, l1_alignment);
 
-<<<<<<< HEAD
     const auto input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     const auto mapping_data_format = datatype_to_dataformat_converter(mapping_tensor.dtype());
     const auto metadata_data_format = datatype_to_dataformat_converter(metadata_tensor.dtype());
-=======
-    auto input_data_format = datatype_to_dataformat_converter(input_tensor.get_dtype());
-    auto mapping_data_format = datatype_to_dataformat_converter(mapping_tensor.get_dtype());
-    auto metadata_data_format = datatype_to_dataformat_converter(metadata_tensor.get_dtype());
->>>>>>> 5574672040 (finishing touches)
 
     // Anything less will lead to deadlocks. It's clear why, TODO fix it.
     const uint32_t buffering_factor = experts_per_device;
