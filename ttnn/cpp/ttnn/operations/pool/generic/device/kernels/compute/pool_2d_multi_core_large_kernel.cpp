@@ -113,18 +113,17 @@ void MAIN {
             tile_regs_wait();
             if (last_c_block) {
                 DPRINT << "last block" << ENDL();
-                if constexpr (last_tile_is_partial) {
-                    if (partial_iter_output_tiles > 1) {
-                        pack_untilize_dest<partial_iter_output_tiles - 1, partial_iter_output_tiles>(
-                            out_cb_id, 1, 0, num_out_rows, num_faces_in_output_tile);
-                        pack_untilize_dest_init<1>(out_cb_id, num_out_rows, num_faces_in_last_output_tile);
-                    }
-                    pack_untilize_dest<1, partial_iter_output_tiles>(
-                        out_cb_id, 1, partial_iter_output_tiles - 1, num_out_rows, num_faces_in_last_output_tile);
-                } else {
-                    pack_untilize_dest<partial_iter_output_tiles>(
-                        out_cb_id, 1, 0, num_out_rows, num_faces_in_output_tile);
-                }
+                // if constexpr (last_tile_is_partial) {
+                //     if (partial_iter_output_tiles > 1) {
+                //         pack_untilize_dest<partial_iter_output_tiles - 1, partial_iter_output_tiles>(
+                //             out_cb_id, 1, 0, num_out_rows, num_faces_in_output_tile);
+                //         //pack_untilize_dest_init<1>(out_cb_id, num_out_rows, num_faces_in_last_output_tile);
+                //     }
+                //     pack_untilize_dest<1, partial_iter_output_tiles>(
+                //         out_cb_id, 1, partial_iter_output_tiles - 1, num_out_rows, num_faces_in_last_output_tile);
+                // } else {
+                pack_untilize_dest<partial_iter_output_tiles>(out_cb_id, 1, 0, num_out_rows, num_faces_in_output_tile);
+                // }
 
                 cb_push_back(out_cb_id, tiles_to_reserve);
             } else {
