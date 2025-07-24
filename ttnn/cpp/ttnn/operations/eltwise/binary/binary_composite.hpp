@@ -533,9 +533,6 @@ constexpr auto floor_div = ttnn::register_operation<
 constexpr auto bias_gelu = ttnn::register_operation<
     "ttnn::bias_gelu",
     operations::binary::ExecuteBiasGelu<operations::binary::BinaryOpType::BIAS_GELU>>();
-constexpr auto scatter = ttnn::register_operation<
-    "ttnn::scatter",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::SCATTER>>();
 constexpr auto outer = ttnn::register_operation<
     "ttnn::outer",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::OUTER>>();

@@ -398,14 +398,6 @@ def torch_squared_difference(x, y, *args, **kwargs):
     return torch.square(torch.sub(x, y))
 
 
-def _golden_function_scatter(input_tensor_a, input_tensor_b, *args, **kwargs):
-    input_tensor_b[0:, 0:, : input_tensor_a.shape[-2], : input_tensor_a.shape[-1]] = input_tensor_a
-    return input_tensor_b
-
-
-ttnn.attach_golden_function(ttnn.scatter, golden_function=_golden_function_scatter)
-
-
 def _golden_function_outer(input_tensor_a, input_tensor_b, *args, **kwargs):
     import torch
 
