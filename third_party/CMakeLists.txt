@@ -338,6 +338,6 @@ if(BUILD_MLP_OP_PERF)
     CPMAddPackage(
         NAME mlp-op-perf
         GIT_REPOSITORY git@github.com:xanderchin/mlp-op-perf.git
-        GIT_TAG 6831d0c6726e9e5f264def1bf76fb3bd4efec72f
+        GIT_TAG 91f0da8c19faf0d3091c10c664bb958aceb3ee92
     )
 endif()

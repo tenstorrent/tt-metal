@@ -59,12 +59,79 @@ target_sources(
         test_graph_capture_arguments_transpose.cpp
         test_graph_query_op_constraints.cpp
         test_graph_query_op_runtime.cpp
+        test_op_runtime_offline.cpp
         test_launch_operation.cpp # TODO: Fix data race (TSan) then shift-left
         test_matmul_benchmark.cpp
 )
 target_include_directories(unit_tests_ttnn_basic PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(
     unit_tests_ttnn_basic
+    PRIVATE
+        test_common_libs
+        TTNN::CPP
+)
+
+# Add mlp-op-perf dependency if BUILD_MLP_OP_PERF is enabled
+if(BUILD_MLP_OP_PERF)
+    message(STATUS "BUILD_MLP_OP_PERF is enabled")
+
+    # Try multiple possible variable names for the mlp-op-perf source directory
+    set(MLP_OP_PERF_DIR "")
+    if(mlp_op_perf_SOURCE_DIR)
+        set(MLP_OP_PERF_DIR ${mlp_op_perf_SOURCE_DIR})
+        message(STATUS "Using mlp_op_perf_SOURCE_DIR: ${mlp_op_perf_SOURCE_DIR}")
+    elseif(mlp-op-perf_SOURCE_DIR)
+        set(MLP_OP_PERF_DIR ${mlp-op-perf_SOURCE_DIR})
+        message(STATUS "Using mlp-op-perf_SOURCE_DIR: ${mlp-op-perf_SOURCE_DIR}")
+    else()
+        # Fallback to CPM cache directory - find interface.hpp directly
+        file(GLOB_RECURSE INTERFACE_HPP_FILE "${CMAKE_SOURCE_DIR}/.cpmcache/mlp-op-perf/*/interface/interface.hpp")
+        if(INTERFACE_HPP_FILE)
+            list(GET INTERFACE_HPP_FILE 0 INTERFACE_FILE)
+            get_filename_component(MLP_OP_PERF_DIR ${INTERFACE_FILE} DIRECTORY)
+            get_filename_component(MLP_OP_PERF_DIR ${MLP_OP_PERF_DIR} DIRECTORY)
+            message(STATUS "Found mlp-op-perf at: ${MLP_OP_PERF_DIR}")
+        else()
+            message(
+                FATAL_ERROR
+                "mlp-op-perf interface.hpp not found. Make sure BUILD_MLP_OP_PERF is enabled and the package is downloaded."
+            )
+        endif()
+    endif()
+
+    # Verify the interface directory exists
+    if(NOT EXISTS "${MLP_OP_PERF_DIR}/interface/interface.hpp")
+        message(FATAL_ERROR "interface.hpp not found at ${MLP_OP_PERF_DIR}/interface/interface.hpp")
+    endif()
+
+    message(STATUS "Adding include directory: ${MLP_OP_PERF_DIR}/interface")
+
+    target_include_directories(
+        unit_tests_ttnn_basic
+        PRIVATE
+            ${MLP_OP_PERF_DIR}/interface
+            ${MLP_OP_PERF_DIR}/ops/include
+    )
+    target_compile_definitions(unit_tests_ttnn_basic PRIVATE BUILD_MLP_OP_PERF=1)
+
+    # Link the mlp-op-perf ops library
+    target_link_libraries(unit_tests_ttnn_basic PRIVATE ops_library)
+endif()
+
+add_library(unit_tests_ttnn_slow OBJECT)
+add_library(TTNN::Test::Slow ALIAS unit_tests_ttnn_slow)
+TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_slow)
+target_sources(
+    unit_tests_ttnn_slow
+    PRIVATE
+        test_async_runtime.cpp # TODO: Fix memory leak (LSan) then shift-left
+        test_conv2d.cpp # TODO: Fix misaligned memory load (UBSan) then shift-left
+        test_multi_cq_multi_dev.cpp
+        test_multiprod_queue.cpp
+)
+target_include_directories(unit_tests_ttnn_slow PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+target_link_libraries(
+    unit_tests_ttnn_slow
     PRIVATE
         test_common_libs
         TTNN::CPP
