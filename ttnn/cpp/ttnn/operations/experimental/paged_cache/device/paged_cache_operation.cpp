@@ -241,7 +241,36 @@ std::vector<ttnn::TensorSpec> PagedUpdateCacheDeviceOperation::compute_output_sp
     return {};
 }
 
-operation::ProgramWithCallbacks PagedUpdateCacheDeviceOperation::create_program(
+operation::MeshWorkloadWithCallbacks create_mesh_workload_from_programs(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::function<tt::tt_metal::operation::ProgramWithCallbacks(const ttnn::MeshCoordinate&)>& create_program) {
+    operation::MeshWorkloadWithCallbacks workload_with_callbacks;
+    for (const auto& range : tensor_coords.ranges()) {
+        for (const auto& coord : range) {
+            const ttnn::MeshCoordinateRange program_range(coord, coord);
+            auto program_with_callbacks = create_program(coord);
+            workload_with_callbacks.workload.add_program(program_range, std::move(program_with_callbacks.program));
+            if (program_with_callbacks.override_runtime_arguments_callback.has_value()) {
+                workload_with_callbacks.per_program_callbacks.emplace(
+                    program_range, std::move(*program_with_callbacks.override_runtime_arguments_callback));
+            }
+        }
+    }
+    return workload_with_callbacks;
+}
+
+operation::MeshWorkloadWithCallbacks PagedUpdateCacheDeviceOperation::create_mesh_workload(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    return create_mesh_workload_from_programs(tensor_coords, [&, this](const ttnn::MeshCoordinate& coord) {
+        return create_program_at(coord, input_tensors, optional_input_tensors, output_tensors);
+    });
+}
+
+operation::ProgramWithCallbacks PagedUpdateCacheDeviceOperation::create_program_at(
+    const ttnn::MeshCoordinate& coord,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
