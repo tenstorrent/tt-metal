@@ -118,35 +118,33 @@ FORCE_INLINE constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint
 
 // Check for get_noc_addr method
 template <typename, typename = void>
-struct has_get_noc_addr : std::false_type {};
+inline constexpr bool has_get_noc_addr_v = false;
 
 template <typename T>
-struct has_get_noc_addr<
+inline constexpr bool has_get_noc_addr_v<
     T,
     std::void_t<decltype(std::declval<T>().get_noc_addr(
-        std::declval<uint32_t>(), std::declval<uint32_t>(), std::declval<uint8_t>()))>> : std::true_type {};
+        std::declval<uint32_t>(), std::declval<uint32_t>(), std::declval<uint8_t>()))>> = true;
 
 // Check for member variable page_size
 template <typename, typename = void>
-struct has_page_size : std::false_type {};
+inline constexpr bool has_page_size_v = false;
 
 template <typename T>
-struct has_page_size<T, std::void_t<decltype(std::declval<T>().page_size)>> : std::true_type {};
+inline constexpr bool has_page_size_v<T, std::void_t<decltype(std::declval<T>().page_size)>> = true;
 
 // Check for log_base_2_of_page_size member variable
 template <typename, typename = void>
-struct has_log_base_2_of_page_size : std::false_type {};
+inline constexpr bool has_log_base_2_of_page_size_v = false;
 
 template <typename T>
-struct has_log_base_2_of_page_size<T, std::void_t<decltype(std::declval<T>().log_base_2_of_page_size)>>
-    : std::true_type {};
+inline constexpr bool has_log_base_2_of_page_size_v<T, std::void_t<decltype(std::declval<T>().log_base_2_of_page_size)>> = true;
 
 // Combined addrgen traits
 template <typename T>
-struct has_required_addrgen_traits {
-    static constexpr bool value =
-        has_get_noc_addr<T>::value && (has_page_size<T>::value || has_log_base_2_of_page_size<T>::value);
-};
+inline constexpr bool has_required_addrgen_traits_v =
+    has_get_noc_addr_v<T> and
+    (has_page_size_v<T> or has_log_base_2_of_page_size_v<T>);
 
 // clang-format off
 /**
