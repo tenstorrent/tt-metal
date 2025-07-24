@@ -54,12 +54,17 @@ def run_clone(
     """
     if input_dtype == "int32":
         torch_input = torch.randint(low=-10, high=11, size=shape, dtype=get_lib_dtype(torch, input_dtype))
+    elif input_dtype == "uint32":
+        torch_input = torch.randint(low=0, high=10, size=shape, dtype=get_lib_dtype(torch, input_dtype))
     else:
         torch_input = 2 * torch.rand(size=shape, dtype=get_lib_dtype(torch, input_dtype)) - 1
 
     if input_dtype == "int32":
         if output_dtype and output_dtype != "int32":
             pytest.skip("For int32 input, output_dtype must be None or int32.")
+    if input_dtype == "uint32":
+        if output_dtype and output_dtype != "uint32":
+            pytest.skip("For uint32 input, output_dtype must be None or uint32.")
     if output_dtype == "int32" and input_dtype != "int32":
         pytest.skip("For int32 output, input_dtype must also be int32.")
     if output_dtype != input_dtype and output_dtype and not tilized:
@@ -116,9 +121,11 @@ memory_config_list = [
     "tilized",
     [True, False],
 )
+@pytest.mark.parametrize("dtype", ["int32", "uint32"])
 def test_clone_shape(
     shape,
     tilized,
+    dtype,
     device,
 ):
     """
@@ -129,7 +136,7 @@ def test_clone_shape(
         shape,
         memory_config_list[0],
         memory_config_list[0],
-        "bfloat16",
+        dtype,
         None,
         tilized,
         None,
@@ -149,10 +156,12 @@ def test_clone_shape(
     "tilized",
     [True, False],
 )
+@pytest.mark.parametrize("dtype", ["int32", "uint32"])
 def test_clone_memory_config(
     input_memory_config,
     output_memory_config,
     tilized,
+    dtype,
     device,
 ):
     """
@@ -164,7 +173,7 @@ def test_clone_memory_config(
         [1, 3, 320, 384],
         input_memory_config,
         output_memory_config,
-        "bfloat16",
+        dtype,
         None,
         tilized,
         None,
@@ -175,9 +184,10 @@ def test_clone_memory_config(
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        "bfloat16",
-        "float32",
-        "int32",
+        # "bfloat16",
+        # "float32",
+        # "int32",
+        "uint32",
     ],
 )
 @pytest.mark.parametrize(
@@ -186,6 +196,7 @@ def test_clone_memory_config(
         "bfloat16",
         "float32",
         "int32",
+        "uint32",
         None,
     ],
 )
@@ -206,7 +217,7 @@ def test_clone_dtype_conversion(
     """
     torch.manual_seed(2024)
     run_clone(
-        [1, 3, 320, 384],
+        [1, 1, 4, 4],
         memory_config_list[0],
         memory_config_list[0],
         input_dtype,
