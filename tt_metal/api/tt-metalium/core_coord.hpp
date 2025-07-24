@@ -221,10 +221,12 @@ std::vector<CoreCoord> corerange_to_cores(
     const CoreRangeSet& crs, std::optional<uint32_t> max_cores = std::nullopt, bool row_wise = false);
 
 // Select a CoreRangeSet of cores from a CoreRangeSet.
+// The method will traverse the given CoreRangeSet in row-wise order and return a subset of cores based on start_index and end_index (inclusive), where each core is represented by it's own CoreRange in the returned CoreRangeSet.
 CoreRangeSet select_from_corerangeset(
     const CoreRangeSet& crs, uint32_t start_index, uint32_t end_index, bool row_wise = false);
 
 // Select a contiguous CoreRange of cores from a CoreRangeSet.
+// The method will select an x by y contiguous CoreRange of cores from the given CoreRangeSet. If multiple CoreRanges of size x by y are found, the method will return the lower leftmost subset of cores in the first available CoreRange.
 std::optional<CoreRange> select_contiguous_range_from_corerangeset(const CoreRangeSet& crs, uint32_t x, uint32_t y);
 
 bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b);
