@@ -64,9 +64,7 @@ class LMHeadTest(OpTestBase):
     ],
     indirect=["mesh_device"],
 )
-def test_lm_head_matmul(
-    mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache, grid_size=(8, 8)
-):
+def test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check_interval, grid_size=(8, 8)):
     if is_blackhole() and mesh_device.get_num_devices() > 1:
         pytest.skip("Multi-chip Blackhole has not been tested")
 
@@ -154,7 +152,7 @@ def test_lm_head_matmul(
     indirect=["mesh_device"],
 )
 def test_specific_chip_lm_head_matmul(
-    mesh_device, logical_chip_id, didt_workload_iterations, determinism_check_interval, use_program_cache
+    mesh_device, logical_chip_id, didt_workload_iterations, determinism_check_interval
 ):
     assert len(mesh_device.get_device_ids()) > logical_chip_id, "Not enough devices!"
 
@@ -162,7 +160,6 @@ def test_specific_chip_lm_head_matmul(
         mesh_device.get_device(logical_chip_id),
         didt_workload_iterations,
         determinism_check_interval,
-        use_program_cache,
         False,
     )
 
@@ -175,11 +172,9 @@ def test_specific_chip_lm_head_matmul(
     indirect=["t3k_single_board_mesh_device"],
 )
 def test_specific_board_lm_head_matmul(
-    t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache
+    t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval
 ):
-    test_lm_head_matmul(
-        t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache, False
-    )
+    test_lm_head_matmul(t3k_single_board_mesh_device, didt_workload_iterations, determinism_check_interval, False)
 
 
 @skip_for_blackhole("Use test_blackhole_grid_size_lm_head_matmul test for blackhole!")
@@ -198,12 +193,8 @@ def test_specific_board_lm_head_matmul(
     ],
     indirect=["mesh_device"],
 )
-def test_grid_size_lm_head_matmul(
-    mesh_device, grid_size, didt_workload_iterations, determinism_check_interval, use_program_cache
-):
-    test_lm_head_matmul(
-        mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache, False, grid_size=grid_size
-    )
+def test_grid_size_lm_head_matmul(mesh_device, grid_size, didt_workload_iterations, determinism_check_interval):
+    test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check_interval, False, grid_size=grid_size)
 
 
 @skip_for_wormhole_b0("Use test_grid_size_lm_head_matmul for blackhole!")
@@ -224,8 +215,6 @@ def test_grid_size_lm_head_matmul(
     indirect=["mesh_device"],
 )
 def test_blackhole_grid_size_lm_head_matmul(
-    mesh_device, grid_size, didt_workload_iterations, determinism_check_interval, use_program_cache
+    mesh_device, grid_size, didt_workload_iterations, determinism_check_interval
 ):
-    test_lm_head_matmul(
-        mesh_device, didt_workload_iterations, determinism_check_interval, use_program_cache, False, grid_size=grid_size
-    )
+    test_lm_head_matmul(mesh_device, didt_workload_iterations, determinism_check_interval, False, grid_size=grid_size)

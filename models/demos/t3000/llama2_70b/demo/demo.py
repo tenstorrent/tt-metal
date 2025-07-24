@@ -11,8 +11,8 @@ import pytest
 import torch
 import torch.nn.functional as F
 from loguru import logger
-from transformers.generation.utils import top_k_top_p_filtering
 
+from models.common.utils import top_k_top_p_filtering
 from models.demos.t3000.llama2_70b.reference.llama.llama import Llama
 from models.demos.t3000.llama2_70b.reference.llama.llama.tokenizer3 import ChatFormat
 from models.demos.t3000.llama2_70b.tt.llama_common import (
@@ -444,7 +444,6 @@ def test_LlamaModel_demo(
     ground_truth,
     max_batch_size,
     max_context_len,
-    use_program_cache,
 ):
     logger.info("Running LlamaModel demo")
     ## Get model config

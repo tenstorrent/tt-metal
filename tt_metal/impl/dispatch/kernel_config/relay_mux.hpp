@@ -9,8 +9,8 @@
 #include "fabric_edm_packet_header.hpp"
 #include "fd_kernel.hpp"
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
-#include "tt_metal/fabric/fabric_mux_config.hpp"
 #include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/fabric.hpp>
 
 namespace tt::tt_metal {
 
@@ -73,6 +73,7 @@ public:
         bool d2h,
         int tunnel_index) :
         FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection), d2h_{d2h}, tunnel_id_{tunnel_index} {
+        TT_FATAL(tunnel_id_ >= 0, "Relay Mux Tunnel Index must be >= 0");
         kernel_type_ = FDKernelType::ROUTING;
     }
 
@@ -111,5 +112,22 @@ void assemble_fabric_mux_client_config_args(
 // Helper function to calculate number of hops from a mmio device to downstream device
 // The two devices must be along the same tunnel.
 int get_num_hops(chip_id_t mmio_dev_id, chip_id_t downstream_dev_id);
+
+// Helper function to assemble args specific to the 2D fabric header
+template <typename Configuration>
+void assemble_2d_fabric_packet_header_args(Configuration& config, int my_device_id, int destination_device_id) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(my_device_id);
+    const auto& dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(destination_device_id);
+    const auto& forwarding_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    const auto& mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
+    const auto router_direction = control_plane.routing_direction_to_eth_direction(forwarding_direction.value());
+
+    config.my_dev_id = src_fabric_node_id.chip_id;
+    config.ew_dim = mesh_shape[1];
+    config.to_mesh_id = dst_fabric_node_id.mesh_id.get();
+    config.to_dev_id = dst_fabric_node_id.chip_id;
+    config.router_direction = router_direction;
+}
 
 }  // namespace tt::tt_metal

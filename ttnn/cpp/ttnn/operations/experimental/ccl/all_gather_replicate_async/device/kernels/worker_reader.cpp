@@ -4,7 +4,7 @@
 
 #include "dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include <cstdint>
 #include <utility>
 

@@ -43,7 +43,6 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt_metal::detail::TileSize(output_cb_data_format);
 
-    uint32_t num_tiles = input.physical_volume() / TILE_HW;
     uint32_t num_rows = input.physical_volume() / input.padded_shape()[-1] / TILE_HEIGHT;
     uint32_t Ht = input.padded_shape()[-2] / TILE_HEIGHT;
     uint32_t Wt = input.padded_shape()[-1] / TILE_WIDTH;
@@ -109,20 +108,20 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
         tt_metal::CircularBufferConfig(
             num_rotated_input_tiles * input_single_tile_size, {{rotated_input_cb_index, input_cb_data_format}})
             .set_page_size(rotated_input_cb_index, input_single_tile_size);
-    auto cb_rotated_input = tt_metal::CreateCircularBuffer(program, all_cores, cb_rotated_input_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_rotated_input_config);
 
     uint32_t num_cos_sin_tiles = token_idx.has_value() ? Wt : 2 * Wt;
     uint32_t cos_cb_index = CBIndex::c_2;
     tt_metal::CircularBufferConfig cb_cos_config =
         tt_metal::CircularBufferConfig(num_cos_sin_tiles * cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
             .set_page_size(cos_cb_index, cos_single_tile_size);
-    auto cb_cos = tt_metal::CreateCircularBuffer(program, all_cores, cb_cos_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_cos_config);
 
     uint32_t sin_cb_index = CBIndex::c_3;
     tt_metal::CircularBufferConfig cb_sin_config =
         tt_metal::CircularBufferConfig(num_cos_sin_tiles * sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
             .set_page_size(sin_cb_index, sin_single_tile_size);
-    auto cb_sin = tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_config);
 
     // Used for bcast scalar
     uint32_t src_scalar_cb_index = CBIndex::c_4;
@@ -131,7 +130,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
         tt_metal::CircularBufferConfig(
             num_scalar_tiles * scalar_single_tile_size, {{src_scalar_cb_index, scalar_cb_data_format}})
             .set_page_size(src_scalar_cb_index, scalar_single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     uint32_t num_interm_tiles = 1;
     uint32_t rotated_input_interm_cb_index = CBIndex::c_24;
@@ -139,21 +138,21 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
         tt_metal::CircularBufferConfig(
             num_interm_tiles * input_single_tile_size, {{rotated_input_interm_cb_index, input_cb_data_format}})
             .set_page_size(rotated_input_interm_cb_index, input_single_tile_size);
-    auto cb_rotated_input_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_rotated_input_interm_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_rotated_input_interm_config);
 
     uint32_t cos_interm_cb_index = CBIndex::c_25;
     tt_metal::CircularBufferConfig cb_cos_interm_config =
         tt_metal::CircularBufferConfig(
             num_interm_tiles * cos_single_tile_size, {{cos_interm_cb_index, cos_cb_data_format}})
             .set_page_size(cos_interm_cb_index, cos_single_tile_size);
-    auto cb_cos_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_cos_interm_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_cos_interm_config);
 
     uint32_t sin_interm_cb_index = CBIndex::c_26;
     tt_metal::CircularBufferConfig cb_sin_interm_config =
         tt_metal::CircularBufferConfig(
             num_interm_tiles * sin_single_tile_size, {{sin_interm_cb_index, sin_cb_data_format}})
             .set_page_size(sin_interm_cb_index, sin_single_tile_size);
-    auto cb_sin_interm = tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_interm_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_sin_interm_config);
 
     uint32_t output_cb_index = CBIndex::c_16;  // output operands start at index 16
     tt_metal::CircularBufferConfig cb_output_config =
@@ -171,17 +170,17 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     uint32_t untilized_sin_sync_cb_index = CBIndex::c_6;
     uint32_t retilized_cos_cb_index = CBIndex::c_29;
     uint32_t retilized_sin_cb_index = CBIndex::c_30;
-    std::map<string, string> reader_kernel_defines, writer_kernel_defines, compute_kernel_defines;
+    std::map<std::string, std::string> reader_kernel_defines, writer_kernel_defines, compute_kernel_defines;
     if (token_idx.has_value()) {
         tt_metal::CircularBufferConfig cb_cos2_config =
             tt_metal::CircularBufferConfig(Wt * cos_single_tile_size, {{retilized_cos_cb_index, cos_cb_data_format}})
                 .set_page_size(retilized_cos_cb_index, cos_single_tile_size);
-        auto cb_cos2 = tt_metal::CreateCircularBuffer(program, all_cores, cb_cos2_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_cos2_config);
 
         tt_metal::CircularBufferConfig cb_sin2_config =
             tt_metal::CircularBufferConfig(Wt * sin_single_tile_size, {{retilized_sin_cb_index, sin_cb_data_format}})
                 .set_page_size(retilized_sin_cb_index, sin_single_tile_size);
-        auto cb_sin2 = tt_metal::CreateCircularBuffer(program, all_cores, cb_sin2_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_sin2_config);
 
         std::map<uint8_t, tt::DataFormat> cos_interim_data_format_spec = {
             {untilized_cos_interm_cb_index, scalar_cb_data_format},
@@ -190,8 +189,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
             tt_metal::CircularBufferConfig(Wt * scalar_single_tile_size, cos_interim_data_format_spec)
                 .set_page_size(untilized_cos_interm_cb_index, scalar_single_tile_size)
                 .set_page_size(untilized_cos_sync_cb_index, scalar_single_tile_size);
-        auto cb_untilized_cos_interm =
-            tt_metal::CreateCircularBuffer(program, all_cores, cb_untilized_cos_interm_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_untilized_cos_interm_config);
 
         std::map<uint8_t, tt::DataFormat> sin_interim_data_format_spec = {
             {untilized_sin_interm_cb_index, scalar_cb_data_format},
@@ -200,8 +198,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
             tt_metal::CircularBufferConfig(Wt * scalar_single_tile_size, sin_interim_data_format_spec)
                 .set_page_size(untilized_sin_interm_cb_index, scalar_single_tile_size)
                 .set_page_size(untilized_sin_sync_cb_index, scalar_single_tile_size);
-        auto cb_untilized_sin_interm =
-            tt_metal::CreateCircularBuffer(program, all_cores, cb_untilized_sin_interm_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_untilized_sin_interm_config);
         reader_kernel_defines["DECODE_MODE"] = "1";
         writer_kernel_defines["DECODE_MODE"] = "1";
         compute_kernel_defines["DECODE_MODE"] = "1";
@@ -308,7 +305,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
              (std::uint32_t)retilized_sin_cb_index});
     }
 
-    auto rotary_embedding_kernel_group_1_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/"
         "rotary_embedding.cpp",
@@ -317,7 +314,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
     if (!core_group_2.ranges().empty()) {
         compute_kernel_args[9] = num_rows_per_core_group_2;
 
-        auto rotary_embedding_kernel_group_2_id = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/compute/"
             "rotary_embedding.cpp",

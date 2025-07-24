@@ -61,7 +61,7 @@ operation::ProgramWithCallbacks non_zero_indices_single_core(
             .set_page_size(output_cb_index_1, dst_rounded_page_size);
     auto cb_dst1 = tt::tt_metal::CreateCircularBuffer(program, core, cb_dst1_config);
 
-    std::map<string, string> defines;
+    std::map<std::string, std::string> defines;
     defines["NUM_BYTES"] = std::to_string(input.element_size());
 
     // Create Kernel
@@ -97,9 +97,9 @@ operation::ProgramWithCallbacks non_zero_indices_single_core(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto output_0 = output_tensors.at(0);
-        auto output_1 = output_tensors.at(1);
-        auto input = input_tensors.at(1);
+        const auto& output_0 = output_tensors.at(0);
+        const auto& output_1 = output_tensors.at(1);
+        const auto& input = input_tensors.at(1);
         uint32_t alignment_base = 32 / input.element_size();
         uint32_t aligned_elements = tt::div_up(input.padded_shape()[-1], alignment_base) * alignment_base;
         uint32_t actual_elements = input.padded_shape()[-1];

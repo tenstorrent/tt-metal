@@ -44,7 +44,7 @@ inline void RunPersistent1dFabricLatencyTest(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     bool is_6u = num_devices == 32 && tt::tt_metal::GetNumPCIeDevices() == num_devices;
-    if (num_devices < 4 && !is_6u) {
+    if (num_devices < line_size && !is_6u) {
         log_info(tt::LogTest, "This test can only be run on T3000 or 6u systems");
         return;
     }
@@ -74,7 +74,9 @@ inline void RunPersistent1dFabricLatencyTest(
             devices_.push_back(view.get_device(MeshCoordinate(r, c)));
         }
     } else {
-        if (line_size == 4) {
+        if (line_size == 2) {
+            devices_ = {view.get_device(MeshCoordinate(0, 0)), view.get_device(MeshCoordinate(0, 1))};
+        } else if (line_size == 4) {
             devices_ = {
                 view.get_device(MeshCoordinate(0, 1)),
                 view.get_device(MeshCoordinate(0, 2)),
@@ -159,6 +161,7 @@ inline void RunPersistent1dFabricLatencyTest(
             fabric_programs,
             fabric_program_ptrs,
             fabric_handle,
+            true,
             num_links,
             topology,
             tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval,
@@ -313,7 +316,7 @@ inline void RunPersistent1dFabricLatencyTest(
                 if (is_connected_in_direction) {
                     const auto connection = local_device_fabric_handle->uniquely_connect_worker(device, direction);
                     const auto new_rt_args = ttnn::ccl::worker_detail::generate_edm_connection_rt_args(
-                        connection, program, {worker_core_logical});
+                        connection, device->id(), program, {worker_core_logical});
                     log_info(
                         tt::LogTest,
                         "On device: {}, connecting to EDM fabric in {} direction. EDM noc_x: {}, noc_y: {}",
@@ -325,10 +328,16 @@ inline void RunPersistent1dFabricLatencyTest(
                 }
             } else {
                 if (is_connected_in_direction) {
+                    const auto device_fabric_node_id =
+                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
+                    chip_id_t connected_chip_id = direction == ttnn::ccl::EdmLineFabricOpInterface::FORWARD
+                                                      ? forward_device->id()
+                                                      : backward_device->id();
+                    const auto connected_device_fabric_node_id =
+                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(connected_chip_id);
                     tt::tt_fabric::append_fabric_connection_rt_args(
-                        device->id(),
-                        direction == ttnn::ccl::EdmLineFabricOpInterface::FORWARD ? forward_device->id()
-                                                                                  : backward_device->id(),
+                        device_fabric_node_id,
+                        connected_device_fabric_node_id,
                         0,
                         program,
                         {worker_core_logical},
@@ -448,7 +457,10 @@ inline void RunPersistent1dFabricLatencyTest(
     log_info(tt::LogTest, "Fabric teardown");
     if (!use_device_init_fabric) {
         persistent_fabric_teardown_sequence(
-            devices, subdevice_managers, fabric_handle.value(), tt::tt_fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+            devices,
+            subdevice_managers,
+            fabric_handle.value(),
+            tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
     }
 
     log_info(tt::LogTest, "Waiting for teardown completion");

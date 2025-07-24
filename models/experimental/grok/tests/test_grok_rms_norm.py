@@ -23,7 +23,7 @@ from models.utility_functions import (
 )
 
 
-def test_grok_rms_norm_inference(t3k_mesh_device, use_program_cache, reset_seeds):
+def test_grok_rms_norm_inference(t3k_mesh_device, reset_seeds):
     dtype = ttnn.bfloat8_b
 
     model_args = TtModelArgs(t3k_mesh_device, dummy_weights=os.getenv("CI") == "true")
@@ -71,7 +71,7 @@ def test_grok_rms_norm_inference(t3k_mesh_device, use_program_cache, reset_seeds
     assert passing, f"Grok_rms_norm output does not meet PCC requirement {0.99}."
 
 
-def test_grok_rms_norm_sharded_inference(t3k_mesh_device, use_program_cache, reset_seeds):
+def test_grok_rms_norm_sharded_inference(t3k_mesh_device, reset_seeds):
     dtype = ttnn.bfloat8_b
 
     model_args = TtModelArgs(t3k_mesh_device, dummy_weights=os.getenv("CI") == "true")

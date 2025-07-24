@@ -157,7 +157,6 @@ def run_perf_bert11(
 )
 def test_perf_bare_metal_wh(
     device,
-    use_program_cache,
     batch_size,
     model_config_str,
     expected_inference_time,
@@ -185,7 +184,6 @@ def test_perf_bare_metal_wh(
 )
 def test_perf_bare_metal_gs(
     device,
-    use_program_cache,
     batch_size,
     model_config_str,
     expected_inference_time,

@@ -107,7 +107,7 @@ void py_bind_reduce_scatter(pybind11::module& module) {
             mesh_device (MeshDevice): Device mesh to perform the line-reduce-scatter operation on.
         * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
 
-        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
+        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 
         Keyword Args:
             num_links (int, optional): Number of links to use for the reduce0scatter operation. Defaults to `1`.

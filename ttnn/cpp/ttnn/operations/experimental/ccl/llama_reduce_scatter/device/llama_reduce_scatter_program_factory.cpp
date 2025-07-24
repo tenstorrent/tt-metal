@@ -9,14 +9,16 @@
 #include <tt-metalium/device_pool.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/experimental/ccl/llama_common.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
-#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
-#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric.hpp>
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -228,10 +230,6 @@ uint32_t max_shards_per_worker(const std::vector<std::vector<ReadRequest>>& sche
     }
     return max_shards_per_worker;
 }
-CoreRangeSet get_llama_ccl_cores() {
-    // We externally reserve this core range for CCL cores
-    return CoreRangeSet(CoreRange({1, 6}, {2, 7}));
-}
 
 CoreRangeSet get_worker_cores(const CoreRangeSet& available_cores, const uint32_t num_workers, bool row_wise) {
     CoreRangeSet worker_cores;
@@ -286,9 +284,49 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
     tt::tt_metal::Program& program) {
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler = std::nullopt;
     return {
         std::move(program),
-        create_at_program_processing(operation_attributes, mesh_coordinate, tensor_args, tensor_return_value, program)};
+        create_at_program_processing(
+            operation_attributes, mesh_coordinate, tensor_args, tensor_return_value, program, empty_fused_op_signaler)};
+}
+
+std::tuple<CoreRangeSet, CoreRangeSet> LlamaReduceScatterDeviceOperation::get_rs_core_grids(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    const uint32_t ring_size = operation_attributes.ring_devices;
+    const auto& input_tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    auto input_tensor_width = input_tensor.logical_shape()[-1];
+    auto input_shard_spec = input_tensor.shard_spec().value();
+    uint32_t input_shard_width = input_shard_spec.shape[1];
+    uint32_t input_tiles_per_core_width = input_shard_width / input_tile_shape[1];
+    uint32_t num_links = operation_attributes.num_links;
+    const uint32_t num_devices = ring_size;
+    auto intermediate_packet_buffer_grid = tensor_args.intermediate_packet_buffer.shard_spec().value().grid;
+    uint32_t ncores_input = (input_tensor_width + input_shard_width - 1) / input_shard_width;
+    if (ncores_input % num_devices != 0) {
+        ncores_input = ((ncores_input + num_devices - 1) / num_devices) * num_devices;
+    }
+    uint32_t input_shard_cores_per_device = ncores_input / num_devices;
+    auto fabric_max_packet_size = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    size_t packet_size_bytes =
+        input_tensor.dtype() == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size) : fabric_max_packet_size;
+    tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    uint32_t input_page_size = tile_size(cb_data_format);
+    uint32_t num_pages_per_packet = packet_size_bytes / input_page_size;
+    uint32_t num_packets_total_per_device =
+        (input_shard_cores_per_device * input_tiles_per_core_width + num_pages_per_packet - 1) / num_pages_per_packet;
+    auto packet_worker_cores_grid = detail::get_worker_cores(
+        intermediate_packet_buffer_grid,
+        num_packets_total_per_device,
+        input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+
+    auto available_cores = llama_specific::get_custom_cores(num_links);
+
+    auto sender_core_grid = detail::get_worker_cores(
+        available_cores, num_links, input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+    auto all_cores_grid = packet_worker_cores_grid.merge(sender_core_grid);
+    return {sender_core_grid, all_cores_grid};
 }
 
 LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::shared_variables_t
@@ -297,7 +335,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value,
-    tt::tt_metal::Program& program) {
+    tt::tt_metal::Program& program,
+    const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler) {
     using namespace tt;
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
@@ -427,18 +466,13 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
         num_packets_total_per_device,
         input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
-    auto available_cores = detail::get_llama_ccl_cores();
-
-    auto sender_core_grid = detail::get_worker_cores(
-        available_cores, num_workers_per_link * num_links, input_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
-    auto all_cores_grid = packet_worker_cores_grid.merge(sender_core_grid);
-
     auto schedule = detail::distribute_work_evenly(
         input_shard_cores_per_device,
         num_workers_per_link * num_links,
         input_tiles_per_core_width,
         num_pages_per_packet);
     auto schedule_string = detail::schedule_to_string(schedule);
+    auto [sender_core_grid, all_cores_grid] = get_rs_core_grids(operation_attributes, tensor_args);
 
     // input sharded buffer
     uint32_t input_tensor_cb_id = tt::CBIndex::c_0;
@@ -468,7 +502,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     constexpr uint32_t buffering_factor = 2;
     // Allocate space for the client interface
     static constexpr auto num_packet_headers_storable = 8;
-    static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig packet_header_cb_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * buffering_factor,
@@ -627,7 +661,8 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
         packet_end_worker_core.at(0).x,
         packet_end_worker_core.at(0).y,
         sender_cores.size(),
-        total_num_read_txns};
+        total_num_read_txns,
+        signaler.has_value()};
 
     if (packet_worker_cores_grid.num_cores() == 1) {
         reader_defines["SKIP_MCAST"] = "1";
@@ -647,7 +682,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
         all_cores_grid,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
-            .noc = NOC::RISCV_1_default,
+            .noc = (operation_attributes.use_noc1_only) ? NOC::NOC_1 : NOC::RISCV_1_default,
+            .noc_mode = (operation_attributes.use_noc1_only) ? tt_metal::NOC_MODE::DM_DYNAMIC_NOC
+                                                             : tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = reader_compile_time_args,
             .defines = reader_defines});
 
@@ -655,7 +692,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     auto num_packet_worker_cores = packet_worker_cores.size();
 
     std::vector<uint32_t> writer_compile_time_args = {
-        input_tensor_cb_id,
         fabric_sender_cb_index,
         packet_header_cb_index,
         fabric_receiver_cb_index,
@@ -686,7 +722,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
         all_cores_grid,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
+            .noc = (operation_attributes.use_noc1_only) ? NOC::NOC_1 : NOC::RISCV_0_default,
+            .noc_mode = (operation_attributes.use_noc1_only) ? tt_metal::NOC_MODE::DM_DYNAMIC_NOC
+                                                             : tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = writer_compile_time_args,
             .defines = writer_defines});
 
@@ -762,14 +800,32 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
 
             writer_runtime_args.push_back(forward_fabric_connection);
             if (forward_fabric_connection) {
+                const auto target_device_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
+                const auto forward_device_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    target_device->id(), forward_device.value()->id(), link_idx, program, core, writer_runtime_args);
+                    target_device_fabric_node_id,
+                    forward_device_fabric_node_id,
+                    link_idx,
+                    program,
+                    core,
+                    writer_runtime_args);
             }
 
             writer_runtime_args.push_back(backward_fabric_connection);
             if (backward_fabric_connection) {
+                const auto target_device_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
+                const auto backward_device_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    target_device->id(), backward_device.value()->id(), link_idx, program, core, writer_runtime_args);
+                    target_device_fabric_node_id,
+                    backward_device_fabric_node_id,
+                    link_idx,
+                    program,
+                    core,
+                    writer_runtime_args);
             }
 
             link_idx++;
@@ -794,6 +850,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
             reader_runtime_args[is_reader_receiver_core_idx] = false;
             writer_runtime_args[is_writer_sender_core_idx] = false;
             writer_runtime_args[is_writer_worker_core_idx] = false;
+        }
+        if (signaler.has_value()) {
+            signaler.value().push_llama_rs_rt_args_for_rs(reader_runtime_args);
         }
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);

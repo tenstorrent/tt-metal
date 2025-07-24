@@ -51,16 +51,16 @@ public:
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Shape& shape);
 
-tt::stl::SmallVector<uint32_t> compute_strides(const tt::tt_metal::Shape& shape);
+tt::stl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape);
 
 }  // namespace tt::tt_metal
 
 template <>
-struct tt::stl::json::to_json_t<tt::tt_metal::Shape> {
+struct ttsl::json::to_json_t<tt::tt_metal::Shape> {
     nlohmann::json operator()(const tt::tt_metal::Shape& shape) const;
 };
 
 template <>
-struct tt::stl::json::from_json_t<tt::tt_metal::Shape> {
+struct ttsl::json::from_json_t<tt::tt_metal::Shape> {
     tt::tt_metal::Shape operator()(const nlohmann::json& json_object) const;
 };

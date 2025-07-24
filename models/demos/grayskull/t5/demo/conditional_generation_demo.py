@@ -237,9 +237,7 @@ def run_summarization_dataset_inference(device, batch_size, sequence_length, max
         (8, 128, 64, "google/flan-t5-small"),
     ),
 )
-def test_t5_demo_for_summarize(
-    input_path, device, use_program_cache, batch_size, sequence_length, max_tokens, model_name
-):
+def test_t5_demo_for_summarize(input_path, device, batch_size, sequence_length, max_tokens, model_name):
     disable_persistent_kernel_cache()
 
     return run_summarization_inference(input_path, device, batch_size, sequence_length, max_tokens, model_name)
@@ -252,7 +250,7 @@ def test_t5_demo_for_summarize(
         (8, 128, 64, "google/flan-t5-small"),
     ),
 )
-def test_t5_demo_for_summarize_dataset(device, use_program_cache, batch_size, sequence_length, max_tokens, model_name):
+def test_t5_demo_for_summarize_dataset(device, batch_size, sequence_length, max_tokens, model_name):
     disable_persistent_kernel_cache()
 
     return run_summarization_dataset_inference(device, batch_size, sequence_length, max_tokens, model_name)

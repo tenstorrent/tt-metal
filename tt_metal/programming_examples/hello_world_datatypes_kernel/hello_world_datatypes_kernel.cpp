@@ -8,6 +8,10 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
+#ifndef OVERRIDE_KERNEL_PREFIX
+#define OVERRIDE_KERNEL_PREFIX ""
+#endif
+
 int main() {
     // Initialize Program and Device
 
@@ -30,13 +34,13 @@ int main() {
     CircularBufferConfig cb_src0_config =
         CircularBufferConfig(buffer_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, buffer_size);
-    CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     // Configure and Create Data Movement Kernels
 
     KernelHandle data_reader_kernel_id = CreateKernel(
         program,
-        "tt_metal/programming_examples/hello_world_datatypes_kernel/kernels/dataflow/float_dataflow_kernel.cpp",
+        OVERRIDE_KERNEL_PREFIX "hello_world_datatypes_kernel/kernels/dataflow/float_dataflow_kernel.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 

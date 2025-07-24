@@ -45,7 +45,6 @@ public:
 private:
     std::unique_ptr<MeshWorkloadImpl> pimpl_;
 
-private:
     friend void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
     friend FDMeshCommandQueue;
 };

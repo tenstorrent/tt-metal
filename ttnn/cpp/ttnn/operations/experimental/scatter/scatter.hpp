@@ -22,15 +22,14 @@ struct ScatterOperation {
         const Tensor& index_tensor,
         const Tensor& source_tensor,
         const std::optional<MemoryConfig>& opt_out_memory_config,
-        const std::optional<scatter::ScatterReductionType>& opt_reduction,
-        std::optional<Tensor>& opt_output);
+        const std::optional<scatter::ScatterReductionType>& opt_reduction);
 };
 
 }  // namespace operations::experimental
 
 namespace experimental {
-constexpr auto scatter_ =
-    ttnn::register_operation<"ttnn::experimental::scatter_", ttnn::operations::experimental::ScatterOperation>();
+constexpr auto scatter =
+    ttnn::register_operation<"ttnn::experimental::scatter", ttnn::operations::experimental::ScatterOperation>();
 }  // namespace experimental
 
 }  // namespace ttnn

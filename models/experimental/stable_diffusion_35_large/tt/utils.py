@@ -11,6 +11,12 @@ import ttnn
 from loguru import logger
 
 
+def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
+    # create global semaphore handles
+    ccl_semaphore_handles = ttnn.create_global_semaphore(mesh_device, cores, initial_value)
+    return ccl_semaphore_handles
+
+
 def allocate_tensor_on_device_like(
     t: ttnn.Tensor, *, device: ttnn.Device, memory_config: ttnn.MemoryConfig | None = None
 ) -> ttnn.Tensor:
@@ -22,7 +28,7 @@ def to_torch(
     *,
     mesh_device: ttnn.MeshDevice | None = None,  # this is only used to construct a mesh composer
     dtype: torch.dtype | None = None,
-    mesh_composer: ttnn.MeshToTensor | None = None,
+    mesh_composer: ttnn.CppMeshToTensor | None = None,
     shard_dim: int | None = None,
     fix_special_numbers: bool = False,
 ) -> torch.Tensor:
@@ -108,6 +114,30 @@ def from_torch_fast(
         tensor = tensor.cpu()
 
     return tensor
+
+
+def from_torch_fast_2d(
+    t: torch.Tensor,
+    mesh_device: ttnn.MeshDevice,
+    mesh_shape: Tuple[int, int],
+    dims: Tuple[Optional[int], Optional[int]],
+    *,
+    layout: ttnn.Layout | None = None,
+    dtype: ttnn.DataType | None = None,
+    mesh_mapper: ttnn.TensorToMesh | None = None,
+    memory_config: ttnn.MemoryConfig | None = None,
+) -> ttnn.Tensor:
+    if mesh_mapper is None and (dims[0] is not None or dims[1] is not None):
+        mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=dims)
+
+    return ttnn.from_torch(
+        t,
+        device=mesh_device,
+        layout=layout,
+        dtype=dtype,
+        memory_config=memory_config,
+        mesh_mapper=mesh_mapper,
+    )
 
 
 def to_memory_config(
@@ -206,12 +236,14 @@ def assert_quality(
 def all_gather(
     x: ttnn.Tensor,
     dim: int,
+    topology: ttnn.Topology,
     *,
     cluster_axis: int | None = None,
     mesh_device: ttnn.MeshDevice | None = None,
     num_links: int = 1,
-    topology: ttnn.Topology = ttnn.Topology.Ring,
     memory_config: ttnn.MemoryConfig | None = None,
+    multi_device_global_semaphore,
+    parallel_config: DiTParallelConfig,
 ) -> ttnn.Tensor:
     assert cluster_axis is None or mesh_device is not None, "cluster_axis requires mesh_device to be set"
     assert x.shape[dim] == x.padded_shape[dim], f"dimension {dim} of {x.shape} should not be padded"
@@ -223,22 +255,26 @@ def all_gather(
         x = ttnn.reshape(x, x.padded_shape, x.padded_shape)
 
     if cluster_axis is not None:
-        x = ttnn.all_gather(
+        x = ttnn.experimental.all_gather_async(
             x,
-            dim,
-            cluster_axis,
-            mesh_device,
-            num_links=num_links,
+            dim=dim,
+            cluster_axis=cluster_axis,
+            mesh_device=mesh_device,
             topology=topology,
+            multi_device_global_semaphore=multi_device_global_semaphore,
             memory_config=memory_config,
+            num_links=num_links,
         )
 
-    x = ttnn.all_gather(
+    x = ttnn.experimental.all_gather_async(
         x,
         dim,
-        num_links=num_links,
+        cluster_axis=parallel_config.tensor_parallel.mesh_axis,
+        mesh_device=mesh_device,
         topology=topology,
+        multi_device_global_semaphore=multi_device_global_semaphore,
         memory_config=memory_config,
+        num_links=num_links,
     )
 
     if reshape:
@@ -251,3 +287,34 @@ def all_gather(
 def silu(x: ttnn.Tensor) -> ttnn.Tensor:
     """More accurate version of `ttnn.silu`"""
     return ttnn.div(x, ttnn.exp(ttnn.neg(x)) + 1)
+
+
+def unpadded_all_gather_async(
+    x,
+    dim,
+    cluster_axis,
+    mesh_device,
+    topology,
+    multi_device_global_semaphore,
+    memory_config=None,
+    num_links=1,
+    persistent_output_tensor=None,
+):
+    shape = list(x.shape)
+
+    x = ttnn.experimental.all_gather_async(
+        x,
+        dim=dim,
+        cluster_axis=cluster_axis,
+        mesh_device=mesh_device,
+        topology=topology,
+        multi_device_global_semaphore=multi_device_global_semaphore,
+        memory_config=memory_config,
+        num_links=num_links,
+        persistent_output_tensor=persistent_output_tensor,
+    )
+
+    shape[dim] = x.shape[dim]
+    x = ttnn.reshape(x, shape, x.padded_shape)
+
+    return x

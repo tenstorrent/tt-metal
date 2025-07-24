@@ -151,7 +151,7 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
     ids=["fp32_enabled", "fp32_disabled"],
 )
 def test_layernorm_part_2_with_program_cache(
-    inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, fp32_enabled, device, use_program_cache
+    inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, fp32_enabled, device
 ):
     run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device, fp32_enabled)
 
@@ -177,7 +177,7 @@ def test_layernorm_part_2_with_program_cache(
     [True, False],
     ids=["rmsnorm", "layernorm"],
 )
-def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, dtype, device, use_program_cache):
+def test_layernorm_part_2_with_program_cache2(inp_shape, n_devices, is_rmsnorm, dtype, device):
     dummy_tensors = []
 
     dram_memcfg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)

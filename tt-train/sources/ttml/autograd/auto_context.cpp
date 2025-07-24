@@ -26,7 +26,7 @@ uint32_t AutoContext::get_seed() const {
 }
 
 AutoContext& AutoContext::get_instance() {
-    static tt::stl::Indestructible<AutoContext> instance{};
+    static ttsl::Indestructible<AutoContext> instance{};
     return instance.get();
 }
 std::optional<NodeId> AutoContext::add_backward_node(GradFunction&& grad_function, std::span<NodeId> links) {
@@ -46,11 +46,13 @@ void AutoContext::reset_graph() {
     m_graph.reset();
 }
 
-void AutoContext::open_device() {
+void AutoContext::open_device(
+    const tt::tt_metal::distributed::MeshShape& mesh_shape, const std::vector<int>& device_ids) {
     if (m_device) {
         throw std::runtime_error("open_device was called after the device was created.");
     }
-    m_device = std::make_unique<core::MeshDevice>(m_mesh_shape);
+    m_mesh_shape = mesh_shape;
+    m_device = std::make_unique<core::MeshDevice>(m_mesh_shape, device_ids);
 }
 
 void AutoContext::close_device() {
@@ -66,13 +68,6 @@ ttnn::distributed::MeshDevice& AutoContext::get_device() {
 }
 
 AutoContext::AutoContext() : m_generator(m_seed) {
-}
-
-void AutoContext::set_mesh_shape(tt::tt_metal::distributed::MeshShape shape) {
-    if (m_device) {
-        throw std::runtime_error("set_mesh_shape was called after the device was created.");
-    }
-    m_mesh_shape = shape;
 }
 
 tt::tt_metal::distributed::MeshShape AutoContext::get_mesh_shape() const {

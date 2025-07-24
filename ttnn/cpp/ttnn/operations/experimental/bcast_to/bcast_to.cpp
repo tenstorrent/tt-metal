@@ -10,7 +10,6 @@
 #include "ttnn/operations/experimental/bcast_to/device/bcast_to_device_operation.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -34,7 +33,6 @@ auto check_shape(const ttnn::Tensor& input, const ttnn::Shape& output_shape) {
 
     // Validate broadcasting rules (checking from right to left)
     size_t input_ndim = input_shape.size();
-    size_t output_ndim = output_shape.size();
 
     for (int i = -1; i >= -static_cast<int>(input_ndim); --i) {
         // Check dimensions from the right side

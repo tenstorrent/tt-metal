@@ -45,16 +45,16 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_with_workers(
     const Tensor& input_tensors,
     const Tensor& output_tensors,
     ttnn::operations::binary::BinaryOpType reduce_op,
-    const uint32_t scatter_split_dim,
-    const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    uint32_t scatter_split_dim,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t ring_index,
     chip_id_t target_device_id,
-    const std::optional<chip_id_t> receiver_device_id,
-    const std::optional<chip_id_t> sender_device_id,
+    std::optional<chip_id_t> receiver_device_id,
+    std::optional<chip_id_t> sender_device_id,
     ttnn::ccl::Topology topology,
-    const std::optional<size_t> user_defined_num_workers,
-    const std::optional<size_t> user_defined_num_buffers_per_channel);
+    std::optional<size_t> user_defined_num_workers,
+    std::optional<size_t> user_defined_num_buffers_per_channel);
 }
 
 };  // namespace ccl
@@ -63,47 +63,47 @@ namespace operations::ccl {
 
 Tensor reduce_scatter(
     const Tensor& input_tensor,
-    const int32_t dim,
+    int32_t dim,
     ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
-    const uint32_t num_links = 1,
+    uint32_t num_links = 1,
     const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-    const std::optional<size_t> user_defined_num_workers = std::nullopt,
-    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
+    std::optional<size_t> user_defined_num_workers = std::nullopt,
+    std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
 
 std::vector<Tensor> reduce_scatter(
     const std::vector<Tensor>& input_tensors,
-    const int32_t dim,
+    int32_t dim,
     ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
-    const uint32_t num_links = 1,
+    uint32_t num_links = 1,
     const MemoryConfig& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-    const std::optional<size_t> user_defined_num_workers = std::nullopt,
-    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
+    std::optional<size_t> user_defined_num_workers = std::nullopt,
+    std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
 
 Tensor reduce_scatter(
     const ttnn::Tensor& input_tensor,
-    const int32_t dim,
-    const uint32_t cluster_axis,
+    int32_t dim,
+    uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
-    const uint32_t num_links = 1,
+    uint32_t num_links = 1,
     const std::optional<ttnn::MemoryConfig>& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-    const std::optional<size_t> user_defined_num_workers = std::nullopt,
-    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
+    std::optional<size_t> user_defined_num_workers = std::nullopt,
+    std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
 
 std::vector<Tensor> reduce_scatter(
     const std::vector<ttnn::Tensor>& input_tensors,
-    const int32_t dim,
-    const uint32_t cluster_axis,
+    int32_t dim,
+    uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
-    const uint32_t num_links = 1,
+    uint32_t num_links = 1,
     const std::optional<ttnn::MemoryConfig>& output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
-    const std::optional<size_t> user_defined_num_workers = std::nullopt,
-    const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
+    std::optional<size_t> user_defined_num_workers = std::nullopt,
+    std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);
 
 }  // namespace operations::ccl
 

@@ -46,10 +46,11 @@ public:
 
     ttnn::distributed::MeshDevice& get_device();
 
-    void set_mesh_shape(tt::tt_metal::distributed::MeshShape shape);
     [[nodiscard]] tt::tt_metal::distributed::MeshShape get_mesh_shape() const;
 
-    void open_device();
+    void open_device(
+        const tt::tt_metal::distributed::MeshShape& mesh_shape = tt::tt_metal::distributed::MeshShape(1, 1),
+        const std::vector<int>& device_ids = std::vector<int>{});
 
     void close_device();
 
@@ -70,7 +71,7 @@ private:
 
     std::shared_ptr<DistributedContext> m_distributed_context;
 
-    friend class tt::stl::Indestructible<AutoContext>;
+    friend class ttsl::Indestructible<AutoContext>;
 };
 
 inline auto& ctx() {

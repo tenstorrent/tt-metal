@@ -10,7 +10,7 @@ struct MorehMean {
     static Tensor invoke(
         const Tensor& input,
         const std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>>& dims,
-        const bool keepdim,
+        bool keepdim,
         const std::optional<uint32_t>& divisor,
         const std::optional<Tensor>& output,
         const std::optional<MemoryConfig>& memory_config,

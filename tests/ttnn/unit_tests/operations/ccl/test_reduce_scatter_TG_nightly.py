@@ -108,7 +108,6 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
     input_dtype,
     layout,
     buffer_type: ttnn.BufferType,
-    use_program_cache,
     function_level_defaults,
     input_shard_spec: ttnn.ShardSpec = None,
     num_reduce_scatter_instances: int = 1,
@@ -119,8 +118,6 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
     use_reduce_scatter_async=False,
     use_persistent_output=False,
 ):
-    mesh_device.enable_program_cache()
-
     per_reduce_scatter_output_shape = list(per_chip_input_shape)
     per_reduce_scatter_output_shape[dim] *= num_devices_per_line
     full_mesh_input_shape = list(per_reduce_scatter_output_shape)
@@ -380,7 +377,6 @@ def test_line_reduce_scatter_on_TG_rows_post_commit(
     input_dtype,
     layout,
     buffer_type,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters=16,
@@ -398,7 +394,6 @@ def test_line_reduce_scatter_on_TG_rows_post_commit(
         input_dtype,
         layout,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         num_reduce_scatter_instances=replication_factor,
@@ -441,7 +436,6 @@ def test_line_reduce_scatter_on_TG_cols_post_commit(
     input_dtype,
     layout,
     buffer_type,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters=16,
@@ -460,7 +454,6 @@ def test_line_reduce_scatter_on_TG_cols_post_commit(
         input_dtype,
         layout,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         num_reduce_scatter_instances=replication_factor,

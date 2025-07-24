@@ -2,8 +2,11 @@ add_executable(distributed_unit_tests)
 target_sources(
     distributed_unit_tests
     PRIVATE
+        test_auto_mpi_init.cpp
+        test_control_plane_local_mesh_binding.cpp
         test_end_to_end_eltwise.cpp
         test_distributed_host_buffer.cpp
+        test_maybe_remote.cpp
         test_mesh_buffer.cpp
         test_mesh_coord.cpp
         test_mesh_device.cpp
@@ -70,3 +73,5 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
 )
+
+add_subdirectory(multiprocess)

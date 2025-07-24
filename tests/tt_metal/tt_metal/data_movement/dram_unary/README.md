@@ -26,7 +26,7 @@ Three different test cases are implemented using the above parameters.
 Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B for BH) as page size.
 Each test case has multiple runs, and each run has a unique runtime host id, assigned by a global counter.
 
-1. DRAM Interleaved Packet Sizes: Tests different number of transactions and transaction sizes by varying the num_of_transactions and transaction_size_pages parameters.
-2. DRAM Interleaved Core Locations: Tests different cores on device (core grid dependent on architecture) by varying the cores parameter.
-3. DRAM Sharded: Tests Sharded DRAM buffer configuration by varying tensor_shape_in_pages and num_dram_banks parameters.
+1. DRAM Packet Sizes: Tests different number of transactions and transaction sizes by varying the num_of_transactions and pages_per_transaction parameters.
+2. DRAM Core Locations: Tests different cores on device (core grid dependent on architecture) by varying the core_coord parameter.
+3. DRAM Channels: Tests different DRAM channels by varying the dram_channel parameter.
 4. DRAM Directed Ideal: Tests the most optimal transaction between two cores that maximizes the transaction size and performs enough transactions to amortize initialization overhead.

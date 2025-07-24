@@ -273,11 +273,20 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
     job_submission_ts_dt = get_datetime_from_github_datetime(job_submission_ts)
     job_start_ts_dt = get_datetime_from_github_datetime(job_start_ts)
 
-    if job_submission_ts_dt > job_start_ts_dt:
-        logger.warning(
-            f"Job {github_job_id} seems to have a start time that's earlier than submission. Setting equal for data"
-        )
-        job_submission_ts = job_start_ts
+    if job_submission_ts_dt > job_start_ts_dt or github_job["conclusion"] == "skipped":
+        if github_job["conclusion"] == "skipped":
+            # When the job is skipped, github may set the start timestamp to an invalid value
+            # In this case, just set the started_at timestamp to the created_at timestamp
+            # See https://github.com/tenstorrent/tt-metal/issues/24151 for an example
+            logger.warning(
+                f"Job {github_job_id} is skipped. Setting start timestamp equal to submission timestamp for data"
+            )
+            job_start_ts = job_submission_ts
+        else:
+            logger.warning(
+                f"Job {github_job_id} seems to have a start time that's earlier than submission. Setting start timestamp equal to submission timestamp for data"
+            )
+            job_submission_ts = job_start_ts
 
     job_end_ts = github_job["completed_at"]
 

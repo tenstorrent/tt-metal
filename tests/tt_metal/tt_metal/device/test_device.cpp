@@ -32,7 +32,6 @@
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/tt_core_coordinates.h"
 #include <tt-metalium/utils.hpp>
 
 namespace tt::tt_metal {
@@ -213,7 +212,7 @@ TEST_F(DeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
         }
 
         tt_metal::Program program = tt_metal::CreateProgram();
-        string kernel_name = "tests/tt_metal/tt_metal/test_kernels/misc/ping_legal_l1s.cpp";
+        std::string kernel_name = "tests/tt_metal/tt_metal/test_kernels/misc/ping_legal_l1s.cpp";
         CoreCoord logical_target_core(0, 0);
         uint32_t intermediate_l1_addr = devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t size_bytes = host_input.size() * sizeof(uint32_t);
@@ -234,7 +233,7 @@ TEST_F(DeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
             uint32_t read_address =
                 l1_address + this->devices_.at(id)->allocator()->get_bank_offset(BufferType::L1, bank_id);
             tt_metal::detail::ReadFromDeviceL1(this->devices_.at(id), logical_core, read_address, size_bytes, output);
-            ASSERT_TRUE(output.size() == host_input.size());
+            ASSERT_EQ(output.size(), host_input.size());
             uint32_t expected_value =
                 bank_id_to_value.at(bank_id) + 1;  // ping_legal_l1s kernel increments each value it reads
             ASSERT_TRUE(output.at(0) == expected_value) << "Logical core " + logical_core.str() + " should have " +

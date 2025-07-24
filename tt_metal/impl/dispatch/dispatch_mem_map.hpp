@@ -32,7 +32,7 @@ public:
     DispatchMemMap& operator=(DispatchMemMap&& other) noexcept = delete;
     DispatchMemMap(const DispatchMemMap&) = delete;
     DispatchMemMap(DispatchMemMap&& other) noexcept = delete;
-    DispatchMemMap(const CoreType& core_type, const uint32_t num_hw_cqs);
+    DispatchMemMap(const CoreType& core_type, uint32_t num_hw_cqs);
 
     uint32_t prefetch_q_entries() const;
 
@@ -60,10 +60,6 @@ public:
 
     uint32_t prefetch_d_buffer_pages() const;
 
-    uint32_t mux_buffer_size(uint8_t num_hw_cqs = 1) const;
-
-    uint32_t mux_buffer_pages(uint8_t num_hw_cqs = 1) const;
-
     uint32_t dispatch_s_buffer_size() const;
 
     uint32_t dispatch_s_buffer_pages() const;
@@ -81,9 +77,11 @@ public:
     // Offset to be passed in the go message.
     uint8_t get_dispatch_message_update_offset(uint32_t index) const;
 
+    uint32_t get_prefetcher_l1_size() const;
+
 private:
     // Reset the instance using the settings for the core_type and num_hw_cqs.
-    void reset(const CoreType& core_type, const uint32_t num_hw_cqs);
+    void reset(const CoreType& core_type, uint32_t num_hw_cqs);
 
     std::pair<uint32_t, uint32_t> get_device_l1_info(const CoreType& core_type) const;
 

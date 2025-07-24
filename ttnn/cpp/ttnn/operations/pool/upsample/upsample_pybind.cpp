@@ -38,7 +38,6 @@ void bind_upsample(py::module& module) {
 
         )doc";
 
-    using OperationType = decltype(ttnn::upsample);
     ttnn::bind_registered_operation(
         module,
         ttnn::upsample,

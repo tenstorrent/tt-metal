@@ -15,10 +15,10 @@ from models.demos.yolov9c.demo.demo_utils import (
     save_seg_predictions_by_model,
 )
 from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
-from models.experimental.yolo_evaluation.yolo_common_evaluation import save_yolo_predictions_by_model
-from models.experimental.yolo_evaluation.yolo_evaluation_utils import LoadImages
-from models.experimental.yolo_evaluation.yolo_evaluation_utils import postprocess as obj_postprocess
-from models.experimental.yolo_evaluation.yolo_evaluation_utils import preprocess
+from models.experimental.yolo_eval.evaluate import save_yolo_predictions_by_model
+from models.experimental.yolo_eval.utils import LoadImages
+from models.experimental.yolo_eval.utils import postprocess as obj_postprocess
+from models.experimental.yolo_eval.utils import preprocess
 from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 
 
@@ -60,7 +60,6 @@ def test_demo(
     use_weights_from_ultralytics,
     model_type,
     model_task,
-    use_program_cache,
     reset_seeds,
 ):
     disable_persistent_kernel_cache()

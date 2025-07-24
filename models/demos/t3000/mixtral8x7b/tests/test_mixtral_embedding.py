@@ -20,7 +20,7 @@ class Emb(torch.nn.Module):
         return self.emb(x)
 
 
-def test_mixtral_embedding(device, use_program_cache, reset_seeds):
+def test_mixtral_embedding(device, reset_seeds):
     dtype = ttnn.bfloat16
 
     model_args = TtModelArgs(device)

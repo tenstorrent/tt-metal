@@ -118,10 +118,10 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        auto output = output_tensors.at(0);
-        auto input_a = input_tensors.at(1);
-        auto input_b = input_tensors.at(2);
-        auto batch_ids = input_tensors.at(0);
+        const auto& output = output_tensors.at(0);
+        const auto& input_a = input_tensors.at(1);
+        const auto& input_b = input_tensors.at(2);
+        const auto& batch_ids = input_tensors.at(0);
         uint32_t core_id = 0;
         uint32_t B = input_a.padded_shape()[0];
         uint32_t b = input_b.padded_shape()[0];

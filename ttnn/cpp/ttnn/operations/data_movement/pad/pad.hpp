@@ -24,16 +24,16 @@ struct ExecutePad {
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::SmallVector<PadSpecDim>& padding,
-        const float value,
-        const bool use_multicore,
+        float value,
+        bool use_multicore,
         const std::optional<MemoryConfig>& memory_config_arg);
 
     static ttnn::Tensor invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::SmallVector<std::pair<uint32_t, uint32_t>>& padding,
-        const float value,
-        const bool use_multicore = false,
+        float value,
+        bool use_multicore = false,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt);
 
     // legacy API
@@ -42,8 +42,8 @@ struct ExecutePad {
         const ttnn::Tensor& input_tensor,
         const tt::tt_metal::Array4D& output_shape,
         const tt::tt_metal::Array4D& input_tensor_start,
-        const float value,
-        const bool use_multicore = false,
+        float value,
+        bool use_multicore = false,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt);
 };
 

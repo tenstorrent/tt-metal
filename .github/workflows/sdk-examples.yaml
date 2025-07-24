@@ -54,6 +54,7 @@ jobs:
         run: |
           set -euo pipefail
           for example in /usr/share/${{ inputs.product }}/examples/*; do
+
             example_name=$(basename "$example")
             # Wouldn't it be nice if we could have nested groups?
             # Yeah, others thought so, too. https://github.com/actions/toolkit/issues/1001
@@ -63,14 +64,12 @@ jobs:
             cmake --build .
             echo "::endgroup::"
 
-            echo "::group::${example_name} - run"
             # Find and run the built executable
-            exec_path=$(find . -maxdepth 1 -type f -executable -not -name "*.so")
-            [ "$(echo "$exec_path" | wc -l)" -eq 1 ] || {
-              echo "Expected exactly one executable, found: $(echo "$exec_path" | wc -l)" >&2
-              echo "$exec_path" >&2
-              exit 1
-            }
-            "$exec_path"
-            echo "::endgroup::"
+            exec_path=$(find . -maxdepth 2 -type f -executable -not -name "*.so")
+            for exe in $exec_path; do
+              exe_basename=$(basename "$exe")
+              echo "::group::${exe_basename} - run"
+              "$exe"
+              echo "::endgroup::"
+            done
           done

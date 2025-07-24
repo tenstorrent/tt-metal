@@ -65,12 +65,30 @@ run_t3000_resnet50_tests() {
 
   echo "LOG_METAL: Running run_t3000_resnet50_tests"
 
-  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/resnet50/tests/test_perf_e2e_resnet50.py -m "model_perf_t3000" ; fail+=$?
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/resnet50/tests/test_perf_e2e_resnet50.py -m "model_perf_t3000" ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))
   echo "LOG_METAL: run_t3000_resnet50_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_t3000_sentence_bert_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_sentence_bert_tests"
+
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/sentence_bert/tests/test_sentence_bert_e2e_performant.py -m "model_perf_t3000" ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_sentence_bert_tests $duration seconds to complete"
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
@@ -121,6 +139,11 @@ run_t3000_ccl_tests() {
 
 }
 
+run_t3000_model_perf_tests() {
+  # Run model performance tests
+  run_t3000_sentence_bert_tests
+}
+
 fail=0
 main() {
   # For CI pipeline - source func commands but don't execute tests if not invoked directly
@@ -165,8 +188,10 @@ main() {
 
   if [[ "$pipeline_type" == "ccl_perf_t3000_device" ]]; then
     run_t3000_ccl_tests
+  elif [[ "$pipeline_type" == "model_perf_t3000" ]]; then
+    run_t3000_model_perf_tests
   else
-    echo "$pipeline_type is invalid (supported: [ccl_perf_t3000_device])" 2>&1
+    echo "$pipeline_type is invalid (supported: [ccl_perf_t3000_device, model_perf_t3000])" 2>&1
     exit 1
   fi
 

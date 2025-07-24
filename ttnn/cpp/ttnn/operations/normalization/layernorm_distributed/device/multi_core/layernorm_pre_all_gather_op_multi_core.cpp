@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_op.hpp"
+#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_pre_all_gather_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 
@@ -11,6 +11,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <optional>
+#include <string>
 #include <variant>
 
 using uint32_t = std::uint32_t;
@@ -23,10 +24,6 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 inline bool is_dram(const Tensor& input_tensor) {
     return input_tensor.memory_config().buffer_type() == BufferType::DRAM;
 }
-inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
-    return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
-}
-inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
 
 inline uint16_t bfloat16(float float_num) {
     uint32_t uint32_data;
@@ -58,7 +55,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     DeviceComputeKernelConfig compute_kernel_config) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;
-    const auto shape = a.padded_shape();
+    const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
     const uint32_t NC = a.physical_volume() / HW;
@@ -186,7 +183,7 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
                                                       (std::uint32_t)writer_block_size};
 
     bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
 
     if (is_rmsnorm) {
         compute_defines["RMSNORM"] = "1";

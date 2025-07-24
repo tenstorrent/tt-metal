@@ -6,7 +6,7 @@
 #include <utility>
 
 #include "ttnn/tensor/types.hpp"
-#include "cpp/ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+#include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 
 namespace ttnn::operations::data_movement {
 

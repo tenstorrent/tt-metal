@@ -17,7 +17,6 @@ from tests.scripts.common import get_updated_device_params
 def reset_device(request, device_params):
     def _reset_device(device):
         """Closes and reopens the device to ensure a fresh state."""
-        ttnn.DumpDeviceProfiler(device)
         ttnn.close_device(device)
 
         # Reopen a new device instance

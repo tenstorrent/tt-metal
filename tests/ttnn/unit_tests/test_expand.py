@@ -43,7 +43,7 @@ def test_expand(input_shape, output_shape, tensor_layout, device):
         ttnn.TILE_LAYOUT,
     ],
 )
-def test_expand_callback(tensor_layout, device, use_program_cache):
+def test_expand_callback(tensor_layout, device):
     num_program_cache_entries_list = []
     for i in range(2):
         test_expand([32, 1], [32, 32], tensor_layout, device)

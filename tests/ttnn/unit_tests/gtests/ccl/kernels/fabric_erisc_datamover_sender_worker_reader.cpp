@@ -10,7 +10,9 @@ void kernel_main() {
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t num_pages_to_read_total = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t pages_per_edm_buffer = 1;
+    constexpr uint32_t _ = get_compile_time_arg_val(3);  // unused pages_per_edm_buffer
+    constexpr bool write_scatter_mode = get_compile_time_arg_val(4) == 1;
+    constexpr uint32_t pages_per_edm_buffer = (write_scatter_mode ? 2 : 1);
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -20,7 +22,8 @@ void kernel_main() {
 
     DPRINT << "swr: args " << "\n\tsrc_addr=" << src_addr << "\n\tsrc_is_dram=" << (src_is_dram ? "T" : "F")
            << "\n\tnum_pages_to_read_total=" << num_pages_to_read_total
-           << "\n\tpages_per_edm_buffer=" << pages_per_edm_buffer << "\n\tpage_size=" << page_size << "\n";
+           << "\n\tpages_per_edm_buffer=" << pages_per_edm_buffer << "\n\tpage_size=" << page_size
+           << "\n\twrite_scatter_mode=" << (write_scatter_mode ? "T" : "F") << "\n";
 
     for (uint32_t num_pages_read = 0; num_pages_read < num_pages_to_read_total;
          num_pages_read += pages_per_edm_buffer) {

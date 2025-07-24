@@ -1,28 +1,23 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
 #include "sfpi.h"
-using namespace sfpi;
 
-namespace ckernel {
-namespace sfpu {
+namespace ckernel::sfpu {
 
-template <bool APPROXIMATION_MODE>
+template <typename V, typename T>
 inline void calculate_logical_not_unary() {
 #pragma GCC unroll 0
     for (int d = 0; d < 8; d++) {
-        vFloat v = dst_reg[0];
-        v_if(v == 0) { dst_reg[0] = 1.0f; }
-        v_else { dst_reg[0] = 0.0f; }
+        V v = sfpi::dst_reg[0];
+        v_if(v == 0) { sfpi::dst_reg[0] = T(1); }
+        v_else { sfpi::dst_reg[0] = T(0); }
         v_endif;
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
-}  // namespace sfpu
-}  // namespace ckernel
+}  // namespace ckernel::sfpu

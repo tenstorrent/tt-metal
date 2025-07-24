@@ -31,9 +31,9 @@
 #include <tt-metalium/tile.hpp>
 #include "impl/context/metal_context.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/common/common.hpp"
-#include "ttnn/cpp/ttnn/operations/functions.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/trace.hpp"
@@ -268,7 +268,8 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         per_core_M,
         per_core_N,
         /*transpose_mcast=*/false,
-        /*fused_activation=*/std::nullopt};
+        /*fused_activation=*/std::nullopt,
+        /*fuse_batch=*/true};
 
     const ttnn::DeviceComputeKernelConfig compute_kernel_config = ttnn::init_device_compute_kernel_config(
         device_->arch(),
@@ -277,7 +278,8 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         /*default_approx_mode=*/true,
         /*default_fp32_acc=*/false,
         /*default_l1_acc=*/true,
-        /*default_dst_full_sync_en=*/false);
+        /*default_dst_full_sync_en=*/false,
+        /*default_throttle_level=*/ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
 
     const ttnn::MemoryConfig out_mem_config =
         out_sharded ? ttnn::MemoryConfig{ttnn::TensorMemoryLayout::BLOCK_SHARDED, ttnn::BufferType::L1}

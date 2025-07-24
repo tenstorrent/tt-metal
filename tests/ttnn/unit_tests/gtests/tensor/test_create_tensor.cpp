@@ -64,7 +64,7 @@ void run_create_tensor_test(tt::tt_metal::distributed::MeshDevice* device, const
 
     auto input_storage = tt::tt_metal::DeviceStorage{input_buffer, {tt::tt_metal::distributed::MeshCoordinate{0, 0}}};
 
-    Tensor input_tensor = Tensor(input_storage, tensor_spec, ReplicateTensor{});
+    Tensor input_tensor = Tensor(input_storage, tensor_spec, ReplicateTensor{}, TensorTopology{});
 
     ttnn::write_buffer(io_cq, input_tensor, {host_data});
 
@@ -87,7 +87,7 @@ class CreateTensorTest : public ttnn::TTNNFixtureWithDevice,
                          public ::testing::WithParamInterface<CreateTensorParams> {};
 
 TEST_P(CreateTensorTest, Tile) {
-    CreateTensorParams params = GetParam();
+    const CreateTensorParams& params = GetParam();
     run_create_tensor_test(device_, params.shape);
 }
 
@@ -132,13 +132,6 @@ TEST_P(EmptyTensorTest, Combinations) {
     auto tensor_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
         dtype, PageConfig(layout), memory_config, /* logical */ shape, /* padded */ shape);
 
-    // Ignoring too large single bank allocations
-    if (memory_config.memory_layout() == TensorMemoryLayout::SINGLE_BANK) {
-        if (tensor_layout.compute_page_size_bytes(shape) >= 500 * 1024) {
-            GTEST_SKIP() << "Skipping test with page size exceeding single bank size of 500 kB!";
-        }
-    }
-
     auto tensor = tt::tt_metal::create_device_tensor(shape, dtype, layout, device_, memory_config);
     EXPECT_EQ(tensor.logical_shape(), shape);
 
@@ -174,10 +167,6 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::Values(tt::tt_metal::Layout::TILE, tt::tt_metal::Layout::ROW_MAJOR),
 
         ::testing::Values(
-            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::SINGLE_BANK, ttnn::BufferType::L1},
-
-            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::SINGLE_BANK, ttnn::BufferType::DRAM},
-
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1},
 
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}

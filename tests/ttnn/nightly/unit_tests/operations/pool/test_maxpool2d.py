@@ -187,12 +187,6 @@ def run_max_pool(
     act_reshaped = act_permuted.reshape(act_shape)
 
     if dtype == ttnn.bfloat8_b:
-        if (in_h * in_w) % 32 != 0:
-            pytest.skip("For BFP8_B datatype, input height * width should be multiple of 32")
-        if shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED and (in_c / max_cores) % 32 != 0:
-            pytest.skip("For BFP8_B datatype, input channels / max_cores should be multiple of 32")
-        if shard_scheme == ttnn.TensorMemoryLayout.BLOCK_SHARDED and (in_c / cores_x) % 32 != 0:
-            pytest.skip("For BFP8_B datatype, input channels / cores_x should be multiple of 32")
         ttact = ttnn.from_torch(act_reshaped, dtype, layout=ttnn.TILE_LAYOUT)
     else:
         ttact = ttnn.from_torch(act_reshaped, dtype)
@@ -381,9 +375,7 @@ def run_max_pool(
         True,
     ],
 )
-def test_run_max_pool(
-    act_shape, kernel_size, padding, stride, dilation, device, torch_tensor_map, dtype, use_program_cache, ceil_mode
-):
+def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, torch_tensor_map, dtype, ceil_mode):
     run_max_pool(
         act_shape,
         kernel_size,
@@ -473,7 +465,6 @@ def test_run_max_pool_width_shard(
     device,
     torch_tensor_map,
     dtype,
-    use_program_cache,
     ceil_mode,
 ):
     run_max_pool(
@@ -585,7 +576,6 @@ def test_run_max_pool_block_shard(
     device,
     torch_tensor_map,
     dtype,
-    use_program_cache,
     ceil_mode,
 ):
     run_max_pool(
@@ -618,7 +608,6 @@ def test_run_max_pool_mem_config(
     device,
     torch_tensor_map,
     memory_config,
-    use_program_cache,
 ):
     run_max_pool(
         act_shape, (3, 3), (1, 1), (2, 2), (1, 1), device, torch_tensor_map, ttnn.bfloat16, memory_config=memory_config
@@ -662,7 +651,6 @@ def test_run_max_pool_yolov4(
     device,
     torch_tensor_map,
     dtype,
-    use_program_cache,
 ):
     run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, torch_tensor_map, dtype)
 
@@ -774,7 +762,6 @@ def test_run_max_pool_yolov4(
 def test_pool_core_nondivis(
     device,
     torch_tensor_map,
-    use_program_cache,
     batch_size,
     input_channels,
     input_height,
@@ -946,7 +933,6 @@ def test_run_max_pool_squeeze_net_model(
     device,
     torch_tensor_map,
     dtype,
-    use_program_cache,
     ceil_mode,
 ):
     run_max_pool(

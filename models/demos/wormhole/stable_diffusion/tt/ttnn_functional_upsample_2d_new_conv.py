@@ -78,7 +78,6 @@ class upsample2d:
         #     tt_out = ttnn.to_memory_config(tt_out, self.conv.conv.input_sharded_memory_config)
         # tt_out = self.conv(tt_out)
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -110,12 +109,14 @@ class upsample2d:
                 input_memory_config=tt_out.memory_config(),
                 has_bias=True,
                 **conv_kwargs,
+                input_dtype=ttnn.bfloat8_b,
             )
             self.conv_bias_tensor = ttnn.prepare_conv_bias(
                 bias_tensor=self.conv_bias_tensor,
                 input_memory_config=tt_out.memory_config(),
                 input_layout=tt_out.get_layout(),
                 **conv_kwargs,
+                input_dtype=ttnn.bfloat8_b,
             )
 
             self.conv_weight_tensor = ttnn.to_device(self.conv_weight_tensor, self.device)
@@ -127,5 +128,6 @@ class upsample2d:
             bias_tensor=self.conv_bias_tensor,
             **conv_kwargs,
             compute_config=compute_config,
+            dtype=ttnn.bfloat8_b,
         )
         return tt_out

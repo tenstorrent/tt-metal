@@ -18,8 +18,6 @@ from models.demos.llama3_subdevices.tt.distributed_norm import DistributedNorm
 from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
-
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -51,7 +49,7 @@ is_RING_6U = os.environ.get("RING_6U", "0") == "1"
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": True,
         }
     ],
     indirect=True,
@@ -61,7 +59,6 @@ def test_llama_rms_norm_inference(
     batch_size,
     mode,
     mesh_device,
-    use_program_cache,
     reset_seeds,
 ):
     dtype = ttnn.bfloat16
@@ -91,7 +88,13 @@ def test_llama_rms_norm_inference(
     )
 
     # Wrap it in DistributedNorm
-    tt_model = DistributedNorm(tt_inner_norm, model_args, TG=model_args.is_galaxy, tt_ccl=tt_ccl)
+    tt_model = DistributedNorm(
+        tt_inner_norm,
+        model_args,
+        TG=model_args.is_galaxy,
+        tt_ccl=tt_ccl,
+        ccl_topology=model_args.model_config["CCL_TOPOLOGY"],
+    )
 
     # Create reference model (unchanged)
     partial_state_dict = {

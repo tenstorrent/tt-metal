@@ -82,6 +82,7 @@ class Transformer(LightweightModule):
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key="norm",
+                add_unit_offset=self.args.rms_norm_add_unit_offset,
                 is_distributed=self.args.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
@@ -256,7 +257,7 @@ class Transformer(LightweightModule):
                     dims=(3, 1) if self.args.is_galaxy else (1, -1),
                     mesh_shape=self.args.cluster_shape,
                 ),
-            )[0, 0, 0, :B]
+            )[0, 0, :B, 0]
             return tt_out
 
         if self.args.num_devices > 1:
@@ -332,12 +333,7 @@ class Transformer(LightweightModule):
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
         if argmax_on_device:
-            tt_logits = ttnn.argmax(  # TODO Add multicore support to batch > 1
-                tt_logits,
-                dim=3,
-                keepdim=True,
-                use_multicore=False if self.args.max_batch_size > 1 else True,  # ,output_tensor=tokens
-            )
+            tt_logits = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
         else:
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
             if not self.args.is_galaxy:

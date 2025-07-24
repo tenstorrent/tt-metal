@@ -248,8 +248,6 @@ def test_multi_device_single_op_unary(mesh_device):
 
 def test_multi_device_single_op_unary_with_cache(mesh_device):
     """Multidevice API test: Running tensor-parallel multi-device single-op unary with cache"""
-    mesh_device.enable_program_cache()
-
     torch_input_tensor = torch.rand((1, 1, 32, 32 * mesh_device.get_num_devices()), dtype=torch.bfloat16)
     torch_output_golden = torch.nn.functional.gelu(torch_input_tensor)
     torch_golden = torch.nn.functional.gelu(torch_output_golden)

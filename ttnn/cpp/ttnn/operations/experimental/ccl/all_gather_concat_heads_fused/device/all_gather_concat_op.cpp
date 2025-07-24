@@ -19,7 +19,7 @@ void AllGatherConcat::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
     const auto input_core_ranges = input_tensor.buffer()->shard_spec().grid().ranges();
-    const auto padded_input_shape = input_tensor.padded_shape();
+    const auto& padded_input_shape = input_tensor.padded_shape();
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
@@ -127,7 +127,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program_at
         this->topology,
         this->semaphore,
         this->sub_device_id,
-        this->num_heads);
+        this->num_heads,
+        this->use_noc1_only);
 }
 
 tt::tt_metal::operation::Hash AllGatherConcat::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
@@ -148,7 +149,8 @@ tt::tt_metal::operation::Hash AllGatherConcat::compute_program_hash(const std::v
         input_memory_layout,
         input_dtype,
         input_memory_config,
-        this->num_heads);
+        this->num_heads,
+        this->use_noc1_only);
 }
 
 namespace operations {
@@ -163,11 +165,12 @@ Tensor all_gather_concat(
     const MeshDevice& mesh_device,
     const GlobalSemaphore& global_semaphore,
     const uint32_t num_heads,
+    bool use_noc1_only,
     const MemoryConfig& memory_config,
     const std::optional<uint32_t> num_links,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
-    const auto mesh_view = mesh_device.get_view();
+    const auto& mesh_view = mesh_device.get_view();
     uint32_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     int32_t rank = input_tensor.logical_shape().rank();
@@ -190,6 +193,7 @@ Tensor all_gather_concat(
                    global_semaphore,
                    sub_device_id,
                    num_heads,
+                   use_noc1_only,
                    cluster_axis},
                {input_tensor, buffer_tensor})
         .at(0);

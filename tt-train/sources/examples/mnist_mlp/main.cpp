@@ -5,6 +5,7 @@
 #include <yaml-cpp/node/node.h>
 
 #include <CLI/CLI.hpp>
+#include <chrono>
 #include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <functional>
@@ -68,7 +69,10 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
 void initialize_device(bool enable_tp) {
     if (enable_tp) {
         // we support only N300 for now
-        ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
+        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
+    } else {
+        // use single device defaults
+        ttml::autograd::ctx().open_device();
     }
 }
 
@@ -170,6 +174,7 @@ int main(int argc, char **argv) {
         dataset.test_images, dataset.test_labels);
 
     auto *device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
         [num_features, num_targets, device](std::vector<DatasetSample> &&samples) {
             const uint32_t batch_size = samples.size();
@@ -185,7 +190,7 @@ int main(int argc, char **argv) {
             std::transform(data.begin(), data.end(), data.begin(), [](float pixel) { return pixel / 255.0F - 0.5F; });
 
             auto data_tensor = ttml::autograd::create_tensor(
-                ttml::core::from_vector(data, ttml::core::create_shape({batch_size, 1, 1, num_features}), device));
+                ttml::core::from_vector(data, ttnn::Shape({batch_size, 1, 1, num_features}), device));
 
             auto targets_tensor =
                 ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
@@ -250,6 +255,8 @@ int main(int argc, char **argv) {
     };
 
     for (size_t epoch = 0; epoch < config.num_epochs; ++epoch) {
+        auto start_time = std::chrono::steady_clock::now();
+        uint32_t num_steps_in_epoch = 0;
         for (const auto &[data, target] : train_dataloader) {
             optimizer.zero_grad();
             auto output = run_model(model, data);
@@ -268,7 +275,12 @@ int main(int argc, char **argv) {
             optimizer.step();
             ttml::autograd::ctx().reset_graph();
             training_step++;
+            num_steps_in_epoch++;
         }
+
+        auto end_time = std::chrono::steady_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+        fmt::println("per step ms: {} ms", duration.count() / num_steps_in_epoch);
 
         const float test_accuracy = evaluate(test_dataloader, model, num_targets);
         fmt::print(

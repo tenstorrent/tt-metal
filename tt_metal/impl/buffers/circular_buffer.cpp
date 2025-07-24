@@ -7,12 +7,10 @@
 #include <global_circular_buffer.hpp>
 #include <array>
 #include <string>
-#include <unordered_map>
 
 #include "assert.hpp"
 #include "circular_buffer_constants.h"
 #include "tile.hpp"
-#include "utils.hpp"
 
 namespace tt {
 
@@ -81,8 +79,8 @@ void CircularBuffer::validate_set_config_attributes() {
         bool df_set = data_format_spec.has_value();
         bool ps_set = page_size_spec.has_value();
         if (df_set != ps_set) {
-            string df_set_str = df_set ? "Data format is set" : "Data format is not set";
-            string ps_set_str = ps_set ? "Page size is set" : "Page size is not set";
+            std::string df_set_str = df_set ? "Data format is set" : "Data format is not set";
+            std::string ps_set_str = ps_set ? "Page size is set" : "Page size is not set";
             TT_THROW(
                 "Expected both data format and page size to be set for buffer index {}. {}. {}.",
                 buffer_index,

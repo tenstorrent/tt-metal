@@ -67,12 +67,14 @@ def process_profile_results(packet_size, num_packets, channel_count, benchmark_t
             timed_data = core_data["riscs"]["ERISC"]["timeseries"]
             sender_chip = sender_eth = receiver_chip = receiver_eth = None
 
+            is_sender_chip = False
             starts = [0] * num_iterations
             ends = [0] * num_iterations
             link_stats = [[]] * num_iterations
             for metadata, ts, ts_data in timed_data:
                 if metadata["type"] == "TS_DATA":
                     # ts_data has sender - receiver link encoding
+                    is_sender_chip = True
                     sender = (ts_data >> 32) & 0xFFFFFFFF
                     sender_chip = (sender >> 8) & 0xFF
                     sender_eth = sender & 0xFF
@@ -127,7 +129,8 @@ def process_profile_results(packet_size, num_packets, channel_count, benchmark_t
                         else:
                             link_stats[run_host_id] = []
 
-            assert sender_chip != None
+            if not is_sender_chip:
+                continue
 
             main_loop_cycles = [end - start for end, start in zip(ends, starts)]
             if test_latency:

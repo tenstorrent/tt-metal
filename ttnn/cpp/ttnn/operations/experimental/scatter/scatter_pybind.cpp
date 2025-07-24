@@ -27,7 +27,6 @@ void bind_scatter_operation(py::module& module) {
             Keyword Arguments:
                 * `reduce` (ScatterReductionType, optional): currently not supported - this is the option to reduce numbers going to the same destination in output with a function like `amax`, `amin`, `sum`, etc.
                 * `memory_config` (MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
-                * `out` (Tensor, optional): Preallocated output tensor where scatter result should go to (should be the same shape as the input tensor). Defaults to `None`.
 
             Additional info:
                 * Up until this time, no reductions have been implemented.
@@ -50,16 +49,13 @@ void bind_scatter_operation(py::module& module) {
                 source_ttnn = ttnn.from_torch(source_torch, dtype=ttnn.float32, device=device, layout=ttnn.Layout.TILE)
                 dim = -1
 
-                output = ttnn.experimental.scatter_(input_ttnn, dim, index_ttnn, source_ttnn)
-
-                output_preallocated = ttnn.zeros_like(input_ttnn)
-                another_output = ttnn.experimental.scatter_(input_ttnn, dim, index_ttnn, source_ttnn, out=output_preallocated)
+                output = ttnn.experimental.scatter(input_ttnn, dim, index_ttnn, source_ttnn)
         )doc";
 
-    using OperationType = decltype(ttnn::experimental::scatter_);
+    using OperationType = decltype(ttnn::experimental::scatter);
     bind_registered_operation(
         module,
-        ttnn::experimental::scatter_,
+        ttnn::experimental::scatter,
         doc,
         ttnn::pybind_overload_t{
             [](const OperationType& self,
@@ -69,7 +65,6 @@ void bind_scatter_operation(py::module& module) {
                const ttnn::Tensor& source_tensor,
                const std::optional<tt::tt_metal::MemoryConfig>& opt_out_memory_config,
                const std::optional<experimental::scatter::ScatterReductionType>& opt_reduction,
-               std::optional<ttnn::Tensor>& opt_output,
                const QueueId& queue_id = DefaultQueueId) -> Tensor {
                 return self(
                     queue_id,
@@ -78,8 +73,7 @@ void bind_scatter_operation(py::module& module) {
                     index_tensor,
                     source_tensor,
                     opt_out_memory_config,
-                    opt_reduction,
-                    opt_output);
+                    opt_reduction);
             },
             py::arg("input").noconvert(),
             py::arg("dim"),
@@ -88,7 +82,6 @@ void bind_scatter_operation(py::module& module) {
             py::kw_only(),
             py::arg("reduce") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("out") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }
 

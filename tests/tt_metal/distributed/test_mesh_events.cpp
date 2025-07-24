@@ -32,7 +32,7 @@
 namespace tt::tt_metal::distributed::test {
 namespace {
 
-using MeshEventsTestT3000 = T3000MultiCQMeshDeviceFixture;
+using MeshEventsTest2x4 = MultiCQMeshDevice2x4Fixture;
 using MeshEventsTestSuite = GenericMultiCQMeshDeviceFixture;
 
 TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
@@ -41,10 +41,7 @@ TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
     int32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = single_tile_size,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = false};
+        .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
     ReplicatedBufferConfig global_buffer_config = {
         .size = NUM_TILES * single_tile_size,
     };
@@ -76,15 +73,12 @@ TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
     }
 }
 
-TEST_F(MeshEventsTestT3000, ShardedAsyncIO) {
+TEST_F(MeshEventsTest2x4, ShardedAsyncIO) {
     uint32_t num_iterations = 20;
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = single_tile_size,
-        .buffer_type = BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = true};
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
 
     Shape2D global_buffer_shape = {2048, 2048};
     Shape2D shard_shape = {512, 1024};
@@ -135,13 +129,20 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
 
     auto programs = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
         mesh_device_, src0_bufs, src1_bufs, output_bufs);
-    uint32_t num_rows_in_workload = mesh_device_->num_rows() / 2;
+    uint32_t num_cols_in_workload = mesh_device_->num_cols() / 2;
     auto mesh_workload = CreateMeshWorkload();
     MeshCoordinateRange devices_0(
-        MeshCoordinate{0, 0}, MeshCoordinate{num_rows_in_workload - 1, mesh_device_->num_cols() - 1});
+        MeshCoordinate{0, 0},
+        MeshCoordinate{
+            mesh_device_->num_rows() - 1,
+            num_cols_in_workload - 1,
+        });
     MeshCoordinateRange devices_1(
-        MeshCoordinate{num_rows_in_workload, 0},
-        MeshCoordinate{mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
+        MeshCoordinate{0, num_cols_in_workload},
+        MeshCoordinate{
+            mesh_device_->num_rows() - 1,
+            mesh_device_->num_cols() - 1,
+        });
 
     AddProgramToMeshWorkload(mesh_workload, std::move(*programs[0]), devices_0);
     AddProgramToMeshWorkload(mesh_workload, std::move(*programs[1]), devices_1);
@@ -191,7 +192,7 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
                         dst_vec,
                         output_bufs[col_idx * worker_grid_size.y + row_idx],
                         device_coord);
-                    if (device_coord[0] <= num_rows_in_workload - 1) {
+                    if (device_coord[1] <= num_cols_in_workload - 1) {
                         for (int i = 0; i < dst_vec.size(); i++) {
                             EXPECT_EQ(dst_vec[i].to_float(), (2 * iter + 5));
                         }
@@ -215,10 +216,7 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
     int32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
 
     DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = single_tile_size,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = false};
+        .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
     ReplicatedBufferConfig global_buffer_config = {
         .size = NUM_TILES * single_tile_size,
     };
@@ -229,8 +227,8 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
     for (std::size_t i = 0; i < num_iterations; i++) {
         std::vector<uint32_t> src_vec(NUM_TILES * single_tile_size / sizeof(uint32_t), i);
         std::iota(src_vec.begin(), src_vec.end(), i);
-        MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{0, mesh_device_->num_cols() - 1});
-        MeshCoordinateRange devices_1(MeshCoordinate{1, 0}, MeshCoordinate{1, mesh_device_->num_cols() - 1});
+        MeshCoordinateRange devices_0(MeshCoordinate{0, 0}, MeshCoordinate{mesh_device_->num_rows() - 1, 0});
+        MeshCoordinateRange devices_1(MeshCoordinate{0, 1}, MeshCoordinate{mesh_device_->num_rows() - 1, 1});
 
         std::vector<std::vector<uint32_t>> readback_vecs = {};
 
@@ -273,10 +271,7 @@ TEST_F(MeshEventsTestSuite, MultiCQNonBlockingReads) {
     constexpr uint32_t NUM_ITERS = 500;
 
     DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = dram_buffer_size,
-        .buffer_type = tt_metal::BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = true};
+        .page_size = dram_buffer_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = true};
     ReplicatedBufferConfig global_buffer_config{.size = dram_buffer_size};
     MeshCoordinateRange devices_0(mesh_device_->shape());
 

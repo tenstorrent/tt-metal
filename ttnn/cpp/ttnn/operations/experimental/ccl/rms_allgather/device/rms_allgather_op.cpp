@@ -138,7 +138,7 @@ void RMSAllGather::validate(
                 TT_FATAL(a.memory_config().memory_layout() == this->output_mem_config.memory_layout(), "Error");
 
                 // tensor shape
-                const auto shape = a.padded_shape();
+                const auto& shape = a.padded_shape();
                 uint32_t M = a.physical_volume() / shape[-1];
                 uint32_t K = shape[-1];
 
@@ -316,11 +316,11 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program_at(
                     device_index,
                     this->topology,
                     this->semaphore,
-                    this->sub_device_id);
+                    this->sub_device_id,
+                    this->use_noc1_only);
             } else {
                 TT_FATAL(false, "Program Config does not match");
 
-                using ProgramConfigType = std::decay_t<decltype(program_config)>;
                 uint32_t num_cores_x = 1;
                 uint32_t num_cores_y = 1;
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
@@ -344,7 +344,8 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program_at(
                     device_index,
                     this->topology,
                     this->semaphore,
-                    this->sub_device_id);
+                    this->sub_device_id,
+                    this->use_noc1_only);
             }
         },
         this->program_config);

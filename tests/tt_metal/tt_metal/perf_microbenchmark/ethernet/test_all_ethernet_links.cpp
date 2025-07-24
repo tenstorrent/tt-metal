@@ -19,6 +19,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel.hpp>
 #include "tt_metal/test_utils/df/df.hpp"
@@ -160,7 +161,7 @@ private:
         auto physical_eth_core =
             soc_d.get_physical_ethernet_core_from_logical(CoreCoord{logical_eth_core.x, logical_eth_core.y});
 
-        const std::vector<tt::umd::CoreCoord>& tensix_cores = soc_d.get_cores(CoreType::TENSIX, CoordSystem::PHYSICAL);
+        const std::vector<tt::umd::CoreCoord>& tensix_cores = soc_d.get_cores(CoreType::TENSIX, CoordSystem::NOC0);
 
         std::optional<CoreCoord> closest_phys_tensix = std::nullopt;
         for (auto phys_tensix : tensix_cores) {
@@ -180,7 +181,7 @@ private:
         assigned_phys_tensix.insert(closest_phys_tensix.value());
 
         auto logical_tensix = soc_d.translate_coord_to(
-            {closest_phys_tensix.value(), CoreType::TENSIX, CoordSystem::PHYSICAL}, CoordSystem::LOGICAL);
+            {closest_phys_tensix.value(), CoreType::TENSIX, CoordSystem::NOC0}, CoordSystem::LOGICAL);
 
         tt_metal::ShardSpecBuffer shard_spec = tt_metal::ShardSpecBuffer(
             CoreRangeSet(std::set<CoreRange>({CoreRange(logical_tensix)})),
@@ -265,7 +266,7 @@ private:
 
         for (auto sender_chip_id : sender_chips) {
             auto non_tunneling_eth_cores =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(
+                tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(
                     sender_chip_id, !slow_dispath_mode);
             for (auto logical_active_eth : non_tunneling_eth_cores) {
                 if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(

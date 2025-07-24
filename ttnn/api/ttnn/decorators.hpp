@@ -31,12 +31,12 @@ static std::string base_name(const std::string& cpp_fully_qualified_name) {
 }
 
 // Convert "ttnn::add" to "add_t"
-static std::string class_name(const std::string& cpp_fully_qualified_name) {
+inline std::string class_name(const std::string& cpp_fully_qualified_name) {
     return base_name(cpp_fully_qualified_name) + "_t";
 }
 
 // Convert "ttnn::add" to "ttnn.add"
-static std::string python_fully_qualified_name(const std::string& cpp_fully_qualified_name) {
+inline std::string python_fully_qualified_name(const std::string& cpp_fully_qualified_name) {
     auto replace = [](const std::string& input, const std::string& from, const std::string& to) {
         if (from.empty()) {
             return input;
@@ -121,7 +121,7 @@ private:
         auto output = invoke(std::forward<args_t>(args)...);
 
         tt::tt_metal::GraphTracker::instance().track_function_end(output);
-        log_debug(tt::LogOp, "Finished C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+        log_debug(tt::LogOp, "Finished invoking C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
         return output;
     }
 

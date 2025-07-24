@@ -6,9 +6,6 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-import os
-
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 
 
 class TtLlamaAttention(LightweightModule):
@@ -153,6 +150,17 @@ class TtLlamaAttention(LightweightModule):
             ),
             cache_file_name=cache_name("wqkv_sharded_2d_prefetcher"),  ## TODO: Fix caching
         )
+        self.wqkv_interleaved = ttnn.as_tensor(
+            qkv_cat,
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, dims=(3, 2) if self.TG else (2, 3), mesh_shape=configuration.cluster_shape
+            ),
+            cache_file_name=cache_name("wqkv_sharded_2d_dram"),  ## TODO: Fix caching
+        )
 
         # For ring topology we can use all gather matmul for wo
         self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
@@ -178,6 +186,19 @@ class TtLlamaAttention(LightweightModule):
             cache_file_name=cache_name("wo_width_sharded_2d_prefetcher")
             if (self.use_fused_all_gather_matmul or self.TG)
             else cache_name("wo"),
+        )
+        self.wo_interleaved = ttnn.as_tensor(
+            pt_wo,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
+                mesh_shape=configuration.cluster_shape,
+            ),
+            cache_file_name=cache_name("wo_width_sharded_2d_dram"),
         )
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
@@ -288,9 +309,10 @@ class TtLlamaAttention(LightweightModule):
         ) = self.tt_ccl.llama_rs_create_heads(
             xqkv_fused_sharded,
             cluster_axis=1,
-            num_links=4 if is_RING_6U else 3,
+            num_links=self.model_config["GALAXY_NUM_LINKS"],
             dim=3,
             qkv_memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
+            use_optimal_ccl_for_llama=True,
         )
 
         # print("done create qkv heads")
@@ -358,31 +380,15 @@ class TtLlamaAttention(LightweightModule):
 
         ttnn.deallocate(q_heads_1BQD)
 
-        # print("done attention")
-
-        # attn_output_1G4D = ttnn.to_memory_config(attn_output_1G4D_sharded, ttnn.DRAM_MEMORY_CONFIG)
-        # attn_output_1G4D_sharded.deallocate(True)
-
-        # Note: Persistent output buffer used, do not deallocate output!
-
-        # ttnn.deallocate(attn_output_1G4D)
-
-        # attn_output_gathered_sharded = ttnn.to_memory_config(
-        #     attn_output_gathered, self.model_config["GATHER_USERS_MEMCFG"](list(self.mesh_device.shape)[1])
-        # )
-        # ttnn.deallocate(attn_output_gathered)
-        attn_output_1G4D_sharded_rm = ttnn.untilize(
-            attn_output_1G4D_sharded,
-        )
-        ttnn.deallocate(attn_output_1G4D_sharded)
         attn_output_cat = self.tt_ccl.all_gather_concat(
-            attn_output_1G4D_sharded_rm,
+            attn_output_1G4D_sharded,
             dim=1,
             cluster_axis=1,
-            num_links=4 if is_RING_6U else 3,
+            num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"],
             num_heads=self.n_local_heads,
         )
+        ttnn.deallocate(attn_output_1G4D_sharded)
         # print("done concat heads")
 
         # Original matmul on each device [1, 1, 32, 1024] @ [1, 1, 1024, 2048]
@@ -398,12 +404,12 @@ class TtLlamaAttention(LightweightModule):
         )
         # [1, 1, 32, 2304]
         # print("done matmul")
-
         dense_out_reduced = self.tt_ccl.line_all_reduce(
             dense_out_ttnn,
             cluster_axis=0,
-            num_links=4 if is_RING_6U else 3,
+            num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+            use_optimal_ccl_for_llama=True,
         )
         ttnn.deallocate(dense_out_ttnn)
 
@@ -433,7 +439,7 @@ class TtLlamaAttention(LightweightModule):
 
         xqkv = ttnn.linear(
             x_11SH,
-            self.wqkv,
+            self.wqkv_interleaved,
             dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi2,
@@ -612,7 +618,7 @@ class TtLlamaAttention(LightweightModule):
 
         output_11SH = ttnn.linear(
             attn_output_11SH,
-            self.wo,
+            self.wo_interleaved,
             compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,

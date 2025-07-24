@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <exception>
@@ -67,9 +68,7 @@ public:
 
     void TearDown() {
         device_open = false;
-        for (auto [device_id, device_ptr] : devices_) {
-            tt::tt_metal::CloseDevice(device_ptr);
-        }
+        tt::tt_metal::detail::CloseDevices(devices_);
     }
 
     std::map<chip_id_t, tt_metal::IDevice*> devices_;

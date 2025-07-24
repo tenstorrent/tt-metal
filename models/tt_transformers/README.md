@@ -1,19 +1,22 @@
 # TT-Transformers
 
-This code can run large language models that are similar to the Llama3 family and other similar models such as Qwen2.5, Mistral and DeepSeek-R1-Distill variants. Tensor-parallelism is automatically used to parallelize workloads across all available chips.
+This code can run large language models such as the Llama3 family, Qwen2.5, Mistral, DeepSeek-R1-Distill variants and similar. Tensor-parallelism automatically distributes workloads across all available chips.
 
 The current version is verified to work with the following models:
-- Llama3.2-1B
-- Llama3.2-3B
-- Llama3.1-8B
-- Llama3.2-11B
-- Llama3.1-70B (LoudBox / QuietBox and Galaxy)
-- Llama3.2-90B (LoudBox / QuietBox)
-- Qwen2.5-7B (N300)
-- Qwen2.5-72B (LoudBox / QuietBox)
-- Qwen3-32B (LoudBox / QuietBox)
-- DeepSeek R1 Distill Llama 3.3 70B (LoudBox / QuietBox and Galaxy)
-- [Mistral-7B-Instruct-v0.3](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3)
+| Model                                                                                            | Hardware                    | <org/name>                                      |
+|--------------------------------------------------------------------------------------------------|-----------------------------|-------------------------------------------------|
+| [DeepSeek R1 Distill Llama 70B](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Llama-70B)| LoudBox / QuietBox / Galaxy | ```deepseek-ai/DeepSeek-R1-Distill-Llama-70B``` |
+| [Llama 3.1 8B](https://huggingface.co/meta-llama/Llama-3.1-8B)                                   | n150 / p100 / p150          | ```meta-llama/Llama-3.1-8B```                   |
+| [Llama 3.1 70B](https://huggingface.co/meta-llama/Llama-3.1-70B)                                 | LoudBox / QuietBox / Galaxy | ```meta-llama/Llama-3.1-70B```                  |
+| [Llama 3.2 1B](https://huggingface.co/meta-llama/Llama-3.2-1B)                                   | n150                        | ```meta-llama/Llama-3.2-1B```                   |
+| [Llama 3.2 3B](https://huggingface.co/meta-llama/Llama-3.2-3B)                                   | n150                        | ```meta-llama/Llama-3.2-3B```                   |
+| [Llama 3.2 11B Vision](https://huggingface.co/meta-llama/Llama-3.2-11B-Vision)                   | n300                        | ```meta-llama/Llama-3.2-11B-Vision```           |
+| [Llama 3.2 90B Vision](https://huggingface.co/meta-llama/Llama-3.2-90B-Vision)                   | LoudBox / QuietBox          | ```meta-llama/Llama-3.2-90B-Vision```           |
+| [Mistral 7B Instruct v0.3](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3)            | n150                        | ```mistralai/Mistral-7B-Instruct-v0.3```        |
+| [Qwen 2.5 7B](https://huggingface.co/Qwen/Qwen2.5-7B)                                            | n300                        | ```Qwen/Qwen2.5-7B```                           |
+| [Qwen 2.5 Coder 32B](https://huggingface.co/Qwen/Qwen2.5-Coder-32B)                              | LoudBox / QuietBox          | ```Qwen/Qwen2.5-Coder-32B```                          |
+| [Qwen 2.5 72B](https://huggingface.co/Qwen/Qwen2.5-72B)                                          | LoudBox / QuietBox          | ```Qwen/Qwen2.5-72B```                          |
+| [Qwen 3 32B](https://huggingface.co/Qwen/Qwen3-32B)                                              | LoudBox / QuietBox          | ```Qwen/Qwen3-32B```                            |
 
 ## Dependencies
 
@@ -26,15 +29,20 @@ pip install -r models/tt_transformers/requirements.txt
 
 ## Run a demo
 
-### 1. Specify which model you want to run
+To run a demo, choose one of the methods below for downloading the model weights:
 
-The easiest way to do this is to set the `HF_MODEL` environment variable to the Huggingface org/name of the model you want to run:
+### 1. Automatic download
 
+Set the `HF_MODEL` environment variable to the Huggingface org/name of the model you want to run, This will automatically download the weights into your HuggingFace cache directory and run the model directly.
+
+Check the models chart on the top of the page and substitue the <org/name> on the following command:
 ```
-export HF_MODEL=deepseek-ai/DeepSeek-R1-Distill-Llama-70B
+export HF_MODEL=deepseek-ai/<org/name>
 ```
 
-This will automatically download the weights into your HuggingFace cache directory and run the model directly. If you wish, you can manually download the weights either from Huggingface or from Meta as described by the two following sections:
+### 2. Manual download
+
+If you wish, you can manually download the weights either from Huggingface or from Meta as described by the two following sections:
 
 #### Option 1: download Llama weights from Meta
 
@@ -62,6 +70,14 @@ python models/tt_transformers/scripts/repack_weights_70b.py <path_to_checkpoint_
 ```
 
 If providing a different output directory, please copy the `params.json` and the `tokenizer.model` files to the new directory.
+
+**⚠️ Warning**
+>
+> For Llama3 models, weights downloaded from the `huggingface-cli` via
+>```
+>huggingface-cli download meta-llama/Meta-Llama-3-70B-Instruct --include "original/*" --local-dir Meta-Llama-3-70B-Instruct
+>```
+> will be in the same format as a direct download from Meta (i.e. as `consolidated.xx.pth` files). Hence, you will still need to repack your weights and export `LLAMA_DIR` as before. This is contrary to if you downloaded your weights directly from `huggingface`, as those weights will be downloaded as sharded `.safetensors` files.
 
 #### Option 2: download weights from HuggingFace
 
@@ -182,6 +198,9 @@ pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch
 # Batch-32
 pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-32"
 
+# Long context with custom parameters
+pytest models/tt_transformers/demo/simple_text_demo.py -k "long-context" --max_seq_len=16384
+
 # Long-context
 pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and long"
 ```
@@ -224,6 +243,11 @@ Using the lt tool (`models/tt_transformers/lt`), the user can also provide multi
 ### Expected performance and accuracy
 
 See [PERF.md](PERF.md) for expected performance and accuracy across different configurations.
+Accuracy of the network architectures is measured by exact token matching using teacher forcing method. During inference the previous token is replaced by the ground truth token while the network generates the next token. This allows to avoid accumulating errors when comparisons on a finer level (tokens) assessed in comparison to other known metrics that compare quality and context of the answer. Token accuracy can be reported by passing the argument shown below:
+
+```
+pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" --token_accuracy True
+```
 
 ### Implementation notes
 
@@ -243,3 +267,48 @@ Max Prefill Chunk Sizes (text-only):
 - These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
 
 **Chunked prefill (Llama3.2-11B multimodal)**: Llama3.2-11B multimodal is currently only supported on N300 and T3000. On N300, a max prefill context length of 8k is supported, while T3000 supports a max context length of 128k.
+
+## Memory Optimization
+
+### HuggingFace Model Caching Control
+
+To help manage memory usage, you can control whether the HuggingFace model is cached in memory using the `cache_hf` parameter via command line or code:
+
+```python
+# Default: disables caching to conserve memory usage
+model_args = ModelArgs(
+    mesh_device,
+    cache_hf=False,  # Default: Reduces memory usage by not keeping HF model in memory
+    max_batch_size=1,
+    max_seq_len=2048
+)
+
+# Optional: enables caching for faster repeated access
+model_args = ModelArgs(
+    mesh_device,
+    cache_hf=True,  # Cache HF model for better performance running reference tests
+    max_batch_size=4,
+    max_seq_len=4096
+)
+```
+
+**When to disable caching (`cache_hf=False`):**
+- Running on systems with limited memory (< 256GB)
+- Loading large models (70B+ parameters)
+- Using the model for single inference runs
+- When you don't need reference model comparisons
+
+**When to keep caching enabled (`cache_hf=True`, default):**
+- Sufficient memory available
+- Comparisons with torch model is needed
+- Minimizing test duration is prioritized over memory usage
+- Running reference model tests
+
+The `cache_hf` parameter affects:
+- `load_state_dict()` method: Controls whether HF model is cached after loading
+- `reference_transformer()` method: Controls whether to reuse cached model or load fresh
+
+**Memory Impact:**
+- Disabling caching saves approximately the full model size in memory
+- For a 70B model, this can save ~140GB+ of memory usage
+- Increased test duration as model needs to be reloaded for reference operations

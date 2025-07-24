@@ -1,0 +1,1 @@
+../../../ttnn/integration_tests/yolov6l/test_ttnn_yolov6l.py

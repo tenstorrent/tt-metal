@@ -3,7 +3,7 @@
 This test suite implements tests that measure the functionality and performance (i.e. bandwidth) of data movement transactions between a gatherer Tensix core and a grid of sender Tensix cores.
 
 ## Test Flow
-Sharded L1 buffers are created on both the gatherer core and on all the sender cores -making sure that the sender core buffers have a total size equal to the size of the gatherer core buffer. Data is written into the L1 buffer of the sender cores. The gatherer kernel issues read NOC transactions to request a transfer of this data to its L1 buffer. A read barrier is placed after these transactions in order to ensure data validity.
+Data is written directly into the L1 memory of the sender cores. The gatherer kernel issues read NOC transactions to request a transfer of this data from each sender core to its L1 memory. A read barrier is placed after these transactions in order to ensure data validity.
 
 Test attributes such as transaction sizes and number of transactions as well as latency measures like kernel and pre-determined scope cycles are recorded by the profiler. Resulting data is cross-checked with original data and validated through a pcc check.
 

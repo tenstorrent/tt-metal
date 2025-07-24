@@ -7,7 +7,7 @@
 #include <limits>
 #include <new>
 
-namespace tt::stl {
+namespace ttsl {
 
 template <typename T, std::size_t Alignment = alignof(T)>
 class aligned_allocator {
@@ -53,4 +53,10 @@ constexpr bool operator==(const aligned_allocator<T, Alignment>&, const aligned_
     return true;
 }
 
-}  // namespace tt::stl
+}  // namespace ttsl
+
+namespace tt {
+namespace [[deprecated("Use ttsl namespace instead")]] stl {
+using namespace ::ttsl;
+}  // namespace stl
+}  // namespace tt

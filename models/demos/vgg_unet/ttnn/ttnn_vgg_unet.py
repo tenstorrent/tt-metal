@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -52,8 +52,8 @@ class Conv:
             packer_l1_acc=False,
             math_approx_mode=True,
         )
+        self.conv_output_dtype = conv_param.dtype
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=conv_param.dtype,
             weights_dtype=ttnn.bfloat8_b,
             activation=conv_param.activation,
             shard_layout=conv_param.shard_layout,
@@ -73,18 +73,7 @@ class Conv:
         else:
             self.bias = None
 
-        weight = ttnn.from_device(conv_pth.weight)
-        self.weight = weight
-
-        if conv_param.shard_layout is None:
-            self.input_memory_config = ttnn.L1_MEMORY_CONFIG
-        elif (
-            conv_param.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-            and conv_param.shard_layout != ttnn.TensorMemoryLayout.WIDTH_SHARDED
-        ):
-            self.input_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
-        else:
-            self.input_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+        self.weight = ttnn.from_device(conv_pth.weight)
 
         self.conv_kwargs = {
             "in_channels": conv_param.in_channels,
@@ -101,25 +90,6 @@ class Conv:
             "conv_config": self.conv_config,
         }
 
-        if not ttnn.is_tensor_storage_on_device(self.weight):
-            self.weight = ttnn.prepare_conv_weights(
-                weight_tensor=self.weight,
-                weights_format="OIHW",
-                input_memory_config=self.input_memory_config,
-                input_layout=input_tensor_layout,
-                has_bias=True,
-                **self.conv_kwargs,
-            )
-
-            self.bias = ttnn.prepare_conv_bias(
-                bias_tensor=self.bias,
-                input_memory_config=self.input_memory_config,
-                input_layout=ttnn.TILE_LAYOUT,
-                **self.conv_kwargs,
-            )
-            self.weight = ttnn.to_device(self.weight, device)
-            self.bias = ttnn.to_device(self.bias, device)
-
     def __str__(self) -> str:
         return f"Conv: {self.weights.shape} {self.bias.shape} {self.kernel_size}"
 
@@ -132,6 +102,7 @@ class Conv:
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         return x
 
@@ -157,7 +128,6 @@ class Conv_transpose:
             math_approx_mode=True,
         )
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=conv_param.dtype,
             weights_dtype=ttnn.bfloat8_b,
             shard_layout=conv_param.shard_layout,
             reshard_if_not_optimal=conv_param.reshard_if_not_optimal,
@@ -216,6 +186,7 @@ class Conv_transpose:
             return_output_dim=True,
             return_weights_and_bias=True,
             mirror_kernel=True,
+            dtype=self.conv_param.dtype,
         )
         return x
 

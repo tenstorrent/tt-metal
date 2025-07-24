@@ -145,6 +145,17 @@ inline uint32_t special_mult(uint32_t a, uint32_t special_b) {
     return 0;
 }
 
+// Invalidates Blackhole's entire L1 cache
+// Blackhole L1 cache is a small write-through cache (4x16B L1 lines). The cache covers all of L1 (no
+// MMU or range registers).
+//  Writing an address on one proc and reading it from another proc only requires the reader to invalidate.
+//  Need to invalidate any address written by noc that may have been previously read by riscv
+inline __attribute__((always_inline)) void invalidate_l1_cache() {
+#if defined(ARCH_BLACKHOLE) && !defined(DISABLE_L1_DATA_CACHE)
+    asm("fence");
+#endif
+}
+
 // risc_init function isn't required for TRISCS
 #if !defined(COMPILE_FOR_TRISC)  // BRISC, NCRISC, ERISC, IERISC
 #include "noc_nonblocking_api.h"
@@ -175,26 +186,16 @@ inline void riscv_wait(uint32_t cycles) {
     } while (wall_clock < (wall_clock_timestamp + cycles));
 }
 
-// Invalidates Blackhole's entire L1 cache
-// Blackhole L1 cache is a small write-through cache (4x16B L1 lines). The cache covers all of L1 (no
-// MMU or range registers).
-//  Writing an address on one proc and reading it from another proc only requires the reader to invalidate.
-//  Need to invalidate any address written by noc that may have been previously read by riscv
-inline __attribute__((always_inline)) void invalidate_l1_cache() {
-#if defined(ARCH_BLACKHOLE) && !defined(DISABLE_L1_DATA_CACHE)
-    asm("fence");
-#endif
-}
-
 // Flush i$ on ethernet riscs
 inline __attribute__((always_inline)) void flush_erisc_icache() {
 #ifdef ARCH_BLACKHOLE
-// Kernel start instructions on WH are not cached because we apply a 1 cache line (32B) padding
-//  between FW end and Kernel start.
-// This works because risc tries to prefetch 1 cache line.
-// The 32B still get cached but they are never executed
 #pragma GCC unroll 2048
     for (int i = 0; i < 2048; i++) {
+        asm("nop");
+    }
+#else
+#pragma GCC unroll 128
+    for (int i = 0; i < 128; i++) {
         asm("nop");
     }
 #endif

@@ -153,7 +153,7 @@ std::vector<Shape> extract_padded_shapes(
         const auto& tensor_spec = tensor_specs[idx];
         TensorLayout tensor_layout =
             use_tensor_layout_from_tensor_spec ? tensor_spec.tensor_layout() : layout_provider(idx);
-        auto logical_shape = tensor_spec.logical_shape();
+        const auto& logical_shape = tensor_spec.logical_shape();
         padded_shapes.push_back(tensor_layout.compute_padded_shape(logical_shape));
     }
     return padded_shapes;
@@ -213,7 +213,7 @@ Tensors run_with_autoformat(
     auto padded_output_shapes = extract_padded_shapes(
         std::move(output_specs),
         [&](size_t idx) {
-            auto tensor = output_tensors[idx];
+            const auto& tensor = output_tensors[idx];
             return TensorLayout(tensor.dtype(), Layout::TILE, tensor.memory_config());
         },
         /*use_tensor_layout_from_tensor_spec=*/true);
@@ -286,7 +286,7 @@ Tensors run_with_autoformat(
     auto legacy_output_shapes = extract_padded_shapes(
         std::move(output_specs),
         [&](size_t idx) {
-            auto tensor = output_tensors[idx];
+            const auto& tensor = output_tensors[idx];
             return TensorLayout(tensor.dtype(), output_layouts[idx], tensor.memory_config());
         },
         /*use_tensor_layout_from_tensor_spec=*/false);

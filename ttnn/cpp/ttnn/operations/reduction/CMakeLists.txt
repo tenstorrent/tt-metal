@@ -10,12 +10,25 @@ set_target_properties(
             FALSE
 )
 
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(GLOB_RECURSE kernels argmax/device/kernels/*)
 target_sources(
     ttnn_op_reduction
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         argmax/device/argmax_op.cpp
         argmax/device/argmax_program_factory.cpp
         argmax/argmax.cpp
+        cumprod/cumprod.cpp
+        cumprod/device/cumprod_device_operation.cpp
+        cumprod/device/cumprod_program_factory.cpp
+        cumsum/cumsum.cpp
+        cumsum/device/cumsum_device_operation.cpp
+        cumsum/device/cumsum_program_factory.cpp
         sampling/device/sampling_op.cpp
         sampling/device/sampling_program_factory.cpp
         sampling/sampling.cpp
@@ -36,16 +49,6 @@ target_sources(
         topk/topk.cpp
         topk/device/topk_program_factory.cpp
         reduction_common/reduction_common.cpp
-)
-
-file(GLOB_RECURSE kernels argmax/device/kernels/*)
-target_sources(
-    ttnn_op_reduction
-    PUBLIC
-        FILE_SET kernels
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES ${kernels}
 )
 
 target_include_directories(ttnn_op_reduction PRIVATE ${FixmeOpIncDirs})

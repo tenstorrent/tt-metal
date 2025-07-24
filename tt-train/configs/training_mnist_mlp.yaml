@@ -10,5 +10,5 @@ training_config:
   model_path: "/tmp/mnist_mlp.msgpack"
   mlp_config:
     input_features: 784
-    hidden_features: [128]
+    hidden_features: [128, 128]
     output_features: 10

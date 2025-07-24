@@ -26,7 +26,7 @@
 #include <utility>
 #include <vector>
 
-namespace tt::stl {
+namespace ttsl {
 
 template <typename T, size_t INDEX_BITS>
 struct Key {
@@ -68,9 +68,9 @@ public:
     friend auto operator<=>(Key, Key) = default;
 };
 
-#define MAKE_SLOTMAP_KEY(NAME, T, N)     \
-    struct NAME : ::tt::stl::Key<T, N> { \
-        using Key::Key;                  \
+#define MAKE_SLOTMAP_KEY(NAME, T, N)  \
+    struct NAME : ::ttsl::Key<T, N> { \
+        using Key::Key;               \
     };
 
 template <typename KeyT, typename T>
@@ -135,7 +135,6 @@ private:
         = default;
     };
 
-private:
     static constexpr index_type max_index = KeyT::max_index;
     static constexpr index_type invalid_index = std::numeric_limits<index_type>::max();
     std::vector<Slot> slots;
@@ -380,4 +379,10 @@ private:
     }
 };
 
-}  // namespace tt::stl
+}  // namespace ttsl
+
+namespace tt {
+namespace [[deprecated("Use ttsl namespace instead")]] stl {
+using namespace ::ttsl;
+}  // namespace stl
+}  // namespace tt

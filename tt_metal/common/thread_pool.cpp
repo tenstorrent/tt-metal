@@ -38,8 +38,7 @@ bool balanced_physical_device_numa() {
     if (numa_available() != -1) {
         int num_nodes = numa_max_node() + 1;
         std::unordered_set<int> numa_nodes_for_cluster = {};
-        for (uint32_t device_id = 0; device_id < MetalContext::instance().get_cluster().number_of_devices();
-             device_id++) {
+        for (auto device_id : MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
             auto numa_node_for_device = MetalContext::instance().get_cluster().get_numa_node_for_device(device_id);
             numa_nodes_for_cluster.insert(numa_node_for_device);
         }

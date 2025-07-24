@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
 #include <optional>
+#include <string>
 #include <variant>
 
-#include "cpp/ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_op.hpp"
+#include "ttnn/operations/normalization/layernorm_distributed/device/layernorm_post_all_gather_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "ttnn/operations/math.hpp"
@@ -29,7 +29,6 @@ inline bool is_dram(const Tensor& input_tensor) {
 inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
     return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
 }
-inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
 
 inline uint16_t bfloat16(float float_num) {
     uint32_t uint32_data;
@@ -70,7 +69,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     using tt::tt_metal::CircularBufferConfig;
 
     const bool is_rmsnorm = norm_type == LayerNormDistributedType::RMSNORM;
-    const auto shape = a.padded_shape();
+    const auto& shape = a.padded_shape();
     const uint32_t W = shape[-1], H = shape[-2];
     const uint32_t HW = H * W;
     const uint32_t NC = a.physical_volume() / HW;
@@ -295,8 +294,8 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
                                                       (std::uint32_t)block_size};
 
     bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
-    std::map<string, string> reader_defines;
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> compute_defines;
     if (gamma.has_value()) {
         reader_defines["FUSE_GAMMA"] = "1";
     }

@@ -13,6 +13,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"
+#include "persistent_kernel_cache.hpp"
 
 // Global state for daemon mode
 static bool daemon_running = true;
@@ -50,6 +51,8 @@ static std::tuple<tt::tt_fabric::NocSendType, bool> get_noc_send_type(const std:
     } else if (message_noc_type == "noc_fused_unicast_write_no_flush_atomic_inc") {
         noc_send_type = tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC;
         flush = false;
+    } else if (message_noc_type == "noc_unicast_scatter_write") {
+        noc_send_type = tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE;
     } else {
         TT_THROW("Invalid message type: {}", message_noc_type.c_str());
     }
@@ -155,7 +158,8 @@ static int run_single_test(
             auto& params = std::get<WriteThroughputStabilityTestWithPersistentFabricParams>(test_params.params);
             if (params.fabric_mode == FabricTestMode::Linear) {
                 Run1DFabricPacketSendTest<Fabric1DLineDeviceInitFixture>(test_fixture, test_specs, params);
-            } else if (params.fabric_mode == FabricTestMode::FullRing) {
+            } else if (
+                params.fabric_mode == FabricTestMode::HalfRing || params.fabric_mode == FabricTestMode::FullRing) {
                 Run1DFabricPacketSendTest<Fabric1DRingDeviceInitFixture>(test_fixture, test_specs, params);
             } else {
                 TT_THROW(
@@ -382,6 +386,7 @@ static void run_daemon_mode() {
 }
 
 int main(int argc, char** argv) {
+    tt::tt_metal::detail::EnablePersistentKernelCache();
     if (argc > 1 && std::string(argv[1]) == "daemon_mode") {
         run_daemon_mode();
         return 0;

@@ -4,7 +4,7 @@
 
 #include "reduce_scatter.hpp"
 
-#include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
 #include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::experimental::ccl {

@@ -6,7 +6,7 @@
 
 #include <boost/core/span.hpp>
 
-namespace tt::stl {
+namespace ttsl {
 
 using boost::dynamic_extent;
 
@@ -21,11 +21,11 @@ public:
 template <class T, std::size_t Extent>
 class SpanBase<const T, Extent> : public boost::span<const T, Extent> {
 public:
-    using boost::span<const T>::span;
+    using boost::span<const T, Extent>::span;
 
     // expose constructor from initializer_list for const-qualified element_type
     explicit(Extent != dynamic_extent) constexpr SpanBase(std::initializer_list<T> ilist) noexcept :
-        boost::span<const T>(ilist) {}
+        boost::span<const T, Extent>(ilist.begin(), ilist.size()) {}
 };
 
 }  // namespace detail
@@ -114,4 +114,10 @@ auto as_writable_bytes(Span<T> span) noexcept {
     return Span<std::byte>(reinterpret_cast<std::byte*>(span.data()), span.size_bytes());
 }
 
-}  // namespace tt::stl
+}  // namespace ttsl
+
+namespace tt {
+namespace [[deprecated("Use ttsl namespace instead")]] stl {
+using namespace ::ttsl;
+}  // namespace stl
+}  // namespace tt

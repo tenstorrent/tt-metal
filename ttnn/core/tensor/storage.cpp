@@ -3,12 +3,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <vector>
 
 #include "tt-metalium/mesh_coord.hpp"
 
 #include "ttnn/tensor/storage.hpp"
 
 namespace tt::tt_metal {
+
+HostStorage::HostStorage(HostBuffer buffer) :
+    distributed_buffer_(DistributedHostBuffer::create(distributed::MeshShape(1, 1))) {
+    distributed_buffer_.emplace_shard(distributed::MeshCoordinate(0, 0), [&buffer]() { return std::move(buffer); });
+}
+HostStorage::HostStorage(DistributedHostBuffer buffer) : distributed_buffer_(std::move(buffer)) {}
+
+const DistributedHostBuffer& HostStorage::buffer() const { return distributed_buffer_; }
+
+HostStorage HostStorage::transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const {
+    return HostStorage(
+        distributed_buffer_.transform(callable, DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL));
+}
 
 DeviceStorage::DeviceStorage(std::shared_ptr<Buffer> buffer_) { buffer = std::move(buffer_); }
 
@@ -50,14 +64,5 @@ bool DeviceStorage::is_uniform_storage() const {
     }
     return coords.size() == mesh_buffer->device()->num_devices();
 }
-
-MultiDeviceHostStorage::MultiDeviceHostStorage(std::vector<HostBuffer> buffers) : buffers_(std::move(buffers)) {}
-
-HostBuffer MultiDeviceHostStorage::get_buffer(int buffer_index) const {
-    TT_FATAL(buffer_index < buffers_.size(), "Buffer not found for buffer_index {}", buffer_index);
-    return buffers_[buffer_index];
-}
-
-size_t MultiDeviceHostStorage::num_buffers() const { return buffers_.size(); }
 
 }  // namespace tt::tt_metal

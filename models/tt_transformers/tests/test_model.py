@@ -75,7 +75,6 @@ def test_model_inference(
     page_params,
     optimizations,
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
     request,
@@ -105,6 +104,7 @@ def test_model_inference(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
         max_batch_size=batch_size,
+        cache_hf=True,
     )
 
     # Define minimum PCC for each iteration

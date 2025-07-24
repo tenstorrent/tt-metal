@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -65,7 +65,7 @@ void Softmax::validate(
                         TT_FATAL(input_tensor.padded_shape()[0] == mask.padded_shape()[0], "Error");
                         TT_FATAL(!this->is_scale_causal_mask_hw_dims_softmax, "Error");
                     } else if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
-                        const auto shape = input_tensor.padded_shape();
+                        const auto& shape = input_tensor.padded_shape();
                         uint32_t M = input_tensor.physical_volume() / shape[-1];
                         uint32_t K = shape[-1];
 
@@ -171,7 +171,8 @@ tt::tt_metal::operation::ProgramWithCallbacks Softmax::create_program(
                     this->scale,
                     causal_mask,
                     this->compute_kernel_config,
-                    this->numeric_stable);
+                    this->numeric_stable,
+                    this->inplace);
             }
         },
         this->program_config);
@@ -183,6 +184,7 @@ tt::tt_metal::operation::Hash Softmax::compute_program_hash(
     return tt::tt_metal::operation::hash_operation<Softmax>(
         input_tensors.at(0).memory_config(),
         input_tensors.at(0).dtype(),
+        input_tensors.at(0).padded_shape(),
         optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().memory_config()}
                                                  : std::nullopt,
         optional_input_tensors.at(0).has_value() ? std::optional{optional_input_tensors.at(0).value().dtype()}

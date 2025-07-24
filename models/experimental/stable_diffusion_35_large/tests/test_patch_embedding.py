@@ -36,7 +36,6 @@ TILE_SIZE = 32
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
-@pytest.mark.usefixtures("use_program_cache")
 def test_patch_embedding(
     *,
     mesh_device: ttnn.MeshDevice,

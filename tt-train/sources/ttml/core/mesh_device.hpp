@@ -11,7 +11,7 @@ namespace ttml::core {
 // should I implement pimpl or its fine
 class MeshDevice {
 public:
-    explicit MeshDevice(tt::tt_metal::distributed::MeshShape shape);
+    explicit MeshDevice(const tt::tt_metal::distributed::MeshShape& shape, const std::vector<int>& device_ids);
     MeshDevice(MeshDevice&& device) = default;
     MeshDevice(const MeshDevice&) = delete;
 
