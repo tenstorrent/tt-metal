@@ -10,6 +10,12 @@
 #include "dspec.h"
 #include "helpers.h"
 
+#if defined(WATCHER_ENABLED) && defined(WATCHER_NOINLINE)
+#define FORCE_INLINE
+#else
+#define FORCE_INLINE inline __attribute__((always_inline))
+#endif
+
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "dataflow_api_addrgen.h"
 #endif
