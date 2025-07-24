@@ -1418,11 +1418,12 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
 DeviceProfiler::~DeviceProfiler() {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
-    dumpDeviceResults();
+    auto t = std::thread([this]() { dumpDeviceResults(); });
     pushTracyDeviceResults();
     for (auto& tracyCtx : device_tracy_contexts) {
         TracyTTDestroy(tracyCtx.second);
     }
+    t.join();
 #endif
 }
 
@@ -1537,7 +1538,7 @@ bool isSyncInfoNewer(const SyncInfo& old_info, const SyncInfo& new_info) {
          ((old_info.device_time / old_info.frequency) < (new_info.device_time / new_info.frequency))));
 }
 
-void DeviceProfiler::dumpDeviceResults() {
+void DeviceProfiler::dumpDeviceResults() const {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 

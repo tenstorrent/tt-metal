@@ -243,7 +243,7 @@ private:
     void updateTracyContext(std::pair<uint32_t, CoreCoord> device_core);
 
     // Dump device results to files
-    void dumpDeviceResults();
+    void dumpDeviceResults() const;
 
 public:
     DeviceProfiler(const IDevice* device, bool new_logs);
