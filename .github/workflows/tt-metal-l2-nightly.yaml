@@ -2,7 +2,7 @@ name: "Nightly tt-metal L2 tests"
 
 on:
   schedule:
-    - cron: "0 22 * * *"
+    - cron: "0 6 * * *"
 
 jobs:
   build-artifact:
