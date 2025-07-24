@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "../../common/dispatch_fixture.hpp"
+#include "../../common/multi_device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_metal {
 
@@ -33,11 +35,13 @@ struct OneToOneConfig {
 };
 
 /// @brief Does L1 Sender Core --> L1 Receiver Core
-/// @param device
+/// @param mesh_device - MeshDevice to run the test on
 /// @param test_config - Configuration of the test -- see struct
-/// @param fixture - DispatchFixture pointer for dispatch-aware operations
 /// @return
-bool run_dm(IDevice* device, const OneToOneConfig& test_config, DispatchFixture* fixture) {
+bool run_dm(std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device, const OneToOneConfig& test_config) {
+    // Get the actual device for this single-device test
+    IDevice* device = mesh_device->get_device(0);
+
     /* ================ SETUP ================ */
 
     // Program
@@ -127,8 +131,16 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config, DispatchFixture*
     tt_metal::detail::WriteToDeviceL1(device, test_config.master_core_coord, l1_base_address, packed_input);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
-    // LAUNCH THE PROGRAM - Use dispatch-aware method
-    fixture->RunProgram(device, program);
+    // LAUNCH THE PROGRAM - Use mesh workload approach
+    auto mesh_workload = distributed::CreateMeshWorkload();
+    std::vector<uint32_t> coord_data = {0, 0};
+    auto target_devices =
+        distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
+    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
+    Finish(cq);
 
     // Record Output from Subordinate L1
     std::vector<uint32_t> packed_output;
@@ -151,16 +163,15 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config, DispatchFixture*
 }
 
 void directed_ideal_test(
-    ARCH arch_,
-    vector<IDevice*>& devices_,
-    uint32_t num_devices_,
+    shared_ptr<distributed::MeshDevice> mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {0, 1},
     uint32_t num_virtual_channels = 1) {
+    IDevice* device = mesh_device->get_device(0);
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(device->arch(), device);
 
     // Adjustable Parameters
     // Ideal: Less transactions, more data per transaction
@@ -183,21 +194,18 @@ void directed_ideal_test(
         .num_virtual_channels = num_virtual_channels};
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-    }
+    EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
 void virtual_channels_test(
-    ARCH arch_,
-    vector<IDevice*>& devices_,
-    uint32_t num_devices_,
+    shared_ptr<distributed::MeshDevice> mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {1, 1}) {
+    IDevice* device = mesh_device->get_device(0);
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(device->arch(), device);
 
     std::uint32_t max_num_pages_per_transaction = 1 << 12;
     std::uint32_t num_of_transactions = 256;  // Constant value
@@ -228,29 +236,26 @@ void virtual_channels_test(
                     .num_virtual_channels = num_virtual_channels,
                     .noc_id = noc_id};
 
-                for (unsigned int id = 0; id < num_devices_; id++) {
-                    EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-                }
+                EXPECT_TRUE(run_dm(mesh_device, test_config));
             }
         }
     }
 }
 
 void packet_sizes_test(
-    ARCH arch_,
-    vector<IDevice*>& devices_,
-    uint32_t num_devices_,
+    shared_ptr<distributed::MeshDevice> mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {1, 1}) {
+    IDevice* device = mesh_device->get_device(0);
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_[0]);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(device->arch(), device);
 
     // Parameters
     uint32_t max_transactions = 256;
     uint32_t max_pages_per_transaction =
-        arch_ == tt::ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
+        device->arch() == tt::ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
 
     for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
         for (uint32_t pages_per_transaction = 1; pages_per_transaction <= max_pages_per_transaction;
@@ -272,26 +277,24 @@ void packet_sizes_test(
             };
 
             // Run
-            for (unsigned int id = 0; id < devices_.size(); id++) {
-                EXPECT_TRUE(run_dm(devices_[id], test_config, this));
-            }
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
         }
     }
 }
 
 void custom_test(
-    ARCH arch_,
-    vector<IDevice*>& devices_,
-    uint32_t num_devices_,
+    shared_ptr<distributed::MeshDevice> mesh_device,
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {1, 1},
     uint32_t num_of_transactions = 256,
     uint32_t pages_per_transaction = 1,
     uint32_t num_virtual_channels = 4) {
+    IDevice* device = mesh_device->get_device(0);
+
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_[0]);
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(device->arch(), device);
 
     // Test config
     unit_tests::dm::core_to_core::OneToOneConfig test_config = {
@@ -305,9 +308,7 @@ void custom_test(
         .num_virtual_channels = num_virtual_channels};
 
     // Run
-    for (unsigned int id = 0; id < devices_.size(); id++) {
-        EXPECT_TRUE(run_dm(devices_[id], test_config, this));
-    }
+    EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
 }  // namespace unit_tests::dm::core_to_core
@@ -318,7 +319,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
     // Test ID
     uint32_t test_id = 4;
 
-    unit_tests::dm::core_to_core::packet_sizes_test(arch_, devices_, num_devices_, test_id);
+    unit_tests::dm::core_to_core::packet_sizes_test(get_mesh_device(), test_id);
 }
 
 /*
@@ -328,14 +329,12 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
         3. Core locations with minimal number of hops
 */
 
-TEST_F(DeviceFixture, TensixDataMovementOneToOneDirectedIdeal) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToOneDirectedIdeal) {
     // Test ID (Arbitrary)
     uint32_t test_id = 50;
 
     unit_tests::dm::core_to_core::directed_ideal_test(
-        arch_,
-        devices_,
-        num_devices_,
+        get_mesh_device(),
         test_id,
         CoreCoord(0, 0),  // Master Core
         CoreCoord(0, 1)   // Subordinate Core
@@ -348,9 +347,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOneVirtualChannels) {
     uint32_t test_id = 150;
 
     unit_tests::dm::core_to_core::virtual_channels_test(
-        arch_,
-        devices_,
-        num_devices_,
+        get_mesh_device(),
         test_id,
         CoreCoord(0, 0),  // Master Core
         CoreCoord(0, 1)   // Subordinate Core
@@ -367,9 +364,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOneCustom) {
     uint32_t num_virtual_channels = 4;
 
     unit_tests::dm::core_to_core::custom_test(
-        arch_,
-        devices_,
-        num_devices_,
+        get_mesh_device(),
         test_id,
         CoreCoord(0, 0),  // Master Core
         CoreCoord(0, 1),  // Subordinate Core
