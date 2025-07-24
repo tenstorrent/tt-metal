@@ -66,8 +66,6 @@ std::shared_ptr<MeshBuffer> create_buffer(int page_size, int transfer_size, std:
     ReplicatedBufferConfig mesh_buffer_config{transfer_size};
     DeviceLocalBufferConfig device_local_config{.page_size = page_size, .buffer_type = TARGET_BUFFER_TYPE};
 
-    TT_ASSERT(mesh_buffer_config.compute_datum_size_bytes() == sizeof(DataType));
-
     return MeshBuffer::create(mesh_buffer_config, device_local_config, device.get());
 }
 
