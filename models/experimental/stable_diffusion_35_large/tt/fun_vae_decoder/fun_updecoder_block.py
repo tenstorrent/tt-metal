@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from loguru import logger
 from typing import TYPE_CHECKING
 
 import ttnn
@@ -20,7 +21,6 @@ if TYPE_CHECKING:
 ## Parameters
 
 
-# Asumption: If the input is sharded, the output is sharded. If the input is not sharded, the output is replicated across mesh.
 @dataclass
 class TtUpDecoderBlock2DParameters:
     resnets: list[TtResnetBlock2DParameters]
@@ -33,34 +33,26 @@ class TtUpDecoderBlock2DParameters:
         *,
         dtype: ttnn.DataType | None = None,
         parallel_config: VAEParallelConfig,
-        gn_allow_sharded_compute: bool = True,  # TODO: Move into resnet specific parameters
-        mesh_sharded_input: bool = True,  # TODO: Move into resnet specific parameters
     ) -> TtUpDecoderBlock2DParameters:
         return cls(
             resnets=[
-                TtResnetBlock2DParameters.from_torch(
-                    resnet_block,
-                    dtype=dtype,
-                    parallel_config=parallel_config,
-                    gn_allow_sharded_compute=gn_allow_sharded_compute,
-                    mesh_sharded_input=mesh_sharded_input,
-                )
+                TtResnetBlock2DParameters.from_torch(resnet_block, dtype=dtype, parallel_config=parallel_config)
                 for resnet_block in (updecoder_block.resnets or [])
             ],
             upsamplers=[
-                TtUpsample2DParameters.from_torch(
-                    torch_upsample, dtype=dtype, parallel_config=parallel_config, mesh_sharded_input=mesh_sharded_input
-                )
+                TtUpsample2DParameters.from_torch(torch_upsample, dtype=dtype, parallel_config=parallel_config)
                 for torch_upsample in (updecoder_block.upsamplers or [])
             ],
         )
 
 
 def updecoder_block(x: ttnn.Tensor, parameters: TtUpDecoderBlock2DParameters) -> ttnn.Tensor:
-    for resnet_params in parameters.resnets:
+    for idx, resnet_params in enumerate(parameters.resnets):
+        logger.info(f"resnet: {idx} <-> {x.shape}")
         x = resnet_block(x, resnet_params)
 
-    for upsample_params in parameters.upsamplers:
+    for idx, upsample_params in enumerate(parameters.upsamplers):
+        logger.info(f"upsample: {idx} <-> {x.shape}")
         x = vae_upsample2d(x, upsample_params)
 
     return x

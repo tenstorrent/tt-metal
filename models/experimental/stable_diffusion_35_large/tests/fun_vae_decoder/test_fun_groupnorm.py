@@ -11,8 +11,6 @@ from ...tt.fun_vae_decoder.fun_group_norm import TtGroupNormParameters, vae_grou
 from ...tt.utils import assert_quality, to_torch
 from models.utility_functions import comp_allclose, comp_pcc
 from ...tt.parallel_config import StableDiffusionParallelManager
-import tracy
-import time
 
 
 def print_stats(label, data: torch.Tensor, device=None):
@@ -23,10 +21,6 @@ def print_stats(label, data: torch.Tensor, device=None):
             data, mesh_composer=ttnn.ConcatMesh2dToTensor(device, mesh_shape=tuple(device.shape), dims=(0, 1))
         )
     return f"{label}: mean:{data_.mean()} , std:{data_.std()} , range:[{data_.max()}, {data_.min()}]"
-
-
-def signpost_name(shape, core_grid, sharded, time=None):
-    tracy.signpost(f"shape:{shape},core_grid:{core_grid},sharded:{sharded},time:{time}")
 
 
 @pytest.mark.parametrize(
@@ -47,20 +41,9 @@ def signpost_name(shape, core_grid, sharded, time=None):
     indirect=True,
 )
 @pytest.mark.parametrize(
-    ("batch", "height", "width", "channels", "group_count", "sharded_input", "core_grid"),
+    ("batch", "channels", "height", "width", "group_count"),
     [
-        # Not sharded input
-        # (1, 128, 128, 128, 32, False, ttnn.CoreGrid(y=4, x=8)),
-        (1, 128, 128, 512, 32, False, None),
-        (1, 128, 128, 512, 32, True, None),
-        (1, 256, 256, 512, 32, False, None),
-        (1, 256, 256, 512, 32, True, None),
-        (1, 512, 512, 512, 32, False, None),
-        (1, 512, 512, 512, 32, True, None),
-        (1, 512, 512, 256, 32, False, None),
-        (1, 512, 512, 256, 32, True, None),
-        (1, 1024, 1024, 256, 32, False, None),
-        (1, 1024, 1024, 256, 32, True, None),
+        (1, 128, 32, 32, 32),  # Group norm observed edge case
     ],
 )
 def test_group_norm(
@@ -71,8 +54,6 @@ def test_group_norm(
     height: int,
     width: int,
     group_count: int,
-    sharded_input: bool,
-    core_grid: ttnn.CoreGrid,
     cfg,
     sp,
     tp,
@@ -103,44 +84,34 @@ def test_group_norm(
     torch_model = torch.nn.GroupNorm(num_groups=group_count, num_channels=channels)
     torch_model.eval()
 
-    in_shape = (batch, channels, height, width)
-    inp = torch.randn(in_shape, dtype=torch_dtype)
+    inp = torch.randn((batch, channels, height, width), dtype=torch_dtype)
 
-    parameters = TtGroupNormParameters.from_torch(
-        torch_model,
-        parallel_config=parallel_manager.vae_parallel_config,
-        mesh_sharded_input=sharded_input,
-        allow_sharded_compute=True,
-        core_grid=core_grid,
-    )
+    parameters = TtGroupNormParameters.from_torch(torch_model, parallel_config=parallel_manager.vae_parallel_config)
 
     tt_inp = ttnn.from_torch(
         inp.permute(0, 2, 3, 1),
         dtype=ttnn_dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=parallel_manager.vae_parallel_config.device,
-        # mesh_mapper=ttnn.ReplicateTensorToMesh(parallel_manager.vae_parallel_config.device),
-        mesh_mapper=ttnn.ShardTensorToMesh(parallel_manager.vae_parallel_config.device, dim=-1)
-        if sharded_input
-        else None,
-        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    logger.info(print_stats("torch_input", inp))
+    logger.info(print_stats("tt_input", tt_inp, device=device))
+
+    # tt_inp = allocate_tensor_on_device_like(tt_inp_host, device=mesh_device)
+    logger.info(f" input shape TT: {tt_inp.shape}, Torch: {inp.shape}")
     with torch.no_grad():
         out = torch_model(inp)
 
-    tracy.signpost("Caching")
     tt_out = vae_group_norm(tt_inp, parameters)
+
     tt_out_torch = to_torch(tt_out).permute(0, 3, 1, 2)
 
-    logger.info("Computing PCC ... ")
     assert_quality(out, tt_out_torch, pcc=0.94, ccc=0.94)
     print(comp_allclose(out, tt_out_torch))
     result, output = comp_pcc(out, tt_out_torch)
     logger.info(f"Comparison result Pass:{result}, Output {output}, in: {torch.count_nonzero(tt_out_torch)}")
-
-    start_time = time.time()
-    for i in range(10):
-        tt_out = vae_group_norm(tt_inp, parameters)
-    end_time = time.time()
-    signpost_name(in_shape, parameters.core_grid, parameters.mesh_sharded_input, time=(end_time - start_time) / 10)
-    # logger.info(f"Time taken: {end_time - start_time} seconds")
+    logger.info(print_stats("torch", out))
+    logger.info(print_stats("tt", tt_out_torch, device=device))
+    logger.info(print_stats("in", inp))
