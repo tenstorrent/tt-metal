@@ -263,6 +263,7 @@ run_t3000_tteager_tests() {
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_t3000.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_mesh_partition_t3000.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_moe_ccl_end_to_end.py ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/operations/point_to_point/test_send_receive.py ; fail+=$?
 
   # distributed layernorm
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest tests/ttnn/unit_tests/operations/test_distributed_layernorm.py ; fail+=$?
