@@ -115,7 +115,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
     //   (vs. 1 cycle SFPLOADI + 2 cycles MAD)
 
     z_f32 = addexp(z_f32, 23);  // equal to multiplying by 2**23
-    sfpi::vInt z = _float_to_int32_positive_(z_f32 + sfpi::vFloat(0x3f800000));
+    const sfpi::vFloat bias = sfpi::vFloat(0x3f800000);
+    sfpi::vInt z = _float_to_int32_positive_(z_f32 + bias);
 
     sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Note: z & 0x7f800000 in paper
     sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Note: z & 0x007fffff in paper
@@ -145,16 +146,13 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
     v_endif;
 
     v_if(base < 0.0f) {  // negative base
-        // Check for integer power
-        v_if(pow_rounded == pow) {
-            // if pow is odd integer, set result to negative
-            v_if(pow_int & 0x1) {
-                // if negative base and negative pow, then x**y = -(abs(x))**(abs(y))
-                y = setsgn(y, 1);
-            }
-            v_endif;
-        }
-        v_else {  // negative base and non-integer power => set to NaN
+        // If pow is odd integer then result is negative
+        // If power is even, then result is positive
+        // To get the sign bit of result, we can shift last bit of pow_int to the 1st bit
+        y = setsgn(y, pow_int << 31);
+
+        // Check for integer power, if it is not then overwrite result with NaN
+        v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
             y = sfpi::vConstFloatPrgm2;
         }
         v_endif;
@@ -172,6 +170,7 @@ inline void calculate_sfpu_binary(const uint dst_offset) {
             sfpi::vFloat in0 = sfpi::dst_reg[0];
             sfpi::vFloat in1 = sfpi::dst_reg[dst_offset * dst_tile_size];
             sfpi::vFloat result = 0.f;
+
             result = _sfpu_binary_power_(in0, in1);
 
             sfpi::dst_reg[0] = result;
