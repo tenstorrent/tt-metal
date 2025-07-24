@@ -171,6 +171,9 @@ void __attribute__((noinline)) Application() {
                 }
             } else if (gEnableFwFlag[0] != 1) {
                 mailboxes->go_message.signal = RUN_MSG_DONE;
+                volatile uint32_t* const debug_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
+                // Track if we could not return back to _start
+                debug_dump_addr[0] = 0x11112222;
                 return;
             } else {
                 service_base_fw();
