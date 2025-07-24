@@ -79,8 +79,12 @@ if is_wormhole_b0():
         (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
         (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
         (ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        (ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.int32, ttnn.TILE_LAYOUT),
+        (ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
+        (ttnn.uint32, ttnn.TILE_LAYOUT),
     ),
-    ids=["BFLOAT8_B-TILE", "BFLOAT16-RM", "BFLOAT16-TILE"],
+    # ids=["BFLOAT8_B-TILE", "BFLOAT16-RM", "BFLOAT16-TILE"],
 )
 @pytest.mark.parametrize("shape", shapes)
 @pytest.mark.parametrize("test_id", (0, 1), ids=["overlap", "non_overlap"])
