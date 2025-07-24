@@ -37,6 +37,17 @@ def test_clip_encoder(*, device: ttnn.Device, use_program_cache: bool, model_nam
     tokenizer_1 = CLIPTokenizer.from_pretrained(model_name_checkpoint, subfolder="tokenizer", local_files_only=True)
     tokenizer_2 = CLIPTokenizer.from_pretrained(model_name_checkpoint, subfolder="tokenizer_2", local_files_only=True)
 
+    # extract pooled output from last_hidden_state exactly like HF does internally
+    def pooled_from_hidden(last_hidden, input_ids, eos_token_id):
+        if eos_token_id == 2:
+            # "argmax" strategy used by older checkpoints
+            idx = input_ids.argmax(dim=-1)
+        else:
+            # search for the first true EOS token
+            idx = (input_ids == eos_token_id).int().argmax(dim=-1)
+        b = torch.arange(last_hidden.size(0), device=last_hidden.device)
+        return last_hidden[b, idx]  # shape [B, hidden]
+
     hf_model_1.eval()
     hf_model_2.eval()
 
@@ -95,7 +106,7 @@ def test_clip_encoder(*, device: ttnn.Device, use_program_cache: bool, model_nam
     tt_model_1 = TtCLIPTextTransformer(parameters_1, config_1)
     logger.info(f"text encoder 1 creation time: {time.time() - start_time}")
 
-    # can't use randn tensor because must use HF tokenizer for the specific eos token
+    # cannot use randn tensor, since HF tokenizer appends a specific eos token syntax
     test_text = "A coffee shop on Main Street that serves excellent pastries and opens at 7 AM on weekdays"
 
     hf_inputs_1 = tokenizer_1(test_text, padding=True, truncation=True, max_length=77, return_tensors="pt")
@@ -105,7 +116,8 @@ def test_clip_encoder(*, device: ttnn.Device, use_program_cache: bool, model_nam
     with torch.no_grad():
         hf_output_1 = hf_model_1(**hf_inputs_1)
         sequence_output_1 = hf_output_1.last_hidden_state
-        pooled_output_1 = hf_output_1.text_embeds
+
+        pooled_output_1 = pooled_from_hidden(sequence_output_1, hf_inputs_1.input_ids, hf_model_1.config.eos_token_id)
     logger.info(f"text encoder 1 CPU runtime: {time.time() - start_time}")
 
     # debug
@@ -121,7 +133,9 @@ def test_clip_encoder(*, device: ttnn.Device, use_program_cache: bool, model_nam
 
     logger.info("executing text encoder 1...")
     start_time = time.time()
-    tt_sequence_output_1, tt_pooled_output_1 = tt_model_1(tt_tokens_1, device)
+    eos_token_id_1 = hf_model_1.config.eos_token_id
+    tt_sequence_output_1, tt_pooled_output_1 = tt_model_1(tt_tokens_1, device, eos_token_id_1)
+
     logger.info(f"text encoder 1 TT-NN runtime: {time.time() - start_time}")
     logger.info("text encoder 1 done...")
 
@@ -183,7 +197,8 @@ def test_clip_encoder(*, device: ttnn.Device, use_program_cache: bool, model_nam
     with torch.no_grad():
         hf_output_2 = hf_model_2(**hf_inputs_2)
         sequence_output_2 = hf_output_2.last_hidden_state
-        pooled_output_2 = hf_output_2.text_embeds
+
+        pooled_output_2 = pooled_from_hidden(sequence_output_2, hf_inputs_2.input_ids, hf_model_2.config.eos_token_id)
     logger.info(f"text encoder 2 CPU runtime: {time.time() - start_time}")
 
     # debug
@@ -199,7 +214,8 @@ def test_clip_encoder(*, device: ttnn.Device, use_program_cache: bool, model_nam
 
     logger.info("executing text encoder 2...")
     start_time = time.time()
-    tt_sequence_output_2, tt_pooled_output_2 = tt_model_2(tt_tokens_2, device)
+    eos_token_id_2 = hf_model_2.config.eos_token_id
+    tt_sequence_output_2, tt_pooled_output_2 = tt_model_2(tt_tokens_2, device, eos_token_id_2)
     logger.info(f"text encoder 2 TT-NN runtime: {time.time() - start_time}")
     logger.info("text encoder 2 done...")
 
