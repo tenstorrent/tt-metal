@@ -591,9 +591,17 @@ struct LowLatencyMeshPacketHeader : public PacketHeaderBase<LowLatencyMeshPacket
 };
 
 struct MeshPacketHeader : public PacketHeaderBase<MeshPacketHeader> {
-    uint16_t dst_start_chip_id;
-    uint16_t dst_start_mesh_id;
-    uint16_t mcast_params[4];
+    union {
+        struct {
+            uint16_t dst_start_chip_id;
+            uint16_t dst_start_mesh_id;
+        };
+        uint32_t dst_start_node_id;  // Used for efficiently writing the dst info
+    };
+    union {
+        uint16_t mcast_params[4];  // Array representing the hops in each direction
+        uint64_t mcast_params_64;  // Used for efficiently writing to the mcast_params array
+    };
     uint8_t is_mcast_active;
     uint8_t reserved[7];
     void to_chip_unicast_impl(uint8_t distance_in_hops) {}
