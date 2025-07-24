@@ -11,15 +11,14 @@
 
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/operations/reduction/cumsum/device/cumsum_device_operation.hpp"
-#include "ttnn/operations/reduction/cumsum/cumsum.hpp"
+#include "ttnn/operations/reduction/accumulation/cumsum/cumsum.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::reduction::detail {
+namespace ttnn::operations::reduction::accumulation::detail {
 namespace py = pybind11;
 
-void bind_cumsum_operation(py::module& module) {
+void bind_reduction_cumsum_operation(py::module& module) {
     auto docstring =
         R"doc(
         Returns cumulative sum of `input` along dimension `dim`
@@ -32,7 +31,8 @@ void bind_cumsum_operation(py::module& module) {
 
         Keyword Args:
             dtype (ttnn.DataType, optional): desired output type. If specified then input tensor will be casted to `dtype` before processing.
-            output (ttnn.Tensor, optional): preallocated output. If specified, `output` must have same shape as `input`, and must be on the same device.
+            reverse_order (bool, optional, default False): whether to perform accumulation from the end to the beginning of accumulation axis.
+            out (ttnn.Tensor, optional): preallocated output. If specified, `out` must have same shape as `input`, and must be on the same device.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -77,7 +77,7 @@ void bind_cumsum_operation(py::module& module) {
             # With preallocated output and dtype
             preallocated_output = ttnn.from_torch(torch.rand([2, 3, 4]), dtype=ttnn.bfloat16, device=device)
 
-            tensor_output = ttnn.cumsum(tensor_input, dim=0, dtype=torch.bfloat16, output=preallocated_output)
+            tensor_output = ttnn.cumsum(tensor_input, dim=0, dtype=torch.bfloat16, out=preallocated_output)
         )doc";
 
     using OperationType = decltype(ttnn::cumsum);
@@ -88,43 +88,22 @@ void bind_cumsum_operation(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const int64_t dim,
-               std::optional<tt::tt_metal::DataType>& dtype,
+               const int32_t& dim,
+               std::optional<DataType>& dtype,
+               const bool& reverse_order,
                std::optional<Tensor> preallocated_tensor,
-               QueueId queue_id) { return self(queue_id, input_tensor, dim, dtype, preallocated_tensor); },
+               const std::optional<MemoryConfig>& memory_config,
+               QueueId queue_id) {
+                return self(queue_id, input_tensor, dim, dtype, reverse_order, preallocated_tensor, memory_config);
+            },
             py::arg("input").noconvert(),
             py::arg("dim"),
             py::kw_only(),
             py::arg("dtype") = std::nullopt,
-            py::arg("output") = std::nullopt,
-            py::arg("queueId") = DefaultQueueId});
-}
-
-void bind_cumsum_backward_operation(py::module& module) {
-    auto docstring = "Returns backward cumulative sum of `input` along dimension `dim`";
-
-    using OperationType = decltype(ttnn::cumsum_backward);
-    bind_registered_operation(
-        module,
-        ttnn::cumsum_backward,
-        docstring,
-        ttnn::pybind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const int64_t dim,
-               std::optional<tt::tt_metal::DataType>& dtype,
-               std::optional<Tensor> preallocated_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               QueueId queue_id) {
-                return self(queue_id, input_tensor, dim, dtype, preallocated_tensor, memory_config);
-            },
-            py::arg("output_grad").noconvert(),
-            py::arg("dim"),
-            py::kw_only(),
-            py::arg("dtype") = std::nullopt,
-            py::arg("input_grad") = std::nullopt,
+            py::arg("reverse_order") = false,
+            py::arg("out") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queueId") = DefaultQueueId});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace ttnn::operations::reduction::detail
+}  // namespace ttnn::operations::reduction::accumulation::detail
