@@ -6,9 +6,22 @@ Add `-e` or `--export-compile-commands` to `./build_metal.sh` to generate `compi
 
 Kernels are compiled and linked in runtime with `runtime/sfpi/compiler/bin/riscv32-tt-elf-g++`, and they naturally aren't part of cmake project, so code indexing doesn't work there.
 
-One of the way to achieve code indexing in kernels is using bear tool that can generate compile_commands.json from compilation logs.
+## 1. Create fake cmake target to enable kernel code indexing
+Add `--fake-kernels-target` to `build_metal.sh`
 
-## 1. Generate kernel `compile_commands.json` with `bear` utility
+- This approach doesn't work very well:
+  - many kernels depend on different defines and compile time arguments
+  - there is a compute kernel split into unpacker/packer/math
+  - jit build generates some file in runtime and includes many different files implicitly
+  - includes depend on architecture
+- But still, many IDE features should work, especially inside kernel file
+
+
+## 2. Generate kernel `compile_commands.json` with `bear` utility
+Another way to achieve code indexing in kernels is using bear tool that can generate compile_commands.json from compilation logs.
+
+This approach generates more precise compile_commands.json, since it parses flags and definitions passed during actual compilation of kernel. But at the same time, it's a bit more involved.
+
 ### Prerequisities
 - bear (`sudo apt-get install bear`)
 - python 3.10+
@@ -79,12 +92,9 @@ options:
 ```
 
 
-### Known issues
-- Compile time arguments are highlighted with the following error message: `Constexpr variable 'variable' must be initialized by a constant expressionclang(constexpr_var_requires_const_init)`
-
 ## Using `compile_commands.json`
 ### VS code:
-- `clangd` by default searches for compile_commands.json in project root, but it can be changed. settings.json example:
+- `clangd` by default searches for compile_commands.json in project root, but it can be changed. `settings.json` example:
 ```json
     "clangd.path": "/usr/bin/clangd-17",
     "clangd.arguments": [
@@ -93,4 +103,7 @@ options:
         "-compile-commands-dir=${workspaceFolder}/build_Debug"
     ],
 ```
--
+- Microsoft Intellisense extension can work with compile commands if configured properly:
+```json
+    "C_Cpp.default.compileCommands": "${workspaceFolder}/build_Debug/compile_commands.json",
+```
