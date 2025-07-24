@@ -51,7 +51,7 @@ jobs:
             -e LD_LIBRARY_PATH="/work/build/lib"
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:/work/generated/test_reports/"
-            -v ${{ github.workspace }}/build:/work
+            -v ${{ github.workspace }}:/work
             -v /dev/hugepages-1G:/dev/hugepages-1G
             -v /etc/rankfile:/etc/rankfile:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
