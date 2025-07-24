@@ -14,7 +14,7 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 
-namespace ttnn::operations::experimental {
+namespace ttnn::operations::data_movement {
 namespace {
 
 constexpr int32_t LAST_DIMENSION = -1;
@@ -158,4 +158,4 @@ Tensor TOSAScatterOperation::invoke(
     return CMAKE_UNIQUE_NAMESPACE::post_tosa_scatter_transform_tensor(output, N, K, W, C, input_tensor.layout());
 }
 
-}  // namespace ttnn::operations::experimental
+}  // namespace ttnn::operations::data_movement
