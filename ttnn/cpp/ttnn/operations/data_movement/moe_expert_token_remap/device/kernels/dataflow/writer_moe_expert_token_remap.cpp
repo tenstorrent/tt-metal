@@ -77,7 +77,6 @@ void kernel_main() {
             }
             const uint64_t output_noc_addr = get_noc_addr(bs, output_addrgen);
             noc_async_write(output_l1_addr, output_noc_addr, output_page_size_bytes);
-            noc_async_write_barrier();
         }
         if (found) {
             cb_pop_front(data_cb_id, 1);
