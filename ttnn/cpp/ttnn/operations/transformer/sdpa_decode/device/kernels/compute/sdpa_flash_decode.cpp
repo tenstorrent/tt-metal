@@ -22,7 +22,6 @@
 #include "compute_common.hpp"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/untilize.h"
-#include "debug/dprint.h"
 
 constexpr uint32_t MAX_PACK_UNTILIZE_WIDTH = 8;
 
@@ -353,12 +352,17 @@ void MAIN {
                     /* cb_out_accumulate_im *= cb_exp_max_diff */
                     reconfig_data_format(cb_out_accumulate_im, cb_exp_max_diff);  // DEBUG
                     pack_reconfig_data_format(cb_out_accumulate_im);
-                    mul_block_bcast_cols<Sq_chunk_t, vDHt>(cb_out_accumulate_im, cb_exp_max_diff, cb_out_im, true);
+                    mul_block_bcast_cols(cb_out_accumulate_im, cb_exp_max_diff, cb_out_accumulate_im, Sq_chunk_t, vDHt);
 
                     /* cb_cur_sum += cb_prev_sum */
                     reconfig_data_format(cb_cur_sum, cb_prev_sum);  // DEBUG
                     pack_reconfig_data_format(cb_cur_sum);
                     add_block_inplace<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+
+                    /* cb_out_accumulate_im += cb_out_im */
+                    reconfig_data_format(cb_out_accumulate_im, cb_out_im);  // DEBUG
+                    pack_reconfig_data_format(cb_out_accumulate_im);
+                    add_block_inplace<true>(cb_out_accumulate_im, cb_out_im, out_chunk_tiles);
                 }
 
                 if (k_chunk < k_chunk_end - 1 || do_reduce) {
@@ -380,12 +384,10 @@ void MAIN {
         if (do_reduce) {
             // cb_out_accumulate_im should contain o_1
             // cb_prev_max and cb_prev_sum should contain m_1 and l_1
-            DPRINT << "before wait for reducer's compute" << ENDL();
             if (k_chunk_end - k_chunk_start < k_num_chunks) {
                 // This indicates that there are computes done by other workers. Needs to wait for them and send to
                 // reducer's compute
                 for (uint32_t i = 0; i < num_cores_to_wait; i++) {
-                    DPRINT << "before max_block" << ENDL();
                     move_block<true>(cb_out_o, cb_out_accumulate_im_2, out_chunk_tiles);
                     move_block<true>(cb_l_in, cb_prev_sum_2, Sq_chunk_t);
                     max_block<vector_mode>(cb_m_in, cb_prev_max, cb_cur_max, Sq_chunk_t);  // pushed, pushed, popped
@@ -393,23 +395,19 @@ void MAIN {
                     // l = torch.exp(m_2 - m) * l_2 + torch.exp(m_1 - m) * l_1
 
                     /// l1 = torch.exp((m_2 - m) * scale) * l_2
-                    DPRINT << "before sub_exp_block 1" << ENDL();
                     sub_exp_block<scale_fp32, vector_mode>(cb_m_in, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
                     mul_block_inplace(cb_prev_sum_2, cb_exp_max_diff_2, Sq_chunk_t);
 
                     /// l2 = torch.exp((m_1 - m)  * scale) * l_1
-                    DPRINT << "before sub_exp_block 2" << ENDL();
                     sub_exp_block<scale_fp32, vector_mode>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
                     mul_block_inplace(cb_prev_sum, cb_exp_max_diff, Sq_chunk_t);
 
                     /// l = l1 + l2
                     add_block(cb_prev_sum_2, cb_prev_sum, cb_cur_sum, Sq_chunk_t);
 
-                    DPRINT << "before mul_block_bcast_cols_inplace" << ENDL();
                     mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, vDHt);
                     mul_block_bcast_cols_inplace(cb_out_accumulate_im_2, cb_exp_max_diff_2, Sq_chunk_t, vDHt);
 
-                    DPRINT << "after mul_block_bcast_cols_inplace" << ENDL();
                     add_block_inplace<true>(cb_out_accumulate_im, cb_out_accumulate_im_2, out_chunk_tiles);
 
                     // copy tiles
@@ -422,22 +420,19 @@ void MAIN {
             /**
              * Performs final row-reduction on the partial sum.
              */
-            DPRINT << "before matmul_reduce" << ENDL();
             matmul_reduce<Sq_chunk_t>(cb_col_identity, cb_prev_sum);
-            DPRINT << "after matmul_reduce" << ENDL();
             move_block<true>(cb_prev_sum, cb_cur_sum, Sq_chunk_t);
 
             /* cb_cur_sum = 1.0 / cb_cur_sum */
             reconfig_data_format(cb_cur_sum, cb_cur_sum);  // DEBUG
             pack_reconfig_data_format(cb_cur_sum);
             recip_block_inplace<vector_mode>(cb_cur_sum, Sq_chunk_t);
-            DPRINT << "after recip_block_inplace" << ENDL();
+
             /* cb_out_accumulate_im *= cb_cur_sum */
             reconfig_data_format(cb_out_accumulate_im, cb_cur_sum);  // DEBUG
             pack_reconfig_data_format(cb_out_accumulate_im);
             mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_cur_sum, Sq_chunk_t, vDHt);
             pack_reconfig_data_format(cb_out_final);
-            DPRINT << "after mul_block_bcast_cols_inplace" << ENDL();
 
             if constexpr (untilize_output) {
                 if constexpr (use_pack_untilize) {
@@ -464,10 +459,8 @@ void MAIN {
             }
             // free up cb_prev_max after K chunks
             cb_pop_front(cb_prev_max, Sq_chunk_t);
-            DPRINT << "after untilize" << ENDL();
         }
     }
     cb_pop_front(cb_q_in, q_chunk_tiles);
-    DPRINT << "end" << ENDL();
 }
 }  // namespace NAMESPACE

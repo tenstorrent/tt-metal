@@ -193,50 +193,29 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
     cb_pop_front(in1_cb, rows);
 }
 
-template <uint32_t rows, uint32_t cols>
-void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, bool pack_accumulate = false) {
+void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t rows, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
-    // Precondition: out_cb has rows*cols produced
-    // Postcondition: in0_cb empty
-    // Postcondition: in1_cb empty
     // Postcondition: out_cb has rows*cols produced
+    // Postcondition: in1_cb has rows consumed
 
-    constexpr uint32_t num_tiles = rows * cols;
-#ifdef DHT_GRANULARITY
-    constexpr uint32_t dst_tiles = DHT_GRANULARITY;
-    constexpr uint32_t granularity = cols >> LOG2_DHT_GRANULARITY;
-#else
-    constexpr uint32_t dst_tiles = cols;
-    constexpr uint32_t granularity = 1;
-#endif
+    // This style of populating out_cb supports in0_cb being used as out_cb (ie. in-place)
+    uint32_t num_tiles = rows * cols;
     mul_bcast_cols_init_short(in0_cb, in1_cb);
-    PACK((llk_pack_reconfig_l1_acc(pack_accumulate)));
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, rows);
-    cb_reserve_back(out_cb, num_tiles);
-    cb_wait_front(out_cb, num_tiles);
-    uint32_t in0_index = 0;
     for (uint32_t i = 0; i < rows; ++i) {
-        for (uint32_t u = 0; u < granularity; ++u) {
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < dst_tiles; ++j) {
-                mul_tiles_bcast_cols(in0_cb, in1_cb, in0_index, i, j);
-                in0_index++;
-            }
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t j = 0; j < dst_tiles; ++j) {
-                pack_tile(j, out_cb);
-            }
-            tile_regs_release();
+        for (uint32_t j = 0; j < cols; ++j) {
+            acquire_dst();
+            mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
+            cb_pop_front(in0_cb, 1);
+            cb_reserve_back(out_cb, 1);
+            pack_tile(0, out_cb);
+            cb_push_back(out_cb, 1);
+            release_dst();
         }
     }
-    PACK((llk_pack_reconfig_l1_acc(false)));
     cb_pop_front(in1_cb, rows);
-    cb_pop_front(in0_cb, num_tiles);
-    cb_push_back(out_cb, num_tiles);
-    cb_pop_front(out_cb, num_tiles);
 }
 
 void mul_block_bcast_scalar_inplace(uint32_t in0_cb, uint32_t in1_scalar_cb, uint32_t num_tiles) {
