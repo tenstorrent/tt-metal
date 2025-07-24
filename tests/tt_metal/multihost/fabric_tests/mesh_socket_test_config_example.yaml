@@ -1,0 +1,66 @@
+# MeshSocket Test Configuration Example
+# This file demonstrates a basic test configuration with explicit socket definitions
+
+# Physical mesh configuration (optional)
+physical_mesh:
+   mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.yaml"
+   eth_coord_mapping: [
+    [[0, 0, 0, 0, 0], [0, 1, 0, 0, 0], [0, 0, 1, 0, 0], [0, 1, 1, 0, 0]],
+    [[0, 2, 0, 0, 0], [0, 3, 0, 0, 0], [0, 2, 1, 0, 0], [0, 3, 1, 0, 0]]
+    ]
+
+# Fabric configuration (required)
+fabric_config:
+  topology: Mesh
+  routing_type: Dynamic
+
+# Test definitions (required)
+tests:
+  - name: "basic_point_to_point"
+    num_iterations: 5
+    memory_config:
+      fifo_size: 1024
+      page_size: 256
+      data_size: 4096
+    sockets:
+      - connections:
+          - sender:
+              mesh_coord: [0, 0]
+              core_coord: [0, 0]
+            receiver:
+              mesh_coord: [0, 1]
+              core_coord: [0, 0]
+      - connections:
+          - sender:
+              mesh_coord: [1, 0]
+              core_coord: [1, 1]
+            receiver:
+              mesh_coord: [1, 1]
+              core_coord: [1, 1]
+
+  - name: "multi_connection_socket"
+    num_iterations: 3
+    memory_config:
+      fifo_size: 2048
+      page_size: 512
+      data_size: 8192
+    sockets:
+      - connections:
+          - sender:
+              mesh_coord: [0, 0]
+              core_coord: [0, 0]
+            receiver:
+              mesh_coord: [0, 1]
+              core_coord: [0, 0]
+          - sender:
+              mesh_coord: [0, 0]
+              core_coord: [1, 0]
+            receiver:
+              mesh_coord: [0, 1]
+              core_coord: [1, 0]
+          - sender:
+              mesh_coord: [0, 0]
+              core_coord: [0, 1]
+            receiver:
+              mesh_coord: [0, 1]
+              core_coord: [0, 1]
