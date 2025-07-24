@@ -192,6 +192,23 @@ def assert_with_ulp(
         actual_result.shape
     ), f"list(expected_result.shape)={list(expected_result.shape)} vs list(actual_result.shape)={list(actual_result.shape)}"
 
+    maximum_meaningful_ulp_thresholds = {
+        torch.float64: 2**52,
+        torch.float32: 2**23,
+        torch.float16: 2**10,
+        torch.bfloat16: 2**7,
+    }
+    maximum_meaningful_ulp_threshold = (
+        maximum_meaningful_ulp_thresholds[torch.float32]
+        if expected_result.dtype in maximum_meaningful_ulp_thresholds
+        else maximum_meaningful_ulp_thresholds[expected_result.dtype]
+    )
+
+    if ulp_threshold > maximum_meaningful_ulp_threshold:
+        logger.warning(
+            f"ULP threshold {ulp_threshold} is greater than the maximum meaningful ULP threshold of {maximum_meaningful_ulp_threshold} for dtype {expected_result.dtype}"
+        )
+
     ulp_passed, ulp_message = comp_ulp(expected_result, actual_result, ulp_threshold, allow_nonfinite)
     assert ulp_passed, ulp_message
     return ulp_passed, ulp_message
