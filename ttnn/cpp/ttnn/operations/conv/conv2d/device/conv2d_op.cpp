@@ -42,7 +42,8 @@ Tensor optimized_conv_new(
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
     bool full_inner_dim,
-    bool enable_split_reader) {
+    bool enable_split_reader,
+    bool enable_activation_reuse) {
     TT_FATAL(b.layout() == Layout::TILE,
              "Weights should be in TILE layout.");  // Weights should already be formatted
     const auto& ashape = input_tensor_shape;
@@ -56,6 +57,7 @@ Tensor optimized_conv_new(
         input_bias_format_params = {
             .pad_shape = bias.value().padded_shape(), .pad_value = 0, .target_layout = Layout::TILE};
     }
+
     auto optimized_conv_op = OptimizedConvNew(
         sliding_window_config,
         output_channels,
@@ -72,7 +74,8 @@ Tensor optimized_conv_new(
         enable_act_double_buffer,
         enable_weights_double_buffer,
         full_inner_dim,
-        enable_split_reader);
+        enable_split_reader,
+        enable_activation_reuse);
     IDevice* device = a.device();
 
     optimized_conv_op.pre_op_l1_allocation_size_bytes =
@@ -255,7 +258,8 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             enable_act_double_buffer,
             enable_weights_double_buffer,
             enable_split_reader,
-            full_inner_dim);
+            full_inner_dim,
+            enable_activation_reuse);
     }
 
     const uint32_t post_op_l1_allocation_size =
@@ -266,6 +270,7 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second});
 
     const SkipMcast skip_mcast = conv_skip_mcast(parallelization_config, memory_config.memory_layout());
+    const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
     conv_op_l1_usage l1_usage = calculate_L1_usage(
         compute_kernel_config,
         block_config,
@@ -278,17 +283,14 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
             .enable_act_double_buffer = enable_act_double_buffer,
             .enable_weights_double_buffer = enable_weights_double_buffer,
-            .enable_split_reader = enable_split_reader},
+            .enable_split_reader = enable_split_reader,
+            .enable_activation_reuse = enable_activation_reuse},
         input_tensor_a.dtype(),
         this->dtype,
+        output_image_width,
         has_bias,
         is_1d_deptwise_conv(
-            groups,
-            input_tensor_shape[3],
-            output_channels,
-            kernel_dims[1],
-            sliding_window_config.get_output_shape()[2],
-            has_bias),
+            groups, input_tensor_shape[3], output_channels, kernel_dims[1], output_image_width, has_bias),
         skip_mcast.skip_activation_mcast);
 
     TT_FATAL(
