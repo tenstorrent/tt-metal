@@ -327,6 +327,7 @@ void send_msg_to_eth_mailbox(
         const auto start = std::chrono::high_resolution_clock::now();
 
         while (true) {
+            tt_driver_atomics::lfence();
             uint32_t mailbox_val = read_hex_vec_from_core(device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0];
             log_debug(tt::LogLLRuntime, "Device {}: Eth {} Mailbox {:#x}", device_id, virtual_core.str(), mailbox_val);
 
@@ -405,6 +406,7 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
 
     while (heartbeat_val == previous_heartbeat_val) {
         std::this_thread::sleep_for(k_sleep_time);
+        tt_driver_atomics::lfence();
         previous_heartbeat_val = heartbeat_val;
         heartbeat_val = read_hex_vec_from_core(device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
         if (timeout_ms > 0) {
