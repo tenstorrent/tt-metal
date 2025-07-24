@@ -143,8 +143,13 @@ def test_vision_model_inference(
     tt_out = tt_model(
         tt_input,
         unpadded_seq_len=ref_seq_len,
-        cu_seqlens=cu_seqlens,
-        cu_window_seqlens=cu_window_seqlens,
+        cu_seqlens=ttnn.from_torch(cu_seqlens, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device),
+        cu_window_seqlens=ttnn.from_torch(
+            cu_window_seqlens,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+        ),
         rot_mats=rot_mats,
     )
 
