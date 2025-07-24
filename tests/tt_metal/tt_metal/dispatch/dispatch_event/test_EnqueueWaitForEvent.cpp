@@ -45,7 +45,7 @@ namespace basic_tests {
 
 // Simplest test to record Event per CQ and wait from host, and verify populated Event struct is correct (many events,
 // wrap issue queue)
-TEST_F(UnitMeshMultiCQMultDeviceEventFixture, TestEventsEventSynchronizeSanity) {
+TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEventSynchronizeSanity) {
     for (auto& mesh_device : devices_) {
         log_info(tt::LogTest, "Running On Device {}", mesh_device->get_devices()[0]->id());
         vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {
@@ -85,8 +85,46 @@ TEST_F(UnitMeshMultiCQMultDeviceEventFixture, TestEventsEventSynchronizeSanity) 
     }
 }
 
+// Simplest test to record Event per CQ and wait from host, and verify populated Event struct is correct (many events,
+// wrap issue queue)
+TEST_F(UnitMeshMultiCQSingleDeviceEventFixture, TestEventsEventSynchronizeSanity) {
+    vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {
+        this->device_->mesh_command_queue(0), this->device_->mesh_command_queue(1)};
+    vector<uint32_t> cmds_issued_per_cq = {0, 0};
+
+    TT_ASSERT(cqs.size() == 2);
+    const int num_cmds_per_cq = 1;
+
+    auto start = std::chrono::system_clock::now();
+    std::unordered_map<uint, std::vector<distributed::MeshEvent>> sync_events;
+    const size_t num_events = 10;
+
+    for (size_t j = 0; j < num_events; j++) {
+        for (uint i = 0; i < cqs.size(); i++) {
+            log_debug(tt::LogTest, "j : {} Recording and Host Syncing on event for CQ ID: {}", j, cqs[i].get().id());
+            auto event = sync_events[i].emplace_back(distributed::EnqueueRecordEventToHost(cqs[i]));
+            distributed::EventSynchronize(event);
+            // Can check events fields after prev sync w/ async CQ.
+            EXPECT_EQ(event.mesh_cq_id(), cqs[i].get().id());
+            EXPECT_EQ(event.id(), cmds_issued_per_cq[i] + 1);
+            cmds_issued_per_cq[i] += num_cmds_per_cq;
+        }
+    }
+
+    // Sync on earlier events again per CQ just to show it works.
+    for (uint i = 0; i < cqs.size(); i++) {
+        for (size_t j = 0; j < num_events; j++) {
+            distributed::EventSynchronize(sync_events.at(i)[j]);
+        }
+    }
+
+    local_test_functions::FinishAllCqs(cqs);
+    std::chrono::duration<double> elapsed_seconds = (std::chrono::system_clock::now() - start);
+    log_info(tt::LogTest, "Test Finished in {:.2f} us", elapsed_seconds.count() * 1000 * 1000);
+}
+
 // Simplest test to record and wait-for-events on same CQ.
-TEST_F(UnitMeshMultiCQMultDeviceEventFixture, TestEventsEnqueueWaitForEventSanity) {
+TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEnqueueWaitForEventSanity) {
     for (auto& mesh_device : devices_) {
         vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {
             mesh_device->mesh_command_queue(0), mesh_device->mesh_command_queue(1)};
@@ -117,7 +155,7 @@ TEST_F(UnitMeshMultiCQMultDeviceEventFixture, TestEventsEnqueueWaitForEventSanit
 
 // Record event on one CQ, wait-for-that-event on another CQ. Then do the flip. Occasionally insert
 // syncs from Host per CQ, and verify completion queues per CQ are correct.
-TEST_F(UnitMeshMultiCQMultDeviceEventFixture, TestEventsEnqueueWaitForEventCrossCQs) {
+TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEnqueueWaitForEventCrossCQs) {
     for (auto& mesh_device : devices_) {
         vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {
             mesh_device->mesh_command_queue(0), mesh_device->mesh_command_queue(1)};
@@ -164,7 +202,7 @@ TEST_F(UnitMeshMultiCQMultDeviceEventFixture, TestEventsEnqueueWaitForEventCross
 
 // Simple 2CQ test to mix reads, writes, record-event, wait-for-event in a basic way. It's simple because
 // the write, record-event, wait-event, read-event are all on the same CQ, but cover both CQ's.
-TEST_F(UnitMeshMultiCQMultDeviceEventFixture, TestEventsReadWriteWithWaitForEventSameCQ) {
+TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEventSameCQ) {
     for (auto& mesh_device : devices_) {
         TestBufferConfig config = {.num_pages = 1, .page_size = 256, .buftype = BufferType::DRAM};
         vector<std::reference_wrapper<distributed::MeshCommandQueue>> cqs = {
@@ -226,7 +264,7 @@ TEST_F(UnitMeshMultiCQMultDeviceEventFixture, TestEventsReadWriteWithWaitForEven
 // More interesting test where Blocking ReadBuffer, Non-Blocking WriteBuffer are on alternate CQs,
 // ordered via events. Do many loops, occasionally increasing size of buffers (page size, num pages).
 // Ensure read back data is correct, data is different for each write.
-TEST_F(UnitMeshMultiCQMultDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQs) {
+TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQs) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP() << "Skipping for GS due to readback mismatch under debug Github issue #6281 ";
     }
@@ -305,7 +343,7 @@ TEST_F(UnitMeshMultiCQMultDeviceEventFixture, TestEventsReadWriteWithWaitForEven
 // 2 CQs with single Buffer, and a loop where each iteration has non-blocking Write to Buffer via CQ0 and non-blocking
 // Read to Bufffer via CQ1. Ping-Pongs between Writes and Reads to same buffer. Use events to synchronze read after
 // write and write after read before checking correct data read at the end after all cmds finished on device.
-TEST_F(UnitMeshMultiCQMultDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQsPingPong) {
+TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEventCrossCQsPingPong) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP() << "Skipping for GS due to readback mismatch under debug Github issue #6281 ";
     }
