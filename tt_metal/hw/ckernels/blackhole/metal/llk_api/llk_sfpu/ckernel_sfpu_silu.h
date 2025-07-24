@@ -11,7 +11,7 @@
 
 namespace ckernel::sfpu {
 
-inline sfpi::vFloat sigmoid_piecewise_linear_positive(sfpi::vFloat val) {
+inline sfpi::vFloat silu_sigmoid_piecewise_linear_positive(sfpi::vFloat val) {
     sfpi::vFloat result = 1.0f;
     v_if(val <= 1.0f) {
         result = 0.2415f * val + 0.5f;  // linear appx as y = 0.2415f + 0.5
@@ -30,7 +30,7 @@ inline void calculate_silu() {
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat val = sfpi::dst_reg[0];
         sfpi::vFloat result = sfpi::abs(val);
-        result = sigmoid_piecewise_linear_positive(result);
+        result = silu_sigmoid_piecewise_linear_positive(result);
         v_if(val < 0.0f) { result = 1.0f - result; }
         v_endif;
         sfpi::dst_reg[0] = val * result;
