@@ -390,10 +390,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                 semaphore.at(2).address(),                // batch_ready_semaphore
                 link,
                 num_links,
-                input_tensor_Wt / ring_size,                                                 // slice_Wt
-                (link * batch_slice_num_pages / num_links) % (input_tensor_Wt / ring_size),  // start_pages_read_in_row
-                (link * batch_slice_num_pages / num_links) / (input_tensor_Wt / ring_size) *
-                    input_tensor_Wt,                            // start_row_offset
+                input_tensor_Wt / ring_size,                                                  // slice_Wt
+                (link * batch_slice_num_pages / num_links) % (input_tensor_Wt / ring_size),   // start_pages_read_in_row
+                (link * batch_slice_num_pages / num_links) / (input_tensor_Wt / ring_size) *  // start_row_offset
+                    input_tensor_Wt,
                 link * batch_slice_num_pages / num_links,       // start_tiles_read
                 (link + 1) * batch_slice_num_pages / num_links  // start_tiles_to_read
             };
@@ -417,19 +417,18 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                 semaphore.at(2).address(),                // batch_ready_semaphore
                 link,
                 num_links,
-                input_tensor_Wt / ring_size,                                                 // slice_Wt
-                (link * batch_slice_num_pages / num_links) % (input_tensor_Wt / ring_size),  // pages_read_in_row
-                (link * batch_slice_num_pages / num_links) / (input_tensor_Wt / ring_size) *
-                    input_tensor_Wt,                            // row_offset
-                (link * batch_slice_num_pages / num_links),     // tiles_read
-                (link + 1) * batch_slice_num_pages / num_links  // tiles_to_read
+                input_tensor_Wt / ring_size,                                                  // slice_Wt
+                (link * batch_slice_num_pages / num_links) % (input_tensor_Wt / ring_size),   // pages_read_in_row
+                (link * batch_slice_num_pages / num_links) / (input_tensor_Wt / ring_size) *  // row_offset
+                    input_tensor_Wt,
+                (link * batch_slice_num_pages / num_links),      // tiles_read
+                (link + 1) * batch_slice_num_pages / num_links,  // tiles_to_read
                 barrier_semaphore.has_value(),                   // use synchronize barrier semaphore
                 barrier_semaphore.has_value()                    // synchronize barrier semaphore
                     ? barrier_semaphore.value().address()
                     : 0,
                 opposite_core_coord.x,
-                opposite_core_coord.y
-            };
+                opposite_core_coord.y};
             if (intermediate_is_sharded) {
                 shard_builder::extend_sharding_run_time_args(intermediate_tensor, writer_rt_args);
             }
