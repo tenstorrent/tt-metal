@@ -105,7 +105,9 @@ void py_module(py::module& module) {
                 }
                 return ms.view()[index];
             },
-            py::arg("index"));
+            py::arg("index"))
+        .def("dims", &MeshShape::dims)
+        .def("mesh_size", &MeshShape::mesh_size);
 
     static_cast<py::class_<MeshCoordinate>>(module.attr("MeshCoordinate"))
         .def(
@@ -144,7 +146,8 @@ void py_module(py::module& module) {
                 }
                 return mc.coords()[index];
             },
-            py::arg("index"));
+            py::arg("index"))
+        .def("dims", &MeshCoordinate::dims);
 
     static_cast<py::class_<MeshCoordinateRange>>(module.attr("MeshCoordinateRange"))
         .def(
