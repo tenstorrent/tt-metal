@@ -236,8 +236,10 @@ The following examples demonstrate how ND sharding distributes 3D tensor data ac
 - Shard shape: (2, 2, 2)
 - Core grid: 2×2
 
+<p float="left">
 <img src="images/nd_4x4x4_to_2x2x2_cores_2x2_start.png" style="width:250px;"/>
 <img src="images/nd_4x4x4_to_2x2x2_cores_2x2_end.png" style="width:250px;"/>
+</p>
 
 This shows how a 4×4×4 tensor is divided into eight 2×2×2 shards, which are then distributed across 4 cores in round-robin order. Each core receives 2 shards.
 
@@ -246,8 +248,10 @@ This shows how a 4×4×4 tensor is divided into eight 2×2×2 shards, which are 
 - Shard shape: (2, 2, 3)
 - Core grid: 1×3
 
+<p float="left">
 <img src="images/nd_4x4x3_to_2x2x3_cores_1x3_start.png" style="width:250px;"/>
 <img src="images/nd_4x4x3_to_2x2x3_cores_1x3_end.png" style="width:250px;"/>
+</p>
 
 This demonstrates how a 4×4×3 tensor is split into four 2×2×3 shards distributed across 3 cores. Core 0 gets 2 shards, while cores 1 and 2 each get 1 shard, showing the round-robin distribution pattern.
 
@@ -256,8 +260,10 @@ This demonstrates how a 4×4×3 tensor is split into four 2×2×3 shards distrib
 - Shard shape: (3, 2, 4)
 - Core grid: 2×2
 
+<p float="left">
 <img src="images/nd_3x6x4_to_3x2x4_cores_2x2_start.png" style="width:250px;"/>
 <img src="images/nd_3x6x4_to_3x2x4_cores_2x2_end.png" style="width:250px;"/>
+</p>
 
 Here, only the middle dimension is sharded, creating three 3×2×4 shards. This shows how ND sharding can selectively shard specific dimensions while keeping others intact.
 
@@ -266,8 +272,10 @@ Here, only the middle dimension is sharded, creating three 3×2×4 shards. This 
 - Shard shape: (2, 2, 3)
 - Core grid: 1×2
 
+<p float="left">
 <img src="images/nd_4x6x3_to_2x2x3_cores_1x2_start.png" style="width:250px;"/>
 <img src="images/nd_4x6x3_to_2x2x3_cores_1x2_end.png" style="width:250px;"/>
+</p>
 
 A 4×6×3 tensor creates six 2×2×3 shards distributed across only 2 cores. Each core receives 3 shards, illustrating how ND sharding efficiently handles cases where there are more shards than cores.
 
