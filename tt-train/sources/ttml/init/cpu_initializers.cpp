@@ -33,19 +33,21 @@ xt::xarray<float> constant_init(const ttnn::Shape& shape, float value) {
 }
 
 void uniform_init(std::vector<float>& vec, UniformRange range) {
-    auto& [a, b] = range;
-    auto dist_factory = [&]() { return std::uniform_real_distribution<float>(a, b); };
     auto& gen = autograd::ctx().get_generator();
     uint32_t seed = gen();
-    core::random::sequential_generate(std::span{vec.data(), vec.size()}, dist_factory, seed);
+    core::random::sequential_generate(
+        std::span{vec.data(), vec.size()},
+        [range]() { return std::uniform_real_distribution<float>(range.a, range.b); },
+        seed);
 }
 
 void normal_init(std::vector<float>& vec, NormalParams params) {
-    auto& [mean, stddev] = params;
-    auto dist_factory = [&]() { return std::normal_distribution<float>(mean, stddev); };
     auto& gen = autograd::ctx().get_generator();
     uint32_t seed = gen();
-    core::random::sequential_generate(std::span{vec.data(), vec.size()}, dist_factory, seed);
+    core::random::sequential_generate(
+        std::span{vec.data(), vec.size()},
+        [params]() { return std::uniform_real_distribution<float>(params.mean, params.stddev); },
+        seed);
 }
 
 void constant_init(std::vector<float>& vec, float value) {
@@ -60,7 +62,7 @@ void xavier_uniform_init(std::vector<float>& vec, FanParams params) {
 
     // Fill the vector with uniformly distributed random values in the range [-limit, limit]
     std::generate(
-        vec.begin(), vec.end(), [&]() { return dist(autograd::AutoContext::get_instance().get_generator()); });
+        vec.begin(), vec.end(), [&dist]() { return dist(autograd::AutoContext::get_instance().get_generator()); });
 }
 
 void xavier_normal_init(std::vector<float>& vec, FanParams params) {
@@ -71,7 +73,7 @@ void xavier_normal_init(std::vector<float>& vec, FanParams params) {
     // Mersenne Twister generator
     std::normal_distribution<float> dist(0.0F, stddev);
     std::generate(
-        vec.begin(), vec.end(), [&]() { return dist(autograd::AutoContext::get_instance().get_generator()); });
+        vec.begin(), vec.end(), [&dist]() { return dist(autograd::AutoContext::get_instance().get_generator()); });
 }
 
 void kaiming_uniform_init(std::vector<float>& vec, int fan_in) {
@@ -81,7 +83,7 @@ void kaiming_uniform_init(std::vector<float>& vec, int fan_in) {
 
     // Fill the vector with uniformly distributed random values in the range [-limit, limit]
     std::generate(
-        vec.begin(), vec.end(), [&]() { return dist(autograd::AutoContext::get_instance().get_generator()); });
+        vec.begin(), vec.end(), [&dist]() { return dist(autograd::AutoContext::get_instance().get_generator()); });
 }
 
 void kaiming_normal_init(std::vector<float>& vec, int fan_out) {
@@ -90,7 +92,7 @@ void kaiming_normal_init(std::vector<float>& vec, int fan_out) {
     std::normal_distribution<float> dist(0.0F, stddev);
 
     std::generate(
-        vec.begin(), vec.end(), [&]() { return dist(autograd::AutoContext::get_instance().get_generator()); });
+        vec.begin(), vec.end(), [&dist]() { return dist(autograd::AutoContext::get_instance().get_generator()); });
 }
 
 }  // namespace ttml::init
