@@ -15,6 +15,7 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include <tt-metalium/global_semaphore.hpp>
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 #include "ttnn/run_operation.hpp"
 

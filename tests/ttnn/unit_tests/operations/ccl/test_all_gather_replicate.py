@@ -344,6 +344,7 @@ def run_all_gather_replicate_impl(
         for i in range(n_iters):
             out = ttnn.experimental.all_gather_replicate_async(
                 tt_input_tensor,
+                tt_in1_tensor,
                 intermediate_tensor=tt_intermediate_tensors[i % num_buffers],
                 aggregated_tensor=tt_aggregated_tensor,
                 dim=3,
@@ -354,6 +355,9 @@ def run_all_gather_replicate_impl(
                 topology=all_gather_replicate_topology,
                 num_links=num_links,
                 subdevice_id=worker_sub_device_id,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+                dtype=output_dtype,
             )
             # breakpoint()
 

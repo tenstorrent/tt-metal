@@ -12,6 +12,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_replicate_async/all_gather_replicate_async.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -26,6 +27,7 @@ void bind_all_gather_replicate_async(pybind11::module& module, const ccl_operati
         ttnn::pybind_overload_t{
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
+               const ttnn::Tensor& input_tensor_b,
                const ttnn::Tensor& intermediate_tensor,
                const ttnn::Tensor& aggregated_tensor,
                const int32_t dim,
@@ -35,9 +37,13 @@ void bind_all_gather_replicate_async(pybind11::module& module, const ccl_operati
                const GlobalSemaphore& multi_device_global_semaphore,
                const std::optional<size_t> num_preferred_links,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> ttnn::Tensor {
+               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+               const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
+               const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+               const std::optional<const DataType> dtype) -> ttnn::Tensor {
                 return self(
-                    input_tensor,
+                    input_tensor,    // in0 for matmul, need AG first
+                    input_tensor_b,  // in1 for matmul
                     intermediate_tensor,
                     aggregated_tensor,
                     dim,
@@ -47,9 +53,14 @@ void bind_all_gather_replicate_async(pybind11::module& module, const ccl_operati
                     multi_device_global_semaphore,
                     memory_config,        // = std::nullopt,
                     num_preferred_links,  // = std::nullopt,
-                    subdevice_id);        // = std::nullopt
+                    subdevice_id,         // = std::nullopt
+                    // MM optional params
+                    program_config,         // = std::nullopt
+                    compute_kernel_config,  // = std::nullopt
+                    dtype);                 // = std::nullopt
             },
             py::arg("input_tensor"),
+            py::arg("input_tensor_b"),
             py::arg("intermediate_tensor"),
             py::arg("aggregated_tensor"),
             py::arg("dim"),
@@ -60,7 +71,10 @@ void bind_all_gather_replicate_async(pybind11::module& module, const ccl_operati
             py::kw_only(),
             py::arg("num_links") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("subdevice_id") = std::nullopt});
+            py::arg("subdevice_id") = std::nullopt,
+            py::arg("program_config") = std::nullopt,
+            py::arg("compute_kernel_config") = std::nullopt,
+            py::arg("dtype") = std::nullopt});
 }
 
 }  // namespace

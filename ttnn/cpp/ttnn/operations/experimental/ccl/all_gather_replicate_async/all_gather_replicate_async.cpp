@@ -12,6 +12,7 @@ namespace ttnn::operations::experimental::ccl {
 
 ttnn::Tensor ExecuteAllGatherReplicateAsync::invoke(
     const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& input_tensor_b,
     const ttnn::Tensor& intermediate_tensor,
     const ttnn::Tensor& aggregated_tensor,
     const int32_t dim,
@@ -21,7 +22,10 @@ ttnn::Tensor ExecuteAllGatherReplicateAsync::invoke(
     const GlobalSemaphore& multi_device_global_semaphore,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const DataType> dtype) {
     return ttnn::operations::experimental::ccl::all_gather_replicate_async(
         input_tensor,
         intermediate_tensor,
