@@ -20,7 +20,7 @@ from tests.ttnn.integration_tests.mobilenetv2.test_mobilenetv2 import MOBILENETV
 
 
 def get_expected_times(name):
-    base = {"mobilenetv2": (63.3, 0.14)}
+    base = {"mobilenetv2": (47.8, 0.02)}
     return base[name]
 
 
