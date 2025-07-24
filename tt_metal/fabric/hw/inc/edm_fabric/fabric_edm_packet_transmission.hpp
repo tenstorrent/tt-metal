@@ -286,10 +286,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 // !!!WARNING!!!
 // This function does a write, so needs to be volatile to avoid compiler optimizations
 template <bool enable_ring_support, bool stateful_api, bool increment_pointers = true, uint8_t NUM_SENDER_BUFFERS>
-#ifndef FABRIC_2D
-FORCE_INLINE
-#endif
-void forward_payload_to_downstream_edm(
+FORCE_INLINE void forward_payload_to_downstream_edm(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint16_t payload_size_bytes,
     ROUTING_FIELDS_TYPE cached_routing_fields,
