@@ -337,13 +337,26 @@ Tensor ExecuteDiv::invoke(
         return result;
     }
 
-    // Accurate mode: handle division by zero (inf/nan cases)
+    // Accurate mode: handles division by zero (inf/nan cases) for non-fp32 inputs
+    // If b=0 in round_mode == "floor" or "trunc", then for b/0  Golden = +/-inf   TT= +/-2147483648.0
     if (accurate_mode) {
         float t_nan = std::nanf("");
         result = typecast(queue_id, result, input_dtype, std::nullopt, output_tensor);
         Tensor condition =
             ttnn::logical_and(ttnn::eqz(input_b, output_mem_config), ttnn::eqz(input_a, output_mem_config));
         result = ttnn::where(condition, t_nan, result, output_mem_config, output_tensor);
+
+        if (round_mode == "floor" || round_mode == "trunc") {
+            std::cout << "here floor or trunc" << std::endl;
+            float t_inf = std::numeric_limits<float>::infinity();
+            condition = ttnn::eqz(input_b, output_mem_config);
+            result = ttnn::where(
+                condition,
+                ttnn::multiply(ttnn::sign(input_b, output_mem_config), t_inf),
+                result,
+                output_mem_config,
+                output_tensor);
+        }
     }
 
     return typecast(queue_id, result, input_dtype, std::nullopt, output_tensor);

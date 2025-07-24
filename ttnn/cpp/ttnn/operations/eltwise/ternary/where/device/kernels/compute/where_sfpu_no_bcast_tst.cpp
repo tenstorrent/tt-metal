@@ -30,15 +30,6 @@ void MAIN {
 
         cb_reserve_back(cb_out, num_tiles_per_cycle);
 
-        // DPRINT << "cb_condition" << ENDL();
-        // DPRINT << TSLICE(tt::CBIndex::c_0, 0, SliceRange::h0_w0_32()) << ENDL();
-
-        // DPRINT << "cb_true" << ENDL();
-        // DPRINT << TSLICE(tt::CBIndex::c_1, 0, SliceRange::h0_w0_32()) << ENDL();
-
-        // DPRINT << "cb_false" << ENDL();
-        // DPRINT << TSLICE(tt::CBIndex::c_2, 0, SliceRange::h0_w0_32()) << ENDL();
-
         tile_regs_acquire();
 
         copy_tile_to_dst_init_short(cb_pre_in1);
@@ -48,6 +39,7 @@ void MAIN {
         for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
 #ifdef FILL_WITH_VALUE_FLOAT
             const auto true_value = reinterpret_cast<const float*>(&true_scalar);
+            fill_tile_init();
             FILL_LLK(i * 2 + 1, *true_value);
 #endif
 #ifdef FILL_WITH_VALUE_INT
@@ -68,9 +60,6 @@ void MAIN {
         }
 
         tile_regs_release();
-
-        DPRINT << "cb_out" << ENDL();
-        DPRINT << TSLICE(tt::CBIndex::c_3, 0, SliceRange::h0_w0_32()) << ENDL();
 
         cb_push_back(cb_out, num_tiles_per_cycle);
         cb_pop_front(cb_pre_in1, num_tiles_per_cycle);

@@ -13,12 +13,6 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::ternary;
 
-// std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_shape_dims(const tt::tt_metal::Tensor& x) {
-//     const auto& shape = x.padded_shape();
-//     const auto& tile = x.tensor_spec().tile();
-//     return {shape[-4], shape[-3], shape[-2] / tile.get_height(), shape[-1] / tile.get_width()};
-// }
-
 template <typename F>
 void set_or_update_runtime_arguments(
     tt::tt_metal::Program& program,
@@ -33,8 +27,6 @@ void set_or_update_runtime_arguments(
     const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
 
     WhereVariant variant = operation_attributes.where_variant;
-
-    // const auto [aN, aC, aHt, aWt] = extract_shape_dims(predicate_tensor);  // Considering all are of same shape
 
     uint32_t num_output_tiles = output.physical_volume() / output.tensor_spec().tile().get_tile_hw();
 
@@ -51,7 +43,7 @@ void set_or_update_runtime_arguments(
     constexpr size_t num_kernel_args = 1;
 
     // Reader args count depends on variant
-    size_t num_reader_args = 5;
+    constexpr size_t num_reader_args = 5;
     uint32_t dummy_arg = 0;
 
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
@@ -63,11 +55,7 @@ void set_or_update_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
-            if (variant == WhereVariant::TTS || variant == WhereVariant::TST) {
-                handle_args(program, reader_kernel_id, core, std::array<uint32_t, 4>{0});
-            } else {
-                handle_args(program, reader_kernel_id, core, std::array<uint32_t, 5>{0});
-            }
+            handle_args(program, reader_kernel_id, core, std::array<uint32_t, num_reader_args>{0});
             handle_args(program, writer_kernel_id, core, std::array<uint32_t, num_writer_args>{0});
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, num_kernel_args>{0});
             continue;

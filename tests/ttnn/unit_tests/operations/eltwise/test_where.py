@@ -598,8 +598,8 @@ def test_div_edgcase(device):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    print("output_tensor", output_tensor)
-    print("golden_tensor", golden_tensor)
+    # print("output_tensor", output_tensor)
+    # print("golden_tensor", golden_tensor)
 
     # Replace NaN values in golden tensor with inf to match expected behavior of ttnn.bfloat16
     golden_tensor = torch.where(
@@ -607,3 +607,56 @@ def test_div_edgcase(device):
     )
 
     assert torch.allclose(output_tensor, golden_tensor, equal_nan=False)
+
+
+def test_addcdiv_edgcase(device):
+    # Hardcoded input tensors
+    a = torch.tensor([1, 2, -4, 0, -6, 0], dtype=torch.bfloat16)
+    b = torch.tensor([-1, 0, 0, 0, -2, 7], dtype=torch.bfloat16)
+    c = torch.tensor([0, 0, 0, 0, 0, 0], dtype=torch.bfloat16)
+
+    ttnn_a = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_b = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_c = ttnn.from_torch(c, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    value = -0.5
+    output_tensor = ttnn.addcdiv(ttnn_c, ttnn_a, ttnn_b, value=value)
+    golden_tensor = torch.addcdiv(c, a, b, value=value)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    # output_tensor tensor([ 0.5000,    -inf,     inf,    -inf, -1.5000,  0.0000],dtype=torch.bfloat16)
+    # golden_tensor tensor([ 0.5000,    -inf,     inf,     nan, -1.5000,  0.0000],dtype=torch.bfloat16)
+
+    print("output_tensor", output_tensor)
+    print("golden_tensor", golden_tensor)
+
+    # Replace NaN values in golden tensor with inf to match expected behavior of ttnn.bfloat16
+    golden_tensor = torch.where(
+        torch.isnan(golden_tensor), value * torch.tensor(float("inf"), dtype=golden_tensor.dtype), golden_tensor
+    )
+
+    assert torch.allclose(output_tensor, golden_tensor, equal_nan=False)
+
+
+def test_addcdiv_edgcase_fp32(device):
+    # Hardcoded input tensors
+    a = torch.tensor([1, 2, -4, 0, -6, 0], dtype=torch.float32)
+    b = torch.tensor([-1, 0, 0, 0, -2, 7], dtype=torch.float32)
+    c = torch.tensor([0, 0, 0, 0, 0, 0], dtype=torch.float32)
+
+    ttnn_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_c = ttnn.from_torch(c, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.addcdiv(ttnn_c, ttnn_a, ttnn_b, value=-0.5)
+    golden_tensor = torch.addcdiv(c, a, b, value=-0.5)
+
+    output_tensor1 = ttnn.to_torch(output_tensor)
+
+    # output_tensor tensor([ 0.5000,    -inf,     inf,     nan, -1.5000,  0.0000])
+    # golden_tensor tensor([ 0.5000,    -inf,     inf,     nan, -1.5000,  0.0000])
+
+    # print("output_tensor", output_tensor1)
+    # print("golden_tensor", golden_tensor)
+
+    assert torch_equal_nan(output_tensor1, golden_tensor)

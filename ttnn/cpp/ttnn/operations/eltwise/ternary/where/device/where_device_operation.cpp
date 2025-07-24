@@ -14,8 +14,7 @@ DataType WhereDeviceOperation::operation_attributes_t::get_dtype() const { retur
 WhereDeviceOperation::program_factory_t WhereDeviceOperation::select_program_factory(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     if (tensor_args.predicate.is_sharded()) {
-        TT_FATAL(false, "WhereDeviceOperation is not implemented for sharded tensors");  // Not implemented yet
-        // return program::WhereShardedProgramFactory{};
+        TT_FATAL(false, "WhereDeviceOperation is not implemented for sharded tensors");
     } else {
         return WhereProgramFactory{};
     }
@@ -248,7 +247,10 @@ WhereDeviceOperation::invoke(
     };
 
     tensor_args_t args{
-        .predicate = predicate, .value_true = value_true, .optional_output_tensor = optional_output_tensor};
+        .predicate = predicate,
+        .value_true = value_true,
+        .value_false = std::nullopt,
+        .optional_output_tensor = optional_output_tensor};
 
     return {attributes, args};
 }
@@ -271,7 +273,10 @@ WhereDeviceOperation::invoke(
     };
 
     tensor_args_t args{
-        .predicate = predicate, .value_false = value_false, .optional_output_tensor = optional_output_tensor};
+        .predicate = predicate,
+        .value_true = std::nullopt,
+        .value_false = value_false,
+        .optional_output_tensor = optional_output_tensor};
 
     return {attributes, args};
 }
