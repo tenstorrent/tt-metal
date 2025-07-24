@@ -1451,10 +1451,10 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
 
             // Populate connection info for fabric-routed channels
             const auto sender_channel = is_2d_fabric ? router_direction : 0;
-            auto& connection_info = fabric_connections.connections[eth_channel_id];
+            auto& connection_info = fabric_connections.read_only[eth_channel_id];
             connection_info.edm_direction = router_direction;
-            connection_info.edm_noc_xy =
-                tt::tt_fabric::WorkerXY(fabric_router_virtual_core.x, fabric_router_virtual_core.y).to_uint32();
+            connection_info.edm_noc_x = static_cast<uint8_t>(fabric_router_virtual_core.x);
+            connection_info.edm_noc_y = static_cast<uint8_t>(fabric_router_virtual_core.y);
             connection_info.edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel];
             connection_info.num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel];
             connection_info.edm_l1_sem_addr =
