@@ -1379,7 +1379,7 @@ private:
                 }
             }
         }
-        tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(
+        tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
             physical_mesh_config.mesh_descriptor_path, chip_to_eth_coord_mapping);
 
         const auto user_mesh_id =
