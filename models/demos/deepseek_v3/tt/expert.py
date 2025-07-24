@@ -36,7 +36,7 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
         return even_int_div(hf_config.n_routed_experts, mesh_device.get_num_devices())
 
     @classmethod
-    def convert_weights_moe(
+    def convert_weights(
         cls,
         hf_config: PretrainedConfig,
         state_dict: dict[str, torch.Tensor],
@@ -74,7 +74,7 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
             experts_group: {
                 "input_tensor_b": save_and_get_path(
                     output_path / f"{experts_group}.input_tensor_b",
-                    cls._convert_weight_moe(
+                    cls._convert_weight(
                         weight_groups[weight_key],
                         mesh_device,
                     ),
@@ -85,7 +85,7 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
 
     @final
     @classmethod
-    def _convert_weight_moe(
+    def _convert_weight(
         cls,
         wx_per_device_state_dict_group: list[torch.Tensor],
         mesh_device: ttnn.Device,
