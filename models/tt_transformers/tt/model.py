@@ -232,33 +232,34 @@ class Transformer(LightweightModule):
         )
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
+    def concat_device_output(self, tt_out):
+        """
+        Concatenate the output of the devices into a single tensor.
+        """
+        torch_out_tensors = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(tt_out.cpu())]
+        if self.args.is_galaxy:
+            row_dim, col_dim = (3, 1)
+        else:
+            row_dim, col_dim = (1, -1)
+
+        rows, cols = self.args.cluster_shape
+        mesh_shape = [torch_out_tensors[i : i + cols] for i in range(0, len(torch_out_tensors), cols)]
+        row_concatenated = [torch.cat(row, dim=col_dim) for row in mesh_shape]
+        return torch.cat(row_concatenated, dim=row_dim)
+
     def process_output_prefill(self, tt_out, last_token_idx):
         """
         Input is ttnn device tensor of logits. Output is torch logits tensor.
         NOTE: In this model, prefill always uses get_last_token
         """
-        logits = ttnn.to_torch(
-            tt_out,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                self.mesh_device, dims=(3, 1) if self.args.is_galaxy else (1, -1), mesh_shape=self.args.cluster_shape
-            ),
-        )[0, 0, last_token_idx, : self.vocab_size]
-        return logits
+        return self.concat_device_output(tt_out)[0, 0, last_token_idx, : self.vocab_size]
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
         """
         Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
         if is_tokens:
-            tt_out = ttnn.to_torch(
-                tt_out,  # tt_out.cpu(blocking=True, cq_id=1),
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    self.mesh_device,
-                    dims=(3, 1) if self.args.is_galaxy else (1, -1),
-                    mesh_shape=self.args.cluster_shape,
-                ),
-            )[0, 0, :B, 0]
-            return tt_out
+            return self.concat_device_output(tt_out)[0, 0, :B, 0]
 
         if self.args.num_devices > 1:
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
