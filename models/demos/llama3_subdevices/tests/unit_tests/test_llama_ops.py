@@ -485,7 +485,7 @@ def test_llama_tg_RowMajorPagedUpdateCacheDeviceOperation(
 )
 @pytest.mark.parametrize("datatype", (ttnn.bfloat16,))
 @pytest.mark.parametrize("pcc", (0.9997,))
-def test_llama_tg_RotaryEmbeddingLlamaFusedQK(
+def test_llama_tg_TileLayoutRotaryEmbeddingLlamaFusedQK(
     batch,
     seq_len,
     n_heads,
@@ -514,7 +514,7 @@ def test_llama_tg_RotaryEmbeddingLlamaFusedQK(
 )
 @pytest.mark.parametrize("datatype", (ttnn.bfloat16,))
 @pytest.mark.parametrize("pcc", (0.9997,))
-def test_llama_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
+def test_llama_tg_RotaryEmbeddingLlamaFusedQK(
     batch,
     seq_len,
     n_heads,
