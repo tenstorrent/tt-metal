@@ -1043,7 +1043,7 @@ def test_demo_text(
         benchmark_data.add_measurement(
             profiler,
             0,
-            "top1_token_accuracy",
+            "inference_decode",
             "top1_token_accuracy",
             acc[0] * 100,
             step_warm_up_num_iterations=None,
@@ -1052,7 +1052,7 @@ def test_demo_text(
         benchmark_data.add_measurement(
             profiler,
             0,
-            "top5_token_accuracy",
+            "inference_decode",
             "top5_token_accuracy",
             acc[1] * 100,
             step_warm_up_num_iterations=None,
