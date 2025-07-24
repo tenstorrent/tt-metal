@@ -34,10 +34,12 @@ run_segformer_func() {
 run_sentencebert_func() {
 
   #SentenceBERT Demo
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference --timeout 600; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/sentence_bert/demo/demo.py --timeout 600; fail+=$?
 
   #SentenceBERT eval
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/sentence_bert/demo/dataset_evaluation.py::test_sentence_bert_eval --timeout 600; fail+=$?
+  # comment out SentenceBERT eval from CI tests for now unitl dataset_evaluation test is available in CIv2 (issue: #25866)
+
+  #WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/sentence_bert/demo/dataset_evaluation.py--timeout 600; fail+=$?
 
 }
 
