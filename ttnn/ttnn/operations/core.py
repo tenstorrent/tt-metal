@@ -371,7 +371,6 @@ def to_torch(
         torch.uint8: ttnn.uint8,
         torch.int16: ttnn.uint16,
         torch.int32: ttnn.int32,
-        torch.int64: ttnn.uint32,
         torch.bfloat16: ttnn.bfloat16,
         torch.float32: ttnn.float32,
     }

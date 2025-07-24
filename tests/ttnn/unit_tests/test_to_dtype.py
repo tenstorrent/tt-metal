@@ -122,11 +122,11 @@ def test_dtype_conversion_on_device(device, height, width, ttnn_dtype, torch_dty
             pcc=conversion_pcc,
         )
 
-    if torch_dtype in [torch.int32, torch.uint8]:
-        torch_input_tensor = torch.randint(0, 100, (height, width), dtype=torch_dtype)
-    else:
-        # multiply by 10 to prevent float -> int type conversion from creating all-zero tensor
+    if torch_is_float:
         torch_input_tensor = torch.rand((height, width), dtype=torch_dtype) * 10
+
+    else:
+        torch_input_tensor = torch.randint(0, 100, (height, width), dtype=torch_dtype)
 
     ttnn_result_tensor = ttnn.from_torch(
         torch_input_tensor,

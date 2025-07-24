@@ -79,6 +79,32 @@ void log_external_operation(const operation::ExternalOperation& operation, const
 
 #endif
 
+template <typename... Args>
+void log_from_cpp(Args&&... message) {
+    auto logging = pybind11::module_::import("logging");
+    auto logger = logging.attr("getLogger")("your_module_name");
+
+    // Convert arguments to Python objects and join with spaces
+    auto builtins = pybind11::module_::import("builtins");
+    auto str_func = builtins.attr("str");
+
+    std::vector<pybind11::object> py_args;
+    auto convert_arg = [&](auto&& arg) { py_args.push_back(str_func(std::forward<decltype(arg)>(arg))); };
+
+    (convert_arg(std::forward<Args>(message)), ...);
+
+    auto join_str = pybind11::str(" ");
+    auto formatted_message = join_str.attr("join")(py_args);
+
+    // py::print(formatted_message);
+
+    logger.attr("debug")(formatted_message);
+    // std::cout << formatted_message.cast<std::string>() << std::endl;
+}
+
+// #define py_log(...) log_from_cpp(__LINE__, "[" #__VA_ARGS__ "] =" __VA_OPT__(, ) __VA_ARGS__);
+#define py_log(...)
+
 template <typename T>
 Tensor create_typed_tt_tensor_from_py_data(
     std::size_t py_data_ptr,
@@ -143,6 +169,7 @@ Tensor create_tt_tensor_from_py_data(
         return create_typed_tt_tensor_from_py_data<T>(
             py_data_ptr, py_data_shape, tensor_layout, device, pydata_pin, cq_id, pad_value, mesh_mapper);
     };
+    py_log(tensor_layout.get_data_type());
     switch (tensor_layout.get_data_type()) {
         case DataType::UINT8: return create_concrete.operator()<uint8_t>();
         case DataType::UINT16: return create_concrete.operator()<uint16_t>();
@@ -282,32 +309,6 @@ struct PyTensorHostConversionStrategy {
     py::object tensor;
 };
 
-template <typename... Args>
-void log_from_cpp(Args&&... message) {
-    auto logging = pybind11::module_::import("logging");
-    auto logger = logging.attr("getLogger")("your_module_name");
-
-    // Convert arguments to Python objects and join with spaces
-    auto builtins = pybind11::module_::import("builtins");
-    auto str_func = builtins.attr("str");
-
-    std::vector<pybind11::object> py_args;
-    auto convert_arg = [&](auto&& arg) { py_args.push_back(str_func(std::forward<decltype(arg)>(arg))); };
-
-    (convert_arg(std::forward<Args>(message)), ...);
-
-    auto join_str = pybind11::str(" ");
-    auto formatted_message = join_str.attr("join")(py_args);
-
-    // py::print(formatted_message);
-
-    logger.attr("debug")(formatted_message);
-    // std::cout << formatted_message.cast<std::string>() << std::endl;
-}
-
-// #define py_log(...) log_from_cpp("[" #__VA_ARGS__ "] = ", __LINE__ __VA_OPT__(, ) __VA_ARGS__);
-#define py_log(...)
-
 PyTensorHostConversionStrategy prepare_conversion_strategy(
     py::handle const& py_tensor,
     std::optional<DataType> const& dtype,
@@ -378,12 +379,7 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
 
     if (tensor.attr("dtype").equal(torch.attr("int64"))) {
         py_log();
-        res.host_side_conversion = true;
-        if (dtype.has_value()) {
-            res.construct_with_data_type = dtype.value();
-        } else {
-            res.construct_with_data_type = DataType::UINT32;
-        }
+        do_host_conversion_through_fallback();
     } else if (!has_device && ttnn_fallback_type_mapping(dtype).has_value()) {
         py_log();
         // Strategy: No Device Fallback
@@ -597,6 +593,8 @@ Tensor convert_python_tensor_to_tt_tensor(
 
     output = tt::tt_metal::set_tensor_id(output);
     py_log("output result ok");
+    py_log(strategy->construct_with_data_type, strategy->tensor);
+    py_log(output);
 
     if (memory_config.is_sharded()) {
         py_log("Sharded memory config");
