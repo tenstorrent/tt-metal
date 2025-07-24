@@ -55,6 +55,10 @@ void kernel_main() {
     size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
+    bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+    size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
 
 #ifdef OUTPUT_IS_SHARDED
     using tensor_shard_info = ShardedInfo<
@@ -100,7 +104,36 @@ void kernel_main() {
     volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
     pkt_hdr->to_chip_unicast(1);
 
+    volatile PACKET_HEADER_TYPE* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
+
     fabric_connection.open();
+
+    // Due to the existing direction of fabric connections, forward writers will signal to backward writers
+    // and backward writers will signal to forward writers
+    bool signal_on_barrier_semaphore = use_barrier_sem && ((direction == 1 && num_targets_backward_direction) ||
+                                                           (direction == 0 && num_targets_forward_direction));
+    bool wait_on_barrier_semaphore = use_barrier_sem && ((direction == 1 && num_targets_backward_direction) ||
+                                                         (direction == 0 && num_targets_forward_direction));
+    if (signal_on_barrier_semaphore) {
+        uint64_t sync_sem_noc_addr_in_pkt = safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
+        pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sync_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
+        if (direction == 1) {
+            fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+            pkt_hdr_sem_inc->to_chip_unicast(1);
+            fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
+                packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+        } else {
+            fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+            pkt_hdr_sem_inc->to_chip_unicast(1);
+            fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
+                packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+        }
+    }
+    if (wait_on_barrier_semaphore) {
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+    }
 
     uint32_t slice_writes = 0;
 
@@ -224,7 +257,6 @@ void kernel_main() {
     // 2. unicast output ready semaphore
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-    auto* pkt_hdr_sem_inc = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
     pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
         out_ready_sem_noc_addr_in_pkt,
         static_cast<uint16_t>(1),  // increment 1

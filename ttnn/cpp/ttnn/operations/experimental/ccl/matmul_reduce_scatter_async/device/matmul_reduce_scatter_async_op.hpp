@@ -98,6 +98,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
     uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     CoreCoord core_grid_offset,
 
@@ -120,6 +121,7 @@ std::vector<Tensor> matmul_reduce_scatter_async(
     uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     CoreCoord reduce_scatter_core_grid_offset,
+    const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
     const std::optional<const Tensor>& bias = std::nullopt,
     uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config_rs = std::nullopt,

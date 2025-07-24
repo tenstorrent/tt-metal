@@ -125,7 +125,7 @@ std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsync::compute_output_specs(
     return {
         TensorSpec(
             inter_shape,
-            TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config)),
+            TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), input_tensor.memory_config())),
         TensorSpec(
             output_shape,
             TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config)),
@@ -196,6 +196,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_
         device_index,
         this->topology,
         this->semaphore,
+        this->barrier_semaphore,
         this->sub_device_id,
         this->cluster_axis);
 }
@@ -214,6 +215,7 @@ tt::tt_metal::operation::Hash ReduceScatterMinimalAsync::compute_program_hash(
         this->ring_size,
         this->output_mem_config,
         this->topology,
+        this->barrier_semaphore.has_value(),
         input_shape,
         input_memory_layout,
         input_dtype,
@@ -231,6 +233,7 @@ Tensor reduce_scatter_minimal_async_impl(
     const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
@@ -283,6 +286,7 @@ Tensor reduce_scatter_minimal_async_impl(
                    memory_config.value_or(input_tensor.memory_config()),
                    ccl_topology,
                    multi_device_global_semaphore,
+                   barrier_semaphore,
                    sub_device_id,
                    cluster_axis),
                {input_tensor},
@@ -297,6 +301,7 @@ Tensor reduce_scatter_minimal_async(
     const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
@@ -308,6 +313,7 @@ Tensor reduce_scatter_minimal_async(
         persistent_output_buffers,
         dim,
         multi_device_global_semaphore,
+        barrier_semaphore,
         num_links,
         memory_config,
         topology,
