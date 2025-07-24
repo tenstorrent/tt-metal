@@ -158,8 +158,7 @@ uint32_t calculate_L1_usage(
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     // ToDo: enable 32 sticks per tile for reduction for all cases.
-    const uint32_t max_rows_for_reduction =
-        (!last_tile_is_partial && !is_large_kernel) ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
+    const uint32_t max_rows_for_reduction = tt::constants::TILE_HEIGHT;
     const bool is_blackhole = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE;
 
     if (input_shape[3] < tt::constants::TILE_WIDTH) {
