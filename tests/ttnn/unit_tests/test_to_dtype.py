@@ -66,6 +66,8 @@ def test_to_dtype(height, width, from_dtype, to_dtype):
 @pytest.mark.parametrize(
     "torch_dtype",
     [
+        torch.float64,
+        torch.int64,
         torch.float16,
         torch.float32,
         torch.int32,
@@ -78,7 +80,7 @@ def test_dtype_conversion_on_device(device, height, width, ttnn_dtype, torch_dty
     ttnn_dtype_requires_tile = ttnn_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b]
     ttnn_dtype_has_random = ttnn_dtype not in [ttnn.uint8, ttnn.int32]
     ttnn_is_float = ttnn_dtype in [ttnn.float32, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b]
-    torch_is_float = torch_dtype in [torch.float16, torch.float32]
+    torch_is_float = torch_dtype in [torch.float16, torch.float32, torch.float64]
 
     conversion_pcc = None
 

@@ -150,6 +150,8 @@ def run_flash_mla_decode_impl(
     if nkv > 1:
         out_mem_config = ttnn.DRAM_MEMORY_CONFIG
 
+    extra_torch_entries = 0
+    current_entries_count = device.num_program_cache_entries()
     tt_q = ttnn.from_torch(
         q.permute(2, 0, 1, 3),  # (B, H, S, D) -> (S, B, H, D)
         device=device,
@@ -170,6 +172,7 @@ def run_flash_mla_decode_impl(
         device=device,
         dtype=ttnn.int32,
     )
+    extra_torch_entries += device.num_program_cache_entries() - current_entries_count
 
     ##########################
     ### FlashMLA Decode
@@ -236,7 +239,9 @@ def run_flash_mla_decode_impl(
     num_program_cache_entries = device.num_program_cache_entries()
 
     # FlashMLA + PlusOne
-    assert num_program_cache_entries == 2, f"Expected 2 program cache entries, got {num_program_cache_entries}."
+    assert (
+        num_program_cache_entries - extra_torch_entries == 2
+    ), f"Expected 2 program cache entries, got {num_program_cache_entries}."
 
 
 @pytest.mark.parametrize(

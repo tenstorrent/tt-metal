@@ -292,13 +292,7 @@ void log_from_cpp(Args&&... message) {
     auto str_func = builtins.attr("str");
 
     std::vector<pybind11::object> py_args;
-    auto convert_arg = [&](auto&& arg) {
-        if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, pybind11::object>) {
-            py_args.push_back(str_func(arg));
-        } else {
-            py_args.push_back(str_func(pybind11::cast(std::forward<decltype(arg)>(arg))));
-        }
-    };
+    auto convert_arg = [&](auto&& arg) { py_args.push_back(str_func(std::forward<decltype(arg)>(arg))); };
 
     (convert_arg(std::forward<Args>(message)), ...);
 
@@ -311,7 +305,8 @@ void log_from_cpp(Args&&... message) {
     // std::cout << formatted_message.cast<std::string>() << std::endl;
 }
 
-#define py_log(...)  // log_from_cpp("[" #__VA_ARGS__ "] = ", __LINE__ __VA_OPT__(, ) __VA_ARGS__);
+// #define py_log(...) log_from_cpp("[" #__VA_ARGS__ "] = ", __LINE__ __VA_OPT__(, ) __VA_ARGS__);
+#define py_log(...)
 
 PyTensorHostConversionStrategy prepare_conversion_strategy(
     py::handle const& py_tensor,
@@ -345,9 +340,13 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
 
     auto ttnn_unsupported_type_mapping = [&torch](py::object dtype) -> std::optional<py::object> {
         if (dtype.equal(torch.attr("int64"))) {
-            return torch.attr("int32");
+            return torch.attr("uint32");
         } else if (dtype.equal(torch.attr("float16"))) {
             return torch.attr("bfloat16");
+        } else if (dtype.equal(torch.attr("float64"))) {
+            return torch.attr("float32");
+        } else if (dtype.equal(torch.attr("bool"))) {
+            return torch.attr("int32");
         } else {
             return std::nullopt;
         }
@@ -375,9 +374,17 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
         }
     };
 
-    py_log(dtype);
+    py_log(dtype, tensor.attr("dtype"));
 
-    if (!has_device && ttnn_fallback_type_mapping(dtype).has_value()) {
+    if (tensor.attr("dtype").equal(torch.attr("int64"))) {
+        py_log();
+        res.host_side_conversion = true;
+        if (dtype.has_value()) {
+            res.construct_with_data_type = dtype.value();
+        } else {
+            res.construct_with_data_type = DataType::UINT32;
+        }
+    } else if (!has_device && ttnn_fallback_type_mapping(dtype).has_value()) {
         py_log();
         // Strategy: No Device Fallback
         // No device, conversion must be performed on the host
