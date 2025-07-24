@@ -270,12 +270,14 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
             {{{16, 8}, {8, 8}}, {{16, 8}, {8, 8}}}, {{{16, 8}, {8, 8}}, {{16, 8}, {8, 8}}}};
 
     auto get_num_buffer_slots = [](Topology topology) -> const std::vector<std::pair<size_t, size_t>>& {
-        static const std::vector<std::pair<size_t, size_t>> mesh_slots = {{4, 8}};
-        static const std::vector<std::pair<size_t, size_t>> other_slots = {{8, 16}};
+        static tt::stl::Indestructible<std::vector<std::pair<size_t, size_t>>> mesh_slots(
+            std::vector<std::pair<size_t, size_t>>{{4, 8}});
+        static tt::stl::Indestructible<std::vector<std::pair<size_t, size_t>>> other_slots(
+            std::vector<std::pair<size_t, size_t>>{{8, 16}});
         if (topology == Topology::Mesh) {
-            return mesh_slots;
+            return mesh_slots.get();
         } else {
-            return other_slots;
+            return other_slots.get();
         }
     };
 
