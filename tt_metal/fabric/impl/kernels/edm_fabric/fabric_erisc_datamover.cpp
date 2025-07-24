@@ -498,6 +498,14 @@ struct DownstreamDirections {};
 template <typename Pack>
 struct PackTraits;
 
+// Specialization for empty directions
+template <>
+struct PackTraits<DownstreamDirections<>> {
+    static constexpr bool has_ew = false;
+    static constexpr bool has_ns = false;
+    static constexpr bool has_both_axes = false;
+};
+
 template <eth_chan_directions first, eth_chan_directions... rest>
 struct PackTraits<DownstreamDirections<first, rest...>> {
     static constexpr bool has_ew = (first == eth_chan_directions::EAST || first == eth_chan_directions::WEST) ||
@@ -505,14 +513,6 @@ struct PackTraits<DownstreamDirections<first, rest...>> {
     static constexpr bool has_ns = (first == eth_chan_directions::NORTH || first == eth_chan_directions::SOUTH) ||
                                    PackTraits<DownstreamDirections<rest...>>::has_ns;
     static constexpr bool has_both_axes = has_ew && has_ns;
-};
-
-// Specialization for empty directions
-template <>
-struct PackTraits<DownstreamDirections<>> {
-    static constexpr bool has_ew = false;
-    static constexpr bool has_ns = false;
-    static constexpr bool has_both_axes = false;
 };
 
 // 2D low-latency mode, fetch from the pkt header
