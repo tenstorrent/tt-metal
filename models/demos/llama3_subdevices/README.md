@@ -1,19 +1,19 @@
-# Llama3 TG
+# Llama3
+
+## Platforms:
+    Galaxy (WH)
 
 ## Introduction
 
 Llama 3 is a state-of-the-art large language model (LLM) developed for high-performance natural language processing tasks, including text generation, summarization, and question answering. This repository provides a comprehensive demo for running Llama 3 on Tenstorrent hardware platforms, leveraging advanced features such as paged attention, high batch throughput, and performance benchmarking.
 
-## Supported Platforms
+Read more about llama3 at [llama.com/llama3](https://www.llama.com/models/llama-3/).
 
-- TG
-
-## Model Architectures
-
+This codebase supports the following model architectures:
 - Llama 3.1-70B
 - Llama 3.3-70B
 
-## Key Features
+### Key Features
 
 - **Paged Attention**: Efficient memory management for long-context inference.
 - **Batch Inference**: Supports up to 32 users per batch.
@@ -24,17 +24,23 @@ Llama 3 is a state-of-the-art large language model (LLM) developed for high-perf
 
 ## Prerequisites
 
-This guide requires the installation / build of `tt-metal`. Please refer to the [installation instructions](/INSTALLING.md) for the release corresponding to [README](/README.md#llms).
+- Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
+- Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
-## Weights
+## How to Run
 
-### Download Llama weights directly from Meta
-
-You can download Llama models [directly from Meta](https://llama.meta.com/llama-downloads/), this will mean accepting their license terms.
-
+### Download Llama weights
 The downloaded directories include weight files (e.g. `consolidated.00.pth`), the tokenizer `tokenizer.model` and configuration file `params.json`.
 
-##### Repack weights
+- You can download Llama models:
+  - [Directly from Meta](https://llama.meta.com/llama-downloads/), this will mean accepting their license terms.
+  - From the `huggingface-cli` via:
+    ```
+    huggingface-cli download meta-llama/Meta-Llama-3-70B-Instruct --include "original/*" --local-dir Meta-Llama-3-70B-Instruct
+    ```
+  - [Directly from Huggingface](https://huggingface.co/meta-llama/Meta-Llama-3-70B-Instruct). If you choose this option, you can skip `Repack Weights` as these will already be downloaded as sharded `.safetensors` files.
+
+### Repack weights
 Meta's Llama3.1/3.3-70B requires repacked weights. We provide scripts to facilitate this in `models/tt_transformers/scripts/repack_weights_70b.py`.
 
 The repacked output directory can be same as the checkpoint directory, since the new files will have different names.
@@ -43,21 +49,13 @@ If providing a different path, please make sure that you keep the string `3.1-70
 Note: Use the default value of `10` for `chunk_size`.
 
 ```
-# This concatenates the sharded checkpoints and makes it easier for us to load.
 python models/tt_transformers/scripts/repack_weights_70b.py <path_to_checkpoint_dir> <repacked_output_dir>
 ```
 
 If providing a different output directory, please copy the `params.json` and the `tokenizer.model` files to the new directory.
 
-**⚠️ Warning**
->
-> Weights downloaded from the `huggingface-cli` via
->```
->huggingface-cli download meta-llama/Meta-Llama-3-70B-Instruct --include "original/*" --local-dir Meta-Llama-3-70B-Instruct
->```
-> will be in the same format as a direct download from Meta (i.e. as `consolidated.xx.pth` files). Hence, you will still need to repack your weights and export `LLAMA_DIR` as before. This is contrary to if you downloaded your weights directly from `huggingface`, as those weights will be downloaded as sharded `.safetensors` files.
 
-## Setting the Environment Variables
+### Setting the Environment Variables
 
 ```
 export LLAMA_DIR=<path_to_llama3.1/3.3-70B-instruct>
@@ -68,15 +66,25 @@ export TT_METAL_ENABLE_ERISC_IRAM=1
 export FAKE_DEVICE=TG
 ```
 
-## Running the Demo
+### Running the Demo
 
-### To run the Llama 3 demo:
+#### Run the Llama 3 demo:
 
 ```
 pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "full"
 ```
 
-#### Demo Decode Arguments
+
+
+#### Run the text demo:
+
+```
+pytest models/demos/llama3_subdevices/demo/text_demo.py -k "repeat2"
+```
+
+## Details
+
+### Demo Decode Arguments
 - **weights (str)**: Model weights to use (instruct, random, etc.)
 - **layers (int)**: Number of transformer layers (e.g., 1, 10, 80)
 - **input_prompts (str)**: Path to JSON file with input prompts
@@ -92,13 +100,7 @@ pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "full"
 - **start_pos (int)**: Start position for decoding
 - **optimizations (str)**: Optimization level (performance, accuracy)
 
-### To run the text demo:
-
-```
-pytest models/demos/llama3_subdevices/demo/text_demo.py -k "repeat2"
-```
-
-#### Text Demo Arguments
+### Text Demo Arguments
 
 - **input_prompts (str)**: Input JSON file with prompts to process.
 - **instruct (bool)**: Whether to use instruct-tuned weights or general weights.
@@ -111,7 +113,7 @@ pytest models/demos/llama3_subdevices/demo/text_demo.py -k "repeat2"
 - **sampling_params (dict)**: Sampling parameters for decoding `{temperature, top_p}`. If `temperature = 0`, uses greedy decoding.
 - **stop_at_eos (bool)**: Whether to stop decoding when the model generates an end-of-sequence (EoS) token.
 
-## Input Prompts
+### Input Prompts
 
 Input prompts should be provided as a JSON file, with each entry containing a prompt and optionally a context and max_length.
 
@@ -128,12 +130,11 @@ Input prompts should be provided as a JSON file, with each entry containing a pr
 ]
 ```
 
-## Serving the model from vLLM
+### Serving the model from vLLM
 
-1. **Ensure that tt-metal is installed and set up correctly. Optional check: `python -c "import tt_lib"`.**
+1. Ensure that tt-metal is installed and set up correctly. Optional check: `python -c "import tt_lib"`.
 
-2. **Install vLLM**
-
+2. Install vLLM
     ```bash
     # Installing from within `tt-metal`
     git clone https://github.com/tenstorrent/vllm.git
@@ -142,8 +143,7 @@ Input prompts should be provided as a JSON file, with each entry containing a pr
     VLLM_USE_PRECOMPILED=1 pip install -e .
     ```
 
-3. **Ensure weights are downloaded and repacked as described above, and that the environment variables are set.**
-
+3. Ensure weights are downloaded and repacked as described above, and that the environment variables are set.
     ```bash
     export VLLM_TARGET_DEVICE="tt"
     export MESH_DEVICE=TG
@@ -151,16 +151,14 @@ Input prompts should be provided as a JSON file, with each entry containing a pr
     export PYTHONPATH=<path_to_tt_metal>:<path_to_vllm>:$PYTHONPATH
     ```
 
-4. **Running the server**
-
+4. Running the server
     ```bash
     python examples/server_example_tt.py
     ```
 
-5. **Interact with server**
+5. Interact with server
 
     In a separate terminal window, run:
-
     ```bash
     curl http://localhost:8000/v1/completions \
         -H "Content-Type: application/json" \
@@ -176,8 +174,9 @@ Input prompts should be provided as a JSON file, with each entry containing a pr
     ```
 This codebase includes Llama3.1-70B on TG.
 
-## Debugging
-### Mixing topologies in prefill ccl ops
+### Debugging
+
+#### Mixing topologies in prefill ccl ops
 When running `text_demo.py` on a machine with torus, all ops will by default use ring topology. To use line implementation of ops you can set enviroment variables:
 - LINE_RS = 1: to use line for all ReduceScatter ops
 - LINE_AG = 1: use line for all AllGather ops
@@ -187,7 +186,7 @@ To use line for only some of the AG ops, you can set USE_LINE_AG set in `llama_c
 - LINE_AG = 0
 - USE_LINE_AG = {"QKV"}
 
-## Updating APC Test Target Values
+#### Updating APC Test Target Values
 <!-- Add instructions for updating pcc -->
 The Llama3.3 70B model runs text_demo.py in APC and can perform assertions at multiple points:
 

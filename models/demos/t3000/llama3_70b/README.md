@@ -1,109 +1,105 @@
-# Llama3/3.1-70B Demo
+# Llama3/3.1-70B
 
-## Table of Contents
+## Platforms:
+    LoudBox, QuietBox
 
-- [One command run](#one-command-run)
-- [How to Run](#how-to-run)
-  - [Running the demo from TT-Metalium](#running-the-demo-from-tt-metalium)
-  - [Serving the model from vLLM](#serving-the-model-from-vllm)
+## Introduction
 
-## One command run
+Read more about llama3 at [llama.com/llama3](https://www.llama.com/models/llama-3/).
 
+## Prerequisites
+
+- An 8-chip LoudBox/QuietBox machine using tensor parallelism
+- The host machine must have at least 512 GB of memory
+- Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
+- Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
+- Submit request to access weights from Meta: [Llama Downloads](https://www.llama.com/llama-downloads)
+- Submit permissions on HuggingFace and have a HF personal access token: [Llama 3.1 70B Instruct](https://huggingface.co/meta-llama/Llama-3.1-70B-Instruct)
+
+## How to Run
+
+### Run in one command:
 ```bash
 chmod +x ./models/demos/t3000/llama3_70b/setup_llama.sh && ./models/demos/t3000/llama3_70b/setup_llama.sh <MODEL_TYPE> <TT_METAL_COMMIT_SHA_OR_TAG> <TT_VLLM_COMMIT_SHA_OR_TAG>
 ```
 
 Where, `TT_METAL_COMMIT_SHA_OR_TAG` and `TT_VLLM_COMMIT_SHA_OR_TAG` are found in the root [README](/README.md#llms) under "Release" version, respectively.
 
-Example:
+- Example:
 
 ```bash
 ./models/demos/t3000/llama3_70b/setup_llama.sh llama-3.1-70b-instruct v0.54.0-rc2 953161188c50f10da95a88ab305e23977ebd3750
 ```
 
-Follow prompts as they come up in CLI to select appropriate weights for Llama 3.1 70B Instruct.
+- Follow prompts as they come up in CLI to select appropriate weights for Llama 3.1 70B Instruct.
 
-Prerequisites:
 
-- Submit request to access weights from Meta: [Llama Downloads](https://www.llama.com/llama-downloads)
-- Submit permissions on HuggingFace and have a HF personal access token: [Llama 3.1 70B Instruct](https://huggingface.co/meta-llama/Llama-3.1-70B-Instruct)
+### Step-by-step:
 
-Steps run:
+1. Download the Llama3/3.1-70B weights from Meta at [llama.meta.com](https://llama.meta.com/)
 
-- Setup environment
-- Build `tt-metal`
-- Download Llama 3.1 70B Instruct weights
-- Install vLLM
-- Deploy vLLM server
+2. Repack the weights:
 
-## How to Run
+```bash
+python models/demos/t3000/llama2_70b/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir> <chunk_size>
+```
 
-Note: This guide requires the installation / build of `tt-metal`. Please refer to the [installation instructions](/INSTALLING.md) for the release corresponding to [README](/README.md#llms).
+Note: Use `5` for `chunk_size`.
 
-1. **Download the Llama3/3.1-70B weights from Meta (<https://llama.meta.com/>):**
-
-2. **Repack the weights:**
-
-    ```bash
-    # This concatenates the sharded checkpoints and makes it easier for us to load.
-    python models/demos/t3000/llama2_70b/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir> <chunk_size>
-    ```
-
-    Note: Use `5` for `chunk_size`.
-
-    Once the weights are repacked, move the `params.json` file from the `checkpoint_dir` to the `repacked_output_dir`.
+- Once the weights are repacked, move the `params.json` file from the `checkpoint_dir` to the `repacked_output_dir`.
 
 ### Running the demo from TT-Metalium
 
 After setting up the repacked weights and tokenizer, you can run the demo using the commands below:
 
-1. **Prepare the weight cache directory:**
+1. Prepare the weight cache directory:
+```bash
+# Make a directory for us to cache weights into. This speeds up subsequent runs.
+mkdir <weight_cache_dir>
+```
 
-    ```bash
-    # Make a directory for us to cache weights into. This speeds up subsequent runs.
-    mkdir <weight_cache_dir>
-    ```
+2. Set up environment variables:
 
-2. **Set up environment variables:**
+```bash
+export LLAMA3_CKPT_DIR=<repacked_output_dir>
+export LLAMA3_TOKENIZER_PATH=<path_to_checkpoint_dir>/tokenizer.model  # Path needs to include the tokenizer.model file
+export LLAMA3_CACHE_PATH=<weight_cache_dir>
 
-    ```bash
-    export LLAMA3_CKPT_DIR=<repacked_output_dir>
-    export LLAMA3_TOKENIZER_PATH=<path_to_checkpoint_dir>/tokenizer.model  # Path needs to include the tokenizer.model file
-    export LLAMA3_CACHE_PATH=<weight_cache_dir>
+export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+export TIKTOKEN_CACHE_DIR=""
 
-    export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-    export TIKTOKEN_CACHE_DIR=""
+pip install -r models/demos/t3000/llama2_70b/reference/llama/requirements.txt
 
-    pip install -r models/demos/t3000/llama2_70b/reference/llama/requirements.txt
+# Example:
+# export LLAMA3_CKPT_DIR="/home/llama-data-repacked/llama-3-70b/"
+# export LLAMA3_TOKENIZER_PATH="/home/llama-data-repacked/tokenizer.model"
+# export LLAMA3_CACHE_PATH="/home/llama-data-cache/weights-cache"
+```
 
-    # Example:
-    # export LLAMA3_CKPT_DIR="/home/llama-data-repacked/llama-3-70b/"
-    # export LLAMA3_TOKENIZER_PATH="/home/llama-data-repacked/tokenizer.model"
-    # export LLAMA3_CACHE_PATH="/home/llama-data-cache/weights-cache"
-    ```
+3. Run the demo:
 
-3. **Run the demo:**
+Note: Run the following command twice.
+1. The first run will cache the weights. This will take some time.
+2. The second run will use the cached weights, thereby running much faster.
 
-    Note: Run the following command twice.
-    1. The first run will cache the weights. This will take some time.
-    2. The second run will use the cached weights, thereby running much faster.
+```bash
+# Run the demo using sampling decode
+pytest -svv models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-device_params0-short_context-check_disabled-sampling-tt-70b-T3000-80L-decode_only-trace_mode_on-text_completion-llama3]
+```
 
-    ```bash
-    # Run the demo using sampling decode
-    pytest -svv models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wormhole_b0-True-device_params0-short_context-check_disabled-sampling-tt-70b-T3000-80L-decode_only-trace_mode_on-text_completion-llama3]
-    ```
+## Testing
 
-4. **Run the performance test:**
+- Performance test:
 
-    The above demo does not achieve peak performance because we log outputs to the screen. The following perf test will print an accurate end-to-end throughput number.
-    For best performance, ensure that tt-metal is built in release mode (default), and ensure the host's CPU frequency governors are set to `performance` -- instructions for setting the frequency governor vary by machine.
-    This performance test runs with sequence length 128 and batch size 32.
+The above demo does not achieve peak performance because we log outputs to the screen. The following perf test will print an accurate end-to-end throughput number.
+For best performance, ensure that tt-metal is built in release mode (default), and ensure the host's CPU frequency governors are set to `performance` -- instructions for setting the frequency governor vary by machine.
+This performance test runs with sequence length 128 and batch size 32.
 
-    ```bash
-    pytest -svv models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_perf_host[wormhole_b0-True-device_params0-gen128-llama3]
-    ```
+```bash
+pytest -svv models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_perf_host[wormhole_b0-True-device_params0-gen128-llama3]
+```
 
-#### Details
+## Details
 
 Supported context lengths and batch sizes for the Llama3.1-70B demo are as follows:
 
@@ -115,7 +111,6 @@ Supported context lengths and batch sizes for the Llama3.1-70B demo are as follo
 
 - **Input File:** Uses `./demo/data/multi_prompt.json`.
 - **Model Configuration:** Utilizes a pretrained model.
-- **Hardware Requirements:** Runs on an 8-chip T3000 machine using tensor parallelism. The host machine must have at least 512 GB of memory.
 - **Demo arguments:**
   - `context: [short_context, long_context, 128k_context]`: Select between short context (batch 32, sequence_length 2k) and long context (batch 16, sequence length 8k) and full context (batch 1, sequence length 128k)
   - `ground_truth: [check_disabled, check_enabled]`: Enable or disable ground truth checking, used for testing
