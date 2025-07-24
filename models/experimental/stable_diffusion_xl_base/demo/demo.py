@@ -340,7 +340,11 @@ def prepare_device(mesh_device, use_tp):
 )
 @pytest.mark.parametrize(
     "use_tp",
-    ((False),),  # TODO: add both cases as well as ids
+    [
+        (True),
+        (False),
+    ],
+    ids=("use_tp", "no_tp"),
 )
 def test_demo(mesh_device, is_ci_env, prompt, num_inference_steps, vae_on_device, evaluation_range, use_tp):
     prepare_device(mesh_device, use_tp)

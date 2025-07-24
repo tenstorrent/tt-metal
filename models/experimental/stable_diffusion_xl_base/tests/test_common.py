@@ -153,7 +153,14 @@ def run_tt_image_gen(
             noise_pred = ttnn.sharded_to_interleaved(noise_pred, ttnn.L1_MEMORY_CONFIG)
             noise_pred = ttnn.to_layout(noise_pred, ttnn.ROW_MAJOR_LAYOUT)
             noise_pred = ttnn.pad(noise_pred, [(0, 0), (0, 0), (0, 0), (0, 4)], 0)
-            noise_pred = ttnn.all_gather(noise_pred, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            noise_pred = ttnn.all_gather(
+                noise_pred,
+                dim=0,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cluster_axis=0,
+                mesh_device=ttnn_device,
+                topology=ttnn.Topology.Linear,
+            )
             noise_pred = ttnn.to_layout(noise_pred, ttnn.TILE_LAYOUT)
             noise_pred = noise_pred[..., :4]
 
@@ -189,7 +196,7 @@ def run_tt_image_gen(
         ttnn.deallocate(tt_latents)
         ttnn.synchronize_device(ttnn_device)
     else:
-        latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))[:1, ...]
+        latents = ttnn.to_torch(tt_latents, mesh_composer=ttnn.ConcatMeshToTensor(ttnn_device, dim=0))[:batch_size, ...]
         B, C, H, W = input_shape
         latents = latents.reshape(batch_size * B, H, W, C)
         latents = torch.permute(latents, (0, 3, 1, 2))
