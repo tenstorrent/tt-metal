@@ -332,11 +332,12 @@ if(BUILD_MLP_OP_PERF)
         GIT_TAG 8fc23ba711075402c9cd77cfa0938a9d33256ca2
         OPTIONS
             "CMAKE_BUILD_PARALLEL_LEVEL 8"
+            "HAVE_CXX_ATOMICS_WITHOUT_LIB"
     )
 
     CPMAddPackage(
         NAME mlp-op-perf
         GIT_REPOSITORY git@github.com:xanderchin/mlp-op-perf.git
-        GIT_TAG 8419cf26c2a369aac87e7636b92bde3e04880048
+        GIT_TAG 6831d0c6726e9e5f264def1bf76fb3bd4efec72f
     )
 endif()
