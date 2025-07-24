@@ -27,18 +27,31 @@ void py_bind_point_to_point(py::module& module) {
 
             Keyword Args:
                 queue_id (int, optional): command queue id. Defaults to `0`.
+                optional_output_tensoe (ttnn.Tensor,optional): Optional output tensor.
 
            Returns:
                ttnn.Tensor: the output tensor, with transferred shard on receiving device.
 
             Example:
 
+                >>> input_tensor_torch = torch.zeros((2,1,1,16), dtype=dtype)
+                >>> input_tensor_torch[0, :, :, :] = data # arbitary data in one shard
+
+                >>> input_tensor = ttnn.from_torch(
+                >>>     input_tensor_torch, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
+                >>> )
+                >>> coord0, coord1 = (ttnn.MeshCoordinate(c) for c in ((0,0), (0,1)))
                 >>> sent_tensor = ttnn.point_to_point(
                         input_tensor,
                         coord0,
                         coord1,
                         ttnn.Topology.Linear,
-                        receiver_semaphore))doc";
+                        receiver_semaphore)
+                >>>  sent_tensor_torch = ttnn.to_torch(
+                >>>      sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+                >>>  )
+                >>> assert sent_tensor_torch[1,:,:,:] == input_tensor_torch[0,:,:,:]
+            )doc";
 
     using OperationType = decltype(ttnn::point_to_point);
     ttnn::bind_registered_operation(
@@ -52,8 +65,16 @@ void py_bind_point_to_point(py::module& module) {
                const MeshCoordinate& receive_coord,
                const ccl::Topology topology,
                const GlobalSemaphore& receiver_semaphore,
+               const std::optional<ttnn::Tensor> optional_output_tensor,
                QueueId queue_id) {
-                return self(queue_id, input_tensor, send_coord, receive_coord, topology, receiver_semaphore);
+                return self(
+                    queue_id,
+                    input_tensor,
+                    send_coord,
+                    receive_coord,
+                    topology,
+                    receiver_semaphore,
+                    optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("send_coord"),
@@ -62,6 +83,6 @@ void py_bind_point_to_point(py::module& module) {
             py::arg("receiver_semaphore"),
             py::kw_only(),
             py::arg("queue_id") = DefaultQueueId,
-        });
+            py::arg("optional_output_tensor") = std::nullopt});
 }
 }  // namespace ttnn::operations::point_to_point

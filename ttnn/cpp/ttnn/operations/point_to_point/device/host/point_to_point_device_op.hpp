@@ -19,8 +19,10 @@ struct PointToPointOp {
         const MeshCoordinate& send_coord;
         const MeshCoordinate& receive_coord;
         const ::ttnn::ccl::Topology topology;
-
         const tt::tt_metal::GlobalSemaphore receiver_semaphore;
+
+        // put this in here to hash on tensor spec
+        const ttnn::TensorSpec _input_tensor_spec;
 
         static constexpr auto attribute_names = std::forward_as_tuple("send_coord", "receive_coord", "topology");
         auto attribute_values() const { return std::forward_as_tuple(send_coord, receive_coord, topology); };
@@ -28,6 +30,7 @@ struct PointToPointOp {
 
     struct tensor_args_t {
         const Tensor input_tensor;
+        const std::optional<ttnn::Tensor> optional_output_tensor;
     };
 
     // entry 0 is the intermediate. Entry 1 is the final output
@@ -35,8 +38,15 @@ struct PointToPointOp {
     using tensor_return_value_t = std::array<ttnn::Tensor, 2>;
 
     struct SendReceive {
-        // !TODO implement program cache #23425
-        struct shared_variables_t {};
+        struct shared_variables_t {
+            tt::tt_metal::KernelHandle send_unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle send_unary_writer_kernel_id;
+            std::vector<CoreCoord> sender_cores;
+
+            tt::tt_metal::KernelHandle receive_unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle receive_unary_writer_kernel_id;
+            std::vector<CoreCoord> receiver_cores;
+        };
 
         // AdaptedCachedMeshWorkload this maps device coordinates to sets of shared variables.
         // CachedMeshWorkload has a common set for all devices.
@@ -51,17 +61,14 @@ struct PointToPointOp {
         static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
             const operation_attributes_t& operation_attributes,
             const ttnn::MeshCoordinate& mesh_coordinate,
-            const ttnn::MeshCoordinate& send_coordinate,
-            const ttnn::MeshCoordinate& receive_coordinate,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
 
-        // ! TODO implement program cache #23425
         static void override_runtime_arguments(
             cached_mesh_workload_t& cached_program,
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value) {};
+            tensor_return_value_t& tensor_return_value);
     };
 
     using program_factory_t = std::variant<SendReceive>;
@@ -97,10 +104,11 @@ struct PointToPointOp {
         const ::ttnn::ccl::Topology& topology,
         const MeshCoordinate& send_coord,
         const MeshCoordinate& receive_coord,
-        const tt::tt_metal::GlobalSemaphore& receiver_semaphore) {
+        const tt::tt_metal::GlobalSemaphore& receiver_semaphore,
+        const std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
         return std::make_tuple(
-            operation_attributes_t{send_coord, receive_coord, topology, receiver_semaphore},
-            tensor_args_t{input_tensor});
+            operation_attributes_t{send_coord, receive_coord, topology, receiver_semaphore, input_tensor.tensor_spec()},
+            tensor_args_t{input_tensor, optional_output_tensor});
     };
 
 private:
