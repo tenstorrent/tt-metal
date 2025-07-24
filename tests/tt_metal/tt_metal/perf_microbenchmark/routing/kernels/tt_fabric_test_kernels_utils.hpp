@@ -471,7 +471,7 @@ struct NocFusedSenderOperations {
 struct LineSyncConfig {
     LineSyncConfig(WorkerToFabricEdmSender* fabric_connection_handle, const uint32_t line_sync_val) :
         fabric_connection_handle(fabric_connection_handle), line_sync_val(line_sync_val) {
-        packet_header = PACKET_HEADER_POOL_ALLOC();
+        packet_header = PacketHeaderPool::allocate_header();
     }
 
     template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
@@ -553,7 +553,7 @@ struct SenderKernelTrafficConfig {
         metadata(metadata),
         noc_send_type_(static_cast<NocSendType>(0)),
         payload_buffer_(nullptr) {
-        packet_header = PACKET_HEADER_POOL_ALLOC();
+        packet_header = PacketHeaderPool::allocate_header();
 
         // Initialize function pointers to null (will be set in parse_and_setup_noc_send_type)
         noc_ops_.parse_and_setup = nullptr;

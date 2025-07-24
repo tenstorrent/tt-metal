@@ -30,7 +30,7 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-    auto* socket_packet_header_addr = PACKET_HEADER_POOL_ALLOC();
+    auto* socket_packet_header_addr = PacketHeaderPool::allocate_header();
 
     fabric_connection.open();
     // Create Socket Interface

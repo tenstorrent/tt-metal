@@ -109,8 +109,8 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender south_trunk_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* north_packet_header = PACKET_HEADER_POOL_ALLOC();
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* south_packet_header = PACKET_HEADER_POOL_ALLOC();
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* north_packet_header = PacketHeaderPool::allocate_header();
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* south_packet_header = PacketHeaderPool::allocate_header();
 
     uint64_t noc_dest_addr = get_noc_addr_helper(rx_noc_encoding, target_address);
     zero_l1_buf((uint32_t*)north_packet_header, sizeof(PACKET_HEADER_TYPE));

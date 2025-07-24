@@ -125,7 +125,7 @@ void kernel_main() {
     uint32_t buffer_index = 0;
     cb_wait_front(cb_id_in0, 1);
 
-    auto* packet_header = PACKET_HEADER_POOL_ALLOC();
+    auto* packet_header = PacketHeaderPool::allocate_header();
     for (uint32_t p = 0; p < total_pages_to_send; p += num_pages_per_send) {
         uint32_t pages_to_send = std::min<uint32_t>(num_pages_per_send, total_pages_to_send - p);
 

@@ -41,8 +41,8 @@ void kernel_main() {
 
     fabric_connection.open();
 
-    auto* packet_header = PACKET_HEADER_POOL_ALLOC();
-    auto* ready_packet_header = PACKET_HEADER_POOL_ALLOC();
+    auto* packet_header = PacketHeaderPool::allocate_header();
+    auto* ready_packet_header = PacketHeaderPool::allocate_header();
     // Setup data packet header
     if constexpr (use_mcast_mode) {
         packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(message_num_hops)});

@@ -379,10 +379,10 @@ void kernel_main() {
     const auto source_l1_buffer_address = get_write_ptr(source_l1_cb_index);
 
     // Allocate packet headers from the pool instead of circular buffer
-    auto* fwd_packet_header = PACKET_HEADER_POOL_ALLOC();
-    auto* bwd_packet_header = PACKET_HEADER_POOL_ALLOC();
-    auto* sync_fwd_packet_header = PACKET_HEADER_POOL_ALLOC();
-    auto* sync_bwd_packet_header = PACKET_HEADER_POOL_ALLOC();
+    auto* fwd_packet_header = PacketHeaderPool::allocate_header();
+    auto* bwd_packet_header = PacketHeaderPool::allocate_header();
+    auto* sync_fwd_packet_header = PacketHeaderPool::allocate_header();
+    auto* sync_bwd_packet_header = PacketHeaderPool::allocate_header();
 
     if (enable_any_synchronization) {
         sync_fwd_packet_header->to_chip_multicast(

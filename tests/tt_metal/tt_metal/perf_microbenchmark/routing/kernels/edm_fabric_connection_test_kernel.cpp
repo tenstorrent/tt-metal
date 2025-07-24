@@ -70,7 +70,7 @@ void kernel_main() {
     cb_reserve_back(source_l1_cb_index, 1);
     const auto source_l1_buffer_address = get_write_ptr(source_l1_cb_index);
 
-    auto* pkt_hdr_fwd = PACKET_HEADER_POOL_ALLOC();
+    auto* pkt_hdr_fwd = PacketHeaderPool::allocate_header();
 
     if (is_starting_worker) {
         DPRINT << "Is starting worker\n";

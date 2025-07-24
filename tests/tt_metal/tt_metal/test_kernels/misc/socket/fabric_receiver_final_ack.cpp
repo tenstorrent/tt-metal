@@ -23,7 +23,7 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-    auto* socket_packet_header_addr = PACKET_HEADER_POOL_ALLOC();
+    auto* socket_packet_header_addr = PacketHeaderPool::allocate_header();
 
     uint32_t worker_config_addr = get_write_ptr(config_cb_id);
     uint64_t worker_config_mcast_noc_addr = get_noc_multicast_addr(

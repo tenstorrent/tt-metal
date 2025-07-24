@@ -97,7 +97,7 @@ void kernel_main() {
     fwd_fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-    fwd_packet_header = PACKET_HEADER_POOL_ALLOC();
+    fwd_packet_header = PacketHeaderPool::allocate_header();
     zero_l1_buf((uint32_t*)fwd_packet_header, sizeof(PACKET_HEADER_TYPE));
 
     fabric_set_unicast_route(

@@ -19,8 +19,8 @@ void kernel_main() {
     sender_fabric_connection.open_start();
 
     // Sanity
-    auto* data_packet_header_addr = PACKET_HEADER_POOL_ALLOC();
-    auto* socket_packet_header_addr = PACKET_HEADER_POOL_ALLOC();
+    auto* data_packet_header_addr = PacketHeaderPool::allocate_header();
+    auto* socket_packet_header_addr = PacketHeaderPool::allocate_header();
 
     // Create Socket Interface
     SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);

@@ -76,8 +76,8 @@ void kernel_main() {
 
     fabric_connection.open();
 
-    auto* payload_packet_header = PACKET_HEADER_POOL_ALLOC();
-    auto* sem_inc_packet_header = PACKET_HEADER_POOL_ALLOC();
+    auto* payload_packet_header = PacketHeaderPool::allocate_header();
+    auto* sem_inc_packet_header = PacketHeaderPool::allocate_header();
 
     auto wait_for_semaphore_then_reset = [semaphore_address](size_t target_value) {
         noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(semaphore_address), target_value);

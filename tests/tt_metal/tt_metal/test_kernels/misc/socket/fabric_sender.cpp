@@ -46,8 +46,8 @@ void kernel_main() {
     //  - data_packet_header: Used for issuing writes to downstream data cores
     //  - socket_packet_header: Used by socket APIs for control flow
     constexpr uint32_t fabric_packet_header_cb_id = 0;
-    auto* data_packet_header_addr = PACKET_HEADER_POOL_ALLOC();
-    auto* socket_packet_header_addr = PACKET_HEADER_POOL_ALLOC();
+    auto* data_packet_header_addr = PacketHeaderPool::allocate_header();
+    auto* socket_packet_header_addr = PacketHeaderPool::allocate_header();
     fabric_connection.open();
 
     // Create Socket Interface

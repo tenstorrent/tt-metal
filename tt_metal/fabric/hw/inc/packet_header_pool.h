@@ -32,8 +32,6 @@ private:
     static const uint32_t risc_pool_end = risc_pool_start + POOL_SIZE_PER_RISC;
 
 public:
-    FORCE_INLINE static void init() { current_offset_ = risc_pool_start; }
-
     FORCE_INLINE static volatile tt_l1_ptr PACKET_HEADER_TYPE* allocate_header() {
         ASSERT(current_offset_ + HEADER_SIZE <= risc_pool_end);
         if (current_offset_ + HEADER_SIZE > risc_pool_end) {
@@ -55,6 +53,3 @@ public:
 };
 
 uint32_t PacketHeaderPool::current_offset_ = PacketHeaderPool::risc_pool_start;
-
-#define PACKET_HEADER_POOL_ALLOC() PacketHeaderPool::allocate_header()
-#define PACKET_HEADER_POOL_RESET() PacketHeaderPool::init()

@@ -22,8 +22,8 @@ void kernel_main() {
     receiver0_fabric_connection.open_start();
     receiver1_fabric_connection.open_start();
     // Sanity
-    auto* socket0_packet_header_addr = PACKET_HEADER_POOL_ALLOC();
-    auto* socket1_packet_header_addr = PACKET_HEADER_POOL_ALLOC();
+    auto* socket0_packet_header_addr = PacketHeaderPool::allocate_header();
+    auto* socket1_packet_header_addr = PacketHeaderPool::allocate_header();
 
     // Create Socket Interface
     SocketReceiverInterface receiver0_socket = create_receiver_socket_interface(socket0_config_addr);

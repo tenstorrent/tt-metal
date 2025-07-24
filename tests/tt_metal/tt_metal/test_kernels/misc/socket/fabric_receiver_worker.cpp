@@ -19,7 +19,7 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
     fabric_connection.open_start();
-    auto* socket_packet_header_addr = PACKET_HEADER_POOL_ALLOC();
+    auto* socket_packet_header_addr = PacketHeaderPool::allocate_header();
 
     // Create Socket Interface
     SocketReceiverInterface receiver_socket = create_receiver_socket_interface(socket_config_addr);

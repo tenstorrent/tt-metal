@@ -213,7 +213,7 @@ void kernel_main() {
     fwd_fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-    fwd_packet_header = PACKET_HEADER_POOL_ALLOC();
+    fwd_packet_header = PacketHeaderPool::allocate_header();
     zero_l1_buf((uint32_t*)fwd_packet_header, sizeof(PACKET_HEADER_TYPE));
 
     setup_connection(fwd_fabric_connection);
@@ -243,7 +243,7 @@ void kernel_main() {
         bwd_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-        bwd_packet_header = PACKET_HEADER_POOL_ALLOC();
+        bwd_packet_header = PacketHeaderPool::allocate_header();
         zero_l1_buf((uint32_t*)bwd_packet_header, sizeof(PACKET_HEADER_TYPE));
 
         setup_connection(bwd_fabric_connection);
