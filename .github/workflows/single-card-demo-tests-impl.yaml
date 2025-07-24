@@ -41,7 +41,7 @@ jobs:
                       #{ name: "segformer", runner-label: "N150", performance: false, cmd: run_segformer_func, owner_id: U045U3DEKM4}, # Mohamed Bahnas (vguduruTT)
                     { name: "sentence_bert", runner-label: "N150", performance: false, cmd: run_sentencebert_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
           #          { name: "yolov11", runner-label: "N150", performance: false, cmd: run_yolov11_func, owner_id: U045U3DEKM4}, # Mohamed Bahnas
-          #          { name: "yolov9c", runner-label: "N150", performance: false, cmd: run_yolov9c_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
+                    { name: "yolov9c", runner-label: "N150", performance: false, cmd: run_yolov9c_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
                     { name: "mobilenetv2", runner-label: "N150", performance: true, cmd: run_mobilenetv2_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
           #          { name: "yolov8s_world", runner-label: "N150", performance: false, cmd: run_yolov8s_world_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
                     { name: "ufld_v2", runner-label: "N150", performance: false, cmd: run_ufld_v2_func, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
@@ -66,7 +66,7 @@ jobs:
                     { name: "roberta", runner-label: "N300", performance: false, cmd: run_roberta_func, owner_id: U06F3ER8X9A}, # Stuti Raizada
           #          { name: "yolov8x", runner-label: "N300", performance: false, cmd: run_yolov8x_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
           #          { name: "yolov8s", runner-label: "N300", performance: false, cmd: run_yolov8s_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
-          #          { name: "yolov9c", runner-label: "N300", performance: false, cmd: run_yolov9c_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
+                    { name: "yolov9c", runner-label: "N300", performance: false, cmd: run_yolov9c_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
                     { name: "mobilenetv2", runner-label: "N300", performance: true, cmd: run_mobilenetv2_perf, owner_id: U056BK5U81E}, # Dalar Vartanians
                     { name: "ufld_v2", runner-label: "N300", performance: false, cmd: run_ufld_v2_func, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
           #          # { name: "mistral7b", runner-label: "N150", performance: false, cmd: run_mistral7b_perf, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati

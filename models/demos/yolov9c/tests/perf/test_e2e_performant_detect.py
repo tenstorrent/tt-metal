@@ -43,7 +43,7 @@ def test_e2e_performant(
         weight_dtype,
         model_task="detect",
         resolution=resolution,
-        model_location_generator=None,
+        model_location_generator=model_location_generator,
     )
     performant_runner._capture_yolov9_trace_2cqs()
     input_shape = (1, 3, *resolution)
