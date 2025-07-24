@@ -67,7 +67,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
         ttnn::ccl::InterleavedRingAllGatherTensorSlicer(input_tensor, all_gather_output_tensor, dim, ring_index);
     bool is_clockwise_direction = true;
     const uint32_t num_transfers = 4;
-    const uint32_t weight_tensor_width = weight_tensor.get_padded_shape()[3] / 32;
+    const uint32_t weight_tensor_width = weight_tensor.padded_shape()[3] / 32;
 
     ////////////////////////////////////////////////////////
 
@@ -144,7 +144,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
 
     // All Gather
     tt::tt_metal::operation::ProgramWithCallbacks program_with_callbacks =
-        ttnn::all_gather_async_minimal_interleaved_helper(
+        ttnn::all_gather_async_minimal_default_helper(
             matmul_program_with_callbacks->program,
             input_tensor,
             target_device,

@@ -84,8 +84,7 @@ CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord& virtu
         return CoreType::DRAM;
     }
 
-    CoreType core_type =
-        soc_desc.translate_coord_to(virtual_coord, CoordSystem::PHYSICAL, CoordSystem::PHYSICAL).core_type;
+    CoreType core_type = soc_desc.translate_coord_to(virtual_coord, CoordSystem::NOC0, CoordSystem::NOC0).core_type;
     if (core_type == CoreType::TENSIX) {
         core_type = CoreType::WORKER;
     }
@@ -603,6 +602,10 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
         case DebugSanitizeNocAddrMailbox:
             error_msg = get_noc_target_str(device_id, core, noc, san);
             error_msg += string(san->is_target ? " (NOC target" : " (Local L1") + " overwrites mailboxes).";
+            break;
+        case DebugSanitizeNocLinkedTransactionViolation:
+            error_msg = get_noc_target_str(device_id, core, noc, san);
+            error_msg += fmt::format(" (submitting a non-mcast transaction when there's a linked transaction).");
             break;
         default:
             error_msg = fmt::format(

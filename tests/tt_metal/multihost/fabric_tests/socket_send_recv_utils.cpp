@@ -55,7 +55,7 @@ void test_socket_send_recv(
     auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
     auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
-    auto distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     auto sender_rank = socket.get_config().sender_rank;
     auto recv_rank = socket.get_config().receiver_rank;
 
@@ -255,7 +255,7 @@ void test_multi_mesh_single_conn_bwd(
     using namespace tt::tt_metal::distributed;
     using namespace tt_metal;
 
-    auto distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     auto sender_logical_coord = CoreCoord(0, 0);
     auto recv_logical_coord = CoreCoord(0, 0);
@@ -315,7 +315,7 @@ void test_multi_mesh_single_conn_fwd(
     using namespace tt::tt_metal::distributed;
     using namespace tt_metal;
 
-    auto distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     auto sender_logical_coord = CoreCoord(0, 0);
     auto recv_logical_coord = CoreCoord(0, 0);
@@ -372,7 +372,7 @@ void test_multi_mesh_multi_conn_fwd(
     using namespace tt::tt_metal::distributed;
     using namespace tt_metal;
 
-    auto distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     std::unordered_map<uint32_t, MeshSocket> sockets;
     std::vector<SocketConnection> socket_connections;
     auto sender_logical_core = CoreCoord(0, 0);
@@ -432,7 +432,7 @@ void test_multi_mesh_multi_conn_bidirectional(
     using namespace tt::tt_metal::distributed;
     using namespace tt_metal;
 
-    auto distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
     std::unordered_map<uint32_t, MeshSocket> forward_sockets;
     std::unordered_map<uint32_t, MeshSocket> backward_sockets;
     std::vector<SocketConnection> socket_connections;
