@@ -117,7 +117,7 @@ jobs:
           model_name: "vgg"
           commands: |
             pytest models/demos/vgg/tests/ -m models_device_performance_bare_metal
-            # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/vgg_unet/tests -m models_device_performance_bare_metal
+            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/vgg_unet/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 

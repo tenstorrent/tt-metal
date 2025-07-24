@@ -6,6 +6,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.vgg_unet.load_model_utils import load_torch_model
 from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
 from models.demos.vgg_unet.ttnn.model_preprocessing import create_vgg_unet_model_parameters
 from models.demos.vgg_unet.ttnn.ttnn_vgg_unet import Tt_vgg_unet
@@ -14,7 +15,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 class VGG_UnetTestInfra:
-    def __init__(self, device, model_location_generator=None, use_pretrained_weight=False):
+    def __init__(self, device, model_location_generator=None, use_pretrained_weight=True):
         super().__init__()
         torch.manual_seed(0)
         self.pcc_passed = False
@@ -27,7 +28,7 @@ class VGG_UnetTestInfra:
         self.ttnn_input = ttnn.from_torch(torch_input_permuted, dtype=ttnn.bfloat16)
         torch_model = UNetVGG19()
         if use_pretrained_weight:
-            torch_model.load_state_dict(torch.load("models/demos/vgg_unet/vgg_unet_torch.pth"))
+            torch_model = load_torch_model(torch_model, model_location_generator)
             torch_model.eval()  # Set to evaluation mode
         parameters = create_vgg_unet_model_parameters(torch_model, self.torch_input, device=device)
         self.torch_output = torch_model(self.torch_input)
