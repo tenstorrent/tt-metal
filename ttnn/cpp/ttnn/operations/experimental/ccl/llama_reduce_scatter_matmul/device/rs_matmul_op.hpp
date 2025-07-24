@@ -38,6 +38,8 @@ struct Matmul_RS {
     struct tensor_args_t {
         LlamaReduceScatterDeviceOperation::tensor_args_t rs;
         matmul_tensor_args_t matmul;
+        std::vector<Tensor> matmul_output_tensors;
+        const std::optional<const ttnn::Tensor> second_weight_tensor;
     };
     struct operation_attributes_t {
         LlamaReduceScatterDeviceOperation rs;
@@ -81,7 +83,7 @@ struct Matmul_RS {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
-        const ttnn::Tensor& rs_tensor,
+        const std::optional<const ttnn::Tensor>& rs_tensor,
         ttnn::Tensor& intermediate_packet_buffer,
         int32_t dim,
         const GlobalSemaphore& semaphore,
@@ -102,7 +104,8 @@ struct Matmul_RS {
         const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
         tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear,
-        bool use_noc1_only = false);
+        bool use_noc1_only = false,
+        const std::optional<const ttnn::Tensor>& second_weight_tensor = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::ccl
