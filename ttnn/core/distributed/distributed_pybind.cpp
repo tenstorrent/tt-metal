@@ -417,11 +417,7 @@ void py_module(py::module& module) {
     py_mesh_device_view.def("shape", &MeshDeviceView::shape, py::return_value_policy::reference_internal)
         .def("num_devices", &MeshDeviceView::num_devices)
         .def("fully_local", &MeshDeviceView::fully_local)
-        .def("is_local", &MeshDeviceView::is_local, py::arg("coord"))
-        .def("contains", &MeshDeviceView::contains, py::arg("coord"))
-        .def("get_device", &MeshDeviceView::get_device, py::arg("coord"), py::return_value_policy::reference_internal)
-        .def("find_device", &MeshDeviceView::find_device, py::arg("device_id"))
-        .def("find_device_id", &MeshDeviceView::find_device_id, py::arg("coord"));
+        .def("is_local", &MeshDeviceView::is_local, py::arg("coord"));
 
     auto py_tensor_to_mesh =
         static_cast<py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>>(module.attr("CppTensorToMesh"));
