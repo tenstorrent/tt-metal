@@ -413,6 +413,79 @@ std::vector<Tensor> LlamaAllGatherMatmulAsync::create_output_tensors(
     return {all_gather_output_tensor, matmul_output_tensor};
 }
 
+tt::tt_metal::operation::MeshWorkloadWithCallbacks LlamaAllGatherMatmulAsync::create_mesh_workload(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    return ccl::create_mesh_workload_from_programs(
+        tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
+            return create_program_at(coord, input_tensors, output_tensors);
+        });
+}
+
+tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_program_at(
+    const ttnn::MeshCoordinate& mesh_coordinate,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    log_debug(tt::LogOp, "DEBUG: create_program_at is called");
+    auto mesh_device = input_tensors[0].mesh_device();
+    AllGatherReplicateAsyncVersion version = this->all_gather_replicate_async_struct.select_version(input_tensors[0]);
+    IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : input_tensors[0].device();
+    std::vector<IDevice*> devices_to_use = {};
+    if (this->all_gather_replicate_async_struct.cluster_axis.has_value()) {
+        // User specified the cluster-axis. Derive devices based on the current coordinate
+        // and the cluster-axis.
+        const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
+        devices_to_use = (this->all_gather_replicate_async_struct.cluster_axis.value() == 0)
+                             ? mesh_view.get_devices_on_column(mesh_coordinate[1])
+                             : mesh_view.get_devices_on_row(mesh_coordinate[0]);
+    } else {
+        devices_to_use = this->all_gather_replicate_async_struct.devices;
+    }
+
+    std::optional<IDevice*> forward_device = std::nullopt;
+    std::optional<IDevice*> backward_device = std::nullopt;
+    uint32_t device_index = 0;  // Initialize device index
+    for (uint32_t i = 0; i < this->all_gather_replicate_async_struct.ring_size; ++i) {
+        if (devices_to_use.at(i) == target_device) {
+            device_index = i;
+            if (i != 0) {
+                backward_device = devices_to_use.at(i - 1);
+            } else if (this->all_gather_replicate_async_struct.topology == ttnn::ccl::Topology::Ring) {
+                backward_device = devices_to_use.at(this->all_gather_replicate_async_struct.ring_size - 1);
+            }
+            if (i != this->all_gather_replicate_async_struct.ring_size - 1) {
+                forward_device = devices_to_use.at(i + 1);
+            } else if (this->all_gather_replicate_async_struct.topology == ttnn::ccl::Topology::Ring) {
+                forward_device = devices_to_use.at(0);
+            }
+        }
+    }
+    log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
+
+    switch (version) {
+        case AllGatherReplicateAsyncVersion::LLAMA_MINIMAL_SHARDED:
+        default:
+            log_trace(
+                tt::LogOp,
+                "Detected all gather replicate specialized shape. all_gather_replicate_async_sharded is called");
+            return all_gather_replicate_async_sharded(
+                input_tensors[0],
+                input_tensors[1],
+                input_tensors[2],
+                output_tensors[0],
+                target_device,
+                forward_device,
+                backward_device,
+                this->all_gather_replicate_async_struct.dim,
+                this->all_gather_replicate_async_struct.num_links,
+                this->all_gather_replicate_async_struct.ring_size,
+                device_index,
+                this->all_gather_replicate_async_struct.topology,
+                this->all_gather_replicate_async_struct.semaphore,
+                this->all_gather_replicate_async_struct.sub_device_id);
+    }
+}
 /* LlamaAllGatherMatmulAsync Implementation ends here*/
 
 namespace operations {

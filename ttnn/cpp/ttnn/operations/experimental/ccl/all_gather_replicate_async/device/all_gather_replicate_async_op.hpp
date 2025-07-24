@@ -117,12 +117,10 @@ struct LlamaAllGatherMatmulAsync {
     tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload(
         const ttnn::MeshCoordinateRangeSet& tensor_coords,
         const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
     tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
         const ttnn::MeshCoordinate& mesh_coordinate,
         const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
     tt::tt_metal::operation::Hash compute_program_hash(
         const std::vector<Tensor>& input_tensors,
