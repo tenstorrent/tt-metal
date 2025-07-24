@@ -374,7 +374,8 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     uint32_t window_h,
     uint32_t window_w,
     bool fp32_accum,
-    bool full_inner_dim) {
+    bool full_inner_dim,
+    bool enable_activation_reuse) {
     if (act_block_h_override > 0) {
         TT_ASSERT(
             act_block_h_override % 32 == 0,
@@ -409,7 +410,9 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     TT_ASSERT(padded_in_channels % act_c_num_blocks == 0);
     uint32_t act_block_w = 0;
     if (parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED) {
-        act_block_w = round_up(padded_in_channels * window_w, tt::constants::TILE_WIDTH);
+        act_block_w = enable_activation_reuse
+                          ? round_up(padded_in_channels * window_h * window_w, tt::constants::TILE_WIDTH)
+                          : round_up(padded_in_channels * window_w, tt::constants::TILE_WIDTH);
     } else if (parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
         act_block_w = round_up(
             padded_in_channels / act_c_num_blocks * window_w * (full_inner_dim ? window_h : 1),
@@ -922,6 +925,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             conv_config,
             input_datatype,
             output_datatype,
+            output_width,
             enable_bias,
             conv_is_1d_deptwise);
 
@@ -1026,7 +1030,8 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
         kernel_size[0],
         kernel_size[1],
         get_fp32_dest_acc_en(compute_config),
-        conv_config.full_inner_dim);
+        conv_config.full_inner_dim,
+        conv_config.enable_activation_reuse);
     return {opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config};
 }
 
@@ -1166,6 +1171,7 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         conv_config,
         DataType::BFLOAT16,  // Input datatype is always BFLOAT16 in Conv2D DRAM
         params.output_datatype,
+        output_slice_width,
         params.enable_bias,
         false);
 
@@ -1217,6 +1223,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     const Conv2dConfig& conv_config,
     const DataType input_datatype,
     const DataType output_datatype,
+    const uint32_t output_image_width,
     const bool enable_bias,
     bool is_1d_depthwise_conv,
     bool skip_act_cb_create) {
@@ -1232,6 +1239,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         input_datatype,
         output_datatype,
         dummy_input_shard_shape,
+        output_image_width,
         enable_bias,
         is_1d_depthwise_conv,
         skip_act_cb_create);
