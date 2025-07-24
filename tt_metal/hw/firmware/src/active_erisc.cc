@@ -124,10 +124,14 @@ void __attribute__((noinline)) Application() {
 
     // Stall for the host to set this flag to 1 otherwise we could exit
     // the base firmware while the host is still initializing
+    volatile uint32_t* const debug_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
+
+    debug_dump_addr[0] = 0x11111111;
     while (gEnableFwFlag[0] != 1) {
         // Wait for sync from host
         invalidate_l1_cache();
     }
+    debug_dump_addr[0] = 0x22222222;
 
     set_deassert_addresses();
 
@@ -157,6 +161,7 @@ void __attribute__((noinline)) Application() {
 
         uint8_t go_message_signal = RUN_MSG_DONE;
         while ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) {
+            debug_dump_addr[0] = 0x5b5b5b5b;
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
@@ -171,9 +176,8 @@ void __attribute__((noinline)) Application() {
                 }
             } else if (gEnableFwFlag[0] != 1) {
                 mailboxes->go_message.signal = RUN_MSG_DONE;
-                volatile uint32_t* const debug_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
                 // Track if we could not return back to _start
-                debug_dump_addr[0] = 0x11112222;
+                debug_dump_addr[0] = 0xefefefef;
                 return;
             } else {
                 service_base_fw();
