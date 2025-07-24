@@ -15,7 +15,7 @@ static uint32_t num_pages(const ttnn::Tensor& input_tensor) {
     return shape.volume() / shape[-1];
 }
 
-static uint32_t page_size(const ttnn::Tensor& input_tensor) {
+static uint32_t get_page_size(const ttnn::Tensor& input_tensor) {
     auto BUFFER_ALIGNMENT = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
                                 ? tt::tt_metal::hal::get_dram_alignment()
                                 : tt::tt_metal::hal::get_l1_alignment();
@@ -41,6 +41,8 @@ FlipDeviceOperation::MultiCoreRowMajor::cached_program_t FlipDeviceOperation::Mu
     using namespace tt;
     using namespace tt::tt_metal;
 
+    Program program{};
+
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;
 
@@ -49,44 +51,96 @@ FlipDeviceOperation::MultiCoreRowMajor::cached_program_t FlipDeviceOperation::Mu
     bool src_is_dram = src_buffer->buffer_type() == BufferType::DRAM;
     bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
 
-    Program program{};
-    IDevice* device = input_tensor.device();
-
-    uint32_t N = operation_attributes.dims.size();
-    uint32_t num_input_pages = detail::num_pages(input_tensor);
-    uint32_t num_input_pages_to_read = 2;  // how do we know?
+    uint32_t rank = input_tensor.logical_shape().rank();
+    uint32_t element_size = input_tensor.element_size();
+    // uint32_t num_rows = detail::get_num_rows(input_tensor);
     uint32_t num_rows = input_tensor.physical_volume() / input_tensor.logical_shape()[-1];
 
-    uint32_t input_rm_page_size = detail::page_size(input_tensor);
-    uint32_t output_rm_page_size = detail::page_size(tensor_return_value);
+    auto dims = operation_attributes.dims;
+    std::vector<uint32_t> dims_to_flip(rank, 0);
+    for (const auto& d : dims) {
+        dims_to_flip[d] = 1;
+    }
 
-    uint32_t src0_cb_index = CBIndex::c_0;
+    // ------------------------------------------------------------------------
+    // 1) Split work to all available cores
+    // ------------------------------------------------------------------------
+    auto core_grid = input_tensor.device()->compute_with_storage_grid_size();
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
+        split_work_to_cores(core_grid, num_rows);
 
-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        split_work_to_cores(compute_with_storage_grid_size, num_rows);
+    // ------------------------------------------------------------------------
+    // 2) Create circular buffer
+    // ------------------------------------------------------------------------
+    DataFormat input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
+    uint32_t input_page_size = detail::get_page_size(input_tensor);
+    uint32_t num_input_pages_to_read = 2;  // double buffering
+    uint32_t cb_size = num_input_pages_to_read * input_page_size;
 
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, N, input_rm_page_size, num_rows};
-    KernelHandle reader_kernel_id = CreateKernel(
+    auto cb_inp = CreateCircularBuffer(
+        program,
+        all_cores,
+        CircularBufferConfig(cb_size, {{CBIndex::c_0, input_data_format}})
+            .set_page_size(CBIndex::c_0, input_page_size));
+
+    // ------------------------------------------------------------------------
+    // 3) Set compile time arguments for kernels
+    // ------------------------------------------------------------------------
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, rank, input_page_size, num_rows};
+    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram, rank, input_page_size, num_rows};
+
+    // ------------------------------------------------------------------------
+    // 4) Create kernels
+    // ------------------------------------------------------------------------
+    KernelHandle reader_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/flip/device/kernels/dataflow/"
         "reader_interleaved_rm.cpp",
         all_cores,
         ReaderDataMovementConfig(reader_compile_time_args));
 
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram, N, output_rm_page_size, num_rows};
-    KernelHandle writer_kernel_id = CreateKernel(
+    KernelHandle writer_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/flip/device/kernels/dataflow/"
         "writer_interleaved_rm.cpp",
         all_cores,
         WriterDataMovementConfig(writer_compile_time_args));
 
+    // ------------------------------------------------------------------------
+    // 5) Set runtime arguments for kernels
+    // ------------------------------------------------------------------------
+    std::vector<uint32_t> reader_runtime_args = {input_tensor.buffer()->address(), 0, 0};
+    std::vector<uint32_t> writer_runtime_args = {output_tensor.buffer()->address(), 0, 0};
+
+    reader_runtime_args.insert(reader_runtime_args.end(), dims_to_flip.begin(), dims_to_flip.end());
+
+    uint32_t start_row = 0;
+    uint32_t end_row = 0;
+    auto work_groups = {
+        std::make_pair(core_group_1, num_rows_per_core_group_1),
+        std::make_pair(core_group_2, num_rows_per_core_group_2)};
+
+    for (const auto& [ranges, rows_per_core] : work_groups) {
+        for (const auto& range : ranges.ranges()) {
+            for (const auto& core : range) {
+                end_row += rows_per_core;
+
+                reader_runtime_args[1] = start_row;
+                reader_runtime_args[2] = end_row;
+                SetRuntimeArgs(program, reader_id, core, reader_runtime_args);
+
+                writer_runtime_args[1] = start_row;
+                writer_runtime_args[2] = end_row;
+                SetRuntimeArgs(program, writer_id, core, writer_runtime_args);
+
+                start_row += rows_per_core;
+            }
+        }
+    }
+
     return {
         std::move(program),
-        {.unary_reader_kernel_id = reader_kernel_id,
-         .unary_writer_kernel_id = writer_kernel_id,
-         .core_range = all_cores},
+        {.unary_reader_kernel_id = reader_id, .unary_writer_kernel_id = writer_id, .core_range = all_cores},
     };
 }
 

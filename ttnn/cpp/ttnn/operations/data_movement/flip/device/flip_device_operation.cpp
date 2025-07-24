@@ -12,25 +12,12 @@ namespace ttnn::operations::data_movement {
 FlipDeviceOperation::program_factory_t FlipDeviceOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
-    const auto& dims = operation_attributes.dims;
-    const auto rank = input_tensor.get_logical_shape().rank();
     const auto layout = input_tensor.get_layout();
-
-    bool is_horizontal_flip = (dims.size() == 1) && (dims[0] == rank - 1);
-    bool is_vertical_flip = (dims.size() == 1) && (dims[0] == rank - 2);
-
-    log_debug(tt::LogOp, "layout: {}", layout);
 
     if (layout == Layout::TILE) {
         return MultiCoreTiled{};
-    } else {
-        return MultiCoreRowMajor{};
     }
-
-    // if (layout == Layout::ROW_MAJOR) {
-    // }
-
-    // return MultiCoreGeneric{};
+    return MultiCoreRowMajor{};
 }
 
 void FlipDeviceOperation::validate_on_program_cache_miss(

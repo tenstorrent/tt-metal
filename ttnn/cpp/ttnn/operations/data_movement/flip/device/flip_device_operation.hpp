@@ -31,7 +31,6 @@ struct FlipDeviceOperation {
     using spec_return_value_t = ttnn::TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    // Implementation for row major tensors - optimized for simple dimension flips
     struct MultiCoreRowMajor {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle unary_reader_kernel_id;
@@ -52,12 +51,10 @@ struct FlipDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    // Implementation for tiled tensors - handles tile-aligned flips efficiently
     struct MultiCoreTiled {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle unary_reader_kernel_id;
             tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            tt::tt_metal::KernelHandle compute_kernel_id;
             tt::tt_metal::CoreRangeSet core_range;
         };
         using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -74,30 +71,7 @@ struct FlipDeviceOperation {
             tensor_return_value_t& tensor_return_value);
     };
 
-    // Generic implementation for complex flip patterns
-    // struct MultiCoreGeneric {
-    //     struct shared_variables_t {
-    //         tt::tt_metal::KernelHandle unary_reader_kernel_id;
-    //         tt::tt_metal::KernelHandle unary_writer_kernel_id;
-    //         tt::tt_metal::KernelHandle compute_kernel_id;
-    //         tt::tt_metal::CoreRangeSet core_range;
-    //     };
-    //     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    //     static cached_program_t create(
-    //         const operation_attributes_t& operation_attributes,
-    //         const tensor_args_t& tensor_args,
-    //         tensor_return_value_t& tensor_return_value);
-
-    //     static void override_runtime_arguments(
-    //         cached_program_t& cached_program,
-    //         const operation_attributes_t& operation_attributes,
-    //         const tensor_args_t& tensor_args,
-    //         tensor_return_value_t& tensor_return_value);
-    // };
-
     using program_factory_t = std::variant<MultiCoreRowMajor, MultiCoreTiled>;
-    // using program_factory_t = std::variant<MultiCoreRowMajor, MultiCoreTiled, MultiCoreGeneric>;
 
     // Mandatory methods
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -106,7 +80,7 @@ struct FlipDeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
-    // API call to map user arguments to operation attributes and tensor args.
+    // API call to map user arguments to operation attributes and tensor args
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
         const SmallVector<uint32_t>& dims,

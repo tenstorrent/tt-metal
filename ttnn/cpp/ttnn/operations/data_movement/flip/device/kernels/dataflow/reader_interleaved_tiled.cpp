@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 
@@ -92,8 +96,6 @@ void kernel_main() {
         uint32_t save_addr = l1_buf_addr;  // save base address for debug print
 
         uint32_t src_tile_id = calc_src_tile_index(tile_id, RANK, dims_to_flip, tiled_shape, tile_strides);
-        // DPRINT << tile_id << " <- " << src_tile_id << ENDL();
-
         uint64_t tile_base_addr = get_noc_addr(src_tile_id, s0, 0);
 
         // face reading order depends on type of flip we performing
@@ -111,7 +113,8 @@ void kernel_main() {
         for (uint32_t i = 0; i < NUM_FACES; i++) {
             uint64_t face_addr = tile_base_addr + face_reading_order[i] * FACE_HW_BYTES;
 
-            // if vertical flip read rows in reverse order else read in normal order
+            // if (is_vertical_flip = true) read rows in reverse order
+            // else read rows in normal order
             int32_t step = is_vertical_flip ? -1 : 1;
             int32_t start = is_vertical_flip ? FACE_HEIGHT - 1 : 0;
             int32_t end = is_vertical_flip ? -1 : FACE_HEIGHT;

@@ -33,6 +33,31 @@ ttnn::Tensor flip_impl(
     // const auto rank = input_tensor.get_logical_shape().rank();
     log_debug(tt::LogOp, "flip_impl");
     auto output = ttnn::prim::flip(input_tensor, dims, memory_config, std::nullopt);
+
+    // is_padded is TRUE when input tensor layout is tiled
+    // and one or more tensor dims are not divisible by 32
+    auto input_shape = input_tensor.logical_shape();
+    uint32_t pad_y = (32 - input_shape[2] % 32);
+    uint32_t pad_x = (32 - input_shape[3] % 32);
+    bool is_padded = (pad_y != 32) || (pad_x != 32);
+    is_padded = false;
+
+    log_debug(tt::LogOp, "pad_y: {}", pad_y);
+    log_debug(tt::LogOp, "pad_x: {}", pad_x);
+
+    // TODO unpad supports only host tensors TT
+    // TODO we should not change the layout
+    if (is_padded) {
+        output = ttnn::operations::core::from_device(output);
+        output = ttnn::to_layout(output, ttnn::Layout::ROW_MAJOR);
+        output = output.unpad(
+            ttnn::Shape({0, 0, pad_y, pad_x}),
+            ttnn::Shape({input_shape[0], input_shape[1], input_shape[2], input_shape[3]}));
+        // output = output.pad(
+        //     ttnn::Shape({input_shape[0], input_shape[1], input_shape[2], input_shape[3]}),
+        //     ttnn::Shape({0, 0, 0, 0}), 0);
+        // output = ttnn::to_layout(output, ttnn::Layout::TILE);
+    }
     return output;
 }
 
