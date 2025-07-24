@@ -8,99 +8,8 @@
 
 namespace ttsl {
 
-namespace detail {
-
-template <class T, std::size_t Extent>
-class SpanBase : public std::span<T, Extent> {
-public:
-    using std::span<T, Extent>::span;
-
-    // Conversion constructor from std::span
-    template <std::size_t OtherExtent>
-    explicit(Extent != std::dynamic_extent && OtherExtent == std::dynamic_extent) constexpr SpanBase(
-        const std::span<T, OtherExtent>& other) noexcept :
-        std::span<T, Extent>(other.data(), other.size()) {}
-};
-
-template <class T, std::size_t Extent>
-class SpanBase<const T, Extent> : public std::span<const T, Extent> {
-public:
-    using std::span<const T, Extent>::span;
-
-    // expose constructor from initializer_list for const-qualified element_type
-    explicit(Extent != std::dynamic_extent) constexpr SpanBase(std::initializer_list<T> ilist) noexcept :
-        std::span<const T, Extent>(ilist.begin(), ilist.size()) {}
-
-    // Conversion constructor from std::span
-    template <std::size_t OtherExtent>
-    explicit(Extent != std::dynamic_extent && OtherExtent == std::dynamic_extent) constexpr SpanBase(
-        const std::span<const T, OtherExtent>& other) noexcept :
-        std::span<const T, Extent>(other.data(), other.size()) {}
-};
-
-}  // namespace detail
-
-template <class T, std::size_t Extent = std::dynamic_extent>
-class Span final : private detail::SpanBase<T, Extent> {
-    using base = detail::SpanBase<T, Extent>;
-
-public:
-    // Member types
-    using typename base::const_pointer;
-    using typename base::const_reference;
-    using typename base::difference_type;
-    using typename base::element_type;
-    using typename base::iterator;
-    using typename base::pointer;
-    using typename base::reference;
-    using typename base::reverse_iterator;
-    using typename base::size_type;
-    using typename base::value_type;
-
-    // Member constants
-    using base::extent;
-
-    using base::base;
-    using base::operator=;
-
-    // Iterators
-    using base::begin;
-    using base::end;
-    using base::rbegin;
-    using base::rend;
-
-    // Element access
-    using base::back;
-    using base::front;
-    using base::operator[];
-    using base::data;
-
-    // Observers
-    using base::empty;
-    using base::size;
-    using base::size_bytes;
-
-    // Subviews
-    using base::first;
-    using base::last;
-    using base::subspan;
-};
-
-template <class It, class EndOrSize>
-Span(It, EndOrSize) -> Span<std::remove_reference_t<decltype(*std::declval<It&>())>>;
-
-template <class T, std::size_t N>
-// NOLINTNEXTLINE(modernize-avoid-c-arrays)
-Span(T (&)[N]) -> Span<T, N>;
-
-template <class T, std::size_t N>
-Span(std::array<T, N>&) -> Span<T, N>;
-
-template <class T, std::size_t N>
-Span(const std::array<T, N>&) -> Span<const T, N>;
-
-template <class R>
-Span(R&&) -> Span<std::remove_reference_t<decltype(*std::begin(std::declval<R&&>()))>>;
+template <typename T, std::size_t Extent = std::dynamic_extent>
+using Span = std::span<T, Extent>;
 
 template <class Container>
 auto make_const_span(const Container& vec) {
@@ -132,14 +41,14 @@ using namespace ::ttsl;
 }  // namespace stl
 }  // namespace tt
 
-#if __cplusplus >= 202002L
-namespace std::ranges {
+// #if __cplusplus >= 202002L
+// namespace std::ranges {
 
-template <typename T>
-inline constexpr bool enable_view<ttsl::Span<T>> = true;
+// template <typename T>
+// inline constexpr bool enable_view<ttsl::Span<T>> = true;
 
-template <typename T>
-inline constexpr bool enable_borrowed_range<ttsl::Span<T>> = true;
+// template <typename T>
+// inline constexpr bool enable_borrowed_range<ttsl::Span<T>> = true;
 
-}  // namespace std::ranges
-#endif
+// }  // namespace std::ranges
+// #endif

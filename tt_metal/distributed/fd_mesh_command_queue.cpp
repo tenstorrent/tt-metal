@@ -370,7 +370,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     mesh_workload.set_last_used_command_queue_for_testing(this);
 
     if (blocking) {
-        this->finish({sub_device_id});
+        this->finish({{sub_device_id}});
     }
 }
 
