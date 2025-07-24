@@ -10,10 +10,16 @@ using tt::data_movement::common::round_up;
 using tt::data_movement::common::tt_memmove;
 
 void kernel_main() {
+    DPRINT << "RECEIVER START \n";
     constexpr bool intermediate_is_dram = get_compile_time_arg_val(0);
     constexpr uint32_t packet_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t receiver_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t alignment = get_compile_time_arg_val(3);
+    constexpr bool nullop = get_compile_time_arg_val(4);
+
+    if constexpr (nullop) {
+        return;
+    }
 
     const auto page_idx_start = get_arg_val<uint32_t>(0);
     const auto page_idx_end = get_arg_val<uint32_t>(1);
@@ -58,8 +64,9 @@ void kernel_main() {
             const uint32_t dest_addr = dest_page_base_addr + page_offset;
             const uint32_t transfer_size_bytes = std::min(page_size_bytes - page_offset, packet_size_bytes);
             const uint32_t packet_l1_page_addr = packet_l1_addr + packet_page_idx * aligned_page_size_bytes;
-
+            DPRINT << "Receiver 1 \n";
             tt_memmove<false, false, false, 0>(dest_addr, packet_l1_page_addr, transfer_size_bytes);
+            DPRINT << "Receiver 2 \n";
 
             ++packet_page_idx;
         }
@@ -69,4 +76,6 @@ void kernel_main() {
 
     // clean up semaphore in case it is reused
     noc_semaphore_set(semaphore_ptr, 0);
+
+    DPRINT << "RECEIVER DONE \n";
 }

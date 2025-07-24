@@ -20,6 +20,8 @@ inline auto& connection_direction_collection(const bool dst_is_forward, FabricCo
 }
 
 void kernel_main() {
+    DPRINT << "SEND WRITER START \n";
+
     constexpr uint32_t sender_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t packet_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(2);
@@ -45,6 +47,7 @@ void kernel_main() {
 
     // reusing the last arg for fabric setup, therefore index overlaps.
     size_t conn_arg_idx = 9;
+
     auto fabric_connection = FabricConnectionManager::build_from_args<
         FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx);
 
@@ -123,4 +126,6 @@ void kernel_main() {
     connection_direction.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
 
     fabric_connection.close();
+
+    DPRINT << "SEND WRITER DONE \n";
 }

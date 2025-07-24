@@ -2,9 +2,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 ##
+from itertools import combinations
 from math import prod
 from time import sleep
-
 
 import pytest
 import torch
@@ -25,19 +25,47 @@ TEST_SHAPES = [
     (1, 1, 1, 17),
 ]
 
+MESH_SHAPE = (2, 4)
+
+
+def _linear_coord(coord, mesh_shape):
+    return coord[0] * mesh_shape[1] + coord[1]
+
+
+def _get_test_coords_and_shapes(mesh_shape, tensor_shapes):
+    coords = [(i, j) for i in range(mesh_shape[0]) for j in range(mesh_shape[1])]
+
+    # only test all coordinate permutations against the first tensor shape to keep test time reasonable
+    for i, shape in enumerate(tensor_shapes):
+        if i == 0:
+            # here we do coordinate filtering appropriate for 1D fabric
+            one_d_filter = lambda cc: cc[0][0] == cc[1][0] or cc[0][1] == cc[1][1]
+            yield from map(lambda cc: (shape, cc), filter(one_d_filter, combinations(coords, 2)))
+        else:
+            yield (shape, (coords[0], coords[1]))
+
 
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("coords", [((0, 0), (0, 1))])
-@pytest.mark.parametrize("shape", TEST_SHAPES)
+@pytest.mark.parametrize("shape_coords", _get_test_coords_and_shapes(MESH_SHAPE, TEST_SHAPES))
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
-def test_send_receive(mesh_device, coords, shape, layout, dtype):
-    use_shape = tuple(s * (2 if i == 0 else 1) for i, s in enumerate(shape))
+def test_send_receive(mesh_device, shape_coords, layout, dtype):
+    shape, coords = shape_coords
 
+    devices = prod(list(mesh_device.shape))
+    multi_device_shape = tuple(s * (devices if i == 0 else 1) for i, s in enumerate(shape))
+
+    lcoord0, lcoord1 = (_linear_coord(c, list(mesh_device.shape)) for c in coords)
     coord0, coord1 = (ttnn.MeshCoordinate(c) for c in coords)
 
-    input_tensor_torch = torch.linspace(1, prod(use_shape), prod(use_shape)).reshape(use_shape).to(dtype=dtype)
+    lrange0 = lcoord0 + shape[0]
+
+    input_tensor_torch = torch.zeros(multi_device_shape, dtype=dtype)
+    input_tensor_torch[lcoord0:lrange0, :, :, :] = (
+        torch.linspace(1, prod(shape), prod(shape)).reshape(shape).to(dtype=dtype)
+    )
+
     input_tensor = ttnn.from_torch(
         input_tensor_torch, layout=layout, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
     )
@@ -56,10 +84,8 @@ def test_send_receive(mesh_device, coords, shape, layout, dtype):
         ttnn.Topology.Linear,
         receiver_semaphore,
     )
-    torch_sent_tensor = ttnn.to_torch(sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-
     return_tensor = ttnn.point_to_point(sent_tensor, coord1, coord0, ttnn.Topology.Linear, send_semaphore)
 
     torch_return_tensor = ttnn.to_torch(return_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
 
-    assert_with_pcc(torch_return_tensor[:1, :, :, :], input_tensor_torch[:1, :, :, :])
+    assert_with_pcc(input_tensor_torch[lcoord0:lrange0, :, :, :], torch_return_tensor[lcoord0:lrange0, :, :, :])

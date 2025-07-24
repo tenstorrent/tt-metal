@@ -18,7 +18,7 @@ struct PointToPointOp {
     struct operation_attributes_t {
         const MeshCoordinate& send_coord;
         const MeshCoordinate& receive_coord;
-        const ccl::Topology topology;
+        const ::ttnn::ccl::Topology topology;
 
         const tt::tt_metal::GlobalSemaphore receiver_semaphore;
 
@@ -94,7 +94,7 @@ struct PointToPointOp {
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
-        const ccl::Topology& topology,
+        const ::ttnn::ccl::Topology& topology,
         const MeshCoordinate& send_coord,
         const MeshCoordinate& receive_coord,
         const tt::tt_metal::GlobalSemaphore& receiver_semaphore) {
@@ -110,6 +110,7 @@ private:
 namespace detail {
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> compute_aligned_packet_dims(
     const DataType& dtype, const uint32_t page_size_bytes, const uint32_t num_pages, const uint32_t alignment);
+}  // namespace detail
 
 device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> send_program_factory(
     const PointToPointOp::tensor_args_t& tensor_args,
@@ -120,9 +121,9 @@ device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t>
 
 device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> receive_program_factory(
     const PointToPointOp::operation_attributes_t& operation_attributes,
-    PointToPointOp::tensor_return_value_t& output_tensor);
+    PointToPointOp::tensor_return_value_t& output_tensor,
+    bool nullop = false);
 
-}  // namespace detail
 }  // namespace operations::point_to_point
 
 namespace prim {
