@@ -20,6 +20,7 @@
 #include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
+#include "get_platform_architecture.hpp"
 #include "impl/dispatch/command_queue_common.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -31,6 +32,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
+#include "rtoptions.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/utils.hpp>
 
@@ -351,6 +353,52 @@ TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
 
     tt_metal::detail::ReadFromDeviceL1(device_, core, l1_unreserved_base, sizeof(uint32_t), random_vec);
     EXPECT_EQ(random_vec[0], value_to_write);
+}
+
+TEST(Debugging, OpenAndClose) {
+    for (int i = 0; i < 100000; ++i) {
+        [[maybe_unused]] auto device = CreateDevice(0);
+        device->close();
+    }
+}
+
+TEST(Debugging, ClusterWritesToEthernetCore) {
+    auto rtoptions = llrt::RunTimeOptions();
+    auto hal = std::make_unique<Hal>(get_platform_architecture(rtoptions), false);
+    auto cluster = std::make_unique<Cluster>(rtoptions, *hal);
+
+    std::vector<uint32_t> data = {0xdeadbeef, 1, 0, 1};
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<uint32_t> dis(0, UINT32_MAX);
+
+    for (int i = 0; i < 100000; ++i) {
+        auto virtual_cores = cluster->get_virtual_eth_cores(0);
+        for (const auto& virtual_core : virtual_cores) {
+            data[0] = dis(gen);
+            data[1] = dis(gen);
+            data[2] = dis(gen);
+            data[3] = dis(gen);
+
+            for (int j = 0; j < data.size(); ++j) {
+                std::vector<uint32_t> data_to_write = {data[j]};
+                cluster->write_core(
+                    data_to_write.data(),
+                    data_to_write.size() * sizeof(uint32_t),
+                    tt_cxy_pair{0, virtual_core.x, virtual_core.y},
+                    0x36b0 + j * 4);
+                cluster->l1_barrier(0);
+            }
+
+            std::vector<uint32_t> data_to_read = {0, 0, 0, 0};
+            cluster->read_core(
+                data_to_read.data(),
+                data_to_read.size() * sizeof(uint32_t),
+                tt_cxy_pair{0, virtual_core.x, virtual_core.y},
+                0x36b0);
+            EXPECT_EQ(data_to_read, data);
+        }
+    }
 }
 
 }  // namespace tt::tt_metal

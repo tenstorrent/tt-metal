@@ -77,12 +77,7 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    runs-on: >-
-      ${{
-        (startsWith(inputs.runner-label, 'tt-beta-ubuntu') && fromJSON(format('["{0}"]', inputs.runner-label)))
-        || github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
-      }}
+    runs-on: tt-beta-ubuntu-2204-p150b-large-stable
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
@@ -100,6 +95,11 @@ jobs:
         run: |
             mkdir -p generated/test_reports
             ${{ matrix.test-group.cmd }}
+      - name: Install TT-Lens Debug tool
+        run: |
+          echo "Installing TT-Lens Debug tool"
+          pip3 install git+https://github.com/tenstorrent/tt-exalens
+        shell: bash
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

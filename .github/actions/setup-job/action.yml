@@ -74,10 +74,3 @@ runs:
         echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
         echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
       shell: bash
-
-    - name: Install TT-Lens Debug tool
-      working-directory: ${{ inputs.path }}
-      run: |
-        echo "Installing TT-Lens Debug tool"
-        pip3 install git+https://github.com/tenstorrent/tt-exalens
-      shell: bash
