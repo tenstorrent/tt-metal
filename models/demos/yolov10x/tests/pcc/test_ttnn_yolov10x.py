@@ -2,33 +2,32 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import torch
 import pytest
-from ultralytics import YOLO
-from tests.ttnn.utils_for_testing import assert_with_pcc
+import torch
+
+import ttnn
+from models.demos.yolov10x.load_model_utils import load_torch_model
 from models.demos.yolov10x.reference.yolov10x import YOLOv10
+from models.demos.yolov10x.tt.attention import TtnnAttention
 from models.demos.yolov10x.tt.bottleneck import TtnnBottleNeck
+from models.demos.yolov10x.tt.c2f import TtnnC2f
+from models.demos.yolov10x.tt.cib import TtnnCIB
+from models.demos.yolov10x.tt.model_preprocessing import (
+    create_yolov10_model_parameters_detect,
+    create_yolov10x_input_tensors,
+    create_yolov10x_input_tensors_submodules,
+    create_yolov10x_model_parameters,
+)
+from models.demos.yolov10x.tt.psa import TtnnPSA
 from models.demos.yolov10x.tt.scdown import TtnnSCDown
 from models.demos.yolov10x.tt.sppf import TtnnSPPF
-from models.demos.yolov10x.tt.cib import TtnnCIB
-from models.demos.yolov10x.tt.psa import TtnnPSA
-from models.demos.yolov10x.tt.c2f import TtnnC2f
-from models.demos.yolov10x.tt.attention import TtnnAttention
-from models.demos.yolov10x.tt.c2fcib import TtnnC2fCIB
 from models.demos.yolov10x.tt.v10detect import TtnnV10Detect
 from models.demos.yolov10x.tt.yolov10x import TtnnYolov10
-
-from models.demos.yolov10x.tt.model_preprocessing import (
-    create_yolov10x_input_tensors,
-    create_yolov10x_model_parameters,
-    create_yolov10_model_parameters_detect,
-    create_yolov10x_input_tensors_submodules,
-)
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
-    "use_weights_from_ultralytics",
+    "use_pretrained_weights",
     [True],
 )
 @pytest.mark.parametrize(
@@ -52,7 +51,9 @@ from models.demos.yolov10x.tt.model_preprocessing import (
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
-def test_yolov10x_bottleneck(device, reset_seeds, index, fwd_input_shape, shortcut, use_weights_from_ultralytics):
+def test_yolov10x_bottleneck(
+    device, reset_seeds, index, fwd_input_shape, shortcut, use_pretrained_weights, model_location_generator
+):
     torch_input, ttnn_input = create_yolov10x_input_tensors_submodules(
         device,
         batch_size=fwd_input_shape[0],
@@ -61,8 +62,8 @@ def test_yolov10x_bottleneck(device, reset_seeds, index, fwd_input_shape, shortc
         input_width=fwd_input_shape[3],
     )
     state_dict = None
-    if use_weights_from_ultralytics:
-        torch_model = YOLO("yolov10x.pt")
+    if use_pretrained_weights:
+        torch_model = load_torch_model(model_location_generator)
 
     ttnn_input = ttnn.to_device(ttnn_input, device=device)
     ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.TILE_LAYOUT)
@@ -96,7 +97,7 @@ def test_yolov10x_bottleneck(device, reset_seeds, index, fwd_input_shape, shortc
 
 
 @pytest.mark.parametrize(
-    "use_weights_from_ultralytics",
+    "use_pretrained_weights",
     [True],
 )
 @pytest.mark.parametrize(
@@ -108,7 +109,7 @@ def test_yolov10x_bottleneck(device, reset_seeds, index, fwd_input_shape, shortc
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
-def test_yolov10x_SCDown(device, reset_seeds, index, fwd_input_shape, use_weights_from_ultralytics):
+def test_yolov10x_scdown(device, reset_seeds, index, fwd_input_shape, use_pretrained_weights, model_location_generator):
     torch_input, ttnn_input = create_yolov10x_input_tensors_submodules(
         device,
         batch_size=fwd_input_shape[0],
@@ -117,8 +118,8 @@ def test_yolov10x_SCDown(device, reset_seeds, index, fwd_input_shape, use_weight
         input_width=fwd_input_shape[3],
     )
     state_dict = None
-    if use_weights_from_ultralytics:
-        torch_model = YOLO("yolov10x.pt")
+    if use_pretrained_weights:
+        torch_model = load_torch_model(model_location_generator)
 
     ttnn_input = ttnn.to_device(ttnn_input, device=device)
     ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.TILE_LAYOUT)
@@ -155,11 +156,11 @@ def test_yolov10x_SCDown(device, reset_seeds, index, fwd_input_shape, use_weight
 
 
 @pytest.mark.parametrize(
-    "use_weights_from_ultralytics",
+    "use_pretrained_weights",
     [True],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
-def test_yolov10x_SPPF(device, reset_seeds, use_weights_from_ultralytics):
+def test_yolov10x_sppf(device, reset_seeds, use_pretrained_weights, model_location_generator):
     fwd_input_shape = [1, 640, 20, 20]
     torch_input, ttnn_input = create_yolov10x_input_tensors_submodules(
         device,
@@ -170,8 +171,8 @@ def test_yolov10x_SPPF(device, reset_seeds, use_weights_from_ultralytics):
     )
     state_dict = None
 
-    if use_weights_from_ultralytics:
-        torch_model = YOLO("yolov10x.pt")
+    if use_pretrained_weights:
+        torch_model = load_torch_model(model_location_generator)
 
     ttnn_input = ttnn.to_device(ttnn_input, device=device)
     ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.TILE_LAYOUT)
@@ -209,7 +210,7 @@ def test_yolov10x_SPPF(device, reset_seeds, use_weights_from_ultralytics):
 
 
 @pytest.mark.parametrize(
-    "use_weights_from_ultralytics",
+    "use_pretrained_weights",
     [True],
 )
 @pytest.mark.parametrize(
@@ -223,7 +224,7 @@ def test_yolov10x_SPPF(device, reset_seeds, use_weights_from_ultralytics):
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
-def test_yolov10x_CIB(device, reset_seeds, index, fwd_input_shape, use_weights_from_ultralytics):
+def test_yolov10x_cib(device, reset_seeds, index, fwd_input_shape, use_pretrained_weights, model_location_generator):
     torch_input, ttnn_input = create_yolov10x_input_tensors_submodules(
         device,
         batch_size=fwd_input_shape[0],
@@ -233,8 +234,8 @@ def test_yolov10x_CIB(device, reset_seeds, index, fwd_input_shape, use_weights_f
     )
 
     state_dict = None
-    if use_weights_from_ultralytics:
-        torch_model = YOLO("yolov10x.pt")
+    if use_pretrained_weights:
+        torch_model = load_torch_model(model_location_generator)
 
     ttnn_input = ttnn.to_device(ttnn_input, device=device)
     ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.TILE_LAYOUT)
@@ -272,11 +273,11 @@ def test_yolov10x_CIB(device, reset_seeds, index, fwd_input_shape, use_weights_f
 
 
 @pytest.mark.parametrize(
-    "use_weights_from_ultralytics",
+    "use_pretrained_weights",
     [True],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
-def test_yolov10x_Attention(device, reset_seeds, use_weights_from_ultralytics):
+def test_yolov10x_attention(device, reset_seeds, use_pretrained_weights, model_location_generator):
     fwd_input_shape = [1, 320, 20, 20]
     torch_input, ttnn_input = create_yolov10x_input_tensors_submodules(
         device,
@@ -287,8 +288,8 @@ def test_yolov10x_Attention(device, reset_seeds, use_weights_from_ultralytics):
         input_dtype=ttnn.bfloat16,
     )
     state_dict = None
-    if use_weights_from_ultralytics:
-        torch_model = YOLO("yolov10x.pt")
+    if use_pretrained_weights:
+        torch_model = load_torch_model(model_location_generator)
 
     ttnn_input = ttnn.to_device(ttnn_input, device=device)
     ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.TILE_LAYOUT)
@@ -329,11 +330,11 @@ def test_yolov10x_Attention(device, reset_seeds, use_weights_from_ultralytics):
 
 
 @pytest.mark.parametrize(
-    "use_weights_from_ultralytics",
+    "use_pretrained_weights",
     [True],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
-def test_yolov10x_PSA(device, reset_seeds, use_weights_from_ultralytics):
+def test_yolov10x_psa(device, reset_seeds, use_pretrained_weights, model_location_generator):
     fwd_input_shape = [1, 640, 20, 20]
     torch_input, ttnn_input = create_yolov10x_input_tensors_submodules(
         device,
@@ -345,8 +346,8 @@ def test_yolov10x_PSA(device, reset_seeds, use_weights_from_ultralytics):
     )
     state_dict = None
 
-    if use_weights_from_ultralytics:
-        torch_model = YOLO("yolov10x.pt")
+    if use_pretrained_weights:
+        torch_model = load_torch_model(model_location_generator)
 
     ttnn_input = ttnn.to_device(ttnn_input, device=device)
     ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.TILE_LAYOUT)
@@ -383,7 +384,7 @@ def test_yolov10x_PSA(device, reset_seeds, use_weights_from_ultralytics):
 
 
 @pytest.mark.parametrize(
-    "use_weights_from_ultralytics",
+    "use_pretrained_weights",
     [True],
 )
 @pytest.mark.parametrize(
@@ -395,15 +396,16 @@ def test_yolov10x_PSA(device, reset_seeds, use_weights_from_ultralytics):
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
-def test_yolov10x_C2f(
+def test_yolov10x_c2f(
     device,
     reset_seeds,
     index,
     fwd_input_shape,
     num_layers,
     shortcut,
-    use_weights_from_ultralytics,
+    use_pretrained_weights,
     memory_config,
+    model_location_generator,
 ):
     torch_input, ttnn_input = create_yolov10x_input_tensors_submodules(
         device,
@@ -413,8 +415,8 @@ def test_yolov10x_C2f(
         input_width=fwd_input_shape[3],
     )
     state_dict = None
-    if use_weights_from_ultralytics:
-        torch_model = YOLO("yolov10x.pt")
+    if use_pretrained_weights:
+        torch_model = load_torch_model(model_location_generator)
 
     torch_model = YOLOv10()
     torch_model = torch_model.model[index]
@@ -449,7 +451,7 @@ def test_yolov10x_C2f(
 
 
 @pytest.mark.parametrize(
-    "use_weights_from_ultralytics",
+    "use_pretrained_weights",
     [True],
 )
 @pytest.mark.parametrize(
@@ -459,8 +461,8 @@ def test_yolov10x_C2f(
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 83000}], indirect=True)
-def test_yolov10x_v10Detect(
-    device, reset_seeds, index, fwd_input_shape, num_layers, shortcut, use_weights_from_ultralytics
+def test_yolov10x_v10detect(
+    device, reset_seeds, index, fwd_input_shape, num_layers, shortcut, use_pretrained_weights, model_location_generator
 ):
     torch_input_1, ttnn_input_1 = create_yolov10x_input_tensors_submodules(
         device,
@@ -485,8 +487,8 @@ def test_yolov10x_v10Detect(
     )
 
     state_dict = None
-    if use_weights_from_ultralytics:
-        torch_model = YOLO("yolov10x.pt")
+    if use_pretrained_weights:
+        torch_model = load_torch_model(model_location_generator)
 
     torch_input = [torch_input_1, torch_input_2, torch_input_3]
 
@@ -523,16 +525,16 @@ def test_yolov10x_v10Detect(
 
 
 @pytest.mark.parametrize(
-    "use_weights_from_ultralytics",
+    "use_pretrained_weights",
     [True],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
-def test_yolov10x(use_weights_from_ultralytics, device, reset_seeds):
+def test_yolov10x(use_pretrained_weights, device, reset_seeds, model_location_generator):
     torch_input, ttnn_input = create_yolov10x_input_tensors(device)
     state_dict = None
 
-    if use_weights_from_ultralytics:
-        torch_model = YOLO("yolov10x.pt")
+    if use_pretrained_weights:
+        torch_model = load_torch_model(model_location_generator)
         state_dict = torch_model.state_dict()
 
     torch_model = YOLOv10()

@@ -69,6 +69,7 @@ jobs:
               - models/demos/mobilenetv2/tests/
               - models/demos/vgg_unet/tests/
               - models/demos/yolov9c/tests/perf/
+              - models/demos/yolov10x/tests/
 
           - name: tt_transformers
             model-list:
