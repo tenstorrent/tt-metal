@@ -1,4 +1,4 @@
-# Whisper (Wormhole & Blackhole)
+# Whisper
 
 ## Platforms:
     Wormhole (n150, n300), Blackhole
