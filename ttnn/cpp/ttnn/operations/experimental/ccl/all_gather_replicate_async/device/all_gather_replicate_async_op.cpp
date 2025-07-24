@@ -388,6 +388,15 @@ void LlamaAllGatherMatmulAsync::validate_with_output_tensors(
     // TODO: Add validation for output_mem_config
 }
 
+std::vector<ttnn::TensorSpec> LlamaAllGatherMatmulAsync::compute_output_specs(
+    const std::vector<Tensor>& input_tensors) const {
+    // Matmul shape
+    ttnn::TensorSpec matmul_output_specs =
+        this->matmul_struct.compute_output_specs({input_tensors[1], input_tensors[2]}, {})[0];
+
+    return {matmul_output_specs};
+}
+
 /* LlamaAllGatherMatmulAsync Implementation ends here*/
 
 namespace operations {
