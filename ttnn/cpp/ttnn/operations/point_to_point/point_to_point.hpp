@@ -3,7 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 #pragma once
+#include <tt-metalium/mesh_coord.hpp>
 
+#include "ttnn/core.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 
 namespace ttnn {
