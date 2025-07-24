@@ -340,21 +340,10 @@ Tensor ExecuteDiv::invoke(
     // Accurate mode: handle division by zero (inf/nan cases)
     if (accurate_mode) {
         float t_nan = std::nanf("");
-        float t_inf = std::numeric_limits<float>::infinity();
-        result = where(
-            queue_id,
-            ttnn::eqz(queue_id, input_b, output_mem_config),
-            ttnn::where(
-                queue_id,
-                ttnn::eqz(queue_id, input_a, output_mem_config),
-                t_nan,
-                ttnn::multiply(
-                    queue_id,
-                    ttnn::sign(queue_id, input_a, output_mem_config),
-                    t_inf,
-                    std::nullopt,
-                    output_mem_config)),
-            result);
+        result = typecast(queue_id, result, input_dtype, std::nullopt, output_tensor);
+        Tensor condition =
+            ttnn::logical_and(ttnn::eqz(input_b, output_mem_config), ttnn::eqz(input_a, output_mem_config));
+        result = ttnn::where(condition, t_nan, result, output_mem_config, output_tensor);
     }
 
     return typecast(queue_id, result, input_dtype, std::nullopt, output_tensor);

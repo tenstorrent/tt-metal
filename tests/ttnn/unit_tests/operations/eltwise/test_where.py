@@ -584,3 +584,26 @@ def test_where_TSS_int_types(scalars, input_shapes, device):
     tt_result = ttnn.to_torch(ttnn_result)
 
     assert torch.equal(tt_result, torch_result)
+
+
+def test_div_edgcase(device):
+    # Hardcoded input tensors
+    a = torch.tensor([1, 2, -4, 0, -6, 0], dtype=torch.bfloat16)
+    b = torch.tensor([-1, 0, 0, 0, -2, 7], dtype=torch.bfloat16)
+
+    ttnn_a = ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_b = ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.div(ttnn_a, ttnn_b, accurate_mode=True)
+    golden_tensor = torch.div(a, b)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    print("output_tensor", output_tensor)
+    print("golden_tensor", golden_tensor)
+
+    # Replace NaN values in golden tensor with inf to match expected behavior of ttnn.bfloat16
+    golden_tensor = torch.where(
+        torch.isnan(golden_tensor), torch.tensor(float("inf"), dtype=golden_tensor.dtype), golden_tensor
+    )
+
+    assert torch.allclose(output_tensor, golden_tensor, equal_nan=False)
