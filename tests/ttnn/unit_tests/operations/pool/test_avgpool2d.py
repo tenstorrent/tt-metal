@@ -21,10 +21,11 @@ def tensor_map():
         # Wide reduction cases channels > 8 * 32
         # Large reduction cases (channels < 32 and kernel_hw > 16) or (channels > 32 and kernel_hw > 32)
         [1, 16, 16, 16],
+        # [1, 48, 16, 16],
         [1, 24, 16, 16],
         [1, 32, 16, 16],
-        # [1, 256, 112, 32],
-        # [1, 512, 112, 32],
+        [1, 256, 112, 32],
+        [1, 512, 112, 32],
         # [1, 320, 48, 48],
         # [1, 320, 47, 47],
     ),
@@ -67,15 +68,15 @@ def tensor_map():
 @pytest.mark.parametrize(
     "divisor_override",
     [
-        36,
+        # 36,
         # 17,
-        # None,
+        None,
     ],
 )
 @pytest.mark.parametrize(
     "shard_scheme",
     [
-        None,
+        # None,
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     ],
 )
