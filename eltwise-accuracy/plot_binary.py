@@ -10,6 +10,9 @@ import glob
 from matplotlib.colors import LogNorm, BoundaryNorm
 
 
+plt.rcParams["svg.fonttype"] = "none"  # Make text editing in SVG easier
+
+
 def load_csv(filename):
     """Load CSV file with binary operation accuracy results"""
     return pd.read_csv(filename, sep=",", index_col=False, skipinitialspace=True)
@@ -91,8 +94,8 @@ def create_heatmap(data, operation_name, output_path):
     # Create colorbar
     cbar = plt.colorbar(mesh, norm=norm, label="Max ULP Error", ticks=levels)
 
-    # Set background color for NaN values to black
-    plt.gca().set_facecolor("black")
+    # Set background color for NaN values to Yellow
+    plt.gca().set_facecolor("yellow")
 
     plt.gca().set_xscale("log")
     plt.gca().set_yscale("symlog")
@@ -112,7 +115,7 @@ def create_heatmap(data, operation_name, output_path):
     # plt.gca().set_aspect('equal')
 
     # Set title and labels
-    plt.title(f"{operation_name}(A, B) - ULP Error Heatmap\n(Black = NaN or Inf)", pad=20)
+    plt.title(f"{operation_name}(A, B) - ULP Error Heatmap\n(Yellow = NaN or Inf)", pad=20)
     plt.xlabel("A (base)")
     plt.ylabel("B (exponent)")
 
@@ -121,10 +124,10 @@ def create_heatmap(data, operation_name, output_path):
 
     # Save the plot
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
-    plt.close()
 
-    print(f"Heatmap saved to: {output_path}")
+    plt.savefig(f"{output_path}.png", dpi=300, bbox_inches="tight")
+    # plt.savefig(f"{output_path}.svg", bbox_inches="tight")
+    plt.close()
 
 
 def preprocess_data(data):
@@ -194,12 +197,12 @@ def main():
     csv_file = "accuracy_results/results/binary/pow[bfloat16].csv"
     data = load_csv(csv_file)
     data = preprocess_data(data)
-    create_heatmap(data, "pow", f"{output_dir}/pow.png")
+    create_heatmap(data, "pow", f"{output_dir}/pow")
 
     csv_file = "accuracy_results/results/binary/pow21f[bfloat16].csv"
     data = load_csv(csv_file)
     data = preprocess_data(data)
-    create_heatmap(data, "pow21f", f"{output_dir}/pow21f.png")
+    create_heatmap(data, "pow21f", f"{output_dir}/pow21f")
 
     print("All heatmaps generated successfully!")
 
