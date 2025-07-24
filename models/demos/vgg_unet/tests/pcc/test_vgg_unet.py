@@ -2,13 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
+from models.demos.vgg_unet.load_model_utils import load_torch_model
 from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
 from models.demos.vgg_unet.ttnn.model_preprocessing import create_vgg_unet_model_parameters
 from models.demos.vgg_unet.ttnn.ttnn_vgg_unet import Tt_vgg_unet
@@ -41,12 +41,7 @@ def test_vgg_unet(device, reset_seeds, model_location_generator, use_pretrained_
 
     # Pre-trained weights processing
     if use_pretrained_weight:
-        weights_pth = "models/demos/vgg_unet/vgg_unet_torch.pth"
-        if not os.path.exists(weights_pth):
-            os.system("bash models/demos/vgg_unet/weights_download.sh")
-        torch_dict = torch.load(weights_pth)
-        new_state_dict = dict(zip(torch_model.state_dict().keys(), torch_dict.values()))
-        torch_model.load_state_dict(new_state_dict)
+        torch_model = load_torch_model(torch_model, model_location_generator)
     torch_model.eval()
 
     # Model call

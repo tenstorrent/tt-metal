@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.vgg_unet.load_model_utils import load_torch_model
 from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
 from models.demos.vgg_unet.ttnn.model_preprocessing import create_vgg_unet_model_parameters
 from models.demos.vgg_unet.ttnn.ttnn_vgg_unet import Tt_vgg_unet
@@ -27,12 +28,12 @@ def get_expected_times(name):
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
-        False,
-        # True,
+        # False,
+        True,
     ],
     ids=[
-        "pretrained_weight_false",
-        # "pretrained_weight_true",
+        # "pretrained_weight_false",
+        "pretrained_weight_true",
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True, ids=["0"])
@@ -49,10 +50,7 @@ def test_vgg_unet(device, reset_seeds, model_location_generator, use_pretrained_
 
     # Pre-trained weights processing
     if use_pretrained_weight:
-        weights_pth = "models/demos/vgg_unet/vgg_unet_torch.pth"
-        torch_dict = torch.load(weights_pth)
-        new_state_dict = dict(zip(torch_model.state_dict().keys(), torch_dict.values()))
-        torch_model.load_state_dict(new_state_dict)
+        torch_model = load_torch_model(torch_model, model_location_generator)
     torch_model.eval()
 
     # Model call
@@ -119,15 +117,14 @@ def test_vgg_unet(device, reset_seeds, model_location_generator, use_pretrained_
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 92.738],
+        [1, 46.188],
     ],
 )
-@pytest.mark.models_device_performance_bare_metal
-def test_perf_device_bare_metal_vgg_unet(batch_size, expected_perf):
+def test_perf_device_vgg_unet(batch_size, expected_perf):
     subdir = "ttnn_vgg_unet"
     num_iterations = 1
     margin = 0.03
-    command = f"pytest tests/ttnn/integration_tests/vgg_unet/test_vgg_unet.py"
+    command = f"pytest models/demos/vgg_unet/tests/pcc/test_vgg_unet.py"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"

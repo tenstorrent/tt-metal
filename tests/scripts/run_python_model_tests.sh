@@ -62,6 +62,9 @@ run_python_model_tests_wormhole_b0() {
     # ViT-base
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv tests/ttnn/integration_tests/vit/test_ttnn_optimized_sharded_vit_wh.py
 
+    #VGG_Unet
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/vgg_unet/tests/pcc/test_vgg_unet.py
+
     # Llama3.1-8B
     llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
     # Llama3.2-1B

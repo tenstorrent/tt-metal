@@ -21,7 +21,7 @@ class VggUnetTrace2CQ:
         self,
         device,
         model_location_generator,
-        use_pretrained_weight=False,
+        use_pretrained_weight=True,
     ):
         self.test_infra = create_test_infra(device, model_location_generator, use_pretrained_weight)
         self.device = device
