@@ -48,6 +48,74 @@ static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
     return static_cast<kernel_profiler::PacketTypes>((timer_id >> 16) & 0x7);
 }
 
+uint32_t hash32CT(const char* str, size_t n, uint32_t basis) {
+    return n == 0 ? basis : hash32CT(str + 1, n - 1, (basis ^ str[0]) * UINT32_C(16777619));
+}
+
+uint16_t hash16CT(const std::string& str) {
+    uint32_t res = hash32CT(str.c_str(), str.length(), UINT32_C(2166136261));
+    return ((res & 0xFFFF) ^ ((res & 0xFFFF0000) >> 16)) & 0xFFFF;
+}
+
+void populateZoneSrcLocations(
+    const std::string& new_log_name,
+    const std::string& log_name,
+    const bool push_new,
+    std::unordered_map<uint16_t, ZoneDetails>& hash_to_zone_src_locations,
+    std::unordered_set<std::string>& zone_src_locations) {
+    std::ifstream log_file_read(new_log_name);
+    std::string line;
+    while (std::getline(log_file_read, line)) {
+        std::string delimiter = "'#pragma message: ";
+        int delimiter_index = line.find(delimiter) + delimiter.length();
+        std::string zone_src_location = line.substr(delimiter_index, line.length() - delimiter_index - 1);
+
+        uint16_t hash_16bit = hash16CT(zone_src_location);
+
+        auto did_insert = zone_src_locations.insert(zone_src_location);
+        if (did_insert.second && (hash_to_zone_src_locations.find(hash_16bit) != hash_to_zone_src_locations.end())) {
+            TT_THROW("Source location hashes are colliding, two different locations are having the same hash");
+        }
+
+        std::stringstream ss(zone_src_location);
+        std::string zone_name;
+        std::string source_file;
+        std::string line_num_str;
+        std::getline(ss, zone_name, ',');
+        std::getline(ss, source_file, ',');
+        std::getline(ss, line_num_str, ',');
+
+        ZoneDetails details(zone_name, source_file, std::stoull(line_num_str));
+
+        auto ret = hash_to_zone_src_locations.emplace(hash_16bit, details);
+        if (ret.second && push_new) {
+            std::ofstream log_file_write(log_name, std::ios::app);
+            log_file_write << line << std::endl;
+            log_file_write.close();
+        }
+    }
+    log_file_read.close();
+}
+
+std::unordered_map<uint16_t, ZoneDetails> generateZoneSourceLocationsHashes() {
+    std::unordered_map<uint16_t, ZoneDetails> hash_to_zone_src_locations;
+    std::unordered_set<std::string> zone_src_locations;
+
+    // Load existing zones from previous runs
+    populateZoneSrcLocations(
+        tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG, "", false, hash_to_zone_src_locations, zone_src_locations);
+
+    // Load new zones from the current run
+    populateZoneSrcLocations(
+        tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG,
+        tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG,
+        true,
+        hash_to_zone_src_locations,
+        zone_src_locations);
+
+    return hash_to_zone_src_locations;
+}
+
 tracy::Color::ColorType getDeviceEventColor(
     uint32_t risc_num,
     const std::array<bool, static_cast<uint16_t>(ZoneDetails::ZoneNameKeyword::COUNT)>& zone_name_keyword_flags) {
@@ -1384,6 +1452,8 @@ void DeviceProfiler::readResults(
     const std::string zone_name = fmt::format(
         "{}-{}-{}-{}", "readResults", device_id, magic_enum::enum_name(state), magic_enum::enum_name(data_source));
     ZoneName(zone_name.c_str(), zone_name.size());
+
+    hash_to_zone_src_locations = generateZoneSourceLocationsHashes();
 
     TT_ASSERT(doAllDispatchCoresComeAfterNonDispatchCores(device, virtual_cores));
 

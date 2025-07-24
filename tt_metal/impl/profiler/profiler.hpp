@@ -154,6 +154,9 @@ private:
     // Output dir for device Profile Logs
     std::filesystem::path output_dir;
 
+    // Hash to zone source locations
+    std::unordered_map<uint16_t, ZoneDetails> hash_to_zone_src_locations;
+
     // Device-Core tracy context
     std::unordered_map<std::pair<uint16_t, CoreCoord>, TracyTTCtx, pair_hash<uint16_t, CoreCoord>>
         device_tracy_contexts;
@@ -248,9 +251,6 @@ public:
     DeviceProfiler() = delete;
 
     ~DeviceProfiler();
-
-    // Hash to zone source locations
-    std::unordered_map<uint16_t, ZoneDetails> hash_to_zone_src_locations;
 
     // Device-core Syncdata
     std::map<CoreCoord, SyncInfo> device_core_sync_info;
