@@ -518,10 +518,9 @@ def run_multi_core_matmul_1d(
     worker_sub_device_id = ttnn.SubDeviceId(0)
     signpost("start")
     logger.info("Compiling model")
-    rs_out, matmul_out = ttnn.experimental.llama_rs_matmul(
+    rs_out_val, matmul_out_val = ttnn.experimental.llama_rs_matmul(
         in0_t,
         in1_t,
-        tt_input,
         tt_intermediate,
         dim,
         ccl_semaphore_handle,
@@ -529,6 +528,7 @@ def run_multi_core_matmul_1d(
         mesh_device,
         num_links,
         worker_sub_device_id,
+        rs_tensor=tt_input,
         program_config=program_config,
         memory_config_mm=output_sharded_mem_config,
         compute_kernel_config=compute_kernel_config,
@@ -543,7 +543,6 @@ def run_multi_core_matmul_1d(
         rs_out, matmul_out = ttnn.experimental.llama_rs_matmul(
             in0_t,
             in1_t,
-            tt_input,
             tt_intermediate,
             dim,
             ccl_semaphore_handle,
@@ -551,6 +550,7 @@ def run_multi_core_matmul_1d(
             mesh_device,
             num_links,
             worker_sub_device_id,
+            rs_tensor=tt_input,
             program_config=program_config,
             memory_config_mm=output_sharded_mem_config,
             compute_kernel_config=compute_kernel_config,
@@ -567,7 +567,6 @@ def run_multi_core_matmul_1d(
         rs_out, matmul_out = ttnn.experimental.llama_rs_matmul(
             in0_t,
             in1_t,
-            tt_input,
             tt_intermediate,
             dim,
             ccl_semaphore_handle,
@@ -575,6 +574,7 @@ def run_multi_core_matmul_1d(
             mesh_device,
             num_links,
             worker_sub_device_id,
+            rs_tensor=tt_input,
             program_config=program_config,
             memory_config_mm=output_sharded_mem_config,
             compute_kernel_config=compute_kernel_config,

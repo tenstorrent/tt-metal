@@ -49,24 +49,23 @@ void kernel_main() {
     size_t rt_arg_idx = 0;
 
     // Define all compile-time arguments at the beginning
-    constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t fabric_sender_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t fabric_receiver_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t accumulator_cb_id = get_compile_time_arg_val(4);
-    constexpr uint32_t output_tensor_cb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t chip_id = get_compile_time_arg_val(6);
-    constexpr uint32_t tiles_per_core_width = get_compile_time_arg_val(7);
-    constexpr uint32_t tiles_per_core_width_output = get_compile_time_arg_val(8);
-    constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(9);
-    constexpr uint32_t input_shard_cores_per_device = get_compile_time_arg_val(10);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(11);
-    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(12);
-    constexpr uint32_t output_cores_per_device = get_compile_time_arg_val(13);
-    constexpr uint32_t packet_receiver_core_x = get_compile_time_arg_val(14);
-    constexpr uint32_t packet_receiver_core_y = get_compile_time_arg_val(15);
-    constexpr uint32_t num_packet_worker_cores = get_compile_time_arg_val(16);
-    constexpr bool ring_topology = (bool)get_compile_time_arg_val(17);
+    constexpr uint32_t fabric_sender_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t fabric_receiver_cb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t accumulator_cb_id = get_compile_time_arg_val(3);
+    constexpr uint32_t output_tensor_cb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t chip_id = get_compile_time_arg_val(5);
+    constexpr uint32_t tiles_per_core_width = get_compile_time_arg_val(6);
+    constexpr uint32_t tiles_per_core_width_output = get_compile_time_arg_val(7);
+    constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(8);
+    constexpr uint32_t input_shard_cores_per_device = get_compile_time_arg_val(9);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(10);
+    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(11);
+    constexpr uint32_t output_cores_per_device = get_compile_time_arg_val(12);
+    constexpr uint32_t packet_receiver_core_x = get_compile_time_arg_val(13);
+    constexpr uint32_t packet_receiver_core_y = get_compile_time_arg_val(14);
+    constexpr uint32_t num_packet_worker_cores = get_compile_time_arg_val(15);
+    constexpr bool ring_topology = (bool)get_compile_time_arg_val(16);
     // Derived compile-time constants
     constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
     constexpr uint32_t num_packets_total_per_device =
