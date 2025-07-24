@@ -75,8 +75,7 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Kernel_Composite) {
                 []() { return std::uniform_real_distribution<float>(0.F, 1.F); },
                 42);
             auto x = ttml::autograd::create_tensor(ttml::core::from_xtensor(x_data, device));
-            auto gamma =
-                ttml::autograd::create_tensor(ttml::core::ones(ttml::core::create_shape({1, 1, 1, shape[3]}), device));
+            auto gamma = ttml::autograd::create_tensor(ttml::core::ones(ttnn::Shape{1, 1, 1, shape[3]}, device));
 
             auto result = ttml::ops::rmsnorm(x, gamma, 0.0078125F);
             auto result_xtensor = ttml::core::to_xtensor(result->get_value());
