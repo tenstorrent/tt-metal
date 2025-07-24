@@ -55,31 +55,33 @@ template <
     uint32_t rows,
     int vector_mode = (int)VectorMode::RC>
 void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_max = false) {
-    // Precondition: in0_cb has rows*cols produced. in0_cb has tiles in row-major order
-    // Precondition: scale_cb has 1 produced
-    // Precondition: out_cb has rows free
-    // Postcondition: in0_cb has rows*cols produced
-    // Precondition: scale_cb has 1 produced
-    // Postcondition: out_cb has rows produced
+    // Precondition: in0_cb has rows*cols produced (row–major).
+    // Precondition: scale_cb has 1 produced.
+    // If do_eltwise_max == true, prev_cb has `rows` produced.
+    // Postcondition: out_cb has `rows` produced.
 
     reduce_init<pool_type, reduce_dim>(in0_cb, scale_cb, out_cb);
 
-    max_tile_init();
     const uint32_t num_tiles = rows * cols;
     cb_wait_front(scale_cb, 1);
     cb_wait_front(in0_cb, num_tiles);
     cb_reserve_back(out_cb, rows);
 
+    if (do_eltwise_max) {
+        copy_tile_to_dst_init_short(prev_cb);
+        max_tile_init();
+    }
+
     constexpr uint32_t reduce_dst_idx = 0;
     constexpr uint32_t prev_max_dst_idx = 1;
-    for (uint32_t i = 0; i < rows; i++) {
+
+    for (uint32_t r = 0; r < rows; ++r) {
         acquire_dst();
-        for (uint32_t j = 0; j < cols; j++) {
-            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, i * cols + j, 0, reduce_dst_idx);
+        for (uint32_t c = 0; c < cols; ++c) {
+            reduce_tile<pool_type, reduce_dim>(in0_cb, scale_cb, r * cols + c, 0, reduce_dst_idx);
         }
         if (do_eltwise_max) {
-            copy_tile_to_dst_init_short(prev_cb);
-            copy_tile(prev_cb, i, prev_max_dst_idx);
+            copy_tile(prev_cb, r, prev_max_dst_idx);
             max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(vector_mode));
         }
         pack_tile(reduce_dst_idx, out_cb);
@@ -108,7 +110,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     cb_push_back(in_cb, num_tiles);
 }
 
-template <uint32_t in0_cb, uint32_t rows, uint32_t scale_fp32, int vector_mode = (int)VectorMode::RC>
+template <uint32_t in0_cb, uint32_t rows, uint32_t scale_fp32, int vector_mode = (int)VectorMode::RC, uint32_t scale_cb>
 void sub_exp_block_bcast_cols_inplace_reduce(uint32_t in1_cb, uint32_t reduce_cb, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
@@ -133,19 +135,22 @@ void sub_exp_block_bcast_cols_inplace_reduce(uint32_t in1_cb, uint32_t reduce_cb
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
-                sub_tiles_bcast_cols(in0_cb, in1_cb, in0_index, i, j);
+                sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
                 exp_tile<true, true>(j, vector_mode);
                 in0_index++;
             }
             tile_regs_commit();
+            cb_pop_front(in0_cb, dst_tiles);
+            cb_reserve_back(in0_cb, dst_tiles);
             tile_regs_wait();
 
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 pack_tile(j, in0_cb);
             }
-
+            cb_push_back(in0_cb, dst_tiles);
             // While we have results in DST, take advantage of L1 accumulation
             // to reduce row x cols tiles to rows x 1 tiles.
+            /*
             if (u > 0) {
                 // If on the same row, keep accumulating
                 PACK((llk_pack_reconfig_l1_acc(1)));
@@ -158,14 +163,15 @@ void sub_exp_block_bcast_cols_inplace_reduce(uint32_t in1_cb, uint32_t reduce_cb
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 }
             }
+                */
             tile_regs_release();
-            PACK((llk_pack_reconfig_l1_acc(0)));
+            // PACK((llk_pack_reconfig_l1_acc(0)));
         }
     }
-    cb_pop_front(in0_cb, rows * cols);
-    cb_reserve_back(in0_cb, rows * cols);
-    cb_push_back(in0_cb, rows * cols);
-    cb_push_back(reduce_cb, rows);
+    // cb_pop_front(in0_cb, rows * cols);
+    // cb_reserve_back(in0_cb, rows * cols);
+    // cb_push_back(in0_cb, rows * cols);
+    // cb_push_back(reduce_cb, rows);
 }
 
 void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols) {
@@ -279,57 +285,6 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
         cb_push_back(in0_cb, 1);
         release_dst();
     }
-}
-
-template <uint32_t M>
-void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
-    // precondition: in0_cb has M*K produced
-    // precondition: in1_cb has K*1 produced
-    // postcondition: out_cb has M*1 produced
-
-    constexpr uint32_t N = 1;  // Result of reduce is Mx1
-    constexpr uint32_t in0_block_w = N;
-
-    // Set dimensions directly
-    mm_block_init_short(
-        out_cb,
-        in1_cb,
-        0 /* transpose */,
-        N /* ct_dim = 1 col */,
-        M /* rt_dim = all rows */,
-        in0_block_w /* kt_dim = 1 element from in0 per dot product */);
-
-    reconfig_data_format(in1_cb, out_cb);
-    cb_wait_front(in1_cb, N);
-    cb_wait_front(out_cb, M);
-
-    tile_regs_acquire();
-
-    uint32_t dst_index = 0;
-    uint32_t in0_index = 0;
-    uint32_t in1_index = 0;
-
-    matmul_block(
-        out_cb,
-        in1_cb,
-        in0_index,
-        in1_index,
-        dst_index,
-        0, /* col offset */
-        N, /* width */
-        M, /* height */
-        in0_block_w);
-
-    tile_regs_commit();
-    cb_pop_front(out_cb, M);
-
-    tile_regs_wait();
-    for (uint32_t i = 0; i < M; ++i) {
-        pack_tile(i, out_cb);
-    }
-
-    tile_regs_release();
-    cb_push_back(out_cb, M);
 }
 
 template <uint32_t scale_fp32, int vector_mode = (int)VectorMode::RC>

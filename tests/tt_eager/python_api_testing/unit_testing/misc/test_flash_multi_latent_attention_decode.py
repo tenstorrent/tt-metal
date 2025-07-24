@@ -222,7 +222,7 @@ def run_flash_mla_decode_impl(
     if dtype == ttnn.bfloat4_b:
         pcc_threshold = 0.91
     if dtype == ttnn.bfloat8_b:
-        pcc_threshold = 0.94
+        pcc_threshold = 0.98
 
     for i, (tt_out, out_t) in enumerate(zip(tt_outs, outs)):
         tt_out_torch = ttnn.to_torch(tt_out)[..., :nh, :].permute(1, 2, 0, 3)  # (S, B, H, D) -> (B, H, S, D)

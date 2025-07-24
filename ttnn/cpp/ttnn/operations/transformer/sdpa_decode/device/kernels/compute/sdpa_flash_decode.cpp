@@ -303,17 +303,20 @@ void MAIN {
                 reconfig_data_format(cb_qk_im, cb_cur_max);
                 pack_reconfig_data_format(cb_qk_im);
                 /**
-                 * sub_exp fuses a few operations.
-                 * In-place it performs `QK = exp((QK - cur_max) * scale)`
-                 *
-                 * It also partially performs reduce_sum on the output using L1 accumulation.
-                 * `cur_sum = sum_tiles(exp((QK - cur_max) * scale), dim=-1)`
-                 *
-                 * Partial reduce_sum is used to push the final row_reduction within a tile
-                 * outside of the loop over K chunks.
+                 * sub_exp performs `QK = exp((QK - cur_max) * scale)`
                  */
-                sub_exp_block_bcast_cols_inplace_reduce<cb_qk_im, Sq_chunk_t, scale_fp32, vector_mode>(cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
+                sub_exp_block_bcast_cols_inplace_reduce<
+                    cb_qk_im,
+                    Sq_chunk_t,
+                    scale_fp32,
+                    vector_mode,
+                    cb_identity_scale_in>(cb_cur_max, cb_cur_sum, Sk_chunk_t_dynamic);
                 cb_wait_front(cb_qk_im, qk_chunk_tiles_dynamic);
+
+                reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+                pack_reconfig_data_format(cb_cur_sum);
+                reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
+                    cb_cur_sum, cb_cur_sum, Sk_chunk_t_dynamic, false);
 
                 /* OUT_IM = QK @ V_CHUNK */
                 reconfig_data_format(cb_qk_im, cb_v_in);  // DEBUG
@@ -417,13 +420,9 @@ void MAIN {
                     move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 }
             }
-            /**
-             * Performs final row-reduction on the partial sum.
-             */
-            matmul_reduce<Sq_chunk_t>(cb_col_identity, cb_prev_sum);
-            move_block<true>(cb_prev_sum, cb_cur_sum, Sq_chunk_t);
-
             /* cb_cur_sum = 1.0 / cb_cur_sum */
+            cb_push_back(cb_cur_sum, Sq_chunk_t);
+
             reconfig_data_format(cb_cur_sum, cb_cur_sum);  // DEBUG
             pack_reconfig_data_format(cb_cur_sum);
             recip_block_inplace<vector_mode>(cb_cur_sum, Sq_chunk_t);
