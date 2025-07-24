@@ -200,3 +200,31 @@ class ScatterConfig(OpConfigBase):
     input: ttnn.Tensor
     dim: int
     src: ttnn.Tensor
+
+
+@dataclass
+class AllToAllDispatchConfig(OpConfigBase):
+    """Common parameters for a ttnn.all_to_all_dispatch op"""
+
+    cluster_axis: int
+    num_links: int
+    topology: ttnn.Topology = ttnn.Topology.Linear
+    memory_config: ttnn.MemoryConfig
+    subdevice_id: int = None
+
+
+@dataclass
+class AllToAllCombineConfig(OpConfigBase):
+    """Common parameters for a ttnn.all_to_all_combine op"""
+
+    num_links: int
+    topology: ttnn.Topology = ttnn.Topology.Linear
+    memory_config: ttnn.MemoryConfig
+    axis: int
+
+
+@dataclass
+class RepeatConfig(OpConfigBase):
+    """Common parameters for a ttnn.repeat op"""
+
+    repeat_dims: ttnn.Shape
