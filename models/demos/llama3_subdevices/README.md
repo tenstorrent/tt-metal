@@ -177,19 +177,4 @@ To use line for only some of the AG ops, you can set USE_LINE_AG set in `llama_c
 - LINE_AG = 0
 - USE_LINE_AG = {"QKV"}
 
-## Updating APC Test Target Values
-<!-- Add instructions for updating pcc -->
-The Llama3.3 70B model runs text_demo.py in APC and can perform assertions at multiple points:
-
-- **Prefill PCC** – Indicates that a change in the underlying prefill operation is affecting the results.
-
-- **Decode PCC** – Indicates that a change in the underlying decode operation is affecting the results.
-
-- **Throughput** – Suggests a regression in performance, likely due to changes in one or more ops used by the model, resulting in reduced end-to-end throughput.
-
-In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in
-models/demos/llama3_subdevices/demo/text_demo_targets.json.
-
-Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.
-
-If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.
+Please note that when using line CCL implementations the maximum sequence length we have validated is 16K tokens. This should just be used for debugging purposes!

@@ -750,9 +750,13 @@ def test_demo_text(
             assert_message = (
                 f"Prefill PCC check failed: {pcc_message}, while expected {demo_targets['prefill_pcc']}.\n"
                 f"If it is expected to be different in Llama model, please update the text_demo_targets.json file.\n"
-                f"Instructions: https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3_subdevices/README.md#updating-apc-test-target-values"
+                f"See the comment on the text_demo.py by the assert for instructions."
             )
             assert pcc_message == demo_targets["prefill_pcc"], assert_message
+            # A 'Prefill PCC mismatch' indicates that a change in the underlying prefill operation is affecting the results.
+            # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/llama3_subdevices/demo/text_demo_targets.json.
+            # Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.
+            # If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.
 
         # Save prefill token
         prefilled_token = toks.view(-1, 1)
@@ -879,9 +883,13 @@ def test_demo_text(
                     assert_message = (
                         f"Decode PCC check failed: {pcc_message}, while expected {demo_targets['decode_pcc']}.\n"
                         f"If any ops in Llama model might be impacted, please update decode_pcc in the text_demo_targets.json file.\n"
-                        f"Instructions: https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3_subdevices/README.md#updating-apc-test-target-values"
+                        f"See the comment on the text_demo.py by the assert for instructions."
                     )
                     assert pcc_message == demo_targets["decode_pcc"], assert_message
+                    # A 'Decode PCC mismatch' indicates that a change in the underlying prefill operation is affecting the results.
+                    # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/llama3_subdevices/demo/text_demo_targets.json.
+                    # Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.
+                    # If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.
 
                 if teacher_forcing:
                     _, tt_top5_tokens = torch.topk(tt_out_logits_saved, k=5, dim=-1)
@@ -939,9 +947,13 @@ def test_demo_text(
                     assert_message = (
                         f"Current throughput: {tokens_per_second_per_user:.1f} tok/s/user for APC test is not within the expected range: ({lower_bound}, {upper_bound}).\n"
                         f"Update text_demo_targets.json file with the expected throughput.\n"
-                        f"Instructions: https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3_subdevices/README.md#updating-apc-test-target-values"
+                        f"See the comment on the text_demo.py by the assert for instructions."
                     )
                     assert lower_bound <= tokens_per_second_per_user <= upper_bound, assert_message
+                    # A mismatch of throughput suggests a regression in performance, likely due to changes in one or more ops used by the model, resulting in reduced end-to-end throughput.
+                    # In some cases, small variations in PCC or improved model performance are expected. When this happens, update the target values in models/demos/llama3_subdevices/demo/text_demo_targets.json.
+                    # Once updated, include the modified target file in your PR. The model code owners will then review and approve the changes.
+                    # If no changes to the model are expected from the PR, but targets differ, further investigation is needed to understand the root cause.
 
             current_pos += 1
             iteration += 1
