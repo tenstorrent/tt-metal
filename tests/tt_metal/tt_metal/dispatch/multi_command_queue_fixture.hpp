@@ -103,16 +103,11 @@ protected:
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         const chip_id_t device_id = 0;
-        const DispatchCoreType dispatch_core_type = this->get_dispatch_core_type();
 
-        this->create_devices();
+        this->create_device(device_id, DEFAULT_TRACE_REGION_SIZE);
     }
 
-    void TearDown() override {
-        for (auto& device : devices_) {
-            device.reset();
-        }
-    }
+    void TearDown() override { device_.reset(); }
 
     bool validate_dispatch_mode() {
         this->slow_dispatch_ = false;
@@ -137,28 +132,17 @@ protected:
         return dispatch_core_type;
     }
 
-    void create_devices(std::size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
+    void create_device(const chip_id_t device_id, const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        const chip_id_t mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
-        std::vector<chip_id_t> chip_ids;
-        auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
-        if (enable_remote_chip or
-            tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB) {
-            for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
-                chip_ids.push_back(id);
-            }
-        } else {
-            chip_ids.push_back(mmio_device_id);
-        }
+        std::vector<chip_id_t> chip_id = {device_id};
+
         auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
-            chip_ids, DEFAULT_L1_SMALL_SIZE, trace_region_size, 2, dispatch_core_config);
-        for (const auto& [id, device] : reserved_devices) {
-            this->devices_.push_back(device);
-        }
+            chip_id, DEFAULT_L1_SMALL_SIZE, trace_region_size, 2, dispatch_core_config);
+        this->device_ = reserved_devices[device_id];
     }
 
-    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
+    std::shared_ptr<distributed::MeshDevice> device_;
     tt::ARCH arch_;
     uint8_t num_cqs_;
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
@@ -167,7 +151,11 @@ protected:
 
 class UnitMeshMultiCQSingleDeviceProgramFixture : public UnitMeshMultiCQSingleDeviceFixture {};
 
+<<<<<<< HEAD
 class UnitMeshMultiCQSingleDeviceBufferFixture : public UnitMeshMultiCQSingleDeviceFixture {};
+=======
+class UnitMeshMultiCQSingleDeviceEventFixture : public UnitMeshMultiCQSingleDeviceFixture {};
+>>>>>>> 0cbe6cec94 (changed SingleDevice fixture to properly have a single device)
 
 class UnitMeshMultiCQSingleDeviceTraceFixture : public UnitMeshMultiCQSingleDeviceFixture {
 protected:
@@ -181,8 +169,8 @@ protected:
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     }
 
-    void CreateDevices(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
-        this->create_devices(trace_region_size);
+    void CreateDevice(const size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) {
+        this->create_device(0 /* device_id */, trace_region_size);
     }
 };
 
@@ -291,8 +279,8 @@ protected:
 };
 
 class UnitMeshMultiCQMultiDeviceBufferFixture : public UnitMeshMultiCQMultiDeviceFixture {};
-class UnitMeshMultiCQMultDeviceEventFixture : public UnitMeshMultiCQMultiDeviceFixture {};
 
+class UnitMeshMultiCQMultDeviceEventFixture : public UnitMeshMultiCQMultiDeviceFixture {};
 class DISABLED_MultiCQMultiDeviceOnFabricFixture : public UnitMeshMultiCQMultiDeviceFixture,
                                                    public ::testing::WithParamInterface<tt::tt_fabric::FabricConfig> {
 private:
