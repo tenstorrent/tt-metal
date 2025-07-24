@@ -171,16 +171,16 @@ def run_flash_mla_decode_impl(
     num_iters = 5
 
     # Log the test parameters
-    logger.info(f"Running FlashMLA Decode with parameters: ")
-    logger.info(f"Batch: {batch}")
-    logger.info(f"Sequence Length: {seq_len}")
-    logger.info(f"Number of Heads (Q): {nh}")
-    logger.info(f"Number of Heads (KV): {nkv}")
-    logger.info(f"KV LoRA Rank: {kv_lora_rank}")
-    logger.info(f"Dimensionality of RoPE: {d_rope}")
-    logger.info(f"Number of Cores for Q Sharding: {q_num_cores}")
-    logger.info(f"Query Data Type: {q_dtype}")
-    logger.info(f"Key-Value Data Type: {dtype}")
+    logger.debug(f"Running FlashMLA Decode with parameters: ")
+    logger.debug(f"Batch: {batch}")
+    logger.debug(f"Sequence Length: {seq_len}")
+    logger.debug(f"Number of Heads (Q): {nh}")
+    logger.debug(f"Number of Heads (KV): {nkv}")
+    logger.debug(f"KV LoRA Rank: {kv_lora_rank}")
+    logger.debug(f"Dimensionality of RoPE: {d_rope}")
+    logger.debug(f"Number of Cores for Q Sharding: {q_num_cores}")
+    logger.debug(f"Query Data Type: {q_dtype}")
+    logger.debug(f"Key-Value Data Type: {dtype}")
 
     # Paged attention configuration
     paged_attention_cfg = None
@@ -350,7 +350,7 @@ def run_flash_mla_decode_impl(
 
     tt_outs = []
     for i in range(num_iters):  # Check for program cache
-        logger.info(f"Running FlashMLA Decode operation iteration {i + 1}/{num_iters}")
+        logger.debug(f"Running FlashMLA Decode operation iteration {i + 1}/{num_iters}")
         tt_out = run_op()
         tt_outs.append(tt_out)
 
@@ -384,7 +384,7 @@ def run_flash_mla_decode_impl(
         tt_out_torch = ttnn.to_torch(tt_out)[..., :nh, :].permute(1, 2, 0, 3)  # (S, B, H, D) -> (B, H, S, D)
 
         out_pass, out_pcc = comp_pcc(tt_out_torch, out_t, pcc_threshold)
-        logger.info(f"Output PCC: {out_pcc}")
+        logger.debug(f"Output PCC: {out_pcc}")
 
     assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"
 
