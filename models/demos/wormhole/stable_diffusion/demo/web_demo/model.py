@@ -21,7 +21,7 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition
     UNet2DConditionModel as UNet2D,
 )
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae import Vae
-from models.utility_functions import disable_persistent_kernel_cache, is_blackhole
+from models.utility_functions import disable_persistent_kernel_cache
 
 
 def constant_prop_time_embeddings(timesteps, sample, time_proj):
@@ -157,14 +157,8 @@ def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
 
         ttnn.copy_host_to_device_tensor(ttnn_text_embeddings, ttnn_text_embeddings_device, cq_id=0)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-        if not is_blackhole():
-            image = ttnn.to_torch(output.cpu(blocking=True))
-        else:
-            # on blackhole, we use the original vae decoder until #20760 is fixed
-            latents = ttnn.to_torch(output).to(torch.float32)
-            image = vae.decode(latents).sample
+        image = ttnn.to_torch(output.cpu(blocking=True))
         ttnn.synchronize_device(device)
-        ttnn.release_trace(device, tid)
 
         image = (image / 2 + 0.5).clamp(0, 1)
         image = image.detach().cpu().float().permute(0, 2, 3, 1).numpy()
@@ -184,7 +178,7 @@ def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
 def warmup_model():
     # create device, these constants are specific to n150 & n300
     device_id = 0
-    device_params = {"l1_small_size": 11 * 8192, "trace_region_size": 595230720}
+    device_params = {"l1_small_size": 11 * 8192, "trace_region_size": 789835776}
     dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
     if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
         dispatch_core_type = ttnn.device.DispatchCoreType.ETH
