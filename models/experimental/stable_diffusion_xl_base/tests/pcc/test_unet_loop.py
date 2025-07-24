@@ -109,7 +109,9 @@ def run_torch_denoising(
 
 
 @torch.no_grad()
-def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, classifier_free_guidance=True):
+def run_unet_inference(
+    ttnn_device, is_ci_env, prompts, num_inference_steps, model_location_generator, classifier_free_guidance=True
+):
     torch.manual_seed(0)
 
     if isinstance(prompts, str):
@@ -135,6 +137,7 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, cla
         "stabilityai/stable-diffusion-xl-base-1.0",
         torch_dtype=torch.float32,
         use_safetensors=True,
+        local_files_only=is_ci_env,
     )
 
     # 2. Load tt_unet and tt_scheduler
@@ -464,5 +467,8 @@ def test_unet_loop(
     prompt,
     loop_iter_num,
     classifier_free_guidance,
+    model_location_generator,
 ):
-    return run_unet_inference(device, is_ci_env, prompt, loop_iter_num, classifier_free_guidance)
+    return run_unet_inference(
+        device, is_ci_env, prompt, loop_iter_num, model_location_generator, classifier_free_guidance
+    )

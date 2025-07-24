@@ -84,8 +84,7 @@ CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord& virtu
         return CoreType::DRAM;
     }
 
-    CoreType core_type =
-        soc_desc.translate_coord_to(virtual_coord, CoordSystem::PHYSICAL, CoordSystem::PHYSICAL).core_type;
+    CoreType core_type = soc_desc.translate_coord_to(virtual_coord, CoordSystem::NOC0, CoordSystem::NOC0).core_type;
     if (core_type == CoreType::TENSIX) {
         core_type = CoreType::WORKER;
     }

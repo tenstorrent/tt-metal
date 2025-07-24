@@ -41,11 +41,9 @@ public:
 
     const DistributedCoordinateTranslator& coordinate_translator() const;
 
-    MeshCoordinate get_global_device_coordinate(int physical_device_id) const;
     DistributedMeshContainer<chip_id_t> get_mapped_physical_device_ids(
         const MeshShape& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
     chip_id_t get_physical_device_id(const MeshCoordinate& coord) const;
-    uint32_t get_physical_mesh_id(const MeshCoordinate& coord) const;
 };
 
 MaybeRemoteDeviceId SystemMesh::Impl::get_maybe_remote_device_id(const MeshCoordinate& coord) const {
@@ -112,23 +110,6 @@ chip_id_t SystemMesh::Impl::get_physical_device_id(const MeshCoordinate& coord) 
     log_debug(LogDistributed, "Global coordinate: {} mapped to physical device ID: {}",
               coord, physical_device_id);
     return physical_device_id;
-}
-
-uint32_t SystemMesh::Impl::get_physical_mesh_id(const MeshCoordinate& coord) const {
-    TT_FATAL(physical_coordinates_.is_local_at(coord), "Coordinate {} is not in the local mesh", coord);
-    const auto& maybe_physical = physical_coordinates_.at(coord);
-    return *maybe_physical->mesh_id();
-}
-
-MeshCoordinate SystemMesh::Impl::get_global_device_coordinate(int physical_device_id) const {
-    for (const auto& [global_coordinate, maybe_physical] : physical_coordinates_) {
-        if (maybe_physical.is_local()) {
-            if (maybe_physical->chip_id() == physical_device_id) {
-                return global_coordinate;
-            }
-        }
-    }
-    TT_THROW("Physical device ID {} not found in the system mesh. Device might be remote.", physical_device_id);
 }
 
 DistributedMeshContainer<int> SystemMesh::Impl::get_mapped_physical_device_ids(
@@ -240,20 +221,8 @@ SystemMesh& SystemMesh::instance() {
     return instance.get();
 }
 
-chip_id_t SystemMesh::get_physical_device_id(const MeshCoordinate& coord) const {
-    return pimpl_->get_physical_device_id(coord);
-}
-
-uint32_t SystemMesh::get_physical_mesh_id(const MeshCoordinate& coord) const {
-    return pimpl_->get_physical_mesh_id(coord);
-}
-
 const MeshShape& SystemMesh::shape() const { return pimpl_->coordinate_translator().global_shape(); }
 const MeshShape& SystemMesh::local_shape() const { return pimpl_->coordinate_translator().local_shape(); }
-
-MeshCoordinate SystemMesh::get_global_device_coordinate(int physical_device_id) const {
-    return pimpl_->get_global_device_coordinate(physical_device_id);
-}
 
 DistributedMeshContainer<chip_id_t> SystemMesh::get_mapped_physical_device_ids(
     const MeshShape& shape, const std::optional<MeshCoordinate>& offset) const {
