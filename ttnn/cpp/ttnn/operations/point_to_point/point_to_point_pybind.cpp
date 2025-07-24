@@ -5,6 +5,8 @@
 
 #include <pybind11/pybind11.h>
 
+#include "ttnn-pybind/decorators.hpp"
+
 #include "point_to_point.hpp"
 #include "point_to_point_pybind.hpp"
 
