@@ -307,16 +307,11 @@ void kernel_main() {
         } else {
             // Offset for current batch
             const uint32_t k_batch_offset = ((cur_batch / q_heads_parallel_factor) % Bkv) * num_kv_heads * St * DHt;
-            const uint32_t v_batch_offset =
-                ((cur_batch / q_heads_parallel_factor) % Bkv) * num_kv_heads * St * DHt;  // Use K's head dim
             const uint32_t k_head_offset = cur_head * St * DHt;
-            const uint32_t v_head_offset = cur_head * St * DHt;  // Use K's head dim
 
             // Then, read K, V, Mask k_chunk_tiles at a time
             const uint32_t k_chunk_offset = k_chunk_start * Sk_chunk_t_dynamic * DHt;
-            const uint32_t v_chunk_offset = k_chunk_start * Sk_chunk_t_dynamic * DHt;
             uint32_t k_start_tile_id = k_batch_offset + k_head_offset + k_chunk_offset;
-            uint32_t v_start_tile_id = v_batch_offset + v_head_offset + v_chunk_offset;
 
             read_kv_mask_chunks<
                 DHt,
@@ -332,7 +327,6 @@ void kernel_main() {
                 k_chunk_start,
                 k_chunk_end,
                 k_start_tile_id,
-                v_start_tile_id,
                 mask_start_tile_id,
                 Sk_chunk_t_dynamic,
                 k_chunk_tiles,

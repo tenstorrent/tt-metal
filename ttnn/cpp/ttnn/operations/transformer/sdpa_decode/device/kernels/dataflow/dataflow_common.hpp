@@ -382,7 +382,6 @@ void read_kv_mask_chunks(
     uint32_t k_chunk_start,
     uint32_t k_chunk_end,
     uint32_t k_start_tile_id,
-    uint32_t v_start_tile_id,
     uint32_t mask_start_tile_id,
     uint32_t Sk_chunk_t,
     uint32_t k_chunk_tiles,
@@ -415,7 +414,6 @@ void read_kv_mask_chunks(
         }
         noc_async_read_barrier();
         cb_push_back(cb_k_in, k_chunk_tiles);
-        k_start_tile_id += k_chunk_tiles;
 
         if constexpr (use_attention_mask) {
             mask_start_tile_id = read_mask_chunk<cb_mask_in, mask_tile_bytes, barrier_threshold, PNHt>(
@@ -441,7 +439,7 @@ void read_kv_mask_chunks(
             cb_reserve_back(cb_v_in, v_chunk_tiles);
             uint32_t v_write_ptr = get_write_ptr(cb_v_in);
             barrier_count = 0;
-            uint32_t v_tile_id = v_start_tile_id;
+            uint32_t v_tile_id = k_start_tile_id;
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
                 for (uint32_t col = 0; col < vDHt; ++col) {
                     noc_async_read_tile(v_tile_id, v_reader, v_write_ptr);
@@ -454,12 +452,11 @@ void read_kv_mask_chunks(
                 }
                 v_tile_id += (DHt - vDHt);  // Skip the padding!
             }
-
-            // ASSUMPTION: We don't support different V chunk size than K chunk size
-            // Execept for FlashMLA, however, V is a subset of K, so we still need to strid with k_chunk_tiles
-            v_start_tile_id += k_chunk_tiles;
         }
         noc_async_read_barrier();
         cb_push_back(cb_v_in, v_chunk_tiles);
+
+        // Update the starting tile id for next iteration
+        k_start_tile_id += k_chunk_tiles;
     }
 }
