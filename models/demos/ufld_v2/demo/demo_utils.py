@@ -278,6 +278,7 @@ def run_test_tusimple(
     is_overlay=False,
     json_path="models/demos/ufld_v2/demo/image_data/test_label.json",
     is_eval=False,
+    model_location_generator=None,
 ):
     output_path = os.path.join(work_dir, exp_name + ".txt")
     fp = open(output_path, "w")
@@ -303,7 +304,9 @@ def run_test_tusimple(
                 out, pred = net(imgs)
         else:
             if performant_runner is None:
-                performant_runner = net(device=device, torch_input_tensor=imgs)
+                performant_runner = net(
+                    device=device, torch_input_tensor=imgs, model_location_generator=model_location_generator
+                )
                 performant_runner._capture_ufldv2_trace_2cqs()
             out = performant_runner.run(imgs)
             out = ttnn.to_torch(out).squeeze(dim=0).squeeze(dim=0)

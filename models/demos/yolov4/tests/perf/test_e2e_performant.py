@@ -32,7 +32,7 @@ def run_perf_e2e_yolov4(
         act_dtype,
         weight_dtype,
         resolution=resolution,
-        model_location_generator=None,
+        model_location_generator=model_location_generator,
         mesh_mapper=inputs_mesh_mapper,
         mesh_composer=output_mesh_composer,
     )
