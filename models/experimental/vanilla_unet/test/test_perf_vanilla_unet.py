@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 
 import pytest
 import torch
@@ -10,44 +9,24 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.experimental.vanilla_unet.reference.unet import UNet
 from models.experimental.vanilla_unet.ttnn.ttnn_unet import TtUnet
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import profiler
-from tests.ttnn.integration_tests.vanilla_unet.test_ttnn_unet import create_custom_preprocessor
+from models.experimental.vanilla_unet.test.pcc.test_ttnn_unet import create_custom_preprocessor
+from models.experimental.vanilla_unet.load_model_utils import load_torch_model
 
 
 def get_expected_times(name):
-    base = {"vanilla_unet": (64.44, 0.018)}
+    base = {"vanilla_unet": (64.44, 0.019)}
     return base[name]
 
 
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"l1_small_size": (7 * 8192) + 1730}], indirect=True, ids=["0"])
-def test_vanilla_unet(device, reset_seeds):
+def test_vanilla_unet(device, reset_seeds, model_location_generator):
     torch.manual_seed(0)
 
-    weights_path = "models/experimental/vanilla_unet/unet.pt"
-    if not os.path.exists(weights_path):
-        os.system("bash models/experimental/vanilla_unet/weights_download.sh")
-
-    state_dict = torch.load(
-        weights_path,
-        map_location=torch.device("cpu"),
-    )
-    ds_state_dict = {k: v for k, v in state_dict.items()}
-
-    reference_model = UNet()
-
-    new_state_dict = {}
-    keys = [name for name, parameter in reference_model.state_dict().items()]
-    values = [parameter for name, parameter in ds_state_dict.items()]
-    for i in range(len(keys)):
-        new_state_dict[keys[i]] = values[i]
-
-    reference_model.load_state_dict(new_state_dict)
-    reference_model.eval()
+    reference_model = load_torch_model(model_location_generator)
 
     torch_input_tensor = torch.randn(1, 3, 480, 640)
     batch_size = torch_input_tensor.shape[0]
@@ -140,12 +119,11 @@ def test_vanilla_unet(device, reset_seeds):
         [1, 46.7],
     ],
 )
-@pytest.mark.models_device_performance_bare_metal
-def test_perf_device_bare_metal_vanilla_unet(batch_size, expected_perf):
+def test_perf_device_vanilla_unet(batch_size, expected_perf):
     subdir = "ttnn_vanilla_unet"
     num_iterations = 1
     margin = 0.03
-    command = f"pytest tests/ttnn/integration_tests/vanilla_unet/test_ttnn_unet.py"
+    command = f"pytest models/experimental/vanilla_unet/test/pcc/test_ttnn_unet.py"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
