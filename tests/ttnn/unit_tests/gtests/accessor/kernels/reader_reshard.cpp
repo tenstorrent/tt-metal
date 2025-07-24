@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "accessor/tensor_accessor.h"
+#include "dataflow_api.h"
 
 void kernel_main() {
     auto args = TensorAccessorArgs<0, 0>();
