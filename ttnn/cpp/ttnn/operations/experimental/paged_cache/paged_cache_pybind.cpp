@@ -31,7 +31,8 @@ void bind_experimental_paged_cache_operations(py::module& module) {
                const std::optional<bool> share_cache,
                const std::optional<const ttnn::Tensor>& page_table,
                const uint32_t batch_offset,
-               std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+               std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+               std::optional<const std::set<ttnn::MeshCoordinate>> mesh_coords) {
                 return self(
                     cache_tensor,
                     input_tensor,
@@ -40,7 +41,8 @@ void bind_experimental_paged_cache_operations(py::module& module) {
                     share_cache,
                     page_table,
                     batch_offset,
-                    compute_kernel_config);
+                    compute_kernel_config,
+                    mesh_coords);
             },
             py::arg("cache_tensor").noconvert(),
             py::arg("input_tensor").noconvert(),
@@ -51,6 +53,7 @@ void bind_experimental_paged_cache_operations(py::module& module) {
             py::arg("page_table").noconvert() = std::nullopt,
             py::arg("batch_offset") = 0,
             py::arg("compute_kernel_config").noconvert() = std::nullopt,
+            py::arg("mesh_coords").noconvert() = std::nullopt,
         });
 
     auto paged_fused_update_cache_doc =
@@ -141,8 +144,16 @@ void bind_experimental_paged_cache_operations(py::module& module) {
                const ttnn::Tensor& page_table,
                std::optional<const ttnn::Tensor> batch_idx_tensor,
                const uint32_t batch_idx,
-               std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-                return self(cache_tensor, input_tensor, page_table, batch_idx_tensor, batch_idx, compute_kernel_config);
+               std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+               std::optional<const std::set<ttnn::MeshCoordinate>> mesh_coords) {
+                return self(
+                    cache_tensor,
+                    input_tensor,
+                    page_table,
+                    batch_idx_tensor,
+                    batch_idx,
+                    compute_kernel_config,
+                    mesh_coords);
             },
             py::arg("cache_tensor").noconvert(),
             py::arg("input_tensor").noconvert(),
@@ -151,6 +162,7 @@ void bind_experimental_paged_cache_operations(py::module& module) {
             py::arg("batch_idx_tensor").noconvert() = std::nullopt,
             py::arg("batch_idx") = 0,
             py::arg("compute_kernel_config").noconvert() = std::nullopt,
+            py::arg("mesh_coords").noconvert() = std::nullopt,
         });
 }
 

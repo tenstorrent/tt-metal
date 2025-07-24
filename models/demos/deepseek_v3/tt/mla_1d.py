@@ -894,10 +894,12 @@ class MLA1D(AbstractModule):
         ttnn.deallocate(tt_kv_rope)
 
         # Update KVPE Cache
+        mesh_coords = {*[ttnn.MeshCoordinate(0, x) for x in range(cfg["mesh_shape"][1])]}
         ttnn.experimental.paged_update_cache(
             kvpe_cache,
             tt_kvpe,
             update_idxs_tensor=position_idxs,
+            mesh_coords=mesh_coords,
         )
 
         # FlashMLA

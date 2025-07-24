@@ -26,6 +26,8 @@ struct PagedUpdateCacheDeviceOperation {
     const PagedUpdateCacheOpType op_type;
     const ttnn::DeviceComputeKernelConfig compute_kernel_config;
     const bool share_cache;
+    const std::optional<std::set<ttnn::MeshCoordinate>>
+        mesh_coords;  // Optional mesh coordinates to use for the operation
 
     PagedUpdateCacheOpParallelizationStrategy get_parallelization_strategy(
         const std::vector<Tensor>& input_tensors) const;
@@ -40,8 +42,7 @@ struct PagedUpdateCacheDeviceOperation {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
-        const ttnn::MeshCoordinate& coord,
+    tt::tt_metal::operation::ProgramWithCallbacks create_program_(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
@@ -58,9 +59,5 @@ struct PagedUpdateCacheDeviceOperation {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 };
-
-tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_programs(
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const std::function<tt::tt_metal::operation::ProgramWithCallbacks(const ttnn::MeshCoordinate&)>& create_program);
 
 }  // namespace ttnn::operations::experimental::paged_cache
