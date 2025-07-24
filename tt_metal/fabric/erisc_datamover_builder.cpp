@@ -255,11 +255,6 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     std::array<size_t, num_receiver_channels>& num_receiver_buffer_slots,
     std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots,
     std::array<size_t, num_downstream_sender_channels>& num_downstream_sender_buffer_slots) {
-    static const std::vector<std::vector<std::pair<size_t, size_t>>> linear_buffer_slot_options = {
-        {{8, 16}}, {{8, 16}}};
-
-    static const std::vector<std::vector<std::pair<size_t, size_t>>> mesh_buffer_slot_options = {{{4, 8}}, {{4, 8}}};
-
     static const std::vector<std::vector<std::pair<size_t, size_t>>> ring_buffer_slot_options = {
         {{8, 8}, {4, 8}}, {{8, 8}, {4, 8}}};
 
@@ -273,6 +268,16 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     static const std::vector<std::vector<std::vector<std::pair<size_t, size_t>>>>
         ring_buffer_slot_options_dateline_upstream_adjcent = {
             {{{16, 8}, {8, 8}}, {{16, 8}, {8, 8}}}, {{{16, 8}, {8, 8}}, {{16, 8}, {8, 8}}}};
+
+    auto get_num_buffer_slots = [](Topology topology) -> const std::vector<std::pair<size_t, size_t>>& {
+        static const std::vector<std::pair<size_t, size_t>> mesh_slots = {{4, 8}};
+        static const std::vector<std::pair<size_t, size_t>> other_slots = {{8, 16}};
+        if (topology == Topology::Mesh) {
+            return mesh_slots;
+        } else {
+            return other_slots;
+        }
+    };
 
     auto get_optimal_num_slots = [this](
                                      auto& buffer_slot_options,
@@ -477,8 +482,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
         size_t default_num_sender_buffer_slots;
         size_t default_num_receiver_buffer_slots;
         get_optimal_num_slots(
-            (topology == Topology::Mesh ? mesh_buffer_slot_options[arch_index]
-                                        : linear_buffer_slot_options[arch_index]),
+            get_num_buffer_slots(topology),
             this->num_used_sender_channels,
             this->num_used_receiver_channels,
             default_num_sender_buffer_slots,
