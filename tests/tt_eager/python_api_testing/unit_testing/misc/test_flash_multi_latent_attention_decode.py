@@ -99,8 +99,20 @@ def to_paged_cache(
     paged_cache = paged_cache.transpose(1, 2)  # (B, num_blocks // B, H, block_size, D)
     paged_cache = paged_cache.reshape(max_num_blocks, nh, block_size, dim)  # (num_blocks, H, block_size, D)
 
-    # Get the reverse mapping to reorder the paged cache, so that paged cache + mapping = original cache
-    # So, paged_cache = original_cache + inverse mapping
+    """
+    Get the reverse mapping to reorder the paged cache,
+    so that paged cache + mapping = original cache
+    and paged_cache = original_cache + inverse mapping
+
+    For example:
+        cache = [0, 1, 2, 3]
+        mapping = [1, 3, 0, 2]
+        inverse_mapping (argsort) = [2, 0, 3, 1]
+    Then,
+        paged_cache = cache[inverse_mapping] = [2, 0, 3, 1]
+        paged_cache[mapping] = cache = [0, 1, 2, 3]
+    """
+
     inverse_mapping = torch.argsort(mapping.view(-1))
     paged_cache = paged_cache[inverse_mapping]
 
