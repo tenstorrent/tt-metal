@@ -8,24 +8,16 @@
 #include "dataflow_api.h"
 #include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"  // this is prob obsolete once debugged
 
-// #define THREE_PACKS true
-
 // CBs with input data
 constexpr uint32_t cb_input_idx = tt::CBIndex::c_0;
 constexpr uint32_t cb_dL_out_idx = tt::CBIndex::c_1;
 // CBs with output data
 constexpr uint32_t cb_dL_da_idx = tt::CBIndex::c_2;
 // CBs with intermediate computations
-#ifdef THREE_PACKS
-constexpr uint32_t cb_neg_sigmoid_idx = tt::CBIndex::c_3;
-constexpr uint32_t cb_x_plus_x_times_neg_sigmoid_plus_one_idx = tt::CBIndex::c_4;
-constexpr uint32_t cb_times_neg_sigmoid_and_neg_idx = tt::CBIndex::c_5;
-#else
 constexpr uint32_t cb_sigmoid_idx = tt::CBIndex::c_3;
 constexpr uint32_t cb_one_minus_sigmoid_idx = tt::CBIndex::c_4;
 constexpr uint32_t cb_times_input_plus_one_idx = tt::CBIndex::c_5;
 constexpr uint32_t cb_times_sigmoid_idx = tt::CBIndex::c_6;
-#endif
 
 constexpr uint32_t block_size = get_compile_time_arg_val(0);
 constexpr uint32_t Wt = get_compile_time_arg_val(1);

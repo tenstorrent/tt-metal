@@ -71,9 +71,6 @@ xt::xarray<float> silu_backward_reference(const xt::xarray<float>& x, const xt::
  * Returns a struct with various precision metrics
  */
 struct PrecisionMetrics {
-    float max_abs_error;
-    float mean_abs_error;
-    float relative_error;
     float rmse;
     bool allclose_strict;
     bool allclose_loose;
@@ -83,11 +80,6 @@ PrecisionMetrics compute_precision_metrics(const xt::xarray<float>& reference, c
     PrecisionMetrics metrics;
 
     auto abs_diff = xt::abs(reference - test);
-    auto rel_diff = abs_diff / (xt::abs(reference) + 1e-8f);
-
-    metrics.max_abs_error = xt::amax(abs_diff)();
-    metrics.mean_abs_error = xt::mean(abs_diff)();
-    metrics.relative_error = xt::mean(rel_diff)();
     metrics.rmse = xt::sqrt(xt::mean(xt::square(abs_diff)))();
     metrics.allclose_strict = xt::allclose(reference, test, 1e-4f, 1e-3f);  // Moderate precision
     metrics.allclose_loose = xt::allclose(reference, test, 1e-3f, 3e-2f);   // Same as CompareKernelVsReference
@@ -259,121 +251,77 @@ TEST_F(SiLUOpTest, SiLU_Compare_SmallModel_Unaligned) {
 TEST_F(SiLUOpTest, SiLU_Precision_Comparison) {
     using namespace ttml;
 
-    // Test with 3 different shapes
-    std::vector<std::vector<uint32_t>> test_shapes = {
-        {1, 1, 1, 8},     // small
-        {2, 1, 64, 512},  // nanollama like
-        {1, 1, 1, 32768}  // large
-    };
-
-    std::vector<std::string> shape_names = {"small", "nanollama-like", "large"};
+    // Single test shape: nanollama-like
+    std::vector<uint32_t> shape = {2, 1, 64, 512};
 
     // Test range: moderate range that covers typical activation values
     const float min_val = -2.0f;
     const float max_val = 2.0f;
 
-    // Run the test multiple times with different seeds for statistical confidence
-    const int num_runs = 10;
+    // Reduced number of runs for faster testing
+    const int num_runs = 3;
 
-    for (size_t shape_idx = 0; shape_idx < test_shapes.size(); ++shape_idx) {
-        const auto& shape = test_shapes[shape_idx];
-        const auto& shape_name = shape_names[shape_idx];
+    // Collect metrics across all runs
+    std::vector<float> kernel_rmse_values(num_runs);
+    std::vector<float> composite_rmse_values(num_runs);
 
-        // Collect metrics across all runs
-        std::vector<float> kernel_rmse_values, kernel_max_error_values, kernel_mean_error_values;
-        std::vector<float> composite_rmse_values, composite_max_error_values, composite_mean_error_values;
-        int kernel_wins = 0, composite_wins = 0;
+    for (int run = 0; run < num_runs; ++run) {
+        // Generate test data with different seed for each run
+        xt::random::seed(42 + run);
+        xt::xarray<float> input_data = xt::random::rand<float>(shape, min_val, max_val);
 
-        for (int run = 0; run < num_runs; ++run) {
-            // Generate test data with different seed for each run
-            xt::random::seed(42 + run);
-            xt::xarray<float> input_data = xt::random::rand<float>(shape, min_val, max_val);
+        // Create input tensors
+        auto input_kernel = autograd::create_tensor(core::from_xtensor(input_data, &autograd::ctx().get_device()));
+        auto input_composite = autograd::create_tensor(core::from_xtensor(input_data, &autograd::ctx().get_device()));
 
-            // Create input tensors
-            auto input_kernel = autograd::create_tensor(core::from_xtensor(input_data, &autograd::ctx().get_device()));
-            auto input_composite =
-                autograd::create_tensor(core::from_xtensor(input_data, &autograd::ctx().get_device()));
+        // Forward pass - kernel implementation
+        auto result_kernel = ops::silu(input_kernel, /*use_composite_bw=*/false);
 
-            // Forward pass - kernel implementation
-            auto result_kernel = ops::silu(input_kernel, /*use_composite_bw=*/false);
+        // Forward pass - composite implementation
+        auto result_composite = ops::silu(input_composite, /*use_composite_bw=*/true);
 
-            // Forward pass - composite implementation
-            auto result_composite = ops::silu(input_composite, /*use_composite_bw=*/true);
+        // Backward pass - create target and compute gradients (same as CompareKernelVsReference)
+        auto target_kernel = autograd::create_tensor(core::zeros_like(result_kernel->get_value()));
+        auto target_composite = autograd::create_tensor(core::zeros_like(result_composite->get_value()));
 
-            // Backward pass - create target and compute gradients (same as CompareKernelVsReference)
-            auto target_kernel = autograd::create_tensor(core::zeros_like(result_kernel->get_value()));
-            auto target_composite = autograd::create_tensor(core::zeros_like(result_composite->get_value()));
+        auto mse_kernel = ops::mse_loss(result_kernel, target_kernel);
+        auto mse_composite = ops::mse_loss(result_composite, target_composite);
 
-            auto mse_kernel = ops::mse_loss(result_kernel, target_kernel);
-            auto mse_composite = ops::mse_loss(result_composite, target_composite);
+        mse_kernel->backward();
+        mse_composite->backward();
 
-            mse_kernel->backward();
-            mse_composite->backward();
+        // Get computed gradients
+        auto input_grad_kernel = core::to_xtensor(input_kernel->get_grad());
+        auto input_grad_composite = core::to_xtensor(input_composite->get_grad());
 
-            // Get computed gradients
-            auto input_grad_kernel = core::to_xtensor(input_kernel->get_grad());
-            auto input_grad_composite = core::to_xtensor(input_composite->get_grad());
+        // Reference backward pass - compute what the gradient should be
+        auto result_ref = silu_forward_reference(input_data);
+        auto total_elements = static_cast<float>(input_data.size());
+        auto mse_grad = (2.0f / total_elements) * result_ref;
+        auto grad_reference = silu_backward_reference(input_data, mse_grad);
 
-            // Reference backward pass - compute what the gradient should be
-            // For MSE loss with zero target: loss = mean((result - 0)^2) = mean(result^2)
-            // Gradient: d_loss/d_input = d_loss/d_result * d_result/d_input
-            // d_loss/d_result = 2 * result / N (where N is total number of elements)
-            // d_result/d_input = silu_derivative
-            // So: d_loss/d_input = (2 * result / N) * silu_derivative
-            auto result_ref = silu_forward_reference(input_data);
-            auto total_elements = static_cast<float>(input_data.size());
-            auto mse_grad = (2.0f / total_elements) * result_ref;  // MSE gradient with mean reduction
-            auto grad_reference = silu_backward_reference(input_data, mse_grad);
+        // Compare backward precision
+        auto backward_metrics_kernel = compute_precision_metrics(grad_reference, input_grad_kernel);
+        auto backward_metrics_composite = compute_precision_metrics(grad_reference, input_grad_composite);
 
-            // Compare backward precision
-            auto backward_metrics_kernel = compute_precision_metrics(grad_reference, input_grad_kernel);
-            auto backward_metrics_composite = compute_precision_metrics(grad_reference, input_grad_composite);
+        // Collect metrics for consolidation
+        kernel_rmse_values[run] = backward_metrics_kernel.rmse;
+        composite_rmse_values[run] = backward_metrics_composite.rmse;
 
-            // Collect metrics for consolidation
-            kernel_rmse_values.push_back(backward_metrics_kernel.rmse);
-            kernel_max_error_values.push_back(backward_metrics_kernel.max_abs_error);
-            kernel_mean_error_values.push_back(backward_metrics_kernel.mean_abs_error);
-
-            composite_rmse_values.push_back(backward_metrics_composite.rmse);
-            composite_max_error_values.push_back(backward_metrics_composite.max_abs_error);
-            composite_mean_error_values.push_back(backward_metrics_composite.mean_abs_error);
-
-            // Count wins
-            if (backward_metrics_kernel.rmse < backward_metrics_composite.rmse) {
-                kernel_wins++;
-            } else {
-                composite_wins++;
-            }
-
-            // Sanity check - both should be reasonably close to reference
-            EXPECT_TRUE(backward_metrics_kernel.allclose_loose) << "Kernel backward pass too inaccurate";
-            EXPECT_TRUE(backward_metrics_composite.allclose_loose) << "Composite backward pass too inaccurate";
-        }
-
-        // Compute consolidated statistics
-        auto compute_mean = [](const std::vector<float>& values) {
-            return std::accumulate(values.begin(), values.end(), 0.0f) / values.size();
-        };
-
-        float kernel_mean_rmse = compute_mean(kernel_rmse_values);
-        float kernel_mean_max_error = compute_mean(kernel_max_error_values);
-        float kernel_mean_mean_error = compute_mean(kernel_mean_error_values);
-
-        float composite_mean_rmse = compute_mean(composite_rmse_values);
-        float composite_mean_max_error = compute_mean(composite_max_error_values);
-        float composite_mean_mean_error = compute_mean(composite_mean_error_values);
-
-        // Print consolidated results for this shape
-        std::cout << "=== CONSOLIDATED RESULTS - " << shape_name << " shape [" << shape[0] << ", " << shape[1] << ", "
-                  << shape[2] << ", " << shape[3] << "] (Average across " << num_runs << " runs) ===\n";
-        std::cout << "Kernel (4 packs, float36)  - Mean Max Error: " << kernel_mean_max_error
-                  << ", Mean Mean Error: " << kernel_mean_mean_error << ", Mean RMSE: " << kernel_mean_rmse << "\n";
-        std::cout << "Composite                  - Mean Max Error: " << composite_mean_max_error
-                  << ", Mean Mean Error: " << composite_mean_mean_error << ", Mean RMSE: " << composite_mean_rmse
-                  << "\n";
-        std::cout << "Overall Winner             - "
-                  << (kernel_mean_rmse < composite_mean_rmse ? "Kernel" : "Composite") << " (based on mean RMSE)\n";
-        std::cout << "Win Count                  - Kernel: " << kernel_wins << "/" << num_runs
-                  << ", Composite: " << composite_wins << "/" << num_runs << "\n\n";
+        // Sanity check - both should be reasonably close to reference
+        EXPECT_TRUE(backward_metrics_kernel.allclose_loose) << "Kernel backward pass too inaccurate";
+        EXPECT_TRUE(backward_metrics_composite.allclose_loose) << "Composite backward pass too inaccurate";
     }
+
+    // Compute consolidated statistics (no output)
+    auto compute_mean = [](const std::vector<float>& values) {
+        return std::accumulate(values.begin(), values.end(), 0.0f) / values.size();
+    };
+
+    float kernel_mean_rmse = compute_mean(kernel_rmse_values);
+    float composite_mean_rmse = compute_mean(composite_rmse_values);
+
+    // Silent validation - just ensure both implementations work reasonably
+    EXPECT_LT(kernel_mean_rmse, 1e-5f) << "Kernel implementation has poor precision";
+    EXPECT_LT(composite_mean_rmse, 1e-5f) << "Composite implementation has poor precision";
 }

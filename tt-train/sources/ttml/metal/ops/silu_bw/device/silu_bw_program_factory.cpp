@@ -18,9 +18,6 @@ constexpr auto kReaderKernelPath =
 
 constexpr auto kComputeKernelPath = "tt-train/sources/ttml/metal/ops/silu_bw/device/kernels/compute/silu_bw_kernel.cpp";
 
-// #define THREE_PACKS true
-#define PRECISE_DATA_FORMAT true
-
 // Buffer indices
 constexpr uint32_t kInputBufferIdx = 0;
 constexpr uint32_t kDLdoutBufferIdx = 1U;
@@ -34,16 +31,10 @@ constexpr auto kDLoutCbIndex = tt::CBIndex::c_1;
 // CBs with output data
 constexpr auto kDLdaCbIndex = tt::CBIndex::c_2;
 // CBs with intermediate computations
-#ifdef THREE_PACKS
-constexpr uint32_t kNegSigmoidCbIndex = tt::CBIndex::c_3;
-constexpr uint32_t kXPlusXTimesNegSigmoidPlusOneCbIndex = tt::CBIndex::c_4;
-constexpr uint32_t kTimesNegSigmoidAndNegCbIndex = tt::CBIndex::c_5;
-#else
 constexpr uint32_t kSigmoidCbIndex = tt::CBIndex::c_3;
 constexpr uint32_t kOneMinusSigmoidCbIndex = tt::CBIndex::c_4;
 constexpr uint32_t kTimesInputPlusOneCbIndex = tt::CBIndex::c_5;
 constexpr uint32_t kTimesSigmoidCbIndex = tt::CBIndex::c_6;
-#endif
 
 // Some of the below constants are set to 2U because we might need to push a new value before poping the old one.
 constexpr uint32_t kNumOneTiles =
@@ -201,7 +192,6 @@ SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
     const uint32_t twice_block_size = 2U * block_size;
 
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
-    auto precise_data_format = tt::DataFormat::Float32;
 
     auto cb_input = create_circular_buffer(
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
@@ -209,70 +199,7 @@ SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
         program, all_cores, kDLoutCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
     auto cb_dL_da = create_circular_buffer(
         program, all_cores, kDLdaCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-#ifdef THREE_PACKS
 
-#ifdef PRECISE_DATA_FORMAT
-    auto cb_neg_sigmoid = create_circular_buffer(
-        program, all_cores, kNegSigmoidCbIndex, precise_data_format, float32_single_tile_size_bytes, twice_block_size);
-    auto cb_x_plus_x_times_neg_sigmoid_plus_one = create_circular_buffer(
-        program,
-        all_cores,
-        kXPlusXTimesNegSigmoidPlusOneCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        twice_block_size);
-    auto cb_times_neg_sigmoid_and_neg = create_circular_buffer(
-        program,
-        all_cores,
-        kTimesNegSigmoidAndNegCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        twice_block_size);
-#else
-    auto cb_neg_sigmoid = create_circular_buffer(
-        program, all_cores, kNegSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    auto cb_x_plus_x_times_neg_sigmoid_plus_one = create_circular_buffer(
-        program,
-        all_cores,
-        kXPlusXTimesNegSigmoidPlusOneCbIndex,
-        data_format,
-        bfloat16_single_tile_size_bytes,
-        twice_block_size);
-    auto cb_times_neg_sigmoid_and_neg = create_circular_buffer(
-        program,
-        all_cores,
-        kTimesNegSigmoidAndNegCbIndex,
-        data_format,
-        bfloat16_single_tile_size_bytes,
-        twice_block_size);
-#endif
-#else
-
-#ifdef PRECISE_DATA_FORMAT
-    auto cb_sigmoid = create_circular_buffer(
-        program, all_cores, kSigmoidCbIndex, precise_data_format, float32_single_tile_size_bytes, twice_block_size);
-    auto cb_one_minus_sigmoid = create_circular_buffer(
-        program,
-        all_cores,
-        kOneMinusSigmoidCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        twice_block_size);
-    auto cb_times_input_plus_one = create_circular_buffer(
-        program,
-        all_cores,
-        kTimesInputPlusOneCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        twice_block_size);
-    auto cb_times_sigmoid = create_circular_buffer(
-        program,
-        all_cores,
-        kTimesSigmoidCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        twice_block_size);
-#else
     auto cb_sigmoid = create_circular_buffer(
         program, all_cores, kSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
     auto cb_one_minus_sigmoid = create_circular_buffer(
@@ -281,14 +208,9 @@ SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
         program, all_cores, kTimesInputPlusOneCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
     auto cb_times_sigmoid = create_circular_buffer(
         program, all_cores, kTimesSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-#endif
-#endif
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
-    // We shouldnt need them
-    // defines["REDUCE_OP"] = "PoolType::SUM";
-    // defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
     auto* input_buffer = input.buffer();
     TT_FATAL(
