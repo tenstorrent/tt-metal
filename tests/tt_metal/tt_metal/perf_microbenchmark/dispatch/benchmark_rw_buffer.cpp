@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <chrono>
 #include <fmt/base.h>
 #include <fmt/format.h>
@@ -55,7 +54,7 @@ static const auto PAGE_SIZE_ARGS = benchmark::CreateRange(32, 32 * KB, 2);
 static const std::vector<int64_t> TRANSFER_SIZE_ARGS{32 * KB, 512 * MB};
 static const auto BENCHMARK_ARGS = {PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS};
 
-static std::map<int, std::shared_ptr<MeshDevice>> DEVICES;
+static std::map<int, std::shared_ptr<MeshDevice>> devices;
 
 // Create a buffer of total transfer_size big that is paged with page_size
 std::shared_ptr<MeshBuffer> create_buffer(int page_size, int transfer_size, std::shared_ptr<MeshDevice> device) {
@@ -72,7 +71,7 @@ std::shared_ptr<MeshBuffer> create_buffer(int page_size, int transfer_size, std:
 static void BM_write(benchmark::State& state) {
     auto page_size = state.range(0);
     auto transfer_size = state.range(1);
-    auto mesh_device = DEVICES[state.range(2)];
+    auto mesh_device = devices[state.range(2)];
 
     auto random_buffer_seed = std::chrono::system_clock::now().time_since_epoch().count();
     auto host_buffer = create_random_vector_of_bfloat16(transfer_size, 1000, random_buffer_seed);
@@ -89,7 +88,7 @@ static void BM_write(benchmark::State& state) {
 static void BM_read(benchmark::State& state) {
     auto page_size = state.range(0);
     auto transfer_size = state.range(1);
-    auto mesh_device = DEVICES[state.range(2)];
+    auto mesh_device = devices[state.range(2)];
 
     auto device_buffer = create_buffer(page_size, transfer_size, mesh_device);
     std::vector<uint32_t> host_buffer;
@@ -117,7 +116,7 @@ int main(int argc, char** argv) {
         log_info(LogTest, "Device 1 is not available");
     }
 
-    DEVICES = MeshDevice::create_unit_meshes(device_ids);
+    devices = MeshDevice::create_unit_meshes(device_ids);
 
     auto benchmark_args = {
         PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS, std::vector<int64_t>(device_ids.begin(), device_ids.end())};
@@ -128,7 +127,7 @@ int main(int argc, char** argv) {
 
     benchmark::RunSpecifiedBenchmarks();
     // closes all opened devices.
-    DEVICES.clear();
+    devices.clear();
     benchmark::Shutdown();
 
     return 0;
