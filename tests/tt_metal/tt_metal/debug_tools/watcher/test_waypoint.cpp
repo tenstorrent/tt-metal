@@ -178,11 +178,6 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
                 } else {
                     k_id_s = "";
                 }
-                std::string erisc1_s = "   X";
-                if (device->arch() == ARCH::BLACKHOLE) {
-                    // There is a second erisc on Blackhole
-                    erisc1_s = "   W";
-                }
                 expected = fmt::format(
                     "Device {} {}eth core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},{},   X,   X,   X  ",
                     device->id(),
@@ -194,7 +189,7 @@ void RunTest(WatcherFixture* fixture, IDevice* device) {
                     waypoint,
                     // TODO(#17275): Rework risc counts & masks into HAL and generalize this test.
                     // Active eth core only has one available erisc to test on.
-                    (device->arch() == ARCH::BLACKHOLE and not is_active) ? waypoint : erisc1_s);
+                    (device->arch() == ARCH::BLACKHOLE and not is_active) ? waypoint : "   X");
                 if (device->arch() == ARCH::BLACKHOLE) {
                     expected += fmt::format("rmsg:???|?? h_id:  0 smsg:? k_id:{}", k_id_s);
                 } else {

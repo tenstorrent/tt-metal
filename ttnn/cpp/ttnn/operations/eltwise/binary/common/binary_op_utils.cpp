@@ -217,6 +217,9 @@ std::map<std::string, std::string> get_defines_fp32(
             if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
                 new_defines.insert({"MUL_INT_INIT", fmt::format("mul_int_tile_init();")});
                 op_name = "mul_uint16_tile";
+            } else if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+                new_defines.insert({"MUL_INT32_INIT", fmt::format("mul_int32_tile_init();")});
+                op_name = "mul_int32_tile";
             } else {
                 new_defines.insert({"BINOP_INIT", fmt::format("mul_binary_tile_init();")});
                 op_name = "mul_binary_tile";

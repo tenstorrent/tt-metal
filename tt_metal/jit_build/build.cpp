@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <span>
 #include <string>
 #include <string_view>
@@ -28,8 +29,8 @@
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
 #include "tt_backend_api_types.hpp"
-#include "tt_cluster.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
+#include "control_plane.hpp"
 #include <umd/device/types/arch.h>
 
 namespace fs = std::filesystem;
@@ -323,7 +324,7 @@ void JitBuildState::finish_init() {
     // Append hw build objects compiled offline
     std::string build_dir =
         tt_metal::MetalContext::instance().rtoptions().get_root_dir() + "runtime/hw/lib/" + get_alias(env_.arch_) + "/";
-    if (this->is_fw_ and this->target_name_ != "erisc" and this->target_name_ != "active_erisc") {
+    if (this->is_fw_ and this->target_name_ != "erisc") {
         this->link_objs_ += build_dir + "tmu-crt0.o ";
     }
 
@@ -493,7 +494,7 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
 
 JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
     JitBuildState(env, build_config) {
-    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid active ethernet processor");
+    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 1, "Invalid active ethernet processor");
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     this->lflags_ = env.lflags_;
     this->cflags_ = env.cflags_;
@@ -517,18 +518,15 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
 
     // 0: core_id = 0 and not cooperative
     // 1: core_id = 0 and cooperative
-    // 2: core_id = 1 and not cooperative
     uint32_t build_class = (this->core_id_ << 1) | uint32_t(build_config.is_cooperative);
 
     switch (build_class) {
         case 0: {
-            // DM0
             this->target_name_ = "active_erisc";
             this->cflags_ = env_.cflags_ + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
 
             this->defines_ +=
-                "-DCOMPILE_FOR_AERISC=0 "
-                "-DCOMPILE_FOR_ERISC "  // Used for eth dataflow api
+                "-DCOMPILE_FOR_ERISC "
                 "-DERISC "
                 "-DRISC_B0_HW ";
 
@@ -536,7 +534,6 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
 
             if (this->is_fw_) {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/active_erisc.cc");
-                this->srcs_.push_back("tt_metal/hw/firmware/src/erisc-crt0.cc");
             } else {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/active_erisck.cc");
             }
@@ -592,37 +589,6 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
                             "-T" +
                             env_.root_ + linker_str;
 
-            break;
-        }
-        case 2: {
-            this->target_name_ = "subordinate_active_erisc";
-            this->cflags_ = env_.cflags_ + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
-            this->defines_ +=
-                "-DCOMPILE_FOR_AERISC=1 "
-                "-DCOMPILE_FOR_ERISC "  // Used for eth dataflow api
-                "-DERISC "
-                "-DRISC_B0_HW ";
-
-            this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
-            if (this->is_fw_) {
-                // Yes. Using same firmware as idle subordinate erisc
-                this->srcs_.push_back("tt_metal/hw/firmware/src/subordinate_erisc.cc");
-                this->defines_ += fmt::format("-DPROCESSOR_TYPE_INDEX={} ", 1);  // Hardcoded to 1 for DM1
-                this->defines_ += fmt::format(
-                    "-DPROGRAMMABLE_CORE_TYPE={} ",
-                    static_cast<int>(tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
-                        HalProgrammableCoreType::ACTIVE_ETH)));
-                this->defines_ += fmt::format("-DDISPATCH_CLASS_INDEX={} ", static_cast<int>(DISPATCH_CLASS_ETH_DM1));
-            } else {
-                this->srcs_.push_back("tt_metal/hw/firmware/src/active_erisck.cc");
-            }
-            if (this->is_fw_) {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) +
-                                 "/firmware_subordinate_aerisc.ld ";
-            } else {
-                this->lflags_ += "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) +
-                                 "/kernel_subordinate_aerisc.ld ";
-            }
             break;
         }
         default:
@@ -694,16 +660,9 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
                 "-DCOMPILE_FOR_IDLE_ERISC=1 "
                 "-DERISC "
                 "-DRISC_B0_HW ";
-
             this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
             if (this->is_fw_) {
-                this->srcs_.push_back("tt_metal/hw/firmware/src/subordinate_erisc.cc");
-                this->defines_ += fmt::format("-DPROCESSOR_TYPE_INDEX={} ", 1);  // Hardcoded to 1 for DM1
-                this->defines_ += fmt::format(
-                    "-DPROGRAMMABLE_CORE_TYPE={} ",
-                    static_cast<int>(tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
-                        HalProgrammableCoreType::IDLE_ETH)));
-                this->defines_ += fmt::format("-DDISPATCH_CLASS_INDEX={} ", static_cast<int>(DISPATCH_CLASS_ETH_DM1));
+                this->srcs_.push_back("tt_metal/hw/firmware/src/subordinate_idle_erisc.cc");
             } else {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisck.cc");
             }

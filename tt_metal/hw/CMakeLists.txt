@@ -12,7 +12,6 @@ set(PROCS
     trisc=1
     trisc=2
     aerisc
-    subordinate_aerisc
 )
 set(TYPES
     firmware
@@ -300,7 +299,6 @@ target_sources(
             inc/blackhole/cfg_defines.h
             inc/blackhole/core_config.h
             inc/blackhole/dev_mem_map.h
-            inc/blackhole/eth_fw_api.h
             inc/blackhole/eth_chan_noc_mapping.h
             inc/blackhole/eth_l1_address_map.h
             inc/blackhole/noc/noc.h
@@ -345,6 +343,8 @@ target_sources(
             inc/risc_common.h
             inc/tensix_functions.h
             inc/utils/bfloat16.h
+            inc/utils/float32.h
+            inc/utils/int32.h
             inc/utils/utils.h
             inc/vptr_uint.h
             inc/wormhole/c_tensix_core.h
