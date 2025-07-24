@@ -28,6 +28,10 @@ ttnn::SmallVector<uint32_t> create_repetition_vector(const Tensor& tensor, std::
             expansion_vector[index] = shape[index];
         }
     }
+    std::cout << "Expansion vector: ";
+    for (auto elem : expansion_vector) {
+        std::cout << elem << " ";
+    }
     return expansion_vector;
 }
 

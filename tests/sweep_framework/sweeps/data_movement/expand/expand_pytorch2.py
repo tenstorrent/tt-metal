@@ -285,7 +285,8 @@ parameters = {
             {"shape": [7, 1], "size": [7, 9]},
             {"shape": [768], "size": [1, 1, -1]},
         ],
-        "dtype": [ttnn.bfloat16],
+        # "dtype": [ttnn.bfloat16],
+        "dtype": [ttnn.uint32],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     }
 }
@@ -302,6 +303,14 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
+def random_torch_tensor(dtype, shape):
+    if dtype == ttnn.uint16:
+        return torch.randint(0, 100, shape).to(torch.int16)
+    if dtype == ttnn.int32:
+        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
+    return torch.rand(shape).bfloat16().float()
+
+
 def run(
     expand_specs,
     dtype,
@@ -309,7 +318,8 @@ def run(
     *,
     device,
 ):
-    torch_tensor = torch_random(expand_specs["shape"], -10, 10, dtype=torch.bfloat16)
+    # torch_tensor = torch_random(expand_specs["shape"], -10, 10, dtype=torch.bfloat16)
+    torch_tensor = random_torch_tensor(dtype, expand_specs["shape"])
     expanded_tensor = torch_tensor.expand(expand_specs["size"])
 
     ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, layout=layout, dtype=dtype)
