@@ -442,15 +442,17 @@ operation::ProgramWithCallbacks argmax_multi_core(
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .compile_args = reader_compile_args});
 
-    tt::tt_metal::KernelHandle reader_kernel_id1 = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
-        cores1,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::RISCV_1_default,
-            .compile_args = reader_compile_args});
-
+    tt::tt_metal::KernelHandle reader_kernel_id1 = 0;
+    if (num_cores1 > 0) {
+        reader_kernel_id1 = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
+            cores1,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt::tt_metal::NOC::RISCV_1_default,
+                .compile_args = reader_compile_args});
+    }
     const auto cores_coords0 = corerange_to_cores(cores0, num_cores0, true);
     const auto cores_coords1 = corerange_to_cores(cores1, num_cores1, true);
 
