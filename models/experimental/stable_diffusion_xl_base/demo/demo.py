@@ -180,7 +180,6 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
         device=ttnn_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        # mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=1),
         mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_device, list(ttnn_device.shape), dims=(1, 0)),
     )
     ttnn_add_text_embeds = ttnn.from_torch(
@@ -189,7 +188,6 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
         device=ttnn_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        # mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=1),
         mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_device, list(ttnn_device.shape), dims=(1, 0)),
     )
 
@@ -201,7 +199,6 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
         device=ttnn_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        # mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
         mesh_mapper=ttnn.ShardTensor2dMesh(ttnn_device, list(ttnn_device.shape), dims=(0, None)),
     )
     ttnn_time_ids = ttnn.squeeze(ttnn_time_ids, dim=0)
