@@ -207,6 +207,13 @@ def run_all_gather_replicate_impl(
         hop_cores=HOP_GRID,
         untilize_out=False,
     )
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=fidelity,
+        math_approx_mode=True,
+        fp32_dest_acc_en=fp32_acc_mode,
+        packer_l1_acc=packer_l1_acc,
+        dst_full_sync_en=True,
+    )
 
     # Intermediate shapes
     intermediate_num_cores = cluster_shape[cluster_axis]
