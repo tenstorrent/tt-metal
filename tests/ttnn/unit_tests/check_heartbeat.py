@@ -27,3 +27,5 @@ for col in range(4, 12):
     print(
         f"Core e0,{col}: metal flag: {metal_fw_flags[0]} {metal_fw_flags[1]}, heartbeat: {heartbeat}, mailbox: {host_mailbox_status[0]:#x} {host_mailbox_status[1]:#x} {host_mailbox_status[2]:#x} {host_mailbox_status[3]:#x}, go_msg: {go_msg:#x}, additional_debug: {additional_debug[0]:#x} {additional_debug[1]:#x} {additional_debug[2]:#x}"
     )
+
+raise Exception("Running this means the test failed")
