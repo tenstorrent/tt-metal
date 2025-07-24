@@ -13,12 +13,10 @@
 namespace ttml::core::random {
 
 template <typename T, typename DistGenFunc>
-void sequential_generate(std::span<T> seq, DistGenFunc&& dist_factory, uint32_t seed) {
+void sequential_generate(std::span<T> seq, const DistGenFunc& dist_factory, uint32_t seed) {
     auto rng = std::mt19937{seed};
-    auto dist = std::forward<DistGenFunc>(dist_factory)();
-    for (auto& it : seq) {
-        it = dist(rng);
-    }
+    auto dist = dist_factory();
+    std::generate(seq.begin(), seq.end(), [&]() { return dist(rng); });
 }
 
 template <typename T, typename DistGenFunc>
@@ -49,7 +47,7 @@ void parallel_generate(
     size_t offset = 0;
     for (size_t i = 0; i < num_threads; ++i) {
         auto adjusted_chunk_size = chunk_size + (i == num_threads - 1 ? remainder : 0);
-        threads.emplace_back([=, &dist_factory, &seq]() {
+        threads.emplace_back([&dist_factory, &seq, offset, adjusted_chunk_size, seed_base, i]() {
             std::span<T> chunk{seq.data() + offset, adjusted_chunk_size};
             sequential_generate(chunk, dist_factory, seed_base + i);
         });

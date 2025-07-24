@@ -36,14 +36,14 @@ void uniform_init(std::vector<float>& vec, UniformRange range) {
     auto& [a, b] = range;
     auto dist_factory = [&]() { return std::uniform_real_distribution<float>(a, b); };
     uint32_t seed = autograd::ctx().get_seed();
-    core::random::parallel_generate(std::span{vec.data(), vec.size()}, dist_factory, seed);
+    core::random::sequential_generate(std::span{vec.data(), vec.size()}, dist_factory, seed);
 }
 
 void normal_init(std::vector<float>& vec, NormalParams params) {
     auto& [mean, stddev] = params;
     auto dist_factory = [&]() { return std::normal_distribution<float>(mean, stddev); };
     uint32_t seed = autograd::ctx().get_seed();
-    core::random::parallel_generate(std::span{vec.data(), vec.size()}, dist_factory, seed);
+    core::random::sequential_generate(std::span{vec.data(), vec.size()}, dist_factory, seed);
 }
 
 void constant_init(std::vector<float>& vec, float value) {
