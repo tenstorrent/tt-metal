@@ -538,7 +538,7 @@ struct WorkerToFabricEdmSenderImpl {
     uint8_t sync_noc_cmd_buf;
     uint8_t direction;
 
-private:
+public:
     template <bool stateful_api = false, bool enable_ring_support = false>
     FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = noc_index) {
         if constexpr (stateful_api) {
@@ -628,7 +628,7 @@ private:
         ASSERT(tt::tt_fabric::is_valid(
             *const_cast<PACKET_HEADER_TYPE*>(reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
         send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
-        post_send_payload_increment_pointers();
+        // post_send_payload_increment_pointers();
     }
     template <
         EDM_IO_BLOCKING_MODE blocking_mode,

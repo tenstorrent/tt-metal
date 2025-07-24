@@ -92,23 +92,71 @@ void kernel_main() {
         fabric_connection.open();
     }
 
+    constexpr uint32_t addr = 1000000;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr)[0] = sizeof(PACKET_HEADER_TYPE);
+
+    bool page_size_safe = intermediate_page_size <= 4096;
+    ASSERT(page_size_safe);
+    if (!page_size_safe) {
+        WAYPOINT("STK0");
+        for (size_t i = 0; i < 100; ++i) {
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr)[i] = 0xdeadbeef;
+        }
+        while (1) {
+        }
+    }
+
     auto* fabric_direction_connection =
         direction ? &fabric_connection.get_forward_connection() : &fabric_connection.get_backward_connection();
 
+    if (direction) {
+        ASSERT(fabric_connection.has_forward_connection());
+        if (!fabric_connection.has_forward_connection()) {
+            for (size_t i = 0; i < 100; ++i) {
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr)[i] = 0xc0ffee;
+            }
+            WAYPOINT("STK1");
+            while (1) {
+            }
+        }
+    } else {
+        ASSERT(fabric_connection.has_backward_connection());
+        if (!fabric_connection.has_backward_connection()) {
+            for (size_t i = 0; i < 100; ++i) {
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr)[i] = 0xf00d1e;
+            }
+            WAYPOINT("STK2");
+            while (1) {
+            }
+        }
+    }
+
     // DEBUGGING
     cb_reserve_back(cb_compute_output_id, tile_granularity);
-    size_t l1_read_addr = get_read_ptr(cb_compute_output_id);
-    uint64_t remote_noc0_dest_noc_addr = get_noc_addr(0, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr)[1] = intermediate_address;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr)[2] = noc_mode;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr)[3] = noc_index;
 
-    for (volatile uint32_t x = 0; x < 5; ++x) {
+    // cb_wait_front(cb_compute_output_id, tile_granularity);
+    // size_t l1_read_addr = 1000000;//get_read_ptr(cb_compute_output_id);
+    uint64_t remote_dest_noc_addr = get_noc_addr(0, intermediate_addrgen, 0 /*offset*/);                     // hangs
+    uint64_t remote_noc0_dest_noc_addr = get_noc_addr(0, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);  // hangs
+
+    for (uint32_t x = 0; x < 10000; ++x) {
+        // Test hangs if this is inside, but doesn't if it's outside
         pkt_hdr->to_noc_unicast_write(
             tt::tt_fabric::NocUnicastCommandHeader{remote_noc0_dest_noc_addr}, intermediate_page_size);
 
         fabric_direction_connection->wait_for_empty_write_slot();
-        fabric_direction_connection->send_payload_without_header_non_blocking_from_address(
-            l1_read_addr, intermediate_page_size);
-        fabric_direction_connection->send_payload_flush_non_blocking_from_address(
-            (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
+        // tt::tt_fabric::send_chunk_from_address<tt::tt_fabric::EDM_IO_BLOCKING_MODE::NON_BLOCKING>(
+        //     (uint32_t)pkt_hdr,
+        //     1,
+        //     sizeof(PACKET_HEADER_TYPE),
+        //     remote_noc0_dest_noc_addr/*buffer_address*/);
+        noc_async_write((uint32_t)pkt_hdr, remote_dest_noc_addr, sizeof(PACKET_HEADER_TYPE));
+
+        // fabric_direction_connection->send_payload_flush_non_blocking_from_address(
+        //     (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
         noc_async_writes_flushed();
     }
 

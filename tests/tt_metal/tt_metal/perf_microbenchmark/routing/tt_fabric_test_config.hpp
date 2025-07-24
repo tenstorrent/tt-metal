@@ -463,6 +463,10 @@ inline ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& te
         test_config.global_sync = parse_scalar<bool>(test_yaml["sync"]);
     }
 
+    // if (test_yaml["runs"]) {
+    //     test_config.runs = parse_scalar<int>(test_yaml["runs"]);
+    // }
+
     return test_config;
 }
 

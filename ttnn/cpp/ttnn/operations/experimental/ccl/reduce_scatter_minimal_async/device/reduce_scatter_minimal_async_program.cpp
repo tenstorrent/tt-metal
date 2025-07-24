@@ -239,10 +239,13 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in4;
     static constexpr auto num_packet_headers_storable = 4;
+    TT_FATAL(
+        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() >= op_config.get_page_size(),
+        "Page sizes too large for fabric, they must be packetized but the implementation doesn't support that yet");
     auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
         tt::tt_metal::CircularBufferConfig(
-            num_packet_headers_storable * packet_header_size_bytes * 2,
+            num_packet_headers_storable * packet_header_size_bytes * 16,
             {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
     auto reserved_packet_header_CB_handle =
