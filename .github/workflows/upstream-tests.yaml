@@ -200,6 +200,7 @@ jobs:
       - get-image-tags
       - build-images
     strategy:
+      fail-fast: false
       matrix:
         bh-card:
           - P100
