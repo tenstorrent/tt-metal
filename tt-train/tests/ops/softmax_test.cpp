@@ -51,7 +51,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Batch) {
     int32_t dim = 3U;
 
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
         42);
@@ -86,7 +86,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Big_Batch) {
     int32_t dim = 3U;
 
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
         42);
@@ -118,7 +118,7 @@ TEST_F(SoftmaxTest, SoftmaxTest_Huge_Batch) {
     int32_t dim = 3U;
 
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
         42);

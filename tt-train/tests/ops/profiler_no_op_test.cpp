@@ -35,7 +35,7 @@ TEST_F(ProfilerNoOpTest, ProfilerNoOpTest_Batch) {
     const uint32_t N = 2U, C = 1U, H = 91U, W = 187U;
 
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
         42);
@@ -60,7 +60,7 @@ TEST_F(ProfilerNoOpTest, ProfilerNoOpTest_Huge_Batch) {
     const uint32_t N = 64U, C = 1U, H = 32U, W = 128000U;
 
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
         42);

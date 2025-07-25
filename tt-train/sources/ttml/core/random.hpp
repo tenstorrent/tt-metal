@@ -10,7 +10,7 @@
 #include <thread>
 #include <vector>
 
-namespace ttml::core::random {
+namespace ttml::core {
 
 template <typename T, typename DistGenFunc>
 void sequential_generate(std::span<T> seq, const DistGenFunc& dist_factory, uint32_t seed) {
@@ -54,4 +54,4 @@ void parallel_generate(
     }
 }
 
-}  // namespace ttml::core::random
+}  // namespace ttml::core

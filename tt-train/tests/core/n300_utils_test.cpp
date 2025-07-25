@@ -118,7 +118,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> xtensor_data = xt::empty<float>({32 * 32});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{xtensor_data.data(), xtensor_data.size()},
         []() { return std::uniform_real_distribution<float>(-0.05, 0.05); },
         42);
@@ -145,7 +145,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> xtensor_data = xt::empty<float>({32});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{xtensor_data.data(), xtensor_data.size()},
         []() { return std::uniform_real_distribution<float>(-1.F, 1.F); },
         42);
@@ -188,14 +188,14 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis3Matmul) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> xtensor_a_data = xt::empty<float>({128 * 64});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{xtensor_a_data.data(), xtensor_a_data.size()},
         []() { return std::uniform_real_distribution<float>(-0.005, 0.005); },
         42);
     xt::xarray<float> xtensor_a = xtensor_a_data.reshape({1, 1, 128, 64});
 
     xt::xarray<float> xtensor_b_data = xt::empty<float>({256 * 64});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{xtensor_b_data.data(), xtensor_b_data.size()},
         []() { return std::uniform_real_distribution<float>(-0.005, 0.005); },
         42);

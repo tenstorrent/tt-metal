@@ -65,7 +65,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNotInputParallel) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> test_data = xt::empty<float>({in_features});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{test_data.data(), test_data.size()},
         []() { return std::uniform_real_distribution<float>(0.0f, 1.0f); },
         42);
@@ -112,7 +112,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasNotInputParallel) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> test_data = xt::empty<float>({in_features});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{test_data.data(), test_data.size()},
         []() { return std::uniform_real_distribution<float>(0.0f, 1.0f); },
         42);
@@ -155,7 +155,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasInputParallel) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> test_data = xt::empty<float>({in_features});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{test_data.data(), test_data.size()},
         []() { return std::uniform_real_distribution<float>(0.0f, 1.0f); },
         42);
@@ -198,7 +198,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasInputParallel) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> test_data = xt::empty<float>({in_features});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{test_data.data(), test_data.size()},
         []() { return std::uniform_real_distribution<float>(0.0f, 1.0f); },
         42);
@@ -238,7 +238,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasAllGather) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> test_data = xt::empty<float>({in_features});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{test_data.data(), test_data.size()},
         []() { return std::uniform_real_distribution<float>(0.0f, 1.0f); },
         42);
@@ -283,7 +283,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasAllGather) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> test_data = xt::empty<float>({in_features});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{test_data.data(), test_data.size()},
         []() { return std::uniform_real_distribution<float>(0.0f, 1.0f); },
         42);
@@ -324,7 +324,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNoAllGather) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> test_data = xt::empty<float>({in_features});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{test_data.data(), test_data.size()},
         []() { return std::uniform_real_distribution<float>(0.0f, 1.0f); },
         42);
@@ -377,7 +377,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNoAllGather) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> test_data = xt::empty<float>({in_features});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{test_data.data(), test_data.size()},
         []() { return std::uniform_real_distribution<float>(0.0f, 1.0f); },
         42);
@@ -430,7 +430,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> test_data = xt::empty<float>({in_features * batch_size * sequence_length});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{test_data.data(), test_data.size()},
         []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
         42);
@@ -503,7 +503,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> test_data = xt::empty<float>({in_features * batch_size * sequence_length});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{test_data.data(), test_data.size()},
         []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
         42);
@@ -575,7 +575,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
     auto mesh_shape = device->shape();
 
     xt::xarray<float> test_data = xt::empty<float>({in_features * batch_size * sequence_length});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{test_data.data(), test_data.size()},
         []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
         42);

@@ -70,7 +70,7 @@ TEST_F(RMSNormOpTest, RMSNorm_Compare_Kernel_Composite) {
     for (const auto& shape : shapes) {
         for (uint32_t iter = 0; iter < iterations; ++iter) {
             xt::xarray<float> x_data = xt::empty<float>(shape);
-            ttml::core::random::parallel_generate(
+            ttml::core::parallel_generate(
                 std::span{x_data.data(), x_data.size()},
                 []() { return std::uniform_real_distribution<float>(0.F, 1.F); },
                 42);

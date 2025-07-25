@@ -63,7 +63,7 @@ TEST_F(N300CommOpsTest, TestAllReduceNotFullyTiled) {
     EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-3));
 
     xt::xarray<float> grad_data = xt::empty<float>(all_reduce_expected.shape());
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{grad_data.data(), grad_data.size()},
         []() { return std::uniform_real_distribution<float>(0.F, 1.F); },
         42);
@@ -102,7 +102,7 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
     size_t size = 384;
     size_t height = 256;
     std::vector<float> test_data_vec(batch * size * height);
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{test_data_vec.data(), test_data_vec.size()},
         []() { return std::uniform_real_distribution<float>{-1.F, 1.F}; },
         42);
@@ -125,7 +125,7 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
     EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[1], /* rtol */ 1e-3, /* atol */ 2e-2));
 
     xt::xarray<float> grad_data = xt::empty<float>(all_reduce_expected.shape());
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{grad_data.data(), grad_data.size()},
         []() { return std::uniform_real_distribution<float>(0.F, 1.F); },
         42);
@@ -159,7 +159,7 @@ TEST_F(N300CommOpsTest, TestAllReduceFullyTiled) {
     size_t size = 64UL;
     size_t height = 32UL;
     std::vector<float> test_data_vec(size * height);
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{test_data_vec.data(), test_data_vec.size()},
         []() { return std::uniform_real_distribution<float>(0.F, 0.001F); },
         42);
@@ -182,7 +182,7 @@ TEST_F(N300CommOpsTest, TestAllReduceFullyTiled) {
     EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
     xt::xarray<float> grad_data = xt::empty<float>(all_reduce_expected.shape());
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{grad_data.data(), grad_data.size()},
         []() { return std::uniform_real_distribution<float>(0.F, 1.F); },
         42);
@@ -229,7 +229,7 @@ TEST_F(N300CommOpsTest, TestAllGatherNotFullyTiled) {
     EXPECT_TRUE(xt::allclose(xtensor, gathered_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
     xt::xarray<float> grad_data = xt::empty<float>(xtensor.shape());
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{grad_data.data(), grad_data.size()},
         []() { return std::uniform_real_distribution<float>(0.F, 1.F); },
         42);
@@ -264,7 +264,7 @@ TEST_F(N300CommOpsTest, TestAllGatherFullyTiled) {
     size_t size = 64UL;
     size_t height = 256UL;
     std::vector<float> test_data_vec(batch * size * height);
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{test_data_vec.data(), test_data_vec.size()},
         []() { return std::uniform_real_distribution<float>{-1.F, 1.F}; },
         42);
@@ -281,7 +281,7 @@ TEST_F(N300CommOpsTest, TestAllGatherFullyTiled) {
     EXPECT_TRUE(xt::allclose(xtensor, gathered_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
     xt::xarray<float> grad_data = xt::empty<float>(xtensor.shape());
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{grad_data.data(), grad_data.size()},
         []() { return std::uniform_real_distribution<float>(0.F, 1.F); },
         42);
@@ -332,7 +332,7 @@ TEST_F(N300CommOpsTest, TestScatterNotFullyTiled) {
 
     // check backward
     xt::xarray<float> grad_data = xt::empty<float>(xtensor.shape());
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{grad_data.data(), grad_data.size()},
         []() { return std::uniform_real_distribution<float>(0.F, 1.F); },
         42);
@@ -362,7 +362,7 @@ TEST_F(N300CommOpsTest, TestScatterFullyTiled) {
     size_t size = 128UL;
     size_t height = 256UL;
     std::vector<float> test_data_vec(batch * size * height);
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{test_data_vec.data(), test_data_vec.size()},
         []() { return std::uniform_real_distribution<float>{-1.F, 1.F}; },
         42);
@@ -395,7 +395,7 @@ TEST_F(N300CommOpsTest, TestScatterFullyTiled) {
 
     // check backward
     xt::xarray<float> grad_data = xt::empty<float>(xtensor.shape());
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{grad_data.data(), grad_data.size()},
         []() { return std::uniform_real_distribution<float>(-1.F, 1.F); },
         42);
