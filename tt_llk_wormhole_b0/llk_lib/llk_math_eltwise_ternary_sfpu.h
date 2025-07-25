@@ -14,8 +14,6 @@
 #include "llk_math_common.h"
 #include "llk_sfpu_types.h"
 
-using namespace ckernel;
-
 // local function declarations
 template <SfpuType sfpu_op>
 inline void eltwise_ternary_sfpu_configure_addrmod()
