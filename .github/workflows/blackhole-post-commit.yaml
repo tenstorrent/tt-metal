@@ -49,7 +49,7 @@ on:
   # push:
   #  branches: ["main"]
 
-run-name: ${{ inputs.enable-llmbox-tests == true && 'Blackhole LLMBox tests' || (inputs.enable-watcher == true && 'Blackhole post-commit tests (watcher enabled) ' || ((github.event_name == 'schedule' && github.event.schedule == '0 0 * * *') && 'Blackhole post-commit tests (P100 nightly) ' || 'Blackhole post-commit tests') }}
+run-name: ${{ inputs.enable-llmbox-tests == true && 'Blackhole LLMBox tests' || (inputs.enable-watcher == true && 'Blackhole post-commit tests (watcher enabled)' || (github.event_name == 'schedule' && github.event.schedule == '0 0 * * *') && 'Blackhole post-commit tests (P100 nightly)' || 'Blackhole post-commit tests') }}
 
 permissions:
   actions: read
