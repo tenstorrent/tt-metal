@@ -500,7 +500,7 @@ struct LineSyncConfig {
 
     void global_sync_finish(uint8_t sync_iter) {
         // sync wait
-        noc_semaphore_wait(line_sync_ptr, line_sync_val * (sync_iter + 1));
+        noc_semaphore_wait_min(line_sync_ptr, line_sync_val * (sync_iter + 1));
     }
 
 private:
