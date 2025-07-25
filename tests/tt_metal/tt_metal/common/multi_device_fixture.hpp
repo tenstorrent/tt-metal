@@ -96,17 +96,23 @@ protected:
         // If specified, the associated tests will run only if SystemMesh shape matches the specified shape.
         std::optional<tt::tt_metal::distributed::MeshShape> system_mesh_shape;
 
+        // If specified, the fixture will open a mesh device with the specified shape and offset.
+        // Otherwise, SystemMesh shape with zero offset will be used.
+        std::optional<tt::tt_metal::distributed::MeshShape> mesh_shape_to_open;
+        std::optional<tt::tt_metal::distributed::MeshCoordinate> mesh_offset_to_open;
+
         // If specified, the associated tests will run only if the machine architecture matches the specified
         // architecture.
         std::optional<tt::ARCH> arch;
 
         int num_cqs = 1;
-        uint32_t trace_region_size = 0;
+        uint32_t l1_small_size = DEFAULT_L1_SMALL_SIZE;
+        uint32_t trace_region_size = DEFAULT_TRACE_REGION_SIZE;
         uint32_t worker_l1_size = DEFAULT_WORKER_L1_SIZE;
         tt_fabric::FabricConfig fabric_config = tt_fabric::FabricConfig::DISABLED;
     };
 
-    MeshDeviceFixtureBase(const Config& fixture_config) : config_(fixture_config) {}
+    explicit MeshDeviceFixtureBase(const Config& fixture_config) : config_(fixture_config) {}
 
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -143,8 +149,8 @@ protected:
             tt_fabric::SetFabricConfig(config_.fabric_config);
         }
         mesh_device_ = MeshDevice::create(
-            MeshDeviceConfig(system_mesh_shape),
-            0,
+            MeshDeviceConfig(config_.mesh_shape_to_open.value_or(system_mesh_shape), config_.mesh_offset_to_open),
+            config_.l1_small_size,
             config_.trace_region_size,
             config_.num_cqs,
             core_type,
