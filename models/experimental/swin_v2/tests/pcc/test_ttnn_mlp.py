@@ -15,8 +15,8 @@ from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.swin_v2.reference.mlp import MLP
 from models.experimental.swin_v2.tt.tt_mlp import TtMLP
-from torchvision import models
 import ttnn
+from models.experimental.swin_v2.load_model_utils import load_torch_model
 
 
 def create_custom_preprocessor(device):
@@ -49,24 +49,12 @@ def create_custom_preprocessor(device):
         (768, [3072, 768], 16, 7, 0),
     ],
 )
-def test_mlp(device, in_channels, hidden_channels, seq_len, i, j, reset_seeds):
-    model = models.swin_v2_s(weights="IMAGENET1K_V1")
-    state_dict = state_dict = model.state_dict()
-    mlp_state_dict = {k: v for k, v in state_dict.items() if (k.startswith(f"features.{i}.{j}.mlp."))}
-
-    if not mlp_state_dict:
-        raise ValueError("No parameters found in mlp_state_dict")
-
+def test_mlp(device, in_channels, hidden_channels, seq_len, i, j, reset_seeds, model_location_generator):
     torch_model = MLP(in_channels, hidden_channels, activation_layer=nn.GELU)
 
-    new_state_dict = {}
-    new_torch_state_dic = {}
-    for k, v in mlp_state_dict.items():
-        new_state_dict[k] = mlp_state_dict[k]
-        new_torch_state_dic[k.replace(f"features.{i}.{j}.mlp.", "")] = mlp_state_dict[k]
-
-    torch_model.load_state_dict(new_torch_state_dic)
-    torch_model.eval()
+    torch_model = load_torch_model(
+        torch_model, i=i, j=j, module="mlp", model_location_generator=model_location_generator
+    )
 
     # Input tensor for testing
     torch_input_tensor = torch.randn(1, seq_len, seq_len, in_channels)  # Sample input tensor
