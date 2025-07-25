@@ -877,17 +877,20 @@ void DumpMeshDeviceProfileResults(
     ZoneScoped;
 
     if (getDeviceProfilerState()) {
-        auto profiler_it = detail::tt_metal_device_profiler_map.find(mesh_device.id());
-        TT_ASSERT(profiler_it != tt_metal_device_profiler_map.end());
-        DeviceProfiler& profiler = profiler_it->second;
-
         if (useFastDispatch(&mesh_device)) {
-            if (profiler.isLastFDDumpDone() && state == ProfilerDumpState::LAST_FD_DUMP) {
-                ZoneScopedN("Skipping! Last FD dispatch is done");
-                return;
-            } else if (state == ProfilerDumpState::LAST_FD_DUMP) {
-                profiler.setLastFDDumpAsDone();
+            for (IDevice* device : mesh_device.get_devices()) {
+                auto profiler_it = detail::tt_metal_device_profiler_map.find(device->id());
+                TT_ASSERT(profiler_it != detail::tt_metal_device_profiler_map.end());
+                DeviceProfiler& profiler = profiler_it->second;
+
+                if (profiler.isLastFDDumpDone() && state == ProfilerDumpState::LAST_FD_DUMP) {
+                    ZoneScopedN("Skipping! Last FD dispatch is done");
+                    return;
+                } else if (state == ProfilerDumpState::LAST_FD_DUMP) {
+                    profiler.setLastFDDumpAsDone();
+                }
             }
+
             mesh_device.mesh_command_queue().finish();
         }
 
