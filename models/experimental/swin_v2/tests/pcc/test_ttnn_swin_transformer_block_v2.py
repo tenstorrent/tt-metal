@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from torchvision import models
 from models.experimental.swin_v2.reference.swin_transformer_block_v2 import SwinTransformerBlockV2
 from models.experimental.swin_v2.reference.shifted_window_attention_v2 import ShiftedWindowAttentionV2
 from models.experimental.swin_v2.tt.tt_swin_transformer_block_v2 import TtSwinTransformerBlockV2
@@ -12,10 +11,11 @@ import ttnn
 from models.utility_functions import skip_for_grayskull
 from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_layernorm_parameter
 from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_linear_weight, preprocess_linear_bias
-from tests.ttnn.integration_tests.swin_v2.tests.test_ttnn_mlp import (
+from models.experimental.swin_v2.tests.pcc.test_ttnn_mlp import (
     create_custom_preprocessor as create_custom_preprocessor_mlp,
 )
 import pytest
+from models.experimental.swin_v2.load_model_utils import load_torch_model
 
 
 def create_custom_preprocessor_shifted_window_attention_v2(device):
@@ -121,24 +121,16 @@ def create_custom_preprocessor(device):
         (384, [4, 4], 12, 5, 1, [1, 16, 1, 64, 64], [1, 32, 32, 384]),
     ],
 )
-def test_swin_transformer_block_v2(device, dim, shift_size, num_heads, i, j, attn_mask, input_shape, reset_seeds):
-    model = models.swin_v2_s(weights="IMAGENET1K_V1")
-    state_dict = model.state_dict()
-    ds_state_dict = {k: v for k, v in state_dict.items() if (k.startswith(f"features.{i}.{j}."))}
-
+def test_swin_transformer_block_v2(
+    device, dim, shift_size, num_heads, i, j, attn_mask, input_shape, reset_seeds, model_location_generator
+):
     attn_mask = torch.rand(attn_mask)
     torch_input_tensor = torch.rand(input_shape)
     torch_model = SwinTransformerBlockV2(dim, num_heads, [8, 8], shift_size)
 
-    new_state_dict = {}
-    new_torch_state_dic = {}
-    for k, v in ds_state_dict.items():
-        if "cbp_mlp" not in k:
-            new_state_dict[k] = ds_state_dict[k]
-        new_torch_state_dic[k.replace(f"features.{i}.{j}.", "")] = ds_state_dict[k]
-
-    torch_model.load_state_dict(new_torch_state_dic)
-    torch_model.eval()
+    torch_model = load_torch_model(
+        torch_model, i=i, j=j, module="transformer_block", model_location_generator=model_location_generator
+    )
 
     torch_output = torch_model(torch_input_tensor)
 
