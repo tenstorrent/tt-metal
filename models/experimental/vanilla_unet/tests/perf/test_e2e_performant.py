@@ -9,14 +9,14 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.yolov10x.runner.performant_runner import YOLOv10PerformantRunner
+from models.experimental.vanilla_unet.runner.performant_runner import VanillaUNetPerformantRunner
 from models.utility_functions import run_for_wormhole_b0
 
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 10 * 1024, "trace_region_size": 23887872, "num_command_queues": 2}],
+    [{"l1_small_size": (7 * 8192) + 1730, "trace_region_size": 1605632, "num_command_queues": 2}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -26,10 +26,10 @@ from models.utility_functions import run_for_wormhole_b0
 @pytest.mark.parametrize(
     "resolution",
     [
-        (640, 640),
+        (480, 640),
     ],
 )
-@pytest.mark.models_device_performance_bare_metal
+@pytest.mark.models_performance_bare_metal
 def test_e2e_performant(
     device,
     batch_size,
@@ -38,7 +38,7 @@ def test_e2e_performant(
     model_location_generator,
     resolution,
 ):
-    performant_runner = YOLOv10PerformantRunner(
+    performant_runner = VanillaUNetPerformantRunner(
         device,
         batch_size,
         act_dtype,
@@ -61,5 +61,5 @@ def test_e2e_performant(
 
     inference_time_avg = round(sum(inference_times) / len(inference_times), 6)
     logger.info(
-        f"ttnn_yolov10_batch_size: {batch_size}, resolution: {resolution}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(batch_size/inference_time_avg)}"
+        f"ttnn_vanilla_unet batch_size: {batch_size}, resolution: {resolution}. One inference iteration time (sec): {inference_time_avg}, FPS: {round(batch_size/inference_time_avg)}"
     )

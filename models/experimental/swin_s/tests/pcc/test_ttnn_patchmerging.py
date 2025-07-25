@@ -14,7 +14,7 @@ from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.swin_s.reference.patchmerging import PatchMerging
 from models.experimental.swin_s.tt.tt_patchmerging import TtPatchMerging
-from models.experimental.swin_s.load_model_utils import load_torch_model
+from models.experimental.swin_s.common import load_torch_model
 
 
 def create_custom_preprocessor(device):

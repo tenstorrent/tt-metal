@@ -6,8 +6,8 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.vgg_unet.tests.vgg_unet_e2e_performant import VggUnetTrace2CQ
-from models.demos.vgg_unet.tests.vgg_unet_performant import run_vgg_unet_inference, run_vgg_unet_trace_inference
+from models.demos.vgg_unet.tests.perf.vgg_unet_e2e_performant import VggUnetTrace2CQ
+from models.demos.vgg_unet.tests.perf.vgg_unet_performant import run_vgg_unet_inference, run_vgg_unet_trace_inference
 from models.utility_functions import run_for_wormhole_b0
 
 

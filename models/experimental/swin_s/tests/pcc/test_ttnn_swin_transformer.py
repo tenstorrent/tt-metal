@@ -21,7 +21,7 @@ from models.experimental.swin_s.tests.pcc.test_ttnn_swin_transformer_block impor
 from models.experimental.swin_s.tests.pcc.test_ttnn_patchmerging import (
     create_custom_preprocessor as create_custom_preprocessor_patch_merging,
 )
-from models.experimental.swin_s.load_model_utils import load_torch_model
+from models.experimental.swin_s.common import load_torch_model
 
 
 def preprocess_attn_mask(input_shape, patch_size, window_size, shift_size, device):

@@ -9,7 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
-from models.demos.mobilenetv2.tests.mobilenetv2_common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
+from models.demos.mobilenetv2.tests.perf.mobilenetv2_common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
 from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
 from models.demos.mobilenetv2.tt.model_preprocessing import (
     create_mobilenetv2_input_tensors,
@@ -21,7 +21,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": MOBILENETV2_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],

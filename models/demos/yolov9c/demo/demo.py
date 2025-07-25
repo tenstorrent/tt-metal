@@ -8,8 +8,8 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.yolov9c.common import load_torch_model
 from models.demos.yolov9c.demo.demo_utils import load_coco_class_names, postprocess, save_seg_predictions_by_model
-from models.demos.yolov9c.load_model_utils import load_torch_model
 from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
 from models.experimental.yolo_eval.evaluate import save_yolo_predictions_by_model
 from models.experimental.yolo_eval.utils import LoadImages

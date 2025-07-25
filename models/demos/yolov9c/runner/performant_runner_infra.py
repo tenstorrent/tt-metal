@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.yolov9c.load_model_utils import load_torch_model
+from models.demos.yolov9c.common import load_torch_model
 from models.demos.yolov9c.tt.model_preprocessing import create_yolov9c_model_parameters
 from models.demos.yolov9c.tt.ttnn_yolov9c import YoloV9
 from models.utility_functions import divup, is_wormhole_b0

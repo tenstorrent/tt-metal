@@ -31,7 +31,7 @@ The MobileNetV2 model has been pre-trained on the ImageNet dataset and can be us
 - end-2-end perf is 2808 FPS
 
 ```bash
-pytest models/demos/mobilenetv2/tests/test_e2e_performant.py
+pytest models/demos/mobilenetv2/tests/perf/test_e2e_performant.py
 ```
 
 ### Demo on ImageNet:

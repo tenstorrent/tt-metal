@@ -15,7 +15,7 @@ from models.experimental.swin_v2.tests.pcc.test_ttnn_mlp import (
     create_custom_preprocessor as create_custom_preprocessor_mlp,
 )
 import pytest
-from models.experimental.swin_v2.load_model_utils import load_torch_model
+from models.experimental.swin_v2.common import load_torch_model
 
 
 def create_custom_preprocessor_shifted_window_attention_v2(device):

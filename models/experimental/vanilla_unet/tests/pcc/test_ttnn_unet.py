@@ -11,7 +11,7 @@ from models.experimental.vanilla_unet.reference.unet import UNet
 from models.experimental.vanilla_unet.ttnn.ttnn_unet import TtUnet
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from loguru import logger
-from models.experimental.vanilla_unet.load_model_utils import load_torch_model
+from models.experimental.vanilla_unet.common import load_torch_model
 
 
 def create_custom_preprocessor(device):

@@ -19,7 +19,7 @@ from models.experimental.swin_v2.tt.tt_swin_transformer import TtSwinTransformer
 from models.experimental.swin_v2.tests.pcc.test_ttnn_swin_transformer_block_v2 import (
     create_custom_preprocessor as create_custom_preprocessor_transformer_block_v2,
 )
-from models.experimental.swin_v2.load_model_utils import load_torch_model
+from models.experimental.swin_v2.common import load_torch_model
 
 
 def create_custom_preprocessor_patch_merging_v2(device):

@@ -69,7 +69,7 @@ run_python_model_tests_wormhole_b0() {
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/yolov9c/tests/pcc/test_ttnn_yolov9c.py
 
     #Vanilla_unet
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/vanilla_unet/test/pcc/test_ttnn_unet.py
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/vanilla_unet/tests/pcc/test_ttnn_unet.py
 
     #Swin_s_v2
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/swin_v2/tests/pcc/test_ttnn_swin_v2_s.py

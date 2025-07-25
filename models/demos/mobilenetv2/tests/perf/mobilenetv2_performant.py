@@ -4,7 +4,7 @@
 
 
 import ttnn
-from models.demos.mobilenetv2.tests.mobilenetv2_test_infra import create_test_infra
+from models.demos.mobilenetv2.tests.perf.mobilenetv2_test_infra import create_test_infra
 
 try:
     from tracy import signpost

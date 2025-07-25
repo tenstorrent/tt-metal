@@ -6,7 +6,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.vgg_unet.load_model_utils import load_torch_model
+from models.demos.vgg_unet.common import load_torch_model
 from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
 from models.demos.vgg_unet.ttnn.model_preprocessing import create_vgg_unet_model_parameters
 from models.demos.vgg_unet.ttnn.ttnn_vgg_unet import Tt_vgg_unet
