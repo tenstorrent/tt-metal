@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 
 import ttnn
@@ -13,7 +14,7 @@ from typing import Optional, Tuple
 from models.utility_functions import pad_by_zero
 
 
-class TtBloomBlock(torch.nn.Module):
+class TtBloomBlock(LightweightModule):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
 
