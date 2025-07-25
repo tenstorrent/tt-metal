@@ -124,7 +124,7 @@ jobs:
           ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
           TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
           TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
-          ./build/test/ttnn/unit_tests_ttnn_ccl --gtest_filter="EdmFabric.RingDeadlockStabilityTest"
+          ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="EdmFabric.RingDeadlockStabilityTest"
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

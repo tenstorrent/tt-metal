@@ -21,6 +21,16 @@
 namespace ttnn {
 namespace ccl {
 
+struct SyncModeSpec {
+    uint32_t num_signals = 0;
+    CoreCoord core;
+    std::vector<uint32_t> sem_ids;
+    std::vector<uint32_t> wait_counts;
+
+    void add_signal(uint32_t sem_id, uint32_t wait_count);
+};
+
+
 enum class LineDirection: uint8_t {
     FORWARD,
     BACKWARD,
@@ -48,17 +58,11 @@ SenderRecieverConfig get_device_sender_receiver_config(
 SenderRecieverConfig get_device_sender_receiver_config_in_ring(
     const MeshCoordinate& mesh_coord, const distributed::MeshDevice* mesh_device, uint32_t cluster_axis, int ring_size);
 
+
 // Returns a vector of devices that the given tensor is stored on.
 std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor);
 
-struct SyncModeSpec {
-    uint32_t num_signals = 0;
-    CoreCoord core;
-    std::vector<uint32_t> sem_ids;
-    std::vector<uint32_t> wait_counts;
 
-    void add_signal(uint32_t sem_id, uint32_t wait_count);
-};
 
 class EriscDatamoverBuilder;
 
@@ -560,14 +564,6 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
         this->input_start_page_idx += num_pages /*pages_per_worker*/;
     }
 };
-
-tt::tt_metal::KernelHandle generate_edm_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::IDevice* device,
-    const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
-    const CoreCoord& eth_core,
-    tt::tt_metal::DataMovementProcessor risc_id,
-    tt::tt_metal::NOC noc_id);
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
     tt::tt_metal::Program& program,
