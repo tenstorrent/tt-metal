@@ -87,7 +87,6 @@ ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_b,
     const std::optional<const ttnn::Tensor>& bias,
     const struct Matmul& parameters,
-    const uint8_t& queue_id,
     std::optional<ttnn::Tensor>& optional_output_tensor) {
     if (input_tensor_a.logical_shape().rank() == 0 || input_tensor_b.logical_shape().rank() == 0) [[unlikely]] {
         TT_THROW(
@@ -129,12 +128,7 @@ ttnn::Tensor bound_matmul(
 
     const bool has_program_config = parameters.program_config.has_value();
     const bool has_user_grid = parameters.user_core_coord.has_value();
-    bool post_process_bias = false;
-    if (bias.has_value()) {
-        if (!has_program_config && !has_user_grid) {
-            post_process_bias = true;
-        }
-    }
+    bool post_process_bias = bias.has_value() && !has_program_config && !has_user_grid;
 
     auto output_tensor = matmul(
         input_tensor_a_adjusted,
@@ -213,7 +207,6 @@ Tensor MatmulOperation::invoke(
             output_tile,
             global_cb,
             sub_device_id},
-        /*queue_id=*/0,
         optional_output_tensor);
 }
 
@@ -259,7 +252,6 @@ Tensor LinearOperation::invoke(
             output_tile,
             global_cb,
             sub_device_id},
-        /*queue_id=*/0,
         optional_output_tensor);
 }
 
