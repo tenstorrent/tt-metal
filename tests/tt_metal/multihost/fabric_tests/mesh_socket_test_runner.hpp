@@ -22,18 +22,6 @@ using SocketConnection = tt::tt_metal::distributed::SocketConnection;
 using SocketMemoryConfig = tt::tt_metal::distributed::SocketMemoryConfig;
 using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
 
-// Additional data structures for test execution
-struct ResolvedSocketConfig {
-    SocketConfig tt_socket_config;
-    MemoryConfig memory;
-};
-
-struct ResolvedTestConfig {
-    std::string name;
-    std::string description;
-    std::vector<ResolvedSocketConfig> sockets;
-};
-
 struct TestExecutionContext {
     std::shared_ptr<MeshDevice> mesh_device;
     uint32_t current_rank;

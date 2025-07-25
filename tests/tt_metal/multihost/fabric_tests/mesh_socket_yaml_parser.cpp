@@ -65,17 +65,15 @@ std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_configs(const st
     std::vector<ParsedTestConfig> parsed_configs;
 
     for (const auto& test_config : test_configs) {
-        parsed_configs.push_back(expand_test_config(test_config));
+        auto expanded_configs = expand_test_config(test_config);
+        parsed_configs.insert(parsed_configs.end(), expanded_configs.begin(), expanded_configs.end());
     }
 
     return parsed_configs;
 }
 
-ParsedTestConfig MeshSocketYamlParser::expand_test_config(const TestConfig& test_config) {
-    ParsedTestConfig parsed;
-    parsed.name = test_config.name;
-    parsed.num_iterations = test_config.num_iterations;
-    parsed.memory_config = test_config.memory_config;
+std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_config(const TestConfig& test_config) {
+    std::vector<ParsedTestConfig> parsed_configs;
 
     // Validate that we have either explicit sockets or pattern expansions, but not both
     if (test_config.sockets.has_value() && test_config.pattern_expansions.has_value()) {
@@ -84,21 +82,31 @@ ParsedTestConfig MeshSocketYamlParser::expand_test_config(const TestConfig& test
 
     // Start with explicit sockets if they exist
     if (test_config.sockets.has_value()) {
-        parsed.sockets = test_config.sockets.value();
+        parsed_configs.emplace_back(ParsedTestConfig{
+            .name = test_config.name,
+            .num_iterations = test_config.num_iterations,
+            .memory_config = test_config.memory_config,
+            .sockets = test_config.sockets.value()});
     } else if (test_config.pattern_expansions.has_value()) {  // Expand patterns and add to sockets, cannot have both
         for (const auto& pattern : test_config.pattern_expansions.value()) {
             auto expanded_sockets = expand_pattern(pattern);
-            parsed.sockets.insert(parsed.sockets.end(), expanded_sockets.begin(), expanded_sockets.end());
+            parsed_configs.emplace_back(ParsedTestConfig{
+                .name = test_config.name,
+                .num_iterations = test_config.num_iterations,
+                .memory_config = test_config.memory_config,
+                .sockets = expanded_sockets});
         }
     }
 
     // Validate the expanded test has at least one socket
-    TT_FATAL(!parsed.sockets.empty(), "Test '{}' has no sockets", test_config.name);
+    for (const auto& parsed_config : parsed_configs) {
+        TT_FATAL(!parsed_config.sockets.empty(), "Test '{}' has no sockets", parsed_config.name);
+    }
 
-    return parsed;
+    return parsed_configs;
 }
 
-std::vector<SocketConfig> MeshSocketYamlParser::expand_pattern(const PatternExpansionConfig& pattern) {
+std::vector<TestSocketConfig> MeshSocketYamlParser::expand_pattern(const PatternExpansionConfig& pattern) {
     switch (pattern.type) {
         case PatternType::AllToAll: return expand_all_to_all_pattern(pattern);
         case PatternType::RandomPairing: return expand_random_pairing_pattern(pattern);
@@ -106,13 +114,8 @@ std::vector<SocketConfig> MeshSocketYamlParser::expand_pattern(const PatternExpa
     }
 }
 
-std::vector<SocketConfig> MeshSocketYamlParser::expand_all_to_all_pattern(const PatternExpansionConfig& pattern) {
-    std::vector<SocketConfig> sockets;
-
-    // If pattern has explicit sockets defined, use those
-    if (pattern.sockets.has_value()) {
-        return pattern.sockets.value();
-    }
+std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_to_all_pattern(const PatternExpansionConfig& pattern) {
+    std::vector<TestSocketConfig> sockets;
 
     // TODO: Implement actual all-to-all expansion
     // This would require knowledge of available devices which isn't available at parse time
@@ -122,13 +125,9 @@ std::vector<SocketConfig> MeshSocketYamlParser::expand_all_to_all_pattern(const 
     return sockets;
 }
 
-std::vector<SocketConfig> MeshSocketYamlParser::expand_random_pairing_pattern(const PatternExpansionConfig& pattern) {
-    std::vector<SocketConfig> sockets;
-
-    // If pattern has explicit sockets defined, use those
-    if (pattern.sockets.has_value()) {
-        return pattern.sockets.value();
-    }
+std::vector<TestSocketConfig> MeshSocketYamlParser::expand_random_pairing_pattern(
+    const PatternExpansionConfig& pattern) {
+    std::vector<TestSocketConfig> sockets;
 
     // TODO: Implement actual random pairing expansion
     // This would require knowledge of available devices which isn't available at parse time
@@ -200,7 +199,7 @@ TestConfig MeshSocketYamlParser::parse_test_config(const YAML::Node& node) {
     // Parse explicit sockets (optional)
     if (node["sockets"]) {
         TT_FATAL(node["sockets"].IsSequence(), "'sockets' must be a list");
-        std::vector<SocketConfig> sockets;
+        std::vector<TestSocketConfig> sockets;
         for (const auto& socket_node : node["sockets"]) {
             sockets.push_back(parse_socket_config(socket_node));
         }
@@ -225,8 +224,8 @@ TestConfig MeshSocketYamlParser::parse_test_config(const YAML::Node& node) {
     return test;
 }
 
-SocketConfig MeshSocketYamlParser::parse_socket_config(const YAML::Node& node) {
-    SocketConfig socket;
+TestSocketConfig MeshSocketYamlParser::parse_socket_config(const YAML::Node& node) {
+    TestSocketConfig socket;
 
     // Parse connections
     if (node["connections"]) {
@@ -402,7 +401,7 @@ void MeshSocketYamlParser::validate_parsed_test_config(const ParsedTestConfig& t
     }
 }
 
-void MeshSocketYamlParser::validate_socket_config(const SocketConfig& socket) {
+void MeshSocketYamlParser::validate_socket_config(const TestSocketConfig& socket) {
     TT_FATAL(!socket.connections.empty(), "Socket must have at least one connection");
 
     for (const auto& connection : socket.connections) {
