@@ -277,13 +277,12 @@ void kernel_main() {
         DPRINT << "cu_window_seqlens: " << ENDL();
         cb_cu_window_seqlens_ptr.print();
     });
-    // [INFO] the first window always starts at 0; all windows are diagonal
-    ASSERT(get_cu_window_seqlens(0) == 0);
+    // [INFO] all windows are diagonal
     for (uint32_t w = 0; w < cu_window_seqlens_eles - 1; ++w) {
         auto window_start = get_cu_window_seqlens(w);
         auto window_end = get_cu_window_seqlens(w + 1);
-        // DPRINT << "w: " << w << " window_start: " << window_start << " window_end: " << window_end << ENDL();
-        if (q_low_idx_in_tokens >= window_start && q_low_idx_in_tokens < window_end) {
+        if ((q_low_idx_in_tokens >= window_start && q_low_idx_in_tokens < window_end) ||
+            (q_high_idx_in_tokens > window_start && q_high_idx_in_tokens <= window_end)) {
             mask_windows_low_idx = w;
             found_mask_windows = true;
             break;

@@ -49,11 +49,12 @@ def timer(description="Operation"):
     [
         # basic cases
         (1, 16, 32, 96, 32, [0, 32]),
-        # (1, 16, 32, 96, 32, [16, 32]), # todo)) add support for this case
         (1, 16, 32, 96, 32, [0, 4, 20, 32]),
         (1, 16, 32, 96, 32, [0, 4, 9, 24, 32]),
         (1, 16, 32, 96, 32, [0, 16, 20]),
         (1, 16, 32, 96, 32, [0, 16, 20, 24, 28, 32]),
+        # basic, not-useful-for-qwen-vl cases; added for completeness (windows index does not need to start at 0)
+        *[(1, 16, 32, 96, 32, [i, 32]) for i in range(1, 32)],
         # medium cases
         (1, 1, 64, 96, 32, [0, 16, 32, 48, 60]),
         (1, 1, 64, 96, 32, [0, 16, 48, 64]),
@@ -82,6 +83,7 @@ def timer(description="Operation"):
         "basic-3",
         "basic-4",
         "basic-5",
+        *[f"basic-rare-{5+i}" for i in range(1, 32)],
         "medium-1",
         "medium-2",
         "medium-3",
