@@ -554,6 +554,7 @@ if(WITH_PYTHON_BINDINGS)
     endif()
 
     # Install .so into src files for pybinds implementation
+    # [[
     install(
         TARGETS
             ttnn
@@ -563,7 +564,6 @@ if(WITH_PYTHON_BINDINGS)
             DESTINATION ${CMAKE_INSTALL_LIBDIR}
             COMPONENT tar
     )
-
     install(
         TARGETS
             ttnn
@@ -572,6 +572,7 @@ if(WITH_PYTHON_BINDINGS)
             COMPONENT
             tt_pybinds
     )
+    # ]]
 endif()
 if(TT_INSTALL)
     install(EXPORT TT-NN NAMESPACE TTNN:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-nn COMPONENT ttnn-dev)

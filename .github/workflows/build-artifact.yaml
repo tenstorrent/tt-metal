@@ -369,7 +369,7 @@ jobs:
             echo "ENABLE_TRACY_BUILD=ON" >> $GITHUB_ENV
             echo "CIBW_TEST_CMD=echo 'Skipping import test for profiler build'" >> $GITHUB_ENV
             echo "Building with Tracy profiler enabled"
-          else
+           else
             echo "ENABLE_TRACY_BUILD=OFF" >> $GITHUB_ENV
             echo "CIBW_TEST_CMD=python -c \"import ttnn\"" >> $GITHUB_ENV
             echo "Building without Tracy profiler"

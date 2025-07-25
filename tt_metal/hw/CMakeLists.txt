@@ -134,8 +134,10 @@ endforeach()
 
 if(TT_USE_SYSTEM_SFPI)
     set(GPP_CMD "/opt/tenstorrent/sfpi/compiler/bin/riscv32-tt-elf-g++")
+    set(GPP_LD "/opt/tenstorrent/sfpi/compiler/bin/riscv32-tt-elf-ld")
 else()
     set(GPP_CMD "${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-tt-elf-g++")
+    set(GPP_LD "${PROJECT_SOURCE_DIR}/runtime/sfpi/compiler/bin/riscv32-tt-elf-ld")
 endif()
 
 if(NOT EXISTS "${GPP_CMD}")
@@ -143,6 +145,7 @@ if(NOT EXISTS "${GPP_CMD}")
 endif()
 
 message(STATUS "Using SFPI compiler: ${GPP_CMD}")
+message(STATUS "Using SFPI ld: ${GPP_LD}")
 
 set(GPP_DEFINES -DTENSIX_FIRMWARE)
 
@@ -239,8 +242,10 @@ foreach(ARCH IN LISTS ARCHS)
             COMMAND
                 ${CMAKE_COMMAND} -E make_directory ${HW_OBJ_DIR}
             COMMAND
-                ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_OBJ_DIR}/${HWOBJ}
+                ${GPP_CMD} ${GPP_FLAGS} ${GPP_DEFINES} ${GPP_INCLUDES} -c -o ${HW_OBJ_DIR}/${HWOBJ}.no-build-id
                 ${PROJECT_SOURCE_DIR}/${HWSRC}
+            COMMAND
+                ${GPP_LD} -r --build-id -o ${HW_OBJ_DIR}/${HWOBJ} ${HW_OBJ_DIR}/${HWOBJ}.no-build-id
             DEPENDS
                 ${PROJECT_SOURCE_DIR}/${HWSRC}
                 # If the compiler changes, rebuild
@@ -251,6 +256,8 @@ foreach(ARCH IN LISTS ARCHS)
         list(APPEND OBJ_FILES ${HW_OUTPUT_FILE})
     endforeach()
 endforeach()
+
+install(FILES ${OBJ_FILES} DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/runtime/hw COMPONENT metalium-runtime)
 
 # custom target that depends on all the output files
 add_custom_target(
