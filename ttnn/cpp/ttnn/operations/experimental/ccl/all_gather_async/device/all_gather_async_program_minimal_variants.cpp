@@ -530,7 +530,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[0];
 
-            auto out_ready_semaphore_backward = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore.at(1);
             auto barrier_semaphore = static_cast<const ttnn::AllGatherAsync*>(operation)->barrier_semaphore;
             // update senders
             uint32_t core_idx = 0;
@@ -545,7 +544,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                         auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_ids[core_idx]);
 
                         auto out_ready_semaphore =
-                            static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore.at(1 - dir);
+                            static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore.at(dir);
                         // sender reader
                         auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
                         worker_reader_sender_runtime_args[0] = input.buffer()->address();

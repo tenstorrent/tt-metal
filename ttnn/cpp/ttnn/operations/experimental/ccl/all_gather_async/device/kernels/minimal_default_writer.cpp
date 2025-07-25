@@ -309,6 +309,7 @@ void kernel_main() {
                 // 2. unicast output ready semaphore
                 if ((direction == 1 && num_targets_backward_direction) ||
                     (direction == 0 && num_targets_forward_direction)) {
+                    pkt_hdr_sem_inc->to_chip_unicast(1);
                     tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_sem_inc);
                 }
             }
