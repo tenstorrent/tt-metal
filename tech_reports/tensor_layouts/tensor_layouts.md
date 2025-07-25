@@ -59,7 +59,7 @@ In a tiled tensor, pages are represented as 2D tiles, with the default tile size
 The hardware architecture supports tile shapes of `32x32` , `16x32` , `4x32`, `2x32`, `1x32`. **However currently TT-Metalium only supports `32x32`, and other tile shapes will be supported in Q4'2024**
 
 #### 3.2.2 Faces
-Data inside the tile isn't contiguous. Each tile is split into faces ("sub-tiles"). By default, tile size is 32x32, and face size is 16x16 -- 4 faces per tile. By default, each tile lies one after another contiguously in memory in row-major fashion (i.e., face0->face1->face2->face3 on the picture below)
+Data inside the tile isn't contiguous. Each tile is split into faces ("sub-tiles"). By default, tile size is 32x32, and face size is 16x16 -- 4 faces per tile and each tile lies one after another contiguously in memory in row-major fashion (i.e., face0->face1->face2->face3 on the picture below)
 
 The reason for using faces is that the matrix engine natively multiplies 16x16 matrices, and tile multiplication is composed of a few face multiplications.
 
@@ -79,7 +79,7 @@ ttnn_tensor = ttnn.to_layout(ttnn_rm_tensor, ttnn.TILE_LAYOUT)
 Also, you can specify tile size:
 
 ```python3
-ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, tile=ttnn.Tile((16, 32), transpose_tile=true))
+ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, tile=ttnn.Tile((16, 32), transpose_tile=True))
 ```
 
 If transpose_tile==true, then the faces' order is transposed, i.e., they are placed in memory in col-major fashion (face0->face2->face1->face3 on the image above), and values inside faces are also transposed.
