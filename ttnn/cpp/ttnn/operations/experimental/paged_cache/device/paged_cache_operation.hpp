@@ -42,7 +42,8 @@ struct PagedUpdateCacheDeviceOperation {
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;
-    tt::tt_metal::operation::ProgramWithCallbacks create_program_(
+    tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
+        const ttnn::MeshCoordinate& _,  // Unused
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;

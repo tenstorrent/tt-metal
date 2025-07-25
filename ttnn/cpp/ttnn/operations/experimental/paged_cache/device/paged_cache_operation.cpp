@@ -260,8 +260,8 @@ operation::MeshWorkloadWithCallbacks PagedUpdateCacheDeviceOperation::create_mes
 
             // Create the program for the coordinate
             const ttnn::MeshCoordinateRange program_range(coord, coord);
-            auto program_with_callbacks =
-                PagedUpdateCacheDeviceOperation::create_program_(input_tensors, optional_input_tensors, output_tensors);
+            auto program_with_callbacks = PagedUpdateCacheDeviceOperation::create_program_at(
+                {0, 0}, input_tensors, optional_input_tensors, output_tensors);
             workload_with_callbacks.workload.add_program(program_range, std::move(program_with_callbacks.program));
             if (program_with_callbacks.override_runtime_arguments_callback.has_value()) {
                 workload_with_callbacks.per_program_callbacks.emplace(
@@ -272,7 +272,8 @@ operation::MeshWorkloadWithCallbacks PagedUpdateCacheDeviceOperation::create_mes
     return workload_with_callbacks;
 }
 
-operation::ProgramWithCallbacks PagedUpdateCacheDeviceOperation::create_program_(
+operation::ProgramWithCallbacks PagedUpdateCacheDeviceOperation::create_program_at(
+    const ttnn::MeshCoordinate& _,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {

@@ -5,7 +5,6 @@
 import torch
 import pytest
 import ttnn
-import numpy as np
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
 from models.utility_functions import nearest_y
@@ -14,8 +13,9 @@ from models.utility_functions import nearest_y
 def get_random_devices(mesh_shape: list[int]) -> set[ttnn.MeshCoordinate]:
     """Get a set of random device coordinates based on the mesh shape."""
     assert len(mesh_shape) == 2, "Mesh shape must be a 2D shape."
+    mesh_shape = torch.tensor(mesh_shape)
 
-    num_devices = torch.randint(1, np.prod(mesh_shape) + 1, (1,)).item()
+    num_devices = torch.randint(1, torch.prod(mesh_shape) + 1, (1,)).item()
     device_coords = set()
     while len(device_coords) < num_devices:
         coord = (torch.randint(0, mesh_shape[0], (1,)).item(), torch.randint(0, mesh_shape[1], (1,)).item())
