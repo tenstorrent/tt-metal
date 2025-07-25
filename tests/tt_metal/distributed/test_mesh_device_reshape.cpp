@@ -85,7 +85,7 @@ TEST_P(MeshConfigurationTest, MeshConfigurations) {
     mesh->close();
 }
 
-TEST_P(MeshConfigurationTest, GetPhysicalDeviceIds) {
+TEST_P(MeshConfigurationTest, GetMappedDevices) {
     const auto& shape = GetParam();
 
     auto& system_mesh = SystemMesh::instance();
