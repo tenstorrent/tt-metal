@@ -183,7 +183,8 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         metadata_page_size_bytes,
         input_is_dram,
         mapping_is_dram,
-        metadata_is_dram};
+        metadata_is_dram,
+        operation_attributes.locally_reduced};
 
     const DataMovementConfig reader_config{
         .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1, .compile_args = reader_compile_time_args};
@@ -254,7 +255,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         writer_config);
 
     constexpr auto start_idx = 0;
-    const auto end_idx = input_tensor.buffer()->num_pages();
+    const auto end_idx = batch_size * seq_size;
     std::vector<uint32_t> reader_runtime_args = {
         mapping_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
         metadata_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
