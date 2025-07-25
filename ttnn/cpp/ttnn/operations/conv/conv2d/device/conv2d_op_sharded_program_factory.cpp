@@ -471,7 +471,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             "num_blocks_out_h_per_core {} should be equal to num_blocks_out_h {}",
             num_blocks_out_h_per_core,
             num_blocks_out_h);
-        TT_FATAL(num_cores_x == 1, "num_cores_x {} should be equal to 1", num_cores_x);
+        if (transpose_mcast) {
+            TT_FATAL(num_cores_x == 1, "num_cores_x {} should be equal to 1", num_cores_x);
+        } else {
+            TT_FATAL(num_cores_y == 1, "num_cores_y {} should be equal to 1", num_cores_y);
+        }
     }
 
     std::vector<std::vector<uint16_t>> conv_sharded_input_top_left_indices =
@@ -556,21 +560,22 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     std::vector<uint32_t> act_mcast_noc_y;
     if (block_sharded) {
         // 2D mcast
-        if (!skip_weights_mcast) {
-            if (transpose_mcast) {
-                mcast_sender_cores = CoreRange(top_left_core, CoreCoord(0, num_cores_y - 1));
+        if (transpose_mcast) {
+            mcast_sender_cores = CoreRange(top_left_core, CoreCoord(0, num_cores_y - 1));
+            if (!skip_weights_mcast) {
                 mcast_receiver_cores = CoreRange(CoreCoord(1, 0), bottom_right_core);
-            } else {
-                mcast_sender_cores = CoreRange(top_left_core, CoreCoord(num_cores_x - 1, 0));
+            }
+        } else {
+            mcast_sender_cores = CoreRange(top_left_core, CoreCoord(num_cores_x - 1, 0));
+            if (!skip_weights_mcast) {
                 mcast_receiver_cores = CoreRange(CoreCoord(0, 1), bottom_right_core);
             }
         }
-
         weights_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
         weights_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     } else {
         // 1D mcast
-        if (total_num_cores > 1) {
+        if (!skip_weights_mcast) {
             std::set<CoreRange> mcast_receiver_set;
             if (num_cores_x > 1) {
                 mcast_receiver_set.insert(CoreRange(CoreCoord(1, 0), CoreCoord(num_active_cores_x - 1, 0)));
@@ -889,7 +894,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             .defines = writer_mcast_sender_defines});
 
     tt::tt_metal::KernelHandle writer_mcast_receiver_id = -1;
-    if (total_num_cores > 1) {
+    if (!skip_weights_mcast) {
         writer_mcast_receiver_id = CreateKernel(
             program,
             writer_mcast_receiver_kernel,
