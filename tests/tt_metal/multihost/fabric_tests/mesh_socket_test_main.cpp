@@ -52,6 +52,26 @@ void print_configuration_summary(const MeshSocketTestConfiguration& config) {
             test.memory_config.page_size,
             test.memory_config.data_size);
         log_info(tt::LogTest, "    Sockets: {} defined", test.sockets.size());
+
+        // Print detailed socket information
+        for (size_t socket_idx = 0; socket_idx < test.sockets.size(); ++socket_idx) {
+            const auto& socket = test.sockets[socket_idx];
+            log_info(tt::LogTest, "      Socket {}: {} connections", socket_idx + 1, socket.connections.size());
+            log_info(
+                tt::LogTest, "        Sender Rank: {}, Receiver Rank: {}", *socket.sender_rank, *socket.receiver_rank);
+            // Print connection details
+            for (size_t conn_idx = 0; conn_idx < socket.connections.size(); ++conn_idx) {
+                const auto& connection = socket.connections[conn_idx];
+                log_info(
+                    tt::LogTest,
+                    "        Connection {}: [{}, {}] -> [{}, {}]",
+                    conn_idx + 1,
+                    connection.sender.mesh_coord[0],
+                    connection.sender.mesh_coord[1],
+                    connection.receiver.mesh_coord[0],
+                    connection.receiver.mesh_coord[1]);
+            }
+        }
     }
     log_info(tt::LogTest, "=== End Configuration Summary ===");
 }
@@ -84,28 +104,36 @@ int main(int argc, char* argv[]) {
         parser.validate_configuration(config);
         log_info(tt::LogTest, "Configuration validation passed!");
 
-        // Example of accessing specific test data
-        if (!config.tests.empty()) {
-            const auto& first_test = config.tests[0];
-            log_info(
-                tt::LogTest, "Example: First test '{}' has {} sockets", first_test.name, first_test.sockets.size());
+        // Example of accessing all test data
+        log_info(tt::LogTest, "=== Detailed Test Data Access Example ===");
+        for (size_t test_idx = 0; test_idx < config.tests.size(); ++test_idx) {
+            const auto& test = config.tests[test_idx];
+            log_info(tt::LogTest, "Test {}: '{}' has {} sockets", test_idx + 1, test.name, test.sockets.size());
 
-            if (!first_test.sockets.empty()) {
-                const auto& first_socket = first_test.sockets[0];
-                log_info(tt::LogTest, "Example: First socket has {} connections", first_socket.connections.size());
+            for (size_t socket_idx = 0; socket_idx < test.sockets.size(); ++socket_idx) {
+                const auto& socket = test.sockets[socket_idx];
+                log_info(
+                    tt::LogTest,
+                    "  Socket {}: {} connections, Sender Rank: {}, Receiver Rank: {}",
+                    socket_idx + 1,
+                    socket.connections.size(),
+                    *socket.sender_rank,
+                    *socket.receiver_rank);
 
-                if (!first_socket.connections.empty()) {
-                    const auto& first_connection = first_socket.connections[0];
+                for (size_t conn_idx = 0; conn_idx < socket.connections.size(); ++conn_idx) {
+                    const auto& connection = socket.connections[conn_idx];
                     log_info(
                         tt::LogTest,
-                        "Example: First connection: [{}, {}] -> [{}, {}]",
-                        first_connection.sender.mesh_coord[0],
-                        first_connection.sender.mesh_coord[1],
-                        first_connection.receiver.mesh_coord[0],
-                        first_connection.receiver.mesh_coord[1]);
+                        "    Connection {}: [{}, {}] -> [{}, {}]",
+                        conn_idx + 1,
+                        connection.sender.mesh_coord[0],
+                        connection.sender.mesh_coord[1],
+                        connection.receiver.mesh_coord[0],
+                        connection.receiver.mesh_coord[1]);
                 }
             }
         }
+        log_info(tt::LogTest, "=== End Detailed Test Data ===");
 
         log_info(tt::LogTest, "YAML parsing and validation completed successfully!");
         return 0;

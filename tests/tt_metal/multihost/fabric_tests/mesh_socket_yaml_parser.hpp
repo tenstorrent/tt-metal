@@ -19,6 +19,7 @@ namespace tt::tt_fabric::mesh_socket_tests {
 
 using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using CoreCoord = tt::tt_metal::CoreCoord;
+using Rank = tt::tt_metal::distributed::multihost::Rank;
 
 enum class RoutingType {
     LowLatency,
@@ -42,9 +43,9 @@ struct FabricConfig {
 };
 
 struct MemoryConfig {
-    uint32_t fifo_size = 1024;
-    uint32_t page_size = 256;
-    uint32_t data_size = 4096;
+    uint32_t fifo_size;
+    uint32_t page_size;
+    uint32_t data_size;
 };
 
 struct EndpointConfig {
@@ -62,6 +63,8 @@ struct SocketConnectionConfig {
 
 struct SocketConfig {
     std::vector<SocketConnectionConfig> connections;
+    Rank sender_rank;
+    Rank receiver_rank;
 };
 
 struct PatternExpansionConfig {
