@@ -242,6 +242,7 @@ def run_conv(
     if config_override and "enable_weights_double_buffer" in config_override:
         conv_config.enable_weights_double_buffer = config_override["enable_weights_double_buffer"]
 
+    logger.info(f"Input Shape : {tt_input_tensor.shape}, Padded Shape : {tt_input_tensor.padded_shape}")
     [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
@@ -1780,7 +1781,6 @@ def test_unet_conv_wh(
         shard_layout=shard_layout,
         output_layout=output_layout,
         auto_shard=auto_shard,
-        input_layout=ttnn.TILE_LAYOUT if output_dtype == ttnn.bfloat8_b else None,
     )
 
 

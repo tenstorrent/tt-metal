@@ -62,14 +62,14 @@ def create_unet_model_parameters(
     for key in parameters.keys():
         parameters[key].module = getattr(model, key)
 
-    parameters.c1["conv_blocking_and_parallelization_config_override"] = None
+    parameters.c1["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 12 * 32}
     parameters.c1["use_split_reader"] = True
     parameters.c1["use_activation_double_buffer"] = True
-    parameters.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 12 * 32}
+    parameters.c1_2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 32}
     parameters.c1_2["use_split_reader"] = True
     parameters.c1_2["use_activation_double_buffer"] = True
 
-    parameters.c2["conv_blocking_and_parallelization_config_override"] = None
+    parameters.c2["conv_blocking_and_parallelization_config_override"] = {"act_block_h": 8 * 32}
     parameters.c2["use_split_reader"] = True
     parameters.c2["use_activation_double_buffer"] = True
     parameters.c2_2["conv_blocking_and_parallelization_config_override"] = None

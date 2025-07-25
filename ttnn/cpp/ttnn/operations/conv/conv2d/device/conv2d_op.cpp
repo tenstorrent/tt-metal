@@ -60,6 +60,7 @@ Tensor optimized_conv_new(
     std::optional<const Tensor> bias,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t output_channels,
+    uint32_t logical_output_width,
     uint32_t groups,
     bool untilize_out,
     const std::string& activation,
@@ -96,6 +97,7 @@ Tensor optimized_conv_new(
     auto optimized_conv_op = OptimizedConvNew(
         sliding_window_config,
         output_channels,
+        logical_output_width,
         groups,
         untilize_out,
         bias.has_value(),
@@ -165,7 +167,7 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
 
     auto sliding_window_output_shape = sliding_window_config.get_output_shape();
     uint32_t conv_output_h = sliding_window_output_shape[1];
-    uint32_t conv_output_w = sliding_window_output_shape[2];
+    uint32_t conv_output_w = logical_output_width;
 
     // Tiled output shape is padded shape. Padded to tile shape.
     auto shape_w = batch_size * conv_output_h * conv_output_w;

@@ -720,9 +720,33 @@ Result conv2d_L1(
 
     // call optimized conv op or matmul micro op
     bool input_is_on_device = tt::tt_metal::is_device_tensor(input_tensor_post_tm);
-    TT_ASSERT(input_is_on_device);
+    TT_FATAL(input_is_on_device, "Input tensor must be on device for conv2d_L1.");
 
     if (!mm_conv) {
+        // This represents the alignment of the Input Tensor's 4D shapes.
+        tt::tt_metal::Alignment input_4D_alignment = tt::tt_metal::Alignment({1, 1, 1, 1});
+        if (input_tensor_post_tm.layout() == Layout::TILE) {
+            auto logical_input_shape = input_tensor_post_tm.logical_shape();
+            TT_FATAL(
+                logical_input_shape.rank() == 4,
+                "Input tensor logical shape must be 4D for conv2d_L1, got: {}",
+                logical_input_shape);
+
+            if (logical_input_shape[1] == 1 && input_height != 1) {
+                // Height has been folded into the width dim. So neither height nor width of the input are independently
+                // aligned.
+                input_4D_alignment = tt::tt_metal::Alignment({1, 1, 1, 32});
+            } else {
+                input_4D_alignment =
+                    tt::tt_metal::Alignment({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
+            }
+            log_info(
+                tt::LogOp,
+                "Input Tensor Post TM Shape : {}, Padded Shape : {}, 4D Alignment : {}",
+                input_tensor_post_tm.logical_shape(),
+                input_tensor_post_tm.padded_shape(),
+                input_4D_alignment);
+        }
         // call halo op
         SlidingWindowConfig sliding_window_config = SlidingWindowConfig{
             .batch_size = batch_size,
@@ -734,7 +758,7 @@ Result conv2d_L1(
             .num_cores_nhw = opt_conv_op_parallel_config.num_cores_nhw,
             .core_range_set = input_tensor_post_tm.memory_config().shard_spec().value().grid,
             .snap_to_tile = true,
-        };
+            .alignment = input_4D_alignment};
 
         bool bypass_halo =
             (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED &&
@@ -779,6 +803,7 @@ Result conv2d_L1(
                 "Conv2D: Split reader was requested by the user, but it can't be support with just one tile per core "
                 "in activation matrix height.");
         }
+
         // call conv micro op
         auto conv_output = optimized_conv_new(
             input_tensor_post_tm,
@@ -786,6 +811,7 @@ Result conv2d_L1(
             bias_tensor_on_device,
             sliding_window_config,
             out_channels,
+            output_width,
             groups,
             conv_config.output_layout == Layout::ROW_MAJOR,
             conv_config.activation,

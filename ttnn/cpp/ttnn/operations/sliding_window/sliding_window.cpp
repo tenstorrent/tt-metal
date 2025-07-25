@@ -235,15 +235,30 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
     } else {
         uint32_t ceil_padding_h = config.get_ceil_pad_h();
         uint32_t ceil_padding_w = config.get_ceil_pad_w();
+        uint32_t aligned_input_h = tt::round_up(config.input_hw.first, config.alignment[1]);
+        uint32_t aligned_input_w = tt::round_up(config.input_hw.second, config.alignment[2]);
         uint32_t padded_input_h = config.input_hw.first + config.get_pad_h() + ceil_padding_h;
         uint32_t padded_input_w = config.input_hw.second + config.get_pad_w() + ceil_padding_w;
+        log_info(
+            tt::LogOp,
+            "Aligned Input = {} x {}, Full Padded Input = {} x {}",
+            aligned_input_h,
+            aligned_input_w,
+            padded_input_h,
+            padded_input_w);
+        TT_FATAL(
+            padded_input_w > aligned_input_w,
+            "The padded input width {} is less than the aligned input width {}, and Halo doesn't support unpadding the "
+            "width.",
+            padded_input_w,
+            aligned_input_w);
         std::vector<bool> pad_metadata(config.batch_size * padded_input_h * padded_input_w, false);
 
         for (uint32_t b = 0; b < config.batch_size; ++b) {
             for (uint32_t h = 0; h < padded_input_h; ++h) {
                 for (uint32_t w = 0; w < padded_input_w; ++w) {
-                    if (h < config.padding[0] || h >= (config.padding[0] + config.input_hw.first) ||
-                        w < config.padding[2] || w >= (config.padding[2] + config.input_hw.second)) {
+                    if (h < config.padding[0] || h >= (config.padding[0] + aligned_input_h) || w < config.padding[2] ||
+                        w >= (config.padding[2] + aligned_input_w)) {
                         pad_metadata[b * padded_input_h * padded_input_w + h * padded_input_w + w] = true;
                     }
                 }
@@ -257,7 +272,7 @@ std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& conf
     ttnn::Shape output_shape = config.get_output_shape();
     uint32_t output_nhw = output_shape[0] * output_shape[1] * output_shape[2];
     std::vector<uint32_t> op_trace_metadata(output_nhw, 0);
-
+    log_info(tt::LogOp, "Generating op trace metadata for config: {}", config.to_string());
     if (config.is_transpose) {
         auto full_input_shape = config.get_transposed_full_input_shape();
         uint32_t padded_input_h = full_input_shape[1];
@@ -278,6 +293,13 @@ std::vector<uint32_t> generate_op_trace_metadata(const SlidingWindowConfig& conf
 
         uint32_t padded_input_h = config.input_hw.first + config.get_pad_h() + ceil_padding_h;
         uint32_t padded_input_w = config.input_hw.second + config.get_pad_w() + ceil_padding_w;
+        log_info(
+            tt::LogOp,
+            "OP Trace ceil_padding {} {}, padded input : {} {}",
+            ceil_padding_h,
+            ceil_padding_w,
+            padded_input_h,
+            padded_input_w);
         uint32_t i = 0;
         for (uint32_t b = 0; b < output_shape[0]; ++b) {
             for (uint32_t h = 0; h < output_shape[1]; ++h) {

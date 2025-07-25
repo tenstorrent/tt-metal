@@ -294,8 +294,6 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
         parallel_config,
         tile_size);
     // tensor_shape is [N, H, W, C]
-    TT_ASSERT(tensor_shape[0] == 1 && tensor_shape[1] == 1);  // todo: add support for generic non-2d shapes
-    // uint32_t channels = tensor_shape[3];
     uint32_t channels = tensor_shape[3];
     uint32_t num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
     uint32_t num_cores_channels = get_num_cores_channels_from_parallel_config(parallel_config);
@@ -636,7 +634,7 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
         auto [input_padded_shape, input_tensor_sharded_memory_config] = determine_input_memory_config(
             conv_config,
             batch_size,
-            input_tensor.logical_shape(),
+            input_tensor.padded_shape(),
             input_tensor.padded_shape(),
             is_mm_conv,
             device,
@@ -682,13 +680,8 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
     ParallelConfig output_parallel_config =
         determine_output_parallel_config(parallel_config, compute_grid_size, out_channels, is_mm_conv);
 
-    // We can have flat and unflattened (n, h, w, c) tensors here
-    const auto flattened_input_shape = flatten_4d_shape(input_tensor.logical_shape());
-    const auto flattened_padded_input_shape = flatten_4d_shape(input_tensor.padded_shape());
-
-    input_tensor = ttnn::reshape(input_tensor, flattened_input_shape, flattened_padded_input_shape);
-    const ttnn::Shape& input_shape = flattened_input_shape;
-
+    const ttnn::Shape& input_shape = input_tensor.logical_shape();
+    log_info(tt::LogOp, "Conv Reshard Input Shape : {}, Padded Input Shape : {}", input_shape, input_padded_shape);
     if (needs_shard_or_reshard) {
         uint32_t tensor_height = input_shape[2];
         uint32_t tensor_width = input_shape[3];
@@ -730,7 +723,7 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                             input_tensor_sharded_memory_config.shard_spec().value().orientation));
                 }
                 Tensor resharded_input_tensor =
-                    ttnn::to_memory_config(input_tensor, input_tensor_sharded_memory_config_to_layout, std::nullopt);
+                    ttnn::to_memory_config(input_tensor, input_tensor_sharded_memory_config, std::nullopt);
                 if (conv_config.deallocate_activation) {
                     input_tensor.deallocate(/*force*/ true);
                     resharded_input_tensor = ttnn::move(resharded_input_tensor);

@@ -55,6 +55,7 @@ struct SlidingWindowConfig {
     bool is_transpose = false;
     bool ceil_mode = false;
     bool is_avg_pool = false;
+    tt::tt_metal::Alignment alignment = tt::tt_metal::Alignment({1, 1, 1, 1});  // alignment for the input tensor
 
     std::string to_string() const;
     bool has_parallel_config() const;

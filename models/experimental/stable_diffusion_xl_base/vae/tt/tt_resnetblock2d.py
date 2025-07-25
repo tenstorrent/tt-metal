@@ -109,7 +109,9 @@ class TtResnetBlock2D(nn.Module):
     def forward(self, input_tensor, input_shape):
         B, C, H, W = input_shape
 
+        hidden_states = ttnn.reshape(input_tensor, [B, 1, H * W, C])
         hidden_states = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
