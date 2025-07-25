@@ -28,6 +28,12 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 @pytest.mark.parametrize(
     "seq_len",
     (64 * 1024, 32 * 1024, 512, 32),
+    ids=(
+        "seq_len_64k",
+        "seq_len_32k",
+        "seq_len_512",
+        "seq_len_32",
+    ),
 )
 @pytest.mark.parametrize(
     "batch_size",
@@ -40,6 +46,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
+    state_dict_ref = model_args.load_state_dict_ref()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = model_args.get_state_dict_prefix("MLP", 0)
@@ -47,8 +54,14 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
         k[len(first_layer_prefix) + 1 :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
+    # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
+    first_layer_prefix_ref = model_args.get_ref_state_dict_prefix("mlp", 0)
+    partial_state_dict_ref = {
+        k[len(first_layer_prefix_ref) + 1 :]: v for k, v in state_dict_ref.items() if (k.startswith(first_layer_prefix_ref))
+    }
+
     reference_model = model_args.reference_mlp()
-    reference_model.load_state_dict(partial_state_dict)
+    reference_model.load_state_dict(partial_state_dict_ref)
 
     tt_model = MLP(
         mesh_device=mesh_device,

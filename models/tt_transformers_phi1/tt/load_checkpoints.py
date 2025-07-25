@@ -137,6 +137,9 @@ def map_hf_to_meta_keys(loaded_weights):
         "model.layers.{layer}.layernorm.weight": "layers.{layer}.attention_norm.weight",
         "model.layers.{layer}.layernorm.bias": "layers.{layer}.attention_norm.bias",
         "lm_head.bias": "output.bias",
+        "model.layers.{layer}.input_layernorm.bias": "layers.{layer}.attention_norm.bias",
+        "model.final_layernorm.weight": "layers.norm.weight",
+        "model.final_layernorm.bias": "layers.norm.bias",
     }
 
     meta_state_dict = {}
@@ -279,6 +282,10 @@ def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
             converted_weights[key] = tensor
     return converted_weights
 
+def remove_hf_layer(state_dict, head_dim):
+    state_dict = convert_meta_qkv_to_hf_format(state_dict, head_dim)
+    state_dict = map_meta_to_hf_keys(state_dict)
+    return state_dict
 
 def convert_meta_to_hf(state_dict, head_dim):
     state_dict = convert_meta_qkv_to_hf_format(state_dict, head_dim)
@@ -300,10 +307,11 @@ def map_meta_to_hf_keys(loaded_weights):
         "attention.wq.weight": "self_attn.q_proj.weight",
         "attention.wk.weight": "self_attn.k_proj.weight",
         "attention.wv.weight": "self_attn.v_proj.weight",
-        "attention.wo.weight": "self_attn.o_proj.weight",
+        "attention.wo.weight": "self_attn.dense.weight",# "attention.wo.weight": "self_attn.o_proj.weight",
         "attention.wq.bias": "self_attn.q_proj.bias",
         "attention.wk.bias": "self_attn.k_proj.bias",
         "attention.wv.bias": "self_attn.v_proj.bias",
+        "attention.wo.bias": "self_attn.dense.bias",# "attention.wo.bias": "self_attn.o_proj.bias",
         "attention.q_norm.weight": "self_attn.q_norm.weight",
         "attention.k_norm.weight": "self_attn.k_norm.weight",
         # Feed forward module
@@ -317,10 +325,13 @@ def map_meta_to_hf_keys(loaded_weights):
         "wq.weight": "q_proj.weight",
         "wk.weight": "k_proj.weight",
         "wv.weight": "v_proj.weight",
-        "wo.weight": "o_proj.weight",
+        # "wo.weight": "o_proj.weight",
+        "wo.weight": "dense.weight",
         "wq.bias": "q_proj.bias",
         "wk.bias": "k_proj.bias",
         "wv.bias": "v_proj.bias",
+        # "wo.bias": "o_proj.bias",
+        "wo.bias": "dense.bias",
         # Host embeddings
         "emb.weight": "weight",
     }

@@ -595,10 +595,11 @@ def map_meta_to_hf_keys(loaded_weights, language_prefix=""):
         "attention.wq.weight": "self_attn.q_proj.weight",
         "attention.wk.weight": "self_attn.k_proj.weight",
         "attention.wv.weight": "self_attn.v_proj.weight",
-        "attention.wo.weight": "self_attn.o_proj.weight",
+        "attention.wo.weight": "self_attn.dense.weight",# "attention.wo.weight": "self_attn.o_proj.weight",
         "attention.wq.bias": "self_attn.q_proj.bias",
         "attention.wk.bias": "self_attn.k_proj.bias",
         "attention.wv.bias": "self_attn.v_proj.bias",
+        "attention.wo.bias": "self_attn.dense.bias",# "attention.wo.bias": "self_attn.o_proj.bias",
         "attention.q_norm.weight": "self_attn.q_norm.weight",
         "attention.k_norm.weight": "self_attn.k_norm.weight",
         "attention.wo.bias": "self_attn.o_proj.bias",
@@ -633,6 +634,10 @@ def map_meta_to_hf_keys(loaded_weights, language_prefix=""):
         # Fused qkv mapping
         "wqkv.weight": "qkv_proj.weight",
         "wqkv.bias": "qkv_proj.bias",
+
+        
+        # "wo.bias": "dense.bias",
+        # "wo.weight": "dense.weight",
         # Host embeddings
         "emb.weight": "weight",
     }
