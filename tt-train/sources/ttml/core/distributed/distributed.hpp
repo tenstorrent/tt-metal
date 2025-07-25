@@ -5,6 +5,9 @@
 #pragma once
 
 #include <core/ttnn_all_includes.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/host_api.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "serialization/serializable.hpp"
@@ -15,6 +18,7 @@ using Rank = tt::tt_metal::distributed::multihost::Rank;
 using Tag = tt::tt_metal::distributed::multihost::Tag;
 
 ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor);
+
 void synchronize_parameters(const serialization::NamedParameters& parameters);
 
 void send_tensor(const autograd::DistributedContext& ctx, const ttnn::Tensor& tensor, Rank dest, Tag tag = Tag{0});

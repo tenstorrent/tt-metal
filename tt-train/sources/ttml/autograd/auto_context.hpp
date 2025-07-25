@@ -8,6 +8,7 @@
 #include <memory>
 #include <random>
 
+#include "core/distributed/ccl_resources.hpp"
 #include "core/mesh_device.hpp"
 #include "graph.hpp"
 
@@ -58,6 +59,8 @@ public:
 
     [[nodiscard]] DistributedContext& get_distributed_context() const;
 
+    [[nodiscard]] core::distributed::CCLResources& get_ccl_resources();
+
 private:
     AutoContext();
     uint32_t m_seed = 5489U;
@@ -70,6 +73,8 @@ private:
     std::unique_ptr<core::MeshDevice> m_device;
 
     std::shared_ptr<DistributedContext> m_distributed_context;
+
+    std::unique_ptr<core::distributed::CCLResources> m_ccl_resources{};
 
     friend class ttsl::Indestructible<AutoContext>;
 };

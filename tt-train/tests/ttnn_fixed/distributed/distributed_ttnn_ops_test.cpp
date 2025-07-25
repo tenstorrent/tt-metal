@@ -46,7 +46,7 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim0) {
     auto shape = ttnn::Shape({size, 1, 1, 1});
     auto tensor = ttml::core::from_vector(data, shape, device);
 
-    auto scattered_tensor = ttml::ttnn_fixed::distributed::scatter(tensor, /* dim */ 0);
+    auto scattered_tensor = ttml::ttnn_fixed::distributed::reduce_scatter(tensor, /* dim */ 0);
 
     auto mesh_shape = device->shape();
     ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
@@ -73,7 +73,7 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim1) {
     auto shape = ttnn::Shape({1, size, 1, 1});
     auto tensor = ttml::core::from_vector(data, shape, device);
 
-    auto scattered_tensor = ttml::ttnn_fixed::distributed::scatter(tensor, /* dim */ 1);
+    auto scattered_tensor = ttml::ttnn_fixed::distributed::reduce_scatter(tensor, /* dim */ 1);
 
     auto mesh_shape = device->shape();
     ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
@@ -100,7 +100,7 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim2) {
     auto shape = ttnn::Shape({1, 1, size, 1});
     auto tensor = ttml::core::from_vector(data, shape, device);
 
-    auto scattered_tensor = ttml::ttnn_fixed::distributed::scatter(tensor, /* dim */ 2);
+    auto scattered_tensor = ttml::ttnn_fixed::distributed::reduce_scatter(tensor, /* dim */ 2);
 
     auto mesh_shape = device->shape();
     ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
@@ -127,7 +127,7 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim3) {
     auto shape = ttnn::Shape({1, 1, 1, size});
     auto tensor = ttml::core::from_vector(data, shape, device);
 
-    auto scattered_tensor = ttml::ttnn_fixed::distributed::scatter(tensor, /* dim */ 3);
+    auto scattered_tensor = ttml::ttnn_fixed::distributed::reduce_scatter(tensor, /* dim */ 3);
 
     auto mesh_shape = device->shape();
     ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
