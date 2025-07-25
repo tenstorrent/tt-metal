@@ -2,10 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <ttnn/tensor/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <tt-metalium/device.hpp>
-#include <ttnn/tensor/types.hpp>
 
 namespace tt::tt_metal {
 
@@ -29,9 +28,9 @@ void append_sharded_args(
     size_t rank = tensor_shape.size();
     size_t n_banks = bank_coords.size();
     TT_FATAL(
-        rank <= tt::tt_metal::MAX_NUM_DIMENSIONS,
-        "Rank must be less than or equal to {} for rank",
-        tt::tt_metal::MAX_NUM_DIMENSIONS);
+        rank <= TensorAccessorArgs::MAX_NUM_DIMENSIONS,
+        "Rank must be less than or equal to {}",
+        TensorAccessorArgs::MAX_NUM_DIMENSIONS);
 
     size_t n_args =
         add_rank + add_num_banks + rank * add_tensor_shape + rank * add_shard_shape + n_banks * add_bank_coords;
@@ -105,7 +104,7 @@ TensorAccessorArgs::TensorAccessorArgs(const Buffer& buffer, tensor_accessor::Ar
     }
 }
 
-void TensorAccessorArgs::append_args(
+void TensorAccessorArgs::append_to(
     std::vector<uint32_t>& compile_time_args, std::vector<uint32_t>& common_runtime_args) const {
     if (args_config_.test(tensor_accessor::ArgConfig::Sharded)) {
         CMAKE_UNIQUE_NAMESPACE::append_sharded_args(*buffer_, args_config_, compile_time_args, /* is_runtime */ false);
@@ -115,7 +114,7 @@ void TensorAccessorArgs::append_args(
     }
 }
 
-void TensorAccessorArgs::append_args(std::vector<uint32_t>& compile_time_args) const {
+void TensorAccessorArgs::append_to(std::vector<uint32_t>& compile_time_args) const {
     TT_FATAL(
         (args_config_ & tensor_accessor::ArgConfig::Runtime).raw() == 0,
         "Common runtime arguments are required for ArgsConfig {}",
