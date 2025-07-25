@@ -13,6 +13,7 @@ usage()
     echo "[--validate, -v]            Validate that required packages are installed"
     echo "[--docker, -d]              Specialize execution for docker"
     echo "[--no-distributed]          Don't install distributed compute dependencies (OpenMPI)"
+    echo "[--hugepages]               Install hugepages dependency"
     exit 1
 }
 
@@ -359,7 +360,7 @@ install_sfpi() {
     rm -rf $TEMP_DIR
 }
 
-install_mpi_ulfm(){
+install_mpi_ulfm() {
     # Only install if distributed flag is set
     if [ "$distributed" -ne 1 ]; then
         echo "[INFO] Skipping MPI ULFM installation (distributed mode not enabled)"
@@ -398,6 +399,30 @@ install_mpi_ulfm(){
     apt-get install -f -y "$TMP_DIR/$DEB_FILE"
 }
 
+# We don't really want to have hugepages dependency
+# This could be removed in the future
+
+configure_hugepages() {
+    # Check if OS is Ubuntu/Debian-based
+    if ! is_debian_based; then
+        echo "[WARNING] Hugepages configuration is currently only supported on Ubuntu/Debian-based distributions"
+        echo "[WARNING] This function needs to be expanded to support $OS_ID"
+        return
+    fi
+
+    # Fetch the lastest tt-tools release link and name of package
+    TT_TOOLS_LINK=$(wget -qO- https://api.github.com/repos/tenstorrent/tt-system-tools/releases/latest | jq -r '.assets[] | select(.name | endswith(".deb")) | .browser_download_url')
+    TT_TOOLS_NAME=$(wget -qO- https://api.github.com/repos/tenstorrent/tt-system-tools/releases/latest | jq -r '.assets[] | select(.name | endswith(".deb")) | .name')
+
+    echo "[INFO] Installing Tenstorrent Hugepages Service $TT_TOOLS_NAME..."
+    TEMP_DIR=$(mktemp -d)
+    wget -P $TEMP_DIR $TT_TOOLS_LINK
+    apt-get install -y --no-install-recommends $TEMP_DIR/$TT_TOOLS_NAME
+    sudo systemctl enable --now 'dev-hugepages\x2d1G.mount'
+    sudo systemctl enable --now tenstorrent-hugepages.service
+    rm -rf "$TEMP_DIR"
+}
+
 install() {
     echo "[INFO] Installing TT-Metalium dependencies for $OS_ID ($PKG_MANAGER)..."
 
@@ -414,6 +439,11 @@ install() {
     install_sfpi
     install_llvm
     install_mpi_ulfm
+
+    # Configure system (hugepages, etc.) - only for baremetal if requested (not docker)
+    if [ "$docker" -ne 1 ] && [ "$hugepages" -eq 1 ]; then
+        configure_hugepages
+    fi
 }
 
 cleanup() {
@@ -443,6 +473,7 @@ fi
 validate=0
 docker=0
 distributed=1
+hugepages=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -459,6 +490,10 @@ while [ $# -gt 0 ]; do
             ;;
         --no-distributed)
             distributed=0
+            shift
+            ;;
+        --hugepages)
+            hugepages=1
             shift
             ;;
         *)
