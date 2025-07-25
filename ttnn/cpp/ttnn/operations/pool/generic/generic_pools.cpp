@@ -125,7 +125,7 @@ static Tensor pool2d_invoke(
             const uint32_t shard_width = input_tensor.memory_config().shard_spec()->shape[1];
             input_channels_alignment = (shard_width % tt::constants::TILE_WIDTH == 0) ? tt::constants::TILE_WIDTH
                                        : (shard_width % 16 == 0)                      ? 16U
-                                       : (shard_width % 8 == 0)                       ? 8U
+                                       : (shard_width % 8 == 0)                       ? 16U
                                                                                       : tt::constants::TILE_WIDTH;
         }
 
@@ -175,7 +175,7 @@ static Tensor pool2d_invoke(
         num_cores_c *
             (is_out_tiled ? tt::constants::TILE_WIDTH
              : shard_layout == TensorMemoryLayout::WIDTH_SHARDED || shard_layout == TensorMemoryLayout::BLOCK_SHARDED
-                 ? 8
+                 ? 16
                  : 16));
     uint32_t output_shard_width_padded = output_c_padded / num_cores_c;
     log_debug(
