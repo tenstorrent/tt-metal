@@ -832,7 +832,9 @@ void DumpDeviceProfileResults(
             } else if (state == ProfilerDumpState::LAST_FD_DUMP) {
                 profiler.setLastFDDumpAsDone();
             }
-            Finish(device->command_queue());
+            for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
+                Finish(device->command_queue(cq_id));
+            }
         }
 
         const std::vector<CoreCoord> virtual_cores = getVirtualCoresForProfiling(device, state);
@@ -891,7 +893,9 @@ void DumpMeshDeviceProfileResults(
                 }
             }
 
-            mesh_device.mesh_command_queue().finish();
+            for (uint8_t cq_id = 0; cq_id < mesh_device.num_hw_cqs(); ++cq_id) {
+                mesh_device.mesh_command_queue(cq_id).finish();
+            }
         }
 
         for (IDevice* device : mesh_device.get_devices()) {
