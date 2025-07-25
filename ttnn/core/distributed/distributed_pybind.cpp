@@ -38,14 +38,20 @@ class SystemMeshDescriptor {
 private:
     MeshShape global_shape_;
     MeshShape local_shape_;
+    tt::tt_metal::distributed::DistributedMeshContainer<int> physical_device_ids_;
 
 public:
     SystemMeshDescriptor() :
         global_shape_(tt::tt_metal::distributed::SystemMesh::instance().shape()),
-        local_shape_(tt::tt_metal::distributed::SystemMesh::instance().local_shape()) {}
+        local_shape_(tt::tt_metal::distributed::SystemMesh::instance().local_shape()),
+        physical_device_ids_(
+            tt::tt_metal::distributed::SystemMesh::instance().get_mapped_physical_device_ids(global_shape_)) {}
 
     const MeshShape& shape() const { return global_shape_; }
     const MeshShape& local_shape() const { return local_shape_; }
+    const tt::tt_metal::distributed::DistributedMeshContainer<int>& physical_device_ids() const {
+        return physical_device_ids_;
+    }
 };
 
 namespace py = pybind11;
@@ -67,6 +73,7 @@ void py_module_types(py::module& module) {
     py::class_<MeshCoordinateRangeSet>(
         module, "MeshCoordinateRangeSet", "Set of coordinate ranges within a mesh device.");
     py::class_<SystemMeshDescriptor>(module, "SystemMeshDescriptor");
+    py::class_<tt::tt_metal::distributed::DistributedMeshContainer<int>>(module, "DistributedMeshContainer");
 }
 
 void py_module(py::module& module) {
@@ -178,7 +185,31 @@ void py_module(py::module& module) {
     static_cast<py::class_<SystemMeshDescriptor>>(module.attr("SystemMeshDescriptor"))
         .def(py::init([]() { return SystemMeshDescriptor(); }))
         .def("shape", &SystemMeshDescriptor::shape)
-        .def("local_shape", &SystemMeshDescriptor::local_shape);
+        .def("local_shape", &SystemMeshDescriptor::local_shape)
+        .def("physical_device_ids", &SystemMeshDescriptor::physical_device_ids);
+
+    static_cast<py::class_<tt::tt_metal::distributed::DistributedMeshContainer<int>>>(
+        module.attr("DistributedMeshContainer"))
+        .def(
+            "__getitem__",
+            [](const tt::tt_metal::distributed::DistributedMeshContainer<int>& self, const MeshCoordinate& coord) {
+                return self.at(coord);
+            })
+        .def(
+            "__iter__",
+            [](const tt::tt_metal::distributed::DistributedMeshContainer<int>& self) {
+                return py::make_iterator(self.begin(), self.end());
+            })
+        .def(
+            "at",
+            [](const tt::tt_metal::distributed::DistributedMeshContainer<int>& self, const MeshCoordinate& coord) {
+                return self.at(coord).value();
+            })
+        .def(
+            "is_local_at",
+            [](const tt::tt_metal::distributed::DistributedMeshContainer<int>& self, const MeshCoordinate& coord) {
+                return self.is_local_at(coord);
+            });
 
     auto py_mesh_device = static_cast<py::class_<MeshDevice, std::shared_ptr<MeshDevice>>>(module.attr("MeshDevice"));
     py_mesh_device
