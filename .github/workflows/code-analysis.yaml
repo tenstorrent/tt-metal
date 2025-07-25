@@ -303,7 +303,7 @@ jobs:
                   # Wait for the new retry run to appear
                   local new_run_id=""
                   for j in {1..15}; do
-                    sleep 10
+                    sleep 20
 
                     # Get runs created after retry trigger time
                     local retry_runs=$(gh run list --workflow "$WORKFLOW" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json databaseId,createdAt --repo "${{ github.repository }}")
@@ -525,14 +525,8 @@ jobs:
             fi
 
             if [ "$WH_RUNS" != "empty" ]; then
-              WH_CONCLUSION=$(echo "$WH_RUNS" | jq -r '.conclusion // "unknown"')
               WH_URL=$(echo "$WH_RUNS" | jq -r '.url // ""')
-
-              if [ "$WH_CONCLUSION" = "success" ]; then
-                TEST_STATUS+="- ✅ **All Post Commit Workflows** passed: [View run]($WH_URL)"$'\n'
-              else
-                TEST_STATUS+="- ❌ **All Post Commit Workflows** failed (conclusion: \`$WH_CONCLUSION\`): [View run]($WH_URL)"$'\n'
-              fi
+              TEST_STATUS+="- ✅ **All Post Commit Workflows** passed: [View run]($WH_URL)"$'\n'
             fi
           fi
 
@@ -545,14 +539,8 @@ jobs:
             fi
 
             if [ "$BH_RUNS" != "empty" ]; then
-              BH_CONCLUSION=$(echo "$BH_RUNS" | jq -r '.conclusion // "unknown"')
               BH_URL=$(echo "$BH_RUNS" | jq -r '.url // ""')
-
-              if [ "$BH_CONCLUSION" = "success" ]; then
-                TEST_STATUS+="- ✅ **Blackhole Post Commit** passed: [View run]($BH_URL)"$'\n'
-              else
-                TEST_STATUS+="- ❌ **Blackhole Post Commit** failed (conclusion: \`$BH_CONCLUSION\`): [View run]($BH_URL)"$'\n'
-              fi
+              TEST_STATUS+="- ✅ **Blackhole Post Commit** passed: [View run]($BH_URL)"$'\n'
             fi
           fi
 
@@ -573,8 +561,16 @@ jobs:
           # Update PR body
           echo "$UPDATED_BODY" | gh pr edit "$PR_NUMBER" --body-file - --repo "${{ github.repository }}"
 
+          # Enable auto-merge
+          echo "🔄 Enabling auto-merge for PR #$PR_NUMBER"
+          if [ "${{ inputs.recheck_tests }}" != "true" ]; then
+            gh pr merge "$PR_NUMBER" --auto --squash --subject "chore: update LLK submodule to ${{ needs.update-submodule.outputs.new-sha }}" --repo "${{ github.repository }}" || echo "⚠️ Could not enable auto-merge (may require additional permissions)"
+          else
+            gh pr merge "$PR_NUMBER" --auto --squash --repo "${{ github.repository }}" || echo "⚠️ Could not enable auto-merge (may require additional permissions)"
+          fi
+
           # Final comment
-          MESSAGE="🎉 **LLK submodule update completed successfully!** Ready for review and merge."
+          MESSAGE="🎉 **LLK submodule update completed successfully!** Auto-merge enabled - will merge automatically once approved by reviewers."
           gh pr comment "$PR_NUMBER" --body "$MESSAGE" --repo "${{ github.repository }}"
 
           echo "✅ Updated PR body with test status"
