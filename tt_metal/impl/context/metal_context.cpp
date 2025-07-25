@@ -510,11 +510,11 @@ void MetalContext::initialize_control_plane() {
         return;
     }
 
-    std::filesystem::path mesh_graph_desc_path = cluster_->get_mesh_graph_descriptor_path();
-
-    // If the cluster is a GALAXY and the fabric type is TORUS_XY, override the mesh graph descriptor path
     auto cluster_type = cluster_->get_cluster_type();
     auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_type);
+    std::filesystem::path mesh_graph_desc_path = tt::tt_fabric::MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type(cluster_type, std::filesystem::path(rtoptions_.get_root_dir()));
+
+    // If the cluster is a GALAXY and the fabric type is TORUS_XY, override the mesh graph descriptor path
     if (cluster_type == tt::ClusterType::GALAXY && fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
         mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
                                "tt_metal/fabric/mesh_graph_descriptors" /

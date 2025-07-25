@@ -1377,22 +1377,6 @@ bool Cluster::is_external_cable(chip_id_t physical_chip_id, CoreCoord eth_core) 
     return is_external_cable;
 }
 
-std::string Cluster::get_mesh_graph_descriptor() const {
-    auto it = cluster_type_to_mesh_graph_descriptor.find(this->cluster_type_);
-    if (it != cluster_type_to_mesh_graph_descriptor.end()) {
-        return it->second;
-    }
-    TT_THROW("Cannot find mesh graph descriptor for cluster type {}", this->cluster_type_);
-}
-
-std::filesystem::path Cluster::get_mesh_graph_descriptor_path() const {
-    std::string filename = this->get_mesh_graph_descriptor();
-    if (filename.empty()) {
-        TT_THROW("Cannot find mesh graph descriptor for cluster type {}", this->cluster_type_);
-    }
-    return std::filesystem::path(rtoptions_.get_root_dir()) / MESH_GRAPH_DESCRIPTOR_DIR / filename;
-}
-
 }  // namespace tt
 
 std::ostream &operator<<(std::ostream &os, tt_target_dram const &dram) {

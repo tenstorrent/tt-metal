@@ -9,6 +9,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/fabric_types.hpp>
 #include <tt_stl/reflection.hpp>
+#include <tt_stl/indestructible.hpp>
 #include <umd/device/types/arch.h>                      // tt::ARCH
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <cstddef>
@@ -21,8 +22,8 @@
 #include <vector>
 namespace tt {
 enum class ARCH;
+enum class ClusterType : std::uint8_t;
 }  // namespace tt
-
 namespace tt::tt_fabric {
 
 using tt::tt_metal::distributed::MeshContainer;
@@ -74,7 +75,6 @@ struct hash_pair {
 using port_id_t = std::pair<RoutingDirection, uint32_t>;
 using InterMeshConnectivity = std::vector<std::vector<std::unordered_map<MeshId, RouterEdge>>>;
 using IntraMeshConnectivity = std::vector<std::vector<std::unordered_map<chip_id_t, RouterEdge>>>;
-
 class MeshGraph {
 public:
     explicit MeshGraph(const std::string& mesh_graph_desc_file_path);
@@ -112,6 +112,9 @@ public:
     MeshCoordinate chip_to_coordinate(MeshId mesh_id, chip_id_t chip_id) const;
     chip_id_t coordinate_to_chip(MeshId mesh_id, MeshCoordinate coordinate) const;
 
+    // Static functions for mesh graph descriptor management
+    static std::filesystem::path get_mesh_graph_descriptor_path_for_cluster_type(tt::ClusterType cluster_type, const std::string& root_dir);
+
 private:
     void validate_mesh_id(MeshId mesh_id) const;
     std::unordered_map<chip_id_t, RouterEdge> get_valid_connections(
@@ -133,5 +136,8 @@ private:
     // For distributed context, bookkeeping of host ranks and their shapes
     std::vector<MeshContainer<HostRankId>> mesh_host_ranks_;
     std::unordered_map<std::pair<MeshId, HostRankId>, MeshCoordinateRange, hash_pair> mesh_host_rank_coord_ranges_;
+
+    static constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
+    static const tt::stl::Indestructible<std::unordered_map<tt::ClusterType, std::string_view>>& cluster_type_to_mesh_graph_descriptor;
 };
 }  // namespace tt::tt_fabric
