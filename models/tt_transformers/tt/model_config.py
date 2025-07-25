@@ -1360,8 +1360,8 @@ class ModelArgs:
 
     def _get_hidden_activation_type(self, config):
         activation_map = {
-            "gelu": ttnn.UnaryOpType.GELU,
-            "gelu_pytorch_tanh": ttnn.UnaryOpType.GELU,
+            "gelu": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0),
+            "gelu_pytorch_tanh": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0),
             "relu": ttnn.UnaryOpType.RELU,
             "silu": ttnn.UnaryOpType.SILU,
             "swish": ttnn.UnaryOpType.SILU,
@@ -1395,7 +1395,7 @@ class ModelArgs:
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
-        self.head_dim = text_config.get("head_dim", self.dim // self.n_heads)
+        self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
         if is_hf:
             self.max_context_len = text_config.get("max_position_embeddings")
         else:
@@ -2185,12 +2185,7 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            # TODO: Generalize for other HF models
-            model_name_env = os.getenv("HF_MODEL")
-            if model_name_env is not None and "mistral" in model_name_env.lower():
-                wrapper = HfDecoderWrapper(layer, self.head_dim, layer.self_attn.rotary_emb)
-            else:
-                wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
+            wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
             return wrapper
 
     def reference_attention(self):
@@ -2201,7 +2196,7 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            use_position_embeddings = layer.__class__.__name__ == "Qwen3Attention"
+            use_position_embeddings = layer.__class__.__name__ in ("Qwen3Attention", "MistralAttention")
             wrapper = HfAttentionWrapper(
                 layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
             )
@@ -2365,12 +2360,7 @@ class HfDecoderWrapper:
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
-        # TODO: Generalize for other HF models
-        model_name_env = os.getenv("HF_MODEL")
-        if model_name_env is not None and "mistral" in model_name_env.lower():
-            position_embeddings = self.rotary_emb(x, x.shape[1])
-        else:
-            position_embeddings = self.rotary_emb(x, position_ids)
+        position_embeddings = self.rotary_emb(x, position_ids)
 
         if mask is not None:
             while len(mask.shape) < 4:

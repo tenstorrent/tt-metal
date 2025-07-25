@@ -104,7 +104,7 @@ def test_forward_pass(
     check_cache,
     reference,
     hf_config_short,
-    temp_dir,
+    tmp_path,
     mesh_row,
 ):
     hf_config = hf_config_short
@@ -119,8 +119,8 @@ def test_forward_pass(
     ### Set up configs
     ############################
     # Setup: Convert weights and get weight_config
-    logger.info(f"Converting weights for MLA1D to {temp_dir}")
-    weight_config = MLA1D.convert_weights(hf_config, reference_model.state_dict(), temp_dir, mesh_row)
+    logger.info(f"Converting weights for MLA1D to {tmp_path}")
+    weight_config = MLA1D.convert_weights(hf_config, reference_model.state_dict(), tmp_path, mesh_row)
 
     # Generate appropriate configs
     ccl = CCL1D(hf_config, mesh_row)

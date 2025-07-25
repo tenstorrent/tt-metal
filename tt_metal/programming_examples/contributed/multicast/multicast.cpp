@@ -12,6 +12,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <cstdint>
 #include <vector>
 #include <memory>
@@ -171,9 +172,26 @@ int main(int argc, char **argv) {
         // reference for num of receivers.
         size_t num_dests = receiver_cores_logical.size();
 
+        ////////// SEMAPHORE SETUP //////////
+        uint32_t sender = CreateSemaphore(program, all_cores_logical, 0);
+        uint32_t receiver = CreateSemaphore(program, all_cores_logical, 0);
+
+        ////////// DRAM & SRAM BUFFERS SETUP //////////
+        constexpr uint32_t num_tiles = 1;
+        uint32_t dram_bank_id = 0;
+        auto src0_dram_buffer = MakeBufferBFP16(device, num_tiles, false);
+        auto output_dram_buffer = MakeBufferBFP16(device, num_dests * num_tiles, false);
+        auto cb_src0 = MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_0, num_tiles);
+        auto cb_output = MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_16, num_tiles);
+
         ////////// DATA MOVEMENT CONFIG SETUP //////////
         DataMovementConfig DataMovementConfigIn = {.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default};
-        DataMovementConfig DataMovementConfigOut = {.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default};
+        std::vector<uint32_t> writer_compile_time_args;
+        TensorAccessorArgs(*output_dram_buffer).append_to(writer_compile_time_args);
+        DataMovementConfig DataMovementConfigOut = {
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = writer_compile_time_args};
 
         ////////// COORDINATOR KERNEL SETUP //////////
         KernelHandle coordinator_kernel_id = CreateKernel(
@@ -210,18 +228,6 @@ int main(int argc, char **argv) {
                 .compile_args = compute_kernel_args
             }
         );
-
-        ////////// SEMAPHORE SETUP //////////
-        uint32_t sender = CreateSemaphore(program, all_cores_logical, 0);
-        uint32_t receiver = CreateSemaphore(program, all_cores_logical, 0);
-
-        ////////// DRAM & SRAM BUFFERS SETUP //////////
-        constexpr uint32_t num_tiles = 1;
-        uint32_t dram_bank_id = 0;
-        auto src0_dram_buffer = MakeBufferBFP16(device, num_tiles, false);
-        auto output_dram_buffer = MakeBufferBFP16(device, num_dests * num_tiles, false);
-        auto cb_src0 = MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_0, num_tiles);
-        auto cb_output = MakeCircularBufferBFP16(program, all_cores_logical, tt::CBIndex::c_16, num_tiles);
 
         ////////// IDENTITY MATRIX TILE SETUP //////////
         std::vector<bfloat16> identity_tile = create_identity_matrix(TILE_WIDTH, TILE_HEIGHT, TILE_WIDTH);
