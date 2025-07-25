@@ -69,7 +69,7 @@ class MLP(LightweightModule):
             "w1_sharded", ff1_3_dtype, dims=w1_dims
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
         self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
-        self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
+        # self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
@@ -118,15 +118,18 @@ class MLP(LightweightModule):
             memory_config=memory_config,
         )
 
-        w3_out = ttnn.linear(
-            x,
-            self.w3,
-            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
-            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
-            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-            program_config=pc_3,
-            memory_config=memory_config,
-        )
+        w1_out = ttnn.gelu(w1_out)
+            
+
+        # w3_out = ttnn.linear(
+        #     x,
+        #     self.w3,
+        #     dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+        #     core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
+        #     compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+        #     program_config=pc_3,
+        #     memory_config=memory_config,
+        # )
         ttnn.deallocate(x)
 
         if TG:
@@ -175,39 +178,39 @@ class MLP(LightweightModule):
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
                 )
 
-        w2_in = ttnn.mul(
-            w1_out,
-            w3_out,
-            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-            dtype=activation_dtype or ttnn.bfloat8_b,
-            memory_config=w1_out.memory_config(),
-        )
+        # w2_in = ttnn.mul(
+        #     w1_out,
+        #     w3_out,
+        #     input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+        #     dtype=activation_dtype or ttnn.bfloat8_b,
+        #     memory_config=w1_out.memory_config(),
+        # )
 
-        if mode == "decode" and not TG:
-            # w2 may use a different core grid, this is a no-op if they already match
-            w2_in = ttnn.to_memory_config(w2_in, self.model_config["SHARDED_MLP2_INPUT_MEMCFG"])
+        # if mode == "decode" and not TG:
+        #     # w2 may use a different core grid, this is a no-op if they already match
+        #     w2_in = ttnn.to_memory_config(w2_in, self.model_config["SHARDED_MLP2_INPUT_MEMCFG"])
 
-        ttnn.deallocate(w3_out)
-        ttnn.deallocate(w1_out)
+        # ttnn.deallocate(w3_out)
+        # ttnn.deallocate(w1_out)
 
-        if TG and (self.dim == 8192 or mode == "prefill"):
-            w2_in = ttnn.all_gather(
-                w2_in,
-                3,
-                num_links=2,
-                cluster_axis=1,
-                mesh_device=self.mesh_device,
-                topology=ttnn.Topology.Linear,
-                memory_config=input_mem_cfg,
-            )
-            if mode == "decode":
-                w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
+        # if TG and (self.dim == 8192 or mode == "prefill"):
+        #     w2_in = ttnn.all_gather(
+        #         w2_in,
+        #         3,
+        #         num_links=2,
+        #         cluster_axis=1,
+        #         mesh_device=self.mesh_device,
+        #         topology=ttnn.Topology.Linear,
+        #         memory_config=input_mem_cfg,
+        #     )
+        #     if mode == "decode":
+        #         w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
 
         li_ff2_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
         )
         w2_out = ttnn.linear(
-            w2_in,
+            w1_out,
             self.w2,
             compute_kernel_config=li_ff2_compute_kernel_cfg,
             dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
@@ -215,7 +218,8 @@ class MLP(LightweightModule):
             memory_config=memory_config,
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
         )
-        ttnn.deallocate(w2_in)
+        # ttnn.deallocate(w2_in)
+        ttnn.deallocate(w1_out)
         # if mode == "decode" and not TG:
         #     w2_out = ttnn.sharded_to_interleaved(w2_out, ttnn.DRAM_MEMORY_CONFIG)
         w2_out_reduced = tt_all_reduce(
