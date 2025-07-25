@@ -84,7 +84,8 @@ void py_bind_point_to_point(py::module& module) {
             py::arg("topology"),
             py::arg("receiver_semaphore"),
             py::kw_only(),
+            py::arg("optional_output_tensor") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId,
-            py::arg("optional_output_tensor") = std::nullopt});
+        });
 }
 }  // namespace ttnn::operations::point_to_point
