@@ -757,12 +757,6 @@ void dumpDeviceResultsToCSV(
         return;
     }
 
-    std::string concatenated_data_points = "";
-
-    // This is a rough estimate of the number of characters per data point based on observing the CSV output
-    constexpr uint32_t approximate_num_chars_per_data_point = 100;
-    concatenated_data_points.reserve(device_data_points.size() * approximate_num_chars_per_data_point);
-
     for (const DeviceProfilerDataPoint& data_point : device_data_points) {
         std::string meta_data_str = "";
         if (!data_point.meta_data.is_null()) {
@@ -770,7 +764,7 @@ void dumpDeviceResultsToCSV(
             std::replace(meta_data_str.begin(), meta_data_str.end(), ',', ';');
         }
 
-        concatenated_data_points += fmt::format(
+        log_file_ofs << fmt::format(
             "{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             data_point.device_id,
             data_point.core_x,
@@ -786,8 +780,6 @@ void dumpDeviceResultsToCSV(
             data_point.source_file,
             meta_data_str);
     }
-
-    log_file_ofs << concatenated_data_points << std::flush;
 
     log_file_ofs.close();
 }
