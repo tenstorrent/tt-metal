@@ -77,24 +77,27 @@ void print_configuration_summary(const MeshSocketTestConfiguration& config) {
 }
 
 int main(int argc, char* argv[]) {
-    std::string yaml_file_path;
+    std::vector<std::string> input_args(argv, argv + argc);
+    // Parse command line and YAML configurations
+    CmdlineParser cmdline_parser(input_args);
 
-    // Parse command line arguments
-    if (argc < 2) {
-        // Use default file if no argument provided
-        yaml_file_path = "tests/tt_metal/multihost/fabric_tests/mesh_socket_test_config_example.yaml";
-        log_info(tt::LogTest, "No YAML file specified, using default: {}", yaml_file_path);
-    } else {
-        yaml_file_path = argv[1];
-        log_info(tt::LogTest, "Using YAML file: {}", yaml_file_path);
+    if (cmdline_parser.has_help_option()) {
+        cmdline_parser.print_help();
+        return 0;
+    }
+
+    auto yaml_file_path = cmdline_parser.get_yaml_config_path();
+    if (!yaml_file_path.has_value()) {
+        log_error(tt::LogTest, "No YAML file specified. Use --help for usage information.");
+        return 1;
     }
 
     try {
         // Create parser and parse the configuration
         MeshSocketYamlParser parser;
-        MeshSocketTestConfiguration config = parser.parse_file(yaml_file_path);
+        MeshSocketTestConfiguration config = parser.parse_file(yaml_file_path.value());
 
-        log_info(tt::LogTest, "Successfully parsed YAML configuration from: {}", yaml_file_path);
+        log_info(tt::LogTest, "Successfully parsed YAML configuration from: {}", yaml_file_path.value());
 
         // Print summary of loaded configuration
         print_configuration_summary(config);
