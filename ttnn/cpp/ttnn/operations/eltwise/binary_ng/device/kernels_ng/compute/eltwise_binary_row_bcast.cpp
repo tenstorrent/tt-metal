@@ -26,11 +26,14 @@ void MAIN {
 
 #if SRC_BCAST
     constexpr auto cb_bcast = cb_post_lhs;
-    constexpr auto cb_left = tt::CBIndex::c_6;
+    constexpr auto cb_llk_post = tt::CBIndex::c_5;
+    constexpr auto cb_left = tt::CBIndex::c_5;
     constexpr auto cb_right = cb_post_rhs;
+
 #endif
 #if SRC_BCAST_B
     constexpr auto cb_bcast = cb_post_rhs;
+    constexpr auto cb_llk_post = tt::CBIndex::c_6;
     constexpr auto cb_left = cb_post_lhs;
     constexpr auto cb_right = tt::CBIndex::c_6;
 #endif
@@ -47,22 +50,22 @@ void MAIN {
         PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, num_tiles_per_cycle);
         cb_wait_front(cb_post_rhs, num_tiles_per_cycle);
 
-        cb_reserve_back(tt::CBIndex::c_6, 1);
-        unary_bcast_init<BroadcastType::ROW>(cb_bcast, tt::CBIndex::c_6);
+        cb_reserve_back(cb_llk_post, 1);
+        unary_bcast_init<BroadcastType::ROW>(cb_bcast, cb_llk_post);
 
         tile_regs_acquire();
         unary_bcast<BroadcastType::ROW>(cb_bcast, 0, 0);
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, tt::CBIndex::c_6);
-        cb_push_back(tt::CBIndex::c_6, 1);
+        pack_tile(0, cb_llk_post);
+        cb_push_back(cb_llk_post, 1);
         tile_regs_release();
 
         cb_pop_front(cb_bcast, 1);
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_left, cb_right);
         cb_reserve_back(cb_out, num_tiles_per_cycle);
-        cb_wait_front(tt::CBIndex::c_6, 1);
+        cb_wait_front(cb_llk_post, 1);
 
         tile_regs_acquire();
         BINARY_OP(cb_left, cb_right, 0, 0, 0);
