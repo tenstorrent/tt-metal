@@ -90,7 +90,7 @@ jobs:
       - uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          name: ${{ inputs.package-artifact-name || 'packages artifact unresolved!' }}
+          name: ${{ inputs.package-artifact-name }}
           path: /work/pkgs/
 
       - name: Install packages
