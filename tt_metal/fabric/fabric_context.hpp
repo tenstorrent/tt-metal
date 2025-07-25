@@ -27,8 +27,13 @@ public:
 
     static tt::tt_fabric::Topology get_topology_from_config(tt::tt_fabric::FabricConfig fabric_config);
 
+    static bool is_2D_topology(tt::tt_fabric::Topology topology);
+
     tt::tt_fabric::Topology get_fabric_topology() const;
-    tt::tt_fabric::FabricConfig get_fabric_config() const { return fabric_config_; }
+    bool is_2D_routing_enabled() const;
+    bool is_dynamic_routing_enabled() const;
+
+    bool need_deadlock_avoidance_support(eth_chan_directions direction) const;
 
     size_t get_fabric_packet_header_size_bytes() const;
     size_t get_fabric_max_payload_size_bytes() const;

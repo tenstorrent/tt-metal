@@ -88,7 +88,7 @@ FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::LowLatencyPacketHeade
 }
 
 FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
-    if constexpr (enable_ring_support) {
+    if constexpr (enable_deadlock_avoidance) {
         auto start_trid = RX_CH_TRID_STARTS[rx_channel_id];
         auto end_trid = start_trid + NUM_TRANSACTION_IDS;
         for (int i = start_trid; i < end_trid; i++) {
@@ -285,7 +285,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 // !!!WARNING!!! * ENSURE DOWNSTREAM EDM HAS SPACE FOR PACKET BEFORE CALLING
 // !!!WARNING!!!
 // This function does a write, so needs to be volatile to avoid compiler optimizations
-template <bool enable_ring_support, bool stateful_api, bool increment_pointers = true, uint8_t NUM_SENDER_BUFFERS>
+template <bool enable_deadlock_avoidance, bool stateful_api, bool increment_pointers = true, uint8_t NUM_SENDER_BUFFERS>
 FORCE_INLINE void forward_payload_to_downstream_edm(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint16_t payload_size_bytes,
@@ -301,7 +301,7 @@ FORCE_INLINE void forward_payload_to_downstream_edm(
         update_packet_header_for_next_hop(packet_header, cached_routing_fields);
     }
     downstream_edm_interface.template send_payload_non_blocking_from_address_with_trid<
-        enable_ring_support,
+        enable_deadlock_avoidance,
         tt::tt_fabric::edm_to_downstream_noc,
         stateful_api,
         increment_pointers>(

@@ -19,6 +19,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/fabric.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include <filesystem>
@@ -418,6 +419,14 @@ void MetalContext::set_fabric_config(
     const tt_fabric::FabricConfig fabric_config,
     tt_fabric::FabricReliabilityMode reliability_mode,
     std::optional<uint8_t> num_routing_planes) {
+    if (is_2d_fabric_config(fabric_config) && cluster_->get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
+        const auto fabric_type = get_fabric_type(fabric_config);
+        if (fabric_type == tt::tt_fabric::FabricType::TORUS_X || fabric_type == tt::tt_fabric::FabricType::TORUS_Y ||
+            fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
+            TT_THROW("2D fabric with torus topology is not supported for non-GALAXY clusters.");
+        }
+    }
+
     // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch config, not through this function exposed in the detail API.
     force_reinit_ = true;
 
@@ -520,11 +529,17 @@ void MetalContext::initialize_control_plane() {
         case tt::tt_metal::ClusterType::N300: mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml"; break;
         case tt::tt_metal::ClusterType::T3K: mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml"; break;
         case tt::tt_metal::ClusterType::GALAXY:
-            if (tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_type) ==
-                tt::tt_fabric::FabricType::TORUS_XY) {
-                mesh_graph_descriptor = "single_galaxy_torus_xy_graph_descriptor.yaml";
-            } else {
-                mesh_graph_descriptor = "single_galaxy_mesh_graph_descriptor.yaml";
+            switch (tt::tt_fabric::get_fabric_type(this->fabric_config_)) {
+                case tt::tt_fabric::FabricType::TORUS_XY:
+                    mesh_graph_descriptor = "single_galaxy_torus_xy_graph_descriptor.yaml";
+                    break;
+                case tt::tt_fabric::FabricType::TORUS_X:
+                    mesh_graph_descriptor = "single_galaxy_torus_x_graph_descriptor.yaml";
+                    break;
+                case tt::tt_fabric::FabricType::TORUS_Y:
+                    mesh_graph_descriptor = "single_galaxy_torus_y_graph_descriptor.yaml";
+                    break;
+                default: mesh_graph_descriptor = "single_galaxy_mesh_graph_descriptor.yaml"; break;
             }
             break;
         case tt::tt_metal::ClusterType::TG: mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml"; break;
