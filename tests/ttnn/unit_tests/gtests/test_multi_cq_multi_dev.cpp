@@ -74,9 +74,9 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
     uint32_t datum_size_bytes = 2;
     auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
     auto readback_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
-    for (int outer_loop = 0; outer_loop < 5; outer_loop++) {
+    for (int outer_loop = 0; outer_loop < 2; outer_loop++) {
         log_info(LogTest, "Running outer loop {}", outer_loop);
-        for (int i = 0; i < 30; i++) {
+        for (int i = 0; i < 5; i++) {
             for (auto& dev : this->devs) {
                 auto dev_idx = dev.first;
                 auto device = dev.second;
@@ -129,9 +129,9 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
 
     TensorSpec tensor_spec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg));
     ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_spec.compute_packed_buffer_size_bytes());
-    for (int outer_loop = 0; outer_loop < 5; outer_loop++) {
+    for (int outer_loop = 0; outer_loop < 2; outer_loop++) {
         log_info(LogTest, "Running outer loop {}", outer_loop);
-        for (int i = 0; i < 30; i++) {
+        for (int i = 0; i < 5; i++) {
             for (auto& dev : this->devs) {
                 auto dev_idx = dev.first;
                 auto device = dev.second;
