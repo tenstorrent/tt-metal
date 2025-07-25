@@ -3,16 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import torch
+
 import ttnn
-from ultralytics import YOLO
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.demos.yolov11.tt.model_preprocessing import (
-    create_yolov11_input_tensors,
-    create_yolov11_model_parameters,
-)
+from models.demos.yolov11.common import load_torch_model
 from models.demos.yolov11.reference import yolov11
 from models.demos.yolov11.tt import ttnn_yolov11
+from models.demos.yolov11.tt.model_preprocessing import create_yolov11_input_tensors, create_yolov11_model_parameters
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
@@ -22,22 +19,20 @@ from models.demos.yolov11.tt import ttnn_yolov11
     ],
 )
 @pytest.mark.parametrize(
-    "use_weights_from_ultralytics",
+    "use_pretrained_weights",
     [
-        # True,
-        False
+        True,
+        # False
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
-def test_yolov11(device, reset_seeds, resolution, use_weights_from_ultralytics, min_channels=8):
-    weights = "yolo11n.pt"
-    if use_weights_from_ultralytics:
-        torch_model = YOLO(weights)
-        state_dict = {k.replace("model.", "", 1): v for k, v in torch_model.state_dict().items()}
+def test_yolov11(device, reset_seeds, resolution, use_pretrained_weights, model_location_generator, min_channels=8):
     torch_model = yolov11.YoloV11()
     torch_model.eval()
-    if use_weights_from_ultralytics:
-        torch_model.load_state_dict(state_dict)
+
+    if use_pretrained_weights:
+        torch_model = load_torch_model(model_location_generator)
+
     torch_input, ttnn_input = create_yolov11_input_tensors(
         device,
         batch=resolution[0],
