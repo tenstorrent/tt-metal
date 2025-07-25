@@ -179,6 +179,8 @@ void configure_static_tlbs(
     for (const CoreCoord& core : sdesc.get_cores(CoreType::ETH, sdesc.get_umd_coord_system())) {
         auto tlb_index = get_static_tlb_index({core.x, core.y});
         device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, TLB_DATA::Strict);
+        std::cerr << "Configured static TLB for eth core: " << core.str() << " with CoordSystem "
+                  << (uint32_t)sdesc.get_umd_coord_system() << "\n";
     }
 
     // TODO (#9932): Remove workaround for BH
@@ -197,7 +199,7 @@ void configure_static_tlbs(
         for (std::uint32_t dram_channel = 0; dram_channel < blackhole::NUM_DRAM_CHANNELS; dram_channel++) {
             tt_xy_pair dram_core = blackhole::ddr_to_noc0(dram_channel);
             auto tlb_index = tt::umd::blackhole::TLB_COUNT_2M + dram_channel;
-            device_driver.configure_tlb(mmio_device_id, dram_core, tlb_index, dram_addr, TLB_DATA::Posted);
+            device_driver.configure_tlb(mmio_device_id, dram_core, tlb_index, dram_addr, TLB_DATA::Strict);
         }
     }
 }
