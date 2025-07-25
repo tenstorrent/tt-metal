@@ -329,12 +329,12 @@ void send_msg_to_eth_mailbox(
     uint32_t msg_status =
         read_hex_vec_from_core(device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0] & status_mask;
     {
-        const auto start_time = std::chrono::high_resolution_clock::now();
+        const auto start_time = std::chrono::steady_clock::now();
         while (msg_status != done_message && msg_status != 0) {
             tt_driver_atomics::lfence();
             msg_status =
                 read_hex_vec_from_core(device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0] & status_mask;
-            const auto timenow = std::chrono::high_resolution_clock::now();
+            const auto timenow = std::chrono::steady_clock::now();
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(timenow - start_time).count();
             if (elapsed > timeout_ms) {
                 TT_THROW(
@@ -386,12 +386,12 @@ void send_msg_to_eth_mailbox(
 
     // Wait for ack
     if (wait_for_ack) {
-        const auto start_time = std::chrono::high_resolution_clock::now();
+        const auto start_time = std::chrono::steady_clock::now();
         do {
             tt_driver_atomics::lfence();
             msg_status =
                 read_hex_vec_from_core(device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0] & status_mask;
-            const auto timenow = std::chrono::high_resolution_clock::now();
+            const auto timenow = std::chrono::steady_clock::now();
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(timenow - start_time).count();
             if (elapsed > timeout_ms) {
                 TT_THROW(
