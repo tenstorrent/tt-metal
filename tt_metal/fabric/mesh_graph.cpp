@@ -30,20 +30,22 @@ FabricType operator&(FabricType lhs, FabricType rhs) {
     return static_cast<FabricType>(static_cast<uint32_t>(lhs) & static_cast<uint32_t>(rhs));
 }
 
-const tt::stl::Indestructible<std::unordered_map<tt::ClusterType, std::string_view>>& MeshGraph::cluster_type_to_mesh_graph_descriptor = 
-    *new tt::stl::Indestructible<std::unordered_map<tt::ClusterType, std::string_view>>(std::unordered_map<tt::ClusterType, std::string_view>{
-        {tt::ClusterType::N150, "n150_mesh_graph_descriptor.yaml"},
-        {tt::ClusterType::N300, "n300_mesh_graph_descriptor.yaml"},
-        {tt::ClusterType::T3K, "t3k_mesh_graph_descriptor.yaml"},
-        {tt::ClusterType::GALAXY, "single_galaxy_mesh_graph_descriptor.yaml"},
-        {tt::ClusterType::TG, "tg_mesh_graph_descriptor.yaml"},
-        {tt::ClusterType::P100, "p100_mesh_graph_descriptor.yaml"},
-        {tt::ClusterType::P150, "p150_mesh_graph_descriptor.yaml"},
-        {tt::ClusterType::P150_X2, "p150_x2_mesh_graph_descriptor.yaml"},
-        {tt::ClusterType::P150_X4, "p150_x4_mesh_graph_descriptor.yaml"},
-        {tt::ClusterType::SIMULATOR_WORMHOLE_B0, "n150_mesh_graph_descriptor.yaml"},
-        {tt::ClusterType::SIMULATOR_BLACKHOLE, "p150_mesh_graph_descriptor.yaml"},
-        {tt::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.yaml"}});
+const tt::stl::Indestructible<std::unordered_map<tt::ClusterType, std::string_view>>&
+    MeshGraph::cluster_type_to_mesh_graph_descriptor =
+        *new tt::stl::Indestructible<std::unordered_map<tt::ClusterType, std::string_view>>(
+            std::unordered_map<tt::ClusterType, std::string_view>{
+                {tt::ClusterType::N150, "n150_mesh_graph_descriptor.yaml"},
+                {tt::ClusterType::N300, "n300_mesh_graph_descriptor.yaml"},
+                {tt::ClusterType::T3K, "t3k_mesh_graph_descriptor.yaml"},
+                {tt::ClusterType::GALAXY, "single_galaxy_mesh_graph_descriptor.yaml"},
+                {tt::ClusterType::TG, "tg_mesh_graph_descriptor.yaml"},
+                {tt::ClusterType::P100, "p100_mesh_graph_descriptor.yaml"},
+                {tt::ClusterType::P150, "p150_mesh_graph_descriptor.yaml"},
+                {tt::ClusterType::P150_X2, "p150_x2_mesh_graph_descriptor.yaml"},
+                {tt::ClusterType::P150_X4, "p150_x4_mesh_graph_descriptor.yaml"},
+                {tt::ClusterType::SIMULATOR_WORMHOLE_B0, "n150_mesh_graph_descriptor.yaml"},
+                {tt::ClusterType::SIMULATOR_BLACKHOLE, "p150_mesh_graph_descriptor.yaml"},
+                {tt::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.yaml"}});
 
 bool has_flag(FabricType flags, FabricType test) { return (flags & test) == test; }
 

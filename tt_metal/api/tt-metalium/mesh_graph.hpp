@@ -138,6 +138,8 @@ private:
     std::unordered_map<std::pair<MeshId, HostRankId>, MeshCoordinateRange, hash_pair> mesh_host_rank_coord_ranges_;
 
     static constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
-    static const tt::stl::Indestructible<std::unordered_map<tt::ClusterType, std::string_view>>& cluster_type_to_mesh_graph_descriptor;
+    static const tt::stl::Indestructible<std::unordered_map<tt::ClusterType, std::string_view>>&
+        cluster_type_to_mesh_graph_descriptor;
 };
+
 }  // namespace tt::tt_fabric
