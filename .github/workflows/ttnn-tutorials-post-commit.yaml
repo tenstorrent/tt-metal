@@ -90,13 +90,14 @@ jobs:
       - uses: actions/download-artifact@v4
         timeout-minutes: 10
         with:
-          name: ${{ inputs.package-artifact-name }}
+          name: ${{ inputs.package-artifact-name != '' }}
           path: /work/pkgs/
 
       - name: Install packages
         run: |
           set -euo pipefail
           apt update
+          ls -la ./pkgs/
           apt install -y ./pkgs/tt-metalium_*.deb ./pkgs/tt-metalium-jit_*.deb ./pkgs/tt-metalium-dev_*.deb ./pkgs/tt-metalium-examples_*.deb
 
       - name: 🐍 Install minimum set of packages
