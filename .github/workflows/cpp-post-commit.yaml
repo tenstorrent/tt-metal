@@ -95,11 +95,6 @@ jobs:
         run: |
             mkdir -p generated/test_reports
             ${{ matrix.test-group.cmd }}
-      - name: Install TT-Lens Debug tool
-        run: |
-          echo "Installing TT-Lens Debug tool"
-          pip3 install git+https://github.com/tenstorrent/tt-exalens
-        shell: bash
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

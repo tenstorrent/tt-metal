@@ -442,8 +442,7 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
                     hal.get_dev_addr(k_CoreType, tt_metal::HalL1MemAddrType::ETH_FW_LIVE_LINK_STATUS);
                 auto return_registers =
                     read_hex_vec_from_core(device_id, virtual_core, return_registers_addr, 16 * sizeof(uint32_t));
-                log_error(
-                    tt::LogMetal,
+                TT_THROW(
                     "Device {}: Timed out while waiting for active ethernet core {} to become active again."
                     "Try resetting the board. Is the firmware updated? Minimum tt-firmware version is 18.2.0. Launch "
                     "erisc val: {:#x}. Dumped return registers: {}. Start time: {}. End time: {}",
@@ -453,8 +452,6 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
                     fmt::format("{:#x}", fmt::join(return_registers, ", ")),
                     std::chrono::duration_cast<std::chrono::milliseconds>(start.time_since_epoch()).count(),
                     std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
-                while (true) {
-                }
             }
         }
     }

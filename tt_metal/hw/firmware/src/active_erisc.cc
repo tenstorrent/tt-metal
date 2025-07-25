@@ -127,10 +127,9 @@ void __attribute__((noinline)) Application() {
     volatile uint32_t* const debug_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
 
     debug_dump_addr[0] = 0x11111111;
-    while (gEnableFwFlag[0] != 1) {
-        // Wait for sync from host
+    do {
         invalidate_l1_cache();
-    }
+    } while (gEnableFwFlag[0] != 1);
     debug_dump_addr[0] = 0x22222222;
 
     set_deassert_addresses();

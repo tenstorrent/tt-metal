@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <csetjmp>
 #include <cstring>
+#include "hw/inc/risc_common.h"
 
 void __attribute__((noinline)) Application();
 
@@ -66,4 +67,6 @@ extern "C" [[gnu::section(".start"), gnu::optimize("Os")]] void _start(void) {
         : /* no output */
         : "r"(debug_dump_addr)
         : "memory");
+
+    invalidate_l1_cache();
 }
