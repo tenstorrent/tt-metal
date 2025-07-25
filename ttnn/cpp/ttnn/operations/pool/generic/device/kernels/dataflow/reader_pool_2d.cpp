@@ -101,31 +101,6 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
         uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
         uint32_t processed_sticks = 0;
         cb_reserve_back(in_cb_id, 1);
-        auto process_in_cb = [&]() {
-            noc_async_read_barrier();
-            cb_push_back(in_cb_id, 1);
-            cb_reserve_back(in_cb_id, 1);
-            in_l1_write_addr = get_write_ptr(in_cb_id);
-            chunk++;
-        };
-        auto check_mod_row_count = [&]() {
-            if ((processed_rows % max_rows_for_reduction) == 0 && processed_rows != total_elems_to_reduce) {
-                process_in_cb();
-                // If next is last chunk, fill whole buffer with the init_value. note for max pool we do
-                // not need to fill the CB for the partial chunk since as long as we have N>1 chunks we
-                // are guaranteed that the junk data remaining from chunk N-1 will fill the entire CB and
-                // cannot contain values greater than the max value, and if we have N=1 chunks we already
-                // initialized the entire CB with the init value, but for avg pool we need to fill the
-                // entire CB with the init value since the junk data will contribute to the average.
-                if constexpr (is_avg_pool) {
-                    // clear the in CB
-                    if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
-                        clear_out_tiles<clear_value_cb_id, in_cb_ntiles>(
-                            get_noc_addr(in_l1_write_addr), get_noc_addr(get_read_ptr(clear_value_cb_id)));
-                    }
-                }
-            }
-        };
         for (uint32_t h = 0; h < window_h; ++h) {
             auto process_h = [&](uint32_t w_offset, uint32_t w_multiple) __attribute__((always_inline)) {
                 const uint32_t stick_offset = ind + w_offset + h * in_w_padded;
