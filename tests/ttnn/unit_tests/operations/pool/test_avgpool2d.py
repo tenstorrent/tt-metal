@@ -20,14 +20,15 @@ def tensor_map():
         # Normal reduction cases are when channels <= 8 * 32 and kernel_hw <= 16
         # Wide reduction cases channels > 8 * 32
         # Large reduction cases (channels < 32 and kernel_hw > 16) or (channels > 32 and kernel_hw > 32)
-        # [1, 16, 16, 16],
-        [1, 7, 16, 16],
-        # [1, 24, 16, 16],
-        # [1, 32, 16, 16],
-        # [1, 256, 112, 32],
-        # [1, 512, 112, 32],
-        # [1, 320, 48, 48],
-        # [1, 320, 47, 47],
+        [1, 16, 16, 16],
+        [1, 1, 7, 7],
+        [1, 290, 10, 10],
+        [1, 24, 16, 16],
+        [1, 32, 16, 16],
+        [1, 256, 112, 32],
+        [1, 512, 112, 32],
+        [1, 320, 48, 48],
+        #  [1, 320, 47, 47],
     ),
 )
 @pytest.mark.parametrize(
@@ -38,8 +39,8 @@ def tensor_map():
         # Reductions which are large and wide at the same time
         # go to large kernels
         # (3, 3),
-        # (5, 5),
-        (8, 5),
+        (5, 5),
+        (6, 6),
         # (36, 36),
     ),
 )
@@ -82,7 +83,7 @@ def tensor_map():
 )
 @pytest.mark.parametrize(
     "dtype",
-    [ttnn.bfloat16],
+    [ttnn.bfloat8_b],
 )
 def test_avg_pool2d_post_commit(
     device,
