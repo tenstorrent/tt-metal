@@ -720,6 +720,10 @@ def run_multiple_modules_json(module_names, suite_name, run_contents=None, vecto
         return
 
     total_vectors_run = 0
+    total_tests_run = 0  # Track total tests (module-suite combinations)
+
+    # Track detailed breakdown
+    module_suite_breakdown = {}  # module_name -> {suite_name: test_count}
 
     # Initialize database if needed
     if not DRY_RUN:
@@ -788,8 +792,16 @@ def run_multiple_modules_json(module_names, suite_name, run_contents=None, vecto
                 if not should_continue:
                     break
 
+                # Track totals for both dry run and actual run
+                total_vectors_run += len(vectors)
+                total_tests_run += 1
+                module_suite_breakdown[module_name] = module_suite_breakdown.get(module_name, {})
+                module_suite_breakdown[module_name][suite] = module_suite_breakdown[module_name].get(suite, 0) + len(
+                    vectors
+                )
+
                 if DRY_RUN:
-                    total_vectors_run += len(vectors)
+                    continue  # Skip actual execution in dry run
 
                 # Verify the module name matches
                 if vectors and vectors[0]["sweep_name"] != module_name:
@@ -802,19 +814,18 @@ def run_multiple_modules_json(module_names, suite_name, run_contents=None, vecto
                     header_info, test_vectors = sanitize_inputs(vectors)
                     logger.info(f"Executing tests for module {module_name}, suite {suite}")
                     results = execute_suite(test_module, test_vectors, pbar_manager, suite, module_name, header_info)
-                    if not DRY_RUN:
-                        test_end_time = dt.datetime.now()
-                        logger.info(f"Completed tests for module {module_name}, suite {suite}.")
-                        logger.info(f"Tests Executed - {len(results)}")
+                    test_end_time = dt.datetime.now()
+                    logger.info(f"Completed tests for module {module_name}, suite {suite}.")
+                    logger.info(f"Tests Executed - {len(results)}")
 
-                        try:
-                            test_status = push_test(run_id, header_info, results, test_start_time, test_end_time)
-                            if test_status == "failure":
-                                status = "failure"
-                        except Exception as e:
-                            logger.error("Stopping execution due to database error")
-                            should_continue = False
-                            break
+                    try:
+                        test_status = push_test(run_id, header_info, results, test_start_time, test_end_time)
+                        if test_status == "failure":
+                            status = "failure"
+                    except Exception as e:
+                        logger.error("Stopping execution due to database error")
+                        should_continue = False
+                        break
 
                 except ImportError as e:
                     logger.error(f"Failed to import module {module_name}: {e}")
@@ -839,10 +850,61 @@ def run_multiple_modules_json(module_names, suite_name, run_contents=None, vecto
         run_end_time = dt.datetime.now()
         update_run(run_id, run_end_time, status)
         logger.info(f"Run status: {status}")
+
+        # Display execution summary
+        logger.info("=== EXECUTION SUMMARY ===")
+        logger.info(f"Total tests (module-suite combinations) executed: {total_tests_run}")
+        logger.info(f"Total test cases (vectors) executed: {total_vectors_run}")
+
+        # Show detailed breakdown by module and suite
+        if module_suite_breakdown:
+            logger.info("\n=== DETAILED BREAKDOWN BY MODULE AND SUITE ===")
+            for module_name in sorted(module_suite_breakdown.keys()):
+                module_total = 0
+                for count in module_suite_breakdown[module_name].values():
+                    module_total += count
+                logger.info(f"Module: {module_name} (Total: {module_total} test cases)")
+                for suite_name in sorted(module_suite_breakdown[module_name].keys()):
+                    test_count = module_suite_breakdown[module_name][suite_name]
+                    logger.info(f"  └─ Suite: {suite_name} ({test_count} test cases)")
     else:
         logger.info("--- DRY RUN SUMMARY ---")
         logger.info(f"Total tests (modules) that would have been run: {len(module_files)}")
         logger.info(f"Total test cases (vectors) that would have been run: {total_vectors_run}")
+
+        # Show detailed breakdown by module and suite
+        logger.info("\n=== DETAILED BREAKDOWN BY MODULE AND SUITE ===")
+        for module_name in sorted(module_suite_breakdown.keys()):
+            module_total = 0
+            for count in module_suite_breakdown[module_name].values():
+                module_total += count
+            logger.info(f"Module: {module_name} (Total: {module_total} test cases)")
+            for suite_name in sorted(module_suite_breakdown[module_name].keys()):
+                test_count = module_suite_breakdown[module_name][suite_name]
+                logger.info(f"  └─ Suite: {suite_name} ({test_count} test cases)")
+
+        # Find the module with the maximum number of test cases
+        max_test_cases_per_module = 0
+        max_test_cases_module = None
+
+        for module_name, vector_file in module_files.items():
+            try:
+                with open(vector_file, "r") as file:
+                    data = json.load(file)
+
+                module_test_cases = 0
+                for suite_key, suite_content in data.items():
+                    module_test_cases += len(suite_content)
+
+                if module_test_cases > max_test_cases_per_module:
+                    max_test_cases_per_module = module_test_cases
+                    max_test_cases_module = module_name
+
+            except Exception as e:
+                logger.warning(f"Could not analyze module {module_name} for max test cases: {e}")
+
+        if max_test_cases_module:
+            logger.info(f"\nMaximum test cases per module: {max_test_cases_per_module} (in {max_test_cases_module})")
 
 
 def run_sweeps_json(module_names, suite_name, run_contents=None, vector_id=None):
@@ -878,29 +940,58 @@ def run_sweeps_json(module_names, suite_name, run_contents=None, vector_id=None)
                     suites_to_process.append((suite_key, vectors))
 
             total_vectors_run = 0
+            total_tests_run = 0  # Track total tests (suites)
+            suite_breakdown = {}  # suite_name -> test_count
             for suite, vectors in suites_to_process:
+                # Track totals for both dry run and actual run
+                total_vectors_run += len(vectors)
+                total_tests_run += 1
+                suite_breakdown[suite] = len(vectors)
+
                 if DRY_RUN:
-                    total_vectors_run += len(vectors)
+                    continue  # Skip actual execution in dry run
+
                 module_name = vectors[0]["sweep_name"]
                 test_module = importlib.import_module("sweeps." + module_name)
                 header_info, test_vectors = sanitize_inputs(vectors)
                 logger.info(f"Executing tests for module {module_name}, suite {suite}")
                 results = execute_suite(test_module, test_vectors, pbar_manager, suite, module_name, header_info)
-                if not DRY_RUN:
-                    logger.info(f"Completed tests for module {module_name}, suite {suite}.")
-                    logger.info(f"Tests Executed - {len(results)}")
-                    if DATABASE_BACKEND == "postgres":
-                        logger.info("Dumping results to PostgreSQL database.")
-                        export_test_results_postgres(
-                            header_info, results, dt.datetime.now(), dt.datetime.now(), run_contents
-                        )
-                    else:
-                        logger.info("Dumping results to JSON file.")
-                        export_test_results_json(header_info, results)
+                logger.info(f"Completed tests for module {module_name}, suite {suite}.")
+                logger.info(f"Tests Executed - {len(results)}")
+                if DATABASE_BACKEND == "postgres":
+                    logger.info("Dumping results to PostgreSQL database.")
+                    export_test_results_postgres(
+                        header_info, results, dt.datetime.now(), dt.datetime.now(), run_contents
+                    )
+                else:
+                    logger.info("Dumping results to JSON file.")
+                    export_test_results_json(header_info, results)
+            # Display summary
             if DRY_RUN:
                 logger.info("--- DRY RUN SUMMARY ---")
-                logger.info(f"Total tests (modules) that would have been run: 1")
+                logger.info(f"Total tests (suites) that would have been run: {total_tests_run}")
                 logger.info(f"Total test cases (vectors) that would have been run: {total_vectors_run}")
+
+                # Show detailed breakdown by suite
+                logger.info(f"\n=== DETAILED BREAKDOWN BY MODULE AND SUITE ===")
+                logger.info(f"Module: {module_names} (Total: {total_vectors_run} test cases)")
+                for suite_name in sorted(suite_breakdown.keys()):
+                    test_count = suite_breakdown[suite_name]
+                    logger.info(f"  └─ Suite: {suite_name} ({test_count} test cases)")
+
+                logger.info(f"\nMaximum test cases per module: {total_vectors_run} (in {module_names})")
+            else:
+                logger.info("=== EXECUTION SUMMARY ===")
+                logger.info(f"Total tests (suites) executed: {total_tests_run}")
+                logger.info(f"Total test cases (vectors) executed: {total_vectors_run}")
+
+                # Show detailed breakdown by suite
+                if suite_breakdown:
+                    logger.info(f"\n=== DETAILED BREAKDOWN BY MODULE AND SUITE ===")
+                    logger.info(f"Module: {module_names} (Total: {total_vectors_run} test cases)")
+                    for suite_name in sorted(suite_breakdown.keys()):
+                        test_count = suite_breakdown[suite_name]
+                        logger.info(f"  └─ Suite: {suite_name} ({test_count} test cases)")
     else:
         # Multiple modules
         run_multiple_modules_json(module_names, suite_name, run_contents, vector_id=vector_id)
@@ -913,6 +1004,13 @@ def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, run_conten
     sweeps_path = pathlib.Path(__file__).parent / "sweeps"
     total_modules_run = 0
     total_vectors_run = 0
+
+    # Track maximum test cases per module for dry run
+    max_test_cases_per_module = 0
+    max_test_cases_module = None
+
+    # Track detailed breakdown for dry run
+    module_suite_breakdown = {}  # module_name -> {suite_name: test_count}
 
     if not module_name:
         all_modules = sorted(sweeps_path.glob("**/*.py"))
@@ -961,10 +1059,14 @@ def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, run_conten
                     continue
 
                 module_pbar = pbar_manager.counter(total=len(suites), desc=f"Module: {sweep_name}", leave=False)
+                module_test_cases = 0  # Track test cases for this module
+                module_suite_breakdown[sweep_name] = {}  # Initialize suite breakdown for this module
                 for suite in suites:
                     logger.info(f"Executing tests for module {sweep_name}, suite {suite}.")
                     header_info, test_vectors = get_suite_vectors(client, vector_index, suite)
                     total_vectors_run += len(test_vectors)
+                    module_test_cases += len(test_vectors)  # Add to module count
+                    module_suite_breakdown[sweep_name][suite] = len(test_vectors)  # Track suite breakdown
                     results = execute_suite(test_module, test_vectors, pbar_manager, suite, sweep_name, header_info)
                     logger.info(f"Completed tests for module {sweep_name}, suite {suite}.")
                     if not DRY_RUN:
@@ -972,6 +1074,11 @@ def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, run_conten
                         export_test_results(header_info, results)
                     module_pbar.update()
                 module_pbar.close()
+
+                # Update maximum test cases tracking
+                if module_test_cases > max_test_cases_per_module:
+                    max_test_cases_per_module = module_test_cases
+                    max_test_cases_module = sweep_name
             except NotFoundError as e:
                 logger.info(f"No test vectors found for module {sweep_name}. Skipping...")
                 continue
@@ -993,6 +1100,12 @@ def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, run_conten
             test_vector["vector_id"] = vector_id
             header_info, test_vectors = sanitize_inputs([test_vector])
             total_vectors_run += len(test_vectors)
+            # Update maximum test cases tracking for single vector
+            if len(test_vectors) > max_test_cases_per_module:
+                max_test_cases_per_module = len(test_vectors)
+                max_test_cases_module = module_name
+            # Track suite breakdown for single vector
+            module_suite_breakdown[module_name] = {"Single Vector": len(test_vectors)}
             results = execute_suite(test_module, test_vectors, pbar_manager, "Single Vector", module_name, header_info)
             if not DRY_RUN:
                 export_test_results(header_info, results)
@@ -1012,10 +1125,14 @@ def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, run_conten
                         )
                         return
 
+                    module_test_cases = 0  # Track test cases for this module
+                    module_suite_breakdown[module_name] = {}  # Initialize suite breakdown for this module
                     for suite in suites:
                         logger.info(f"Executing tests for module {module_name}, suite {suite}.")
                         header_info, test_vectors = get_suite_vectors(client, vector_index, suite)
                         total_vectors_run += len(test_vectors)
+                        module_test_cases += len(test_vectors)  # Add to module count
+                        module_suite_breakdown[module_name][suite] = len(test_vectors)  # Track suite breakdown
                         results = execute_suite(
                             test_module, test_vectors, pbar_manager, suite, module_name, header_info
                         )
@@ -1023,10 +1140,20 @@ def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, run_conten
                         if not DRY_RUN:
                             logger.info(f"Tests Executed - {len(results)}")
                             export_test_results(header_info, results)
+                    # Update maximum test cases tracking
+                    if module_test_cases > max_test_cases_per_module:
+                        max_test_cases_per_module = module_test_cases
+                        max_test_cases_module = module_name
                 else:
                     logger.info(f"Executing tests for module {module_name}, suite {suite_name}.")
                     header_info, test_vectors = get_suite_vectors(client, vector_index, suite_name)
                     total_vectors_run += len(test_vectors)
+                    # Update maximum test cases tracking for single suite
+                    if len(test_vectors) > max_test_cases_per_module:
+                        max_test_cases_per_module = len(test_vectors)
+                        max_test_cases_module = module_name
+                    # Track suite breakdown for single suite
+                    module_suite_breakdown[module_name] = {suite_name: len(test_vectors)}
                     results = execute_suite(
                         test_module, test_vectors, pbar_manager, suite_name, module_name, header_info
                     )
@@ -1036,10 +1163,42 @@ def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, run_conten
                         export_test_results(header_info, results)
             except Exception as e:
                 logger.info(e)
+    # Display summary
     if DRY_RUN:
         logger.info("--- DRY RUN SUMMARY ---")
         logger.info(f"Total tests (modules) that would have been run: {total_modules_run}")
         logger.info(f"Total test cases (vectors) that would have been run: {total_vectors_run}")
+
+        # Show detailed breakdown by module and suite
+        if module_suite_breakdown:
+            logger.info("\n=== DETAILED BREAKDOWN BY MODULE AND SUITE ===")
+            for module_name in sorted(module_suite_breakdown.keys()):
+                module_total = 0
+                for count in module_suite_breakdown[module_name].values():
+                    module_total += count
+                logger.info(f"Module: {module_name} (Total: {module_total} test cases)")
+                for suite_name in sorted(module_suite_breakdown[module_name].keys()):
+                    test_count = module_suite_breakdown[module_name][suite_name]
+                    logger.info(f"  └─ Suite: {suite_name} ({test_count} test cases)")
+
+        if max_test_cases_module:
+            logger.info(f"\nMaximum test cases per module: {max_test_cases_per_module} (in {max_test_cases_module})")
+    else:
+        logger.info("=== EXECUTION SUMMARY ===")
+        logger.info(f"Total tests (modules) executed: {total_modules_run}")
+        logger.info(f"Total test cases (vectors) executed: {total_vectors_run}")
+
+        # Show detailed breakdown by module and suite
+        if module_suite_breakdown:
+            logger.info("\n=== DETAILED BREAKDOWN BY MODULE AND SUITE ===")
+            for module_name in sorted(module_suite_breakdown.keys()):
+                module_total = 0
+                for count in module_suite_breakdown[module_name].values():
+                    module_total += count
+                logger.info(f"Module: {module_name} (Total: {module_total} test cases)")
+                for suite_name in sorted(module_suite_breakdown[module_name].keys()):
+                    test_count = module_suite_breakdown[module_name][suite_name]
+                    logger.info(f"  └─ Suite: {suite_name} ({test_count} test cases)")
     client.close()
 
 

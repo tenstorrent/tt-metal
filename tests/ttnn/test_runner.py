@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -111,6 +111,9 @@ def initialize_postgres_database(pg_config):
         CREATE TABLE IF NOT EXISTS runs (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             initiated_by VARCHAR(255) NOT NULL,
+            host VARCHAR(255),
+            device VARCHAR(255),
+            run_contents VARCHAR(1024),
             git_author VARCHAR(255),
             git_branch_name VARCHAR(255),
             git_commit_hash VARCHAR(50),
@@ -125,7 +128,7 @@ def initialize_postgres_database(pg_config):
         CREATE TABLE IF NOT EXISTS tests (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             run_id UUID NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-            name VARCHAR(1024) NOT NULL,
+            name VARCHAR(255) NOT NULL,
             start_time_ts TIMESTAMP NOT NULL,
             end_time_ts TIMESTAMP,
             status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failure', 'error', 'cancelled', 'skipped')),
@@ -138,15 +141,16 @@ def initialize_postgres_database(pg_config):
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             test_id UUID NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
             name VARCHAR(255) NOT NULL,
-            device VARCHAR(255),
-            host VARCHAR(255) NOT NULL,
             start_time_ts TIMESTAMP NOT NULL,
             end_time_ts TIMESTAMP,
             status VARCHAR(100) NOT NULL,
-            test_parameters JSONB,
+            suite_name VARCHAR(255) NOT NULL,
+            test_vector JSONB,
             message TEXT,
             exception TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            e2e_perf FLOAT,
+            device_perf JSONB,
+            error_signature VARCHAR(255)
         );
         """
 
@@ -167,19 +171,22 @@ def initialize_postgres_database(pg_config):
             conn.close()
 
 
-def push_run(pg_config, start_time_ts, status="success"):
+def push_run(pg_config, start_time_ts, status="success", run_contents=None):
     """Create a new run record in the database."""
     conn = None
     try:
         conn = psycopg2.connect(**pg_config)
         cursor = conn.cursor()
         insert_run_query = """
-        INSERT INTO runs (initiated_by, git_author, git_branch_name, git_commit_hash, start_time_ts, status)
-        VALUES (%s, %s, %s, %s, %s, %s)
+        INSERT INTO runs (initiated_by, host, device, run_contents, git_author, git_branch_name, git_commit_hash, start_time_ts, status)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """
         run_data = (
             get_initiated_by(),
+            get_hostname(),
+            os.getenv("ARCH_NAME"),
+            run_contents,
             get_git_author(),
             get_git_branch(),
             git_hash(),
@@ -244,23 +251,27 @@ def push_test_and_cases(pg_config, run_id, file_path, test_cases_results):
         # 2. Insert each test case
         case_statuses = []
         testcase_insert_query = """
-        INSERT INTO unit_testcases (test_id, name, device, host, start_time_ts, end_time_ts, status, test_parameters, message, exception)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO unit_testcases (test_id, name, start_time_ts, end_time_ts, status, suite_name, test_vector, message, exception, e2e_perf, device_perf, error_signature)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
         for case in test_cases_results:
             db_status = case["status"].value
             case_statuses.append(db_status)
+            exception_text = case["exception"]
+            error_sig = generate_error_signature(exception_text)
             case_values = (
                 test_id,
                 case["name"],
-                case["device"],
-                get_hostname(),
                 case["start_time_ts"],
                 case["end_time_ts"],
                 db_status,
+                case.get("suite_name", "default"),  # Default suite name for unit tests
                 json.dumps(case["test_parameters"]) if case.get("test_parameters") else None,
                 case["message"],
-                case["exception"],
+                exception_text,
+                case.get("e2e_perf"),  # Performance data if available
+                json.dumps(case.get("device_perf")) if case.get("device_perf") else None,
+                error_sig,
             )
             cursor.execute(testcase_insert_query, case_values)
 
@@ -302,6 +313,14 @@ def map_test_status_to_run_status(statuses):
     return "success"
 
 
+def generate_error_signature(exception_message):
+    """Generate a concise error signature from an exception message."""
+    if not exception_message:
+        return None
+    # Take the first line of the exception as the signature, capped at 255 chars
+    return exception_message.splitlines()[0][:255]
+
+
 # --- Pytest Result Collector ---
 class ResultCollector:
     def __init__(self):
@@ -340,11 +359,16 @@ class ResultCollector:
         params = self.test_params.get(report.nodeid, {})
         serializable_params = {k: str(v) for k, v in params.items()} if params else None
 
-        device_name = os.getenv("ARCH_NAME")
-
         full_name = report.nodeid.split("::")[-1]
         if len(full_name) > 255:
             full_name = full_name[:252] + "..."
+
+        # Extract suite name from the test file path or use "default"
+        suite_name = "default"
+        if "::" in report.nodeid:
+            test_file = report.nodeid.split("::")[0]
+            # Use the test file name (without .py extension) as suite name
+            suite_name = test_file.split("/")[-1].replace(".py", "")
 
         self.test_results.append(
             {
@@ -354,8 +378,10 @@ class ResultCollector:
                 "end_time_ts": end_time,
                 "message": message,
                 "exception": exception_str,
-                "device": device_name,
                 "test_parameters": serializable_params,
+                "suite_name": suite_name,
+                "e2e_perf": None,  # Can be populated if performance measurement is added
+                "device_perf": None,  # Can be populated if device performance measurement is added
             }
         )
 
@@ -371,8 +397,14 @@ def discover_and_run_tests(test_path: pathlib.Path):
     if test_path.is_file():
         test_files = [test_path]
     elif test_path.is_dir():
-        # Find all python files that start with test_
+        # Find all python files that start with test_ recursively
         test_files = sorted(test_path.rglob("test_*.py"))
+        if not test_files:
+            print(f"No test files found in directory: {test_path}")
+            return {}
+        print(f"Found {len(test_files)} test files in directory: {test_path}")
+        for file in test_files:
+            print(f"  - {file}")
     else:
         print(f"Error: Test path {test_path} is not a valid file or directory.")
         return {}
@@ -392,11 +424,67 @@ def run_tests_in_file(file_path: pathlib.Path):
     return collector.test_results
 
 
+def collect_tests_in_file(file_path: pathlib.Path):
+    """Collect test cases from a file without running them."""
+
+    class TestCollector:
+        def __init__(self):
+            self.collected_tests = []
+
+        def pytest_collection_modifyitems(self, config, items):
+            for item in items:
+                params = {}
+                if hasattr(item, "callspec"):
+                    params = item.callspec.params
+
+                full_name = item.nodeid.split("::")[-1]
+                if len(full_name) > 255:
+                    full_name = full_name[:252] + "..."
+
+                self.collected_tests.append(
+                    {
+                        "name": full_name,
+                        "file": str(file_path),
+                        "test_parameters": {k: str(v) for k, v in params.items()} if params else None,
+                    }
+                )
+
+    collector = TestCollector()
+    pytest.main(["--collect-only", str(file_path)], plugins=[collector])
+    return collector.collected_tests
+
+
+def discover_and_collect_tests(test_path: pathlib.Path):
+    """Discover and collect test information without running them."""
+    if test_path.is_file():
+        test_files = [test_path]
+    elif test_path.is_dir():
+        test_files = sorted(test_path.rglob("test_*.py"))
+        if not test_files:
+            print(f"No test files found in directory: {test_path}")
+            return {}
+        print(f"Found {len(test_files)} test files in directory: {test_path}")
+        for file in test_files:
+            print(f"  - {file}")
+    else:
+        print(f"Error: Test path {test_path} is not a valid file or directory.")
+        return {}
+
+    collected_tests_by_file = {}
+    for file in test_files:
+        print(f"Collecting tests from: {file}")
+        collected_tests_by_file[file] = collect_tests_in_file(file)
+
+    return collected_tests_by_file
+
+
 # --- Main Execution ---
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Unit Test Runner with PostgreSQL reporting.")
     parser.add_argument(
-        "test_paths", type=str, help="A comma-separated list of paths to test files or directories to run."
+        "test_paths",
+        type=str,
+        help="A comma-separated list of paths to test files or directories to run. Directories will be searched recursively for files starting with 'test_'.",
     )
     parser.add_argument(
         "--postgres-env",
@@ -404,8 +492,65 @@ if __name__ == "__main__":
         choices=["dev", "prod"],
         help="PostgreSQL environment to use ('dev' or 'prod').",
     )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Perform a dry run to count test cases without executing them or connecting to the database.",
+    )
     args = parser.parse_args()
 
+    # Handle dry-run mode
+    if args.dry_run:
+        print("=== DRY RUN MODE ===")
+        print("Collecting test information without executing tests...")
+
+        # 3. Discover and collect tests
+        test_paths_list = [path.strip() for path in args.test_paths.split(",")]
+        all_collected_tests = {}
+        total_test_cases = 0
+
+        for test_path_str in test_paths_list:
+            test_path = pathlib.Path(test_path_str)
+            collected_tests_for_path = discover_and_collect_tests(test_path)
+            all_collected_tests.update(collected_tests_for_path)
+
+        # Print summary
+        print("\n=== DRY RUN SUMMARY ===")
+        if not all_collected_tests:
+            print("No test files found to analyze.")
+        else:
+            max_test_cases_per_file = 0
+            max_test_cases_file = None
+
+            for file_path, test_cases in all_collected_tests.items():
+                test_count = len(test_cases)
+                total_test_cases += test_count
+
+                # Track the file with the most test cases
+                if test_count > max_test_cases_per_file:
+                    max_test_cases_per_file = test_count
+                    max_test_cases_file = file_path
+
+                print(f"File: {file_path}")
+                print(f"  Test cases: {test_count}")
+                if test_cases:
+                    for test_case in test_cases[:3]:  # Show first 3 test cases as examples
+                        params_str = ""
+                        if test_case.get("test_parameters"):
+                            params_str = f" (params: {test_case['test_parameters']})"
+                        print(f"    - {test_case['name']}{params_str}")
+                    if len(test_cases) > 3:
+                        print(f"    ... and {len(test_cases) - 3} more test cases")
+                print()
+
+            print(f"Total test files: {len(all_collected_tests)}")
+            print(f"Total test cases that would be executed: {total_test_cases}")
+            print(f"Maximum test cases per file: {max_test_cases_per_file} (in {max_test_cases_file})")
+
+        print("=== END DRY RUN ===")
+        sys.exit(0)
+
+    # Normal execution mode (existing code)
     pg_config = get_postgres_config(args.postgres_env)
 
     # 1. Initialize DB
@@ -413,10 +558,11 @@ if __name__ == "__main__":
 
     # 2. Create a new run
     run_start_time = dt.datetime.now()
-    run_id = push_run(pg_config, run_start_time)
+    test_paths_list = [path.strip() for path in args.test_paths.split(",")]
+    run_contents = ", ".join(test_paths_list)
+    run_id = push_run(pg_config, run_start_time, run_contents=run_contents)
 
     # 3. Discover and run tests
-    test_paths_list = [path.strip() for path in args.test_paths.split(",")]
     all_results = {}
     for test_path_str in test_paths_list:
         test_path = pathlib.Path(test_path_str)
