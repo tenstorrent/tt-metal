@@ -57,10 +57,11 @@ ALWI void cb_wait_front(uint32_t cbid, uint32_t ntiles) { UNPACK((llk_wait_tiles
  * the CB
  *
  * Important note: This operation updates the read pointer of the CB, the CB pointer
- * can only be updated from one thread at a time. Example: if compute kernel has cb_pop_front(input_id, 1)
+ * can only be updated from one thread only. Example: if compute kernel has cb_pop_front(input_id, 1)
  * and writer kernel also has cb_pop_front(input_id, 1), these calls will produce non-deterministic behavior because
  * cb pointers are not synchronized across threads. Per circular buffer index, only have one thread pop tiles
- * to update the read pointer
+ * to update the read pointer. For specialized cases multiple circular buffers may point to same memory and
+ * the different buffers can be managed by separate threads.
  *
  * Return value: None
  *
@@ -108,10 +109,11 @@ ALWI void cb_reserve_back(uint32_t cbid, uint32_t ntiles) {
  * valid section of the CB
  *
  * Important note: This operation updates the write pointer of the CB, the CB pointer
- * can only be updated from one thread at a time. Example: if compute kernel has cb_push_back(output_id, 1)
+ * can only be updated from one thread only. Example: if compute kernel has cb_push_back(output_id, 1)
  * and reader kernel also has cb_push_back(output_id, 1), these calls will produce non-deterministic behavior because
  * cb pointers are not synchronized across threads. Per circular buffer index, only have one thread push tiles
- * to update the write pointer
+ * to update the write pointer. For specialized cases multiple circular buffers may point to same memory and
+ * the different buffers can be managed by separate threads.
  *
  * Return value: None
  *
