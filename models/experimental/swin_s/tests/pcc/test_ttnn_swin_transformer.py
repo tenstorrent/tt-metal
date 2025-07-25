@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from torchvision import models
 import pytest
 import ttnn
 from ttnn.model_preprocessing import (
@@ -16,12 +15,13 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_grayskull
 from models.experimental.swin_s.reference.swin_transformer import SwinTransformer
 from models.experimental.swin_s.tt.tt_swin_transformer import TtSwinTransformer
-from tests.ttnn.integration_tests.swin_s.test_ttnn_swin_transformer_block import (
+from models.experimental.swin_s.tests.pcc.test_ttnn_swin_transformer_block import (
     create_custom_preprocessor as create_custom_preprocessor_transformer_block,
 )
-from tests.ttnn.integration_tests.swin_s.test_ttnn_patchmerging import (
+from models.experimental.swin_s.tests.pcc.test_ttnn_patchmerging import (
     create_custom_preprocessor as create_custom_preprocessor_patch_merging,
 )
+from models.experimental.swin_s.load_model_utils import load_torch_model
 
 
 def preprocess_attn_mask(input_shape, patch_size, window_size, shift_size, device):
@@ -129,15 +129,13 @@ def create_custom_preprocessor(device):
         "pretrained_weight_true",
     ],
 )
-def test_swin_s_transformer(device, use_pretrained_weight, reset_seeds):
+def test_swin_s_transformer(device, use_pretrained_weight, reset_seeds, model_location_generator):
     torch_model = SwinTransformer(
         patch_size=[4, 4], embed_dim=96, depths=[2, 2, 18, 2], num_heads=[3, 6, 12, 24], window_size=[7, 7]
     )
 
     if use_pretrained_weight:
-        model = models.swin_s(weights="IMAGENET1K_V1")
-        state_dict = model.state_dict()
-        torch_model.load_state_dict(state_dict)
+        torch_model = load_torch_model(torch_model=torch_model, model_location_generator=model_location_generator)
 
     torch_model.eval()
 

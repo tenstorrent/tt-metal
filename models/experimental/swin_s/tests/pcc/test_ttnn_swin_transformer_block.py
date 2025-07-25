@@ -3,14 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from torchvision import models
-import pytest
-from models.utility_functions import skip_for_grayskull
-from models.experimental.swin_s.reference.shifted_window_attention import ShiftedWindowAttention
-from models.experimental.swin_s.tt.tt_shifted_window_attention import TtShiftedWindowAttention
+from models.experimental.swin_s.reference.swin_transformer_block import SwinTransformerBlock
+from models.experimental.swin_s.tt.tt_swin_transformer_block import TtSwinTransformerBlock
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
-from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_linear_weight, preprocess_linear_bias
+from models.utility_functions import skip_for_grayskull
+from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_layernorm_parameter
+from models.experimental.swin_s.tests.pcc.test_ttnn_shifted_window_attention import (
+    create_custom_preprocessor as create_custom_preprocessor_shifted_window_attention,
+)
+from models.experimental.swin_s.tests.pcc.test_ttnn_mlp import (
+    create_custom_preprocessor as create_custom_preprocessor_mlp,
+)
+import pytest
+from models.experimental.swin_s.load_model_utils import load_torch_model
 
 
 def preprocess_attn_mask(input_shape, patch_size, window_size, shift_size, device):
@@ -58,16 +64,23 @@ def preprocess_attn_mask(input_shape, patch_size, window_size, shift_size, devic
 def create_custom_preprocessor(device):
     def custom_preprocessor(torch_model, name, ttnn_module_args):
         parameters = {}
-        if isinstance(torch_model, ShiftedWindowAttention):
-            parameters["qkv"] = {}
-            parameters["proj"] = {}
-            parameters["qkv"]["weight"] = preprocess_linear_weight(torch_model.qkv.weight, dtype=ttnn.bfloat16)
-            parameters["qkv"]["bias"] = preprocess_linear_bias(torch_model.qkv.bias, dtype=ttnn.bfloat16)
-            parameters["relative_position_bias"] = ttnn.from_torch(
-                torch_model.get_relative_position_bias(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        if isinstance(torch_model, SwinTransformerBlock):
+            parameters["norm1"] = {}
+            parameters["norm1"]["weight"] = preprocess_layernorm_parameter(
+                torch_model.norm1.weight, dtype=ttnn.bfloat16
             )
-            parameters["proj"]["weight"] = preprocess_linear_weight(torch_model.proj.weight, dtype=ttnn.bfloat16)
-            parameters["proj"]["bias"] = preprocess_linear_bias(torch_model.proj.bias, dtype=ttnn.bfloat16)
+            parameters["norm1"]["bias"] = preprocess_layernorm_parameter(torch_model.norm1.bias, dtype=ttnn.bfloat16)
+            parameters["attn"] = {}
+            shifted_window_attention_preprocessor = create_custom_preprocessor_shifted_window_attention(device)
+            parameters["attn"] = shifted_window_attention_preprocessor(torch_model.attn, None, None)
+            parameters["norm2"] = {}
+            parameters["norm2"]["weight"] = preprocess_layernorm_parameter(
+                torch_model.norm2.weight, dtype=ttnn.bfloat16
+            )
+            parameters["norm2"]["bias"] = preprocess_layernorm_parameter(torch_model.norm2.bias, dtype=ttnn.bfloat16)
+            parameters["mlp"] = {}
+            mlp_preprocessor = create_custom_preprocessor_mlp(device)
+            parameters["mlp"] = mlp_preprocessor(torch_model.mlp, None, None)
 
         return parameters
 
@@ -90,20 +103,14 @@ def create_custom_preprocessor(device):
         (192, [7, 7], [0, 0], 6, 64, 3, 0),
         (192, [7, 7], [3, 3], 6, 64, 3, 1),
         (384, [7, 7], [0, 0], 12, 32, 5, 0),
-        (384, [7, 7], [3, 3], 12, 32, 5, 1),
+        (384, [7, 7], [3, 3], 12, 32, 5, 1),  # Low pcc after precomputing attn_mask outside,  check it
         (768, [7, 7], [0, 0], 24, 16, 7, 0),
-        (768, [7, 7], [3, 3], 24, 16, 7, 1),
+        (768, [7, 7], [3, 3], 24, 16, 7, 1),  # Low pcc after precomputing attn_mask outside, check it
     ],
 )
-def test_shifted_window_attention(
-    device, batch_size, dim, window_size, shift_size, num_heads, seq_len, i, j, reset_seeds
+def test_swin_transformer_block(
+    device, batch_size, dim, window_size, shift_size, num_heads, seq_len, i, j, reset_seeds, model_location_generator
 ):
-    model = models.swin_s(weights="IMAGENET1K_V1")
-    state_dict = model.state_dict()
-    ds_state_dict = {k: v for k, v in state_dict.items() if (k.startswith(f"features.{i}.{j}.attn."))}
-
-    torch_model = ShiftedWindowAttention(dim, window_size, shift_size, num_heads)
-
     attn_mask_tuple = preprocess_attn_mask([1, 3, 512, 512], [4, 4], [7, 7], [3, 3], device)
 
     if seq_len == 128:
@@ -115,14 +122,11 @@ def test_shifted_window_attention(
     elif seq_len == 16:
         attn_mask = attn_mask_tuple[3]
 
-    new_state_dict = {}
-    keys = [name for name, parameter in torch_model.state_dict().items()]
-    values = [parameter for name, parameter in ds_state_dict.items()]
-    for i in range(len(keys)):
-        new_state_dict[keys[i]] = values[i]
+    torch_model = SwinTransformerBlock(dim, num_heads, window_size, shift_size)
 
-    torch_model.load_state_dict(new_state_dict)
-    torch_model.eval()
+    torch_model = load_torch_model(
+        torch_model=torch_model, i=i, j=j, module="transformer_block", model_location_generator=model_location_generator
+    )
 
     torch_input_tensor = torch.randn(batch_size, seq_len, seq_len, dim)
     torch_output = torch_model(torch_input_tensor)
@@ -131,13 +135,12 @@ def test_shifted_window_attention(
         initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(device), device=device
     )
 
-    ttnn_model = TtShiftedWindowAttention(
-        parameters, device, dim, window_size, shift_size, num_heads, attn_mask=attn_mask
+    ttnn_model = TtSwinTransformerBlock(
+        device, parameters, dim, num_heads, window_size, shift_size, attn_mask=attn_mask
     )
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     tt_output = ttnn_model(input_tensor)
-
     tt_output = ttnn.to_torch(tt_output)
     assert_with_pcc(torch_output, tt_output, 0.99)
