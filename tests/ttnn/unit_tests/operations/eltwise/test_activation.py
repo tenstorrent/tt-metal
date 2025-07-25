@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 
 
 def run_activation_unary_test(device, h, w, ttnn_function, pcc=0.99):
@@ -254,10 +254,13 @@ def test_scalarB_elu(device, h, w, scalar):
     run_activation_test_elu(device, h, w, scalar, ttnn.elu)
 
 
-@pytest.mark.parametrize("alpha", [1, 2.5, 5.0])
+@pytest.mark.parametrize("alpha", [1, 2.5, 5.0, -1, -5, 0])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_scalarB_celu(device, h, w, alpha):
+    if alpha == 0:
+        pytest.skip("alpha=0 is not supported")
+
     torch.manual_seed(0)
 
     torch_input_tensor_a = torch.rand((h, w), dtype=torch.bfloat16)
@@ -269,6 +272,7 @@ def test_scalarB_celu(device, h, w, alpha):
 
     output_tensor = ttnn.celu(input_tensor_a, alpha=alpha)
     output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_ulp(torch_output_tensor, output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 

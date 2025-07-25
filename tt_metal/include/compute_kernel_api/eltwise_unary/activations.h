@@ -39,7 +39,11 @@ ALWI void hardsigmoid_tile_init() { MATH((llk_math_eltwise_unary_sfpu_hardsigmoi
 
 // clang-format off
 /**
+<<<<<<< HEAD
 * Performs element-wise softsign operation. The DST
+=======
+* Performs element-wise celu operation. The DST
+>>>>>>> 35c616ff71 (Migrate celu to LLK)
 * register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
 * compute engine.
 *
@@ -48,13 +52,27 @@ ALWI void hardsigmoid_tile_init() { MATH((llk_math_eltwise_unary_sfpu_hardsigmoi
 * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
 * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
 * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+<<<<<<< HEAD
 */
 // clang-format on
 ALWI void softsign_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_softsign<APPROX>(idst))); }
+=======
+* | alpha           | The alpha parameter for the CELU function                                  | uint32_t |                                                       | True     |
+* | alpha_recip     | The reciprocal of the alpha parameter for the CELU function                | uint32_t |                                                       | True     |
+*/
+// clang-format on
+ALWI void celu_tile(uint32_t idst, uint32_t alpha, uint32_t alpha_recip) {
+    MATH((llk_math_eltwise_unary_sfpu_celu<APPROX, ckernel::ActivationType::Celu>(idst, alpha, alpha_recip)));
+}
+>>>>>>> 35c616ff71 (Migrate celu to LLK)
 
 /**
  * Please refer to documentation for any_init.
  */
+<<<<<<< HEAD
 ALWI void softsign_tile_init() { MATH((llk_math_eltwise_unary_sfpu_softsign_init<APPROX>())); }
+=======
+ALWI void celu_tile_init() { MATH((llk_math_eltwise_unary_sfpu_celu_init<APPROX>())); }
+>>>>>>> 35c616ff71 (Migrate celu to LLK)
 
 }  // namespace ckernel

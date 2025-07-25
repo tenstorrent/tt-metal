@@ -6,7 +6,11 @@
 
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
+<<<<<<< HEAD
 #include "ckernel_sfpu_softsign.h"
+=======
+#include "ckernel_sfpu_exp.h"
+>>>>>>> 35c616ff71 (Migrate celu to LLK)
 
 namespace ckernel {
 
@@ -38,4 +42,21 @@ inline void llk_math_eltwise_unary_sfpu_softsign(uint dst_index, int vector_mode
         ckernel::sfpu::calculate_softsign<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
 }
 
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_celu_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::celu, APPROXIMATE>(
+        // sfpu::exp_init<APPROXIMATE>);
+        ckernel::sfpu::_init_hardsigmoid_<APPROXIMATE>);
+}
+
+template <bool APPROXIMATE, ckernel::ActivationType ACTIVATION, int ITERATIONS = 8>
+inline void llk_math_eltwise_unary_sfpu_celu(
+    uint dst_index, uint32_t alpha, uint32_t alpha_recip, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        static_cast<void (*)(float, float)>(ckernel::sfpu::_calculate_activation_<APPROXIMATE, ACTIVATION, ITERATIONS>),
+        dst_index,
+        vector_mode,
+        alpha,
+        alpha_recip);
+}
 }  // namespace ckernel
