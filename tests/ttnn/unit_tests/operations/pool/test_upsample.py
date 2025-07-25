@@ -101,6 +101,56 @@ def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, ma
     assert isequal
 
 
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        [1, 64, 32, 32],
+        [2, 32, 64, 64],
+        [1, 128, 32, 32],
+        [1, 64, 64, 64],
+        [2, 64, 32, 32],
+        [1, 32, 96, 96],
+        [1, 96, 32, 32],
+        [1, 256, 512, 512],
+    ],
+)
+@pytest.mark.parametrize("scale_h", [2, 3])
+@pytest.mark.parametrize("scale_w", [2, 3])
+def test_upsample_tiled_nearest_interleaved(device, input_shapes, scale_h, scale_w):
+    torch.manual_seed(0)
+
+    input_nchw = torch.rand(input_shapes, dtype=torch.bfloat16)
+
+    scale_factor = (scale_h, scale_w)
+    torch_upsample = nn.Upsample(scale_factor=scale_factor, mode="nearest")
+    torch_result_nchw = torch_upsample(input_nchw)
+
+    # Convert to NHWC format for ttnn (channel last configuration)
+    input_nhwc = input_nchw.permute(0, 2, 3, 1)  # NCHW -> NHWC
+    torch_result_nhwc = torch_result_nchw.permute(0, 2, 3, 1)  # NCHW -> NHWC
+
+    # Create ttnn tensor with TILE_LAYOUT
+    input_tensor = ttnn.from_torch(
+        input_nhwc, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    output_tensor = ttnn.upsample(input_tensor, scale_factor)
+
+    output_torch = ttnn.to_torch(output_tensor)
+
+    assert (
+        torch_result_nhwc.shape == output_torch.shape
+    ), f"Shape mismatch: expected {torch_result_nhwc.shape}, got {output_torch.shape}"
+
+    pcc_passed, pcc_message = assert_with_pcc(torch_result_nhwc, output_torch, pcc=0.9999)
+    logger.info(pcc_message)
+    assert pcc_passed, f"PCC check failed: {pcc_message}"
+
+    allclose = torch.allclose(output_torch, torch_result_nhwc, atol=1e-3, rtol=1e-3)
+    assert allclose, "Values are not close within tolerance"
+
+
 def upsample_multicore_common(
     device,
     input_shape,

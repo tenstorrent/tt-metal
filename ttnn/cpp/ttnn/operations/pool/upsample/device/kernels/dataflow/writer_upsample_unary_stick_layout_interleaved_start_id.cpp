@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
+#include "debug/dprint.h"
+
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t stick_size = get_arg_val<uint32_t>(1);

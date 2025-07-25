@@ -25,6 +25,8 @@ struct UpSample {
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
 };
 
+tt::tt_metal::operation::ProgramWithCallbacks upsample_tiled_interleaved(
+    const Tensor& input, Tensor& output, uint32_t scale_factor_h, uint32_t scale_factor_w);
 tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_sharded(
     const Tensor& input, Tensor& output, uint32_t scale_factor_h, uint32_t scale_factor_w);
 tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
