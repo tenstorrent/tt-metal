@@ -12,8 +12,8 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed_mapping.hpp"
+#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "init/cpu_initializers.hpp"
 
 namespace {
 
@@ -62,7 +62,11 @@ TEST_F(N300CommOpsTest, TestAllReduceNotFullyTiled) {
     EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-3));
     EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-3));
 
-    xt::xarray<float> grad_data = xt::random::rand(all_reduce_expected.shape(), 0.F, 1.F);
+    xt::xarray<float> grad_data = xt::empty<float>(all_reduce_expected.shape());
+    ttml::core::parallel_generate(
+        std::span{grad_data.data(), grad_data.size()},
+        []() { return std::uniform_real_distribution<float>(0.F, 1.F); },
+        42);
     mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tt_grad_tensor =
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, ttnn::Layout::TILE, mapper.get());
@@ -98,7 +102,10 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
     size_t size = 384;
     size_t height = 256;
     std::vector<float> test_data_vec(batch * size * height);
-    ttml::init::uniform_init(test_data_vec, {-1.F, 1.F});
+    ttml::core::parallel_generate(
+        std::span{test_data_vec.data(), test_data_vec.size()},
+        []() { return std::uniform_real_distribution<float>{-1.F, 1.F}; },
+        42);
     xt::xarray<float> test_data = xt::adapt(test_data_vec);
     xt::xarray<float> xtensor = test_data.reshape({batch, 1U, height, size});
     auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
@@ -117,7 +124,11 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
     EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[0], /* rtol */ 1e-3, /* atol */ 2e-2));
     EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[1], /* rtol */ 1e-3, /* atol */ 2e-2));
 
-    xt::xarray<float> grad_data = xt::random::rand(all_reduce_expected.shape(), 0.F, 1.F);
+    xt::xarray<float> grad_data = xt::empty<float>(all_reduce_expected.shape());
+    ttml::core::parallel_generate(
+        std::span{grad_data.data(), grad_data.size()},
+        []() { return std::uniform_real_distribution<float>(0.F, 1.F); },
+        42);
     mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tt_grad_tensor =
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, ttnn::Layout::TILE, mapper.get());
@@ -148,7 +159,10 @@ TEST_F(N300CommOpsTest, TestAllReduceFullyTiled) {
     size_t size = 64UL;
     size_t height = 32UL;
     std::vector<float> test_data_vec(size * height);
-    ttml::init::uniform_init(test_data_vec, {0.F, 0.001F});
+    ttml::core::parallel_generate(
+        std::span{test_data_vec.data(), test_data_vec.size()},
+        []() { return std::uniform_real_distribution<float>(0.F, 0.001F); },
+        42);
     xt::xarray<float> test_data = xt::adapt(test_data_vec);
     xt::xarray<float> xtensor = test_data.reshape({1U, 1U, height, size});
     auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
@@ -167,7 +181,11 @@ TEST_F(N300CommOpsTest, TestAllReduceFullyTiled) {
     EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
-    xt::xarray<float> grad_data = xt::random::rand(all_reduce_expected.shape(), 0.F, 1.F);
+    xt::xarray<float> grad_data = xt::empty<float>(all_reduce_expected.shape());
+    ttml::core::parallel_generate(
+        std::span{grad_data.data(), grad_data.size()},
+        []() { return std::uniform_real_distribution<float>(0.F, 1.F); },
+        42);
     mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tt_grad_tensor =
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, ttnn::Layout::TILE, mapper.get());
@@ -211,7 +229,11 @@ TEST_F(N300CommOpsTest, TestAllGatherNotFullyTiled) {
     EXPECT_TRUE(xt::allclose(xtensor, gathered_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(xtensor, gathered_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
-    xt::xarray<float> grad_data = xt::random::rand(xtensor.shape(), 0.F, 1.F);
+    xt::xarray<float> grad_data = xt::empty<float>(xtensor.shape());
+    ttml::core::parallel_generate(
+        std::span{grad_data.data(), grad_data.size()},
+        []() { return std::uniform_real_distribution<float>(0.F, 1.F); },
+        42);
     mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tt_grad_tensor =
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, ttnn::Layout::TILE, mapper.get());
@@ -243,7 +265,10 @@ TEST_F(N300CommOpsTest, TestAllGatherFullyTiled) {
     size_t size = 64UL;
     size_t height = 256UL;
     std::vector<float> test_data_vec(batch * size * height);
-    ttml::init::uniform_init(test_data_vec, {-1.F, 1.F});
+    ttml::core::parallel_generate(
+        std::span{test_data_vec.data(), test_data_vec.size()},
+        []() { return std::uniform_real_distribution<float>{-1.F, 1.F}; },
+        42);
     xt::xarray<float> test_data = xt::adapt(test_data_vec);
     xt::xarray<float> xtensor = test_data.reshape({batch, 1U, height, size});
     auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
@@ -257,7 +282,11 @@ TEST_F(N300CommOpsTest, TestAllGatherFullyTiled) {
     EXPECT_TRUE(xt::allclose(xtensor, gathered_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(xtensor, gathered_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
-    xt::xarray<float> grad_data = xt::random::rand(xtensor.shape(), 0.F, 1.F);
+    xt::xarray<float> grad_data = xt::empty<float>(xtensor.shape());
+    ttml::core::parallel_generate(
+        std::span{grad_data.data(), grad_data.size()},
+        []() { return std::uniform_real_distribution<float>(0.F, 1.F); },
+        42);
     mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tt_grad_tensor =
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, ttnn::Layout::TILE, mapper.get());
@@ -305,7 +334,11 @@ TEST_F(N300CommOpsTest, TestScatterNotFullyTiled) {
         xt::allclose(xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size)), xtensors_back[1]));
 
     // check backward
-    xt::xarray<float> grad_data = xt::random::rand(xtensor.shape(), 0.F, 1.F);
+    xt::xarray<float> grad_data = xt::empty<float>(xtensor.shape());
+    ttml::core::parallel_generate(
+        std::span{grad_data.data(), grad_data.size()},
+        []() { return std::uniform_real_distribution<float>(0.F, 1.F); },
+        42);
     mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
     auto tt_grad_tensor =
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, ttnn::Layout::TILE, mapper.get());
@@ -332,7 +365,10 @@ TEST_F(N300CommOpsTest, TestScatterFullyTiled) {
     size_t size = 128UL;
     size_t height = 256UL;
     std::vector<float> test_data_vec(batch * size * height);
-    ttml::init::uniform_init(test_data_vec, {-1.F, 1.F});
+    ttml::core::parallel_generate(
+        std::span{test_data_vec.data(), test_data_vec.size()},
+        []() { return std::uniform_real_distribution<float>{-1.F, 1.F}; },
+        42);
     xt::xarray<float> test_data = xt::adapt(test_data_vec);
     xt::xarray<float> xtensor = test_data.reshape({batch, 1U, height, size});
 
@@ -362,7 +398,11 @@ TEST_F(N300CommOpsTest, TestScatterFullyTiled) {
         /* atol */ 1e-2));
 
     // check backward
-    xt::xarray<float> grad_data = xt::random::rand(xtensor.shape(), -1.F, 1.F);
+    xt::xarray<float> grad_data = xt::empty<float>(xtensor.shape());
+    ttml::core::parallel_generate(
+        std::span{grad_data.data(), grad_data.size()},
+        []() { return std::uniform_real_distribution<float>(-1.F, 1.F); },
+        42);
     mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
     auto tt_grad_tensor = ttml::core::from_xtensor(grad_data, device, ttnn::Layout::TILE, mapper.get());
     scattered_tensor->set_grad(tt_grad_tensor);
