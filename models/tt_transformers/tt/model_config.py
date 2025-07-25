@@ -22,6 +22,7 @@ from models.tt_transformers.tt.common import (
     get_out_subblock_w,
     nearest_multiple,
     num_to_core_range_set,
+    rope_scaling_model_factory,
 )
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
@@ -419,6 +420,7 @@ class ModelArgs:
         max_batch_size=1,
         max_seq_len=1024 * 128,
         optimizations=None,
+        cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
@@ -441,6 +443,7 @@ class ModelArgs:
         self.from_hf_url = False  # updated below if true
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
         self.dummy_weights = dummy_weights
+        self.cache_hf_flag = cache_hf  # Whether to cache HF model to avoid multiple loads (uses extra memory)
         self.cached_hf_model = None  # Save any HF model object to avoid loading it multiple times for reference methods
 
         assert not os.getenv(
@@ -1372,7 +1375,7 @@ class ModelArgs:
 
         hidden_activation = hidden_activation.lower()
         if hidden_activation not in activation_map:
-            logger.warning(f"Warning: Unsupported activation '{hidden_activation}', defaulting to SILU")
+            raise NotImplementedError(f"Unsupported activation '{hidden_activation}'")
 
         return activation_map.get(hidden_activation, ttnn.UnaryOpType.SILU)
 
@@ -1393,7 +1396,7 @@ class ModelArgs:
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
-        self.head_dim = text_config.get("head_dim", self.dim // self.n_heads)
+        self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
         if is_hf:
             self.max_context_len = text_config.get("max_position_embeddings")
         else:
@@ -1455,16 +1458,8 @@ class ModelArgs:
 
         # RoPE params
         self.rope_theta = text_config.get("rope_theta")
-        # If use_scaled_rope is not present, assume setting rope_scaling means use scaled rope
-        # If it is present and is set to false, do not use scaled rope
-        # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
         rope_scaling_params = text_config.get("rope_scaling", None)
-        if rope_scaling_params:
-            self.rope_scaling_factor = rope_scaling_params.get("factor", None)
-            self.orig_context_len = rope_scaling_params.get("original_max_position_embeddings", self.max_context_len)
-        else:
-            self.rope_scaling_factor = None
-            self.orig_context_len = None
+        self.rope_scaling = rope_scaling_model_factory(rope_scaling_params) if rope_scaling_params else None
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
 
@@ -1496,7 +1491,7 @@ class ModelArgs:
 
     @property
     def use_scaled_rope(self):
-        return self.rope_scaling_factor is not None
+        return self.rope_scaling is not None
 
     @property
     def base_model_name(self):
@@ -1524,31 +1519,38 @@ class ModelArgs:
             params = json.load(f)
         self._set_params_from_dict(params)
 
-        # Meta-style config dicts don't specity model name or rope_scaling_factor so hard-code these
+        # Meta-style config dicts don't specify model name or rope_scaling_factor so hard-code these
         # Set the model name based on the checkpoint directory being loaded
+        orig_context_len = 8192
         if "3.2-1B" in checkpoint_dir:
             self.model_name = "Llama-3.2-1B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 32
+            rope_scaling_factor = 32
         elif "3.2-3B" in checkpoint_dir:
             self.model_name = "Llama-3.2-3B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 32
+            rope_scaling_factor = 32
         elif "3.1-8B" in checkpoint_dir:
             self.model_name = "Llama-3.1-8B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 8
+            rope_scaling_factor = 8
         elif "3.2-11B" in checkpoint_dir:
             self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 8  # shared with 3.1-8B
+            rope_scaling_factor = 8  # shared with 3.1-8B
         elif "3.1-70B" in checkpoint_dir:
             self.model_name = "Llama-3.1-70B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 8
+            rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
         elif "3.2-90B" in checkpoint_dir:
             self.model_name = "Llama-3.2-90B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 8
+            rope_scaling_factor = 8
             self.is_90b = True
         else:
             logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
-        self.orig_context_len = 8192
+        self.rope_scaling = rope_scaling_model_factory(
+            {
+                "rope_type": "llama3",
+                "factor": rope_scaling_factor,
+                "original_max_position_embeddings": orig_context_len,
+            }
+        )
 
     def _set_hf_params(self, checkpoint_dir):
         if self.from_hf_url:
@@ -1580,7 +1582,7 @@ class ModelArgs:
     ffn_dim_multiplier={self.ffn_dim_multiplier},
     norm_eps={self.norm_eps},
     rope_theta={self.rope_theta},
-    rope_scaling_factor={self.rope_scaling_factor},
+    rope_scaling_factor={self.rope_scaling.factor},
     max_batch_size={self.max_batch_size},
     max_seq_len={self.max_seq_len},
     vision_chunk_size={self.vision_chunk_size},
@@ -1640,8 +1642,15 @@ class ModelArgs:
             if self.from_hf_url:
                 from transformers import AutoConfig, AutoModelForCausalLM
 
-                model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                self.cached_hf_model = model
+                model = AutoModelForCausalLM.from_pretrained(
+                    self.CKPT_DIR,
+                    torch_dtype="auto"
+                    # Note that the default setting is torch.dtype.float32, but model weights are
+                    # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
+                    # unnecessary cast.
+                )
+                if self.cache_hf_flag:
+                    self.cached_hf_model = model
                 state_dict = model.state_dict()
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
@@ -2109,11 +2118,14 @@ class ModelArgs:
                 config.num_hidden_layers = self.n_layers
                 model = AutoModelForCausalLM.from_config(config)
             else:
-                if self.cached_hf_model is None:
+                if self.cache_hf_flag and self.cached_hf_model is None:
                     model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
                     self.cached_hf_model = model
-                else:
+                elif self.cache_hf_flag and self.cached_hf_model is not None:
                     model = self.cached_hf_model
+                else:
+                    # No caching - load fresh each time
+                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
                 # HACK: Assume that we want the language model layers only
                 if hasattr(model, "language_model"):
                     model.model = model.language_model
@@ -2173,12 +2185,7 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            # TODO: Generalize for other HF models
-            model_name_env = os.getenv("HF_MODEL")
-            if model_name_env is not None and "mistral" in model_name_env.lower():
-                wrapper = HfDecoderWrapper(layer, self.head_dim, layer.self_attn.rotary_emb)
-            else:
-                wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
+            wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
             return wrapper
 
     def reference_attention(self):
@@ -2189,7 +2196,7 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            use_position_embeddings = layer.__class__.__name__ == "Qwen3Attention"
+            use_position_embeddings = layer.__class__.__name__ in ("Qwen3Attention", "MistralAttention")
             wrapper = HfAttentionWrapper(
                 layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
             )
@@ -2353,12 +2360,7 @@ class HfDecoderWrapper:
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
-        # TODO: Generalize for other HF models
-        model_name_env = os.getenv("HF_MODEL")
-        if model_name_env is not None and "mistral" in model_name_env.lower():
-            position_embeddings = self.rotary_emb(x, x.shape[1])
-        else:
-            position_embeddings = self.rotary_emb(x, position_ids)
+        position_embeddings = self.rotary_emb(x, position_ids)
 
         if mask is not None:
             while len(mask.shape) < 4:

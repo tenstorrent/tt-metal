@@ -1451,10 +1451,10 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
 
             // Populate connection info for fabric-routed channels
             const auto sender_channel = is_2d_fabric ? router_direction : 0;
-            auto& connection_info = fabric_connections.connections[eth_channel_id];
+            auto& connection_info = fabric_connections.read_only[eth_channel_id];
             connection_info.edm_direction = router_direction;
-            connection_info.edm_noc_xy =
-                tt::tt_fabric::WorkerXY(fabric_router_virtual_core.x, fabric_router_virtual_core.y).to_uint32();
+            connection_info.edm_noc_x = static_cast<uint8_t>(fabric_router_virtual_core.x);
+            connection_info.edm_noc_y = static_cast<uint8_t>(fabric_router_virtual_core.y);
             connection_info.edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel];
             connection_info.num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel];
             connection_info.edm_l1_sem_addr =
@@ -1792,8 +1792,7 @@ std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(
         for (const auto& eth_channel : logical_active_eth_channels) {
             tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
             const auto& routing_info = eth_routing_info.at(eth_core);
-            if ((routing_info == EthRouterMode::BI_DIR_TUNNELING or routing_info == EthRouterMode::FABRIC_ROUTER) and
-                skip_reserved_cores) {
+            if (routing_info == EthRouterMode::FABRIC_ROUTER && skip_reserved_cores) {
                 continue;
             }
             if (freq_retrain_eth_cores.find(eth_core) != freq_retrain_eth_cores.end()) {

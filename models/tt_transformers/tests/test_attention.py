@@ -61,7 +61,7 @@ def test_attention_inference(
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1  # For the unit test, just run a single layer
 
     state_dict = model_args.load_state_dict()
@@ -88,8 +88,7 @@ def test_attention_inference(
         model_args.head_dim,
         model_args.max_seq_len,
         model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
+        model_args.rope_scaling,
     )
 
     transformation_mats = rope_setup.get_both_trans_mats()
@@ -137,8 +136,8 @@ def test_attention_inference(
         model_args.head_dim,
         model_args.max_seq_len * 2,
         model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
+        model_args.rope_scaling.factor if model_args.rope_scaling else None,
+        model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
     )
     freqs_cis = torch.complex(cos, sin)
 

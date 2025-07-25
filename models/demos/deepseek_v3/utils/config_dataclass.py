@@ -130,6 +130,18 @@ class ReduceScatterAsyncConfig(OpConfigBase):
 
 
 @dataclass
+class AllGatherConfig(OpConfigBase):
+    dim: int
+    mesh_device: ConfigDevice | None = None
+    cluster_axis: int | None = None
+    memory_config: ttnn.MemoryConfig | None = None
+    num_workers: int | None = None
+    num_buffers_per_channel: int | None = None
+    topology: ttnn.Topology = ttnn.Topology.Ring
+    num_links: int = 1
+
+
+@dataclass
 class ReduceScatterConfig(OpConfigBase):
     """Common parameters for a ttnn.reduce_scatter op"""
 
@@ -152,15 +164,102 @@ class ReshardConfig(OpConfigBase):
 
 @dataclass
 class RMSNormConfig(OpConfigBase):
-    """RMSNorm config"""
+    """ttnn.rms_norm config"""
 
-    mesh_device: ConfigDevice
-    epsilon: float
-    weight: ConfigWeight
-    compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None
-    stats_memcfg: ttnn.MemoryConfig | None = None
-    output_memcfg: ttnn.MemoryConfig | None = None
-    output_dtype: ttnn.DataType = ttnn.bfloat16
-    is_distributed: bool = False
+    epsilon: float = 1e-12
+    weight: ConfigWeight | None = None
+    bias: ConfigWeight | None = None
+    residual_input_tensor: ConfigWeight | None = None
+    memory_config: ttnn.MemoryConfig | None = None
+    program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None
+    compute_kernel_config: ttnn.GrayskullComputeKernelConfig | ttnn.WormholeComputeKernelConfig | None = None
+
+
+@dataclass
+class RMSNormPreAllGatherConfig(OpConfigBase):
+    """ttnn.rms_norm_pre_all_gather config"""
+
+    dtype: ttnn.DataType = ttnn.bfloat16
+    residual_input_tensor: ConfigWeight | None = None
+    compute_kernel_config: ttnn.GrayskullComputeKernelConfig | ttnn.WormholeComputeKernelConfig | None = None
+    program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None
+    memory_config: ttnn.MemoryConfig | None = None
+
+
+@dataclass
+class RMSNormPostAllGatherConfig(OpConfigBase):
+    """ttnn.rms_norm_post_all_gather config"""
+
+    epsilon: float = 1e-12
+    weight: ConfigWeight | None = None
+    bias: ConfigWeight | None = None
+    memory_config: ttnn.MemoryConfig | None = None
+    program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None
+    compute_kernel_config: ttnn.GrayskullComputeKernelConfig | ttnn.WormholeComputeKernelConfig | None = None
+    dtype: ttnn.DataType | None = None
+
+
+@dataclass
+class BinaryOpConfig(OpConfigBase):
+    """Common parameters for a ttnn.add/sub/mul/div op, weights are in input_tensor_b"""
+
+    input_tensor_b: ConfigWeight
+    memory_config: ttnn.MemoryConfig | None = None
+    dtype: ttnn.DataType | None = None
+    activation: ttnn.UnaryOpType | None = None
+
+
+@dataclass
+class ReshapeConfig(OpConfigBase):
+    """Common parameters for a ttnn.reshape op"""
+
+    shape: tuple[int, int, int, int] | None = None
+
+
+@dataclass
+class TopKConfig(OpConfigBase):
+    """Common parameters for a ttnn.topk op"""
+
+    k: int
+    dim: int
+    largest: bool = True
+    sorted: bool = True
+
+
+@dataclass
+class ScatterConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.scatter op"""
+
+    input: ttnn.Tensor
+    dim: int
+    src: ttnn.Tensor
+
+
+@dataclass
+class AllToAllDispatchConfig(OpConfigBase):
+    """Common parameters for a ttnn.all_to_all_dispatch op"""
+
+    cluster_axis: int
+    num_links: int
+    memory_config: ttnn.MemoryConfig
+    global_semaphore: object
     topology: ttnn.Topology = ttnn.Topology.Linear
-    norm_category: str = None
+    subdevice_id: int | None = None
+
+
+@dataclass
+class AllToAllCombineConfig(OpConfigBase):
+    """Common parameters for a ttnn.all_to_all_combine op"""
+
+    num_links: int
+    memory_config: ttnn.MemoryConfig
+    axis: int
+    global_semaphore: object
+    topology: ttnn.Topology = ttnn.Topology.Linear
+
+
+@dataclass
+class RepeatConfig(OpConfigBase):
+    """Common parameters for a ttnn.repeat op"""
+
+    repeat_dims: ttnn.Shape
