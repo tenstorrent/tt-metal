@@ -242,6 +242,12 @@ SocketConfig MeshSocketYamlParser::parse_socket_config(const YAML::Node& node) {
         throw_parse_error("Socket must define either 'connections' or 'sender'/'receiver' pair", node);
     }
 
+    // Parse sender and receiver ranks (required)
+    TT_FATAL(node["sender_rank"], "Socket missing required 'sender_rank' field");
+    TT_FATAL(node["receiver_rank"], "Socket missing required 'receiver_rank' field");
+    socket.sender_rank = Rank{node["sender_rank"].as<uint32_t>()};
+    socket.receiver_rank = Rank{node["receiver_rank"].as<uint32_t>()};
+
     return socket;
 }
 
