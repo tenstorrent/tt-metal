@@ -151,7 +151,7 @@ inline uint32_t special_mult(uint32_t a, uint32_t special_b) {
 //  Writing an address on one proc and reading it from another proc only requires the reader to invalidate.
 //  Need to invalidate any address written by noc that may have been previously read by riscv
 inline __attribute__((always_inline)) void invalidate_l1_cache() {
-#if defined(ARCH_BLACKHOLE) && !defined(DISABLE_L1_DATA_CACHE)
+#if defined(ARCH_BLACKHOLE)
     asm("fence");
 #endif
 }

@@ -397,7 +397,8 @@ void send_msg_to_eth_mailbox(
                 const auto run_flag_addr = hal.get_dev_addr(k_CoreType, tt_metal::HalL1MemAddrType::ETH_METAL_RUN_FLAG);
                 auto run_flag_val = read_hex_vec_from_core(device_id, virtual_core, run_flag_addr, sizeof(uint32_t))[0];
 
-                TT_THROW(
+                log_error(
+                    tt::LogMetal,
                     "Device {}: Timed out while waiting for ack when trying to launch Metal ethernet firmware on "
                     "ethernet core {}. Last message status: {:#x}. Retrain count: {}. Is the firmware updated? Minimum "
                     "tt-firmware version is 18.2.0. Start time: {}. End time: {}. Metal fw enable flag: {:#x}",
@@ -408,6 +409,7 @@ void send_msg_to_eth_mailbox(
                     std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch()).count(),
                     std::chrono::duration_cast<std::chrono::milliseconds>(timenow.time_since_epoch()).count(),
                     run_flag_val);
+                std::abort();
             }
             std::this_thread::sleep_for(k_sleep_time);
         } while (msg_status != done_message);
@@ -446,7 +448,8 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
                     hal.get_dev_addr(k_CoreType, tt_metal::HalL1MemAddrType::ETH_FW_LIVE_LINK_STATUS);
                 auto return_registers =
                     read_hex_vec_from_core(device_id, virtual_core, return_registers_addr, 16 * sizeof(uint32_t));
-                TT_THROW(
+                log_error(
+                    tt::LogMetal,
                     "Device {}: Timed out while waiting for active ethernet core {} to become active again."
                     "Try resetting the board. Is the firmware updated? Minimum tt-firmware version is 18.2.0. Launch "
                     "erisc val: {:#x}. Dumped return registers: {}. Start time: {}. End time: {}",
@@ -456,6 +459,7 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
                     fmt::format("{:#x}", fmt::join(return_registers, ", ")),
                     std::chrono::duration_cast<std::chrono::milliseconds>(start.time_since_epoch()).count(),
                     std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
+                std::abort();
             }
         }
     }
