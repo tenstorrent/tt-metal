@@ -5,7 +5,6 @@
 #include "llama.hpp"
 
 #include "autograd/tensor.hpp"
-#include "core/distributed_mapping.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/distributed/linear.hpp"
 #include "modules/distributed/llama_block.hpp"
