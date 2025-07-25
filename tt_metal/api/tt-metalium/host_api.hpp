@@ -571,6 +571,20 @@ void SetRuntimeArgs(
 // clang-format on
 void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args);
 
+// clang-format off
+/**
+ * Set common (shared by all cores) runtime args for a kernel that are sent to all cores during runtime. This API needs to be called to update the common runtime args for the kernel.
+ * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                                                   | Valid Range                                                         | Required |
+ * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
+ * | runtime_args | The runtime args to be written                                         | std::initializer_list<const uint32_t>                  |                                                                     | Yes      |
+ */
+// clang-format on
 void SetCommonRuntimeArgs(
     const Program& program, KernelHandle kernel_id, std::initializer_list<const uint32_t> runtime_args);
 
