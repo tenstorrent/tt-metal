@@ -1065,6 +1065,40 @@ void pytensor_module(py::module& m_tensor) {
                 tt_tensor = tt_tensor.cpu()
         )doc")
         .def(
+            "item",
+            [](const Tensor& self) -> py::object {
+                switch (self.dtype()) {
+                    case DataType::FLOAT32: return py::cast(self.item<float>());
+                    case DataType::BFLOAT16: return py::cast(self.item<bfloat16>().to_float());
+                    case DataType::BFLOAT8_B:
+                    case DataType::BFLOAT4_B: return py::cast(self.item<float>());
+                    case DataType::INT32: return py::cast(self.item<int32_t>());
+                    case DataType::UINT32: return py::cast(self.item<uint32_t>());
+                    case DataType::UINT16: return py::cast(self.item<uint16_t>());
+                    case DataType::UINT8: return py::cast(self.item<uint8_t>());
+                    case DataType::INVALID: TT_THROW("Unsupported DataType");
+                }
+                TT_THROW("Unreachable");
+            },
+            R"doc(
+                 Extract the scalar value from a tensor containing exactly one element.
+
+                 Similar to PyTorch's tensor.item(), this method returns the value of this tensor as a standard Python number.
+                 This only works for tensors with one element.
+
+                 Returns:
+                     Python scalar: The scalar value contained in the tensor.
+
+                 Raises:
+                     RuntimeError: If the tensor doesn't contain exactly one element.
+
+                 .. code-block:: python
+
+                     # Create a tensor with one element
+                     scalar_tensor = ttnn.from_torch(torch.tensor([3.14]), device=device)
+                     value = scalar_tensor.item()  # Returns 3.14
+             )doc")
+        .def(
             "to",
             py::overload_cast<Layout>(&Tensor::to_layout, py::const_),
             py::arg("target_layout").noconvert(),

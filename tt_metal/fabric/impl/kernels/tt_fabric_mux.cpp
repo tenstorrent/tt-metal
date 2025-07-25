@@ -112,7 +112,8 @@ void forward_data(
         increment_local_update_ptr_val(my_channel_free_slots_stream_id.get(), 1);
     }
 
-    check_worker_connections(worker_interface, channel_connection_established, my_channel_free_slots_stream_id.get());
+    tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR>(
+        worker_interface, channel_connection_established, my_channel_free_slots_stream_id.get());
 }
 
 void kernel_main() {
@@ -187,7 +188,8 @@ void kernel_main() {
         fabric_router_status_address,
         local_fabric_router_status_address);
 
-    fabric_connection.open();
+    constexpr bool use_worker_allocated_credit_address = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;
+    fabric_connection.open<use_worker_allocated_credit_address>();
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
 

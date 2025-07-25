@@ -27,7 +27,8 @@ std::vector<CBInfo> get_cb_info(
     DataType output_datatype,
     std::array<uint32_t, 2> conv_input_shard_shape,
     bool enable_bias,
-    bool is_1d_depthwise_conv) {
+    bool is_1d_depthwise_conv,
+    bool skip_act_cb_create) {
     const uint32_t num_cbs = static_cast<uint32_t>(Conv2dCb::COUNT);
     std::vector<CBInfo> cb_info;
     cb_info.reserve(num_cbs);
@@ -136,7 +137,7 @@ std::vector<CBInfo> get_cb_info(
             sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? conv_input_df : output_df;
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT,
-            .num_pages = act_cb_num_tiles,
+            .num_pages = skip_act_cb_create ? 0 : act_cb_num_tiles,
             .page_size = act_cb_tile_size,
             .data_format = act_cb_data_format});
         cb_info.emplace_back(CBInfo{
@@ -180,10 +181,11 @@ std::vector<CBInfo> get_cb_info(
         const bool overlap_act_cb = sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && conv_input_df == output_df;
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT_ROW_MAJOR_BFLOAT16,
-            .num_pages = overlap_act_cb ? 0 : row_major_act_cb_num_tiles,
+            .num_pages = overlap_act_cb && !skip_act_cb_create ? 0 : row_major_act_cb_num_tiles,
             .page_size = input_tile_size,
             .data_format = conv_input_df,
-            .overlapped_by_cb = overlap_act_cb ? std::optional<Conv2dCb>(Conv2dCb::ACT) : std::nullopt});
+            .overlapped_by_cb =
+                overlap_act_cb && !skip_act_cb_create ? std::optional<Conv2dCb>(Conv2dCb::ACT) : std::nullopt});
     }
 
     // Output CB

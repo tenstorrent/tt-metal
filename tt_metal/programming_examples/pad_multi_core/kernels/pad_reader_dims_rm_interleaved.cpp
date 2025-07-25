@@ -14,12 +14,12 @@ void kernel_main() {
     const uint32_t data_size_bytes = get_arg_val<uint32_t>(5);
     const uint32_t num_rows_per_core = get_arg_val<uint32_t>(6);
 
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool pad_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
 
-    const InterleavedAddrGen<src_is_dram> s0 = {.bank_base_address = src_addr, .page_size = data_size_bytes};
-    const InterleavedAddrGen<pad_is_dram> s1 = {.bank_base_address = pad_addr, .page_size = data_size_bytes};
+    constexpr auto s0_args = TensorAccessorArgs<0>();
+    const auto s0 = TensorAccessor(s0_args, src_addr, data_size_bytes);
+    constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
+    const auto s1 = TensorAccessor(s1_args, pad_addr, data_size_bytes);
 
     // pad based on page
     uint32_t src_stick_id = start_src_stick_id;

@@ -22,9 +22,9 @@
 
 namespace tt::tt_metal::distributed {
 
-using MeshSocketTest = T3000MeshDeviceFixture;
-using MeshSocketTest1DFabric = T3000MeshDevice1DFabricFixture;
-using MeshSocketTest2DFabric = T3000MeshDevice2DFabricFixture;
+using MeshSocketTest = MeshDevice2x4Fixture;
+using MeshSocketTest1DFabric = MeshDevice2x4Fabric1DFixture;
+using MeshSocketTest2DFabric = MeshDevice2x4Fabric2DFixture;
 
 struct SocketCoreMapping {
     CoreCoord sender_core;
@@ -1554,6 +1554,7 @@ void test_multi_connection_multi_device_data_copy(
 
     std::vector<SocketConnection> socket_connections;
 
+    socket_connections.reserve(4);
     for (std::size_t x = 0; x < 4; x++) {
         socket_connections.push_back(
             {.sender_core = {MeshCoordinate(0, x), sender_logical_core},
@@ -1865,6 +1866,7 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
 
     std::vector<SocketConnection> socket_connections;
 
+    socket_connections.reserve(sender_logical_coords.size());
     for (std::size_t core_idx = 0; core_idx < sender_logical_coords.size(); core_idx++) {
         socket_connections.push_back(SocketConnection{
             .sender_core = {MeshCoordinate(0, 0), sender_logical_coords[core_idx]},

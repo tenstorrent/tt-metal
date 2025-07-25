@@ -8,6 +8,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -352,6 +353,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     if (output_num_cores == 1) {
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
+    bool skip_mcast = is_singlecore_skip_mcast(p_config, a.memory_config().memory_layout());
+    if (skip_mcast) {
+        reader_defines["SKIP_MCAST"] = "1";
+    }
     if (has_bias) {
         writer_defines["FUSE_BIAS"] = "1";
         writer_mcast_sender_defines["FUSE_BIAS"] = "1";
@@ -373,7 +378,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     if (weight_block_w_ntiles <= 8) {
         compute_defines["PACKER_UNTILIZE"] = "1";
     }
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), all_cores.num_cores(), compute_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), all_cores.num_cores(), compute_defines, ttnn::get_throttle_level(compute_kernel_config));
 
     for (auto elem : compute_defines) {
         log_debug(tt::LogOp, "compute_defines: {} = {}", elem.first, elem.second);
@@ -396,7 +402,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         output.dtype(),
         a.memory_config().shard_spec().value().shape,
         has_bias,
-        false);
+        false,
+        skip_mcast);
 
     std::vector<std::vector<uint16_t>> conv_sharded_input_top_left_indices =
         ttnn::operations::sliding_window::generate_sliding_window_op_config(
@@ -445,7 +452,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         bias_ntiles,
         get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
 
-        get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
+        skip_mcast ? get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index
+                   : get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
         get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_SECOND_READER).index,
@@ -511,7 +519,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = activation_kernel_compile_args});
+            .compile_args = activation_kernel_compile_args,
+            .defines = reader_defines});
 
     auto weights_kernel_id = CreateKernel(
         program,
@@ -537,10 +546,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     std::vector<uint32_t> act_mcast_noc_y;
     std::vector<uint32_t> act_mcast_noc_x;
 
+    act_mcast_noc_x.reserve(full_core_grid.x);
     for (uint32_t core_index = 0; core_index < full_core_grid.x; core_index++) {
         act_mcast_noc_x.push_back(device->worker_core_from_logical_core(CoreCoord(core_index, 0)).x);
     }
 
+    act_mcast_noc_y.reserve(full_core_grid.y);
     for (uint32_t core_index = 0; core_index < full_core_grid.y; core_index++) {
         act_mcast_noc_y.push_back(device->worker_core_from_logical_core(CoreCoord(0, core_index)).y);
     }

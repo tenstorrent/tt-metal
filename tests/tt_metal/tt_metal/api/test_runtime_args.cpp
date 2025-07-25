@@ -426,6 +426,7 @@ TEST_F(DeviceFixture, TensixSetRuntimeArgsVaryingLengthPerCore) {
                     uint32_t val_offset = x * 100 + y * 10;
                     uint32_t num_rt_args = 2 + x + y;
                     std::vector<uint32_t> initial_runtime_args;
+                    initial_runtime_args.reserve(num_rt_args);
                     for (uint32_t i = 0; i < num_rt_args; i++) {
                         initial_runtime_args.push_back(101 + val_offset + (i * 66));
                     }

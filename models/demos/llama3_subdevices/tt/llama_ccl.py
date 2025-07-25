@@ -644,6 +644,57 @@ class TT_CCL:
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return xqkv_reduced, q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, v_heads_1BKD
 
+    def double_matmul_line_reduce_scatter(
+        self,
+        # Matmul
+        matmul_input,
+        matmul_weightA,
+        matmul_weightB,
+        # Matmul
+        compute_kernel_config=None,
+        dtype=None,
+        program_config=None,
+        memory_config=None,
+        global_cb=None,
+        sub_device_id=None,
+        # Reduce Scatter
+        dim=3,
+        num_links=1,
+        math_op=ttnn.ReduceType.Sum,
+        buffer_key=None,
+        RS_memory_config=None,
+        cluster_axis=1,
+        use_noc1_only=False,
+    ):
+        persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
+            self.reduce_scatter_buffer_idx[cluster_axis]
+        ]
+        w1_out, w3_out, ttnn_tensor_out = ttnn.experimental.llama_rs_matmul(
+            matmul_input,
+            matmul_weightA,
+            persistent_interim_buffer,
+            dim,
+            self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+            cluster_axis,
+            self.mesh_device,
+            num_links,
+            self.worker_sub_device_id,
+            second_weight_tensor=matmul_weightB,
+            memory_config_rs=RS_memory_config,
+            compute_kernel_config=compute_kernel_config,
+            dtype=dtype,
+            program_config=program_config,
+            memory_config_mm=memory_config,
+            global_cb=global_cb,
+            topology=self.model_config["CCL_TOPOLOGY"],
+            use_noc1_only=use_noc1_only,
+        )
+        w1_out.deallocate(True)
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        self.reduce_scatter_buffer_idx[cluster_axis] = (self.reduce_scatter_buffer_idx[cluster_axis] + 1) % self.num_cbs
+        # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
+        return ttnn_tensor_out, w3_out
+
     def matmul_line_reduce_scatter(
         self,
         # Matmul
@@ -673,7 +724,6 @@ class TT_CCL:
         w3_out, ttnn_tensor_out = ttnn.experimental.llama_rs_matmul(
             matmul_input,
             matmul_weight,
-            input_tensor_mesh,
             persistent_interim_buffer,
             dim,
             self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
@@ -681,12 +731,14 @@ class TT_CCL:
             self.mesh_device,
             num_links,
             self.worker_sub_device_id,
+            rs_tensor=input_tensor_mesh,
             memory_config_rs=RS_memory_config,
             compute_kernel_config=compute_kernel_config,
             dtype=dtype,
             program_config=program_config,
             memory_config_mm=memory_config,
             global_cb=global_cb,
+            second_weight_tensor=None,
             topology=self.model_config["CCL_TOPOLOGY"],
             use_noc1_only=use_noc1_only,
         )
@@ -824,14 +876,15 @@ class TT_CCL:
             input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
         )
         seqlen = input_tensor_mesh.shape[-2]
-        persistent_buffers = self.persistent_buffers[seqlen].get(buffer_key, None)
-
+        persistent_buffers = (
+            self.persistent_buffers[seqlen].get(buffer_key, None) if seqlen in self.persistent_buffers else None
+        )
+        persistent_buffers_list = list(persistent_buffers.values()) if persistent_buffers else None
         num_links = 4
         num_semaphores = 3 * num_links
         ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor=input_tensor_mesh,
-            persistent_intermediate_buffer=persistent_buffers["intermediate"],
-            persistent_output_buffer=persistent_buffers["output"],
+            persistent_output_buffers=persistent_buffers_list,
             dim=dim,
             multi_device_global_semaphore=self.reduce_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]][
                 :num_semaphores
@@ -864,7 +917,9 @@ class TT_CCL:
             if self.use_ring_ag_prefill and buffer_key is not None:
                 if buffer_key in USE_LINE_AG:
                     seqlen = input_tensor_mesh.shape[1] * input_tensor_mesh.shape[-2]
-                    persistent_buffer = self.all_gather_buffers[seqlen][buffer_key]
+                    persistent_buffer = (
+                        self.all_gather_buffers[seqlen][buffer_key] if seqlen in self.all_gather_buffers else None
+                    )
                 else:
                     return self.ring_all_gather(
                         input_tensor_mesh,
@@ -883,7 +938,11 @@ class TT_CCL:
                 )
                 seqlen = input_tensor_mesh.shape[-2]
                 if persistent_buffer is None and seqlen in self.all_gather_buffers:
-                    persistent_buffer = self.all_gather_buffers[seqlen].get(buffer_key, None)
+                    persistent_buffer = (
+                        self.all_gather_buffers[seqlen].get(buffer_key, None)
+                        if seqlen in self.all_gather_buffers
+                        else None
+                    )
 
         else:
             topology = self.model_config["CCL_TOPOLOGY"]
@@ -924,7 +983,10 @@ class TT_CCL:
             input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
         )
         seqlen = input_tensor_mesh.shape[-2]
-        persistent_buffers = self.all_gather_buffers[seqlen].get(buffer_key, None)
+        persistent_buffers = (
+            self.all_gather_buffers[seqlen].get(buffer_key, None) if seqlen in self.all_gather_buffers else None
+        )
+        # persistent_buffers = None
 
         num_links = 4
         ttnn_tensor_out = ttnn.experimental.all_gather_async(

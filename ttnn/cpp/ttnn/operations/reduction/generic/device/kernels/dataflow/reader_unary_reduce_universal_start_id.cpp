@@ -15,7 +15,7 @@ void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
     constexpr uint32_t scaler = get_compile_time_arg_val(0);
-    constexpr auto tensor_args = make_tensor_accessor_args<1>();
+    constexpr auto tensor_args = TensorAccessorArgs<1>();
 
     constexpr uint32_t cb_id_in2 = 2;
 #ifndef REDUCE_ROW_SUM_VIA_MM
@@ -30,7 +30,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
-    auto tensor_accessor = make_tensor_accessor_from_args(tensor_args, src_addr, tile_bytes);
+    auto tensor_accessor = TensorAccessor(tensor_args, src_addr, tile_bytes);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {

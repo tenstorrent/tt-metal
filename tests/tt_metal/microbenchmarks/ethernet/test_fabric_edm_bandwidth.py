@@ -16,7 +16,7 @@ import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_confi
 from tabulate import tabulate
 import pandas as pd
 
-from conftest import is_6u
+from conftest import is_6u, get_devices
 
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
@@ -34,6 +34,31 @@ binary_path = os.environ.get("TT_METAL_HOME", "") + "/build/test/ttnn/unit_tests
 
 # Global direct execution mode setting (determined once per test session)
 _direct_mode_enabled = None
+
+# Global architecture setting (determined once per test session)
+_architecture = None
+
+
+# Update your existing functions to use session devices
+@pytest.fixture(scope="session", autouse=True)
+def get_architecture(silicon_arch_name):
+    """Get the current architecture (now uses session-cached value)"""
+    global _architecture
+
+    _architecture = silicon_arch_name
+    if _architecture == "wormhole_b0":
+        _architecture = "wormhole"
+
+    if _architecture is None:
+        raise RuntimeError("Architecture not initialized. Session setup should have handled this.")
+
+    return _architecture
+
+
+def should_test_be_skipped(*, num_links, line_size, num_cluster_cols, num_cluster_rows):
+    if _architecture == "blackhole":
+        return num_cluster_cols != 0 or num_cluster_rows != 0 or line_size > 2 or num_links > 1
+    return False
 
 
 def start_fabric_edm_daemon():
@@ -242,7 +267,7 @@ def read_golden_results(
     """Print a summary table of all test results by packet size"""
     csv_path = os.path.join(
         os.environ["TT_METAL_HOME"],
-        f"tests/tt_metal/microbenchmarks/ethernet/fabric_edm_bandwidth_golden{'_' + machine_type_suffix if machine_type_suffix is not None else ''}.csv",
+        f"tests/tt_metal/microbenchmarks/ethernet/golden/{_architecture}/fabric_edm_bandwidth_golden{'_' + machine_type_suffix if machine_type_suffix is not None else ''}.csv",
     )
 
     if not os.path.exists(csv_path):
@@ -335,7 +360,12 @@ def profile_results(
     total_packets_sent = packets_per_src_chip * traffic_streams_through_boundary
     total_byte_sent = total_packets_sent * packet_size
     bandwidth = total_byte_sent / max(main_loop_cycles)
-    packets_per_second = total_packets_sent / max(main_loop_cycles) * freq_hz
+    # main_loop_cycles = cycles
+    # freq_hz = cycles/s
+    # total_packets_sent = packets
+    # main_loop_cycles [cycles] / freq_hz [cycles/s] = s
+    # => total_packets_sent [packets] / (main_loop_cycles [cycles] / freq_hz [cycles/s])[=>s] = packets/s
+    packets_per_second = total_packets_sent / (max(main_loop_cycles) / freq_hz)
     bytes_per_GB = 1000000000
     bandwidth_GB_s = (bandwidth * freq_hz) / bytes_per_GB
     logger.info("main_loop_cycles: {} ", max(main_loop_cycles))
@@ -532,6 +562,11 @@ def run_fabric_edm(
     num_cluster_rows=0,
     num_cluster_cols=0,
 ):
+    if should_test_be_skipped(
+        num_links=num_links, line_size=line_size, num_cluster_cols=num_cluster_cols, num_cluster_rows=num_cluster_rows
+    ):
+        pytest.skip("Skipping test")
+
     if test_mode == "1_fabric_instance":
         assert num_cluster_rows == 0 and num_cluster_cols == 0
         test_name = f"{'unicast' if is_unicast else 'mcast'}_{fabric_mode.name}"

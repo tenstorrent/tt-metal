@@ -255,7 +255,6 @@ IntraMeshAdjacencyMap build_mesh_adjacency_map(
 
         // Get adjacent chips using the provided adjacency function
         std::vector<chip_id_t> adjacent_chips = get_adjacent_chips_func(current_chip);
-
         // Count neighbours: CORNER_ADJACENT_CHIPS → corner, EDGE_ADJACENT_CHIPS → edge, INTERIOR_ADJACENT_CHIPS →
         // interior (we treat only links with ≥ num_ports_per_side lanes as neighbours)
         bool is_corner = false;

@@ -3,9 +3,11 @@
 
 import math
 from itertools import takewhile
+from pathlib import Path
 from typing import Sequence
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -13,6 +15,7 @@ import ttnn
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
 MAX_BATCH_SIZE = 32
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
+TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
 
 
 # Compute kernel configurations
@@ -497,8 +500,11 @@ def sub_state_dict(state_dict, prefix):
     return {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
 
 
-def save_and_get_path(path, tensor):
+def save_and_get_path(path: Path, tensor: ttnn.Tensor) -> str:
     """Save a tensor to a file and return the path."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        logger.warning(f"Overwriting existing cache file: {path}")
     ttnn.dump_tensor(path, tensor)
     ttnn.deallocate(tensor)
     return str(path)

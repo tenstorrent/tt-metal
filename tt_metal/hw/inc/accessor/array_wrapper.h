@@ -17,7 +17,6 @@ struct ArrayStaticWrapper {
     static constexpr uint32_t size = sizeof...(Elements);
     static constexpr std::array<T, size> elements = {Elements...};
     constexpr explicit ArrayStaticWrapper() = delete;
-    static_assert(size > 0, "Array size must be greater than 0!");
 };
 
 // Type aliases for convenience
