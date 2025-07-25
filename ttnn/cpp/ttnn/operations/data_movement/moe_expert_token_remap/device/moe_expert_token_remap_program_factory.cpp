@@ -42,8 +42,8 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
 
     const auto experts_per_device = tensor_return_value.logical_shape()[-1];
 
-    const auto l1_alignment = hal::get_l1_alignment();
-    const auto dram_alignment = hal::get_dram_alignment();
+    const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const auto dram_alignment = tt::tt_metal::hal::get_dram_alignment();
 
     const auto mapping_page_size_bytes = mapping_tensor.tensor_spec().compute_page_size_bytes();
     const auto aligned_mapping_page_size_bytes = tt::align(mapping_page_size_bytes, l1_alignment);
@@ -82,7 +82,8 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     using local_experts_t = uint16_t;
     const auto aligned_local_expert_page_size_bytes =
         tt::align(experts_per_device * sizeof(local_experts_t), l1_alignment);
-    const auto local_experts_dataformat = datatype_to_dataformat_converter(convert_to_data_type<local_experts_t>());
+    const auto local_experts_dataformat =
+        datatype_to_dataformat_converter(tt::tt_metal::convert_to_data_type<local_experts_t>());
     CircularBufferConfig cb_local_experts_config =
         CircularBufferConfig(aligned_local_expert_page_size_bytes, {{local_experts_cb_id, local_experts_dataformat}})
             .set_page_size(local_experts_cb_id, aligned_local_expert_page_size_bytes);
