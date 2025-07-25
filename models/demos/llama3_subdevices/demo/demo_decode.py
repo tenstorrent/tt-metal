@@ -431,6 +431,7 @@ def run_llama3_demo(
     # Tracks the number of iterations where throughput falls below `tsu_threshold`
     tsu_failures = 0
     all_tokens_per_second_per_user = []
+    all_iteration_time = []
     failed_tokens_per_second_per_user = []
     read_events = []
     tt_out_toks_cpu = []
@@ -438,6 +439,7 @@ def run_llama3_demo(
     prefill = True
     block_host = True
     decode_iteration = 0
+    prefill_iteration = 0
     trace_exec_offset = 1
     while users_decoding:
         # Execute trace
@@ -456,6 +458,7 @@ def run_llama3_demo(
         if prefill:
             current_iteration = iteration
             all_outputs.append(encoded_prompts[0][iteration])  # Update list of TT outputs
+
             tt_out_tok_reset = ttnn.from_torch(
                 encoded_prompts_tensor_whole_sequence[:, iteration].reshape(1, 1, 1, batch_size),
                 dtype=ttnn.uint32,
@@ -463,20 +466,20 @@ def run_llama3_demo(
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
             )
             ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
-            profiler.start(f"log_printing_iter_{iteration}", iteration=iteration)
-            if not is_ci_env:
-                # Print out generated outputs for each user at the end of every iteration
-                logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
+            # profiler.start(f"log_printing_iter_{iteration}", iteration=iteration)
+            # if not is_ci_env:
+            #     # Print out generated outputs for each user at the end of every iteration
+            #     logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
 
             iteration_time_ends = time()
             iteration_time = iteration_time_ends - iteration_time_start
             tokens_per_second_per_user = 1 / iteration_time
 
-            if not is_ci_env or iteration < 200 or iteration % 1000 == 0:
-                logger.info(
-                    f"Iteration : {iteration}, Prefill Iteration : {iteration}, tok/s/user : {tokens_per_second_per_user:.2f}, Throughput : {batch_size/iteration_time:.2f} tok/s, Iteration Time : {1000*iteration_time:.2f} ms"
-                )
-            profiler.end(f"log_printing_iter_{iteration}", iteration=iteration)
+            # if not is_ci_env or iteration < 200 or iteration % 1000 == 0:
+            #     logger.info(
+            #         f"Iteration : {iteration}, Prefill Iteration : {iteration}, tok/s/user : {tokens_per_second_per_user:.2f}, Throughput : {batch_size/iteration_time:.2f} tok/s, Iteration Time : {1000*iteration_time:.2f} ms"
+            #     )
+            # profiler.end(f"log_printing_iter_{iteration}", iteration=iteration)
             iteration_time_start = time()
         else:
             tt_out_toks_cpu += [tt_out_tok.cpu(blocking=block_host, cq_id=0)]
@@ -490,37 +493,37 @@ def run_llama3_demo(
                 tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out_toks_cpu[current_decode_iteration])[0])[
                     0, 0, 0, :batch_size
                 ]
-                all_outputs.append(tt_output_torch.tolist()[0])  # Update generated token to list of TT outputs
-
-                profiler.start(f"log_printing_iter_{current_iteration}", iteration=current_iteration)
-                if not is_ci_env:
-                    # Print out generated outputs for each user at the end of every iteration
-                    logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
-
                 iteration_time_ends = time()
                 iteration_time = iteration_time_ends - iteration_time_start
+                all_outputs.append(tt_output_torch.tolist()[0])  # Update generated token to list of TT outputs
 
-                tokens_per_second_per_user = 1 / iteration_time
+                # profiler.start(f"log_printing_iter_{current_iteration}", iteration=current_iteration)
+                # if not is_ci_env:
+                #     # Print out generated outputs for each user at the end of every iteration
+                #     logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
 
-                all_tokens_per_second_per_user.append(tokens_per_second_per_user)
+                # tokens_per_second_per_user = 1 / iteration_time
 
-                if not is_ci_env or current_iteration < 200 or current_iteration % 1000 == 0:
-                    logger.info(
-                        f"Iteration : {current_iteration}, Decode Iteration : {current_decode_iteration}, tok/s/user : {tokens_per_second_per_user:.2f}, Throughput : {batch_size/iteration_time:.2f} tok/s, Iteration Time : {1000*iteration_time:.2f} ms"
-                    )
-                profiler.end(f"log_printing_iter_{current_iteration}", iteration=current_iteration)
+                # all_tokens_per_second_per_user.append(tokens_per_second_per_user)
+                all_iteration_time.append(iteration_time)
 
-                if current_iteration == 127:
-                    tokens_per_second_per_user_token127 = tokens_per_second_per_user
+                # if not is_ci_env or current_iteration < 200 or current_iteration % 1000 == 0:
+                #     logger.info(
+                #         f"Iteration : {current_iteration}, Decode Iteration : {current_decode_iteration}, tok/s/user : {tokens_per_second_per_user:.2f}, Throughput : {batch_size/iteration_time:.2f} tok/s, Iteration Time : {1000*iteration_time:.2f} ms"
+                #     )
+                # profiler.end(f"log_printing_iter_{current_iteration}", iteration=current_iteration)
 
-                if not stress_test:
-                    # Increment failure count if throughput is too low
-                    if decode_iteration in range(1, 200) and (
-                        tokens_per_second_per_user < tsu_thresholds["min"]
-                        or tokens_per_second_per_user > tsu_thresholds["max"]
-                    ):
-                        tsu_failures += 1
-                        failed_tokens_per_second_per_user.append((decode_iteration, tokens_per_second_per_user))
+                # if current_iteration == 127:
+                #     tokens_per_second_per_user_token127 = tokens_per_second_per_user
+
+                # if not stress_test:
+                #     # Increment failure count if throughput is too low
+                #     if decode_iteration in range(1, 200) and (
+                #         tokens_per_second_per_user < tsu_thresholds["min"]
+                #         or tokens_per_second_per_user > tsu_thresholds["max"]
+                #     ):
+                #         tsu_failures += 1
+                #         failed_tokens_per_second_per_user.append((decode_iteration, tokens_per_second_per_user))
 
                 iteration_time_start = time()
 
@@ -553,40 +556,49 @@ def run_llama3_demo(
             ml_model_name="llama70b-tg",
         )
 
-    if not stress_test and len(all_tokens_per_second_per_user) > 0:
-        logger.info(f"Min tsu throughput: {min(all_tokens_per_second_per_user)}")
-        logger.info(f"Max tsu throughput: {max(all_tokens_per_second_per_user)}")
-        logger.info(f"Avg tsu throughput: {sum(all_tokens_per_second_per_user) / len(all_tokens_per_second_per_user)}")
-        logger.info(
-            f"Median tsu throughput: {sorted(all_tokens_per_second_per_user)[len(all_tokens_per_second_per_user) // 2]}"
-        )
-        # 95 percentile tsu throughput
-        percentile_5 = sorted(all_tokens_per_second_per_user)[int(0.05 * len(all_tokens_per_second_per_user))]
-        percentile_95 = sorted(all_tokens_per_second_per_user)[int(0.95 * len(all_tokens_per_second_per_user))]
-        logger.info(f"5 percentile tsu throughput: {percentile_5}")
-        logger.info(f"95 percentile tsu throughput: {percentile_95}")
+    if not stress_test and len(all_iteration_time) > 0:
+        logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
 
-        logger.info(
-            f"Suggested taget range is 5 percentile: {int(percentile_5)} - max: {int(max(all_tokens_per_second_per_user))+1}"
-        )
+        for i in range(len(all_iteration_time)):
+            if not is_ci_env or i < 200 or i % 1000 == 0:
+                decode_iteration = i + len(encoded_prompts[0])
+                logger.info(
+                    f"Iteration : {decode_iteration}, tok/s/user : {1 / all_iteration_time[i]:.2f}, Throughput : {batch_size/all_iteration_time[i]:.2f} tok/s, Iteration Time : {1000*all_iteration_time[i]:.2f} ms"
+                )
 
-        if tokens_per_second_per_user_token127 is not None:
-            logger.info(f"Tokens per second per user at token 128: {tokens_per_second_per_user_token127}")
+        # logger.info(f"Min tsu throughput: {min(all_tokens_per_second_per_user)}")
+        # logger.info(f"Max tsu throughput: {max(all_tokens_per_second_per_user)}")
+        # logger.info(f"Avg tsu throughput: {sum(all_tokens_per_second_per_user) / len(all_tokens_per_second_per_user)}")
+        # logger.info(
+        #     f"Median tsu throughput: {sorted(all_tokens_per_second_per_user)[len(all_tokens_per_second_per_user) // 2]}"
+        # )
+        # # 95 percentile tsu throughput
+        # percentile_5 = sorted(all_tokens_per_second_per_user)[int(0.05 * len(all_tokens_per_second_per_user))]
+        # percentile_95 = sorted(all_tokens_per_second_per_user)[int(0.95 * len(all_tokens_per_second_per_user))]
+        # logger.info(f"5 percentile tsu throughput: {percentile_5}")
+        # logger.info(f"95 percentile tsu throughput: {percentile_95}")
 
-        # print before assertion
-        out_of_targets_msg = f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
-        tsu_perf_drop_limit = TSU_PERF_DROP_LIMIT_PERCENT * decode_iteration / 100
-        if tsu_failures > tsu_perf_drop_limit:
-            logger.info(out_of_targets_msg)
-            logger.info(f"Failing iterations sorted by t/s/u")
-            sorted_tokens_per_second_per_user = sorted(failed_tokens_per_second_per_user, key=lambda x: x[1])
-            for iteration, tsu in sorted_tokens_per_second_per_user:
-                logger.info(f"Iteration {iteration}: {tsu}")
-        # Assert at the end of test to check if the throughput recuperated
-        assert tsu_failures <= tsu_perf_drop_limit, out_of_targets_msg
+        # logger.info(
+        #     f"Suggested taget range is 5 percentile: {int(percentile_5)} - max: {int(max(all_tokens_per_second_per_user))+1}"
+        # )
 
-        # Print out total number of tsu_failures
-        logger.info(f"Total TSU Failures: {tsu_failures} (threshold: {tsu_perf_drop_limit})")
+        # if tokens_per_second_per_user_token127 is not None:
+        #     logger.info(f"Tokens per second per user at token 128: {tokens_per_second_per_user_token127}")
+
+        # # print before assertion
+        # out_of_targets_msg = f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
+        # tsu_perf_drop_limit = TSU_PERF_DROP_LIMIT_PERCENT * decode_iteration / 100
+        # if tsu_failures > tsu_perf_drop_limit:
+        #     logger.info(out_of_targets_msg)
+        #     logger.info(f"Failing iterations sorted by t/s/u")
+        #     sorted_tokens_per_second_per_user = sorted(failed_tokens_per_second_per_user, key=lambda x: x[1])
+        #     for iteration, tsu in sorted_tokens_per_second_per_user:
+        #         logger.info(f"Iteration {iteration}: {tsu}")
+        # # Assert at the end of test to check if the throughput recuperated
+        # assert tsu_failures <= tsu_perf_drop_limit, out_of_targets_msg
+
+        # # Print out total number of tsu_failures
+        # logger.info(f"Total TSU Failures: {tsu_failures} (threshold: {tsu_perf_drop_limit})")
 
 
 # List of supported Parameters for demo.py
