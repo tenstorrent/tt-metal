@@ -102,8 +102,8 @@ void log_from_cpp(Args&&... message) {
     // std::cout << formatted_message.cast<std::string>() << std::endl;
 }
 
-// #define py_log(...) log_from_cpp(__LINE__, "[" #__VA_ARGS__ "] =" __VA_OPT__(, ) __VA_ARGS__);
-#define py_log(...)
+#define py_log(...) log_from_cpp(__LINE__, "[" #__VA_ARGS__ "] =" __VA_OPT__(, ) __VA_ARGS__);
+// #define py_log(...)
 
 template <typename T>
 Tensor create_typed_tt_tensor_from_py_data(
@@ -341,7 +341,7 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
 
     auto ttnn_unsupported_type_mapping = [&torch](py::object dtype) -> std::optional<py::object> {
         if (dtype.equal(torch.attr("int64"))) {
-            return torch.attr("uint32");
+            return torch.attr("int32");
         } else if (dtype.equal(torch.attr("float16"))) {
             return torch.attr("bfloat16");
         } else if (dtype.equal(torch.attr("float64"))) {
@@ -379,7 +379,12 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
 
     if (tensor.attr("dtype").equal(torch.attr("int64"))) {
         py_log();
-        do_host_conversion_through_fallback();
+        if (!dtype.has_value()) {
+            res.host_side_conversion = true;
+            res.construct_with_data_type = DataType::UINT32;
+        } else {
+            do_host_conversion_through_fallback();
+        }
     } else if (!has_device && ttnn_fallback_type_mapping(dtype).has_value()) {
         py_log();
         // Strategy: No Device Fallback
