@@ -144,8 +144,8 @@ void MorehDotBackwardOperation::SingleCore::override_runtime_arguments(
     const auto& output_grad_buffer = tensor_args.output_grad.buffer();
     const auto& input_buffer = tensor_args.input.buffer();
     const auto& other_buffer = tensor_args.other.buffer();
-    const auto input_grad_buffer = tensor_return_value.at(0);
-    const auto other_grad_buffer = tensor_return_value.at(1);
+    const auto& input_grad_buffer = tensor_return_value.at(0);
+    const auto& other_grad_buffer = tensor_return_value.at(1);
 
     {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, CoreCoord{0, 0});

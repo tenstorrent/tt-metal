@@ -24,9 +24,11 @@ protected:
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) override;
+    void finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
 
 public:
-    SDMeshCommandQueue(MeshDevice* mesh_device, uint32_t id);
+    SDMeshCommandQueue(
+        MeshDevice* mesh_device, uint32_t id, std::function<std::lock_guard<std::mutex>()> lock_api_function);
     ~SDMeshCommandQueue() override = default;
 
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;

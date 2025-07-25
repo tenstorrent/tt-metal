@@ -1,12 +1,15 @@
 # SPDX-FileCopyrightText: © 2023 DeepSeek
 # SPDX-License-Identifier: MIT
 
+import importlib.util
 from typing import Tuple
 
 import torch
-import triton
-import triton.language as tl
-from triton import Config
+
+triton = importlib.util.find_spec("triton")
+if triton:
+    import triton.language as tl
+    from triton import Config
 
 
 def act_quant_kernel(x_ptr, y_ptr, s_ptr, BLOCK_SIZE: tl.constexpr):

@@ -9,26 +9,27 @@ void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t stick_size = get_arg_val<uint32_t>(1);
     uint32_t num_sticks = get_arg_val<uint32_t>(2);
-    uint32_t scale_h = get_arg_val<uint32_t>(3);
-    uint32_t scale_w = get_arg_val<uint32_t>(4);
-    uint32_t height = get_arg_val<uint32_t>(5);
-    uint32_t width = get_arg_val<uint32_t>(6);
+    uint32_t start_id = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
 
     constexpr bool dst0_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr bool dst_stick_size_is_pow2 = get_compile_time_arg_val(2) == 1;
     constexpr uint32_t dst_log_base_2_of_page_size = get_compile_time_arg_val(3);
+    constexpr uint32_t scale_h = get_compile_time_arg_val(4);
+    constexpr uint32_t scale_w = get_compile_time_arg_val(5);
+    constexpr uint32_t height = get_compile_time_arg_val(6);
+    constexpr uint32_t width = get_compile_time_arg_val(7);
 
     const auto s0 = get_interleaved_addr_gen<dst0_is_dram, dst_stick_size_is_pow2>(
         dst_addr, stick_size, dst_log_base_2_of_page_size);
 
-    uint32_t scale = scale_h * scale_w;
-    uint32_t in_width = width / scale_w;
-    uint32_t in_height = height / scale_h;
+    constexpr uint32_t in_width = width / scale_w;
+    constexpr uint32_t in_height = height / scale_h;
+    uint32_t end_id = start_id + num_sticks;
     // reader copied the data from DRAM to CB buffer.
     // writer copy the data from CB buffer to DRAM.
-    for (uint32_t i = 0; i < num_sticks; ++i) {
+    for (uint32_t i = start_id; i < end_id; ++i) {
         cb_wait_front(cb_id_out0, 1);
         uint32_t curr_index = i % (in_width * in_height);
         uint32_t curr_batch = i / (in_width * in_height);

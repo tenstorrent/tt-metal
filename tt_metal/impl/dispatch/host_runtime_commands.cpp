@@ -287,11 +287,20 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
 
 void EnqueueRecordEvent(
     CommandQueue& cq, const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        // Ignore record event in slow dispatch.
+        return;
+    }
     detail::DispatchStateCheck(true);
     cq.enqueue_record_event(event, sub_device_ids);
 }
 
 void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        // Slow dispatch conservatively flushes all work since there's no cq.
+        Synchronize(event->device);
+        return;
+    }
     detail::DispatchStateCheck(true);
     event->wait_until_ready();  // Block until event populated. Worker thread.
     log_trace(
@@ -306,6 +315,11 @@ void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) 
 }
 
 void EventSynchronize(const std::shared_ptr<Event>& event) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        // Slow dispatch conservatively flushes all work since there's no cq.
+        Synchronize(event->device);
+        return;
+    }
     detail::DispatchStateCheck(true);
     event->wait_until_ready();  // Block until event populated. Parent thread.
     log_trace(
@@ -329,6 +343,10 @@ void EventSynchronize(const std::shared_ptr<Event>& event) {
 }
 
 bool EventQuery(const std::shared_ptr<Event>& event) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        // Slow dispatch always returns true to avoid infinite blocking. Unclear if this is safe for all situations.
+        return true;
+    }
     detail::DispatchStateCheck(true);
     event->wait_until_ready();  // Block until event populated. Parent thread.
     bool event_completed = event->device->sysmem_manager().get_last_completed_event(event->cq_id) >= event->event_id;

@@ -15,11 +15,14 @@ from loguru import logger
 @pytest.mark.parametrize(
     "input_shape, module_path, num_channels", [((1,), "time_proj", 320), ((6,), "add_time_proj", 256)]
 )
-def test_timesteps(device, input_shape, module_path, num_channels, reset_seeds):
+def test_timesteps(device, input_shape, module_path, num_channels, is_ci_env, reset_seeds):
     unet = UNet2DConditionModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        subfolder="unet",
+        local_files_only=is_ci_env,
     )
-    # unet = pipe.unet
     unet.eval()
     state_dict = unet.state_dict()
 

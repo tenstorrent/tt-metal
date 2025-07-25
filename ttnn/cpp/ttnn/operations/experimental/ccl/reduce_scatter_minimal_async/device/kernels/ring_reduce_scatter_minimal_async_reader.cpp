@@ -4,8 +4,9 @@
 
 #include "dataflow_api.h"
 #include <tt-metalium/buffer_types.hpp>
-#include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
+#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -51,24 +52,68 @@ void kernel_main() {
     int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 
-    ReduceScatterOpReceiver matmul_receiver;
-    if constexpr (fuse_op) {
-        matmul_receiver = ReduceScatterOpReceiver(arg_idx);
-    }
+    constexpr uint32_t ct_idx = 14;
 
-    constexpr uint32_t batch_num_pages = batch_slice_num_pages * ring_size;
+#ifdef INPUT_IS_SHARDED
+    constexpr uint32_t ct_offset = 7;
+
+    using input_tensor_shard_info = ShardedInfo<
+        get_compile_time_arg_val(ct_idx),       // Memory layout
+        get_compile_time_arg_val(ct_idx + 1),   // The number of sharding cores
+        get_compile_time_arg_val(ct_idx + 2),   // The page size we offset each write to
+        get_compile_time_arg_val(ct_idx + 3),   // The number of pages in each sharding row not including padding pages
+        get_compile_time_arg_val(ct_idx + 4),   // This defines times when contiguous pages can't be calculated
+        get_compile_time_arg_val(ct_idx + 5),   // pages_per_shard_x
+        get_compile_time_arg_val(ct_idx + 6)>;  // pages_per_shard_y
+
+    const auto [input_mapping_table, input_rt_increment] =
+        experimental::shard_addr_gen_utils::get_shard_map<input_tensor_shard_info>(get_arg_addr(arg_idx));
+    experimental::ShardedAddrGen<input_tensor_shard_info> input_tensor_addrgen = {
+        .bank_base_address = input_tensor_address, .shard_array = input_mapping_table};
+
+    arg_idx += input_rt_increment;
+#else
+    constexpr uint32_t ct_offset = 0;
 
     constexpr bool input_tensor_is_dram = input_buffer_type == tt::tt_metal::BufferType::DRAM;
     auto input_tensor_addrgen = InterleavedAddrGenFast<input_tensor_is_dram>{
         .bank_base_address = input_tensor_address,
         .page_size = input_tensor_page_size,
         .data_format = get_dataformat(cb_input_id)};
+#endif
+
+#ifdef INTERMEDIATE_IS_SHARDED
+    using intermediate_tensor_shard_info = ShardedInfo<
+        get_compile_time_arg_val(ct_idx + ct_offset),       // Memory layout
+        get_compile_time_arg_val(ct_idx + ct_offset + 1),   // The number of sharding cores
+        get_compile_time_arg_val(ct_idx + ct_offset + 2),   // The page size we offset each write to
+        get_compile_time_arg_val(ct_idx + ct_offset + 3),   // The number of pages in each sharding row not including
+                                                            // padding pages
+        get_compile_time_arg_val(ct_idx + ct_offset + 4),   // This defines times when contiguous pages can't be
+                                                            // calculated
+        get_compile_time_arg_val(ct_idx + ct_offset + 5),   // pages_per_shard_x
+        get_compile_time_arg_val(ct_idx + ct_offset + 6)>;  // pages_per_shard_y
+
+    const auto [intermediate_mapping_table, intermediate_rt_increment] =
+        experimental::shard_addr_gen_utils::get_shard_map<intermediate_tensor_shard_info>(get_arg_addr(arg_idx));
+    experimental::ShardedAddrGen<intermediate_tensor_shard_info> intermediate_tensor_addrgen = {
+        .bank_base_address = intermediate_tensor_address, .shard_array = intermediate_mapping_table};
+
+    arg_idx += intermediate_rt_increment;
+#else
     constexpr bool intermediate_tensor_is_dram = intermediate_buffer_type == tt::tt_metal::BufferType::DRAM;
     auto intermediate_tensor_addrgen = InterleavedAddrGenFast<intermediate_tensor_is_dram>{
         .bank_base_address = intermediate_tensor_address,
         .page_size = input_tensor_page_size,
         .data_format = get_dataformat(cb_input_id)};
+#endif
 
+    ReduceScatterOpReceiver matmul_receiver;
+    if constexpr (fuse_op) {
+        matmul_receiver = ReduceScatterOpReceiver(arg_idx);
+    }
+
+    constexpr uint32_t batch_num_pages = batch_slice_num_pages * ring_size;
     for (uint32_t b = 0; b < num_batches; b++) {
         if constexpr (fuse_op) {
             matmul_receiver.wait_for_matmul_batch(b);
@@ -144,7 +189,8 @@ void kernel_main() {
                 uint32_t l1_write_addr = get_write_ptr(cb_in0);
                 for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                     uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;
-                    noc_async_read_tile(tile_id, input_tensor_addrgen, l1_write_addr);
+                    uint64_t noc_read_addr = get_noc_addr(tile_id, input_tensor_addrgen);
+                    noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
                     l1_write_addr += input_tensor_page_size;
                     tiles_read++;
 
@@ -162,8 +208,9 @@ void kernel_main() {
                     for (uint32_t j = 0; j < tiles_to_read_in_current_direction; ++j) {
                         uint32_t intermediate_tile_id =
                             intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
-                        noc_async_read_tile(
-                            intermediate_tile_id, intermediate_tensor_addrgen, intermediate_l1_write_addr);
+                        uint64_t intermediate_noc_read_addr =
+                            get_noc_addr(intermediate_tile_id, intermediate_tensor_addrgen);
+                        noc_async_read(intermediate_noc_read_addr, intermediate_l1_write_addr, input_tensor_page_size);
                         intermediate_l1_write_addr += input_tensor_page_size;
 
                         intermediate_pages_read_in_row++;

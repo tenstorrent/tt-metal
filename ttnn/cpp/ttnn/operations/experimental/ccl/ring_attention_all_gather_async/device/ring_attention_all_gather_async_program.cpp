@@ -110,7 +110,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = input_tensor;
-    std::vector<Tensor> output_tensors = output_tensor;
+    const std::vector<Tensor>& output_tensors = output_tensor;
     const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, topology);
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
         ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
@@ -142,7 +142,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     const uint32_t num_pages_per_packet =
         std::min((uint32_t)(packet_size_bytes / l1_scratch_cb_page_size_bytes), max_scatter_write_pages);
     const uint32_t cb_num_pages = 3 * num_pages_per_packet;  // triple buffering
-    const tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor[0].get_dtype());
+    const tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor[0].dtype());
 
     // CBs for transferring data between sender_reader and sender_writer
     uint32_t sender_forward_cb_index = tt::CB::c_in0;
@@ -188,8 +188,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     const auto output_tensor_layout = output_tensor[0].buffer()->buffer_layout();
     const auto output_tensor_buffer_type = output_tensor[0].buffer()->buffer_type();
     const auto output_tensor_page_layout = output_tensor[0].layout();
-    const auto input_tensor_shape = input_tensor[0].get_padded_shape();
-    const auto output_tensor_shape = output_tensor[0].get_padded_shape();
+    const auto input_tensor_shape = input_tensor[0].padded_shape();
+    const auto output_tensor_shape = output_tensor[0].padded_shape();
     const uint32_t num_inputs = input_tensor.size();
 
     uint32_t tiles_to_write_per_packet = 1;

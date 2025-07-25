@@ -4,7 +4,7 @@
 
 #include "nd_reshard_program_factory.hpp"
 
-#include "ttnn/tensor/tensor_accessor_args.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 

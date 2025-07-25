@@ -104,6 +104,7 @@ def test_model_inference(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
         max_batch_size=batch_size,
+        cache_hf=True,
     )
 
     # Define minimum PCC for each iteration

@@ -14,7 +14,7 @@ The current version is verified to work with the following models:
 | [Llama 3.2 90B Vision](https://huggingface.co/meta-llama/Llama-3.2-90B-Vision)                   | LoudBox / QuietBox          | ```meta-llama/Llama-3.2-90B-Vision```           |
 | [Mistral 7B Instruct v0.3](https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3)            | n150                        | ```mistralai/Mistral-7B-Instruct-v0.3```        |
 | [Qwen 2.5 7B](https://huggingface.co/Qwen/Qwen2.5-7B)                                            | n300                        | ```Qwen/Qwen2.5-7B```                           |
-| [Qwen 2.5 Coder 32B](https://huggingface.co/Qwen/Qwen2.5-Coder-32B)                              | LoudBox / QuietBox          | ```Qwen/Qwen2.5-32B```                          |
+| [Qwen 2.5 Coder 32B](https://huggingface.co/Qwen/Qwen2.5-Coder-32B)                              | LoudBox / QuietBox          | ```Qwen/Qwen2.5-Coder-32B```                          |
 | [Qwen 2.5 72B](https://huggingface.co/Qwen/Qwen2.5-72B)                                          | LoudBox / QuietBox          | ```Qwen/Qwen2.5-72B```                          |
 | [Qwen 3 32B](https://huggingface.co/Qwen/Qwen3-32B)                                              | LoudBox / QuietBox          | ```Qwen/Qwen3-32B```                            |
 
@@ -198,6 +198,9 @@ pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch
 # Batch-32
 pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-32"
 
+# Long context with custom parameters
+pytest models/tt_transformers/demo/simple_text_demo.py -k "long-context" --max_seq_len=16384
+
 # Long-context
 pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and long"
 ```
@@ -264,3 +267,48 @@ Max Prefill Chunk Sizes (text-only):
 - These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
 
 **Chunked prefill (Llama3.2-11B multimodal)**: Llama3.2-11B multimodal is currently only supported on N300 and T3000. On N300, a max prefill context length of 8k is supported, while T3000 supports a max context length of 128k.
+
+## Memory Optimization
+
+### HuggingFace Model Caching Control
+
+To help manage memory usage, you can control whether the HuggingFace model is cached in memory using the `cache_hf` parameter via command line or code:
+
+```python
+# Default: disables caching to conserve memory usage
+model_args = ModelArgs(
+    mesh_device,
+    cache_hf=False,  # Default: Reduces memory usage by not keeping HF model in memory
+    max_batch_size=1,
+    max_seq_len=2048
+)
+
+# Optional: enables caching for faster repeated access
+model_args = ModelArgs(
+    mesh_device,
+    cache_hf=True,  # Cache HF model for better performance running reference tests
+    max_batch_size=4,
+    max_seq_len=4096
+)
+```
+
+**When to disable caching (`cache_hf=False`):**
+- Running on systems with limited memory (< 256GB)
+- Loading large models (70B+ parameters)
+- Using the model for single inference runs
+- When you don't need reference model comparisons
+
+**When to keep caching enabled (`cache_hf=True`, default):**
+- Sufficient memory available
+- Comparisons with torch model is needed
+- Minimizing test duration is prioritized over memory usage
+- Running reference model tests
+
+The `cache_hf` parameter affects:
+- `load_state_dict()` method: Controls whether HF model is cached after loading
+- `reference_transformer()` method: Controls whether to reuse cached model or load fresh
+
+**Memory Impact:**
+- Disabling caching saves approximately the full model size in memory
+- For a 70B model, this can save ~140GB+ of memory usage
+- Increased test duration as model needs to be reloaded for reference operations

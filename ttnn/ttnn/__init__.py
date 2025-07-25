@@ -191,6 +191,7 @@ from ttnn.types import (
     Shape,
     TensorSpec,
     Tensor,
+    ThrottleLevel,
     DeviceComputeKernelConfig,
     WormholeComputeKernelConfig,
     GrayskullComputeKernelConfig,

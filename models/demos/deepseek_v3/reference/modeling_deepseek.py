@@ -51,6 +51,7 @@ from transformers.utils import (
 from transformers.utils.import_utils import is_torch_fx_available
 
 from .configuration_deepseek import DeepseekV3Config
+from .reference_utils import topk_bitonic
 
 # This makes `_prepare_4d_causal_attention_mask` a leaf function in the FX graph.
 # It means that the function will not be traced through and simply appear as a node in the graph.
@@ -353,6 +354,7 @@ class MoEGate(nn.Module):
         self.topk_method = config.topk_method
         self.n_group = config.n_group
         self.topk_group = config.topk_group
+        self.training = False
 
         # topk selection algorithm
         self.norm_topk_prob = config.norm_topk_prob
@@ -361,6 +363,11 @@ class MoEGate(nn.Module):
         if self.topk_method == "noaux_tc":
             self.e_score_correction_bias = nn.Parameter(torch.empty((self.n_routed_experts)))
         self.reset_parameters()
+        # initatialize whether to use bitonic topk or torch.topk
+        self.use_bitonic_sort = True
+        self.topk_fn = torch.topk
+        if self.use_bitonic_sort:
+            self.topk_fn = topk_bitonic
 
     def reset_parameters(self) -> None:
         import torch.nn.init as init
@@ -381,10 +388,11 @@ class MoEGate(nn.Module):
         if self.topk_method == "noaux_tc":
             assert not self.training
             scores_for_choice = scores.view(bsz * seq_len, -1) + self.e_score_correction_bias.unsqueeze(0)
-            group_scores = (
-                scores_for_choice.view(bsz * seq_len, self.n_group, -1).topk(2, dim=-1)[0].sum(dim=-1)
+            group_scores = topk_bitonic(scores_for_choice.view(bsz * seq_len, self.n_group, -1), k=2, dim=-1)[0].sum(
+                dim=-1
             )  # [n, n_group]
-            group_idx = torch.topk(group_scores, k=self.topk_group, dim=-1, sorted=False)[1]  # [n, top_k_group]
+
+            group_idx = self.topk_fn(group_scores, k=self.topk_group, dim=-1, sorted=True)[1]  # [n, top_k_group]
             group_mask = torch.zeros_like(group_scores)  # [n, n_group]
             group_mask.scatter_(1, group_idx, 1)  # [n, n_group]
             score_mask = (
@@ -393,7 +401,7 @@ class MoEGate(nn.Module):
                 .reshape(bsz * seq_len, -1)
             )  # [n, e]
             tmp_scores = scores_for_choice.masked_fill(~score_mask.bool(), float("-inf"))  # [n, e]
-            _, topk_idx = torch.topk(tmp_scores, k=self.top_k, dim=-1, sorted=False)
+            _, topk_idx = self.topk_fn(tmp_scores, k=self.top_k, dim=-1, sorted=True)
             topk_weight = scores.gather(1, topk_idx)
         else:
             raise NotImplementedError(f"insupportable TopK function for MoE gating: {self.topk_method}")
@@ -416,6 +424,7 @@ class DeepseekV3MoE(nn.Module):
         super().__init__()
         self.config = config
         self.num_experts_per_tok = config.num_experts_per_tok
+        self.training = False
 
         if hasattr(config, "ep_size") and config.ep_size > 1:
             assert config.ep_size == dist.get_world_size()

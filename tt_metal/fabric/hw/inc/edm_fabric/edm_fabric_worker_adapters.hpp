@@ -69,47 +69,56 @@ struct WorkerToFabricEdmSenderImpl {
     template <ProgrammableCoreType my_core_type>
     static WorkerToFabricEdmSenderImpl build_from_args(std::size_t& arg_idx) {
         constexpr bool is_persistent_fabric = true;
-        uint32_t direction;
-        WorkerXY edm_worker_xy(0, 0);
+        uint8_t direction;
+        uint8_t edm_worker_x;
+        uint8_t edm_worker_y;
         uint32_t edm_buffer_base_addr;
-        uint32_t num_buffers_per_channel;
+        uint8_t num_buffers_per_channel;
         uint32_t edm_l1_sem_id;
         uint32_t edm_connection_handshake_l1_addr;
         uint32_t edm_worker_location_info_addr;
-        uint32_t buffer_size_bytes;
+        uint16_t buffer_size_bytes;
         uint32_t edm_copy_of_wr_counter_addr;
+        volatile uint32_t* writer_send_sem_addr;
 
+        // TODO: https://github.com/tenstorrent/tt-metal/issues/24959
+        // remove redundant nested constructor to avoid copy
         if constexpr (my_core_type == ProgrammableCoreType::TENSIX) {
             tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
                 reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
             uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
-            const auto& conn = connection_info->connections[eth_channel];
-            direction = conn.edm_direction;
-            edm_worker_xy = WorkerXY::from_uint32(conn.edm_noc_xy);
-            edm_buffer_base_addr = conn.edm_buffer_base_addr;
-            num_buffers_per_channel = conn.num_buffers_per_channel;
-            edm_l1_sem_id = conn.edm_l1_sem_addr;
-            edm_connection_handshake_l1_addr = conn.edm_connection_handshake_addr;
-            edm_worker_location_info_addr = conn.edm_worker_location_info_addr;
-            buffer_size_bytes = conn.buffer_size_bytes;
-            edm_copy_of_wr_counter_addr = conn.buffer_index_semaphore_id;
+            const auto conn = &connection_info->read_only[eth_channel];
+            const auto aligned_conn = &connection_info->read_write[eth_channel];
+            direction = conn->edm_direction;
+            edm_worker_x = conn->edm_noc_x;
+            edm_worker_y = conn->edm_noc_y;
+            edm_buffer_base_addr = conn->edm_buffer_base_addr;
+            num_buffers_per_channel = conn->num_buffers_per_channel;
+            edm_l1_sem_id = conn->edm_l1_sem_addr;
+            edm_connection_handshake_l1_addr = conn->edm_connection_handshake_addr;
+            edm_worker_location_info_addr = conn->edm_worker_location_info_addr;
+            buffer_size_bytes = conn->buffer_size_bytes;
+            edm_copy_of_wr_counter_addr = conn->buffer_index_semaphore_id;
+            writer_send_sem_addr = reinterpret_cast<volatile uint32_t*>(
+                reinterpret_cast<uintptr_t>(&aligned_conn->worker_flow_control_semaphore));
         } else {
             // TODO: will be deprecated. currently for ethernet dispatch case
             //       ethernet core need to have same memory mapping as worker
-            direction = get_arg_val<uint32_t>(arg_idx++);
-            edm_worker_xy = WorkerXY::from_uint32(get_arg_val<uint32_t>(arg_idx++));
+            direction = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
+            auto edm_worker_xy = WorkerXY::from_uint32(get_arg_val<uint32_t>(arg_idx++));
+            edm_worker_x = edm_worker_xy.x;
+            edm_worker_y = edm_worker_xy.y;
             edm_buffer_base_addr = get_arg_val<uint32_t>(arg_idx++);
-            num_buffers_per_channel = get_arg_val<uint32_t>(arg_idx++);
+            num_buffers_per_channel = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
             edm_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
             edm_connection_handshake_l1_addr = get_arg_val<uint32_t>(arg_idx++);
             edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
-            buffer_size_bytes = get_arg_val<uint32_t>(arg_idx++);
+            buffer_size_bytes = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
             edm_copy_of_wr_counter_addr = get_arg_val<uint32_t>(arg_idx++);
+            auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);
+            writer_send_sem_addr =
+                reinterpret_cast<volatile uint32_t*>(get_semaphore<my_core_type>(writer_send_sem_id));
         }
-        const auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);
-
-        auto writer_send_sem_addr =
-            reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(writer_send_sem_id));
 
         // DEAD CODE
         // Workers don't have a local stream ID, so we set to a placeholder (unused) value until the worker and EDM
@@ -122,8 +131,8 @@ struct WorkerToFabricEdmSenderImpl {
         return WorkerToFabricEdmSenderImpl(
             is_persistent_fabric,
             direction,
-            edm_worker_xy.x,
-            edm_worker_xy.y,
+            edm_worker_x,
+            edm_worker_y,
             edm_buffer_base_addr,
             num_buffers_per_channel,
             edm_l1_sem_id,
@@ -344,12 +353,13 @@ struct WorkerToFabricEdmSenderImpl {
     // for the read barrier to complete before returning, saving some cycles for advanced users.
     // !!! IMPORTANT !!!
     // Must be called alongside (before) open_finish().
-    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
+    template <bool SEND_CREDIT_ADDR = false, bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
     void open_start() {
         const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
 
         tt::tt_fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr =
             reinterpret_cast<tt::tt_fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
+
         if constexpr (!I_USE_STREAM_REG_FOR_CREDIT_RECEIVE) {
             const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_copy_of_wr_counter_addr;
             // piggy back off of worker_teardown_addr just to temporarily store the read-back write pointer
@@ -392,7 +402,6 @@ struct WorkerToFabricEdmSenderImpl {
                 0xf,
                 WORKER_HANDSHAKE_NOC);
         }
-
         const uint64_t edm_teardown_semaphore_address_address =
             dest_noc_addr_coord_only |
             reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_teardown_semaphore_address));
@@ -417,7 +426,7 @@ struct WorkerToFabricEdmSenderImpl {
     void open_finish() {
         const uint64_t edm_connection_handshake_noc_addr =
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, edm_connection_handshake_l1_addr);
-        noc_async_read_barrier();
+        noc_async_read_barrier(WORKER_HANDSHAKE_NOC);
         // Order here is important
         // We need to write our read counter value to the register before we signal the EDM
         // As EDM will potentially increment the register as well
@@ -443,9 +452,11 @@ struct WorkerToFabricEdmSenderImpl {
         }
     }
 
-    template <bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
+    // SEND_CREDIT_ADDR: True when the EDM sender is IDLE_ETH (mux) as it doesn't have credits on L1 static address
+    //                   or some legacy code which skips connection info copy on Tensix L1 static address
+    template <bool SEND_CREDIT_ADDR = false, bool posted = false, uint8_t WORKER_HANDSHAKE_NOC = noc_index>
     void open() {
-        open_start<posted, WORKER_HANDSHAKE_NOC>();
+        open_start<SEND_CREDIT_ADDR, posted, WORKER_HANDSHAKE_NOC>();
         open_finish<posted, WORKER_HANDSHAKE_NOC>();
     }
 

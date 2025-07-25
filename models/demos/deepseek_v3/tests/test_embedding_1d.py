@@ -41,13 +41,13 @@ def test_embedding_forward_pass(
     seq_len,
     reference_model,
     hf_config,
-    temp_dir,
+    tmp_path,
     mesh_row,
 ):
     """Test embedding forward pass against reference model."""
     # Setup: Convert weights and get weight_config
     hf_state_dict = reference_model.state_dict()
-    weight_config = Embedding1D.convert_weights(hf_config, hf_state_dict, temp_dir, mesh_row)
+    weight_config = Embedding1D.convert_weights(hf_config, hf_state_dict, tmp_path, mesh_row)
 
     # Generate appropriate config
     if mode == "prefill":

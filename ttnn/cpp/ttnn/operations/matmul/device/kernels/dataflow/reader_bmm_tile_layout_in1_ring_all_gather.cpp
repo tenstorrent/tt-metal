@@ -36,6 +36,32 @@ void read_block_from_dram(
     noc_async_read_barrier();
 }
 
+void do_signaling(uint32_t& rt_args_idx) {
+    const uint32_t pv_core_x = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t pv_core_y = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t pv_semaphore = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
+    volatile tt_l1_ptr uint32_t* pv_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pv_semaphore);
+    const bool is_privilaged = get_arg_val<uint32_t>(rt_args_idx++) == 1;
+    if (is_privilaged) {
+        const uint32_t target_sem_value = get_arg_val<uint32_t>(rt_args_idx++);
+        const uint32_t multicast_start_x = get_arg_val<uint32_t>(rt_args_idx++);
+        const uint32_t multicast_start_y = get_arg_val<uint32_t>(rt_args_idx++);
+        const uint32_t multicast_end_x = get_arg_val<uint32_t>(rt_args_idx++);
+        const uint32_t multicast_end_y = get_arg_val<uint32_t>(rt_args_idx++);
+        const uint32_t num_signalling_semaphores = get_arg_val<uint32_t>(rt_args_idx++);
+        const uint32_t signalling_semaphore = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
+        const uint64_t signalling_semaphore_address =
+            get_noc_multicast_addr(multicast_start_x, multicast_start_y, multicast_end_x, multicast_end_y, 0) |
+            signalling_semaphore;
+        noc_semaphore_wait(pv_semaphore_ptr, target_sem_value);
+        noc_semaphore_set(pv_semaphore_ptr, 1);
+        noc_semaphore_set_multicast(pv_semaphore, signalling_semaphore_address, num_signalling_semaphores);
+    } else {
+        const uint64_t sem_addr = get_noc_addr(pv_core_x, pv_core_y, pv_semaphore);
+        noc_semaphore_inc(sem_addr, 1);
+    }
+}
+
 void kernel_main() {
     // Compile time args
     constexpr const bool in1_is_dram_interleaved = get_compile_time_arg_val(0);
@@ -51,15 +77,25 @@ void kernel_main() {
     constexpr uint32_t in1_shard_width_in_dram = get_compile_time_arg_val(10);
 
     uint32_t rt_args_idx = 0;
+    constexpr bool needs_signaler = get_compile_time_arg_val(15) == 1;
     uint32_t core_type = get_arg_val<uint32_t>(rt_args_idx++);
     if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE || core_type == (uint32_t)CORE_TYPE::HOP_CORE) {
+        if constexpr (needs_signaler) {
+            do_signaling(rt_args_idx);
+        }
         return;
     }
     const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t ring_idx = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t dram_bank_id = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t vc = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t dram_read_offset = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t dram_bank_id = 0;
+    uint32_t vc = 0;
+    uint32_t dram_read_offset = 0;
+
+    if constexpr (in1_is_dram_interleaved || in1_is_dram_sharded) {
+        dram_bank_id = get_arg_val<uint32_t>(rt_args_idx++);
+        vc = get_arg_val<uint32_t>(rt_args_idx++);
+        dram_read_offset = get_arg_val<uint32_t>(rt_args_idx++);
+    }
 
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(11);
     constexpr uint32_t sync_cb = get_compile_time_arg_val(12);
@@ -146,6 +182,12 @@ void kernel_main() {
         experimental::remote_cb_pop_front(remote_cb_id, num_blocks);
         cb_pop_front(sync_cb, 1);
 #endif
+        // Signal Here
+        if constexpr (needs_signaler) {
+            if (b == 0) {
+                do_signaling(rt_args_idx);
+            }
+        }
     }
 
 #ifdef ENABLE_GLOBAL_CB

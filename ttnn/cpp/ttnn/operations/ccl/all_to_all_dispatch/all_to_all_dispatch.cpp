@@ -38,9 +38,9 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
         AllToAllDispatchDeviceOperation::AllToAllTransferType::FullPacket;
     uint32_t total_size_bytes = std::accumulate(cb_sizes.begin(), cb_sizes.end(), 0u);
     if (optional_output_tensors.has_value()) {
-        auto output_tensors = optional_output_tensors.value();
-        auto output_tensor = output_tensors.at(0);
-        auto metadata_tensor = output_tensors.at(1);
+        const auto& output_tensors = optional_output_tensors.value();
+        const auto& output_tensor = output_tensors.at(0);
+        const auto& metadata_tensor = output_tensors.at(1);
 
         if (output_tensor.buffer()->is_l1()) {
             total_size_bytes += output_tensor.buffer()->aligned_size_per_bank();

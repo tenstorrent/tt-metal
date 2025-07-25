@@ -33,7 +33,7 @@ def test_demo_sd_db(device, reset_seeds, input_path, num_prompts, num_inference_
 
 
 @pytest.mark.timeout(600)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 11 * 8192, "trace_region_size": 789321728}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 11 * 8192, "trace_region_size": 789835776}], indirect=True)
 @pytest.mark.parametrize(
     "input_path",
     (("models/demos/wormhole/stable_diffusion/demo/input_data.json"),),

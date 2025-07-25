@@ -91,7 +91,7 @@ def attempt_load(weights, map_location=None):
     for w in weights if isinstance(weights, list) else [weights]:
         weight_path = attempt_download(w)
         logger.info(f"Loading weights from: {weight_path}")
-        ckpt = torch.load(weight_path, map_location=map_location)
+        ckpt = torch.load(weight_path, map_location=map_location, weights_only=False)
         model.append(ckpt["ema" if ckpt.get("ema") else "model"].float().eval())
     for m in model.modules():
         if isinstance(m, (nn.Hardswish, nn.LeakyReLU, nn.ReLU, nn.ReLU6, nn.SiLU)):

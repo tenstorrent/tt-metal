@@ -889,7 +889,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_dram_sharded(
 
             auto src_buffer_a = input_tensors.at(0).buffer();
             auto src_buffer_b = input_tensors.at(1).buffer();
-            auto bias_tensor = optional_input_tensors.at(0);
+            const auto& bias_tensor = optional_input_tensors.at(0);
 
             auto dst_buffer = output_tensors.at(0).buffer();
 

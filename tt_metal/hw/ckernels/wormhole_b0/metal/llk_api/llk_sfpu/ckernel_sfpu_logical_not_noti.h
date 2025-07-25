@@ -1,17 +1,12 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
-#include "noc_nonblocking_api.h"
-
 #include "sfpi.h"
 
-namespace ckernel {
-namespace sfpu {
+namespace ckernel::sfpu {
 
 template <typename V, typename T>
 inline void calculate_logical_not_unary() {
@@ -25,5 +20,4 @@ inline void calculate_logical_not_unary() {
     }
 }
 
-}  // namespace sfpu
-}  // namespace ckernel
+}  // namespace ckernel::sfpu

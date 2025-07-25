@@ -102,20 +102,15 @@ public:
     [[nodiscard]] std::vector<IDevice*> get_ring_devices() const;
     [[nodiscard]] std::vector<IDevice*> get_line_devices() const;
 
-    // Distributed mesh support
-    // Returns the offset of this host's portion of the mesh within the global distributed mesh.
-    // For single-host meshes, this returns (0, 0).
-    [[nodiscard]] MeshCoordinate local_offset() const;
+    // Returns true if the view is fully local, i.e. all devices in the view are local.
+    bool fully_local() const;
 
-    // Returns the shape of the mesh portion managed by this host.
-    // For single-host meshes, this equals the global mesh shape.
-    [[nodiscard]] MeshShape local_shape() const;
-
-    // Checks if a global coordinate is managed by this host.
-    // Returns true if the coordinate falls within this host's local mesh bounds.
-    [[nodiscard]] bool is_local_coordinate(const MeshCoordinate& coord) const;
+    // Returns true if the view is fully local, i.e. all devices in the view are local.
+    // Throws if the coordinate is out of bounds of this view.
+    bool is_local(const MeshCoordinate& coord) const;
 
 private:
+    bool fully_local_ = true;
     DistributedMeshContainer<IDevice*> devices_;
     std::unordered_map<chip_id_t, MeshCoordinate> device_coordinates_;
 

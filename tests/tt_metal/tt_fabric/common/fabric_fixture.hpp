@@ -68,6 +68,7 @@ public:
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
         std::vector<chip_id_t> ids;
+        ids.reserve(num_devices);
         for (unsigned int id = 0; id < num_devices; id++) {
             ids.push_back(id);
         }
@@ -147,7 +148,7 @@ public:
     void SetUp(
         const std::string& mesh_graph_desc_file,
         const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
-        tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(
+        tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
             mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
         BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
     }
@@ -157,7 +158,7 @@ private:
 
     void TearDown() override {
         BaseFabricFixture::DoTearDownTestSuite();
-        tt::tt_metal::MetalContext::instance().set_default_control_plane_mesh_graph();
+        tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
     }
 };
 

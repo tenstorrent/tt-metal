@@ -16,8 +16,8 @@ ExampleMultipleReturnDeviceOperation::SingleCore::create(
 
     const auto& input_tensor = tensor_args.input_tensor;
 
-    auto output_tensor1 = tensor_return_value.at(0);
-    auto output_tensor2 = tensor_return_value.at(1);
+    const auto& output_tensor1 = tensor_return_value.at(0);
+    const auto& output_tensor2 = tensor_return_value.at(1);
 
     auto src_buffer = input_tensor.buffer();
 
@@ -146,8 +146,8 @@ void ExampleMultipleReturnDeviceOperation::SingleCore::override_runtime_argument
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
 
     const auto& input_tensor = tensor_args.input_tensor;
-    auto output_tensor1 = tensor_return_value.at(0);
-    auto output_tensor2 = tensor_return_value.at(1);
+    const auto& output_tensor1 = tensor_return_value.at(0);
+    const auto& output_tensor2 = tensor_return_value.at(1);
 
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer1 = output_tensor1.has_value() ? output_tensor1.value().buffer() : 0;

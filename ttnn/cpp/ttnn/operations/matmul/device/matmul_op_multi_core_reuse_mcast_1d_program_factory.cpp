@@ -16,6 +16,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -69,6 +70,7 @@ process_mcast_in0_program_and_create_override_variables(
     bool math_approx_mode,
     bool packer_l1_acc,
     CoreCoord compute_with_storage_grid_size,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t B,
     uint32_t M,
     uint32_t N,
@@ -441,7 +443,8 @@ process_mcast_in0_program_and_create_override_variables(
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_cores, mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
     if (in1_is_sharded) {
         mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
@@ -914,6 +917,7 @@ process_mcast_in1_program_and_create_override_variables(
     bool math_approx_mode,
     bool packer_l1_acc,
     CoreCoord compute_with_storage_grid_size,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t B,
     uint32_t M,
     uint32_t N,
@@ -1223,7 +1227,8 @@ process_mcast_in1_program_and_create_override_variables(
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_cores, mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
     if (in0_is_sharded) {
         mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
@@ -1607,6 +1612,7 @@ process_gather_in0_program_and_create_override_variables(
     bool packer_l1_acc,
     bool dst_full_sync_en,
     CoreCoord compute_with_storage_grid_size,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t base_cb_index,
     uint32_t B,
     uint32_t M,
@@ -1633,7 +1639,8 @@ process_gather_in0_program_and_create_override_variables(
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<CoreRangeSet> restricted_cores) {
+    std::optional<CoreRangeSet> restricted_cores,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
     const auto& b = b_tensors[0];
     const auto num_output_cb = out_buffers.size();
     const auto batch = b_tensors.size();
@@ -1910,6 +1917,7 @@ process_gather_in0_program_and_create_override_variables(
         (std::uint32_t)sync_cb_index,
         (std::uint32_t)sync_cb2_index,
         (std::uint32_t)remote_cb_index,
+        (std::uint32_t)fused_op_signaler.has_value(),
     };
 
     /* compute kernel args */
@@ -1980,7 +1988,8 @@ process_gather_in0_program_and_create_override_variables(
     }
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_cores, mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
@@ -1990,6 +1999,11 @@ process_gather_in0_program_and_create_override_variables(
     tt_metal::NOC_MODE noc_mode =
         use_dedicated_noc ? tt_metal::NOC_MODE::DM_DEDICATED_NOC : tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
 
+    // Init the signaler
+    if (fused_op_signaler.has_value()) {
+        ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
+        signaler.init_llama_rs_cores_mm(all_cores, program, device, 0);
+    }
     /* Create the kernels */
     auto mm_kernel_in0_id = tt_metal::CreateKernel(
         program,
@@ -2000,7 +2014,7 @@ process_gather_in0_program_and_create_override_variables(
             .noc = in0_noc,
             .noc_mode = noc_mode,
             .compile_args = in0_sender_compile_time_args});
-
+    // Each core needs to signal to all RS cores, need to get a count of how many cores are in all_cores
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_ring_all_gather.cpp",
@@ -2049,6 +2063,11 @@ process_gather_in0_program_and_create_override_variables(
             // in1
             std::vector<uint32_t> mm_kernel_in1_sender_writer_args;
             mm_kernel_in1_sender_writer_args.push_back((std::uint32_t)core_type);
+            if (fused_op_signaler.has_value()) {
+                ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
+                signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, device);
+            }
+
             tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_kernel_in1_sender_writer_args);
 
             // compute
@@ -2144,6 +2163,10 @@ process_gather_in0_program_and_create_override_variables(
             mm_in1_args.push_back((std::uint32_t)vc);
             mm_in1_args.push_back((std::uint32_t)dram_read_offset);
         }
+        if (fused_op_signaler.has_value()) {
+            ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
+            signaler.push_llama_rs_rt_args_for_mm(mm_in1_args, core, in1_noc, device);
+        }
         tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_in1_args);
 
         /* compute */
@@ -2185,6 +2208,10 @@ process_gather_in0_program_and_create_override_variables(
         // in1
         std::vector<uint32_t> mm_kernel_in1_sender_writer_args;
         mm_kernel_in1_sender_writer_args.push_back((std::uint32_t)core_type);
+        if (fused_op_signaler.has_value()) {
+            ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
+            signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, device);
+        }
         tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_kernel_in1_sender_writer_args);
 
         // compute
@@ -2223,7 +2250,7 @@ inline void override_mcast_in1_program_parameters(
 
     auto src_buffer_a = input_tensors.at(0).buffer();
     auto src_buffer_b = input_tensors.at(1).buffer();
-    auto bias_tensor = optional_input_tensors.at(0);
+    const auto& bias_tensor = optional_input_tensors.at(0);
 
     std::optional<tt::tt_metal::Buffer*> bias_buffer;
     if (bias_tensor.has_value()) {
@@ -2300,7 +2327,7 @@ inline void override_mcast_in0_program_parameters(
 
     auto src_buffer_a = input_tensors.at(0).buffer();
     auto src_buffer_b = input_tensors.at(1).buffer();
-    auto bias_tensor = optional_input_tensors.at(0);
+    const auto& bias_tensor = optional_input_tensors.at(0);
 
     std::optional<tt::tt_metal::Buffer*> bias_buffer;
     if (bias_tensor.has_value()) {
@@ -2439,6 +2466,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     bool bcast_batch,
     CoreCoord compute_with_storage_grid_size,
     DeviceComputeKernelConfig compute_kernel_config,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t in0_block_w,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
@@ -2575,6 +2603,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
             packer_l1_acc,
             dst_full_sync_en,
             compute_with_storage_grid_size,
+            throttle_level,
             start_cb_index,
             B,
             Mt,
@@ -2601,7 +2630,8 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
             global_cb,
             num_global_cb_receivers,
             sub_device_id,
-            restricted_cores);
+            restricted_cores,
+            fused_op_signaler);
     }
     TT_FATAL(start_cb_index == tt::CBIndex::c_0, "mcast does not support a non-zero start cb index");
     if (mcast_in0) {
@@ -2614,6 +2644,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
             math_approx_mode,
             packer_l1_acc,
             compute_with_storage_grid_size,
+            throttle_level,
             B,
             Mt,
             Nt,
@@ -2655,6 +2686,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
             math_approx_mode,
             packer_l1_acc,
             compute_with_storage_grid_size,
+            throttle_level,
             B,
             Mt,
             Nt,
@@ -2711,7 +2743,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     uint32_t num_global_cb_receivers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt_metal::Program program{}; /* Create a program */
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler = std::nullopt;
 
     ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t shared_vars =
         matmul_multi_core_reuse_mcast_1d_optimized_(
@@ -2723,6 +2755,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
             broadcast_batch,
             compute_with_storage_grid_size,
             compute_kernel_config,
+            ttnn::get_throttle_level(compute_kernel_config),
             in0_block_w,
             out_subblock_h,
             out_subblock_w,
@@ -2783,6 +2816,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
         broadcast_batch,
         config.compute_with_storage_grid_size,
         compute_kernel_config,
+        ttnn::get_throttle_level(compute_kernel_config),
         config.in0_block_w,
         config.out_subblock_h,
         config.out_subblock_w,

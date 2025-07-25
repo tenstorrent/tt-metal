@@ -72,11 +72,13 @@ inline std::pair<std::vector<uint32_t>, std::vector<uint32_t>> create_runtime_ar
         tt::tt_metal::max_runtime_args);
 
     std::vector<uint32_t> common_rt_args;
+    common_rt_args.reserve(num_common_rt_args);
     for (uint32_t i = 0; i < num_common_rt_args; i++) {
         common_rt_args.push_back(common_base + i);
     }
 
     std::vector<uint32_t> unique_rt_args;
+    unique_rt_args.reserve(num_unique_rt_args);
     for (uint32_t i = 0; i < num_unique_rt_args; i++) {
         unique_rt_args.push_back(unique_base + i);
     }

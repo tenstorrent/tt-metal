@@ -44,7 +44,7 @@ inline void RunPersistent1dFabricLatencyTest(
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     bool is_6u = num_devices == 32 && tt::tt_metal::GetNumPCIeDevices() == num_devices;
-    if (num_devices < 4 && !is_6u) {
+    if (num_devices < line_size && !is_6u) {
         log_info(tt::LogTest, "This test can only be run on T3000 or 6u systems");
         return;
     }
@@ -74,7 +74,9 @@ inline void RunPersistent1dFabricLatencyTest(
             devices_.push_back(view.get_device(MeshCoordinate(r, c)));
         }
     } else {
-        if (line_size == 4) {
+        if (line_size == 2) {
+            devices_ = {view.get_device(MeshCoordinate(0, 0)), view.get_device(MeshCoordinate(0, 1))};
+        } else if (line_size == 4) {
             devices_ = {
                 view.get_device(MeshCoordinate(0, 1)),
                 view.get_device(MeshCoordinate(0, 2)),
@@ -159,6 +161,7 @@ inline void RunPersistent1dFabricLatencyTest(
             fabric_programs,
             fabric_program_ptrs,
             fabric_handle,
+            true,
             num_links,
             topology,
             tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval,

@@ -65,6 +65,11 @@ on:
         type: boolean
         default: false
         description: "Build UMD tests"
+      fetch-depth:
+        required: false
+        type: number
+        default: 500
+        description: "Git fetch depth for the checkout step. Must be large enough to include all tags and history needed for `git describe`."
     outputs:
       ci-build-docker-image:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -209,7 +214,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 500 # Need enough history for `git describe`
+          fetch-depth: ${{ inputs.fetch-depth }}
           fetch-tags: true # Need tags for `git describe`
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
 
@@ -309,7 +314,7 @@ jobs:
 
   build-wheel:
     if: ${{ inputs.build-wheel }}
-    name: 🐍 Build wheel
+    name: 🐍 Build wheel (Python ${{ inputs.version == '22.04' && '3.10' || '3.12' }})
     needs: build-docker-image
     timeout-minutes: 30
     runs-on: tt-beta-ubuntu-2204-large
@@ -321,6 +326,17 @@ jobs:
         shell: bash
 
     steps:
+      - name: Set Python version based on OS version
+        id: set_python_version
+        run: |
+          if [ "${{ inputs.version }}" = "22.04" ]; then
+            PYTHON_VERSION="3.10"
+          else
+            PYTHON_VERSION="3.12"
+          fi
+          echo "python_version=${PYTHON_VERSION}" >> $GITHUB_OUTPUT
+          echo "Selected Python ${PYTHON_VERSION} for Ubuntu ${{ inputs.version }}"
+
       - name: Check Redis credentials
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
@@ -339,7 +355,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 500 # Need enough history for `git describe`
+          fetch-depth: ${{ inputs.fetch-depth }}
           fetch-tags: true # Need tags for `git describe`
 
       - name: Set up Python 3.12
@@ -347,7 +363,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Determine Tracy build setting
+      - name: Configure Tracy profiler and ttnn wheel import testing
         run: |
           if [ "${{ inputs.tracy }}" = "true" ]; then
             echo "ENABLE_TRACY_BUILD=ON" >> $GITHUB_ENV
@@ -362,13 +378,15 @@ jobs:
       - name: 🐍 Build wheel
         uses: pypa/cibuildwheel@v2.23.2
         env:
+          CIBW_BUILD: "cp${{ steps.set_python_version.outputs.python_version == '3.10' && '310' || '312' }}-manylinux_x86_64*"
+          CIBW_SKIP: "*-musllinux_*"
           CIBW_BUILD_FRONTEND: build
           CIBW_ENVIRONMENT: >-
             CCACHE_REMOTE_ONLY=true
             CCACHE_TEMPDIR=/tmp/ccache
             CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
             CIBW_ENABLE_TRACY="${{ env.ENABLE_TRACY_BUILD }}"
-          CIBW_BEFORE_BUILD: mkdir -p /tmp/ccache && ccache -z && ccache -p
+          CIBW_BEFORE_BUILD: "mkdir -p /tmp/ccache && ccache -z && ccache -p"
           CIBW_BEFORE_TEST: ccache -s
           CIBW_TEST_COMMAND: ${{ env.CIBW_TEST_CMD }}
           CIBW_MANYLINUX_X86_64_IMAGE: harbor.ci.tenstorrent.net/${{ needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!' }}
@@ -376,15 +394,16 @@ jobs:
       - name: Set wheel artifact name
         id: set_wheel_artifact_name
         run: |
-          WHEEL_ARTIFACT_NAME="eager-dist-${{ inputs.distro }}-${{ inputs.version }}-any${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}"
-          echo "wheel_artifact_name=$WHEEL_ARTIFACT_NAME" >> "$GITHUB_ENV"
-          echo "wheel_artifact_name=$WHEEL_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+          PYTHON_VERSION_NODOT=$(echo "${{ steps.set_python_version.outputs.python_version }}" | tr -d '.')
+          WHEEL_ARTIFACT_NAME="eager-dist-cp${PYTHON_VERSION_NODOT}-${{ inputs.distro }}-${{ inputs.version }}-any${{ (inputs.tracy && '-profiler') || '' }}${{ (inputs.distributed == false && '-no-distributed') || '' }}"
+          echo "wheel_artifact_name=${WHEEL_ARTIFACT_NAME}" >> $GITHUB_OUTPUT
+          echo "wheel_artifact_name=${WHEEL_ARTIFACT_NAME}" >> "$GITHUB_ENV"
 
       - name: ☁️ Upload wheel
         if: ${{ inputs.build-wheel }}
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
-          name: ${{ env.wheel_artifact_name }}
+          name: ${{ steps.set_wheel_artifact_name.outputs.wheel_artifact_name }}
           path: wheelhouse
           if-no-files-found: error

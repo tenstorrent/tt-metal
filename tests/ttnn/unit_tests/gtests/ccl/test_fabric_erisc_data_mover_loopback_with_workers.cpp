@@ -91,7 +91,7 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_2_messages_Persiste
     auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram);
     ASSERT_EQ(result, 0);
 }
-#ifdef ARCH_WORMHOLE
+
 // Will wrapp sender but not receiver buffers
 TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_2_messages_PersistentFabric_Scatter) {
     const uint32_t page_size = 2048;
@@ -131,7 +131,7 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_20_messages_Persist
     auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, true);
     ASSERT_EQ(result, 0);
 }
-#endif
+
 // Will wrapp sender but not receiver buffers
 TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_10_messages_PersistentFabric) {
     const uint32_t page_size = 2048;

@@ -38,6 +38,12 @@ jobs:
           - name: ttnn nightly pool tests
             cmd: pytest tests/ttnn/nightly/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"
             owner: U052J2QDDKQ # Pavle Josipovic
+          - name: ttnn nightly sdxl tests
+            cmd:  if [[ "${{ inputs.runner-label }}" == "N300" ]]; then
+                    export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml;
+                  fi;
+                  pytest models/experimental/stable_diffusion_xl_base/tests/pcc/test_unet_loop.py --loop-iter-num=50 -xv -m "not disable_fast_runtime_mode"
+            owner: U07N3CUUN05 # Iva Potkonjak
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
@@ -45,10 +51,11 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
+        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent"
+      options: "--device /dev/tenstorrent -v /mnt/MLPerf:/mnt/MLPerf:ro"
     defaults:
       run:
         shell: bash

@@ -62,14 +62,10 @@ void kernel_main() {
     uint32_t batch = get_arg_val<uint32_t>(37);
     uint32_t bcast_B = get_arg_val<uint32_t>(38);
 
-    constexpr bool in0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool in1_is_dram = get_compile_time_arg_val(1) == 1;  // not used
-
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
-    const DataFormat data_format = get_dataformat(cb_id_in0);
 
     uint32_t l1_write_addr_in0;
 
@@ -85,8 +81,8 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* in1_mcast_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_receiver_semaphore_addr);
 
-    const InterleavedAddrGenFast<in0_is_dram> s0 = {
-        .bank_base_address = in0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = data_format};
+    constexpr auto s0_args = TensorAccessorArgs<0>();
+    const auto s0 = TensorAccessor(s0_args, in0_tensor_addr, single_tile_size_bytes);
 
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;

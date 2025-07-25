@@ -60,7 +60,7 @@ void MAIN {
                     // untilize tile and write to CBIndex::c_25
                     reconfig_data_format_srca(cb_in1, cb_intermed0);
                     cb_wait_front(cb_intermed0, onetile);
-                    untilize_init_short(cb_intermed0);
+                    untilize_init(cb_intermed0);
                     cb_reserve_back(cb_intermed1, onetile);
                     untilize_block(cb_intermed0, onetile, cb_intermed1);
                     cb_push_back(cb_intermed1, onetile);

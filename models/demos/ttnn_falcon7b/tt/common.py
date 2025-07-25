@@ -4,6 +4,7 @@
 
 import torch
 import transformers
+from transformers.cache_utils import DynamicCache
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 
 import ttnn
@@ -11,6 +12,14 @@ import ttnn
 
 def strip_state_dict_prefix(state_dict, prefix):
     return {k[len(prefix) + 1 :]: v for k, v in state_dict.items() if k.startswith(prefix)}
+
+
+def _get_rotary_embedding_from_inv_freq(torch_model) -> torch.Tensor:
+    # https://github.com/huggingface/transformers/blob/2b789f27f383435b8db2fee3d10b0a1358c0c234/src/transformers/models/falcon/modeling_falcon.py#L181-L187
+    t = torch.arange(torch_model.max_seq_len_cached, dtype=torch.int64).type_as(torch_model.inv_freq)
+    freqs = torch.outer(t, torch_model.inv_freq)
+    emb = torch.cat((freqs, freqs), dim=-1)
+    return emb
 
 
 def create_custom_preprocessor(model_config, tt_cache_path, device, base_file_name=None, weights_mesh_mapper=None):
@@ -22,8 +31,9 @@ def create_custom_preprocessor(model_config, tt_cache_path, device, base_file_na
             base_file_path = f"{tt_cache_path}/{name}"
 
         if isinstance(torch_model, transformers.models.falcon.modeling_falcon.FalconRotaryEmbedding):
+            emb = _get_rotary_embedding_from_inv_freq(torch_model)
             parameters["cos_cached"] = ttnn.as_tensor(
-                torch_model.cos_cached,
+                emb.cos(),
                 dtype=model_config["COS_CACHED_WEIGHTS_DTYPE"],
                 device=device,
                 layout=ttnn.TILE_LAYOUT,
@@ -33,7 +43,7 @@ def create_custom_preprocessor(model_config, tt_cache_path, device, base_file_na
                 mesh_mapper=weights_mesh_mapper,
             )
             parameters["sin_cached"] = ttnn.as_tensor(
-                torch_model.sin_cached,
+                emb.sin(),
                 dtype=model_config["SIN_CACHED_WEIGHTS_DTYPE"],
                 device=device,
                 memory_config=model_config["DEFAULT_MEMCFG"],
@@ -192,7 +202,7 @@ def create_kv_cache(llm_mode, dtype, batch, kv_cache_length, config, device, mes
     torch_v_cache = torch.zeros(batch, 1, config.max_position_embeddings, head_dim)
 
     if llm_mode == "prefill":
-        layer_past = None
+        layer_past = DynamicCache()
         ttnn_k_cache = ttnn.from_torch(
             torch_k_cache, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype, mesh_mapper=mesh_mapper
         )
@@ -202,7 +212,7 @@ def create_kv_cache(llm_mode, dtype, batch, kv_cache_length, config, device, mes
     elif llm_mode == "decode":
         k_cache_data = torch.rand(batch, 1, kv_cache_length, head_dim)
         v_cache_data = torch.rand(batch, 1, kv_cache_length, head_dim)
-        layer_past = (k_cache_data, v_cache_data)
+        layer_past = DynamicCache.from_legacy_cache(((k_cache_data, v_cache_data),))
 
         torch_k_cache[:, :, :kv_cache_length, :] = k_cache_data
         torch_v_cache[:, :, :kv_cache_length, :] = v_cache_data
@@ -219,11 +229,11 @@ def create_kv_cache(llm_mode, dtype, batch, kv_cache_length, config, device, mes
     return layer_past, tt_layer_past
 
 
-def create_position_ids(llm_mode, kv_cache_length):
+def create_position_ids(llm_mode, seq_len, kv_cache_length):
     if llm_mode == "prefill":
-        position_ids = None
+        position_ids = torch.arange(seq_len)
     elif llm_mode == "decode":
-        position_ids = torch.LongTensor([kv_cache_length])
+        position_ids = torch.arange(kv_cache_length, kv_cache_length + seq_len)
     else:
         raise NotImplementedError(f"Llm mode {llm_mode} is not supported! Must be one of prefill or decode.")
-    return position_ids
+    return position_ids.unsqueeze(0)

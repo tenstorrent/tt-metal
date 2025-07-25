@@ -16,7 +16,7 @@ test_suite_bh_single_pcie_metal_unit_tests() {
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardProgramFixture.*
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=CommandQueueProgramFixture.*
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQProgramFixture.*
-    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=RandomProgramFixture.*
+    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=*RandomProgramFixture.*
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=CommandQueueSingleCardBufferFixture.* # Tests EnqueueRead/EnqueueWrite Buffer from DRAM/L1
 
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_api --gtest_filter=*SimpleDram*:*SimpleL1* # Executable is dependent on arch (provided through GitHub CI workflow scripts)
@@ -86,6 +86,15 @@ test_suite_bh_llmbox_llama_demo_tests() {
     verify_llama_dir_
 
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 4
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel 4 --max_generated_tokens 220
+}
+
+test_suite_bh_llmbox_llama_stress_tests() {
+    echo "[upstream-tests] Running BH LLMBox upstream Llama stress model tests"
+
+    verify_llama_dir_
+
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel 4 --max_generated_tokens 22000
 }
 
 test_suite_wh_6u_metal_unit_tests() {

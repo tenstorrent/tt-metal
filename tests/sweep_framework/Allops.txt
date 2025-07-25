@@ -135,11 +135,13 @@ ttnn.experimental.mul
 ttnn.experimental.ne
 ttnn.experimental.nlp_concat_heads
 ttnn.experimental.nlp_concat_heads_decode
+ttnn.experimental.nlp_concat_heads_boltz
 ttnn.experimental.nlp_create_qkv_heads
 ttnn.experimental.nlp_create_qkv_heads_decode
 ttnn.experimental.nlp_create_qkv_heads_falcon7b
 ttnn.experimental.nlp_create_qkv_heads_segformer
 ttnn.experimental.nlp_create_qkv_heads_vit
+ttnn.experimental.nlp_create_qkv_heads_boltz
 ttnn.experimental.nlp_kv_cache_load_slice
 ttnn.experimental.paged_fill_cache
 ttnn.experimental.paged_fused_update_cache

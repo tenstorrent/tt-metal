@@ -7,7 +7,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "ttnn/tensor/tensor_accessor_args.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
 using namespace tt::constants;
@@ -81,10 +81,10 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
     bfloat16 bfloat_scaler_value = bfloat16(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     std::vector<uint32_t> reader_compile_time_args = {packed_scaler_value};
-    TensorAccessorArgs(*src0_buffer).append_args(reader_compile_time_args);
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
-    TensorAccessorArgs(*dst_buffer).append_args(writer_compile_time_args);
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,

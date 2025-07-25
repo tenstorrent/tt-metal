@@ -120,7 +120,7 @@ def test_falcon_model(
                 mesh_device,
                 mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
             )
-            past_key_values += (current_layer_past,)
+            past_key_values += ((current_layer_past.key_cache[0], current_layer_past.value_cache[0]),)
             tt_layer_past += (tt_current_layer_past,)
 
     else:

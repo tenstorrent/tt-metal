@@ -35,7 +35,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 def test_embedding(max_seq_len, batch_size, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()

@@ -85,35 +85,6 @@ run_frequent_api_pipeline_tests() {
     fi
 }
 
-run_models_performance() {
-    local tt_arch=$1
-    local pipeline_type=$2
-
-    ./tests/scripts/run_performance.sh --pipeline-type $pipeline_type --tt-arch $tt_arch
-}
-
-run_models_performance_multi_device() {
-    local tt_arch=$1
-    local pipeline_type=$2
-
-    ./tests/scripts/run_performance.sh --pipeline-type $pipeline_type --tt-arch $tt_arch
-}
-
-run_models_performance_bare_metal_pipeline_tests() {
-    local tt_arch=$1
-    local pipeline_type=$2
-    local dispatch_mode=$3
-
-    run_models_performance "$tt_arch" "$pipeline_type"
-}
-
-run_models_performance_virtual_machine_pipeline_tests() {
-    local tt_arch=$1
-    local pipeline_type=$2
-
-    run_models_performance "$tt_arch" "$pipeline_type"
-}
-
 run_stress_post_commit_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -290,10 +261,6 @@ run_pipeline_tests() {
         run_post_commit_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "frequent_api" ]]; then
         run_frequent_api_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == *"models_performance_bare_metal" || $pipeline_type == "models_device_performance_bare_metal" ]]; then
-        run_models_performance_bare_metal_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
-    elif [[ $pipeline_type == "models_performance_virtual_machine" ]]; then
-        run_models_performance_virtual_machine_pipeline_tests "$tt_arch" "$pipeline_type"
     elif [[ $pipeline_type == "stress_post_commit" ]]; then
         run_stress_post_commit_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "ttnn_sweeps" ]]; then

@@ -6,6 +6,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -39,29 +40,6 @@ constexpr bool do_final_reduction = get_compile_time_arg_val(19);
 constexpr uint32_t num_total_reduction_steps = get_compile_time_arg_val(20);
 constexpr bool sync_with_other_direction = get_compile_time_arg_val(21);
 
-template <bool is_dram>
-inline void read_tiles(
-    const uint32_t cb_id,
-    const uint32_t num_pages_to_read,
-    const uint32_t start_tile_id,
-    const InterleavedAddrGenFast<is_dram>& addrgen,
-    const uint32_t page_size,
-    uint32_t& pages_read_in_row,
-    uint32_t& row_offset,
-    const uint32_t slice_Wt,
-    const uint32_t stride_Wt) {
-    uint32_t l1_write_addr = get_write_ptr(cb_id);
-    for (uint32_t j = 0; j < num_pages_to_read; j++) {
-        noc_async_read_tile(start_tile_id + row_offset + pages_read_in_row, addrgen, l1_write_addr);
-        l1_write_addr += page_size;
-        pages_read_in_row++;
-        if (pages_read_in_row >= slice_Wt) {
-            row_offset += stride_Wt;
-            pages_read_in_row = 0;
-        }
-    }
-}
-
 void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
@@ -77,6 +55,94 @@ void kernel_main() {
     uint32_t num_links = get_arg_val<uint32_t>(arg_idx++);
     uint32_t fwd_bwd_sem_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
 
+    constexpr uint32_t ct_idx = 22;
+
+#ifdef INPUT_IS_SHARDED
+    constexpr uint32_t ct_offset_one = 7;
+
+    using input_tensor_shard_info = ShardedInfo<
+        get_compile_time_arg_val(ct_idx),       // Memory layout
+        get_compile_time_arg_val(ct_idx + 1),   // The number of sharding cores
+        get_compile_time_arg_val(ct_idx + 2),   // The page size we offset each write to
+        get_compile_time_arg_val(ct_idx + 3),   // The number of pages in each sharding row not including padding pages
+        get_compile_time_arg_val(ct_idx + 4),   // This defines times when contiguous pages can't be calculated
+        get_compile_time_arg_val(ct_idx + 5),   // pages_per_shard_x
+        get_compile_time_arg_val(ct_idx + 6)>;  // pages_per_shard_y
+
+    const auto [input_mapping_table, input_rt_increment] =
+        experimental::shard_addr_gen_utils::get_shard_map<input_tensor_shard_info>(get_arg_addr(arg_idx));
+    experimental::ShardedAddrGen<input_tensor_shard_info> input_tensor_addrgen = {
+        .bank_base_address = input_tensor_address, .shard_array = input_mapping_table};
+
+    arg_idx += input_rt_increment;
+#else
+    constexpr uint32_t ct_offset_one = 0;
+
+    constexpr bool input_tensor_is_dram = input_buffer_type == tt::tt_metal::BufferType::DRAM;
+    auto input_tensor_addrgen = InterleavedAddrGenFast<input_tensor_is_dram>{
+        .bank_base_address = input_tensor_address,
+        .page_size = input_tensor_page_size,
+        .data_format = get_dataformat(cb_input_id)};
+#endif
+
+#ifdef INTERMEDIATE_IS_SHARDED
+    constexpr uint32_t ct_offset_two = 7;
+
+    constexpr uint32_t inter_start_ct_idx = ct_idx + ct_offset_one;
+    using intermediate_tensor_shard_info = ShardedInfo<
+        get_compile_time_arg_val(inter_start_ct_idx),       // Memory layout
+        get_compile_time_arg_val(inter_start_ct_idx + 1),   // The number of sharding cores
+        get_compile_time_arg_val(inter_start_ct_idx + 2),   // The page size we offset each write to
+        get_compile_time_arg_val(inter_start_ct_idx + 3),   // The number of pages in each sharding row not including
+                                                            // padding pages
+        get_compile_time_arg_val(inter_start_ct_idx + 4),   // This defines times when contiguous pages can't be
+                                                            // calculated
+        get_compile_time_arg_val(inter_start_ct_idx + 5),   // pages_per_shard_x
+        get_compile_time_arg_val(inter_start_ct_idx + 6)>;  // pages_per_shard_y
+
+    const auto [intermediate_mapping_table, intermediate_rt_increment] =
+        experimental::shard_addr_gen_utils::get_shard_map<intermediate_tensor_shard_info>(get_arg_addr(arg_idx));
+    experimental::ShardedAddrGen<intermediate_tensor_shard_info> intermediate_tensor_addrgen = {
+        .bank_base_address = intermediate_tensor_address, .shard_array = intermediate_mapping_table};
+
+    arg_idx += intermediate_rt_increment;
+#else
+    constexpr uint32_t ct_offset_two = 0;
+
+    constexpr bool intermediate_tensor_is_dram = intermediate_buffer_type == tt::tt_metal::BufferType::DRAM;
+    auto intermediate_tensor_addrgen = InterleavedAddrGenFast<intermediate_tensor_is_dram>{
+        .bank_base_address = intermediate_tensor_address,
+        .page_size = input_tensor_page_size,
+        .data_format = get_dataformat(cb_input_id)};
+#endif
+
+#ifdef OUTPUT_IS_SHARDED
+    constexpr uint32_t output_start_ct_idx = ct_idx + ct_offset_one + ct_offset_two;
+    using output_tensor_shard_info = ShardedInfo<
+        get_compile_time_arg_val(output_start_ct_idx),       // Memory layout
+        get_compile_time_arg_val(output_start_ct_idx + 1),   // The number of sharding cores
+        get_compile_time_arg_val(output_start_ct_idx + 2),   // The page size we offset each write to
+        get_compile_time_arg_val(output_start_ct_idx + 3),   // The number of pages in each sharding row not including
+                                                             // padding pages
+        get_compile_time_arg_val(output_start_ct_idx + 4),   // This defines times when contiguous pages can't be
+                                                             // calculated
+        get_compile_time_arg_val(output_start_ct_idx + 5),   // pages_per_shard_x
+        get_compile_time_arg_val(output_start_ct_idx + 6)>;  // pages_per_shard_y
+
+    const auto [output_mapping_table, output_rt_increment] =
+        experimental::shard_addr_gen_utils::get_shard_map<output_tensor_shard_info>(get_arg_addr(arg_idx));
+    experimental::ShardedAddrGen<output_tensor_shard_info> output_tensor_addrgen = {
+        .bank_base_address = output_tensor_address, .shard_array = output_mapping_table};
+
+    arg_idx += output_rt_increment;
+#else
+    constexpr bool output_tensor_is_dram = output_buffer_type == tt::tt_metal::BufferType::DRAM;
+    auto output_tensor_addrgen = InterleavedAddrGenFast<output_tensor_is_dram>{
+        .bank_base_address = output_tensor_address,
+        .page_size = input_tensor_page_size,
+        .data_format = get_dataformat(cb_input_id)};
+#endif
+
     ReduceScatterOpReceiver matmul_receiver;
     if constexpr (fuse_op) {
         matmul_receiver = ReduceScatterOpReceiver(arg_idx);
@@ -85,22 +151,6 @@ void kernel_main() {
     constexpr uint32_t slice_Wt = input_tensor_Wt / ring_size;
 
     constexpr uint32_t batch_num_pages = batch_slice_num_pages * ring_size;
-
-    constexpr bool input_tensor_is_dram = input_buffer_type == tt::tt_metal::BufferType::DRAM;
-    auto input_tensor_addrgen = InterleavedAddrGenFast<input_tensor_is_dram>{
-        .bank_base_address = input_tensor_address,
-        .page_size = input_tensor_page_size,
-        .data_format = get_dataformat(cb_input_id)};
-    constexpr bool intermediate_tensor_is_dram = intermediate_buffer_type == tt::tt_metal::BufferType::DRAM;
-    auto intermediate_tensor_addrgen = InterleavedAddrGenFast<intermediate_tensor_is_dram>{
-        .bank_base_address = intermediate_tensor_address,
-        .page_size = input_tensor_page_size,
-        .data_format = get_dataformat(cb_input_id)};
-    constexpr bool output_tensor_is_dram = output_buffer_type == tt::tt_metal::BufferType::DRAM;
-    auto output_tensor_addrgen = InterleavedAddrGenFast<output_tensor_is_dram>{
-        .bank_base_address = output_tensor_address,
-        .page_size = input_tensor_page_size,
-        .data_format = get_dataformat(cb_input_id)};
 
     for (uint32_t b = 0; b < num_batches; b++) {
         if (fuse_op) {
@@ -134,16 +184,18 @@ void kernel_main() {
                     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, tile_granularity);
 
                     cb_reserve_back(cb_in0, tile_granularity);
-                    read_tiles<input_tensor_is_dram>(
-                        cb_in0,
-                        num_pages_to_read,
-                        input_tile_id_start,
-                        input_tensor_addrgen,
-                        input_tensor_page_size,
-                        pages_read_in_row,
-                        row_offset,
-                        slice_Wt,
-                        stride_Wt);
+                    uint32_t l1_write_addr = get_write_ptr(cb_in0);
+                    for (uint32_t j = 0; j < num_pages_to_read; j++) {
+                        uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;
+                        uint64_t noc_read_addr = get_noc_addr(tile_id, input_tensor_addrgen);
+                        noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
+                        l1_write_addr += input_tensor_page_size;
+                        pages_read_in_row++;
+                        if (pages_read_in_row >= slice_Wt) {
+                            row_offset += stride_Wt;
+                            pages_read_in_row = 0;
+                        }
+                    }
                     tiles_read += num_pages_to_read;
                     noc_async_read_barrier();
                     cb_push_back(cb_in0, tile_granularity);
@@ -159,31 +211,37 @@ void kernel_main() {
 
                     cb_reserve_back(cb_in0, tile_granularity);
 
-                    read_tiles<input_tensor_is_dram>(
-                        cb_in0,
-                        num_pages_to_read,
-                        input_tile_id_start,
-                        input_tensor_addrgen,
-                        input_tensor_page_size,
-                        pages_read_in_row,
-                        row_offset,
-                        slice_Wt,
-                        stride_Wt);
+                    uint32_t l1_write_addr = get_write_ptr(cb_in0);
+                    for (uint32_t j = 0; j < num_pages_to_read; j++) {
+                        uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;
+                        uint64_t noc_read_addr = get_noc_addr(tile_id, input_tensor_addrgen);
+                        noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
+                        l1_write_addr += input_tensor_page_size;
+                        pages_read_in_row++;
+                        if (pages_read_in_row >= slice_Wt) {
+                            row_offset += stride_Wt;
+                            pages_read_in_row = 0;
+                        }
+                    }
 
                     tiles_read += num_pages_to_read;
 
                     // read the next intermediate slice out of the intermediate buffer, and put it in intermediate CB
                     cb_reserve_back(cb_intermediate_id, tile_granularity);
-                    read_tiles<intermediate_tensor_is_dram>(
-                        cb_intermediate_id,
-                        num_pages_to_read,
-                        intermediate_tile_id_start,
-                        intermediate_tensor_addrgen,
-                        input_tensor_page_size,
-                        intermediate_pages_read_in_row,
-                        intermediate_row_offset,
-                        slice_Wt,
-                        stride_Wt);
+
+                    l1_write_addr = get_write_ptr(cb_intermediate_id);
+                    for (uint32_t j = 0; j < num_pages_to_read; j++) {
+                        uint32_t tile_id =
+                            intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
+                        uint64_t noc_read_addr = get_noc_addr(tile_id, intermediate_tensor_addrgen);
+                        noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
+                        l1_write_addr += input_tensor_page_size;
+                        intermediate_pages_read_in_row++;
+                        if (intermediate_pages_read_in_row >= slice_Wt) {
+                            intermediate_row_offset += stride_Wt;
+                            intermediate_pages_read_in_row = 0;
+                        }
+                    }
 
                     noc_async_read_barrier();
                     cb_push_back(cb_in0, tile_granularity);
@@ -203,15 +261,14 @@ void kernel_main() {
         if constexpr (do_final_reduction) {
             bool accumulate_output =
                 false;  // If true, output += intermediate. Otherwise, output = input + intermediate
-            auto reduction_input_addrgen = input_tensor_addrgen;
-            if constexpr (sync_with_other_direction && !is_forward) {
+            constexpr bool use_output_tensor_addrgen = sync_with_other_direction && !is_forward;
+            if constexpr (use_output_tensor_addrgen) {
                 /**
                  * If two cores are doing final reduction, BWD core will accumulate output with
                  * incoming BWD intermediate. Use slice_idx=0 to index into output buffer, and
                  * use output address generator.
                  */
                 accumulate_output = true;
-                reduction_input_addrgen = output_tensor_addrgen;
                 // Wait for FWD writer to signal that it has done its final reduction
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), 1);
                 noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), 0);
@@ -264,31 +321,37 @@ void kernel_main() {
 
                 cb_reserve_back(cb_in0, tile_granularity);
 
-                read_tiles<input_tensor_is_dram>(
-                    cb_in0,
-                    num_pages_to_read,
-                    input_tile_id_start,
-                    reduction_input_addrgen,
-                    input_tensor_page_size,
-                    pages_read_in_row,
-                    row_offset,
-                    slice_Wt,
-                    stride_Wt);
-
+                uint32_t l1_write_addr = get_write_ptr(cb_in0);
+                for (uint32_t j = 0; j < num_pages_to_read; j++) {
+                    uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;
+                    uint64_t noc_read_addr = use_output_tensor_addrgen ? get_noc_addr(tile_id, output_tensor_addrgen)
+                                                                       : get_noc_addr(tile_id, input_tensor_addrgen);
+                    noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
+                    l1_write_addr += input_tensor_page_size;
+                    pages_read_in_row++;
+                    if (pages_read_in_row >= slice_Wt) {
+                        row_offset += stride_Wt;
+                        pages_read_in_row = 0;
+                    }
+                }
                 tiles_read += num_pages_to_read;
 
                 // read the next intermediate slice out of the intermediate buffer, and put it in intermediate CB
                 cb_reserve_back(cb_intermediate_id, tile_granularity);
-                read_tiles<intermediate_tensor_is_dram>(
-                    cb_intermediate_id,
-                    num_pages_to_read,
-                    intermediate_tile_id_start,
-                    intermediate_tensor_addrgen,
-                    input_tensor_page_size,
-                    intermediate_pages_read_in_row,
-                    intermediate_row_offset,
-                    slice_Wt,
-                    intermediate_stride_Wt);
+
+                l1_write_addr = get_write_ptr(cb_intermediate_id);
+                for (uint32_t j = 0; j < num_pages_to_read; j++) {
+                    uint32_t tile_id =
+                        intermediate_tile_id_start + intermediate_row_offset + intermediate_pages_read_in_row;
+                    uint64_t noc_read_addr = get_noc_addr(tile_id, intermediate_tensor_addrgen);
+                    noc_async_read(noc_read_addr, l1_write_addr, input_tensor_page_size);
+                    l1_write_addr += input_tensor_page_size;
+                    intermediate_pages_read_in_row++;
+                    if (intermediate_pages_read_in_row >= slice_Wt) {
+                        intermediate_row_offset += intermediate_stride_Wt;
+                        intermediate_pages_read_in_row = 0;
+                    }
+                }
 
                 noc_async_read_barrier();
                 cb_push_back(cb_in0, tile_granularity);

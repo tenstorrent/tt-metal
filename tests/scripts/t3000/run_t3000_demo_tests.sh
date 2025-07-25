@@ -245,6 +245,25 @@ run_t3000_resnet50_tests() {
   fi
 }
 
+run_t3000_sentence_bert_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_sentence_bert_tests"
+
+  # Sentence BERT demo test
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/sentence_bert/demo/demo.py --timeout=600 ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_sentence_bert_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 
 run_t3000_sd35large_tests() {
   # Record the start time
@@ -324,6 +343,9 @@ run_t3000_tests() {
 
   # Run resnet50 tests
   run_t3000_resnet50_tests
+
+  # Run sentence bert tests
+  run_t3000_sentence_bert_tests
 
   # Run qwen25 tests
   run_t3000_qwen25_tests

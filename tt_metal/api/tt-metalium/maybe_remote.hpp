@@ -296,4 +296,22 @@ template <typename Container>
     return locals;
 }
 
+/**
+ * Wraps all local values from a container to a container with MaybeRemote objects.
+ *
+ * @tparam Container Any container type
+ * @param container The container of objects of type T
+ * @return std::vector<MaybeRemote<T>> containing the local values wrapped in MaybeRemote
+ */
+template <typename Container>
+[[nodiscard]] auto wrap_to_maybe_remote(const Container& container) {
+    using T = typename Container::value_type;
+    std::vector<MaybeRemote<T>> wrapped;
+    wrapped.reserve(container.size());
+    for (const auto& local : container) {
+        wrapped.push_back(MaybeRemote<T>::local(local));
+    }
+    return wrapped;
+}
+
 }  // namespace tt::tt_metal::distributed

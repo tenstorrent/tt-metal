@@ -293,12 +293,12 @@ AllocatorConfig L1BankingAllocator::generate_config(
         config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
     }
     // Initialize core_type_from_noc_coord_table table
-    for (const CoreCoord& core : soc_desc.get_all_cores(CoordSystem::PHYSICAL)) {
+    for (const CoreCoord& core : soc_desc.get_all_cores(CoordSystem::NOC0)) {
         config.core_type_from_noc_coord_table.insert(
             {cluster.get_virtual_coordinate_from_physical_coordinates(device_id, {core.x, core.y}),
              AllocCoreType::Invalid});
     }
-    for (const CoreCoord& core : soc_desc.get_all_harvested_cores(CoordSystem::PHYSICAL)) {
+    for (const CoreCoord& core : soc_desc.get_all_harvested_cores(CoordSystem::NOC0)) {
         config.core_type_from_noc_coord_table.insert(
             {cluster.get_virtual_coordinate_from_physical_coordinates(device_id, {core.x, core.y}),
              AllocCoreType::Invalid});

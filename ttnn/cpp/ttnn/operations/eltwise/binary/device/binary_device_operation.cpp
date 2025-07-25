@@ -23,10 +23,9 @@ namespace utils {
             return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32)
                 || (a == DataType::UINT32 && b == DataType::UINT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::SUB:
+        case BinaryOpType::MUL:
             return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32)
                 || (a == DataType::UINT16 && b == DataType::UINT16));
-        case BinaryOpType::MUL:
-            return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::DIV:
         case BinaryOpType::RSUB:
         case BinaryOpType::LOGADDEXP:
@@ -298,9 +297,9 @@ tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
 
     if (input_tensor_b.has_value()) {
         TT_ASSERT(
-            std::holds_alternative<DeviceStorage>(input_tensor_b->get_storage()),
+            std::holds_alternative<DeviceStorage>(input_tensor_b->storage()),
             "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(input_tensor_b->get_storage()));
+            tt::stl::get_active_type_name_in_variant(input_tensor_b->storage()));
 
         return operation::hash_operation<BinaryDeviceOperation>(
             attributes,

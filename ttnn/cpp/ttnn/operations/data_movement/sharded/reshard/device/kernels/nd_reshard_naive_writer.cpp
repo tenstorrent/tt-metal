@@ -8,8 +8,8 @@
 // Simple kernel that copies [start_page, end_page) pages from dst to dst.
 void kernel_main() {
     auto args_dst = TensorAccessorArgs<0, 0>();
-    constexpr uint32_t base_idx_cta = args_dst.compile_time_args_skip();
-    constexpr uint32_t base_idx_crta = args_dst.runtime_args_skip();
+    constexpr uint32_t base_idx_cta = args_dst.next_compile_time_args_offset();
+    constexpr uint32_t base_idx_crta = args_dst.next_common_runtime_args_offset();
 
     constexpr uint32_t cb_id = get_compile_time_arg_val(base_idx_cta);
     constexpr uint32_t page_size = get_compile_time_arg_val(base_idx_cta + 1);

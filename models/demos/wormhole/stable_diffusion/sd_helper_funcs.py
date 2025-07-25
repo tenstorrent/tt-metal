@@ -11,7 +11,6 @@ import torch
 from tqdm.auto import tqdm
 
 import ttnn
-from models.utility_functions import is_blackhole
 
 
 @dataclass
@@ -150,7 +149,6 @@ def run(
     time_step,
     guidance_scale,
     ttnn_scheduler,
-    use_host_decoder=True,
 ):
     ttnn_latents = input_latents
     # Denoising loop
@@ -177,10 +175,6 @@ def run(
 
     # scale and decode the image latents with vae
     latents = 1 / 0.18215 * ttnn_latents
-
-    # on blackhole, we use the original vae decoder until #20760 is fixed
-    if use_host_decoder:
-        return latents
 
     ttnn_output = ttnn.permute(latents, [0, 2, 3, 1])
     ttnn_output = tt_vae.decode(ttnn_output)
@@ -214,7 +208,6 @@ def compile_trace_sd(
             time_step,
             guidance_scale,
             ttnn_scheduler,
-            is_blackhole(),
         )
     )
 
@@ -233,7 +226,6 @@ def compile_trace_sd(
         time_step,
         guidance_scale,
         ttnn_scheduler,
-        is_blackhole(),
     )
     ttnn.end_trace_capture(device, tid, cq_id=0)
     ttnn.synchronize_device(device)

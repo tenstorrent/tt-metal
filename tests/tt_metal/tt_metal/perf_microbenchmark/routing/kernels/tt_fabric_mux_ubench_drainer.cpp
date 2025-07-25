@@ -22,6 +22,7 @@ constexpr size_t connection_info_address = get_compile_time_arg_val(4);
 constexpr size_t connection_handshake_address = get_compile_time_arg_val(5);
 constexpr size_t sender_flow_control_address = get_compile_time_arg_val(6);
 constexpr size_t channel_base_address = get_compile_time_arg_val(7);
+constexpr size_t my_eth_channel_id = get_compile_time_arg_val(8);
 
 namespace tt::tt_fabric {
 using DrainerChannelBuffer = EthChannelBuffer<NUM_BUFFERS>;
@@ -77,7 +78,8 @@ void kernel_main() {
             worker_interface.notify_worker_of_read_counter_update();
             increment_local_update_ptr_val(slots_free_stream_id, 1);
         }
-        check_worker_connections(worker_interface, connection_established, slots_free_stream_id);
+        tt::tt_fabric::check_worker_connections<my_eth_channel_id>(
+            worker_interface, connection_established, slots_free_stream_id);
     }
 
     noc_async_write_barrier();

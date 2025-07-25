@@ -265,7 +265,7 @@ void MAIN {
 
                             // After reduction (if any), untilize result
                             cb_wait_front(cb_matmul_interm_tiled, output_tiles);
-                            untilize_init_short(cb_matmul_interm_tiled);
+                            untilize_init(cb_matmul_interm_tiled);
                             for (uint32_t patch_t = 0; patch_t < matmul_M_t; patch_t++) {
                                 cb_reserve_back(cb_matmul_result_rm, matmul_N_t);
                                 untilize_block(cb_matmul_interm_tiled, matmul_N_t, cb_matmul_result_rm);

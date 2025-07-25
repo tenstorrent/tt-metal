@@ -14,15 +14,12 @@ void kernel_main() {
 
     // Compile time args
     constexpr uint32_t src0_cb_index = get_compile_time_arg_val(0);
-    constexpr bool input_is_dram = get_compile_time_arg_val(1) == 1;
 
     // Input data config
     const uint32_t input_data_tile_size_bytes = get_tile_size(src0_cb_index);
-    const DataFormat input_data_format = get_dataformat(src0_cb_index);
-    const InterleavedAddrGenFast<input_is_dram> interleaved_accessor = {
-        .bank_base_address = input_buffer_addr,
-        .page_size = input_data_tile_size_bytes,
-        .data_format = input_data_format};
+    constexpr auto interleaved_accessor_args = TensorAccessorArgs<1>();
+    const auto interleaved_accessor =
+        TensorAccessor(interleaved_accessor_args, input_buffer_addr, input_data_tile_size_bytes);
 
     // Constants
     constexpr uint32_t one_tile = 1;

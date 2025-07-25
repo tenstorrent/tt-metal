@@ -40,10 +40,11 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
     constexpr bool src_is_dram = (bool)get_compile_time_arg_val(2);
+    // not using indices tensor arg get_compile_time_arg_val(3)
 
-    constexpr uint32_t Ht = get_compile_time_arg_val(3);
-    constexpr uint32_t Wt_local = get_compile_time_arg_val(4);
-    constexpr uint32_t Wt = get_compile_time_arg_val(5);
+    constexpr uint32_t Ht = get_compile_time_arg_val(4);
+    constexpr uint32_t Wt_local = get_compile_time_arg_val(5);
+    constexpr uint32_t Wt = get_compile_time_arg_val(6);
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;

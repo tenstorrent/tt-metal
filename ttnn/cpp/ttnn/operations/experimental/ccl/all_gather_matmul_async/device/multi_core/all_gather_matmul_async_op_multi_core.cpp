@@ -49,6 +49,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
     const uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const CoreCoord core_grid_offset,
 
@@ -67,7 +68,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
         ttnn::ccl::InterleavedRingAllGatherTensorSlicer(input_tensor, all_gather_output_tensor, dim, ring_index);
     bool is_clockwise_direction = true;
     const uint32_t num_transfers = 4;
-    const uint32_t weight_tensor_width = weight_tensor.get_padded_shape()[3] / 32;
+    const uint32_t weight_tensor_width = weight_tensor.padded_shape()[3] / 32;
 
     ////////////////////////////////////////////////////////
 
@@ -107,6 +108,24 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
                     matmul_fused_op_signaler);
                 matmul_override_runtime_arguments_callback =
                     matmul_program_with_callbacks->override_runtime_arguments_callback;
+            } else if (std::is_same_v<
+                           ProgramConfigType,
+                           operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                matmul_program_with_callbacks = operations::matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
+                    program,
+                    all_gather_output_tensor,
+                    {weight_tensor},
+                    bias,
+                    {matmul_output_tensor},
+                    bcast_batch,
+                    compute_kernel_config,
+                    config,
+                    untilize_out,
+                    matmul_fused_op_signaler,
+                    std::nullopt,
+                    std::nullopt);
+                matmul_override_runtime_arguments_callback =
+                    matmul_program_with_callbacks->override_runtime_arguments_callback;
             } else {
                 TT_THROW("Unsupported MatmulProgramConfig type. Needs to be 1D or 2D Multicast.");
             }
@@ -126,7 +145,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
 
     // All Gather
     tt::tt_metal::operation::ProgramWithCallbacks program_with_callbacks =
-        ttnn::all_gather_async_minimal_interleaved_helper(
+        ttnn::all_gather_async_minimal_default_helper(
             matmul_program_with_callbacks->program,
             input_tensor,
             target_device,
@@ -139,6 +158,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
             ring_index,
             topology,
             semaphore,
+            barrier_semaphore,
             sub_device_id,
             all_gather_fused_op_signaler,
             core_grid_offset);
@@ -169,7 +189,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
                     program,
                     {input_tensors[0]}, /* input tensor */
                     optional_input_tensors,
-                    {output_tensors[1]} /* all gather output tensor */
+                    {output_tensors[0]} /* all gather output tensor */
                 );
             }
         };

@@ -20,10 +20,9 @@ void kernel_main() {
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
-    const DataFormat data_format = get_dataformat(cb_id_out);
 
-    const InterleavedAddrGenFast<dst_is_dram> s = {
-        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
+    constexpr auto s_args = TensorAccessorArgs<0>();
+    const auto s = TensorAccessor(s_args, dst_addr, tile_bytes);
 
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_tiles;

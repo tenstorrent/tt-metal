@@ -32,6 +32,7 @@ jobs:
             model-type: "CNN",
             arch: wormhole_b0,
             runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
+            save-perf-data: false,
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type cnn_model_perf_tg_device --dispatch-mode ""'
           },  # Pavle Josipovic
           {
@@ -39,6 +40,7 @@ jobs:
             model-type: "Llama-70B",
             arch: wormhole_b0,
             runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
+            save-perf-data: true,
             cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_llama_model_perf_tg_device --dispatch-mode ""',
             owner_id: U053W15B6JF # Djordje Ivanovic
           },
@@ -49,27 +51,18 @@ jobs:
             timeout: 100,
             tracy: true,
             runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
+            save-perf-data: true,
             owner_id: U071CKL4AFK # Ammar Vora
           },
           {
-            name: "Galaxy Llama 70B prefill perf tests [128]",
+            name: "Galaxy Llama 70B prefill perf tests",
+            model-type: "Llama-70B",
             arch: wormhole_b0,
-            cmd: "FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py::test_llama_TG_perf_device[128]",
-            timeout: 100,
-            tracy: true,
             runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
+            save-perf-data: true,
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_llama_prefill_model_perf_tg_device --dispatch-mode ""',
             owner_id: U03PUAKE719 # Miguel Tairum
           },
-          {
-            name: "Galaxy Llama 70B prefill perf tests [4096]",
-            arch: wormhole_b0,
-            cmd: "FAKE_DEVICE=TG LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py::test_llama_TG_perf_device[4096]",
-            timeout: 100,
-            tracy: true,
-            runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
-            owner_id: U03PUAKE719 # Miguel Tairum
-          },
-
         ]
     name: ${{ matrix.test-group.name }}
     env:
@@ -117,7 +110,7 @@ jobs:
           run_args: |
             ${{ matrix.test-group.cmd }}
       - name: Save environment data
-        if: ${{ (matrix.test-group.name == 'Llama Galaxy Perf Unit Tests' || matrix.test-group.name == 'Galaxy Llama 70B model perf tests' || matrix.test-group.name == 'Galaxy Llama 70B model dispatch perf tests' || matrix.test-group.name == 'Galaxy Llama 70B prefill perf tests [128]' || matrix.test-group.name == 'Galaxy Llama 70B prefill perf tests [4096]') && !cancelled() }}
+        if: ${{ matrix.test-group.save-perf-data && !cancelled() }}
         uses: ./.github/actions/docker-run
         with:
           docker_image: ${{ inputs.docker-image }}
@@ -129,7 +122,7 @@ jobs:
           install_wheel: true
           run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
       - name: Upload benchmark data
-        if: ${{ (matrix.test-group.name == 'Llama Galaxy Perf Unit Tests' || matrix.test-group.name == 'Galaxy Llama 70B model perf tests' || matrix.test-group.name == 'Galaxy Llama 70B model dispatch perf tests' || matrix.test-group.name == 'Galaxy Llama 70B prefill perf tests [128]' || matrix.test-group.name == 'Galaxy Llama 70B prefill perf tests [4096]') && !cancelled() }}
+        if: ${{ matrix.test-group.save-perf-data && !cancelled() }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -138,7 +131,7 @@ jobs:
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
       - name: Check perf report exists
         id: check-perf-report
-        if: ${{ !(matrix.test-group.name == 'Llama Galaxy Perf Unit Tests'|| matrix.test-group.name == 'Galaxy Llama 70B model perf tests' || matrix.test-group.name == 'Galaxy Llama 70B model dispatch perf tests' || matrix.test-group.name == 'Galaxy Llama 70B prefill perf tests [128]' || matrix.test-group.name == 'Galaxy Llama 70B prefill perf tests [4096]') && !cancelled() }}
+        if: ${{ !(matrix.test-group.save-perf-data) && !cancelled() }}
         run: |
           TODAY=$(date +%Y_%m_%d)
           PERF_REPORT_FILENAME_MODELS="Models_Perf_${TODAY}.csv"

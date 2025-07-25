@@ -512,7 +512,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     }
 
     for (const auto& core : cores) {
-        auto page_stride_vector = output_core_to_page_range_pair.at(core);
+        const auto& page_stride_vector = output_core_to_page_range_pair.at(core);
         uint32_t num_ranges = page_stride_vector.size();
         auto runtime_args_0 = get_runtime_args_for_given_ranges(
             physical_core_coords,

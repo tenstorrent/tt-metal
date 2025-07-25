@@ -81,7 +81,7 @@ def get_cache_on_host(tt_cache, mesh_device):
     "mode, seq_len, batch_size",
     [
         ("decode", 1, 32),
-        # ("prefill", 128, 1),
+        ("prefill", 128, 1),
     ],
 )
 @pytest.mark.parametrize(
@@ -104,7 +104,7 @@ def test_forward_pass(
     check_cache,
     reference,
     hf_config_short,
-    temp_dir,
+    tmp_path,
     mesh_row,
 ):
     hf_config = hf_config_short
@@ -119,8 +119,8 @@ def test_forward_pass(
     ### Set up configs
     ############################
     # Setup: Convert weights and get weight_config
-    logger.info(f"Converting weights for MLA1D to {temp_dir}")
-    weight_config = MLA1D.convert_weights(hf_config, reference_model.state_dict(), temp_dir, mesh_row)
+    logger.info(f"Converting weights for MLA1D to {tmp_path}")
+    weight_config = MLA1D.convert_weights(hf_config, reference_model.state_dict(), tmp_path, mesh_row)
 
     # Generate appropriate configs
     ccl = CCL1D(hf_config, mesh_row)
@@ -130,7 +130,7 @@ def test_forward_pass(
         model_config = MLA1D.decode_model_config(hf_config, mesh_row, ccl)
 
     # Create a new model state
-    model_state = MLA1D.create_state(hf_config, mesh_device=mesh_row)
+    model_state = MLA1D.create_state(hf_config, mesh_device=mesh_row, use_dp_cache=(mode == "decode"))
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state)
@@ -168,6 +168,7 @@ def test_forward_pass(
     ############################
     ### TTNN inputs
     ############################
+    logger.info("Preparing TTNN inputs")
     if mode == "decode":
         # TT Shape: [1, seq_len, batch_size, hidden_size]
         torch_input = torch_input.permute(1, 0, 2)
@@ -191,7 +192,7 @@ def test_forward_pass(
             torch.tensor(position_idxs),
             device=mesh_row,
             mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_row, dims=(None, None), mesh_shape=mesh_shape
+                mesh_row, dims=(None, 0), mesh_shape=mesh_shape
             ),  # TODO: Shard on batch when DP
             dtype=ttnn.int32,
         )
@@ -230,14 +231,18 @@ def test_forward_pass(
     ############################
     ### TTNN forward pass
     ############################
+    logger.info("Running TTNN forward pass")
     if mode == "prefill":
         tt_output = MLA1D.forward_prefill(tt_input, user_id, rope_tensors, run_config)
-        tt_output_torch = ttnn.to_torch(tt_output)
     else:
         tt_output = MLA1D.forward_decode(tt_input, position_idxs_tensor, rope_tensors, run_config)
-        tt_output_torch = ttnn.to_torch(
-            tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_row, dims=(0, -1), mesh_shape=mesh_shape)
-        )[:1, ...]
+
+    tt_output_torch = ttnn.to_torch(
+        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_row, dims=(0, -1), mesh_shape=mesh_shape)
+    )[:1, ...]
+
+    if mode == "decode":
+        # Torch Shape: [batch_size, seq_len, hidden_size]
         tt_output_torch = tt_output_torch.squeeze(0).permute(1, 0, 2)
 
     ############################

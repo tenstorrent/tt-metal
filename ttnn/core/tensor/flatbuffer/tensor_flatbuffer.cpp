@@ -186,7 +186,8 @@ Tensor from_flatbuffer(
 
     tt::tt_metal::HostStorage host_storage{std::move(distributed_buffer)};
 
-    return Tensor(std::move(host_storage), spec, strategy);
+    // TODO (#25340): Add TensorTopology to flatbuffer serialization and properly handle it in deserialization.
+    return Tensor(std::move(host_storage), spec, strategy, tt::tt_metal::TensorTopology{});
 }
 
 }  // namespace ttnn

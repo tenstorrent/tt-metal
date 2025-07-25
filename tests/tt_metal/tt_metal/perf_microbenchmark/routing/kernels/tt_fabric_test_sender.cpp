@@ -30,8 +30,9 @@ void kernel_main() {
     tt::tt_fabric::fabric_tests::write_test_status(sender_config.get_result_buffer_address(), TT_FABRIC_STATUS_STARTED);
 
     // Local sync (as participant, not master)
+    uint8_t sync_iter = 0;
     if constexpr (LINE_SYNC) {
-        sender_config.local_sync();
+        sender_config.local_sync(sync_iter++);
     }
 
     sender_config.open_connections();
@@ -41,6 +42,7 @@ void kernel_main() {
     uint64_t total_elapsed_cycles = 0;
 
     // Round-robin packet sending: send one packet from each config per iteration
+    uint64_t start_timestamp = get_timestamp();
     while (packets_left_to_send) {
         packets_left_to_send = false;
         for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
@@ -60,15 +62,24 @@ void kernel_main() {
 
     sender_config.close_connections();
 
+    // Local sync (as participant, not master) for end of sync, first sync tells sync core to start global sync, second
+    // sync is waiting for global sync done
+    if constexpr (LINE_SYNC) {
+        sender_config.local_sync(sync_iter++);
+        sender_config.local_sync(sync_iter++);
+    }
+
+    uint64_t total_elapsed_cycles_outer_loop = get_timestamp() - start_timestamp;
+
     // Collect results from all traffic configs
     for (uint8_t i = 0; i < NUM_TRAFFIC_CONFIGS; i++) {
         auto* traffic_config = sender_config.traffic_config_ptrs[i];
         total_packets_sent += traffic_config->num_packets_processed;
-        total_elapsed_cycles += traffic_config->elapsed_cycles;
     }
 
     // Write test results
-    tt::tt_fabric::fabric_tests::write_test_cycles(sender_config.get_result_buffer_address(), total_elapsed_cycles);
+    tt::tt_fabric::fabric_tests::write_test_cycles(
+        sender_config.get_result_buffer_address(), total_elapsed_cycles_outer_loop);
     tt::tt_fabric::fabric_tests::write_test_packets(sender_config.get_result_buffer_address(), total_packets_sent);
 
     // Mark test as passed

@@ -381,7 +381,7 @@ In a single-device context, a CommandQueueHandle is associated with a CQ tied to
 
 **All APIs discussed in this section will be required for V1.**
 
-This section introduces the MeshBuffer and the MeshAllocator, through which memory management mechanisms exposed by TT-Metallium are extended to a distributed address space across a DRAM and SRAM banks in a Virtual Mesh.
+This section introduces the MeshBuffer and the MeshAllocator, through which memory management mechanisms exposed by TT-Metalium are extended to a distributed address space across a DRAM and SRAM banks in a Virtual Mesh.
 
 ### 3.3.1 Background: Device Buffer and Single-Device Allocator
 
