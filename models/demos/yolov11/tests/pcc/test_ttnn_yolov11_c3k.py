@@ -3,15 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import torch
+
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.demos.yolov11.tt.model_preprocessing import (
-    create_yolov11_input_tensors,
-    create_yolov11_model_parameters,
-)
 from models.demos.yolov11.reference.yolov11 import C3k as torch_c3k
+from models.demos.yolov11.tt.model_preprocessing import create_yolov11_input_tensors, create_yolov11_model_parameters
 from models.demos.yolov11.tt.ttnn_yolov11_c3k import TtnnC3K as ttnn_c3k
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(

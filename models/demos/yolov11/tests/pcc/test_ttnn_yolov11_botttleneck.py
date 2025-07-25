@@ -2,27 +2,31 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import ttnn
-import torch
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.demos.yolov11.tt.model_preprocessing import (
-    create_yolov11_input_tensors,
-    create_yolov11_model_parameters,
-)
-from models.demos.yolov11.reference.yolov11 import Attention as torch_attention
 
-from models.demos.yolov11.tt.ttnn_yolov11_attention import TtnnAttention as ttnn_attention
+import pytest
+
+import ttnn
+from models.demos.yolov11.reference.yolov11 import Bottleneck as torch_bottleneck
+from models.demos.yolov11.tt.model_preprocessing import create_yolov11_input_tensors, create_yolov11_model_parameters
+from models.demos.yolov11.tt.ttnn_yolov11_bottleneck import TtnnBottleneck as ttnn_bottleneck
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
     "in_channel, out_channel, kernel, stride, padding, dilation, groups,fwd_input_shape",
     [
-        ([128, 128, 128], [256, 128, 128], [1, 1, 3], [1, 1, 1], [0, 0, 1], [1, 1, 1], [1, 1, 128], [1, 128, 7, 7]),
+        ([16, 8], [8, 16], [3, 3], [1, 1], [1, 1], [1, 1], [1, 1], [1, 16, 56, 56]),
+        ([32, 16], [16, 32], [3, 3], [1, 1], [1, 1], [1, 1], [1, 1], [1, 32, 38, 28]),
+        ([32, 32], [32, 32], [3, 3], [1, 1], [1, 1], [1, 1], [1, 1], [1, 32, 14, 14]),
+        ([64, 64], [64, 64], [3, 3], [1, 1], [1, 1], [1, 1], [1, 1], [1, 64, 7, 7]),
+        ([64, 32], [32, 64], [3, 3], [1, 1], [1, 1], [1, 1], [1, 1], [1, 64, 14, 14]),
+        ([32, 16], [16, 32], [3, 3], [1, 1], [1, 1], [1, 1], [1, 1], [1, 32, 28, 28]),
+        ([64, 32], [32, 64], [3, 3], [1, 1], [1, 1], [1, 1], [1, 1], [1, 64, 14, 14]),
+        ([64, 64], [64, 64], [3, 3], [1, 1], [1, 1], [1, 1], [1, 1], [1, 64, 7, 7]),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
-def test_yolo_v11_attention(
+def test_yolo_v11_bottleneck(
     device,
     reset_seeds,
     in_channel,
@@ -34,7 +38,7 @@ def test_yolo_v11_attention(
     groups,
     fwd_input_shape,
 ):
-    torch_module = torch_attention(in_channel, out_channel, kernel, stride, padding, dilation, groups)
+    torch_module = torch_bottleneck(in_channel, out_channel, kernel, stride, padding, dilation, groups)
     torch_module.eval()
     torch_input, ttnn_input = create_yolov11_input_tensors(
         device,
@@ -47,7 +51,7 @@ def test_yolo_v11_attention(
     ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     torch_output = torch_module(torch_input)
     parameters = create_yolov11_model_parameters(torch_module, torch_input, device=device)
-    ttnn_module = ttnn_attention(device=device, parameter=parameters.conv_args, conv_pt=parameters)
+    ttnn_module = ttnn_bottleneck(device=device, parameter=parameters.conv_args, conv_pt=parameters)
     ttnn_output = ttnn_module(x=ttnn_input, device=device)
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.permute(0, 3, 1, 2)

@@ -41,12 +41,12 @@ run_sentencebert_func() {
 
 }
 
-#run_yolov11_func() {
-#
-#  #Yolov11 Demo
-#  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/yolov11/demo/demo.py --timeout 600; fail+=$?
-#
-#}
+run_yolov11_func() {
+
+ #Yolov11 Demo
+ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/yolov11/demo/demo.py --timeout 600; fail+=$?
+
+}
 
 run_llama3_func() {
   fail=0
