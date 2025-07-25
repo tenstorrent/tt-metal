@@ -373,13 +373,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     std::max((input_tile_id_end - input_tile_id_start) / num_tiles_to_write_per_packet, (uint32_t)1));
 
                 // Reader
-		std::vector<uint32_t> sender_reader_compile_args = {
+                std::vector<uint32_t> sender_reader_compile_args = {
                     ring_index,                                        // my_chip_id
                     static_cast<uint32_t>(input_tensor_buffer_type),   // input_buffer_type
                     static_cast<uint32_t>(output_tensor_buffer_type),  // output_buffer_type
                     sender_cb_index,                                   // cb_forward_id
                     num_tiles_to_write_per_packet,                     // num_tiles_to_write_per_packet
-                    op_config.get_page_size(),                         // tensor0_page_size
+                    page_size,                                         // tensor0_page_size
                     num_targets_forward,                               // num_slices_forward_direction
                     num_targets_backward,                              // num_slices_backward_direction
                     static_cast<uint32_t>(topology),                   // topology
@@ -387,12 +387,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     fuse_op,                                           // fused op
                     chunks_per_sync_val,
                 };
-		if (input_is_sharded) {
-		  shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
-		}
-		if (output_is_sharded) {
-		  shard_builder::extend_sharding_compile_time_args(output_tensor, sender_reader_compile_args);
-		}
+                if (input_is_sharded) {
+                    shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
+                }
+                if (output_is_sharded) {
+                    shard_builder::extend_sharding_compile_time_args(output_tensor, sender_reader_compile_args);
+                }
                 auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
                     program,
                     "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
@@ -430,7 +430,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                         fused_op_signaler_backward->push_all_gather_fused_op_rt_args(reader_rt_args, 1, 0, 0);
                     }
                 }
-		
+
                 tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
 
                 CoreCoord termination_master_logical_core =
@@ -439,14 +439,14 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     mesh_device->worker_core_from_logical_core(termination_master_logical_core);
 
                 // Writer
-		std::vector<uint32_t> sender_writer_compile_args = {
+                std::vector<uint32_t> sender_writer_compile_args = {
                     ring_index,                                        // my_chip_id
                     reserved_packet_header_CB_index,                   // reserved_packet_header_cb_id
                     num_packet_headers_storable,                       // num_packet_headers_storable
                     static_cast<uint32_t>(output_tensor_buffer_type),  // output_buffer_type
                     sender_cb_index,                                   // cb_forward_id
                     num_tiles_to_write_per_packet,                     // num_tiles_to_write_per_packet
-                    op_config.get_page_size(),                         // tensor0_page_size
+                    page_size,                                         // tensor0_page_size
                     num_targets_forward,                               // num_targets_forward_direction
                     num_targets_backward,                              // num_targets_backward_direction
                     dynamic_alternate,                                 // alternate
@@ -465,46 +465,46 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
 		if (output_is_sharded) {
 		  shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
 		}
-                auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
-                    program,
-                    "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
-                    "interleaved_writer.cpp",
-                    {core}, 
-		    tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
-                writer_kernel_ids.push_back(worker_sender_writer_kernel_id);
+        auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
+            "interleaved_writer.cpp",
+            {core},
+            tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
+        writer_kernel_ids.push_back(worker_sender_writer_kernel_id);
 
-                std::vector<uint32_t> writer_rt_args = {
-                    output_tensor.buffer()->address(),                        // output_tensor_address
-                    input_tensor_Wt,                                          // width in tiles of the output shard
-                    input_tensor_Ht,                                          // height in tiles of the output shard
-                    output_tensor_Wt,                                         // width in tiles of entire output
-                    output_tensor_Ht,                                         // height in tiles of entire output
-                    dim,                                                      // dim to gather on
-                    batch_head_size,                                          // product of the first two dims
-                    input_tile_id_start,                                      //
-                    input_tile_id_end,                                        //
-                    virtual_core.x,                                           // out_ready_sem_noc0_x
-                    virtual_core.y,                                           // out_ready_sem_noc0_y
-                    ring_size,                                                // ring_size
-                    semaphore.at(dir).address(),                              // out_ready_semaphore_forward
-                    input_tile_id_start % input_tensor_Wt,                    // start_pages_read_in_row
-                    input_tile_id_start / input_tensor_Wt * output_tensor_Wt,  // start_row_offset
-		    barrier_semaphore.has_value(),                             // use synchronize barrier semaphore
-		    barrier_semaphore.has_value()                              // synchronize barrier semaphore
-		    ? barrier_semaphore.value().address()
-		    : 0,
-		    opposite_core_coord.x,
-		    opposite_core_coord.y};
-                fabric_mux_connection_rt_args(
-                    mux_connection_valid,
-                    core,
-                    program,
-                    termination_master_virtual_core,
-                    num_workers_per_direction,
-                    writer_rt_args);
-		if (output_is_sharded) {
-		  shard_builder::extend_sharding_run_time_args(output_tensor, writer_rt_args);
-		}
+        std::vector<uint32_t> writer_rt_args = {
+            output_tensor.buffer()->address(),                         // output_tensor_address
+            input_tensor_Wt,                                           // width in tiles of the output shard
+            input_tensor_Ht,                                           // height in tiles of the output shard
+            output_tensor_Wt,                                          // width in tiles of entire output
+            output_tensor_Ht,                                          // height in tiles of entire output
+            dim,                                                       // dim to gather on
+            batch_head_size,                                           // product of the first two dims
+            input_tile_id_start,                                       //
+            input_tile_id_end,                                         //
+            virtual_core.x,                                            // out_ready_sem_noc0_x
+            virtual_core.y,                                            // out_ready_sem_noc0_y
+            ring_size,                                                 // ring_size
+            semaphore.at(dir).address(),                               // out_ready_semaphore_forward
+            input_tile_id_start % input_tensor_Wt,                     // start_pages_read_in_row
+            input_tile_id_start / input_tensor_Wt * output_tensor_Wt,  // start_row_offset
+            barrier_semaphore.has_value(),                             // use synchronize barrier semaphore
+            barrier_semaphore.has_value()                              // synchronize barrier semaphore
+                ? barrier_semaphore.value().address()
+                : 0,
+            opposite_core_coord.x,
+            opposite_core_coord.y};
+        fabric_mux_connection_rt_args(
+            mux_connection_valid,
+            core,
+            program,
+            termination_master_virtual_core,
+            num_workers_per_direction,
+            writer_rt_args);
+        if (output_is_sharded) {
+            shard_builder::extend_sharding_run_time_args(output_tensor, writer_rt_args);
+        }
                 if (fuse_op) {
                     fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(writer_rt_args, 1, 0, 1);
                 }

@@ -445,7 +445,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     intermediate_cb_index,                                   // cb_intermediate_id
                     reader_output_cb_index,                                  // cb_reader_output_id
                     tile_granularity,                                        // packet_size_in_pages
-                    op_config.get_page_size(),                               // tensor0_page_size
+                    page_size,                                               // tensor0_page_size
                     input_tensor_Wt,                                         // input_tensor_Wt
                     batch_slice_num_pages,                                   // batch_slice_num_pages
                     ring_size,                                               // ring_size
@@ -454,12 +454,12 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     dir,                                                     // direction
                     chunks_per_sync_val,
                 };
-		if (input_is_sharded) {
-		  shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
-		}
-		if (intermediate_is_sharded) {
-		  shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_reader_compile_args);
-		}
+                if (input_is_sharded) {
+                    shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
+                }
+                if (intermediate_is_sharded) {
+                    shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_reader_compile_args);
+                }
                 auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
                     program,
                     "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
@@ -500,7 +500,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     mesh_device->worker_core_from_logical_core(termination_master_logical_core);
 
                 // Writer
-		std::vector<uint32_t> sender_writer_compile_args = {
+                std::vector<uint32_t> sender_writer_compile_args = {
                     ring_index,                                              // my_chip_id
                     reserved_packet_header_CB_index,                         // reserved_packet_header_cb_id
                     num_packet_headers_storable,                             // num_packet_headers_storable
@@ -509,7 +509,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     compute_output_cb_index,                                 // cb_compute_output_id
                     reader_output_cb_index,                                  // cb_reader_output_id
                     tile_granularity,                                        // packet_size_in_pages
-                    op_config.get_page_size(),                               // tensor0_page_size
+                    page_size,                                               // tensor0_page_size
                     input_tensor_Wt,                                         // input_tensor_Wt
                     batch_slice_num_pages,                                   // batch_slice_num_pages
                     ring_size,                                               // ring_size
@@ -552,15 +552,15 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     (worker_id * batch_slice_num_pages / num_workers) %
                         (input_tensor_Wt / ring_size),  // pages_read_in_row
                     (worker_id * batch_slice_num_pages / num_workers) / (input_tensor_Wt / ring_size) *
-                        input_tensor_Wt,                                   // row_offset
-                    (worker_id * batch_slice_num_pages / num_workers),     // tiles_read
-                    (worker_id + 1) * batch_slice_num_pages / num_workers  // tiles_to_read
-		    barrier_semaphore.has_value(),                   // use synchronize barrier semaphore
-		    barrier_semaphore.has_value()                    // synchronize barrier semaphore
-                    ? barrier_semaphore.value().address()
-                    : 0,
-		    opposite_core_coord.x,
-		    opposite_core_coord.y};
+                        input_tensor_Wt,                                    // row_offset
+                    (worker_id * batch_slice_num_pages / num_workers),      // tiles_read
+                    (worker_id + 1) * batch_slice_num_pages / num_workers,  // tiles_to_read
+                    barrier_semaphore.has_value(),                          // use synchronize barrier semaphore
+                    barrier_semaphore.has_value()                           // synchronize barrier semaphore
+                        ? barrier_semaphore.value().address()
+                        : 0,
+                    opposite_core_coord.x,
+                    opposite_core_coord.y};
                 append_fabric_mux_connection_rt_args(
                     true, core, program, termination_master_virtual_core, num_workers_per_direction, writer_rt_args);
 		if (intermediate_is_sharded) {
@@ -644,6 +644,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
 
 			if (barrier_semaphore.has_value()) {
 			  worker_writer_sender_runtime_args[14] = barrier_semaphore.value().address();
+            }
 
                         core_idx++;
                     }
@@ -968,7 +969,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     chunks_per_sync.value_or(std::max((tiles_to_read - tiles_read) / tile_granularity, (uint32_t)1));
 
                 // Reader
-		std::vector<uint32_t> sender_reader_compile_args = {
+                std::vector<uint32_t> sender_reader_compile_args = {
                     ring_index,                                              // my_chip_id
                     static_cast<uint32_t>(input_tensor_buffer_type),         // input_buffer_type
                     static_cast<uint32_t>(intermediate_tensor_buffer_type),  // intermediate_buffer_type
@@ -977,7 +978,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     intermediate_cb_index,                                   // cb_intermediate_id
                     reader_output_cb_index,                                  // cb_reader_output_id
                     tile_granularity,                                        // packet_size_in_pages
-                    op_config.get_page_size(),                               // tensor0_page_size
+                    page_size,                                               // tensor0_page_size
                     input_tensor_Wt,                                         // input_tensor_Wt
                     batch_slice_num_pages,                                   // batch_slice_num_pages
                     ring_size,                                               // ring_size
@@ -993,15 +994,15 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     sync_with_other_direction,
                     chunks_per_sync_val,
                 };
-		if (input_is_sharded) {
-		  shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
-		}
-		if (intermediate_is_sharded) {
-		  shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_reader_compile_args);
-		}
-		if (output_is_sharded) {
-		  shard_builder::extend_sharding_compile_time_args(output_tensor, sender_reader_compile_args);
-		}
+                if (input_is_sharded) {
+                    shard_builder::extend_sharding_compile_time_args(input_tensor, sender_reader_compile_args);
+                }
+                if (intermediate_is_sharded) {
+                    shard_builder::extend_sharding_compile_time_args(intermediate_tensor, sender_reader_compile_args);
+                }
+                if (output_is_sharded) {
+                    shard_builder::extend_sharding_compile_time_args(output_tensor, sender_reader_compile_args);
+                }
                 auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
                     program,
                     "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
@@ -1035,7 +1036,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                 CoreCoord termination_master_virtual_core =
                     mesh_device->worker_core_from_logical_core(termination_master_logical_core);
                 // Writer
-		std::vector<uint32_t> sender_writer_compile_args = {
+                std::vector<uint32_t> sender_writer_compile_args = {
                     ring_index,                                              // my_chip_id
                     reserved_packet_header_CB_index,                         // reserved_packet_header_cb_id
                     num_packet_headers_storable,                             // num_packet_headers_storable
@@ -1044,7 +1045,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     compute_output_cb_index,                                 // cb_compute_output_id
                     reader_output_cb_index,                                  // cb_reader_output_id
                     tile_granularity,                                        // packet_size_in_pages
-                    op_config.get_page_size(),                               // tensor0_page_size
+                    page_size,                                               // tensor0_page_size
                     input_tensor_Wt,                                         // input_tensor_Wt
                     batch_slice_num_pages,                                   // batch_slice_num_pages
                     ring_size,                                               // ring_size
@@ -1079,9 +1080,8 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     {core},
 		    tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
                 writer_kernel_ids.push_back(worker_sender_writer_kernel_id);
-		int num_targets_in_direction = is_forward ? num_targets_forward : num_targets_backward;
-		bool signal_on_barrier_sem = use_barrier_sem && num_targets_in_direction;
-		bool wait_on_barrier_sem = use_barrier_sem && num_targets_in_direction;
+                bool signal_on_barrier_sem = use_barrier_sem && num_targets_in_direction;
+                bool wait_on_barrier_sem = use_barrier_sem && num_targets_in_direction;
                 std::vector<uint32_t> writer_rt_args = {
                     intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
                     output_tensor.buffer()->address(),        // output_tensor_address
@@ -1159,7 +1159,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             const auto& output = output_tensors[1];
             const auto& intermed = output_tensors[0];
             auto barrier_semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->barrier_semaphore;
-	    
+
             // update senders
             uint32_t core_idx = 0;
             for (uint32_t link = 0; link < num_links; link++) {
@@ -1186,6 +1186,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
 
 			if (barrier_semaphore.has_value()) {
 			  worker_writer_sender_runtime_args[14] = barrier_semaphore.value().address();
+            }
 
                         core_idx++;
                     }
