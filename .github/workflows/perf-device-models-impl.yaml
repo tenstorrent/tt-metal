@@ -265,8 +265,7 @@ jobs:
         env:
           TRACY_NO_INVARIANT_CHECK: 1
         run: |
-          CLEAN_NAME=$(echo "${{ matrix.test-info.name }}" | tr ' ' '-')
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_${{ CLEAN_NAME }}_$(date +%Y_%m_%d).csv
+          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_${{ replace(matrix.test-info.name, ' ', '-') }}_$(date +%Y_%m_%d).csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
@@ -279,13 +278,9 @@ jobs:
       - name: Upload device perf report
         timeout-minutes: 5
         if: ${{ !cancelled() && steps.check-device-perf-report.conclusion == 'success' }}
-        run: |
-          CLEAN_NAME=$(echo "${{ matrix.test-info.name }}" | tr ' ' '-')
-          ARTIFACT_NAME="device-perf-report-csv-${{ matrix.test-info.test-type }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}-${CLEAN_NAME}"
-          echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_ENV"
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.artifact_name }}
+          name: device-perf-report-csv-${{ matrix.test-info.test-type }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}-${{ replace(matrix.test-info.name, ' ', '-') }}
           path: /work/${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
