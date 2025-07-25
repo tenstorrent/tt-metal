@@ -208,9 +208,10 @@ class AllToAllDispatchConfig(OpConfigBase):
 
     cluster_axis: int
     num_links: int
-    topology: ttnn.Topology = ttnn.Topology.Linear
     memory_config: ttnn.MemoryConfig
-    subdevice_id: int = None
+    global_semaphore: object
+    topology: ttnn.Topology = ttnn.Topology.Linear
+    subdevice_id: int | None = None
 
 
 @dataclass
@@ -218,9 +219,10 @@ class AllToAllCombineConfig(OpConfigBase):
     """Common parameters for a ttnn.all_to_all_combine op"""
 
     num_links: int
-    topology: ttnn.Topology = ttnn.Topology.Linear
     memory_config: ttnn.MemoryConfig
     axis: int
+    global_semaphore: object
+    topology: ttnn.Topology = ttnn.Topology.Linear
 
 
 @dataclass

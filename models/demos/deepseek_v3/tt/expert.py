@@ -197,7 +197,7 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
 
     @classmethod
     def _forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        assert x.memory_config() == cfg["input_memory_config"]
+        assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
         # Gate and up projections
         w1_out = ttnn.linear(x, **cfg["w1_experts"])
