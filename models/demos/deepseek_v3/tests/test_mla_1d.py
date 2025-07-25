@@ -104,7 +104,7 @@ def test_forward_pass(
     check_cache,
     reference,
     hf_config_short,
-    temp_dir,
+    tmp_path,
     mesh_row,
 ):
     hf_config = hf_config_short
@@ -119,8 +119,8 @@ def test_forward_pass(
     ### Set up configs
     ############################
     # Setup: Convert weights and get weight_config
-    logger.info(f"Converting weights for MLA1D to {temp_dir}")
-    weight_config = MLA1D.convert_weights(hf_config, reference_model.state_dict(), temp_dir, mesh_row)
+    logger.info(f"Converting weights for MLA1D to {tmp_path}")
+    weight_config = MLA1D.convert_weights(hf_config, reference_model.state_dict(), tmp_path, mesh_row)
 
     # Generate appropriate configs
     ccl = CCL1D(hf_config, mesh_row)
@@ -130,7 +130,7 @@ def test_forward_pass(
         model_config = MLA1D.decode_model_config(hf_config, mesh_row, ccl)
 
     # Create a new model state
-    model_state = MLA1D.create_state(hf_config, mesh_device=mesh_row)
+    model_state = MLA1D.create_state(hf_config, mesh_device=mesh_row, use_dp_cache=(mode == "decode"))
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state)
@@ -192,7 +192,7 @@ def test_forward_pass(
             torch.tensor(position_idxs),
             device=mesh_row,
             mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_row, dims=(None, None), mesh_shape=mesh_shape
+                mesh_row, dims=(None, 0), mesh_shape=mesh_shape
             ),  # TODO: Shard on batch when DP
             dtype=ttnn.int32,
         )

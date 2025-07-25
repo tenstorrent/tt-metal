@@ -1,14 +1,8 @@
 name: "Nightly tt-metal L2 tests"
 
 on:
-  workflow_dispatch:
-    inputs:
-      timeout:
-        required: false
-        type: number
-        default: 120
   schedule:
-    - cron: "0 22 * * *"
+    - cron: "0 6 * * *"
 
 jobs:
   build-artifact:

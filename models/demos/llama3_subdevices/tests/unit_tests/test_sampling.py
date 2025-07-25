@@ -169,7 +169,7 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
 )
 @pytest.mark.parametrize(
     "num_samples_with_threshold",
-    [(10, 25.5), (1000, 1.2)],
+    [(10, 25.5), (1000, 2.0)],
 )
 @pytest.mark.parametrize(
     "dtype",
@@ -244,7 +244,7 @@ def test_llama_sampling_inference(
 
     else:
         # Random inputs
-        torch_input = torch.randn(1, 1, 32, 512)
+        torch_input = torch.randn(1, 1, 32, 16 * 1024)
 
     tt_input = ttnn.from_torch(
         torch_input,

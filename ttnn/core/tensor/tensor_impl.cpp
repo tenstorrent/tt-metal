@@ -602,7 +602,7 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking, ttnn::QueueId cq
     mesh_cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
 
     HostStorage host_storage(std::move(distributed_host_buffer));
-    return Tensor(std::move(host_storage), tensor.tensor_spec(), tensor.distributed_tensor_config());
+    return Tensor(std::move(host_storage), tensor.tensor_spec(), tensor.distributed_tensor_config(), TensorTopology{});
 }
 
 template Tensor to_host_mesh_tensor<bfloat16>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id);
@@ -706,7 +706,9 @@ Tensor to_device(const Tensor& tensor, IDevice* target_device, const MemoryConfi
     TensorSpec tensor_spec(
         tensor.logical_shape(), tensor.tensor_spec().tensor_layout().with_memory_config(memory_config));
     auto device_buffer = tensor_impl::to_device_buffer<T>(tensor.storage(), target_device, tensor_spec, cq_id);
-    return Tensor(DeviceStorage{device_buffer}, tensor_spec, tensor.distributed_tensor_config());
+    // TODO (#25340): Add test for this
+    return Tensor(
+        DeviceStorage{device_buffer}, tensor_spec, tensor.distributed_tensor_config(), tensor.tensor_topology());
 }
 
 template Tensor to_device<bfloat16>(
@@ -827,7 +829,7 @@ Tensor to_device_mesh_tensor(
     auto mesh_buffer = allocate_mesh_buffer_on_device(mesh_device, tensor_spec);
     DeviceStorage mesh_storage =
         to_device_mesh_buffer<T>(tensor.storage(), mesh_buffer, tensor_spec, *tensor.tensor_attributes, cq_id);
-    return Tensor(std::move(mesh_storage), tensor_spec, tensor.distributed_tensor_config());
+    return Tensor(std::move(mesh_storage), tensor_spec, tensor.distributed_tensor_config(), tensor.tensor_topology());
 }
 
 template <typename T>
@@ -882,7 +884,8 @@ void copy_to_host_tensor(const Tensor& device_tensor, Tensor& host_tensor, bool 
     host_tensor = Tensor(
         HostStorage(std::move(dst_distributed_host_buffer)),
         device_tensor.tensor_spec(),
-        device_tensor.distributed_tensor_config());
+        device_tensor.distributed_tensor_config(),
+        TensorTopology{});
 }
 
 template <typename T>
@@ -905,7 +908,8 @@ void copy_to_device_tensor(const Tensor& host_tensor, Tensor& device_tensor, ttn
     device_tensor = Tensor(
         std::move(mesh_storage),
         host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
-        host_tensor.distributed_tensor_config());
+        host_tensor.distributed_tensor_config(),
+        device_tensor.tensor_topology());  // TODO (#25340): Add test for this
 }
 
 template Tensor to_device_mesh_tensor<bfloat16>(
@@ -1273,7 +1277,8 @@ Tensor to_layout(const Tensor& tensor, Layout target_layout) {
                 MemoryConfig{},
                 tensor.logical_shape(),
                 tensor.padded_shape())),
-        tensor.distributed_tensor_config());
+        tensor.distributed_tensor_config(),
+        TensorTopology{});
 }
 
 template Tensor to_layout<bfloat16>(const Tensor& tensor, Layout target_layout);
@@ -1400,7 +1405,8 @@ Tensor pad(
                 MemoryConfig{},
                 tensor.logical_shape(),
                 output_padded_shape)),
-        tensor.distributed_tensor_config());
+        tensor.distributed_tensor_config(),
+        TensorTopology{});
 }
 
 template Tensor pad<bfloat16>(
@@ -1503,7 +1509,8 @@ Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const
                 tensor.dtype(),
                 tt::tt_metal::PageConfig(tensor.layout(), tensor.tensor_spec().tile()),
                 tt::tt_metal::MemoryConfig{})),
-        tensor.distributed_tensor_config());
+        tensor.distributed_tensor_config(),
+        TensorTopology{});
 }
 
 template Tensor unpad<bfloat16>(
