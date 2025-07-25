@@ -54,8 +54,6 @@ static const auto PAGE_SIZE_ARGS = benchmark::CreateRange(32, 32 * KB, 2);
 static const std::vector<int64_t> TRANSFER_SIZE_ARGS{32 * KB, 512 * MB};
 static const auto BENCHMARK_ARGS = {PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS};
 
-static std::map<int, std::shared_ptr<MeshDevice>> devices;
-
 // Create a buffer of total transfer_size big that is paged with page_size
 std::shared_ptr<MeshBuffer> create_buffer(int page_size, int transfer_size, std::shared_ptr<MeshDevice> device) {
     using DataType = uint32_t;
@@ -68,10 +66,9 @@ std::shared_ptr<MeshBuffer> create_buffer(int page_size, int transfer_size, std:
     return MeshBuffer::create(mesh_buffer_config, device_local_config, device.get());
 }
 
-static void BM_write(benchmark::State& state) {
+static void BM_write(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
     auto page_size = state.range(0);
     auto transfer_size = state.range(1);
-    auto mesh_device = devices[state.range(2)];
 
     auto random_buffer_seed = std::chrono::system_clock::now().time_since_epoch().count();
     auto host_buffer = create_random_vector_of_bfloat16(transfer_size, 1000, random_buffer_seed);
@@ -85,10 +82,9 @@ static void BM_write(benchmark::State& state) {
     state.SetBytesProcessed(transfer_size * state.iterations());
 }
 
-static void BM_read(benchmark::State& state) {
+static void BM_read(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
     auto page_size = state.range(0);
     auto transfer_size = state.range(1);
-    auto mesh_device = devices[state.range(2)];
 
     auto device_buffer = create_buffer(page_size, transfer_size, mesh_device);
     std::vector<uint32_t> host_buffer;
@@ -116,18 +112,17 @@ int main(int argc, char** argv) {
         log_info(LogTest, "Device 1 is not available");
     }
 
-    devices = MeshDevice::create_unit_meshes(device_ids);
-
-    auto benchmark_args = {
-        PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS, std::vector<int64_t>(device_ids.begin(), device_ids.end())};
-    // Google Benchmark uses CPU time to calculate throughput by default, which is not suitable for this
-    // benchmark
-    benchmark::RegisterBenchmark("Write", BM_write)->ArgsProduct(benchmark_args)->UseRealTime();
-    benchmark::RegisterBenchmark("Read", BM_read)->ArgsProduct(benchmark_args)->UseRealTime();
+    auto devices = MeshDevice::create_unit_meshes(device_ids);
+    for (auto [device_id, device] : devices) {
+        // Device ID embedded here for extraction
+        auto benchmark_args = {PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS, {device_id}};
+        // Google Benchmark uses CPU time to calculate throughput by default, which is not suitable for this
+        // benchmark
+        benchmark::RegisterBenchmark("Write", BM_write, device)->ArgsProduct(benchmark_args)->UseRealTime();
+        benchmark::RegisterBenchmark("Read", BM_read, device)->ArgsProduct(benchmark_args)->UseRealTime();
+    }
 
     benchmark::RunSpecifiedBenchmarks();
-    // closes all opened devices.
-    devices.clear();
     benchmark::Shutdown();
 
     return 0;
