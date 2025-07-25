@@ -265,7 +265,7 @@ jobs:
           model_name: "yolov9c"
           commands: |
             WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov9c/tests/perf -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: vanilla_unet tests
@@ -274,7 +274,7 @@ jobs:
           model_name: "vanilla_unet"
           commands: |
             WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/vanilla_unet/test -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: Merge test reports
