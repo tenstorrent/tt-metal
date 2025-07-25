@@ -46,9 +46,7 @@ inline uint32_t calc_src_tile_index(
 }
 
 void kernel_main() {
-    // ------------------------------------------------------------------------
-    // 1) Compile-time arguments
-    // ------------------------------------------------------------------------
+    // Compile time arguments
     constexpr bool src_is_dram = static_cast<bool>(get_compile_time_arg_val(0));
     constexpr uint32_t RANK = get_compile_time_arg_val(1);
     constexpr uint32_t element_size = get_compile_time_arg_val(2);
@@ -57,9 +55,7 @@ void kernel_main() {
     constexpr uint32_t FACE_HEIGHT = get_compile_time_arg_val(5);
     constexpr uint32_t FACE_WIDTH = get_compile_time_arg_val(6);
 
-    // ------------------------------------------------------------------------
-    // 2) Runtime arguments
-    // ------------------------------------------------------------------------
+    // Runtime arguments
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_tile = get_arg_val<uint32_t>(1);
     const uint32_t end_tile = get_arg_val<uint32_t>(2);
@@ -71,9 +67,7 @@ void kernel_main() {
         dims_to_flip[i] = get_arg_val<uint32_t>(i + RANK + RANK + 3);
     }
 
-    // ------------------------------------------------------------------------
-    // 3) Derived constants
-    // ------------------------------------------------------------------------
+    // Derived constants
     constexpr uint32_t FACE_HW = FACE_HEIGHT * FACE_WIDTH;
     constexpr uint32_t FACE_HW_BYTES = FACE_HW * element_size;
     constexpr uint32_t NUM_FACES_H = TILE_HEIGHT / FACE_HEIGHT;
@@ -98,7 +92,7 @@ void kernel_main() {
         uint32_t src_tile_id = calc_src_tile_index(tile_id, RANK, dims_to_flip, tiled_shape, tile_strides);
         uint64_t tile_base_addr = get_noc_addr(src_tile_id, s0, 0);
 
-        // face reading order depends on type of flip we performing
+        // Face reading order depends on type of flip we performing
         static const uint32_t order_array[4][NUM_FACES] = {
             {0, 1, 2, 3},  // If both flip flags FALSE then no intra tile flipping is needed
             {1, 0, 3, 2},  // Horizontal flip
@@ -113,7 +107,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < NUM_FACES; i++) {
             uint64_t face_addr = tile_base_addr + face_reading_order[i] * FACE_HW_BYTES;
 
-            // if (is_vertical_flip = true) read rows in reverse order
+            // if (is_vertical_flip == true) read rows in reverse order
             // else read rows in normal order
             int32_t step = is_vertical_flip ? -1 : 1;
             int32_t start = is_vertical_flip ? FACE_HEIGHT - 1 : 0;

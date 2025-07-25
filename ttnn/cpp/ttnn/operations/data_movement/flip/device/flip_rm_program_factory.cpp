@@ -53,7 +53,6 @@ FlipDeviceOperation::MultiCoreRowMajor::cached_program_t FlipDeviceOperation::Mu
 
     uint32_t rank = input_tensor.logical_shape().rank();
     uint32_t element_size = input_tensor.element_size();
-    // uint32_t num_rows = detail::get_num_rows(input_tensor);
     uint32_t num_rows = input_tensor.physical_volume() / input_tensor.logical_shape()[-1];
 
     auto dims = operation_attributes.dims;
@@ -69,13 +68,25 @@ FlipDeviceOperation::MultiCoreRowMajor::cached_program_t FlipDeviceOperation::Mu
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
         split_work_to_cores(core_grid, num_rows);
 
+    log_debug(tt::LogOp, "num_rows: {}\n", num_rows);
+    log_debug(tt::LogOp, "core_grid: {}\n", core_grid);
+    log_debug(tt::LogOp, "num_cores: {}\n", num_cores);
+    log_debug(tt::LogOp, "all_cores: {}\n", all_cores);
+    log_debug(tt::LogOp, "core_group_1: {}\n", core_group_1);
+    log_debug(tt::LogOp, "core_group_2: {}\n", core_group_2);
+    log_debug(tt::LogOp, "num_rows_per_core_group_1: {}\n", num_rows_per_core_group_1);
+    log_debug(tt::LogOp, "num_rows_per_core_group_2: {}\n", num_rows_per_core_group_2);
+
     // ------------------------------------------------------------------------
     // 2) Create circular buffer
     // ------------------------------------------------------------------------
     DataFormat input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_page_size = detail::get_page_size(input_tensor);
+    uint32_t input_row_width = input_page_size / input_tensor.element_size();
     uint32_t num_input_pages_to_read = 2;  // double buffering
     uint32_t cb_size = num_input_pages_to_read * input_page_size;
+
+    log_debug(tt::LogOp, "input_row_width: {}\n", input_row_width);
 
     auto cb_inp = CreateCircularBuffer(
         program,
@@ -86,8 +97,8 @@ FlipDeviceOperation::MultiCoreRowMajor::cached_program_t FlipDeviceOperation::Mu
     // ------------------------------------------------------------------------
     // 3) Set compile time arguments for kernels
     // ------------------------------------------------------------------------
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, rank, input_page_size, num_rows};
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram, rank, input_page_size, num_rows};
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, input_page_size, input_row_width, rank};
+    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram, input_page_size};
 
     // ------------------------------------------------------------------------
     // 4) Create kernels
