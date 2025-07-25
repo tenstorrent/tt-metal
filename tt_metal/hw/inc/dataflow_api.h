@@ -945,7 +945,7 @@ FORCE_INLINE void noc_async_read_page(
     } else {
         page_size = (1 << addrgen.log_base_2_of_page_size);
     }
-    noc_async_read_one_packet(addrgen.get_noc_addr(id, offset, noc), dst_local_l1_addr, page_size, noc);
+    noc_async_read(addrgen.get_noc_addr(id, offset, noc), dst_local_l1_addr, page_size, noc);
 }
 
 // clang-format off
@@ -1033,8 +1033,7 @@ FORCE_INLINE void noc_async_read_page(
     uint32_t dst_local_l1_addr,
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
-    noc_async_read_page<InterleavedPow2AddrGenFast<DRAM>>(
-        id, addrgen, dst_local_l1_addr, 1 << addrgen.aligned_log_base_2_of_page_size, offset, noc);
+    noc_async_read_page<InterleavedPow2AddrGenFast<DRAM>>(id, addrgen, dst_local_l1_addr, offset, noc);
 }
 
 // clang-format off
@@ -1077,7 +1076,7 @@ FORCE_INLINE void noc_async_write_page(
     } else {
         page_size = (1 << addrgen.log_base_2_of_page_size);
     }
-    noc_async_write_one_packet(src_local_l1_addr, addrgen.get_noc_addr(id, offset, noc), size ? size : page_size, noc);
+    noc_async_write(src_local_l1_addr, addrgen.get_noc_addr(id, offset, noc), size ? size : page_size, noc);
 }
 
 // clang-format off
