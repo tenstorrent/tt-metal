@@ -249,11 +249,29 @@ void kernel_main() {
                 tiles_to_read = input_tile_id_end;
                 output_tile_id_start += output_tensor_Wt * output_tensor_Ht;
             }
+        } else {
+            for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
+                chunk_count = 0;
+                tiles_read = input_tile_id_start;
+                tiles_to_read = input_tile_id_end;
+                while (tiles_read < tiles_to_read) {
+                    if (chunk_count % chunks_per_sync == 0) {
+                        noc_semaphore_wait_min(
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
+                        sem_target++;
+                    }
+                    chunk_count++;
+                    uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
+                    uint32_t num_tiles_to_read = std::min(tiles_remaining_to_read, num_tiles_to_write_per_packet);
+                    tiles_read += num_tiles_to_read;
+                }
+                tiles_read = input_tile_id_start;
+                tiles_to_read = input_tile_id_end;
+            }
         }
 
         slices_received++;
     }
 
-    const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem);
-    noc_inline_dw_write(dest_noc_addr, 0);
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }

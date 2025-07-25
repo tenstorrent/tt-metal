@@ -44,7 +44,7 @@ from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather
     indirect=["device_params"],
     ids=["fabric_linear"],
 )
-@pytest.mark.parametrize("chunks_per_sync", [10])
+@pytest.mark.parametrize("chunks_per_sync", [20])
 @pytest.mark.parametrize("num_workers_per_link", [2])
 @pytest.mark.parametrize("num_buffers_per_channel", [2])
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
