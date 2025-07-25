@@ -6,17 +6,8 @@
 
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/pack_untilize.h"
+#include "common.cpp"
 
-// Helper constexpr function to compute num_blocks_per_col
-constexpr uint32_t compute_num_blocks(uint32_t per_core_block_tile_cnt, uint32_t max_bct) {
-    for (uint32_t bct = max_bct; bct >= 1; --bct) {
-        if (per_core_block_tile_cnt % bct == 0) {
-            return per_core_block_tile_cnt / bct;
-        }
-    }
-
-    return 1;
-}
 namespace NAMESPACE {
 void MAIN {
 #ifdef DST_ACCUM_MODE
@@ -31,7 +22,7 @@ void MAIN {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(2);
 
     // Compute optimal num_blocks_per_col and block_ct_dim
-    constexpr uint32_t num_blocks_per_col = compute_num_blocks(per_core_block_tile_cnt, max_bct);
+    constexpr uint32_t num_blocks_per_col = compute_num_blocks_per_column(per_core_block_tile_cnt, max_bct);
     constexpr uint32_t block_ct_dim = per_core_block_tile_cnt / num_blocks_per_col;
     constexpr uint32_t full_ct_dim = per_core_block_tile_cnt;
     compute_kernel_hw_startup(src_cb_id, out_cb_id);
