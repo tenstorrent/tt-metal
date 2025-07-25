@@ -98,7 +98,12 @@ void py_module(py::module& module) {
         .def(
             "__iter__",
             [](const MeshShape& ms) { return py::make_iterator(ms.view().begin(), ms.view().end()); },
-            py::keep_alive<0, 1>());
+            py::keep_alive<0, 1>())
+        .def(
+            "__getitem__", [](const MeshShape& ms, int index) { return ms[index]; }, py::arg("index"))
+        .def("dims", &MeshShape::dims)
+        .def("mesh_size", &MeshShape::mesh_size);
+
     static_cast<py::class_<MeshCoordinate>>(module.attr("MeshCoordinate"))
         .def(
             py::init([](size_t c0, size_t c1) { return MeshCoordinate(c0, c1); }),
@@ -127,7 +132,10 @@ void py_module(py::module& module) {
         .def(
             "__iter__",
             [](const MeshCoordinate& mc) { return py::make_iterator(mc.coords().begin(), mc.coords().end()); },
-            py::keep_alive<0, 1>());
+            py::keep_alive<0, 1>())
+        .def(
+            "__getitem__", [](const MeshCoordinate& mc, int index) { return mc[index]; }, py::arg("index"))
+        .def("dims", &MeshCoordinate::dims);
 
     static_cast<py::class_<MeshCoordinateRange>>(module.attr("MeshCoordinateRange"))
         .def(
