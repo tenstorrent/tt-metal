@@ -61,30 +61,32 @@ struct SocketConnectionConfig {
     EndpointConfig receiver;
 };
 
-struct SocketConfig {
+struct TestSocketConfig {
     std::vector<SocketConnectionConfig> connections;
     Rank sender_rank;
     Rank receiver_rank;
 };
 
+// TODO: remove this and just have optional vector of PatternType instead in TestConfig. Do not do this unless I am
+// sure.
 struct PatternExpansionConfig {
     PatternType type;  // "all_to_all" or "random_pairing"
-    std::optional<std::vector<SocketConfig>> sockets;
 };
 
 struct TestConfig {
     std::string name;
     std::optional<uint32_t> num_iterations;
     MemoryConfig memory_config;
-    std::optional<std::vector<SocketConfig>> sockets;
+    std::optional<std::vector<TestSocketConfig>> sockets;
     std::optional<std::vector<PatternExpansionConfig>> pattern_expansions;
 };
 
+// Second pass expansion of patterns
 struct ParsedTestConfig {
     std::string name;
     std::optional<uint32_t> num_iterations;
     MemoryConfig memory_config;
-    std::vector<SocketConfig> sockets;
+    std::vector<TestSocketConfig> sockets;
 };
 
 struct MeshSocketTestConfiguration {
@@ -114,17 +116,17 @@ private:
     PhysicalMeshConfig parse_physical_mesh(const YAML::Node& node);
     FabricConfig parse_fabric_config(const YAML::Node& node);
     TestConfig parse_test_config(const YAML::Node& node);
-    SocketConfig parse_socket_config(const YAML::Node& node);
+    TestSocketConfig parse_socket_config(const YAML::Node& node);
     SocketConnectionConfig parse_connection_config(const YAML::Node& node);
     EndpointConfig parse_endpoint_config(const YAML::Node& node);
     MemoryConfig parse_memory_config(const YAML::Node& node);
     PatternExpansionConfig parse_pattern_expansion(const YAML::Node& node);
 
     // Pattern expansion methods
-    ParsedTestConfig expand_test_config(const TestConfig& test_config);
-    std::vector<SocketConfig> expand_pattern(const PatternExpansionConfig& pattern);
-    std::vector<SocketConfig> expand_all_to_all_pattern(const PatternExpansionConfig& pattern);
-    std::vector<SocketConfig> expand_random_pairing_pattern(const PatternExpansionConfig& pattern);
+    std::vector<ParsedTestConfig> expand_test_config(const TestConfig& test_config);
+    std::vector<TestSocketConfig> expand_pattern(const PatternExpansionConfig& pattern);
+    std::vector<TestSocketConfig> expand_all_to_all_pattern(const PatternExpansionConfig& pattern);
+    std::vector<TestSocketConfig> expand_random_pairing_pattern(const PatternExpansionConfig& pattern);
 
     // Utility parsing methods
     MeshCoordinate parse_mesh_coordinate(const YAML::Node& node);
@@ -135,7 +137,7 @@ private:
     // Validation helper methods
     void validate_test_config(const TestConfig& test);
     void validate_parsed_test_config(const ParsedTestConfig& test);
-    void validate_socket_config(const SocketConfig& socket);
+    void validate_socket_config(const TestSocketConfig& socket);
     void validate_memory_config(const MemoryConfig& memory);
     void validate_endpoint_config(const EndpointConfig& endpoint);
     void validate_pattern_expansion_config(const PatternExpansionConfig& pattern);
