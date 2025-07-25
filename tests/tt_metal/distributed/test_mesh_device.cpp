@@ -65,10 +65,10 @@ TEST_F(MeshDevice2x4Test, MemoryAllocationStatistics) {
 }
 
 TEST_F(MeshDevice2x4Test, ViewIs2D) {
-    std::vector<MaybeRemote<IDevice*>> devices;
+    std::vector<IDevice*> devices;
     std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        devices.push_back(MaybeRemote<IDevice*>::local(mesh_device_->get_view().get_device(coord)));
+        devices.push_back(mesh_device_->get_view().get_device(coord));
         fabric_node_ids.push_back(mesh_device_->get_view().get_fabric_node_id(coord));
     }
 
