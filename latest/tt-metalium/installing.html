@@ -91,6 +91,12 @@
 <li class="toctree-l3"><a class="reference internal" href="#interested-in-contributing">Interested in Contributing?</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="#virtual-machine-requirements">Virtual Machine Requirements</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#overview">Overview</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#why-it-matters">Why It Matters</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#requirements-for-vms">Requirements for VMs</a></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -450,7 +456,7 @@ sudo<span class="w"> </span>cpupower<span class="w"> </span>frequency-set<span c
 <p>Download the latest Docker release from our <a class="reference external" href="https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&amp;amp;tab=packages&amp;amp;q=tt-metalium-ubuntu-22.04-release-amd64">Docker registry</a> page</p>
 <div class="highlight-sh notranslate">
 <div class="highlight"><pre><span></span>docker<span class="w"> </span>pull<span class="w"> </span>ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc
-docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span>/dev/hugepages-1G:/dev/hugepages-1G<span class="w"> </span>--device<span class="w"> </span>/dev/tenstorrent<span class="w"> </span>ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc<span class="w"> </span>bash
+docker<span class="w"> </span>run<span class="w"> </span>-it<span class="w"> </span>--rm<span class="w"> </span>--device<span class="w"> </span>/dev/tenstorrent<span class="w"> </span>ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc<span class="w"> </span>bash
 </pre></div>
 </div>
 <ul class="simple">
@@ -561,6 +567,41 @@ All binaries support only Linux and distros with glibc 2.34 or newer.</p>
 </h3>
 <ul class="simple">
 <li><p>For more information on development and contributing, visit Tenstorrent’s <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md">CONTRIBUTING.md page</a>.</p></li>
+</ul>
+</section>
+</section>
+<hr class="docutils">
+<section id="virtual-machine-requirements">
+<h2>Virtual Machine Requirements<a class="headerlink" href="#virtual-machine-requirements" title="Permalink to this heading"></a>
+</h2>
+<blockquote>
+<div>
+<p>[!IMPORTANT]</p>
+<p>If you are running this software in a virtual machine, additional configuration is required.</p>
+</div>
+</blockquote>
+<section id="overview">
+<h3>Overview<a class="headerlink" href="#overview" title="Permalink to this heading"></a>
+</h3>
+<p>This software requires an IOMMU (Input-Output Memory Management Unit) to be enabled at the host level to ensure proper memory isolation and device passthrough support. On virtual machines, this translates to enabling the virtual IOMMU (vIOMMU) feature in the hypervisor.</p>
+</section>
+<section id="why-it-matters">
+<h3>Why It Matters<a class="headerlink" href="#why-it-matters" title="Permalink to this heading"></a>
+</h3>
+<ul class="simple">
+<li><p>Enables secure and efficient DMA operations</p></li>
+<li><p>Required for PCIe passthrough to guest VMs (e.g., for hardware accelerators)</p></li>
+<li><p>Prevents host memory corruption by restricting device access</p></li>
+</ul>
+</section>
+<section id="requirements-for-vms">
+<h3>Requirements for VMs<a class="headerlink" href="#requirements-for-vms" title="Permalink to this heading"></a>
+</h3>
+<p>To run this software reliably in a VM:</p>
+<ul class="simple">
+<li><p>The host machine must have IOMMU support enabled (e.g., <code class="docutils literal notranslate"><span class="pre">intel_iommu=on</span></code> or <code class="docutils literal notranslate"><span class="pre">amd_iommu=on</span></code> in kernel parameters)</p></li>
+<li><p>The virtual machine must be provisioned with a vIOMMU</p></li>
+<li><p>The vIOMMU must support DMA remapping (Intel VT-d, AMD-Vi)</p></li>
 </ul>
 </section>
 </section>
