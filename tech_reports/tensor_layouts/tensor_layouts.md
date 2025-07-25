@@ -61,7 +61,7 @@ The hardware architecture supports tile shapes of `32x32` , `16x32` , `4x32`, `2
 #### 3.2.2 Faces
 Data inside the tile isn't contiguous. Each tile is split into faces ("sub-tiles"). By default, tile size is 32x32, and face size is 16x16 -- 4 faces per tile and each tile lies one after another contiguously in memory in row-major fashion (i.e., face0->face1->face2->face3 on the picture below)
 
-The reason for using faces is that the matrix engine natively multiplies 16x16 matrices, and tile multiplication is composed of a few face multiplications.
+The reason for using faces is that the matrix engine natively multiplies 16x16 matrices, and tile multiplication is decomposed into multiple face multiplications.
 
 <img src="images/tile_faces.svg" style="width:500px;"/>
 
@@ -82,7 +82,7 @@ Also, you can specify tile size:
 ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, tile=ttnn.Tile((16, 32), transpose_tile=True))
 ```
 
-If transpose_tile==true, then the faces' order is transposed, i.e., they are placed in memory in col-major fashion (face0->face2->face1->face3 on the image above), and values inside faces are also transposed.
+If transpose_tile==true, then the faces' order is transposed, i.e. they are placed in memory in col-major fashion (face0->face2->face1->face3 on the image above), and values inside faces are also transposed.
 
 
 ## 4. Memory Layout

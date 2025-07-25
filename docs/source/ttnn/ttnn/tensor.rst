@@ -67,7 +67,7 @@ When the height or width of the tensor are not divisible by 32, padding is autom
     :align: center
     :alt: Tensor With Tile Layout
 
-    4x4 tensor stored using 2x2 tiles. Note that ttnn Tensors can only have 32x32 tiles. This image is for illustrative purposes only.
+    4x4 tensor stored using 2x2 tiles. Note that ttnn Tensors by default have 32x32 tiles. This image is for illustrative purposes only.
 
 You can create tile layout tensors using any creation function (e.g. :ref:`ttnn.full<ttnn.full>`, :ref:`ttnn.from_torch<ttnn.from_torch>`)  by passing `layout=ttnn.TILE_LAYOUT` as an argument. You can also convert a row-major tensor to tile layout with :ref:`ttnn.to_layout<ttnn.to_layout>`.
 
@@ -92,10 +92,10 @@ Data inside the tile isn't contiguous. Each tile is split into faces ("sub-tiles
 
     A tile with 4 faces. Each face is 16x16 elements.
 
-The reason for using faces is that the matrix engine natively multiplies 16x16 matrices, and tile multiplication is composed of a few face multiplications.
+The reason for using faces is that the matrix engine natively multiplies 16x16 matrices, and tile multiplication is decomposed into multiple face multiplications.
 
 To create a tensor with a tile layout, you can pass layout=ttnn.TILE_LAYOUT in most tensor-creation functions, or change row-major tensor with :ref:`ttnn.to_layout<ttnn.to_layout>`.
-You can specify tile size and faces orientation. If transpose_tile==true, then the faces' order is transposed, i.e., they are placed in memory in col-major fashion (face0->face2->face1->face3 on the image above), and values inside faces are also transposed.
+You can specify tile size and face orientation. If transpose_tile==true, then the faces' order is transposed, i.e. they are placed in memory in col-major fashion (face0->face2->face1->face3 on the image above), and values inside faces are also transposed.
 
 .. code-block:: python
 
