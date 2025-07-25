@@ -28,7 +28,6 @@ namespace tt::tt_metal {
 class CommandQueueFixture : public DispatchFixture {
 protected:
     tt::tt_metal::IDevice* device_;
-
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
