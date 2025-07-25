@@ -2,22 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import sys
-import ttnn
-import torch
 import pytest
-from pathlib import Path
-import torch.nn as nn
+import torch
 from loguru import logger
-from ultralytics import YOLO
-from tests.ttnn.utils_for_testing import assert_with_pcc
+
+import ttnn
+from models.demos.yolov8s.common import load_torch_model
+from models.demos.yolov8s.tt.tt_yolov8s_utils import custom_preprocessor
+from models.demos.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel
 from models.utility_functions import disable_persistent_kernel_cache
-from models.demos.yolov8s.tt.tt_yolov8s_utils import (
-    ttnn_decode_bboxes,
-    custom_preprocessor,
-)
-from models.demos.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel, TtConv, TtC2f, TtSppf, TtDFL
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True, ids=["0"])
@@ -27,17 +21,15 @@ from models.demos.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel, TtConv, TtC2f, 
     ids=["input_tensor1"],
 )
 @pytest.mark.parametrize(
-    "use_weights_from_ultralytics",
+    "use_pretrained_weights",
     [True],
 )
-def test_yolov8s_640(device, input_tensor, use_weights_from_ultralytics):
+def test_yolov8s_640(device, input_tensor, use_pretrained_weights, model_location_generator):
     disable_persistent_kernel_cache()
 
     inp_h, inp_w = input_tensor.shape[2], input_tensor.shape[3]
-    if use_weights_from_ultralytics:
-        torch_model = YOLO("yolov8s.pt")
-        torch_model = torch_model.model
-        torch_model.eval()
+    if use_pretrained_weights:
+        torch_model = load_torch_model(model_location_generator)
         state_dict = torch_model.state_dict()
 
     parameters = custom_preprocessor(device, state_dict, inp_h=inp_h, inp_w=inp_w)

@@ -16,11 +16,11 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_perf_device_bare_metal_yolov8s(batch_size, expected_perf):
+def test_perf_device_yolov8s(batch_size, expected_perf):
     subdir = "ttnn_yolov8s"
     num_iterations = 1
     margin = 0.05
-    command = f"pytest tests/ttnn/integration_tests/yolov8s/test_yolov8s.py::test_yolov8s_640[use_weights_from_ultralytics=True-input_tensor1-0]"
+    command = f"pytest models/demos/yolov8s/tests/pcc/test_yolov8s.py::test_yolov8s_640"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
