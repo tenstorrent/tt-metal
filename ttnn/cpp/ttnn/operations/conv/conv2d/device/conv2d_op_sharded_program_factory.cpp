@@ -80,7 +80,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
     const uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
-    const bool skip_mcast = is_singlecore_skip_mcast(parallelization_config);
+    const std::tuple<bool, bool>& skip_mcast =
+        conv_skip_mcast(parallelization_config, a.memory_config().memory_layout());
+    const bool skip_activation_mcast = std::get<0>(skip_mcast);
+    const bool skip_weights_mcast = std::get<1>(skip_mcast);
 
     const tt::DataFormat tilized_act_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
@@ -553,7 +556,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     std::vector<uint32_t> act_mcast_noc_y;
     if (block_sharded) {
         // 2D mcast
-        if (!skip_mcast) {
+        if (!skip_weights_mcast) {
             if (transpose_mcast) {
                 mcast_sender_cores = CoreRange(top_left_core, CoreCoord(0, num_cores_y - 1));
                 mcast_receiver_cores = CoreRange(CoreCoord(1, 0), bottom_right_core);
@@ -636,7 +639,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         shard_shape,
         has_bias,
         is_conv_1d_depthwise_conv,
-        skip_mcast);
+        skip_activation_mcast);
 
     access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size = conv_sharded_input_top_left_indices[0].size();
 
@@ -755,8 +758,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     std::map<std::string, std::string> writer_defines;
     std::map<std::string, std::string> writer_mcast_sender_defines;
     std::map<std::string, std::string> compute_defines;
-    if (skip_mcast) {
+    if (skip_activation_mcast) {
         reader_defines["SKIP_MCAST"] = "1";
+    }
+    if (skip_weights_mcast) {
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
     if (has_bias) {

@@ -462,8 +462,13 @@ bool is_1d_deptwise_conv(
     return is_depthwise_conv && is_1d_conv(kernel_width, image_width) && !has_bias;
 }
 
-bool is_singlecore_skip_mcast(const OptimizedConvParallelizationConfig& parallelization_config) {
-    return parallelization_config.num_cores_c * parallelization_config.num_cores_nhw == 1;
+std::tuple<bool, bool> conv_skip_mcast(
+    const OptimizedConvParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout) {
+    if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        return {parallelization_config.num_cores_c == 1, parallelization_config.num_cores_nhw == 1};
+    }
+    const bool skip_mcast = parallelization_config.num_cores_c * parallelization_config.num_cores_nhw == 1;
+    return {skip_mcast, skip_mcast};
 }
 
 template <typename DeviceType>
