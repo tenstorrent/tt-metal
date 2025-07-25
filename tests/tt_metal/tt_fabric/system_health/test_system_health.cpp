@@ -330,7 +330,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
         num_connections_per_side = 4;
     } else if (cluster_type == tt::ClusterType::P150_X8) {
         num_expected_chips = 8;
-        num_expected_mmio_chips = 4;
+        num_expected_mmio_chips = 8;
         num_connections_per_side = 2;
     } else {
         GTEST_SKIP() << "Mesh check not supported for system type " << enchantum::to_string(cluster_type);
