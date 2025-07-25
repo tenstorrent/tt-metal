@@ -175,7 +175,8 @@ def evaluation(
             num_iterations = 105
         elif model_name in ["YOLOv9c", "YOLOv7"]:
             num_iterations = 20
-
+        elif model_name == "YOLOv12x":
+            num_iterations = 14
     dataset_name = "coco-2017"
     dataset = fiftyone.zoo.load_zoo_dataset(
         dataset_name,
@@ -238,7 +239,7 @@ def evaluation(
         else:
             ttnn_im = im.permute((0, 2, 3, 1))
 
-        if model_name in ["YOLOv11"]:
+        if model_name in ["YOLOv11", "YOLOv12x"]:
             ttnn_im = ttnn_im.reshape(
                 1,
                 1,
@@ -254,8 +255,11 @@ def evaluation(
             "YOLOv8x",
             "YOLOv11n",
             "YOLOv7",
+            "YOLOv12x",
         ]:
             ttnn_im = ttnn.from_torch(ttnn_im, dtype=input_dtype, layout=input_layout, device=device)
+        elif model_name == "YOLOv12x":
+            ttnn_im = ttnn.from_torch(ttnn_im, dtype=input_dtype, layout=input_layout)
 
         if model_type != "torch_model":
             preprocessed_images.append((ttnn_im, im, im0s))
@@ -296,6 +300,9 @@ def evaluation(
                 preds_temp = model.run(ttnn_im)
                 preds = ttnn.clone(preds_temp[0])
                 preds = ttnn.to_torch(preds, dtype=torch.float32)
+            elif model_name == "YOLOv12x":
+                preds_temp = model.run(torch_input_tensor=im)
+                preds = ttnn.to_torch(preds_temp, dtype=torch.float32)
             else:
                 preds = model(ttnn_im)
                 preds[0] = ttnn.to_torch(preds[0], dtype=torch.float32)
@@ -749,3 +756,65 @@ def test_yolov7(device, model_type, res, reset_seeds):
         save_dir=save_dir,
         model_name="YOLOv7",
     )
+
+
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        "tt_model",
+        "torch_model",  # Uncomment to run the demo with torch model.
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 32768, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
+def test_yolov12x(device, model_type, reset_seeds):
+    from models.experimental.yolov12x.reference import yolov12x
+    from models.experimental.yolov12x.runner.performant_runner import YOLOv12xPerformantRunner
+
+    disable_persistent_kernel_cache()
+
+    if model_type == "torch_model":
+        state_dict = None
+        torch_model = YOLO("yolo12x.pt")
+        state_dict = torch_model.state_dict()
+
+        model = yolov12x.YoloV12x()
+        state_dict = model.state_dict() if state_dict is None else state_dict
+
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(model.state_dict().items(), ds_state_dict.items()):
+            if isinstance(parameter2, torch.FloatTensor):
+                new_state_dict[name1] = parameter2
+        model.load_state_dict(new_state_dict)
+        model.eval()
+        logger.info("Inferencing [Torch] Model")
+    else:
+        model = YOLOv12xPerformantRunner(
+            device,
+            device_batch_size=1,
+            act_dtype=ttnn.bfloat8_b,
+            weight_dtype=ttnn.bfloat8_b,
+            model_location_generator=None,
+        )
+        model._capture_yolov12x_trace_2cqs()
+
+        logger.info("Inferencing [TTNN] Model")
+
+    save_dir = "models/experimental/yolov12x/demo"
+
+    input_dtype = ttnn.bfloat16
+    input_layout = ttnn.ROW_MAJOR_LAYOUT
+
+    evaluation(
+        device=device,
+        res=(640, 640),
+        model_type=model_type,
+        model=model,
+        input_dtype=input_dtype,
+        input_layout=input_layout,
+        save_dir=save_dir,
+        model_name="YOLOv12x",
+    )
+    logger.info("Inference done")
