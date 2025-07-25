@@ -37,6 +37,7 @@ target_sources(
         all_gather_replicate_async/all_gather_replicate_async.cpp
         all_gather_replicate_async/device/all_gather_replicate_async_op.cpp
         all_gather_replicate_async/device/all_gather_replicate_async_program_factory.cpp
+        all_gather_replicate_async/device/llama_all_gather_mm_async_program_factory.cpp
         all_to_all_async/all_to_all_async.cpp
         all_to_all_async/device/all_to_all_program_factory.cpp
         all_to_all_async/device/all_to_all_async_op.cpp

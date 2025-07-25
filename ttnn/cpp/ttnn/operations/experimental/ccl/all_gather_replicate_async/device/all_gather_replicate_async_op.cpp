@@ -248,7 +248,6 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherReplicateAsync::create_pr
             return all_gather_replicate_async_sharded(
                 input_tensors[0],
                 input_tensors[1],
-                input_tensors[1],
                 input_tensors[2],
                 output_tensors[0],
                 target_device,
@@ -479,7 +478,7 @@ tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_
             log_trace(
                 tt::LogOp,
                 "Detected all gather replicate specialized shape. all_gather_replicate_async_sharded is called");
-            return all_gather_replicate_async_sharded(
+            return llama_all_gather_mm_async_sharded(
                 input_tensors[0],   // in0
                 input_tensors[1],   // in1
                 output_tensors[0],  // intermediate_tensor
