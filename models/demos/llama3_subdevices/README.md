@@ -83,7 +83,7 @@ This would run the same test as 64K but with a 128K input prompt instead.
 - **paged_attention (bool)**: Whether to use paged attention (required for long contexts and vLLM compatibility). On by default.
 - **page_params (dict)**: Parameters for paged attention `{block_size, max_num_blocks}`.
 - **sampling_params (dict)**: Sampling parameters for decoding `{temperature, top_p}`. If `temperature = 0`, it uses greedy decoding.
-- **stop_at_eos (bool)**: Whether to stop decoding when the model generates an end-of-sequence (EoS) token.
+- **stop_at_eos (bool)**: Whether to stop decoding when the model generates an end-of-sequence (EoS) token. This is currently hard set to False in `text_demo.py` for testing purposes.
 - **apc_test**: [Dev Flag] Runs a specific internal CI test.
 - **pcc_check**: [Dev Flag] Enables PCC comparison. To be used by specific internal CI tests.
 - **prefill-only profile**: [Dev Flag] Runs prefill only. To be used when measuring prefill OP performance.
