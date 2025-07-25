@@ -18,7 +18,7 @@ from helpers.format_arg_mapping import (
     format_dict,
 )
 from helpers.format_config import DataFormat
-from helpers.pack import pack_bfp8_b, pack_bfp16, pack_fp32
+from helpers.pack import pack_bfp16, pack_fp32
 from helpers.param_config import (
     input_output_formats,
     parametrize,
@@ -151,10 +151,6 @@ def test_ttnn_where(test_name, formats, dest_acc, mathop, test_case):
         pack_function_A = pack_bfp16
         pack_function_B = pack_bfp16
         pack_function_C = pack_bfp16
-    elif formats.input_format == DataFormat.Bfp8_b:
-        pack_function_A = pack_bfp8_b
-        pack_function_B = pack_bfp8_b
-        pack_function_C = pack_bfp8_b
     else:
         raise ValueError(f"Unsupported input format: {formats.input_format}")
 
@@ -184,8 +180,7 @@ def test_ttnn_where(test_name, formats, dest_acc, mathop, test_case):
         golden,
         dtype=(
             format_dict[formats.output_format]
-            if formats.output_format
-            in [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
+            if formats.output_format in [DataFormat.Float16_b, DataFormat.Float32]
             else torch.bfloat16
         ),
     )
@@ -193,8 +188,7 @@ def test_ttnn_where(test_name, formats, dest_acc, mathop, test_case):
         res_from_L1,
         dtype=(
             format_dict[formats.output_format]
-            if formats.output_format
-            in [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
+            if formats.output_format in [DataFormat.Float16_b, DataFormat.Float32]
             else torch.bfloat16
         ),
     )
@@ -258,10 +252,6 @@ def test_ttnn_where_mcw(test_name, formats, dest_acc, mathop, height, width):
         pack_function_A = pack_bfp16
         pack_function_B = pack_bfp16
         pack_function_C = pack_bfp16
-    elif formats.input_format == DataFormat.Bfp8_b:
-        pack_function_A = pack_bfp8_b
-        pack_function_B = pack_bfp8_b
-        pack_function_C = pack_bfp8_b
     else:
         raise ValueError(f"Unsupported input format: {formats.input_format}")
 
@@ -290,8 +280,7 @@ def test_ttnn_where_mcw(test_name, formats, dest_acc, mathop, height, width):
         golden,
         dtype=(
             format_dict[formats.output_format]
-            if formats.output_format
-            in [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
+            if formats.output_format in [DataFormat.Float16_b, DataFormat.Float32]
             else torch.bfloat16
         ),
     )
@@ -302,8 +291,7 @@ def test_ttnn_where_mcw(test_name, formats, dest_acc, mathop, height, width):
         res_from_L1,
         dtype=(
             format_dict[formats.output_format]
-            if formats.output_format
-            in [DataFormat.Float16, DataFormat.Float16_b, DataFormat.Float32]
+            if formats.output_format in [DataFormat.Float16_b, DataFormat.Float32]
             else torch.bfloat16
         ),
     )
