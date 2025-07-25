@@ -18,7 +18,6 @@
 class RandomGenerationTests : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Set a fixed seed for reproducible tests
         ttml::autograd::ctx().set_seed(42);
     }
 
@@ -31,7 +30,6 @@ TEST_F(RandomGenerationTests, ParallelUniformInitDeterminism) {
     // fixed seed.
     constexpr size_t size = 1024 * 256 * 384;  // ~100M elements
 
-    // Create two vectors for comparison
     std::vector<float> vec1(size);
     std::vector<float> vec2(size);
 
@@ -40,12 +38,10 @@ TEST_F(RandomGenerationTests, ParallelUniformInitDeterminism) {
     ttml::core::parallel_generate(
         std::span{vec2.data(), vec2.size()}, []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); }, 42);
 
-    // Results should be identical
     EXPECT_EQ(vec1, vec2);
 }
 
 TEST_F(RandomGenerationTests, UniformInitsGoodMeanAndRange) {
-    // Test that parallel and sequential produce different but valid results
     constexpr size_t size = 1024 * 256 * 384;  // ~100M elements
 
     std::vector<float> parallel_vec(size);
@@ -56,14 +52,10 @@ TEST_F(RandomGenerationTests, UniformInitsGoodMeanAndRange) {
         []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
         42);
 
-    // Initialize with sequential method
     ttml::core::sequential_generate(
         std::span{sequential_vec.data(), sequential_vec.size()},
         []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
         42);
-
-    // Results will be different due to different generation patterns
-    // But both should be valid uniform distributions
 
     // Check that both vectors contain values in the expected range
     auto check_range = [](const std::vector<float>& vec) {
@@ -73,7 +65,6 @@ TEST_F(RandomGenerationTests, UniformInitsGoodMeanAndRange) {
     EXPECT_TRUE(check_range(parallel_vec));
     EXPECT_TRUE(check_range(sequential_vec));
 
-    // Check that both have reasonable statistical properties
     auto compute_mean = [](const std::vector<float>& vec) {
         double sum = std::accumulate(vec.begin(), vec.end(), 0.0);
         return sum / vec.size();
@@ -82,7 +73,6 @@ TEST_F(RandomGenerationTests, UniformInitsGoodMeanAndRange) {
     double parallel_mean = compute_mean(parallel_vec);
     double sequential_mean = compute_mean(sequential_vec);
 
-    // Both means should be close to 0
     EXPECT_NEAR(parallel_mean, 0.0, 0.01);
     EXPECT_NEAR(sequential_mean, 0.0, 0.01);
 }
