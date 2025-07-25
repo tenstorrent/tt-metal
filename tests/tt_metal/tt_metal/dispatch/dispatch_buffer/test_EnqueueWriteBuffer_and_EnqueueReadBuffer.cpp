@@ -229,6 +229,8 @@ vector<ShardedSubBufferStressTestConfig> generate_sharded_sub_buffer_test_config
     return configs;
 }
 
+// These are helper functions that are used for Slow Dispatch based IO. These are used in tests mixing Fast Dispatch IO
+// with Slow Dispatch for validation.
 void WriteToUnitMeshBuffer(
     std::shared_ptr<distributed::MeshDevice> mesh_device,
     const TestBufferConfig& config,
@@ -261,6 +263,7 @@ void ReadFromUnitMeshBuffer(
     detail::ReadFromBuffer(*slow_dispatch_buffer, dst);
 }
 
+// These are helper functions used to write and read from a region of a MeshBuffer (sub-buffer)
 void EnqueueWriteMeshSubBuffer(
     distributed::MeshCommandQueue& cq,
     const std::shared_ptr<distributed::MeshBuffer> buffer,
@@ -301,18 +304,13 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(
     // Clear out command queue
     uint16_t channel =
         tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
-
-
     chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
-
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
     uint32_t cq_start =
         MetalContext::instance().dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
     auto device_coord = distributed::MeshCoordinate(0, 0);
-
     std::vector<uint32_t> cq_zeros((cq_size - cq_start) / sizeof(uint32_t), 0);
-
     tt::tt_metal::MetalContext::instance().get_cluster().write_sysmem(
         cq_zeros.data(),
         (cq_size - cq_start),
@@ -491,17 +489,16 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                 distributed::DeviceLocalBufferConfig local_config{
                     .page_size = config.page_size(), .buffer_type = buftype, .bottom_up = false};
                 const distributed::ReplicatedBufferConfig buffer_config{.size = buf_size};
-
                 auto buf = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
 
-                auto slow_dispatch_buffer =
-                    Buffer::create(device, buf->address(), buf->size(), config.page_size(), buftype);
+                TestBufferConfig test_config = {
+                    .num_pages = buf_size / config.page_size(), .page_size = config.page_size(), .buftype = buftype};
 
                 vector<uint32_t> src2 = src;
                 if (cq_write) {
                     distributed::WriteShard(cq, buf, src, device_coord, false);
                 } else {
-                    detail::WriteToBuffer(*slow_dispatch_buffer, src);
+                    local_test_functions::WriteToUnitMeshBuffer(mesh_device, test_config, src, buf, std::nullopt);
                     if (buftype == BufferType::DRAM) {
                         tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
                     } else {
@@ -518,7 +515,7 @@ void stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                 if (cq_read) {
                     distributed::ReadShard(cq, res, buf, device_coord, true);
                 } else {
-                    detail::ReadFromBuffer(*slow_dispatch_buffer, res);
+                    local_test_functions::ReadFromUnitMeshBuffer(mesh_device, test_config, res, buf, std::nullopt);
                 }
                 EXPECT_EQ(src, res);
             }
@@ -593,7 +590,6 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
             unique_vectors[i % unique_vectors.size()],
             distributed::MeshCoordinate(0, 0),
             false);
-        // EnqueueWriteBuffer(cq, bufs[bufs.size() - 1], unique_vectors[i % unique_vectors.size()], false);
     }
 
     log_info(tt::LogTest, "Comparing {} buffers", bufs.size());
@@ -602,7 +598,6 @@ bool stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_wrap(
     uint32_t idx = start;
     for (const auto& buffer : bufs) {
         distributed::ReadShard(cq, dst, buffer, distributed::MeshCoordinate(0, 0), true);
-        // EnqueueReadBuffer(cq, buffer, dst, true);
         pass &= dst == unique_vectors[idx % unique_vectors.size()];
         idx++;
     }
