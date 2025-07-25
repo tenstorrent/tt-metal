@@ -75,24 +75,27 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      # - name: ⬇️  Setup Job
-      #   uses: tenstorrent/tt-metal/.github/actions/setup-job@main
-      #   timeout-minutes: 10
-      #   with:
-      #     wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
-      - name: 🐍 Create virtual environment using tutorials_venv.sh
+      - name: 🐍 Install minimum set of packages
         timeout-minutes: 10
         run: |
           cd docs/source/ttnn/ttnn/tutorials/ttnn_tutorials_basic_python
-          chmod +x tutorials_venv.sh
-          ./tutorials_venv.sh
+          python3 -m pip install -r tutorials-dev.txt
+
+      - name: 🐍 Install testing utils
+        timeout-minutes: 10
+        run: |
+          cd docs/source/ttnn/ttnn/tutorials/ttnn_tutorials_basic_python
+          python3 -m pip install -r tutorials-tests.txt
 
       - name: 🧪 Run tutorial tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          cd docs/source/ttnn/ttnn/tutorials/ttnn_tutorials_basic_python
-          source tutorials_env/bin/activate
           cd /work  # Go back to root for test_tutorials.py
           python -m pytest tests/ttnn/unit_tests/test_tutorials.py -v
 
