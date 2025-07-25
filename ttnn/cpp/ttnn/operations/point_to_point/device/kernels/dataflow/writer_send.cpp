@@ -6,8 +6,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
-#include "dprint_pages.h"
-
 using tt::data_movement::common::round_up;
 using tt::data_movement::common::tt_memmove;
 
@@ -20,7 +18,6 @@ inline auto& connection_direction_collection(const bool dst_is_forward, FabricCo
 }
 
 void kernel_main() {
-    DPRINT << "SEND WRITER START \n";
 
     constexpr uint32_t sender_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t packet_cb_id = get_compile_time_arg_val(1);
@@ -42,7 +39,6 @@ void kernel_main() {
     const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(8);
     const bool dst_is_forward = get_arg_val<uint32_t>(9);
 
-    const uint32_t aligned_page_segment_size_bytes = round_up(page_size_bytes / page_segments, alignment);
     const uint32_t aligned_page_size_bytes = round_up(page_size_bytes, alignment);
 
     // reusing the last arg for fabric setup, therefore index overlaps.
@@ -77,35 +73,33 @@ void kernel_main() {
     for (uint32_t page_idx = page_idx_start, packet_page_idx = 0; page_idx < page_idx_end; ++page_idx) {
         cb_wait_front(sender_cb_id, 1);
         const uint32_t src_page_base_addr = get_read_ptr(sender_cb_id);
-
         for (uint32_t page_segment_idx = 0; page_segment_idx < page_segments; ++page_segment_idx) {
-            const uint32_t page_offset = page_segment_idx * aligned_page_segment_size_bytes;
+            const uint32_t page_offset = page_segment_idx * payload_size_bytes;
             const uint32_t src_addr = src_page_base_addr + page_offset;
             const uint32_t transfer_size_bytes =
-                std::min(page_size_bytes - page_offset, aligned_page_segment_size_bytes);
+                std::min(page_size_bytes - page_offset, payload_size_bytes);
 
             // copy page to packet buffer with offset
             const uint32_t packet_addr = packet_base_addr + packet_page_idx * aligned_page_size_bytes;
             tt_memmove<false, false, false, 0>(packet_addr, src_addr, transfer_size_bytes);
-
             ++packet_page_idx;
-            if (packet_page_idx == curr_pages_per_packet) {
-                const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer_addrgen, 0, 0);
+            DPRINT<<"packet_page_idx: "<<packet_page_idx<<"curr_pages_per_packet: "<< curr_pages_per_packet<<"\n";
+	    if (packet_page_idx >= curr_pages_per_packet) {
+            const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer_addrgen, 0, 0);
+            packet_header_ptr->to_noc_unicast_write(
+                tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, align(payload_size_bytes, alignment));
 
-                packet_header_ptr->to_noc_unicast_write(
-                    tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, payload_size_bytes);
+            connection_direction.wait_for_empty_write_slot();
+            connection_direction.send_payload_without_header_non_blocking_from_address(
+                packet_base_addr, payload_size_bytes);
+            connection_direction.send_payload_flush_non_blocking_from_address(
+                (uint32_t)packet_header_ptr, packet_header_size_bytes);
 
-                connection_direction.wait_for_empty_write_slot();
-                connection_direction.send_payload_without_header_non_blocking_from_address(
-                    packet_base_addr, payload_size_bytes);
-                connection_direction.send_payload_flush_non_blocking_from_address(
-                    (uint32_t)packet_header_ptr, packet_header_size_bytes);
+            // reset counters
+            packet_page_idx = 0;
+            curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx - 1);
 
-                // reset counters
-                packet_page_idx = 0;
-                curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx - 1);
-
-                ++packet_idx;
+            ++packet_idx;
             }
         }
         cb_pop_front(sender_cb_id, 1);
@@ -126,6 +120,4 @@ void kernel_main() {
     connection_direction.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
 
     fabric_connection.close();
-
-    DPRINT << "SEND WRITER DONE \n";
 }

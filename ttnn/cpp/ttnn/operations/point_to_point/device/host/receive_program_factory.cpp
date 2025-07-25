@@ -27,7 +27,6 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const auto [packet_size_bytes, num_pages_per_packet, num_page_segments, total_packets] =
         detail::compute_aligned_packet_dims(
             output_tensor.dtype(), output_page_size_bytes, output_num_pages, l1_alignment);
-
     // distribute work
     const CoreCoord use_cores = {1, 1};
 

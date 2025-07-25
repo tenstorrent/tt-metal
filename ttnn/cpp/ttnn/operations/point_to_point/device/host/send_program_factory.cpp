@@ -111,11 +111,11 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     // Note this ID is hardcoded in the reader kernel
     constexpr auto sender_cb_id = tt::CBIndex::c_0;
     constexpr auto cb_num_pages = 2;
-
+    const uint32_t aligned_input_page_size_bytes = tt::round_up(input_page_size_bytes, l1_alignment);
     tt::DataFormat input_dataformat = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::tt_metal::CircularBufferConfig cb_sender_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * input_page_size_bytes, {{sender_cb_id, input_dataformat}})
-            .set_page_size(sender_cb_id, input_page_size_bytes);
+        tt::tt_metal::CircularBufferConfig(cb_num_pages * aligned_input_page_size_bytes, {{sender_cb_id, input_dataformat}})
+            .set_page_size(sender_cb_id, aligned_input_page_size_bytes);
     tt::tt_metal::CBHandle cb_sender_handle = CreateCircularBuffer(program, all_cores, cb_sender_config);
 
     // allocate space for packet headers for payload sempahore

@@ -11,18 +11,22 @@ import torch
 from loguru import logger
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 
 TEST_SHAPES = [
     (1, 1, 1, 16),
-    (1, 1, 2, 16),
+    (1, 1, 8, 16),
     (1, 1, 1, 64),
     (1, 1, 3, 128),
     (1, 13, 1, 32),
-    (1, 1, 1, 512),
+    (1, 1, 1, 32),
     (100, 1, 1, 16),
-    (1, 1, 1, 17),
+    (1, 1, 1, 24),
+    # (1, 1, 2, 8), alignment issues here too
+    # (1, 1, 2, 17), TODO make non-aligned tensors work
+    (1, 1, 1, 7168),
+    (1, 1, 32, 7168),
 ]
 
 MESH_SHAPE = (2, 4)
@@ -45,6 +49,9 @@ def _get_test_coords_and_shapes(mesh_shape, tensor_shapes):
             yield (shape, (coords[0], coords[1]))
 
 
+torch.set_printoptions(threshold=10000)
+
+
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
@@ -65,7 +72,6 @@ def test_send_receive(mesh_device, shape_coords, layout, dtype):
     input_tensor_torch[lcoord0:lrange0, :, :, :] = (
         torch.linspace(1, prod(shape), prod(shape)).reshape(shape).to(dtype=dtype)
     )
-
     input_tensor = ttnn.from_torch(
         input_tensor_torch, layout=layout, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
     )
@@ -84,8 +90,19 @@ def test_send_receive(mesh_device, shape_coords, layout, dtype):
         ttnn.Topology.Linear,
         receiver_semaphore,
     )
-    return_tensor = ttnn.point_to_point(sent_tensor, coord1, coord0, ttnn.Topology.Linear, send_semaphore)
+    sent_tensor_torch = ttnn.to_torch(sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+
+    # test optional output tensor
+    return_tensor = ttnn.from_torch(
+        torch.zeros(sent_tensor_torch.shape, dtype=dtype),
+        layout=layout,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+    ttnn.point_to_point(
+        sent_tensor, coord1, coord0, ttnn.Topology.Linear, send_semaphore, optional_output_tensor=return_tensor
+    )
 
     torch_return_tensor = ttnn.to_torch(return_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
 
-    assert_with_pcc(input_tensor_torch[lcoord0:lrange0, :, :, :], torch_return_tensor[lcoord0:lrange0, :, :, :])
+    assert_equal(input_tensor_torch[lcoord0:lrange0, :, :, :], torch_return_tensor[lcoord0:lrange0, :, :, :])

@@ -18,7 +18,7 @@ namespace detail {
 
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> compute_aligned_packet_dims(
     const DataType& dtype, const uint32_t page_size_bytes, const uint32_t num_pages, const uint32_t alignment) {
-    const auto fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
 
     const uint32_t max_packet_size_bytes =
         dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
@@ -86,6 +86,12 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
             output_tensor.mesh_device() == mesh_device,
             "Output tensor must be allocated on same mesh device as input tensor");
     }
+    const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    const uint32_t input_page_size_bytes = input_tensor.tensor_spec().compute_page_size_bytes();
+
+    TT_FATAL(
+        input_page_size_bytes % l1_alignment == 0 || input_page_size_bytes == l1_alignment,
+        "Tensor page size must be 16 byte aligned");
 };
 
 PointToPointOp::spec_return_value_t PointToPointOp::compute_output_specs(
