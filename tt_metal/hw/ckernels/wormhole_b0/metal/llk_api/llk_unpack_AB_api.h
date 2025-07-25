@@ -5,6 +5,7 @@
 #pragma once
 #include "llk_unpack_AB.h"
 #include "llk_unpack_common_api.h"
+#include "debug/dprint.h"
 
 /*************************************************************************
  * LLK UNPACK AB

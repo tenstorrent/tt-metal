@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pool_utils.hpp"
+#include <cstdint>
 #include <limits>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/assert.hpp>
 
@@ -227,6 +229,7 @@ uint32_t calculate_L1_usage(
     uint32_t in_cb_pagesize = in_nbytes * in_cb_page_padded;
     uint32_t in_cb_npages = multi_buffering_factor;
     uint32_t in_cb_config_0_size = in_cb_npages * in_cb_pagesize;
+    log_info(tt::LogOp, "input pagesize: {}, npages: {}, size: {}", in_cb_pagesize, in_cb_npages, in_cb_config_0_size);
     uint32_t in_cb_config_1_size = 0;
 
     if (split_reader) {
@@ -249,8 +252,10 @@ uint32_t calculate_L1_usage(
         return factor * alignment_bytes;
     };
 
-    return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
-           align(out_cb_config_size) /* global, involved */;
+    uint32_t mul_cb_size = 2 * 8 * in_cb_pagesize;
+
+    return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + mul_cb_size +
+           in_cb_config_1_size + align(out_cb_config_size) /* global, involved */;
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(

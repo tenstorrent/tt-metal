@@ -154,6 +154,8 @@ void kernel_main() {
     constexpr uint32_t in_scalar_cb_id =
         split_reader && reader_id == 1 && !one_scalar_per_core ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
     constexpr uint32_t stride_w = get_compile_time_arg_val(26);
+    constexpr uint32_t weight_cb_id = get_compile_time_arg_val(27);
+    constexpr uint32_t mul_cb_id = get_compile_time_arg_val(28);
 
     constexpr uint32_t in_nbytes_leftover = (in_c % (TILE_WIDTH * MAX_TILES_PER_REDUCTION)) * BYTES_PER_DATUM;
 
@@ -166,6 +168,10 @@ void kernel_main() {
         cb_reserve_back(in_scalar_cb_id_0, 1);
         fill_with_val(get_write_ptr(in_scalar_cb_id_0), TILE_WIDTH, bf16_scalar >> 16);
         cb_push_back(in_scalar_cb_id_0, 1);
+    }
+
+    for (uint32_t i = 0; i < 2; i++) {
+        fill_with_val(get_write_ptr(weight_cb_id), TILE_HEIGHT * TILE_WIDTH, 0x3f80);
     }
 
     constexpr uint32_t window_hw = window_h * window_w;

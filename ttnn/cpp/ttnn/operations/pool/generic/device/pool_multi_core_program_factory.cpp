@@ -271,6 +271,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t kernel_size_hw = kernel_size_w * kernel_size_h;  // number of valid rows, to read
     const uint32_t kernel_size_hw_padded = tt::round_up(kernel_size_hw, tt::constants::TILE_HEIGHT);
     const uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
+
+    log_info(tt::LogOp, "in_tiles_c: {}", in_ntiles_c);
+
     const uint32_t out_ntiles_c =
         (uint32_t)std::ceil((float)output_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
     const bool is_partial_tile = (input_shape[3] / num_shards_c) == 16;
@@ -305,7 +308,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // CBs
     const uint32_t multi_buffering_factor = 2;
 
-    const uint32_t split_reader = 1;
+    const uint32_t split_reader = 0;
 
     // scalar CB as coefficient of reduce
     using tt::tt_metal::CBHandle;
@@ -402,6 +405,14 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_1, in_cb_pagesize, in_cb_npages);
     }
 
+    auto [weight_cb_id, cb_weight] =
+        tt::tt_metal::create_cb(next_cb_index++, program, all_cores, in_cb_pagesize, in_cb_npages, in_df);
+
+    auto [mul_cb_id, cb_mul] =
+        tt::tt_metal::create_cb(next_cb_index++, program, all_cores, in_cb_pagesize, multi_buffering_factor * 8, in_df);
+
+    log_info(tt::LogOp, "weight: Page size = {}, Num pages = {}", in_cb_pagesize, in_cb_npages);
+
     // output of reduce == writer to write
     // output rows in RM
     // after reduction
@@ -488,7 +499,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         one_scalar_per_core,
         config_cb_id,
         multi_buffering_factor,
-        stride_w};
+        stride_w,
+        weight_cb_id,
+        mul_cb_id};
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 
@@ -532,10 +545,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id_0,
         in_scalar_cb_id_1,
         out_cb_id,
-        one_scalar_per_core};
+        one_scalar_per_core,
+        weight_cb_id,
+        mul_cb_id};
 
     auto compute_config = tt::tt_metal::ComputeConfig{
-        .math_fidelity = MathFidelity::HiFi4,
+        .math_fidelity = MathFidelity::LoFi,
         .fp32_dest_acc_en =
             is_large_kernel && is_avg_pool,  // for large kernels average pool requires fp32 accumulation to avoid
                                              // precision error buildup over multiuple reduction stages
