@@ -161,6 +161,7 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>, std
             if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::DIV;
             } else {
+                TT_FATAL(false, "DIV should not use FPU");
                 process_rhs = unary::UnaryOpType::RECIP;
                 binary_op = FpuBinaryOp::MUL;
             }
