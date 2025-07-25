@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/data_movement/fill_pad/device/fill_pad_op.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/tensor_accessor_args.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
@@ -56,8 +57,6 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
             .set_page_size(src0_cb_index, cb_page_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    bool src_is_dram = tens_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     // pack bf16 vals
     uint32_t packed_fill_value = (std::uint32_t)fill_value;
     if (input_tensor.dtype() == DataType::BFLOAT16) {
@@ -78,19 +77,20 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
 
     // create kernel
     // reader compile time args
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)src_is_dram,
-        (std::uint32_t)packed_fill_value,
-        (std::uint32_t)input_element_size_bytes,
-        (std::uint32_t)height,
-        (std::uint32_t)width,
-        (std::uint32_t)padded_height,
-        (std::uint32_t)padded_width,
-        (std::uint32_t)tiles_per_2d_tensor,
-        (std::uint32_t)tiles_per_tile_row,
-        (std::uint32_t)tt::constants::TILE_HEIGHT,
-        (std::uint32_t)tt::constants::FACE_HEIGHT};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index};
+    ttnn::TensorAccessorArgs(*tens_buffer).append_args(writer_compile_time_args);
+    writer_compile_time_args.insert(
+        writer_compile_time_args.end(),
+        {(std::uint32_t)packed_fill_value,
+         (std::uint32_t)input_element_size_bytes,
+         (std::uint32_t)height,
+         (std::uint32_t)width,
+         (std::uint32_t)padded_height,
+         (std::uint32_t)padded_width,
+         (std::uint32_t)tiles_per_2d_tensor,
+         (std::uint32_t)tiles_per_tile_row,
+         (std::uint32_t)tt::constants::TILE_HEIGHT,
+         (std::uint32_t)tt::constants::FACE_HEIGHT});
 
     std::map<std::string, std::string> compute_defines;
     if (sharded) {

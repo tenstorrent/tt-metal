@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include "ttnn/tensor/tensor_accessor_args.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -80,8 +81,11 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
 
     std::vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
     if (tilized) {
-        reader_compile_time_args = {(uint32_t)src_is_dram};
-        writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+        reader_compile_time_args = {};
+        TensorAccessorArgs(*src_buffer).append_args(reader_compile_time_args);
+
+        writer_compile_time_args = {(std::uint32_t)output_cb_index};
+        TensorAccessorArgs(*dst_buffer).append_args(writer_compile_time_args);
     } else {
         bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(input_unit_size);
         uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)log2(input_unit_size) : 0;

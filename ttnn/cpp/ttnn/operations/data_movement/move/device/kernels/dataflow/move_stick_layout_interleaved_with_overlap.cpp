@@ -36,15 +36,15 @@ void kernel_main() {
     uint32_t log_base_2_of_page_size = get_arg_val<uint32_t>(27);
 
     constexpr uint32_t cb_id = get_compile_time_arg_val(0);
-    constexpr bool src_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr bool dst_is_dram = get_compile_time_arg_val(2) == 1;
+    constexpr auto src_tensor_args = TensorAccessorArgs<1>();
+    constexpr auto dst_tensor_args = TensorAccessorArgs<1 + src_tensor_args.compile_time_args_skip()>();
 
-    constexpr bool page_size_is_pow2 = get_compile_time_arg_val(3) == 1;
+    constexpr bool page_size_is_pow2 =
+        get_compile_time_arg_val(
+            1 + src_tensor_args.compile_time_args_skip() + dst_tensor_args.compile_time_args_skip()) == 1;
 
-    const auto src_addrgen =
-        get_interleaved_addr_gen<src_is_dram, page_size_is_pow2>(src_addr, page_size, log_base_2_of_page_size);
-    const auto dst_addrgen =
-        get_interleaved_addr_gen<dst_is_dram, page_size_is_pow2>(dst_addr, page_size, log_base_2_of_page_size);
+    const auto src_addrgen = TensorAccessor(src_tensor_args, src_addr, page_size);
+    const auto dst_addrgen = TensorAccessor(dst_tensor_args, dst_addr, page_size);
 
     // if controller core then this local address will be incremented by remote cores,
     // otherwise controller core will set this to signal that write to dst can be done once controller core sees
@@ -55,7 +55,7 @@ void kernel_main() {
     cb_reserve_back(cb_id, num_pages);
     uint32_t l1_write_addr = get_write_ptr(cb_id);
     for (uint32_t i = start_id; i < start_id + num_pages; ++i) {
-        uint64_t src_noc_addr = get_noc_addr(i, src_addrgen);
+        uint64_t src_noc_addr = src_addrgen.get_noc_addr(i);
         noc_async_read(src_noc_addr, l1_write_addr, page_size);
         noc_async_read_barrier();
         l1_write_addr += aligned_page_size;
@@ -88,7 +88,7 @@ void kernel_main() {
     cb_wait_front(cb_id, num_pages);
     uint32_t l1_read_addr = get_read_ptr(cb_id);
     for (uint32_t i = start_id; i < start_id + num_pages; ++i) {
-        uint64_t dst_noc_addr = get_noc_addr(i, dst_addrgen);
+        uint64_t dst_noc_addr = dst_addrgen.get_noc_addr(i);
         noc_async_write(l1_read_addr, dst_noc_addr, page_size);
         noc_async_write_barrier();
         l1_read_addr += aligned_page_size;

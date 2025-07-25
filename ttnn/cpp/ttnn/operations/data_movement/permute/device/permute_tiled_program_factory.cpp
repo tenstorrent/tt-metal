@@ -2,10 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "permute_tiled_program_factory.hpp"
+
+#include <algorithm>
+
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
+#include "ttnn/operations/math.hpp"
+#include "ttnn/tensor/tensor_accessor_args.hpp"
+
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/util.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <vector>
-#include <tt-metalium/hal.hpp>
 
 namespace ttnn::operations::data_movement {
 
@@ -135,8 +144,9 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
         output_cb_index = src1_cb_index;
     }
 
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, rank, input_page_size, num_tiles};
+    std::vector<uint32_t> reader_compile_time_args = {};
+    TensorAccessorArgs(*src_buffer).append_args(reader_compile_time_args);
+    reader_compile_time_args.insert(reader_compile_time_args.end(), {rank, input_page_size, num_tiles});
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -335,7 +345,6 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     uint32_t output_H = input_shape[dims[rank - 2]];
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     uint32_t element_size = input_tensor.element_size();
 
     bool needs_padding = (output_H % tile_shape[1] != 0) && pad_value.has_value();
@@ -418,20 +427,22 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
             });
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)dst_is_dram,
-        element_size,
-        output_cb_index,
-        output_H,
-        input_shape[rank - 2],
-        input_shape[rank - 1],
-        tile_shape[0],
-        tile_shape[1],
-        face_shape[0],
-        face_shape[1],
-        (uint32_t)needs_padding,
-        rank,
-        h_in_dest};
+    std::vector<uint32_t> writer_compile_time_args = {};
+    TensorAccessorArgs(*dst_buffer).append_args(writer_compile_time_args);
+    writer_compile_time_args.insert(
+        writer_compile_time_args.end(),
+        {element_size,
+         output_cb_index,
+         output_H,
+         input_shape[rank - 2],
+         input_shape[rank - 1],
+         tile_shape[0],
+         tile_shape[1],
+         face_shape[0],
+         face_shape[1],
+         (uint32_t)needs_padding,
+         rank,
+         h_in_dest});
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -714,12 +725,11 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         auto cb_padding = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_padding_cfg);
     }
 
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     uint32_t non_x_rows = num_rows / x;
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        (uint32_t)src_is_dram,
+    std::vector<uint32_t> reader_compile_time_args = {};
+    TensorAccessorArgs(*src_buffer).append_args(reader_compile_time_args);
+    reader_compile_time_args.insert(reader_compile_time_args.end(), {
         rank,
         input_page_size,
         element_size,
@@ -769,8 +779,9 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
             .compile_args = compute_kernel_args,
         });
 
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)dst_is_dram,
+    std::vector<uint32_t> writer_compile_time_args = {};
+    TensorAccessorArgs(*dst_buffer).append_args(writer_compile_time_args);
+    writer_compile_time_args.insert(writer_compile_time_args.end(), {
         rank,
         input_page_size,
         element_size,
@@ -794,7 +805,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
         w_blocks,
         (uint32_t)needs_y_padding,
         permuted_w_dim,
-    };
+    });
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,

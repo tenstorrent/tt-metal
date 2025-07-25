@@ -157,20 +157,26 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
     KernelHandle binary_reader_kernel_id{};
 
     if (src1_buffer != nullptr) {
-        auto src1_is_dram = static_cast<uint32_t>(src1_buffer->buffer_type() == tt_metal::BufferType::DRAM);
+        std::vector<uint32_t> reader_hw_compile_time_args = {};
+        if (!src0_sharded) {
+            TensorAccessorArgs(*src0_buffer).append_args(reader_hw_compile_time_args);
+        }
+        TensorAccessorArgs(*src1_buffer).append_args(reader_hw_compile_time_args);
         binary_reader_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/"
             "reader_bcast_hw_interleaved_partitioned.cpp",
             all_device_cores,
-            tt_metal::ReaderDataMovementConfig({src0_is_dram, src1_is_dram}, reader_defines));
+            tt_metal::ReaderDataMovementConfig(reader_hw_compile_time_args, reader_defines));
     } else {
+        std::vector<uint32_t> reader_scalar_compile_time_args = {};
+        TensorAccessorArgs(*src0_buffer).append_args(reader_scalar_compile_time_args);
         binary_reader_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/"
             "reader_bcast_scalar_interleaved_partitioned.cpp",
             all_device_cores,
-            tt_metal::ReaderDataMovementConfig({src0_is_dram}, reader_defines));
+            tt_metal::ReaderDataMovementConfig(reader_scalar_compile_time_args, reader_defines));
     }
 
     std::map<std::string, std::string> writer_defines;

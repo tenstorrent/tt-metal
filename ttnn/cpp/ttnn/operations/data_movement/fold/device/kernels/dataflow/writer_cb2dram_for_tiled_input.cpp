@@ -30,69 +30,70 @@ void kernel_main() {
     // dump(stick_nbytes);
 
     // Initialize DRAM address generator
-    const InterleavedAddrGen<true> d = {.bank_base_address = dst_addr, .page_size = stick_nbytes};
+    constexpr auto tensor_args = TensorAccessorArgs<1, 1, 0>();  // Hard-code DRAM
+    const auto d = TensorAccessor(tensor_args, dst_addr, stick_nbytes);
 
     // Pre-calculate output dimensions and patch size - moved outside loops
     const uint32_t OH = input_height / stride_height;                   // Output height
     const uint32_t OW = input_width / stride_width;                     // Output width
-    const uint32_t patch_size = stride_height * stride_width;           // Size of each patch
-    const uint32_t W_PAD = TILE_HEIGHT;                                 // Width padding
-    const uint32_t C_PAD = TILE_WIDTH * element_size * ntiles_per_row;  // Channel padding
+    const uint32_t patch_size = stride_height * stride_width;           // Elements per patch
+    const uint32_t elements_per_batch = OH * OW * patch_size;           // Elements in one batch
+    const uint32_t elements_per_row = input_width * patch_size;         // Elements in output row
+    const uint32_t sticks_per_output_row = stride_height * input_width;  // Sticks per output row
 
-    // Calculate tile dimensions - moved outside loops
-    const uint32_t tile_cols = (input_width + W_PAD - 1) / W_PAD;  // Number of tile columns
-    const uint32_t tiles_per_batch = input_height * tile_cols;     // Tiles per batch
+    // Pre-calculated indices for faster processing - moved outside loops for efficiency
+    uint32_t output_row = 0;
+    uint32_t input_batch = 0;
+    uint32_t input_row = 0;
+    uint32_t output_col = 0;
 
-    const uint32_t end_block_id = start_block_id + num_blocks;
-    for (uint32_t i = start_block_id; i < end_block_id; ++i) {
-        // Wait for input data to be available
+    // Process each block sequentially with pre-calculated parameters
+    for (uint32_t nblock = start_block_id; nblock < start_block_id + num_blocks; nblock++) {
+        // Wait for data to be available in the circular buffer
         cb_wait_front(cb_id_in1, ntiles_per_row);
-        uint64_t l1_read_addr = get_read_ptr(cb_id_in1);
+        uint32_t l1_read_addr = get_read_ptr(cb_id_in1);
 
-        // Pre-calculate batch and position indices - moved outside inner loop
-        const uint32_t batch_idx = i / tiles_per_batch;    // Batch index
-        const uint32_t bh_index = i % tiles_per_batch;     // Index within batch
-        const uint32_t height_idx = bh_index / tile_cols;  // Height index
-        const uint32_t tile_col = bh_index % tile_cols;    // Tile column index
+        // Calculate the global linear output index for this block
+        uint32_t global_linear_output_idx = nblock * ntiles_per_row;
 
-        const uint32_t kernel_row_offset = (height_idx % stride_height) * stride_width;
-        const uint32_t output_row_idx = height_idx / stride_height;
-        const uint32_t base_dst_row = batch_idx * OH * OW + output_row_idx * OW;
+        // Process each tile in the current block using the global index
+        for (uint32_t j = 0; j < ntiles_per_row; j++) {
+            uint32_t current_global_idx = global_linear_output_idx + j;
 
-        // Process each element in the tile
-        const uint32_t w_start = tile_col * W_PAD;
-        const uint32_t w_end = (w_start + W_PAD > input_width) ? input_width : w_start + W_PAD;
+            // Use integer arithmetic to calculate batch, tile, and position indices
+            uint32_t batch_idx = current_global_idx / elements_per_batch;
+            uint32_t remaining_idx = current_global_idx % elements_per_batch;
 
-        // Pre-calculate as much as possible before entering the inner loop
-        uint32_t width_idx = w_start;
-        uint32_t out_width_idx = width_idx / stride_width;
-        uint32_t kernel_width_idx = width_idx % stride_width;
+            uint32_t output_row_idx = remaining_idx / elements_per_row;
+            uint32_t remaining_in_row = remaining_idx % elements_per_row;
 
-        // Pre-compute values for the entire inner loop range
-        for (uint32_t w_local = 0; w_start + w_local < w_end; ++w_local) {
-            const uint64_t src = l1_read_addr + w_local * C_PAD;
+            uint32_t output_col_idx = remaining_in_row / patch_size;
+            uint32_t patch_element_idx = remaining_in_row % patch_size;
 
-            // Use pre-calculated values where possible
-            const uint32_t dst_row = base_dst_row + out_width_idx;
-            const uint32_t dst_col = kernel_row_offset + kernel_width_idx;
-            const uint64_t dst = dst_row * patch_size + dst_col;
-            const uint64_t dst_addr_ = get_noc_addr(dst, d);
+            // Map patch element index to original spatial coordinates
+            uint32_t patch_h = patch_element_idx / stride_width;
+            uint32_t patch_w = patch_element_idx % stride_width;
 
-            // Write data to DRAM
-            noc_async_write(src, dst_addr_, stick_nbytes);
+            // Calculate actual input position
+            uint32_t input_row_actual = output_row_idx * stride_height + patch_h;
+            uint32_t input_col_actual = output_col_idx * stride_width + patch_w;
 
-            // Update indices for next iteration
-            width_idx++;
-            kernel_width_idx++;
-            if (kernel_width_idx == stride_width) {
-                kernel_width_idx = 0;
-                out_width_idx++;
-            }
+            // Calculate final linear output index
+            uint32_t final_output_idx =
+                batch_idx * input_height * input_width + input_row_actual * input_width + input_col_actual;
+
+            // Get destination address and perform write operation
+            uint64_t dst_noc_addr = d.get_noc_addr(final_output_idx);
+            noc_async_write(l1_read_addr, dst_noc_addr, stick_nbytes);
+
+            // Advance to next tile in memory
+            l1_read_addr += stick_nbytes;
         }
-        // Ensure all writes are completed
+
+        // Wait for all writes to complete before proceeding
         noc_async_write_barrier();
 
-        // Pop processed data buffer
+        // Pop completed data from the circular buffer
         cb_pop_front(cb_id_in1, ntiles_per_row);
     }
 }

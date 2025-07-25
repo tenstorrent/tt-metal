@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "bcast_op_multi_core_w.hpp"
+
 #include "ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
+#include "ttnn/tensor/tensor_accessor_args.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -84,9 +87,9 @@ operation::ProgramWithCallbacks bcast_multi_core_w(
             .set_page_size(output_cb_index, dst_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_device_cores, output_cb_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
+    std::vector<uint32_t> reader_compile_time_args = {};
+    TensorAccessorArgs(*src0_buffer).append_args(reader_compile_time_args);
+    TensorAccessorArgs(*src1_buffer).append_args(reader_compile_time_args);
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};

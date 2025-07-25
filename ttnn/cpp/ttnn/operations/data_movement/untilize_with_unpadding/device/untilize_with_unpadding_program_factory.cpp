@@ -15,6 +15,7 @@
 #include <tt-metalium/allocator.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/tensor_accessor_args.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -352,7 +353,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
 
     // writer
 
-    uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     uint32_t stick_size = unpadded_row_size_bytes;
     uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
@@ -361,13 +361,19 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
     std::map<std::string, std::string> writer_defines = {
         {"STICK_SIZE_IS_POW2", std::to_string((uint32_t)(stick_size_is_power_of_two))}};
 
+    std::vector<uint32_t> writer_compile_time_args = {};
+    TensorAccessorArgs(*dst_buffer).append_args(writer_compile_time_args);
+    writer_compile_time_args.push_back(log2_stick_size);
+    writer_compile_time_args.push_back(total_num_rows);
+    writer_compile_time_args.push_back(third_dim);
+    writer_compile_time_args.push_back(TILE_HEIGHT);
+
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/untilize_with_unpadding/device/kernels/dataflow/"
         "writer_unary_stick_layout_wh_multicore.cpp",
         all_cores,
-        WriterDataMovementConfig(
-            {out_is_dram, log2_stick_size, total_num_rows, third_dim, TILE_HEIGHT}, writer_defines));
+        WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
     // compute
 

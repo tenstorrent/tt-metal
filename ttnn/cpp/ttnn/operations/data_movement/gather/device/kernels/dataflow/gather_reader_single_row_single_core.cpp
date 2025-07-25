@@ -8,6 +8,8 @@
 #include <tt-metalium/constants.hpp>
 
 #include <cstdint>
+#include <stdint.h>
+#include <type_traits>
 
 /*
 To improve performance of both reader and writer kernels the work has been split so that they both prepare input and
@@ -115,16 +117,18 @@ void kernel_main() {
     const uint32_t tile_height = get_arg_val<uint32_t>(3);
 
     // Compile time args
-    constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t input_index_tensor_cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t output_tensor_cb_index = get_compile_time_arg_val(2);
-    constexpr bool input_index_tensor_is_dram = get_compile_time_arg_val(3);
-    constexpr uint32_t Ht = get_compile_time_arg_val(4);
-    constexpr uint32_t Wt_input = get_compile_time_arg_val(5);
-    constexpr uint32_t Wt_index = get_compile_time_arg_val(6);
-    constexpr uint32_t total_number_of_cores = get_compile_time_arg_val(7);
-    constexpr uint32_t compute_with_storage_grid_size_x = get_compile_time_arg_val(8);
-    constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(9);
+    constexpr auto tensor_args = TensorAccessorArgs<0>();
+    constexpr uint32_t input_tensor_cb_index = get_compile_time_arg_val(tensor_args.compile_time_args_skip());
+    constexpr uint32_t input_index_tensor_cb_index = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 1);
+    constexpr uint32_t output_tensor_cb_index = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 2);
+    constexpr uint32_t Ht = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 3);
+    constexpr uint32_t Wt_input = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 4);
+    constexpr uint32_t Wt_index = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 5);
+    constexpr uint32_t total_number_of_cores = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 6);
+    constexpr uint32_t compute_with_storage_grid_size_x =
+        get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 7);
+    constexpr uint32_t compute_with_storage_grid_size_y =
+        get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 8);
 
     constexpr uint32_t one_tile = 1;
     const uint32_t tile_width_mask = tile_width - 1;
@@ -132,10 +136,8 @@ void kernel_main() {
     // Index tensor config
     constexpr uint32_t input_index_tensor_tile_size_bytes = get_tile_size(input_index_tensor_cb_index);
     constexpr DataFormat input_index_tensor_data_format = get_dataformat(input_index_tensor_cb_index);
-    const InterleavedAddrGenFast<input_index_tensor_is_dram> input_index_tensor_dram = {
-        .bank_base_address = input_index_tensor_buffer_addr,
-        .page_size = input_index_tensor_tile_size_bytes,
-        .data_format = input_index_tensor_data_format};
+    const auto input_index_tensor_dram =
+        TensorAccessor(tensor_args, input_index_tensor_buffer_addr, input_index_tensor_tile_size_bytes);
 
     // Dataformats size
     constexpr uint32_t input_tensor_data_format_size =

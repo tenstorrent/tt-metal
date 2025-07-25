@@ -17,15 +17,14 @@ void kernel_main() {
     const uint32_t num_padded_Xt = get_arg_val<uint32_t>(8);
     const uint32_t pad_value = get_arg_val<uint32_t>(9);
 
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_out1 = get_compile_time_arg_val(1);
-    constexpr bool dst_is_dram = get_compile_time_arg_val(2) == 1;
+    constexpr auto tensor_args = TensorAccessorArgs<0>();
+    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(tensor_args.compile_time_args_skip());
+    constexpr uint32_t cb_id_out1 = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 1);
 
     const uint32_t tile_size = get_tile_size(cb_id_out0);
     const DataFormat data_format = get_dataformat(cb_id_out0);
 
-    const InterleavedAddrGenFast<dst_is_dram> s1 = {
-        .bank_base_address = dst_addr, .page_size = tile_size, .data_format = data_format};
+    const auto s1 = TensorAccessor(tensor_args, dst_addr, tile_size);
 
     cb_reserve_back(cb_id_out1, 1);  // in this kernel we are not pushing anything into CBs, just using the space
 

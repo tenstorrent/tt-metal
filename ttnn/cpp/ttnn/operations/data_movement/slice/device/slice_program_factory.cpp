@@ -14,6 +14,8 @@
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
+#include "ttnn/tensor/tensor_accessor_args.hpp"
+
 namespace ttnn::operations::data_movement::detail {
 
 inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_slice_runtime_args_rm(
@@ -212,9 +214,6 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     constexpr uint32_t src0_cb_index = 0;
 
     const auto [cb_page_size, num_read_per_barrier, misalignment] =
@@ -225,9 +224,11 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
             .set_page_size(src0_cb_index, cb_page_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
-    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
+    TensorAccessorArgs(*dst_buffer).append_args(writer_compile_time_args_vec);
 
-    std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_is_dram};
+    std::vector<uint32_t> reader_compile_time_args_vec = {};
+    TensorAccessorArgs(*src0_buffer).append_args(reader_compile_time_args_vec);
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
@@ -336,8 +337,8 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
     const auto& input_shape = a.padded_shape();
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
 
-    uint32_t src_is_dram = a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    uint32_t dst_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    bool src_is_dram = a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool dst_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     uint32_t page_size_output = dst_is_dram ? tt::round_up(output_shape[-1] * a.element_size(), TILE_WIDTH)
                                             : tt::round_up(output_shape[-1] * a.element_size(), TILE_WIDTH / 2);
@@ -356,27 +357,26 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
     auto cb_input_tensor = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
     auto cb_output_tensor = tt::tt_metal::CreateCircularBuffer(program, core, cb_dst0_config);
 
+    std::vector<uint32_t> reader_ct_args = {};
+    TensorAccessorArgs(*a.buffer()).append_args(reader_ct_args);
+    reader_ct_args.insert(reader_ct_args.end(), {(uint32_t)page_size_input, (uint32_t)input_shape.rank()});
+
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/"
         "strided_slice_reader_rm_interleaved_nd.cpp",
         core,
-        tt::tt_metal::ReaderDataMovementConfig({
-            src_is_dram,
-            (uint32_t)page_size_input,
-            (uint32_t)input_shape.rank(),
-        }
+        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
-                                               ));
+    std::vector<uint32_t> writer_ct_args = {};
+    TensorAccessorArgs(*output.buffer()).append_args(writer_ct_args);
+    writer_ct_args.push_back((uint32_t)page_size_output);
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/slice/device/kernels/dataflow/strided_slice_writer_rm_interleaved.cpp",
         core,
-        tt::tt_metal::WriterDataMovementConfig({
-            dst_is_dram,
-            (uint32_t)page_size_output,
-        }));
+        tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
     std::vector<uint32_t> reader_runtime_args;
     reader_runtime_args.reserve(1 + (4 * input_shape.rank()));

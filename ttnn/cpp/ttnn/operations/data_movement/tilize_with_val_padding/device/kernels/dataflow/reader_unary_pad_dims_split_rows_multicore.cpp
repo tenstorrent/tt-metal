@@ -17,7 +17,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t tile_height = 32;
 
-    constexpr uint32_t tile_row_shift_bits = get_compile_time_arg_val(3);
+    constexpr auto tensor_args = TensorAccessorArgs<0>();
+    constexpr uint32_t tile_row_shift_bits = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 2);
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t unpadded_X_size = get_arg_val<uint32_t>(1);
@@ -29,14 +30,12 @@ void kernel_main() {
     const uint32_t num_tiles_per_row =
         padded_X_size >> tile_row_shift_bits;  // means / 64, assuming bfloat16, there are 64 bytes per tile row
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(1) == 1;
+    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(tensor_args.compile_time_args_skip()) == 1;
 #if (stick_size_is_pow2)
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
-    const InterleavedPow2AddrGen<src0_is_dram> s = {
-        .bank_base_address = src_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 1);
+    const auto s = TensorAccessor(tensor_args, src_addr, 1 << log_base_2_of_page_size);
 #else
-    const InterleavedAddrGen<src0_is_dram> s = {.bank_base_address = src_addr, .page_size = unpadded_X_size};
+    const auto s = TensorAccessor(tensor_args, src_addr, unpadded_X_size);
 #endif
 
     auto pad_blocks = [&](uint32_t num_blocks) {

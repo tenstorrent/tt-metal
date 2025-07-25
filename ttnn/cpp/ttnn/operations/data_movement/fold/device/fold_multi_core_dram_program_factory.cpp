@@ -91,10 +91,14 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     // Configure compile-time arguments for reader kernel
-    std::vector<uint32_t> reader_compile_time_args = {
-        ntiles_per_row,
-        src0_cb_index,
-    };
+    std::vector<uint32_t> reader_compile_time_args = {};
+    TensorAccessorArgs(*src0_buffer).append_args(reader_compile_time_args);
+    reader_compile_time_args.insert(
+        reader_compile_time_args.end(),
+        {
+            ntiles_per_row,
+            src0_cb_index,
+        });
 
     // Configure compile-time arguments for writer kernel
     std::vector<uint32_t> writer_compile_time_args = {

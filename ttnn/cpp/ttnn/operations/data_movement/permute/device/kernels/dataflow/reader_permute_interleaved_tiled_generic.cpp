@@ -25,35 +25,37 @@ void kernel_main() {
     // 1) Compile-time arguments
     // ------------------------------------------------------------------------
 
-    constexpr bool src0_is_dram = static_cast<bool>(get_compile_time_arg_val(0));
-    constexpr uint32_t RANK = get_compile_time_arg_val(1);
+    constexpr auto tensor_args = TensorAccessorArgs<0>();
+    constexpr uint32_t RANK = get_compile_time_arg_val(tensor_args.compile_time_args_skip());
     // constexpr uint32_t input_cb_page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t element_size = get_compile_time_arg_val(3);
-    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(4);
-    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(5);
-    constexpr uint32_t FACE_HEIGHT = get_compile_time_arg_val(6);
-    constexpr uint32_t FACE_WIDTH = get_compile_time_arg_val(7);
-    constexpr uint32_t x_dim_index_in_input = get_compile_time_arg_val(8);
-    constexpr uint32_t X = get_compile_time_arg_val(9);
-    constexpr uint32_t W = get_compile_time_arg_val(10);
-    constexpr uint32_t H = get_compile_time_arg_val(11);
-    constexpr uint32_t X_p = get_compile_time_arg_val(12);
-    constexpr uint32_t W_p = get_compile_time_arg_val(13);
-    constexpr uint32_t H_p = get_compile_time_arg_val(14);
-    constexpr uint32_t H_t = get_compile_time_arg_val(15);
-    constexpr uint32_t W_t = get_compile_time_arg_val(16);
-    constexpr uint32_t final_tile_real_w = get_compile_time_arg_val(17);
-    constexpr uint32_t final_tile_real_faces_w = get_compile_time_arg_val(18);
-    constexpr uint32_t xw_blocks = get_compile_time_arg_val(19);
-    constexpr uint32_t x_blocks = get_compile_time_arg_val(20);
-    constexpr uint32_t w_blocks = get_compile_time_arg_val(21);
-    constexpr uint32_t num_writes = get_compile_time_arg_val(22);
-    constexpr uint32_t padding_val_packed = get_compile_time_arg_val(23);
-    constexpr bool needs_x_padding = static_cast<bool>(get_compile_time_arg_val(24));
-    constexpr bool needs_y_padding = static_cast<bool>(get_compile_time_arg_val(25));
-    constexpr uint32_t rows_per_x = get_compile_time_arg_val(26);
-    constexpr uint32_t misalignment = get_compile_time_arg_val(27);
-    constexpr uint32_t read_alignment = get_compile_time_arg_val(28);
+    constexpr uint32_t element_size = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 2);
+    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 3);
+    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 4);
+    constexpr uint32_t FACE_HEIGHT = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 5);
+    constexpr uint32_t FACE_WIDTH = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 6);
+    constexpr uint32_t x_dim_index_in_input = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 7);
+    constexpr uint32_t X = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 8);
+    constexpr uint32_t W = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 9);
+    constexpr uint32_t H = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 10);
+    constexpr uint32_t X_p = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 11);
+    constexpr uint32_t W_p = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 12);
+    constexpr uint32_t H_p = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 13);
+    constexpr uint32_t H_t = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 14);
+    constexpr uint32_t W_t = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 15);
+    constexpr uint32_t final_tile_real_w = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 16);
+    constexpr uint32_t final_tile_real_faces_w = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 17);
+    constexpr uint32_t xw_blocks = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 18);
+    constexpr uint32_t x_blocks = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 19);
+    constexpr uint32_t w_blocks = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 20);
+    constexpr uint32_t num_writes = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 21);
+    constexpr uint32_t padding_val_packed = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 22);
+    constexpr bool needs_x_padding =
+        static_cast<bool>(get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 23));
+    constexpr bool needs_y_padding =
+        static_cast<bool>(get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 24));
+    constexpr uint32_t rows_per_x = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 25);
+    constexpr uint32_t misalignment = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 26);
+    constexpr uint32_t read_alignment = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 27);
 
     // ------------------------------------------------------------------------
     // 2) Derived Constants (kept as constexpr)
@@ -111,8 +113,7 @@ void kernel_main() {
         src_tiled_strides[i] = src_tiled_strides[i + 1] * input_tiled_shape[i + 1];
     }
     constexpr auto data_format = get_dataformat(tt::CBIndex::c_0);
-    const InterleavedAddrGenFast<src0_is_dram> s = {
-        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto s = TensorAccessor(tensor_args, src_addr, tile_bytes);
 
     // Stride for stepping along x_dim_index_in_input
     const uint32_t X_stride_tile = src_tiled_strides[x_dim_index_in_input];
@@ -193,7 +194,7 @@ void kernel_main() {
 
             for (uint32_t x = x_start; x < x_end; ++x) {
                 uint32_t l1_col_base = src_buffer_l1_addr + page_offset;
-                uint64_t src_noc_addr = get_noc_addr(tile, s, base_face_line_offset_bytes);
+                uint64_t src_noc_addr = s.get_noc_addr(tile) + base_face_line_offset_bytes;
 
                 // Read each face in [0..real_faces_w)
                 uint16_t w_offset = 0;

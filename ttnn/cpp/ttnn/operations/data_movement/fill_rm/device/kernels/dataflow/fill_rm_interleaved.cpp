@@ -22,8 +22,8 @@ void kernel_main() {
     uint32_t val_hi = get_arg_val<uint32_t>(6);
     uint32_t val_lo = get_arg_val<uint32_t>(7);
 
-    constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
-    const InterleavedAddrGen<dst_is_dram> s0 = {.bank_base_address = dst_addr, .page_size = W << 1};
+    constexpr auto tensor_args = TensorAccessorArgs<0>();
+    const auto s0 = TensorAccessor(tensor_args, dst_addr, W << 1);
 
     // DPRINT << "fill_rm_8bank: NC=" << NC << " H=" << H << " W=" << W << " fillH=" << fillH << " fillW=" << fillW <<
     // ENDL();
@@ -57,7 +57,7 @@ void kernel_main() {
     // input is NCH(Wt*32) unpadded RM
     for (uint32_t nc = 0; nc < NC; nc++) {
         for (uint32_t h = 0; h < H; h++) {
-            uint64_t dst_noc_addr = get_noc_addr(nch_dst, s0);
+            uint64_t dst_noc_addr = s0.get_noc_addr(nch_dst);
             if (h < fillH) {
                 noc_async_write(l1_w_addr, dst_noc_addr, (W << 1));  // TODO(AP): segment this write
             } else {

@@ -14,6 +14,7 @@
 #include <tt-metalium/allocator.hpp>
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding_common.hpp"
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/tensor/tensor_accessor_args.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -170,12 +171,14 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
         block_row_leftover_size};
 
     // Reader compile-time args
-    uint32_t src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     uint32_t stick_size = unpadded_row_size_bytes;
     uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (uint32_t)log2(stick_size) : 0;
-    std::vector<uint32_t> reader_compile_time_args = {
-        src0_is_dram, stick_size_is_power_of_two, log2_stick_size, tile_row_size_bytes};
+    std::vector<uint32_t> reader_compile_time_args = {};
+    TensorAccessorArgs(*src0_buffer).append_args(reader_compile_time_args);
+    reader_compile_time_args.push_back(stick_size_is_power_of_two);
+    reader_compile_time_args.push_back(log2_stick_size);
+    reader_compile_time_args.push_back(tile_row_size_bytes);
 
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -372,13 +375,20 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
     std::map<std::string, std::string> reader_defines = {
         {"STICK_SIZE_IS_POW2", std::to_string((uint32_t)(stick_size_is_power_of_two))}};
 
+    std::vector<uint32_t> reader_compile_time_args = {};
+    TensorAccessorArgs(*src0_buffer).append_args(reader_compile_time_args);
+#if (stick_size_is_power_of_two)
+    reader_compile_time_args.push_back(log2_stick_size);
+#endif
+    reader_compile_time_args.insert(
+        reader_compile_time_args.end(), {total_num_rows, third_dim, tile_height, a.element_size()});
+
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
         "reader_unary_pad_multicore_both_dims.cpp",
         all_cores,
-        ReaderDataMovementConfig(
-            {src0_is_dram, log2_stick_size, total_num_rows, third_dim, tile_height, a.element_size()}, reader_defines));
+        ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
     // writer
     uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;

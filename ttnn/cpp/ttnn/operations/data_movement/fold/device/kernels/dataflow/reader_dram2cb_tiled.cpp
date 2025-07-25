@@ -8,8 +8,9 @@
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
-    constexpr uint32_t ntiles_per_row = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(1);
+    constexpr auto tensor_args = TensorAccessorArgs<0>();
+    constexpr uint32_t ntiles_per_row = get_compile_time_arg_val(tensor_args.compile_time_args_skip());
+    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(tensor_args.compile_time_args_skip() + 1);
 
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t start_block_id = get_arg_val<uint32_t>(1);
@@ -18,9 +19,8 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
     constexpr DataFormat data_format = get_dataformat(cb_id_in0);
 
-    // Initialize interleaved address generator for DRAM access
-    const InterleavedAddrGenFast<true> s = {
-        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
+    // Initialize TensorAccessor for tensor access
+    const auto s = TensorAccessor(tensor_args, src_addr, tile_bytes);
 
     // Process each block of data
     uint32_t end_block_id = start_block_id + num_blocks;
