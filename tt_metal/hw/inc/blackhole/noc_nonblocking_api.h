@@ -105,6 +105,12 @@ inline __attribute__((always_inline)) void set_noc_counter_val(uint32_t noc, uin
 
 inline __attribute__((always_inline)) void NOC_CMD_BUF_WRITE_REG(
     uint32_t noc, uint32_t buf, uint32_t addr, uint32_t val) {
+#if defined(WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION)
+    if (addr == NOC_CTRL) {
+        auto* watcher_msg = GET_MAILBOX_ADDRESS_DEV(watcher);
+        watcher_msg->noc_linked_status[noc] = (val & NOC_CMD_VC_LINKED) != 0;
+    }
+#endif
     uint32_t offset = (buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT) + addr;
     volatile uint32_t* ptr = (volatile uint32_t*)offset;
     *ptr = val;

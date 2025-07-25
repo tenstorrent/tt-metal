@@ -102,8 +102,8 @@ void log_from_cpp(Args&&... message) {
     // std::cout << formatted_message.cast<std::string>() << std::endl;
 }
 
-#define py_log(...) log_from_cpp(__LINE__, "[" #__VA_ARGS__ "] =" __VA_OPT__(, ) __VA_ARGS__);
-// #define py_log(...)
+// #define py_log(...) log_from_cpp(__LINE__, "[" #__VA_ARGS__ "] =" __VA_OPT__(, ) __VA_ARGS__);
+#define py_log(...)
 
 template <typename T>
 Tensor create_typed_tt_tensor_from_py_data(
@@ -380,6 +380,7 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
     if (tensor.attr("dtype").equal(torch.attr("int64"))) {
         py_log();
         if (!dtype.has_value()) {
+            tensor = tensor.attr("to")(torch.attr("int32"));
             res.host_side_conversion = true;
             res.construct_with_data_type = DataType::UINT32;
         } else {

@@ -64,11 +64,13 @@ def run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, va
 @pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (0, 32), (0, 32)), (0, 32, 0, 32, 0, 1))])
 @pytest.mark.parametrize("value", [0])
 def test_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value):
+    extra_torch_entries = 0
     for _ in range(2):
         run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value)
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
+        current_entries_count = device.num_program_cache_entries()
         tt_dummy_tensor = ttnn.from_torch(
             py_dummy_tensor,
             dtype=ttnn.DataType.BFLOAT16,
@@ -76,7 +78,9 @@ def test_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, v
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 1
+        extra_torch_entries += device.num_program_cache_entries() - current_entries_count
+
+    assert device.num_program_cache_entries() - extra_torch_entries == 1
 
 
 def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient):

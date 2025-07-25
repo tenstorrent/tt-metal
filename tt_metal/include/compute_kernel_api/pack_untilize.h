@@ -45,7 +45,7 @@ namespace ckernel {
  * | Param Type | Name         | Description                              | Type      | Valid Range     | Required |
  * |------------|--------------|------------------------------------------|-----------|-----------------|----------|
  * | Template   | block_ct_dim | Width of a single block in tiles         | uint32_t  | 1 to max (see note) | False (default = 8) |
- * | Template   | full_ct_dim  | Width of a full input in tiles           | uint32_t  | >= block_ct_dim | False    |
+ * | Template   | full_ct_dim  | Width of a full input in tiles           | uint32_t  | Divisible by block_ct_dim | False    |
  * | Template   | narrow_row   |  Whether the provided input is narrow    | bool      | true/false      | False    |
  * | Template   | row_num_datums | Number of datums per row               | uint32_t  | >= 1            | False    |
  * | Function   | ocb          | Output circular buffer identifier        | uint32_t  | 0 to 31         | True     |
@@ -98,7 +98,7 @@ ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t face_r_dim = 16, uint32
  * | Param Type | Name         | Description                                | Type      | Valid Range     | Required |
  * |------------|--------------|--------------------------------------------|-----------|-----------------|----------|
  * | Template   | block_ct_dim | Width of a single block in tiles           | uint32_t  | 1 to max (see note) | False (default = 8) |
- * | Template   | full_ct_dim  | Width of a full input in tiles             | uint32_t  | >= block_ct_dim | False    |
+ * | Template   | full_ct_dim  | Width of a full input in tiles             | uint32_t  | Divisible by block_ct_dim | False    |
  * | Function   | icb          | Input circular buffer identifier           | uint32_t  | 0 to 31         | True     |
  * | Function   | ocb          | Output circular buffer identifier          | uint32_t  | 0 to 31         | True     |
  */
@@ -130,7 +130,7 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb) {
  * | Param Type | Name         | Description                                 | Type      | Valid Range     | Required |
  * |------------|--------------|---------------------------------------------|-----------|-----------------|----------|
  * | Template   | block_ct_dim | Width of a single block in tiles            | uint32_t  | 1 to max (see note) | False (default = 8) |
- * | Template   | full_ct_dim  | Width of a full input in tiles              | uint32_t  | >= block_ct_dim | False    |
+ * | Template   | full_ct_dim  | Width of a full input in tiles              | uint32_t  | Divisible by block_ct_dim | False    |
  * | Function   | icb          | Input circular buffer identifier            | uint32_t  | 0 to 31         | True     |
  * | Function   | block_rt_dim | Height of a single block in tiles           | uint32_t  | >= 1            | True     |
  * | Function   | ocb          | Output circular buffer identifier           | uint32_t  | 0 to 31         | True     |
@@ -174,7 +174,7 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb,
  * | Param Type | Name           | Description                                                   | Type      | Valid Range     | Required |
  * |------------|----------------|---------------------------------------------------------------|-----------|-----------------|----------|
  * | Template   | block_ct_dim   | Width of a single block in tiles                              | uint32_t  | 1 to max (see note) | False (default = 8) |
- * | Template   | full_ct_dim    | Width of a full input in tiles                                | uint32_t  | >= block_ct_dim | False    |
+ * | Template   | full_ct_dim    | Width of a full input in tiles                                | uint32_t  | Divisible by block_ct_dim | False    |
  * | Template   | diagonal       | Whether to use diagonal packing                               | bool      | true/false      | False    |
  * | Template   | narrow_row     | Whether the provided input is narrow                          | bool      | true/false      | False    |
  * | Template   | row_num_datums | Number of datums per row                                      | uint32_t  | >= 1            | False    |

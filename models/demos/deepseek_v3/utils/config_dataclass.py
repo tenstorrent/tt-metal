@@ -164,3 +164,69 @@ class RMSNormConfig(OpConfigBase):
     is_distributed: bool = False
     topology: ttnn.Topology = ttnn.Topology.Linear
     norm_category: str = None
+
+
+@dataclass
+class BinaryOpConfig(OpConfigBase):
+    """Common parameters for a ttnn.add/sub/mul/div op, weights are in input_tensor_b"""
+
+    input_tensor_b: ConfigWeight
+    memory_config: ttnn.MemoryConfig | None = None
+    dtype: ttnn.DataType | None = None
+    activation: ttnn.UnaryOpType | None = None
+
+
+@dataclass
+class ReshapeConfig(OpConfigBase):
+    """Common parameters for a ttnn.reshape op"""
+
+    shape: tuple[int, int, int, int] | None = None
+
+
+@dataclass
+class TopKConfig(OpConfigBase):
+    """Common parameters for a ttnn.topk op"""
+
+    k: int
+    dim: int
+    largest: bool = True
+    sorted: bool = True
+
+
+@dataclass
+class ScatterConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.scatter op"""
+
+    input: ttnn.Tensor
+    dim: int
+    src: ttnn.Tensor
+
+
+@dataclass
+class AllToAllDispatchConfig(OpConfigBase):
+    """Common parameters for a ttnn.all_to_all_dispatch op"""
+
+    cluster_axis: int
+    num_links: int
+    memory_config: ttnn.MemoryConfig
+    global_semaphore: object
+    topology: ttnn.Topology = ttnn.Topology.Linear
+    subdevice_id: int | None = None
+
+
+@dataclass
+class AllToAllCombineConfig(OpConfigBase):
+    """Common parameters for a ttnn.all_to_all_combine op"""
+
+    num_links: int
+    memory_config: ttnn.MemoryConfig
+    axis: int
+    global_semaphore: object
+    topology: ttnn.Topology = ttnn.Topology.Linear
+
+
+@dataclass
+class RepeatConfig(OpConfigBase):
+    """Common parameters for a ttnn.repeat op"""
+
+    repeat_dims: ttnn.Shape

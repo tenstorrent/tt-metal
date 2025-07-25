@@ -84,8 +84,6 @@ DispatchSettings DispatchSettings::worker_defaults(const tt::Cluster& cluster, c
 
         .with_alignment(MetalContext::instance().hal().get_alignment(HalMemType::L1))
 
-        .tunneling_buffer_size(256_KB)  // same as prefetch_d_buffer_size
-
         .build();
 }
 
@@ -102,8 +100,6 @@ DispatchSettings DispatchSettings::eth_defaults(const tt::Cluster& /*cluster*/, 
 
         .dispatch_size(128_KB)
         .dispatch_s_buffer_size(32_KB)
-
-        .tunneling_buffer_size(128_KB)  // same as prefetch_d_buffer_size
 
         .with_alignment(MetalContext::instance().hal().get_alignment(HalMemType::L1))
 
@@ -208,9 +204,7 @@ bool DispatchSettings::operator==(const DispatchSettings& other) const {
            prefetch_d_buffer_size_ == other.prefetch_d_buffer_size_ && prefetch_d_pages_ == other.prefetch_d_pages_ &&
            dispatch_size_ == other.dispatch_size_ && dispatch_pages_ == other.dispatch_pages_ &&
            dispatch_s_buffer_size_ == other.dispatch_s_buffer_size_ &&
-           dispatch_s_buffer_pages_ == other.dispatch_s_buffer_pages_ &&
-           tunneling_buffer_size_ == other.tunneling_buffer_size_ &&
-           tunneling_buffer_pages_ == other.tunneling_buffer_pages_ && core_type_ == other.core_type_;
+           dispatch_s_buffer_pages_ == other.dispatch_s_buffer_pages_;
 }
 
 bool DispatchSettings::operator!=(const DispatchSettings& other) const { return !(*this == other); }
@@ -276,14 +270,6 @@ DispatchSettings& DispatchSettings::dispatch_size(uint32_t val) {
 DispatchSettings& DispatchSettings::dispatch_s_buffer_size(uint32_t val) {
     this->dispatch_s_buffer_size_ = val;
     this->dispatch_s_buffer_pages_ = this->dispatch_s_buffer_size_ / (1 << DISPATCH_S_BUFFER_LOG_PAGE_SIZE);
-    return *this;
-}
-
-// Setter for tunneling_buffer_size and update tunneling_buffer_pages
-DispatchSettings& DispatchSettings::tunneling_buffer_size(uint32_t val) {
-    this->tunneling_buffer_size_ = val;
-    this->tunneling_buffer_pages_ =
-        this->tunneling_buffer_size_ / (1 << PREFETCH_D_BUFFER_LOG_PAGE_SIZE);  // match legacy DispatchMemMap
     return *this;
 }
 

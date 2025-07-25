@@ -85,9 +85,12 @@ run_t3000_qwen25_tests() {
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   qwen25_7b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-7B-Instruct
   qwen25_72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-72B-Instruct
+  qwen25_coder_32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-Coder-32B
 
   MESH_DEVICE=N300 HF_MODEL=$qwen25_7b WH_ARCH_YAML=$wh_arch_yaml pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 600; fail+=$?
   HF_MODEL=$qwen25_72b WH_ARCH_YAML=$wh_arch_yaml pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800; fail+=$?
+  pip install -r models/tt_transformers/requirements.txt
+  HF_MODEL=$qwen25_coder_32b WH_ARCH_YAML=$wh_arch_yaml pytest models/tt_transformers/demo/simple_text_demo.py -k "not performance-ci-stress-1" --timeout 1800; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -242,6 +245,25 @@ run_t3000_resnet50_tests() {
   fi
 }
 
+run_t3000_sentence_bert_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_sentence_bert_tests"
+
+  # Sentence BERT demo test
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/sentence_bert/demo/demo.py --timeout=600 ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_sentence_bert_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 
 run_t3000_sd35large_tests() {
   # Record the start time
@@ -252,9 +274,8 @@ run_t3000_sd35large_tests() {
 
   # Run test_model (decode and prefill) for llama3 70B
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
-  mesh_device=T3K
   sd35large=/mnt/MLPerf/tt_dnn-models/StableDiffusion_35_Large/
-  NO_PROMPT=1 MESH_DEVICE=$mesh_device SD35L_DIR=$sd35large WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/experimental/stable_diffusion_35_large/demo.py  --timeout 600 ; fail+=$?
+  NO_PROMPT=1 SD35L_DIR=$sd35large WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/experimental/stable_diffusion_35_large/fun_demo.py -k "t3k"  --timeout 600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -322,6 +343,9 @@ run_t3000_tests() {
 
   # Run resnet50 tests
   run_t3000_resnet50_tests
+
+  # Run sentence bert tests
+  run_t3000_sentence_bert_tests
 
   # Run qwen25 tests
   run_t3000_qwen25_tests

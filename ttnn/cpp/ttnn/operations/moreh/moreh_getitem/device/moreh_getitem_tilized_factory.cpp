@@ -90,7 +90,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
         for (uint32_t i = 0; i < index_tensors.size(); i++) {
             auto dim = index_dims[i] + input_dim_offset;
-            auto index = index_tensors[i];
+            const auto& index = index_tensors[i];
 
             index_info[dim].is_defined = true;
             index_info[dim].address = index.buffer()->address();
@@ -328,7 +328,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
 
         for (uint32_t i = 0; i < index_tensors.size(); i++) {
             auto dim = index_dims[i] + input_dim_offset;
-            auto index = index_tensors[i];
+            const auto& index = index_tensors[i];
 
             index_info[dim].is_defined = true;
             index_info[dim].address = index_tensors[i].buffer()->address();
@@ -568,7 +568,7 @@ void MorehGetItemOperation::MorehGetItemTilizedFactory::override_runtime_argumen
     IndexInfo index_info[5] = {{false}};
     for (uint32_t i = 0; i < index_dims.size(); i++) {
         auto dim = index_dims[i] + input_dim_offset;
-        auto index_buffer = index_tensors[i];
+        const auto& index_buffer = index_tensors[i];
 
         index_info[dim].address = index_buffer.buffer()->address();
     }

@@ -81,6 +81,9 @@ def run_softmax_stable_with_program_cache(
     device, batch_size, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype, extra_torch_entries=[0]
 ):
     torch.manual_seed(0)
+    import logging
+
+    logger = logging.getLogger()
 
     scale = 1.0
     attention_mask = torch.rand(batch_size, 1, 1, w)

@@ -222,6 +222,7 @@ def test_slice_write_height_sharded(device, dims, slice_dim, slice_size, cores, 
     [
         [[2, 64, 64, 2048], 32, 64],
         [[2, 48, 48, 2944], 32, 46],
+        [[2, 48, 48, 2904], 32, 46],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
@@ -245,7 +246,7 @@ def test_slice_write_width_sharded(device, dims, slice_dim, slice_size, cores, l
         grid=core_range, shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED, shard_orientation=orientation
     )
     num_slices = round_up(dims[slice_dim], slice_size) // slice_size
-    padded_channels = round_up(dims[-1], 32)
+    padded_channels = round_up(dims[-1], 32 * cores)
 
     padded_torch_input = torch.nn.functional.pad(torch_input, (0, padded_channels - dims[-1]))
 
@@ -289,12 +290,13 @@ def test_slice_write_width_sharded(device, dims, slice_dim, slice_size, cores, l
 @pytest.mark.parametrize(
     "dims, slice_size, core_x, core_y, layout",
     [
-        [[2, 256, 256, 64], 128, 8, 2, ttnn.ROW_MAJOR_LAYOUT],
-        [[2, 256, 128, 32], 16, 4, 4, ttnn.ROW_MAJOR_LAYOUT],
+        [[2, 256, 256, 64], 128, 2, 8, ttnn.ROW_MAJOR_LAYOUT],
+        [[2, 256, 128, 128], 16, 4, 4, ttnn.ROW_MAJOR_LAYOUT],
         [[2, 32, 32, 128], 32, 2, 2, ttnn.ROW_MAJOR_LAYOUT],
         [[2, 256, 256, 64], 64, 2, 4, ttnn.TILE_LAYOUT],
         [[2, 256, 128, 128], 32, 4, 4, ttnn.TILE_LAYOUT],
         [[2, 64, 64, 128], 32, 2, 2, ttnn.TILE_LAYOUT],
+        [[2, 64, 64, 512], 32, 3, 5, ttnn.TILE_LAYOUT],
     ],
 )
 @pytest.mark.parametrize("slice_dim", [1, 2])
@@ -310,25 +312,41 @@ def test_slice_write_block_sharded(device, dims, slice_dim, slice_size, core_x, 
     ttnn_output = ttnn.zeros(dims, device=device, layout=layout, dtype=ttnn.bfloat16)
     ttnn_output = ttnn.to_memory_config(ttnn_output, ttnn.DRAM_MEMORY_CONFIG)
     num_slices = dims[slice_dim] // slice_size
+
+    padded_channels = round_up(dims[-1], 32 * core_x)
+    padded_torch_input = torch.nn.functional.pad(torch_input, (0, padded_channels - dims[-1]))
+
+    core_grid = ttnn.CoreRangeSet([ttnn.CoreRange((0, 0), (core_x - 1, core_y - 1))])
+    parallel_config = ttnn.SlidingWindowParallelConfig(
+        grid=core_grid, shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED, shard_orientation=orientation
+    )
+
     for i in range(num_slices):
         begins = [0, 0, 0, 0]
         ends = [dims[0], dims[1], dims[2], dims[3]]
         begins[slice_dim] = i * slice_size
-        ends[slice_dim] = (i + 1) * slice_size
+        if i == num_slices - 1:
+            ends[slice_dim] = dims[slice_dim]
+        else:
+            ends[slice_dim] = (i + 1) * slice_size
         this_ttnn_input = ttnn.from_torch(
-            torch_input[begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : ends[3]],
+            padded_torch_input[
+                begins[0] : ends[0], begins[1] : ends[1], begins[2] : ends[2], begins[3] : padded_channels
+            ],
             device=device,
             layout=layout,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         core_grid = ttnn.CoreGrid(x=core_x, y=core_y)
-        memory_config = ttnn.create_sharded_memory_config_(
-            this_ttnn_input.shape, core_grid, ttnn.ShardStrategy.BLOCK, orientation
+
+        this_ttnn_input = ttnn.reshape(this_ttnn_input, [1, 1, -1, this_ttnn_input.padded_shape[-1]])
+        memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
+            this_ttnn_input.shape,
+            parallel_config,
+            32 if layout == ttnn.TILE_LAYOUT else 1,
         )
-        # x = (i + 1)%num_slices
-        # begins[slice_dim] = (x) * slice_size
-        # ends[slice_dim] = (x + 1) * slice_size
+
         this_ttnn_input = ttnn.to_memory_config(this_ttnn_input, memory_config)
         ttnn.slice_write(this_ttnn_input, ttnn_output, begins, ends, strides)
 
@@ -395,15 +413,18 @@ def slice_test(
     in_mem_config,
     out_mem_config,
     dtype,
+    extra_torch_entries=[0],
 ):
     if dtype == ttnn.float32:
         torch_input_tensor = torch.rand(*input_tensor_shape, dtype=torch.float)
     else:
         torch_input_tensor = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
 
+    current_entries_count = device.num_program_cache_entries()
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor, layout=input_layout, device=device, memory_config=in_mem_config
     )
+    extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
 
     tt_output_tensor = ttnn.slice(tt_input_tensor, output_tensor_start, output_tensor_end, memory_config=out_mem_config)
 
@@ -479,6 +500,8 @@ def test_run_slice_test(
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
 
+    extra_torch_entries = [0]
+
     a_pt, a_ref, num_cache_entries = slice_test(
         ttnn.ROW_MAJOR_LAYOUT,
         input_tensor_shape_0,
@@ -488,11 +511,12 @@ def test_run_slice_test(
         in_mem_config,
         out_mem_config,
         dtype,
+        extra_torch_entries=extra_torch_entries,
     )
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
     assert eq
-    assert num_cache_entries == 1
+    assert num_cache_entries - extra_torch_entries[0] == 1
 
     a_pt, a_ref, num_cache_entries = slice_test(
         ttnn.ROW_MAJOR_LAYOUT,
@@ -503,12 +527,13 @@ def test_run_slice_test(
         in_mem_config,
         out_mem_config,
         dtype,
+        extra_torch_entries=extra_torch_entries,
     )
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
     assert eq
     # different width for row major
-    assert num_cache_entries == 2
+    assert num_cache_entries - extra_torch_entries[0] == 2
 
     a_pt, a_ref, num_cache_entries = slice_test(
         ttnn.TILE_LAYOUT,
@@ -519,9 +544,10 @@ def test_run_slice_test(
         in_mem_config,
         out_mem_config,
         dtype,
+        extra_torch_entries=extra_torch_entries,
     )
     # change from RM to TILE
-    assert num_cache_entries == 3
+    assert num_cache_entries - extra_torch_entries[0] == 3
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
     assert eq
@@ -535,9 +561,10 @@ def test_run_slice_test(
         in_mem_config,
         out_mem_config,
         dtype,
+        extra_torch_entries=extra_torch_entries,
     )
     # CACHE HIT
-    assert num_cache_entries == 4
+    assert num_cache_entries - extra_torch_entries[0] == 4
     assert a_pt.shape == a_ref.shape
     eq = torch.equal(a_pt, a_ref)
     assert eq

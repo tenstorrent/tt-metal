@@ -466,12 +466,8 @@ def test_reshape_host(input_shape, output_shape, device):
     ],
 )
 def test_reshape_int(input_shape, output_shape, device):
-    import logging
-
-    logger = logging.getLogger()
     torch_input_tensor = torch.randint(0, 100, input_shape)
     torch_result = torch_input_tensor.reshape(output_shape)
-    logger.debug(f"torch_result {torch_result}")
 
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -479,12 +475,9 @@ def test_reshape_int(input_shape, output_shape, device):
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    logger.debug(f"input_tensor {input_tensor}")
     ttnn_output = ttnn.reshape(input_tensor, output_shape)
-    logger.debug(f"ttnn_output {ttnn_output}")
 
     output = ttnn.to_torch(ttnn_output)
-    logger.debug(f"ttnn_output {output}")
 
     assert_with_pcc(torch_result, output, 0.9999)
 

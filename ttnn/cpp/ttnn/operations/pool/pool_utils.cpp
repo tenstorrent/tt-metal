@@ -144,7 +144,7 @@ uint32_t calculate_L1_usage(
     Pool2DType pool_type,
     bool count_include_pad,
     std::optional<int32_t> divisor_override) {
-    const auto& input_shape = input.get_padded_shape();
+    const auto& input_shape = input.padded_shape();
 
     auto in_dtype = input.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input.dtype();
     tt::DataFormat in_df = datatype_to_dataformat_converter(in_dtype);

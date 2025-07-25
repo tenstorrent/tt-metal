@@ -509,35 +509,6 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
             logical_mesh_chip_id_to_physical_chip_id_mapping.insert({FabricNodeId(MeshId{4}, i), physical_chip_ids[i]});
         }
         // This case can be depreciated once we have multi-host testing and validate it working
-    } else if (mesh_graph_desc_filename == "t3k_dual_host_mesh_graph_descriptor.yaml") {
-        // TODO(#24230): This path will soon be deprecated once we generalize logical mesh_chip_id to physical chip_id
-        // mapping
-        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        auto chip_eth_coords = cluster.get_user_chip_ethernet_coordinates();
-        std::vector<eth_coord_t> eth_coords;
-        eth_coords.reserve(chip_eth_coords.size());
-        for (const auto& [_, eth_coord] : chip_eth_coords) {
-            eth_coords.push_back(eth_coord);
-        }
-        std::sort(eth_coords.begin(), eth_coords.end(), EthCoordComparator());
-
-        auto mesh_ids = this->get_local_mesh_id_bindings();
-        auto mesh_id = mesh_ids.at(0);  // Use the first mesh ID
-        auto host_rank_id = this->get_local_host_rank_id_binding();
-        auto fabric_chip_ids = this->routing_table_generator_->mesh_graph->get_chip_ids(mesh_id, host_rank_id).values();
-
-        TT_FATAL(
-            fabric_chip_ids.size() == eth_coords.size(),
-            "Number of fabric chip ids {} does not match number of eth coords {}",
-            fabric_chip_ids.size(),
-            eth_coords.size());
-        for (std::uint32_t idx = 0; idx < fabric_chip_ids.size(); idx++) {
-            auto fabric_chip_id = fabric_chip_ids.at(idx);
-            auto eth_coord = eth_coords.at(idx);
-            logical_mesh_chip_id_to_physical_chip_id_mapping.insert(
-                {tt_fabric::FabricNodeId(mesh_id, fabric_chip_id),
-                 cluster.get_physical_chip_id_from_eth_coord(eth_coord)});
-        }
     } else {
         // Iterate over every mesh defined in the mesh-graph descriptor and embed it on top of
         // the physical cluster using the generic helper.
@@ -1480,10 +1451,10 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
 
             // Populate connection info for fabric-routed channels
             const auto sender_channel = is_2d_fabric ? router_direction : 0;
-            auto& connection_info = fabric_connections.connections[eth_channel_id];
+            auto& connection_info = fabric_connections.read_only[eth_channel_id];
             connection_info.edm_direction = router_direction;
-            connection_info.edm_noc_xy =
-                tt::tt_fabric::WorkerXY(fabric_router_virtual_core.x, fabric_router_virtual_core.y).to_uint32();
+            connection_info.edm_noc_x = static_cast<uint8_t>(fabric_router_virtual_core.x);
+            connection_info.edm_noc_y = static_cast<uint8_t>(fabric_router_virtual_core.y);
             connection_info.edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel];
             connection_info.num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel];
             connection_info.edm_l1_sem_addr =
@@ -1821,8 +1792,7 @@ std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(
         for (const auto& eth_channel : logical_active_eth_channels) {
             tt::umd::CoreCoord eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
             const auto& routing_info = eth_routing_info.at(eth_core);
-            if ((routing_info == EthRouterMode::BI_DIR_TUNNELING or routing_info == EthRouterMode::FABRIC_ROUTER) and
-                skip_reserved_cores) {
+            if (routing_info == EthRouterMode::FABRIC_ROUTER && skip_reserved_cores) {
                 continue;
             }
             if (freq_retrain_eth_cores.find(eth_core) != freq_retrain_eth_cores.end()) {
@@ -2141,21 +2111,5 @@ bool ControlPlane::is_local_mesh(MeshId mesh_id) const {
 }
 
 ControlPlane::~ControlPlane() = default;
-
-GlobalControlPlane::GlobalControlPlane(const std::string& mesh_graph_desc_file) {
-    mesh_graph_desc_file_ = mesh_graph_desc_file;
-    // Initialize host mappings
-    control_plane_ = std::make_unique<ControlPlane>(mesh_graph_desc_file);
-}
-
-GlobalControlPlane::GlobalControlPlane(
-    const std::string& mesh_graph_desc_file,
-    const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
-    mesh_graph_desc_file_ = mesh_graph_desc_file;
-    control_plane_ =
-        std::make_unique<ControlPlane>(mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
-}
-
-GlobalControlPlane::~GlobalControlPlane() = default;
 
 }  // namespace tt::tt_fabric

@@ -49,8 +49,7 @@ def test_to_dtype(height, width, from_dtype, to_dtype):
     assert_with_pcc(torch_input_tensor, output_tensor, bfloat4_pcc if to_dtype == ttnn.bfloat4_b else 0.9999)
 
 
-@pytest.mark.parametrize("height", [4])
-@pytest.mark.parametrize("width", [4])
+@pytest.mark.parametrize("shape", [(4, 4), (32, 32)])
 @pytest.mark.parametrize(
     "ttnn_dtype",
     [
@@ -76,7 +75,7 @@ def test_to_dtype(height, width, from_dtype, to_dtype):
 )
 @pytest.mark.parametrize("ttnn_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("convert_with_device", [True, False])
-def test_dtype_conversion_on_device(device, height, width, ttnn_dtype, torch_dtype, ttnn_layout, convert_with_device):
+def test_dtype_conversion_on_device(device, shape, ttnn_dtype, torch_dtype, ttnn_layout, convert_with_device):
     ttnn_dtype_requires_tile = ttnn_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b]
     ttnn_dtype_has_random = ttnn_dtype not in [ttnn.uint8, ttnn.int32]
     ttnn_is_float = ttnn_dtype in [ttnn.float32, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b]
@@ -92,6 +91,14 @@ def test_dtype_conversion_on_device(device, height, width, ttnn_dtype, torch_dty
     elif ttnn_is_float != torch_is_float:
         conversion_pcc = 0.98
 
+    elif torch_dtype == torch.bfloat16:
+        if ttnn_dtype == ttnn.bfloat16 or ttnn_dtype == ttnn.bfloat8_b:
+            conversion_pcc = 0.9999
+        elif ttnn_dtype == ttnn.bfloat4_b:
+            conversion_pcc = 0.989
+        else:
+            conversion_pcc = 0.999
+
     else:
         conversion_pcc = 0.999
 
@@ -100,7 +107,7 @@ def test_dtype_conversion_on_device(device, height, width, ttnn_dtype, torch_dty
     if ttnn_dtype_has_random:
         for store_input_on_device in [True, False]:
             ttnn_input_tensor = ttnn.rand(
-                (height, width),
+                shape,
                 dtype=ttnn_dtype,
                 device=device,
                 layout=ttnn.TILE_LAYOUT if ttnn_dtype_requires_tile else ttnn_layout,
@@ -123,10 +130,10 @@ def test_dtype_conversion_on_device(device, height, width, ttnn_dtype, torch_dty
         )
 
     if torch_is_float:
-        torch_input_tensor = torch.rand((height, width), dtype=torch_dtype) * 10
+        torch_input_tensor = torch.rand(shape, dtype=torch_dtype) * 10
 
     else:
-        torch_input_tensor = torch.randint(0, 100, (height, width), dtype=torch_dtype)
+        torch_input_tensor = torch.randint(0, 100, shape, dtype=torch_dtype)
 
     ttnn_result_tensor = ttnn.from_torch(
         torch_input_tensor,

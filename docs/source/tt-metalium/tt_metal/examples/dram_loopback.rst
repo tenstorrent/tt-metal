@@ -115,12 +115,15 @@ Create a kernel that will copy data from DRAM to L1 and back. Since we are only 
 .. code-block:: cpp
 
     constexpr CoreCoord core = {0, 0};
+    std::vector<uint32_t> compile_args;
+    TensorAccessorArgs(*input_dram_buffer).append_to(compile_args);
+    TensorAccessorArgs(*output_dram_buffer).append_to(compile_args);
 
     KernelHandle dram_copy_kernel_id = CreateKernel(
         program,
         "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = compile_args}
     );
 
 .. note::
@@ -135,7 +138,7 @@ Create a kernel that will copy data from DRAM to L1 and back. Since we are only 
 
 The kernel itself is simple. It takes the address and bank indices we just created. Copies data from the input DRAM buffer to the L1 buffer and then back out to the output DRAM buffer. You might notice that the kernel is using ``uint32_t`` instead of pointers for addresses. This is intended design as the DRAM is not directly addressable by the kernels. Instead, access requests are sent to the NoC (Network on Chip) and be brought to the L1 before the kernel can access it in a meaningful way. However, letting the RISC-V core directly access the L1 is not the most efficient way to move data around. Thus the L1 address is also an integer.
 
-The ``InterleavedAddrGenFast`` object handles bank addressing and page size automatically, simplifying interleaved buffer access. Data transfers are asynchronous, allowing the kernel to issue multiple requests while transfers are in progress. This improves performance by utilizing on-core resources more efficiently. In this example, we use ``noc_async_read_barrier()`` and ``noc_async_write_barrier()`` after each operation to ensure data integrity before proceeding to the next loop iteration.
+The ``TensorAccessor`` object handles bank addressing and page size automatically, simplifying interleaved or sharded buffer access. Data transfers are asynchronous, allowing the kernel to issue multiple requests while transfers are in progress. This improves performance by utilizing on-core resources more efficiently. In this example, we use ``noc_async_read_barrier()`` and ``noc_async_write_barrier()`` after each operation to ensure data integrity before proceeding to the next loop iteration.
 
 .. code-block:: cpp
 
@@ -143,21 +146,16 @@ The ``InterleavedAddrGenFast`` object handles bank addressing and page size auto
     void kernel_main() {
         std::uint32_t l1_buffer_addr        = get_arg_val<uint32_t>(0);
         std::uint32_t dram_buffer_src_addr  = get_arg_val<uint32_t>(1);
-        std::uint32_t dram_buffer_dst_addr  = get_arg_val<uint32_t>(3);
+        std::uint32_t dram_buffer_dst_addr  = get_arg_val<uint32_t>(2);
         std::uint32_t num_tiles             = get_arg_val<uint32_t>(3);
 
         const uint32_t tile_size_bytes = 32 * 32 * 2; // same tile size as in the host code
-        const InterleavedAddrGenFast<true> in0 = {
-            .bank_base_address = dram_buffer_src_addr, // The base address of the buffer
-            .page_size = tile_size_bytes,              // The size of a buffer page
-            .data_format = DataFormat::Float16_b,      // The data format of the buffer
-        };
 
-        const InterleavedAddrGenFast<true> out0 = {
-            .bank_base_address = dram_buffer_dst_addr,
-            .page_size = tile_size_bytes,
-            .data_format = DataFormat::Float16_b,
-        };
+        constexpr auto in0_args = TensorAccessorArgs<0>();
+        const auto in0 = TensorAccessor(in0_args, dram_buffer_src_addr, tile_size_bytes);
+
+        constexpr auto out0_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
+        const auto out0 = TensorAccessor(out0_args, dram_buffer_dst_addr, tile_size_bytes);
 
         for(uint32_t i=0;i<num_tiles;i++) {
             noc_async_read_tile(i, in0, l1_buffer_addr);
@@ -169,7 +167,7 @@ The ``InterleavedAddrGenFast`` object handles bank addressing and page size auto
     }
 
 .. note::
-  ``InterleavedAddrGenFast`` handles address generation for tiled interleaved buffers automatically. For none tiled layouts or when manual address control is needed, use ``InterleavedAddrGen`` or calculate addresses manually. Without the helper, the kernel implementation would be:
+  ``TensorAccessor`` handles address generation for all kinds of buffers automatically. Without the helper, the kernel implementation would be:
 
   .. code-block:: cpp
 

@@ -378,7 +378,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     if (weight_block_w_ntiles <= 8) {
         compute_defines["PACKER_UNTILIZE"] = "1";
     }
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), all_cores.num_cores(), compute_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), all_cores.num_cores(), compute_defines, ttnn::get_throttle_level(compute_kernel_config));
 
     for (auto elem : compute_defines) {
         log_debug(tt::LogOp, "compute_defines: {} = {}", elem.first, elem.second);
@@ -545,10 +546,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     std::vector<uint32_t> act_mcast_noc_y;
     std::vector<uint32_t> act_mcast_noc_x;
 
+    act_mcast_noc_x.reserve(full_core_grid.x);
     for (uint32_t core_index = 0; core_index < full_core_grid.x; core_index++) {
         act_mcast_noc_x.push_back(device->worker_core_from_logical_core(CoreCoord(core_index, 0)).x);
     }
 
+    act_mcast_noc_y.reserve(full_core_grid.y);
     for (uint32_t core_index = 0; core_index < full_core_grid.y; core_index++) {
         act_mcast_noc_y.push_back(device->worker_core_from_logical_core(CoreCoord(0, core_index)).y);
     }

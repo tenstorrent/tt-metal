@@ -47,12 +47,6 @@ jobs:
           }, # Sean Nijjar
           {
             arch: wormhole_b0,
-            runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
-            name: "N300 tunneler",
-            cmd: "TT_METAL_SLOW_DISPATCH_MODE=1 ./tests/scripts/run_tunneler_tests.sh --machine-type N300",
-          },  # Miaorong Wang
-          {
-            arch: wormhole_b0,
             runs-on: ["arch-wormhole_b0", "pipeline-perf", "config-t3000", "in-service"],
             name: "T3K ubench - Fabric BW",
             cmd: "pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_edm_bandwidth.py",
