@@ -364,6 +364,7 @@ class OperationGraph:
                 if intermediate_indices:
                     graph_output_indices = intermediate_indices
             if node_data["op_type"] == "TUPLE_GET_ITEM":
+                args = self.parse_args(node_data.get("args", []), node_data["name"])
                 parent_index = node_data["kwargs"]["index"]
                 parent_id = node_data["args"][parent_index].id.split("_")[0]
                 assert parent_id in self.operations, f"Parent ID {parent_id} not found in operations."
@@ -639,7 +640,7 @@ def propagate_module_name(graph_output_to_input, graph_output_to_node):
             continue
         if common_prefix and common_prefix in node_data["name"]:
             node_data["name"] = node_data["name"].removeprefix(common_prefix)
-        node_data["name"] = ".".join(node_data["name"].split(".")[:12])  # Limit to first 12 parts
+        node_data["name"] = ".".join(node_data["name"].split(".")[:20])  # Limit to first 20 parts
 
     # Ensure all names are unique by appending a unique identifier
     # using a while loop to check for uniqueness
