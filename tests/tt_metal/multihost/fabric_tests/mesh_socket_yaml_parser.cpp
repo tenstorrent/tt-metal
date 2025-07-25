@@ -3,15 +3,58 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tests/tt_metal/multihost/fabric_tests/mesh_socket_yaml_parser.hpp"
-
 #include <fstream>
 #include <sstream>
 #include <algorithm>
 #include <random>
 
 #include <tt-logger/tt-logger.hpp>
+#include "tt_metal/impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric::mesh_socket_tests {
+
+std::optional<std::string> CmdlineParser::get_yaml_config_path() {
+    std::string yaml_config = test_args::get_command_option(input_args_, "--test_config", "");
+
+    if (!yaml_config.empty()) {
+        std::filesystem::path fpath(yaml_config);
+        if (!fpath.is_absolute()) {
+            const auto& fname = fpath.filename();
+            fpath = std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+                    "tests/tt_metal/multihost/fabric_tests/" / fname;
+            log_warning(tt::LogTest, "Relative fpath for config provided, using absolute path: {}", fpath);
+        }
+        return fpath.string();
+    }
+
+    return std::nullopt;
+}
+
+std::optional<uint32_t> CmdlineParser::get_master_seed() {
+    if (test_args::has_command_option(input_args_, "--master-seed")) {
+        uint32_t master_seed = test_args::get_command_option_uint32(input_args_, "--master-seed", 0);
+        log_info(tt::LogTest, "Using master seed from command line: {}", master_seed);
+        return std::make_optional(master_seed);
+    }
+
+    log_info(LogTest, "No master seed provided. Use --master-seed to reproduce.");
+    return std::nullopt;
+}
+
+bool CmdlineParser::has_help_option() { return test_args::has_command_option(input_args_, "--help"); }
+
+void CmdlineParser::print_help() {
+    log_info(tt::LogTest, "Usage: mesh_socket_test_main --test_config FILE");
+    log_info(tt::LogTest, "");
+    log_info(tt::LogTest, "--test_config FILE     Path to the YAML test configuration file. ");
+    log_info(tt::LogTest, "--master-seed SEED     Master seed for all random operations to ensure reproducibility.");
+    log_info(tt::LogTest, "--help                 Print this help message.");
+    log_info(tt::LogTest, "");
+    log_info(
+        tt::LogTest,
+        "Example: mesh_socket_test_main --test_config "
+        "tests/tt_metal/multihost/fabric_tests/mesh_socket_test_config_example.yaml --master-seed 12345");
+}
 
 MeshSocketTestConfiguration MeshSocketYamlParser::parse_file(const std::string& yaml_file_path) {
     log_info(tt::LogTest, "Parsing MeshSocket test configuration from: {}", yaml_file_path);
