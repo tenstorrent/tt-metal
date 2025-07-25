@@ -10,10 +10,12 @@ class YOLOv8xPerformantRunner:
         self,
         device,
         device_batch_size,
+        model_location_generator=None,
     ):
         self.runner_infra = YOLOv8xPerformanceRunnerInfra(
             device,
             device_batch_size,
+            model_location_generator=model_location_generator,
         )
         self.device = device
         (

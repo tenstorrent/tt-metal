@@ -70,6 +70,7 @@ jobs:
               - models/demos/vgg_unet/tests/
               - models/demos/yolov9c/tests/perf/
               - models/experimental/vanilla_unet/tests/perf/
+              - models/demos/yolov8x/tests/perf/
 
           - name: tt_transformers
             model-list:
