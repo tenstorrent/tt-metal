@@ -288,7 +288,7 @@ class MoEGate(AbstractModule):
         src_tensor = ttnn.repeat(src_tensor, ttnn.Shape((1, 1, scores.shape[2], 1)))
 
         # scatter top-k expert groups indices to full expert_groups_mask
-        active_groups_mask = ttnn.experimental.scatter(
+        active_groups_mask = ttnn.scatter(
             input=input_mask,
             index=topk_expert_groups_indices,
             src=src_tensor,
