@@ -66,21 +66,6 @@ target_link_libraries(
         TTNN::CPP
 )
 
-#add_library(unit_tests_ttnn_slow OBJECT)
-#add_library(TTNN::Test::Slow ALIAS unit_tests_ttnn_slow)
-#TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_slow)
-#target_sources(
-#    unit_tests_ttnn_slow
-#    PRIVATE
-#)
-#target_include_directories(unit_tests_ttnn_slow PRIVATE ${PROJECT_SOURCE_DIR}/tests)
-#target_link_libraries(
-#    unit_tests_ttnn_slow
-#    PRIVATE
-#        test_common_libs
-#        TTNN::CPP
-#)
-
 add_executable(unit_tests_ttnn)
 target_link_libraries(
     unit_tests_ttnn
