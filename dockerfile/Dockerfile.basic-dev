@@ -16,6 +16,7 @@ RUN apt-get update && apt-get install -y \
     ninja-build \
     g++-12 \
     build-essential \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install mpi-ulfm from the tenstorrent repository
