@@ -11,7 +11,6 @@
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
-#include <initializer_list>
 #include <kernel.hpp>
 #include <magic_enum/magic_enum.hpp>
 #include <sub_device_types.hpp>
