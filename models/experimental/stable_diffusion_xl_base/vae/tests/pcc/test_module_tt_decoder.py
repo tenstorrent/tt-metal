@@ -59,8 +59,12 @@ def test_vae_decoder(device, input_shape, pcc, is_ci_env, reset_seeds):
     ttnn_input_tensor = ttnn.reshape(ttnn_input_tensor, (B, 1, H * W, C))
 
     logger.info("Running TT model")
-    output_tensor = tt_vae.forward(ttnn_input_tensor, [B, C, H, W])
+    output_tensor, [C, H, W] = tt_vae.forward(ttnn_input_tensor, [B, C, H, W])
     logger.info("TT model done")
+
+    output_tensor = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0)).float()
+    output_tensor = output_tensor.reshape(B, H, W, C)
+    output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
 
     del vae
     gc.collect()
