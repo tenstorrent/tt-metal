@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.yolov10x.common import load_torch_model
 from models.demos.yolov10x.demo.demo_utils import (
     LoadImages,
     load_coco_class_names,
@@ -16,7 +17,6 @@ from models.demos.yolov10x.demo.demo_utils import (
     preprocess,
     save_yolo_predictions_by_model,
 )
-from models.demos.yolov10x.load_model_utils import load_torch_model
 from models.demos.yolov10x.reference.yolov10x import YOLOv10
 from models.demos.yolov10x.runner.performant_runner import YOLOv10PerformantRunner
 from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0

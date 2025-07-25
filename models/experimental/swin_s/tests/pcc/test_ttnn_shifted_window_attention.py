@@ -10,7 +10,7 @@ from models.experimental.swin_s.tt.tt_shifted_window_attention import TtShiftedW
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_linear_weight, preprocess_linear_bias
-from models.experimental.swin_s.load_model_utils import load_torch_model
+from models.experimental.swin_s.common import load_torch_model
 
 
 def preprocess_attn_mask(input_shape, patch_size, window_size, shift_size, device):

@@ -8,10 +8,10 @@ from warnings import filterwarnings
 import kagglehub
 import pytest
 
+from models.demos.vgg_unet.common import load_torch_model
 from models.demos.vgg_unet.demo.demo_utils import postprocess, prediction, preprocess, process_single_image
-from models.demos.vgg_unet.load_model_utils import load_torch_model
 from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
-from models.demos.vgg_unet.tests.vgg_unet_e2e_performant import VggUnetTrace2CQ
+from models.demos.vgg_unet.tests.perf.vgg_unet_e2e_performant import VggUnetTrace2CQ
 from models.utility_functions import disable_persistent_kernel_cache
 
 for dirname, _, filenames in os.walk("/kaggle/input"):

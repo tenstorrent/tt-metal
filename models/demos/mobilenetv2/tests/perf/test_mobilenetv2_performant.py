@@ -4,8 +4,8 @@
 
 import pytest
 
-from models.demos.mobilenetv2.tests.mobilenetv2_common import MOBILENETV2_L1_SMALL_SIZE
-from models.demos.mobilenetv2.tests.mobilenetv2_performant import (
+from models.demos.mobilenetv2.tests.perf.mobilenetv2_common import MOBILENETV2_L1_SMALL_SIZE
+from models.demos.mobilenetv2.tests.perf.mobilenetv2_performant import (
     run_mobilenetv2_inference,
     run_mobilenetv2_trace_2cqs_inference,
     run_mobilenetv2_trace_inference,

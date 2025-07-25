@@ -24,14 +24,14 @@ To obtain the perf reports through profiler, please build with following command
 Command to run the inference pipeline with random tensor:
 
 ```sh
-pytest models/experimental/vanilla_unet/test/pcc/test_ttnn_unet.py
+pytest models/experimental/vanilla_unet/tests/pcc/test_ttnn_unet.py
 ```
 
 ### Model performant running with Trace+2CQ
 Use the following command to run the e2e perf:
 - end-2-end perf is 42 FPS
 ```sh
-pytest models/experimental/vanilla_unet/test/test_e2e_performant.py::test_e2e_performant
+pytest models/experimental/vanilla_unet/tests/perf/test_e2e_performant.py::test_e2e_performant
 ```
 
 ## How to run demo

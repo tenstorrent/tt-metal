@@ -16,7 +16,7 @@ from models.experimental.swin_s.tests.pcc.test_ttnn_mlp import (
     create_custom_preprocessor as create_custom_preprocessor_mlp,
 )
 import pytest
-from models.experimental.swin_s.load_model_utils import load_torch_model
+from models.experimental.swin_s.common import load_torch_model
 
 
 def preprocess_attn_mask(input_shape, patch_size, window_size, shift_size, device):

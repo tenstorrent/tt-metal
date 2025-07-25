@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.yolov10x.load_model_utils import load_torch_model
+from models.demos.yolov10x.common import load_torch_model
 from models.demos.yolov10x.reference.yolov10x import YOLOv10
 from models.demos.yolov10x.tt.attention import TtnnAttention
 from models.demos.yolov10x.tt.bottleneck import TtnnBottleNeck

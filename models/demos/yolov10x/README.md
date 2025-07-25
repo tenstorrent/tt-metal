@@ -35,7 +35,7 @@ pytest --disable-warnings models/demos/yolov10x/tests/pcc/test_ttnn_yolov10x.py:
 Use the following command to run Model performant running with Trace+2CQ
 
 ```
-pytest models/demos/yolov10x/tests/test_e2e_performant.py::test_e2e_performant
+pytest models/demos/yolov10x/tests/perf/test_e2e_performant.py::test_e2e_performant
 ```
 
 ## Model demo running with Trace+2CQ

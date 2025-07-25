@@ -16,7 +16,7 @@ from models.experimental.vanilla_unet.reference.unet import UNet
 from models.experimental.vanilla_unet.ttnn.ttnn_unet import TtUnet
 from models.utility_functions import run_for_wormhole_b0
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, preprocess_model_parameters
-from models.experimental.vanilla_unet.load_model_utils import load_torch_model
+from models.experimental.vanilla_unet.common import load_torch_model
 
 
 def create_custom_preprocessor(device):

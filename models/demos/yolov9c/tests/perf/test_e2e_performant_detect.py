@@ -27,7 +27,6 @@ from models.utility_functions import run_for_wormhole_b0
     ],
 )
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.models_performance_virtual_machine
 def test_e2e_performant(
     device,
     model_location_generator,

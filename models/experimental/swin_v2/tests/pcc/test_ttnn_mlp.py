@@ -16,7 +16,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.swin_v2.reference.mlp import MLP
 from models.experimental.swin_v2.tt.tt_mlp import TtMLP
 import ttnn
-from models.experimental.swin_v2.load_model_utils import load_torch_model
+from models.experimental.swin_v2.common import load_torch_model
 
 
 def create_custom_preprocessor(device):

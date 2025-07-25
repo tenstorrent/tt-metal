@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.vgg_unet.tests.vgg_unet_e2e_performant import VggUnetTrace2CQ
+from models.demos.vgg_unet.tests.perf.vgg_unet_e2e_performant import VggUnetTrace2CQ
 from models.utility_functions import run_for_wormhole_b0
 
 
@@ -21,7 +21,7 @@ from models.utility_functions import run_for_wormhole_b0
     "batch_size",
     ((1),),
 )
-@pytest.mark.models_device_performance_bare_metal
+@pytest.mark.models_performance_bare_metal
 def test_run_vgg_unet_trace_2cqs_inference(
     device,
     batch_size,

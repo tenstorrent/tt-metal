@@ -7,7 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.mobilenetv2.load_model_utils import load_torch_model
+from models.demos.mobilenetv2.common import load_torch_model
 from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
 from models.demos.mobilenetv2.tt.model_preprocessing import create_mobilenetv2_model_parameters
 from models.demos.mobilenetv2.tt.ttnn_mobilenetv2 import TtMobileNetV2

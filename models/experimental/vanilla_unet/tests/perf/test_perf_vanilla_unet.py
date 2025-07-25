@@ -7,31 +7,20 @@ import pytest
 from loguru import logger
 
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
-from models.utility_functions import run_for_wormhole_b0
 
 
-@run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "batch_size",
-    [1],
-)
-@pytest.mark.parametrize(
-    "model_task",
+    "batch_size, expected_perf",
     [
-        "segment",  # To run the test for instance segmentation
-        "detect",  # To run the test for Object Detection
+        [1, 46.7],
     ],
-    ids=["segment", "detect"],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_perf_device_yolov9c(model_task, batch_size):
-    subdir = "ttnn_yolov9c"
+def test_perf_device_vanilla_unet(batch_size, expected_perf):
+    subdir = "ttnn_vanilla_unet"
     num_iterations = 1
     margin = 0.03
-    enable_segment = model_task == "segment"
-    expected_perf = 31.6 if enable_segment else 31.7
-
-    command = f"pytest models/demos/yolov9c/tests/pcc/test_ttnn_yolov9c.py::test_yolov9c"
+    command = f"pytest models/experimental/vanilla_unet/tests/pcc/test_ttnn_unet.py"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
@@ -43,7 +32,7 @@ def test_perf_device_yolov9c(model_task, batch_size):
     logger.info(f"{expected_results}")
 
     prep_device_perf_report(
-        model_name=f"ttnn_functional_yolov9c{batch_size}",
+        model_name=f"ttnn_functional_vanilla_unet{batch_size}",
         batch_size=batch_size,
         post_processed_results=post_processed_results,
         expected_results=expected_results,

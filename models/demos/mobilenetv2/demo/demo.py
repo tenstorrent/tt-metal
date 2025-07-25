@@ -9,7 +9,7 @@ from tqdm import tqdm
 from transformers import AutoImageProcessor
 
 import ttnn
-from models.demos.mobilenetv2.tests.mobilenetv2_e2e_performant import MobileNetV2Trace2CQ
+from models.demos.mobilenetv2.tests.perf.mobilenetv2_e2e_performant import MobileNetV2Trace2CQ
 from models.demos.ttnn_resnet.tests.demo_utils import get_batch, get_data_loader
 from models.utility_functions import profiler, run_for_wormhole_b0
 

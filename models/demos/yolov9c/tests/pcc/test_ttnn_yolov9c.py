@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.yolov9c.load_model_utils import load_torch_model
+from models.demos.yolov9c.common import load_torch_model
 from models.demos.yolov9c.reference import yolov9c
 from models.demos.yolov9c.tt import ttnn_yolov9c
 from models.demos.yolov9c.tt.model_preprocessing import create_yolov9c_input_tensors, create_yolov9c_model_parameters

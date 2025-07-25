@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.vgg_unet.tests.vgg_unet_test_infra import create_test_infra
+from models.demos.vgg_unet.tests.perf.vgg_unet_test_infra import create_test_infra
 
 try:
     pass
