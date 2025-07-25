@@ -14,6 +14,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/fabric.hpp>
 #include "umd/device/types/cluster_descriptor_types.h"
+#include "tests/tt_metal/test_utils/test_common.hpp"
 
 namespace tt::tt_fabric::mesh_socket_tests {
 
@@ -93,6 +94,19 @@ struct MeshSocketTestConfiguration {
     std::optional<PhysicalMeshConfig> physical_mesh_config;
     FabricConfig fabric_config;
     std::vector<ParsedTestConfig> tests;
+};
+
+class CmdlineParser {
+public:
+    CmdlineParser(const std::vector<std::string>& input_args) : input_args_(input_args) {}
+
+    std::optional<std::string> get_yaml_config_path();
+    std::optional<uint32_t> get_master_seed();
+    bool has_help_option();
+    void print_help();
+
+private:
+    const std::vector<std::string>& input_args_;
 };
 
 // Main YAML parser class
