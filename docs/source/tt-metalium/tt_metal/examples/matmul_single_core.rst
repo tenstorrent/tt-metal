@@ -164,18 +164,23 @@ The matrix multiplication is performed by a pipeline of three specialized kernel
 .. code-block:: cpp
 
     // Reader kernel - reads tiles from DRAM into circular buffers
+    std::vector<uint32_t> reader_args;
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_args});
 
     // Writer kernel - writes result tiles from circular buffer to DRAM
+    std::vector<uint32_t> writer_args;
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_args});
 
     // Compute kernel - performs matrix multiplication using the matrix engine
     MathFidelity math_fidelity = MathFidelity::HiFi4;
@@ -214,14 +219,10 @@ maps tiles in the row-major order of the matrices in DRAM to read into the circu
 
         // Declare address in which we stored the source matrices. We have set the exact same format between CBs and DRAM
         // buffers in the host code, so we can use the same address for both DRAM and CBs.
-        const InterleavedAddrGenFast<true> s0 = {
-            .bank_base_address = src0_addr,
-            .page_size = get_tile_size(cb_id_in0),
-            .data_format = get_dataformat(cb_id_in0)};
-        const InterleavedAddrGenFast<true> s1 = {
-            .bank_base_address = src1_addr,
-            .page_size = get_tile_size(cb_id_in1),
-            .data_format = get_dataformat(cb_id_in1)};
+        constexpr auto s0_args = TensorAccessorArgs<0>();
+        const auto s0 = TensorAccessor(s0_args, src0_addr, get_tile_size(cb_id_in0));
+        constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
+        const auto s1 = TensorAccessor(s1_args, src1_addr, get_tile_size(cb_id_in1));
 
         // Loop through the dimensions of the matrices. Read them and push to the circular buffers.
         // Dimension names are called M, N and K. `t` in `mt` means tile.
@@ -325,11 +326,8 @@ The writer kernel consumes tiles from the output circular buffer ``cb_id_out0`` 
 
         constexpr uint32_t cb_id_out0 = 16;
 
-
-        const InterleavedAddrGenFast<true> s = {
-            .bank_base_address = dst_addr,
-            .page_size = get_tile_size(cb_id_out0),
-            .data_format = get_dataformat(cb_id_out0)};
+        constexpr auto s_args = TensorAccessorArgs<0>();
+        const auto s = TensorAccessor(s_args, dst_addr, get_tile_size(cb_id_out0));
 
         for (uint32_t mt = 0; mt < Mt; ++mt) {
             for (uint32_t nt = 0; nt < Nt; ++nt) {
