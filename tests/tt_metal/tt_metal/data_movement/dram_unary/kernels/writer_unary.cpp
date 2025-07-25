@@ -14,6 +14,7 @@ void kernel_main() {
     constexpr uint32_t dram_channel = get_compile_time_arg_val(5);
     constexpr uint32_t local_l1_addr = get_compile_time_arg_val(6);
     constexpr uint32_t sem_id = get_compile_time_arg_val(7);
+    constexpr uint32_t virtual_channel = get_compile_time_arg_val(8);
 
     constexpr uint32_t bytes_per_transaction = pages_per_transaction * bytes_per_page;
 
@@ -29,12 +30,16 @@ void kernel_main() {
     {
         DeviceZoneScopedN("RISCV0");
         for (uint32_t i = 0; i < num_of_transactions; i++) {
-            noc_async_write(local_l1_addr, dram_noc_addr, bytes_per_transaction);
+            noc_async_write(local_l1_addr, dram_noc_addr, bytes_per_transaction, virtual_channel);
         }
         noc_async_write_barrier();
     }
 
+    DeviceTimestampedData("Test id", test_id);
+
     DeviceTimestampedData("Number of transactions", num_of_transactions);
     DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction);
-    DeviceTimestampedData("Test id", test_id);
+
+    DeviceTimestampedData("DRAM Channel", dram_channel);
+    DeviceTimestampedData("Virtual Channel", virtual_channel);
 }

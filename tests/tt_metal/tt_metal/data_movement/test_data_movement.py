@@ -535,20 +535,23 @@ def print_stats(dm_stats):
     for riscv1_run, riscv0_run in itertools.zip_longest(
         dm_stats["riscv_1"]["analysis"]["series"], dm_stats["riscv_0"]["analysis"]["series"], fillvalue=None
     ):
+        logger.info(f"")
+        logger.info(f"")
+
         run_host_id = (riscv1_run if riscv1_run else riscv0_run)["duration_type"][0]["run_host_id"]
 
         logger.info(f"Run host id: {run_host_id}")
 
-        if riscv1_run:
-            logger.info(f'RISCV 1 duration: {riscv1_run["duration_cycles"]}')
+        for riscv, run in [("RISCV 1", riscv1_run), ("RISCV 0", riscv0_run)]:
+            if run:
+                logger.info(f"")
+                logger.info(f'{riscv} duration: {run["duration_cycles"]}')
+                logger.info("Attributes:")
+                for attr, val in dm_stats[riscv.lower().replace(" ", "_")]["attributes"][run_host_id].items():
+                    logger.info(f"  {attr}: {val}")
 
-        if riscv0_run:
-            logger.info(f'RISCV 0 duration: {riscv0_run["duration_cycles"]}')
-
-        logger.info(f"Attributes:")
-        for attr, val in dm_stats["riscv_1" if riscv1_run else "riscv_0"]["attributes"][run_host_id].items():
-            logger.info(f"  {attr}: {val}")
-        logger.info("")
+    logger.info(f"")
+    logger.info(f"")
 
 
 def aggregate_performance(dm_stats, method="median"):
