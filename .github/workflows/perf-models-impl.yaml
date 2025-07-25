@@ -65,7 +65,7 @@ jobs:
               - models/demos/metal_BERT_large_11/tests/
               - models/demos/yolov8s_world/tests/
               - models/demos/yolov8s/tests
-              - models/experimental/yolov6l/tests/
+              - models/experimental/yolov6l/tests/perf/
               - models/demos/mobilenetv2/tests/perf/
               - models/demos/vgg_unet/tests/
               - models/demos/yolov9c/tests/perf/
