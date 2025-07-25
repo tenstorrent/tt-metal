@@ -337,18 +337,17 @@ void send_msg_to_eth_mailbox(
             const auto timenow = std::chrono::high_resolution_clock::now();
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(timenow - start_time).count();
             if (elapsed > timeout_ms) {
-                log_error(
-                    tt::LogMetal,
+                TT_THROW(
                     "Device {}: Timed out while waiting for the base firmware ethernet mailbox on ethernet core {} to "
                     "be ready to launch Metal ethernet firmware."
                     " Last message status: {:#x}. Retrain count: {}. Is the tt-firmware updated? Minimum tt-firmware "
-                    "version is 18.2.0",
+                    "version is 18.2.0. Start time: {}. End time: {}",
                     device_id,
                     virtual_core.str(),
                     msg_status,
-                    get_retrain_count(device_id, virtual_core));
-                while (true) {
-                }
+                    get_retrain_count(device_id, virtual_core),
+                    std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch()).count(),
+                    std::chrono::duration_cast<std::chrono::milliseconds>(timenow.time_since_epoch()).count());
             }
             std::this_thread::sleep_for(k_sleep_time);
         }
@@ -395,17 +394,16 @@ void send_msg_to_eth_mailbox(
             const auto timenow = std::chrono::high_resolution_clock::now();
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(timenow - start_time).count();
             if (elapsed > timeout_ms) {
-                log_error(
-                    tt::LogMetal,
+                TT_THROW(
                     "Device {}: Timed out while waiting for ack when trying to launch Metal ethernet firmware on "
                     "ethernet core {}. Last message status: {:#x}. Retrain count: {}. Is the firmware updated? Minimum "
-                    "tt-firmware version is 18.2.0",
+                    "tt-firmware version is 18.2.0. Start time: {}. End time: {}",
                     device_id,
                     virtual_core.str(),
                     msg_status,
-                    get_retrain_count(device_id, virtual_core));
-                while (true) {
-                }
+                    get_retrain_count(device_id, virtual_core),
+                    std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch()).count(),
+                    std::chrono::duration_cast<std::chrono::milliseconds>(timenow.time_since_epoch()).count());
             }
             std::this_thread::sleep_for(k_sleep_time);
         } while (msg_status != done_message);
@@ -448,11 +446,13 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
                     tt::LogMetal,
                     "Device {}: Timed out while waiting for active ethernet core {} to become active again."
                     "Try resetting the board. Is the firmware updated? Minimum tt-firmware version is 18.2.0. Launch "
-                    "erisc val: {:#x}. Dumped return registers: {}",
+                    "erisc val: {:#x}. Dumped return registers: {}. Start time: {}. End time: {}",
                     device_id,
                     virtual_core.str(),
                     run_flag_val,
-                    fmt::format("{:#x}", fmt::join(return_registers, ", ")));
+                    fmt::format("{:#x}", fmt::join(return_registers, ", ")),
+                    std::chrono::duration_cast<std::chrono::milliseconds>(start.time_since_epoch()).count(),
+                    std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
                 while (true) {
                 }
             }

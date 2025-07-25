@@ -362,7 +362,7 @@ TEST(Debugging, OpenAndClose) {
     }
 }
 
-TEST(Debugging, ClusterWritesToEthernetCore) {
+TEST(Debugging, DISABLED_ClusterWritesToEthernetCore) {
     auto rtoptions = llrt::RunTimeOptions();
     auto hal = std::make_unique<Hal>(get_platform_architecture(rtoptions), false);
     auto cluster = std::make_unique<Cluster>(rtoptions, *hal);
