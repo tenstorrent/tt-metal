@@ -32,7 +32,7 @@ public:
             offset_bytes % this->alignment_ == 0, "Offset {} should be {} B aligned", offset_bytes, this->alignment_);
     }
 
-    virtual ~Algorithm() {}
+    virtual ~Algorithm() = default;
 
     DeviceAddr align(DeviceAddr address) const {
         DeviceAddr factor = (address + alignment_ - 1) / alignment_;

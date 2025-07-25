@@ -225,7 +225,7 @@ inline TrafficPatternType merge_patterns(const TrafficPatternType& base, const T
 
 class YamlConfigParser {
 public:
-    YamlConfigParser() {}
+    YamlConfigParser() = default;
 
     ParsedYamlConfig parse_file(const std::string& yaml_config_path);
 
