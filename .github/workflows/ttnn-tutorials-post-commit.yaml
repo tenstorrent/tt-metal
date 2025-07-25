@@ -19,9 +19,9 @@ on:
       build-artifact-name:
         required: true
         type: string
-      # wheel-artifact-name:
-      #   required: true
-      #   type: string
+      wheel-artifact-name:
+        required: true
+        type: string
 
   workflow_dispatch:
     inputs:
@@ -48,9 +48,9 @@ on:
       build-artifact-name:
         required: true
         type: string
-      # wheel-artifact-name:
-      #   required: true
-      #   type: string
+      wheel-artifact-name:
+        required: true
+        type: string
 
 jobs:
   ttnn-tutorials:
