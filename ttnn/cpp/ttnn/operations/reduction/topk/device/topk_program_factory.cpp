@@ -6,6 +6,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include "ttnn/operation.hpp"
+#include "topk_utils.hpp"
 
 #include <iostream>
 #include <cmath>
@@ -212,8 +213,6 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     return {std::move(program), override_runtime_args_callback};
 }
 
-static inline uint32_t largest_power_of_two(std::uint32_t x) { return x == 0 ? 0 : (1 << (31 - __builtin_clz(x))); }
-
 /**
  * Split the work along the width such that the width is divisible by min_dim and the number of cores used is less than
  * or equal to max_cores. Each core must have a minimum of two tiles - min_dim = 64 as that's the minimum size for the
@@ -224,64 +223,30 @@ static inline uint32_t largest_power_of_two(std::uint32_t x) { return x == 0 ? 0
  * number of cores used is less than or equal to max_cores.
  */
 static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
-    uint16_t width,
-    uint16_t min_dim,
-    uint16_t max_dim,
-    CoreRange core_range,
+    uint32_t width,
+    uint32_t min_dim,
+    uint32_t max_dim,
     uint32_t k,
+    const CoreRange core_range,
     const uint32_t l1_size,
     const uint32_t value_tile_size,
     const uint32_t index_tile_size) {
-    // Max cores for first topk reduction is y-1 * x; the last row is used for the final core
-    const auto max_cores =
-        (core_range.end_coord.y - core_range.start_coord.y - 1) * (core_range.end_coord.x - core_range.start_coord.x);
-    uint16_t start_split_size = width / largest_power_of_two(max_cores);
-    for (uint16_t split_size = start_split_size; split_size <= max_dim; split_size *= 2) {
-        uint16_t rem = width % split_size;
-        uint16_t num_cores = width / split_size + (rem > 0);
-        uint32_t memory_cost_gather =
-            2 * num_cores * (value_tile_size + index_tile_size);  // gathering one index and one value tile from each
-                                                                  // local core, allocating two CBs for each
-        uint32_t memory_cost_local =
-            (split_size / tt::constants::TILE_WIDTH) *
-            (value_tile_size + index_tile_size);  // we divide the width into split_size chunks and each chunk, as well
-                                                  // as a matching set of indices, is processed by a core
-
-        // Verify that there is a contiguous range of cores with num_cores cores available
-        uint32_t max_x = core_range.end_coord.x - core_range.start_coord.x;
-        uint32_t max_y = core_range.end_coord.y - core_range.start_coord.y - 1;
-
-        uint32_t max_cores_available = max_x * max_y;
-        if (num_cores > max_cores_available) {
-            continue;
-        }
-
-        bool contiguous_cores_available = false;
-        uint32_t selected_x = 0;
-        uint32_t selected_y = 0;
-        for (uint32_t y = max_y; y > 0; y--) {
-            for (uint32_t x = max_x; x > 0; x--) {
-                if (x * y == num_cores) {
-                    selected_x = x;
-                    selected_y = y;
-                    contiguous_cores_available = true;
-                    break;
-                }
-            }
-        }
-
-        if (num_cores <= max_cores && (memory_cost_gather + memory_cost_local * num_cores) < (l1_size * num_cores) &&
-            num_cores > 1 && split_size >= min_dim && contiguous_cores_available) {
-            return {
-                num_cores + 1,
-                split_size,
-                rem,
-                num_cores * std::max(static_cast<uint32_t>(k), static_cast<uint32_t>(tt::constants::TILE_WIDTH)),
-                selected_x,
-                selected_y};
-        }
+    auto config_opt = ttnn::operations::reduction::topk_utils::find_topk_core_config(
+        width, min_dim, max_dim, k, core_range, l1_size, value_tile_size, index_tile_size);
+    if (config_opt.has_value()) {
+        auto config = config_opt.value();
+        return {
+            config.num_cores + 1,
+            config.split_size,
+            config.rem,
+            config.final_input_size,
+            config.selected_x,
+            config.selected_y};
+    } else {
+        const auto max_cores = (core_range.end_coord.y - core_range.start_coord.y - 1) *
+                               (core_range.end_coord.x - core_range.start_coord.x);
+        return {max_cores + 1, width, 0, width * k, 0, 0};
     }
-    return {max_cores + 1, width, 0, width * k, 0, 0};
 }
 
 /**
@@ -335,8 +300,8 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         input_shape[dim],
         64,
         input_shape[dim] / 2,
-        first_core_range,
         k,
+        first_core_range,
         device->l1_size_per_core(),
         value_tile_size,
         index_tile_size);
