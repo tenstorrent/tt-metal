@@ -12,10 +12,10 @@ void kernel_main() {
     const uint32_t data_size_bytes = get_arg_val<uint32_t>(3);
     const uint32_t num_rows_per_core = get_arg_val<uint32_t>(4);
 
-    constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
 
-    const InterleavedAddrGen<dst_is_dram> s0 = {.bank_base_address = dst_addr, .page_size = data_size_bytes};
+    constexpr auto s0_args = TensorAccessorArgs<0>();
+    const auto s0 = TensorAccessor(s0_args, dst_addr, data_size_bytes);
 
     uint32_t dst_stick_id = start_dst_stick_id;
     for (uint32_t row_idx = 0; row_idx < num_rows_per_core; row_idx++) {

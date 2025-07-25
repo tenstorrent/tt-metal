@@ -10,6 +10,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -63,7 +64,6 @@ int main() {
     uint32_t src_addr = src_buffer->address();
 
     // configure and create circular buffers with the same address on each of the designated cores
-    bool src_is_dram = src_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     uint32_t input_cb_index = CBIndex::c_0;
     CircularBufferConfig input_cb_config =
         CircularBufferConfig(shard_size * input_unit_size, {{input_cb_index, cb_data_format}})
@@ -71,7 +71,8 @@ int main() {
     tt_metal::CreateCircularBuffer(program, cores, input_cb_config);
 
     // create data movement kernel to shard data
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_cb_index, (std::uint32_t)src_is_dram};
+    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_cb_index};
+    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "shard_data_rm/kernels/reader_sharded_rm.cpp",

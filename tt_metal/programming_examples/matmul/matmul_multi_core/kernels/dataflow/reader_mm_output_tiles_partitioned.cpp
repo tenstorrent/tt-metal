@@ -24,15 +24,13 @@ void kernel_main() {
     // Declare address in which we stored the source matrices. We have set the exact same format between CBs and DRAM
     // buffers in the host code, so we can use the same address for both DRAM and CBs.
     const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-    const DataFormat in0_data_format = get_dataformat(cb_id_in0);
     const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
-    const DataFormat in1_data_format = get_dataformat(cb_id_in1);
 
-    const InterleavedAddrGenFast<true> a = {
-        .bank_base_address = src0_addr, .page_size = in0_tile_bytes, .data_format = in0_data_format};
+    constexpr auto a_args = TensorAccessorArgs<0>();
+    const auto a = TensorAccessor(a_args, src0_addr, in0_tile_bytes);
 
-    const InterleavedAddrGenFast<true> b = {
-        .bank_base_address = src1_addr, .page_size = in1_tile_bytes, .data_format = in1_data_format};
+    constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
+    const auto b = TensorAccessor(b_args, src1_addr, in1_tile_bytes);
 
     // Simple 2D matmul: A[Mt, Kt] @ B[Kt, Nt] = C[Mt, Nt]
     for (uint32_t output_tile = 0; output_tile < num_output_tiles; output_tile++) {

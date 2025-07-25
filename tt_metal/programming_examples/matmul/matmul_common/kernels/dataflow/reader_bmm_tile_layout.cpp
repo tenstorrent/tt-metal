@@ -39,25 +39,19 @@ void kernel_main() {
     uint32_t batch = get_arg_val<uint32_t>(19);
     uint32_t bcast_B = get_arg_val<uint32_t>(20);
 
-    constexpr bool in0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool in1_is_dram = get_compile_time_arg_val(1) == 1;
-
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
 
     const uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
-    const DataFormat in0_data_format = get_dataformat(cb_id_in0);
     const uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
-    const DataFormat in1_data_format = get_dataformat(cb_id_in1);
 
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;
 
-    const InterleavedAddrGenFast<in0_is_dram> s0 = {
-        .bank_base_address = in0_tensor_addr, .page_size = in0_single_tile_size_bytes, .data_format = in0_data_format};
-
-    const InterleavedAddrGenFast<in1_is_dram> s1 = {
-        .bank_base_address = in1_tensor_addr, .page_size = in1_single_tile_size_bytes, .data_format = in1_data_format};
+    constexpr auto s0_args = TensorAccessorArgs<0>();
+    const auto s0 = TensorAccessor(s0_args, in0_tensor_addr, in0_single_tile_size_bytes);
+    constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
+    const auto s1 = TensorAccessor(s1_args, in1_tensor_addr, in1_single_tile_size_bytes);
 
     for (uint32_t b = 0; b < batch; b++) {
         uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;

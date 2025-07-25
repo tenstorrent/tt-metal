@@ -22,9 +22,6 @@ void kernel_main() {
     uint32_t num_output_tiles = get_arg_val<uint32_t>(10);
     uint32_t MtNt = get_arg_val<uint32_t>(11);
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
-
     // DPRINT << "Mt=" << Mt << " Kt=" << Kt << " Nt=" << Nt << " MtKt=" << MtKt << "KtNt=" << KtNt << ENDL();
     // DPRINT << "src0=" << src0_addr << " src1=" << src1_addr << ENDL();
     // DPRINT << "batch=" << batch << ENDL();
@@ -34,9 +31,7 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
     const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-    const DataFormat in0_data_format = get_dataformat(cb_id_in0);
     const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
-    const DataFormat in1_data_format = get_dataformat(cb_id_in1);
 
     uint32_t itileA = output_tile_start_id / Nt * Kt;  // input0 row = output row * input0 width
 
@@ -48,11 +43,10 @@ void kernel_main() {
         itileB += output_tile_start_id / MtNt * KtNt;  // offset into correct batch if not bcasting
     }
 
-    const InterleavedAddrGenFast<src0_is_dram> s0 = {
-        .bank_base_address = src0_addr, .page_size = in0_tile_bytes, .data_format = in0_data_format};
-
-    const InterleavedAddrGenFast<src1_is_dram> s1 = {
-        .bank_base_address = src1_addr, .page_size = in1_tile_bytes, .data_format = in1_data_format};
+    constexpr auto s0_args = TensorAccessorArgs<0>();
+    const auto s0 = TensorAccessor(s0_args, src0_addr, in0_tile_bytes);
+    constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
+    const auto s1 = TensorAccessor(s1_args, src1_addr, in1_tile_bytes);
 
     for (uint32_t n = 0; n < num_output_tiles; n++) {
         for (uint32_t kt = 0; kt < Kt; kt++) {

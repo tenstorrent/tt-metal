@@ -26,6 +26,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 
@@ -79,16 +80,6 @@ int main(int argc, char** argv) {
             * Setup program and command queue to execute along with its buffers and kernels to use
             */
             CommandQueue& cq = device->command_queue();
-            Program program = CreateProgram();
-
-            constexpr CoreCoord core = {0, 0};
-
-            KernelHandle dram_copy_kernel_id = CreateKernel(
-                program,
-                "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
-                core,
-                DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
-            );
 
             constexpr uint32_t single_tile_size = 2 * (32 * 32);
             constexpr uint32_t num_tiles = 50;
@@ -114,6 +105,22 @@ int main(int argc, char** argv) {
 
             auto output_dram_buffer = CreateBuffer(dram_config);
             const uint32_t output_dram_buffer_addr = output_dram_buffer->address();
+
+            Program program = CreateProgram();
+
+            constexpr CoreCoord core = {0, 0};
+
+            std::vector<uint32_t> compile_time_args;
+            TensorAccessorArgs(*input_dram_buffer).append_to(compile_time_args);
+            TensorAccessorArgs(*output_dram_buffer).append_to(compile_time_args);
+            KernelHandle dram_copy_kernel_id = CreateKernel(
+                program,
+                "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
+                core,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                    .compile_args = compile_time_args});
 
             /*
             * Create input data and runtime arguments, then execute
