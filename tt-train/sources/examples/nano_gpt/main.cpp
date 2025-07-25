@@ -882,8 +882,7 @@ int main(int argc, char **argv) {
     };
 
     auto get_loss_value = [device](const TensorPtr &loss) {
-        ttml::core::MeshToXTensorVariant<float> composer = ttml::core::VectorMeshToXTensor<float>(device->shape());
-        auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), composer);
+        auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
         // sum of loss xtensors
         float loss_float =
             std::accumulate(loss_xtensors.begin(), loss_xtensors.end(), 0.0F, [](float acc, auto &xtensor) {
