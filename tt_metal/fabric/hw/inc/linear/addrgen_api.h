@@ -28,7 +28,7 @@ uint32_t get_page_size(const InterleavedAddrGenFast<DRAM>& s) {
 template <typename AddrGenType>
 FORCE_INLINE void to_noc_unicast_write(
     volatile PACKET_HEADER_TYPE* pkt_hdr, const uint32_t id, const AddrGenType& d, uint32_t offset = 0) {
-    pkt_hdr->noc_send_type = NOC_FUSED_UNICAST_ATOMIC_INC;
+    pkt_hdr->noc_send_type = NOC_UNICAST_WRITE;
 
     pkt_hdr->command_fields.unicast_write.noc_address = d.get_noc_addr(id, offset, edm_to_local_chip_noc);
     pkt_hdr->payload_size_bytes = addrgen_detail::get_page_size(d);
