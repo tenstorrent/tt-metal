@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
-from torchvision import models
 import pytest
 import ttnn
 from ttnn.model_preprocessing import (
@@ -15,6 +14,7 @@ from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.swin_s.reference.patchmerging import PatchMerging
 from models.experimental.swin_s.tt.tt_patchmerging import TtPatchMerging
+from models.experimental.swin_s.load_model_utils import load_torch_model
 
 
 def create_custom_preprocessor(device):
@@ -49,25 +49,12 @@ def create_custom_preprocessor(device):
         (384, 32, 6),
     ],
 )
-def test_patchmerging(device, batch_size, dim, seq_len, i, reset_seeds):
-    model = models.swin_s(weights="IMAGENET1K_V1")
-    state_dict = state_dict = model.state_dict()
-    patchmerging_state_dict = {k: v for k, v in state_dict.items() if (k.startswith(f"features.{i}."))}
-
-    if not patchmerging_state_dict:
-        raise ValueError("No parameters found in resblock_state_dict")
-
+def test_patchmerging(device, batch_size, dim, seq_len, i, reset_seeds, model_location_generator):
     torch_model = PatchMerging(dim)
 
-    new_state_dict = {}
-    keys = [name for name, parameter in torch_model.state_dict().items()]
-    values = [parameter for name, parameter in patchmerging_state_dict.items()]
-
-    for i in range(len(keys)):
-        new_state_dict[keys[i]] = values[i]
-
-    torch_model.load_state_dict(new_state_dict)
-    torch_model.eval()
+    torch_model = load_torch_model(
+        torch_model=torch_model, i=i, module="patchmerging", model_location_generator=model_location_generator
+    )
 
     # Input tensor for testing
     torch_input_tensor = torch.randn(batch_size, seq_len, seq_len, dim)  # Sample input tensor
