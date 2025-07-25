@@ -54,42 +54,6 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Forward) {
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 1e-2F));
 }
 
-TEST_F(RMSNormOpTest, RMSNorm_Compare_Kernel_Composite) {
-    std::vector<std::vector<uint32_t>> shapes = {
-        {1U, 1U, 1U, 1024U},
-        {1U, 1U, 1U, 1U << 20U},
-        {32U, 1U, 1024U, 4096U},
-        {32U, 1U, 1024U, 4091U},
-        {32U, 1U, 1024U, 4079U},
-        {1U, 1U, 1U, (1U << 20U) - 1U},
-        {1U, 1U, 1U, (1U << 20U) - 18U}};
-
-    auto* device = &ttml::autograd::ctx().get_device();
-
-    constexpr uint32_t iterations = 2U;
-    for (const auto& shape : shapes) {
-        for (uint32_t iter = 0; iter < iterations; ++iter) {
-            xt::xarray<float> x_data = xt::empty<float>(shape);
-            ttml::core::parallel_generate(
-                std::span{x_data.data(), x_data.size()},
-                []() { return std::uniform_real_distribution<float>(0.F, 1.F); },
-                42);
-            auto x = ttml::autograd::create_tensor(ttml::core::from_xtensor(x_data, device));
-            auto gamma = ttml::autograd::create_tensor(ttml::core::ones(ttnn::Shape{1, 1, 1, shape[3]}, device));
-
-            auto result = ttml::ops::rmsnorm(x, gamma, 0.0078125F);
-            auto result_xtensor = ttml::core::to_xtensor(result->get_value());
-
-            auto expected_result = ttml::ops::rmsnorm_composite(x, gamma, 0.0078125F);
-            auto expected_result_xtensor = ttml::core::to_xtensor(expected_result->get_value());
-
-            EXPECT_TRUE(xt::allclose(result_xtensor, expected_result_xtensor, 1.0e-3F, 3e-2F));
-
-            ttml::autograd::ctx().reset_graph();
-        }
-    }
-}
-
 TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
     using namespace ttml;
     float eps = 0.0078125F;  // default in PyTorch for bf16
@@ -356,11 +320,12 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
     float eps = 0.0078125F;
 
     // Generate random input data
-    xt::random::seed(42);
     std::array<uint32_t, 4> gamma_shape = {1, 1, 1, shape[3]};
-    xt::xarray<float> x_data = xt::random::rand<float>(shape, -1.0F, 1.0F);
+    xt::xarray<float> x_data = xt::empty<float>(shape);
+    core::parallel_generate<float>(x_data, []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); }, 42);
 
-    xt::xarray<float> gamma_data = xt::random::rand<float>(gamma_shape, 0.0F, 1.0F);
+    xt::xarray<float> gamma_data = xt::empty<float>(gamma_shape);
+    core::parallel_generate<float>(gamma_data, []() { return std::uniform_real_distribution<float>(0.0F, 1.0F); }, 42);
 
     // Test forward pass - kernel vs composite
     auto x_kernel = autograd::create_tensor(core::from_xtensor(x_data, device));
