@@ -1,7 +1,8 @@
 # Define the object library with the name you want
 add_library(multi_host_fabric OBJECT)
 add_library(TT::Metalium::Test::Distributed::MultiHostFabric ALIAS multi_host_fabric)
-TT_ENABLE_UNITY_BUILD(multi_host_fabric)
+# TODO: Uncomment this later
+# TT_ENABLE_UNITY_BUILD(multi_host_fabric)
 
 target_sources(
     multi_host_fabric
