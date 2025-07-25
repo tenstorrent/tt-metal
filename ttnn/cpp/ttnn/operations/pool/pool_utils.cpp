@@ -134,7 +134,7 @@ get_factory_parameters(
     uint32_t multi_buffering_factor = 2;
     bool split_reader = true;
 
-    const auto& input_shape = input.get_padded_shape();
+    const auto& input_shape = input.padded_shape();
 
     auto dtype = input.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input.dtype();
     tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);
