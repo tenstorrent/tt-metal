@@ -1,0 +1,23 @@
+inputs:
+  model_name:
+    required: true
+    description: "Model name"
+  commands:
+    required: true
+    description: "Shell commands to run the test"
+runs:
+  using: "composite"
+  steps:
+    - run: |
+        cd docker-job
+        set -x
+        export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+
+        ${{ inputs.commands }}
+
+        export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ inputs.model_name }}_$(date +%Y_%m_%d).csv
+        python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME ${{ inputs.model_name }}
+        echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
+      shell: bash
+      env:
+        TRACY_NO_INVARIANT_CHECK: 1

@@ -19,10 +19,8 @@ void kernel_main() {
     uint32_t num_shards = get_arg_val<uint32_t>(4);
 
     auto args_src = TensorAccessorArgs<1, 0>();
-    constexpr uint32_t base_idx_cta_src = 1 + args_src.compile_time_args_skip();
-    constexpr uint32_t base_idx_crta_src = args_src.runtime_args_skip();
-
-    auto args_dst = TensorAccessorArgs<base_idx_cta_src, base_idx_crta_src>();
+    auto args_dst =
+        TensorAccessorArgs<args_src.next_compile_time_args_offset(), args_src.next_common_runtime_args_offset()>();
 
     auto tensor_accessor_src = TensorAccessor(args_src, input_base_address, page_size);
     auto tensor_accessor_dst = TensorAccessor(args_dst, output_base_address, page_size);

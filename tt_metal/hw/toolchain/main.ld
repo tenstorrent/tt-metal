@@ -4,7 +4,7 @@
 
 #if (defined(COMPILE_FOR_BRISC) + defined(COMPILE_FOR_NCRISC) +         \
      defined(COMPILE_FOR_IERISC) + defined(COMPILE_FOR_SUBORDINATE_IERISC) +  \
-     defined(COMPILE_FOR_TRISC) + defined(COMPILE_FOR_AERISC) + defined(COMPILE_FOR_SUBORDINATE_AERISC)) != 1
+     defined(COMPILE_FOR_TRISC) + defined(COMPILE_FOR_AERISC)) != 1
 #error "Exactly one COMPILE_FOR_${PROC}RISC must be defined"
 #endif
 
@@ -75,25 +75,15 @@ OUTPUT_ARCH(riscv)
 #endif
 
 #elif defined(COMPILE_FOR_AERISC)
-#define DATA_START MEM_AERISC_LOCAL_BASE
-#define DATA_SIZE MEM_AERISC_LOCAL_SIZE
-#define STACK_MIN_SIZE 0
+/* Yes, using IERISC sizes.  */
+#define DATA_START MEM_LOCAL_BASE
+#define DATA_SIZE MEM_IERISC_LOCAL_SIZE
+#define STACK_MIN_SIZE MEM_AERISC_STACK_MIN_SIZE
 #define TEXT_START MEM_AERISC_FIRMWARE_BASE
 #if defined(TYPE_FIRMWARE)
-#define TEXT_SIZE MEM_AERISC_FIRMWARE_SIZE
+#define TEXT_SIZE MEM_IERISC_FIRMWARE_SIZE
 #else
-#define TEXT_SIZE MEM_AERISC_KERNEL_SIZE
-#endif
-
-#elif defined(COMPILE_FOR_SUBORDINATE_AERISC)
-#define DATA_START MEM_SUBORDINATE_AERISC_LOCAL_BASE
-#define DATA_SIZE MEM_SUBORDINATE_AERISC_LOCAL_SIZE
-#define STACK_MIN_SIZE MEM_AERISC_STACK_MIN_SIZE
-#define TEXT_START MEM_SUBORDINATE_AERISC_FIRMWARE_BASE
-#if defined(TYPE_FIRMWARE)
-#define TEXT_SIZE MEM_SUBORDINATE_AERISC_FIRMWARE_SIZE
-#else
-#define TEXT_SIZE MEM_AERISC_KERNEL_SIZE
+#define TEXT_SIZE MEM_IERISC_KERNEL_SIZE
 #endif
 
 #else
@@ -140,8 +130,7 @@ SECTIONS
 #if defined(TYPE_FIRMWARE)
 /* Need separation beteen end of firmware and start of kernel, so that
    they don't share unflushable i$ cache lines.  */
-#if defined(COMPILE_FOR_IERISC) || defined(COMPILE_FOR_SUBORDINATE_IERISC) \
-    || defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_SUBORDINATE_AERISC)
+#if defined(COMPILE_FOR_IERISC) || defined(COMPILE_FOR_SUBORDINATE_IERISC) || defined(COMPILE_FOR_AERISC)
 #define MEM_PAD MEM_IERISC_KERNEL_PAD
 #else
 #define MEM_PAD 0
@@ -214,13 +203,9 @@ SECTIONS
   . = ALIGN(ABSOLUTE(.), 16);
 #ifdef TYPE_FIRMWARE
   __fw_export_ldm_end = ABSOLUTE(.);
-#endif
-#if !defined(COMPILE_FOR_AERISC)
-#ifdef TYPE_FIRMWARE
   __stack_top = DATA_START + DATA_SIZE;
 #else
   __stack_base = .;
-#endif
 #endif
 
   /* The loader uses this data to check for size overflows.
