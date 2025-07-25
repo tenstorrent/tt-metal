@@ -1647,4 +1647,3 @@ void run_ring_all_gather_with_persistent_fabric(
     // wait for op completion
     wait_for_worker_program_completion(devices, subdevice_managers);
 }
-
