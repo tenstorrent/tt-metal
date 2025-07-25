@@ -15,10 +15,8 @@ void kernel_main() {
     // Create the address generator for the output buffer. Due to us sharing buffer and circular buffer
     // configuration parameters (e.g. same data type and same page size) in the host code, we can grab
     // the same parameters from the circular buffer as we would from the DRAM buffer.
-    const InterleavedAddrGenFast<true> s = {
-        .bank_base_address = dst_addr,
-        .page_size = get_tile_size(cb_id_out0),
-        .data_format = get_dataformat(cb_id_out0)};
+    constexpr auto s_args = TensorAccessorArgs<0>();
+    const auto s = TensorAccessor(s_args, dst_addr, get_tile_size(cb_id_out0));
 
     // Loop through the matrix dimensions Mt and Nt. bmm will generate C's tiles C=A*B, MN=MK*KN,
     // in row major order, we just read them from CB and write out to DRAM

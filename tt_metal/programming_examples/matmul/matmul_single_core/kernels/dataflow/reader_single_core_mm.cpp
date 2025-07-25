@@ -20,14 +20,10 @@ void kernel_main() {
 
     // Declare address in which we stored the source matrices. We have set the exact same format between CBs and DRAM
     // buffers in the host code, so we can use the same address for both DRAM and CBs.
-    const InterleavedAddrGenFast<true> s0 = {
-        .bank_base_address = src0_addr,
-        .page_size = get_tile_size(cb_id_in0),
-        .data_format = get_dataformat(cb_id_in0)};
-    const InterleavedAddrGenFast<true> s1 = {
-        .bank_base_address = src1_addr,
-        .page_size = get_tile_size(cb_id_in1),
-        .data_format = get_dataformat(cb_id_in1)};
+    constexpr auto s0_args = TensorAccessorArgs<0>();
+    const auto s0 = TensorAccessor(s0_args, src0_addr, get_tile_size(cb_id_in0));
+    constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
+    const auto s1 = TensorAccessor(s1_args, src1_addr, get_tile_size(cb_id_in1));
 
     // Loop through the dimensions of the matrices. Read them and push to the circular buffers.
     // Dimension names are called M, N and K. `t` in `mt` means tile.

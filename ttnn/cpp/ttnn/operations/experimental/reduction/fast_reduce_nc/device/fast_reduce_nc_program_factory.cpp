@@ -8,7 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "ttnn/tensor/tensor_accessor_args.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::experimental::reduction::detail {
 
@@ -172,10 +172,10 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args = {input_granularity, shard_factor, num_cores_to_be_used};
-    TensorAccessorArgs(*input.buffer()).append_args(reader_compile_time_args);
+    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {shard_factor, num_cores_to_be_used};
-    TensorAccessorArgs(*output.buffer()).append_args(writer_compile_time_args);
+    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/device/kernels/reader_reduce_nc.cpp";

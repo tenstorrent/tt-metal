@@ -12,18 +12,15 @@ void kernel_main() {
 
     // Compile time args
     constexpr uint32_t src1_cb_index = get_compile_time_arg_val(0);
-    constexpr bool output_is_dram = get_compile_time_arg_val(1) == 1;
 
     // Constants
     constexpr uint32_t one_tile = 1;
 
     // Output data config
     constexpr uint32_t output_tensor_tile_size_bytes = get_tile_size(src1_cb_index);
-    constexpr DataFormat output_tensor_data_format = get_dataformat(src1_cb_index);
-    const InterleavedAddrGenFast<output_is_dram> output_tensor_dram = {
-        .bank_base_address = output_tensor_buffer_addr,
-        .page_size = output_tensor_tile_size_bytes,
-        .data_format = output_tensor_data_format};
+    constexpr auto output_tensor_dram_args = TensorAccessorArgs<1>();
+    const auto output_tensor_dram =
+        TensorAccessor(output_tensor_dram_args, output_tensor_buffer_addr, output_tensor_tile_size_bytes);
 
     // Wait for incoming data from reader1
     cb_wait_front(src1_cb_index, one_tile);
