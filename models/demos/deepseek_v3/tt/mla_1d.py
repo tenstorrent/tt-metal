@@ -12,7 +12,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
-from models.demos.deepseek_v3.tt.rms_norm import RMSNorm
+from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
@@ -228,13 +228,19 @@ class MLA1D(AbstractModule):
         our_name = "q_norm"
         q_norm_state_dict = {"weight": state_dict[f"{our_name}.weight"]}
         weight_config["q_norm"] = RMSNorm.convert_weights(
-            hf_config, q_norm_state_dict, output_path, mesh_device, norm_category="q_norm"
+            hf_config,
+            q_norm_state_dict,
+            output_path / "q_norm",
+            mesh_device,
         )
 
         our_name = "kv_norm"
         kv_norm_state_dict = {"weight": state_dict[f"{our_name}.weight"]}
         weight_config["kv_norm"] = RMSNorm.convert_weights(
-            hf_config, kv_norm_state_dict, output_path, mesh_device, norm_category="k_norm"
+            hf_config,
+            kv_norm_state_dict,
+            output_path / "kv_norm",
+            mesh_device,
         )
 
         return weight_config
@@ -345,8 +351,14 @@ class MLA1D(AbstractModule):
         }
 
         # Norms
-        config["q_norm"] = RMSNorm.prefill_model_config(hf_config, mesh_device, norm_category="q_norm")
-        config["kv_norm"] = RMSNorm.prefill_model_config(hf_config, mesh_device, norm_category="k_norm")
+        config["q_norm"] = RMSNorm.prefill_model_config(
+            hf_config,
+            mesh_device,
+        )
+        config["kv_norm"] = RMSNorm.prefill_model_config(
+            hf_config,
+            mesh_device,
+        )
 
         # Set up CCLs
         # **Must be in order of execution**
@@ -595,8 +607,14 @@ class MLA1D(AbstractModule):
         )
 
         # Norms
-        config["q_norm"] = RMSNorm.decode_model_config(hf_config, mesh_device, norm_category="q_norm")
-        config["kv_norm"] = RMSNorm.decode_model_config(hf_config, mesh_device, norm_category="k_norm")
+        config["q_norm"] = RMSNorm.decode_model_config(
+            hf_config,
+            mesh_device,
+        )
+        config["kv_norm"] = RMSNorm.decode_model_config(
+            hf_config,
+            mesh_device,
+        )
 
         # Set up CCLs
         # **Must be in order of execution**
