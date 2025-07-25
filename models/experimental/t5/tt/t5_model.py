@@ -2,13 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import copy
 from torch import nn
 
 from models.experimental.t5.tt.t5_stack import TtT5Stack
 
 
-class TtT5Model(nn.Module):
+class TtT5Model(LightweightModule):
     _keys_to_ignore_on_load_missing = [
         r"encoder.embed_tokens.weight",
         r"decoder.embed_tokens.weight",

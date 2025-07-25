@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from typing import Optional, Tuple, Union
 import torch
 import torch.nn as nn
@@ -26,7 +27,7 @@ class TtSwinImageClassifierOutput:
     reshaped_hidden_states: Optional[Tuple[ttnn.Tensor]] = None
 
 
-class TtSwinForImageClassification(nn.Module):
+class TtSwinForImageClassification(LightweightModule):
     def __init__(self, config, state_dict, base_address, device) -> None:
         super().__init__()
         self.config = config

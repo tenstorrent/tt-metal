@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
-import torch.nn as nn
 import math
 from typing import Optional, Tuple
 
@@ -14,7 +14,7 @@ from models.helper_funcs import Linear
 from models.utility_functions import torch_to_tt_tensor_rm
 
 
-class TtTrOCRAttention(nn.Module):
+class TtTrOCRAttention(LightweightModule):
     """Multi-headed attention from 'Attention Is All You Need' paper."""
 
     def __init__(

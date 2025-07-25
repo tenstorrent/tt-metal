@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import math
 import torch
 from torch import nn
@@ -60,7 +61,7 @@ def t5_unshape_tt(states, batch_size, inner_dim, device):
     return tt_out
 
 
-# class T5Attention(nn.Module):
+# class T5Attention(LightweightModule):
 #     def __init__(self, config, hf_reference_module, has_relative_attention_bias=False):
 #         super().__init__()
 #         self.is_decoder = config["is_decoder"]
@@ -295,7 +296,7 @@ def t5_unshape_tt(states, batch_size, inner_dim, device):
 #         return outputs
 
 
-class TtT5Attention(nn.Module):
+class TtT5Attention(LightweightModule):
     def __init__(
         self,
         config,

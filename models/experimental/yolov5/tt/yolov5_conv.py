@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+from models.common.lightweightmodule import LightweightModule
 import ttnn
 from loguru import logger
 from tt_lib.fallback_ops import fallback_ops
@@ -22,7 +22,7 @@ def autopad(k, p=None, d=1):  # kernel, padding, dilation
     return p
 
 
-class TtYolov5Conv2D(torch.nn.Module):
+class TtYolov5Conv2D(LightweightModule):
     def __init__(
         self,
         state_dict,
@@ -94,7 +94,7 @@ class TtYolov5Conv2D(torch.nn.Module):
         return x
 
 
-class TtYolov5Conv(torch.nn.Module):
+class TtYolov5Conv(LightweightModule):
     # Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation)
 
     def __init__(

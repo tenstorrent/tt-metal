@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch.nn as nn
 
 from tt_lib import fallback_ops
@@ -9,7 +10,7 @@ from models.experimental.vovnet.tt.osa_block import TtOsaBlock
 import ttnn
 
 
-class TtOsaStage(nn.Module):
+class TtOsaStage(LightweightModule):
     def __init__(
         self,
         in_chs,

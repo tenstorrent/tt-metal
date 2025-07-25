@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from typing import Optional, Tuple
 import torch.nn as nn
 
@@ -10,7 +11,7 @@ from models.experimental.swin.tt.swin_layer import TtSwinLayer
 import ttnn
 
 
-class TtSwinStage(nn.Module):
+class TtSwinStage(LightweightModule):
     def __init__(
         self,
         config,

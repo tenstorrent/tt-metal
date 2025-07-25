@@ -228,7 +228,7 @@ class ttBatchNorm:
 
 
 # pytorch
-class PytorchBatchNorm1D(nn.Module):
+class PytorchBatchNorm1D(torch.nn.Module):
     def __init__(self, input_dim):
         super(PytorchBatchNorm1D, self).__init__()
 

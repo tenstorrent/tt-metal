@@ -2,13 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 
 from models.utility_functions import tt2torch_tensor
 from models.experimental.yolov5.tt.yolov5_conv import TtYolov5Conv2D
 
 
-class TtYolov5Detect(torch.nn.Module):
+class TtYolov5Detect(LightweightModule):
     # YOLOv5 Detect head for detection models
     stride = None  # strides computed during build
     dynamic = False  # force grid reconstruction

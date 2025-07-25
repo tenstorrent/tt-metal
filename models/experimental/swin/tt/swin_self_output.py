@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 
 from models.utility_functions import (
     torch_to_tt_tensor_rm,
@@ -11,7 +11,7 @@ from models.experimental.swin.swin_helper_funcs import linear as TtLinear
 import ttnn
 
 
-class TtSwinSelfOutput(nn.Module):
+class TtSwinSelfOutput(LightweightModule):
     def __init__(self, config, dim, state_dict, base_address, device):
         super().__init__()
         self.device = device

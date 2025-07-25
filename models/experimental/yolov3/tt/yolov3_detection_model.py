@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 from torch import nn
 from copy import deepcopy
@@ -134,7 +135,7 @@ def parse_model(state_dict, base_address, yaml_dict, ch, device):  # model_dict,
     return nn.Sequential(*layers), sorted(save)
 
 
-class BaseModel(nn.Module):
+class BaseModel(LightweightModule):
     # YOLOv3 base model
     def forward(self, x, profile=False, visualize=False):
         return self._forward_once(x, profile, visualize)  # single-scale inference, train

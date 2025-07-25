@@ -45,7 +45,7 @@ def ttBatchnorm1d_inference(gamma, beta, running_mean, running_var, epsilon):
     return batchnorm1d_inference_
 
 
-class PytorchBatchNorm1D(nn.Module):
+class PytorchBatchNorm1D(torch.nn.Module):
     def __init__(self, input_dim):
         super(PytorchBatchNorm1D, self).__init__()
 

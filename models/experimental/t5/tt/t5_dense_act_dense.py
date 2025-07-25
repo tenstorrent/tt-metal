@@ -2,12 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from torch import nn
+from models.common.lightweightmodule import LightweightModule
 import ttnn
 from models.utility_functions import torch2tt_tensor
 
 
-class TtT5DenseActDense(nn.Module):
+class TtT5DenseActDense(LightweightModule):
     def __init__(self, config, state_dict, base_address, device):
         super().__init__()
 

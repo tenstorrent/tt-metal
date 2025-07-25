@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 import ttnn
 
 from models.experimental.vovnet.tt.conv_norm_act import TtConvNormAct
@@ -14,7 +14,7 @@ from models.experimental.vovnet.tt.effective_se_module import (
 )
 
 
-class TtOsaBlock(nn.Module):
+class TtOsaBlock(LightweightModule):
     def __init__(
         self,
         in_chs=1,

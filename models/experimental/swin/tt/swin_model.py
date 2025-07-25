@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from typing import Optional, Tuple, Union
 import torch
 import torch.nn as nn
@@ -28,7 +29,7 @@ class TtSwinModelOutput:
     reshaped_hidden_states: Optional[Tuple[ttnn.Tensor]] = None
 
 
-class TtSwinModel(nn.Module):
+class TtSwinModel(LightweightModule):
     def __init__(
         self,
         config,

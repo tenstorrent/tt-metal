@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 import ttnn
 from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 
-class TtUpsample(torch.nn.Module):
+class TtUpsample(LightweightModule):
     # Standard bottleneck
     def __init__(
         self,
