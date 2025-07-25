@@ -793,10 +793,17 @@ void dumpDeviceResultsToCSV(
 }
 
 bool isGalaxyMMIODevice(IDevice* device) {
-    if (auto mesh_device = device->get_mesh_device()) {
+    // This is wrapped in a try-catch block because get_mesh_device() can throw a std::bad_weak_ptr if profiler dump is
+    // called during MeshDevice::close()
+    try {
+        if (auto mesh_device = device->get_mesh_device()) {
+            return false;
+        } else {
+            return tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() &&
+                   device->is_mmio_capable();
+        }
+    } catch (const std::bad_weak_ptr& e) {
         return false;
-    } else {
-        return tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() && device->is_mmio_capable();
     }
 }
 
