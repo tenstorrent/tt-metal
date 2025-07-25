@@ -1,0 +1,184 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <compute_kernel_api/cb_api.h>
+#include <compute_kernel_api/pack.h>
+#include <compute_kernel_api/reconfig_data_format.h>
+#include <compute_kernel_api/reg_api.h>
+#include <hostdevcommon/kernel_structs.h>
+#include <tensix.h>
+
+#include <cstdint>
+
+#include "compute_kernel_api.h"
+#include "compute_kernel_api/bcast.h"
+#include "compute_kernel_api/common.h"
+#include "compute_kernel_api/eltwise_binary.h"
+#include "compute_kernel_api/eltwise_binary_sfpu.h"
+#include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
+#include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "compute_kernel_api/eltwise_unary/exp.h"
+#include "compute_kernel_api/eltwise_unary/recip.h"
+#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "compute_kernel_api/eltwise_unary/sqrt.h"
+#include "compute_kernel_api/mask.h"
+#include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/reduce.h"
+#include "compute_kernel_api/tile_move_copy.h"
+#include "compute_kernel_api/transpose_wh.h"
+
+namespace NAMESPACE {
+
+constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);  // rows to process in this kernel
+constexpr uint32_t block_size = get_compile_time_arg_val(1);         // size of block
+constexpr uint32_t Wt = get_compile_time_arg_val(2);
+constexpr uint32_t Ht = get_compile_time_arg_val(3);
+constexpr uint32_t scaler_bits = get_compile_time_arg_val(4);      // sdpa scaler factor
+constexpr uint32_t minus_one_bits = get_compile_time_arg_val(5);   // used to transform mask from 1/0 to 0/-1
+constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(6);  // used to transform mask from 0/-1 to 0/-1e9F
+
+constexpr uint32_t cb_query = tt::CBIndex::c_0;
+constexpr uint32_t cb_key = tt::CBIndex::c_1;
+constexpr uint32_t cb_value = tt::CBIndex::c_2;
+constexpr uint32_t cb_attn_mask = tt::CBIndex::c_3;
+constexpr uint32_t cb_scaler = tt::CBIndex::c_4;
+constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_5;
+constexpr uint32_t cb_transpose_key = tt::CBIndex::c_6;  // isn't used right now, for debugging only
+constexpr uint32_t cb_temp_accum = tt::CBIndex::c_7;     // used for accumulating results
+constexpr uint32_t cb_output = tt::CBIndex::c_8;
+
+const uint32_t onetile = 1U;
+
+const uint32_t q_chunk_size = Wt;
+const uint32_t k_chunk_size = Wt;
+const uint32_t v_chunk_size = Wt;
+const uint32_t kv_chunks_size = Wt;
+const uint32_t kv_chunks_number = Ht;
+
+void MAIN {
+    init_sfpu(cb_query, cb_output);
+    binary_op_init_common(cb_query, cb_key, cb_value);
+
+    for (uint32_t row = 0; row < num_rows_per_core; ++row) {
+        cb_wait_front(cb_query, q_chunk_size);
+        cb_wait_front(cb_attn_mask, Ht);  // wait until reader kernel has written kv_chunks_size tiles to cb_attn_mask
+        cb_reserve_back(cb_output, q_chunk_size);
+
+        const uint32_t matmul_accum_reg = 0;
+        const uint32_t mask_register = 1U;                 // mask register should be next to data register
+        for (uint32_t h = 0; h < kv_chunks_number; ++h) {  // read all
+            cb_wait_front(cb_key, kv_chunks_size);
+            cb_wait_front(cb_value, kv_chunks_size);
+
+            mm_init(cb_query, cb_key, cb_temp_accum, /* transpose */ 1);
+            // TODO[check]: check whether I can use mm_init_short here instead of full init
+            // mm_init_short(cb_query, cb_key, /* transpose */ 1);
+            tile_regs_acquire();
+            for (uint32_t tile_idx = 0; tile_idx < q_chunk_size; tile_idx++) {
+                matmul_tiles(
+                    cb_query,
+                    cb_key,
+                    /* tile_idx */ tile_idx,
+                    /* tile_idx */ tile_idx,
+                    /* dst_reg_idx*/ matmul_accum_reg,
+                    /* transpose */ 1);  // accumulate in dest_reg 0
+            }
+
+            // TODO[improve]: maybe I need to move mask/scaler stuff to separate function
+
+            // now we have to multiply result by scaler factor and then apply mask
+            // we need to transform the attention mask for use in softmax:
+            // The input `attn_mask` contains 1.0 for valid (keep) positions and 0.0 for masked (drop) positions.
+            // To convert this into a format compatible with softmax masking:
+            //   - Subtract 1.0 from the mask, so values become 0.0 (keep) and -1.0 (mask).
+            //   - Multiply by a large negative value (e.g., 1e9F), resulting in 0.0 for valid entries and -inf for
+            //   masked ones.
+            // This way, after applying softmax, masked positions will effectively become zero,
+            // and only the unmasked positions will retain meaningful attention weights
+            copy_tile_init(cb_attn_mask);
+            copy_tile(
+                cb_attn_mask,
+                /* tile_idx */ h,  // row of K define the column in (QK^T) matrix, so it define the column of attn_mask
+                /* register idx */ mask_register);
+
+            // Apply the attention mask to Q @ K^T scores:
+            // masked positions receive 0.0, unmasked positions remain unchanged
+            mask_tile_init();
+            mask_tile(matmul_accum_reg, mask_register);
+
+            binop_with_scalar_tile_init();
+            mul_unary_tile(matmul_accum_reg, scaler_bits);   // multiply by scaler factor
+            add_unary_tile(mask_register, minus_one_bits);   // subtract 1.0 from mask, so it becomes 0.0 and -1.0
+            mul_unary_tile(mask_register, custom_inf_bits);  // multiply by 1e9F to transform mask to 0.0 and -1e9F
+
+            // Add mask to scaled matmul result:
+            // masked positions receive large negative values (will be 0.0 after softmax),
+            // unmasked positions remain unchanged
+            add_binary_tile_init();
+            add_binary_tile(matmul_accum_reg, mask_register);
+            tile_regs_commit();
+
+            tile_regs_wait();
+            cb_reserve_back(cb_temp_accum, onetile);
+            pack_reconfig_data_format(cb_temp_accum);
+            pack_tile(matmul_accum_reg, cb_temp_accum);
+
+            // if (h == 0) {
+            //     cb_reserve_back(cb_scaler, onetile);
+            //     pack_reconfig_data_format(cb_scaler);
+            //     pack_tile(mask_register, cb_scaler);
+            // }
+            tile_regs_release();
+
+            cb_push_back(cb_temp_accum, onetile);
+            // cb_push_back(cb_scaler, onetile);
+
+            // pop key data to make space for next key chunk
+            cb_pop_front(cb_key, kv_chunks_size);
+
+            // wait for Q_chunk by K_chunk result to be ready
+            cb_wait_front(cb_temp_accum, onetile);
+            mm_init(cb_temp_accum, cb_value, cb_output, /* transpose */ 0);
+            // TODO[check]: check whether I can use mm_init_short here instead of full init
+            // mm_init_short(cb_temp_accum, cb_value, /* transpose */ 0);
+            for (uint32_t tile_idx = 0; tile_idx < kv_chunks_size; tile_idx += block_size) {
+                tile_regs_acquire();
+                for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                    matmul_tiles(
+                        cb_temp_accum,
+                        cb_value,
+                        /* tile_idx */ 0,
+                        /* tile_idx */ tile_idx + block_idx,
+                        block_idx,
+                        0);
+                }
+                tile_regs_commit();
+
+                tile_regs_wait();
+                if (h > 0) {
+                    // if in the same q_chunk(row) continue accumulating
+                    PACK((llk_pack_reconfig_l1_acc(1)));
+                }
+
+                // TODO[improve]: change block_idx/size naming to dst_reg_idx/count to be more clear
+                for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                    pack_tile<true>(
+                        /* dst_reg_idx */ block_idx, /* cb_idx */ cb_output, /* tile_idx */ tile_idx + block_idx);
+                }
+                tile_regs_release();
+                PACK((llk_pack_reconfig_l1_acc(0)));
+            }
+
+            // pop data from circular buffers
+            cb_pop_front(cb_temp_accum, onetile);
+            cb_pop_front(cb_value, kv_chunks_size);
+        }
+        // cb_pop_front(cb_scaler, onetile);  // pop scaler after processing all K and V rows
+        cb_pop_front(cb_attn_mask, Ht);  // pop attn_mask after processing all K and V rows
+        cb_push_back(cb_output, q_chunk_size);
+        cb_pop_front(cb_query, q_chunk_size);
+    }
+}
+
+}  // namespace NAMESPACE

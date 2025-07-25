@@ -9,6 +9,7 @@
 #include "ops/profiler_no_op/profiler_no_op.hpp"
 #include "ops/rmsnorm_bw/rmsnorm_bw.hpp"
 #include "ops/rmsnorm_fw/rmsnorm_fw.hpp"
+#include "ops/sdpa_fw/sdpa_fw.hpp"
 #include "ops/softmax/softmax.hpp"
 
 namespace ttml::metal {
@@ -32,5 +33,8 @@ constexpr auto softmax =
 
 constexpr auto profiler_no_op =
     ttnn::register_operation<"ttml::metal::profiler_no_op", ttml::metal::ops::profiler_no_op::ProfilerNoopOperation>();
+
+constexpr auto sdpa_fw =
+    ttnn::register_operation<"ttml::metal::sdpa_fw", ttml::metal::ops::sdpa_fw::SDPAForwardOperation>();
 
 }  // namespace ttml::metal
