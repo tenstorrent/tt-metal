@@ -14,7 +14,7 @@ from models.utility_functions import comp_allclose, comp_pcc
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
-def test_mixtral_moe_inference(t3k_mesh_device, use_program_cache, reset_seeds):
+def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds):
     pcc = 0.99
     iterations = 1
     dtype = ttnn.bfloat8_b

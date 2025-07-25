@@ -16,6 +16,7 @@ from models.demos.mobilenetv2.tt.model_preprocessing import create_mobilenetv2_m
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import disable_persistent_kernel_cache, profiler
+from tests.ttnn.integration_tests.mobilenetv2.test_mobilenetv2 import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
 
 
 def get_expected_times(name):
@@ -25,7 +26,7 @@ def get_expected_times(name):
 
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": MOBILENETV2_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("input_tensor", [torch.rand((1, 224, 224, 3))], ids=["input_tensor"])
 @pytest.mark.parametrize(
     "use_pretrained_weight",
@@ -118,7 +119,7 @@ def test_mobilenetv2(device, input_tensor, use_pretrained_weight, reset_seeds):
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 728],
+        [MOBILENETV2_BATCH_SIZE, 3178],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

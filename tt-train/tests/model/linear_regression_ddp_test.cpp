@@ -82,14 +82,12 @@ TEST_F(LinearRegressionDDPTest, Full) {
                 std::move(target.begin(), target.end(), std::back_inserter(targets));
             }
 
-            xt::xarray<float> data_xtensor = xt::adapt(data, std::vector<size_t>{batch_size, 1, 1, num_features});
-            xt::xarray<float> targets_xtensor = xt::adapt(targets, std::vector<size_t>{batch_size, 1, 1, num_targets});
-
-            auto mesh_shape = device->shape();
-            ttml::core::XTensorToMeshVariant<float> composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-            auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_xtensor(data_xtensor, device, composer));
+            const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+            auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
+                data, ttnn::Shape({batch_size, 1, 1, num_features}), device, ttnn::Layout::TILE, mapper.get()));
             auto targets_tensor =
-                ttml::autograd::create_tensor(ttml::core::from_xtensor(targets_xtensor, device, composer));
+                ttml::autograd::create_tensor(ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
+                    targets, ttnn::Shape({batch_size, 1, 1, num_targets}), device, ttnn::Layout::TILE, mapper.get()));
 
             return std::make_pair(data_tensor, targets_tensor);
         };

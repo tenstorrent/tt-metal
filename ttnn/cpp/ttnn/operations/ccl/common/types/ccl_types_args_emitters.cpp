@@ -43,7 +43,6 @@ args_list_t legacy_emit_address_generator_runtime_args(
 
             break;
 
-        case tt::tt_metal::TensorMemoryLayout::SINGLE_BANK:
         default:
             TT_ASSERT(
                 false,
@@ -69,7 +68,6 @@ args_list_t emit_address_generator_runtime_args(const tt::tt_metal::IDevice* con
 
             break;
 
-        case tt::tt_metal::TensorMemoryLayout::SINGLE_BANK:
         default:
             TT_ASSERT(
                 false,
@@ -88,7 +86,6 @@ args_list_t legacy_emit_address_generator_compile_time_args(const tt::tt_metal::
 
         case tt::tt_metal::TensorMemoryLayout::INTERLEAVED: return {}; break;
 
-        case tt::tt_metal::TensorMemoryLayout::SINGLE_BANK:
         default:
             TT_ASSERT(
                 false,
@@ -110,7 +107,6 @@ args_list_t emit_address_generator_compile_time_args(const tt::tt_metal::Tensor&
 
         case tt::tt_metal::TensorMemoryLayout::INTERLEAVED: return {}; break;
 
-        case tt::tt_metal::TensorMemoryLayout::SINGLE_BANK:
         default:
             TT_ASSERT(
                 false,

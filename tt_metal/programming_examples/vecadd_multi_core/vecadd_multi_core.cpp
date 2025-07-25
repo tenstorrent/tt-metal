@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -136,9 +137,9 @@ int main(int argc, char** argv) {
     auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
     const uint32_t cir_buf_num_title = 4;
-    CBHandle cb_a = MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_0, cir_buf_num_title);
-    CBHandle cb_b = MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_1, cir_buf_num_title);
-    CBHandle cb_c = MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_2, cir_buf_num_title);
+    MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_0, cir_buf_num_title);
+    MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_1, cir_buf_num_title);
+    MakeCircularBufferBFP16(program, all_device_cores, tt::CBIndex::c_2, cir_buf_num_title);
 
     // A Tensix core is made up with 5 processors. 2 data movement processors,
     // and 3 compute processors. The 2 data movement processors act independent
@@ -156,7 +157,10 @@ int main(int argc, char** argv) {
     // result into a third circular buffer. `tile_write` reads tiles from the
     // third circular buffer and writes them to the output buffer C.
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)tt::CBIndex::c_0, (std::uint32_t)tt::CBIndex::c_1};
+    TensorAccessorArgs(*a).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*b).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)tt::CBIndex::c_2};
+    TensorAccessorArgs(*c).append_to(writer_compile_time_args);
     std::vector<uint32_t> compute_compile_time_args = {
         (std::uint32_t)tt::CBIndex::c_0, (std::uint32_t)tt::CBIndex::c_1, (std::uint32_t)tt::CBIndex::c_2};
 

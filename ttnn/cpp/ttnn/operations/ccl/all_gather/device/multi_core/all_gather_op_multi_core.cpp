@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 #include <algorithm>
+#include <string>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -41,8 +42,6 @@ get_all_worker_cores(
     uint32_t ring_index,
     const CoreCoord& grid_size) {
     uint32_t worker_grid_width = grid_size.x;
-    const bool fit_sender_and_receiver_workers_on_same_row =
-        (worker_grid_width / 2) >= all_gather_config.get_num_workers_per_link();
 
     std::set<CoreRange> receiver_worker_cores;
     std::set<CoreRange> sender_worker_cores;
@@ -211,7 +210,7 @@ static void emit_sharded_tensor_kernel_rt_args(IDevice* d, Tensor const& tensor,
     std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
 }
 
-static bool shard_grid_is_transposed(Tensor const& t) {
+inline bool shard_grid_is_transposed(const Tensor& t) {
     TT_FATAL(
         t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
             t.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
@@ -359,10 +358,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
     log_trace(tt::LogOp, "max_buffer_per_chunk: {}", max_buffer_per_chunk);
     log_trace(tt::LogOp, "max_pages_per_chunk: {}", max_pages_per_chunk);
     bool rm = input_tensor.layout() == Layout::ROW_MAJOR;
-    bool width = input_tensor.padded_shape().rank() - 1 == dim;
     tt::DataFormat df = datatype_to_dataformat_converter(input_tensor.dtype());
 
-    std::map<string, string> worker_defines;
+    std::map<std::string, std::string> worker_defines;
     if (rm) {
         worker_defines["ROW_MAJOR_LAYOUT"] = "1";
     } else {
@@ -385,7 +383,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
     uint32_t global_num_workers =
         num_links * all_gather_config.get_num_eth_buffers_per_edm() * num_full_send_directions;
     uint32_t global_num_workers_per_direction = global_num_workers / num_full_send_directions;
-    uint32_t total_worker_core_pairs_used = global_num_workers;
 
     uint32_t num_input_pages = input_tensor.buffer()->size() / input_page_size;
     uint32_t min_pages_per_link = num_input_pages / num_links;
@@ -468,9 +465,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
     auto cb_src0_config = tt::tt_metal::CircularBufferConfig(CB_buffer_size, {{src0_cb_index, df}})
                               .set_page_size(src0_cb_index, input_page_size)
                               .set_tile_dims(src0_cb_index, input_tensor_config->get_tile());
-    tt::tt_metal::CBHandle cb_src0_sender_workers = CreateCircularBuffer(program, all_sender_workers, cb_src0_config);
-    tt::tt_metal::CBHandle cb_src0_receiver_workers =
-        CreateCircularBuffer(program, all_receiver_workers, cb_src0_config);
+    CreateCircularBuffer(program, all_sender_workers, cb_src0_config);
+    CreateCircularBuffer(program, all_receiver_workers, cb_src0_config);
 
     // This semaphore is used by the receiver core to tell workers that data is available to read
     auto receiver_worker_semaphore_id = CreateSemaphore(program, all_receiver_workers, 0);
@@ -942,8 +938,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
             }
 
             for (uint32_t b = 0; b < all_gather_config.get_num_workers_per_link(); ++b) {
-                uint32_t global_worker_index = all_gather_config.get_num_workers_per_link() * i + b;
-
                 bool is_clockwise_direction = is_buffer_in_clockwise_direction(b);
 
                 // Not fully sure about these two
@@ -960,8 +954,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
                 if (sender_enabled) {
                     //// Send Reader
                     auto build_worker_send_reader_rt_args = [&]() {
-                        bool is_clockwise = is_buffer_in_clockwise_direction(b);
-
                         std::vector<uint32_t> args = {
                             static_cast<uint32_t>(input_buffer->address()),
                             static_cast<uint32_t>(output_buffer->address()),

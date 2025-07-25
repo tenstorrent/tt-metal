@@ -2,6 +2,44 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+# This test runs different shapes for matmul_2d, with possibly the best configurations for performance.
+#
+# The inputs include:
+#   - m, k, n: Dimensions of the input tensors.
+#   - in0_sharded, out_sharded: Flags indicating whether the in0 (activation) and output tensors are sharded or not.
+#   - in0_block_w_div: A parameter to divide an in0 block into multiple chunks, helping to reduce L1 cache usage.
+#   - num_out_blocks_h: A parameter to divide an output block into multiple chunks on height dim, helping to reduce L1 cache usage.
+#   - num_out_blocks_w: A parameter to divide an output block into multiple chunks on width dim, helping to reduce L1 cache usage.
+#
+# Test is measuring and calculating following performance metrics:
+#   - Inference time: The average time taken for inference in nanoseconds.
+#   - TFLOPs: The number of tera floating-point operations per second.
+#   - Host based utilization: The ratio of ideal cycles to inference cycles, calculated for both user selected and full available grid size.
+#   - Device based utilization: The ratio of ideal cycles to TRISC1 kernel duration, calculated for both user selected and full available grid size.
+#
+# Important notes regarding performance metrics calculation:
+#   - If profiler build is not enabled (TT_METAL_DEVICE_PROFILER environment variable is not set) only host based utilization is calculated.
+#   - If profiler build is enabled, additionally device based utilization is calculated using TRISC1 kernel duration that is
+#     measured and reported by profiler build.
+#   - Inference time is measured by host based on repeated(num_measurement_iterations times) execution of matmul operation.
+#   - Measured inference time includes all host and device overheads. If profiler build is enabled it can have impact on
+#     runtime performance of device and host operations.
+#   - TFLOPs is calculated based on the formula: 2 * m * k * n / 1e12 / inference_time_avg
+#       - factor 2 comes from fact that we are doing multiplication and addition in matmul operation.
+#   - Host based utilization is calculated using formula: ideal_cycle / inference_cycle
+#       - ideal_cycle is the number of cycles required to perform matmul on the input tensors:
+#         m * k * n / (tile_h * tile_w * tile_h) * (cycle_per_tile / num_cores)
+#           - cycle_per_tile is idealistic number of cycles required for Tensix engine to perform matmul on 2 tiles and it is based on
+#             math fidelity: for LoFi it is 16, for HiFi2 it is 32, for HiFi3 it is 48 and for HiFi4 it is 64.
+#           - num_cores is number of cores in grid that is used to execute matmul operation, 8x8 grid will have 64 cores.
+#       - inference_cycle is calculated as: inference_time_avg * device_freq[Hz]
+#           - device_freq is fixed value common for specific architecture, for Wormhole B0 it is 1000MHz, for Blackhole it is 1350MHz
+#             This value can change and needs to be updated in code until there is python support to read device frequency from device.
+#   - Host based utilization uses fixed device frequency value, in reality device frequency can vary due to frequency throttling. Calculated value
+#     is worst case scenario for host based utilization since frequency throttling will reduce device frequency and thus increase utilization.
+#   - Device based utilization is calculated using formula: ideal_cycle / trisc1_kernel_duration
+#       - trisc1_kernel_duration is read from profiler log and it is average duration of TRISC1 kernel in number of cycles.
+
 import time
 
 from loguru import logger
@@ -9,10 +47,15 @@ import csv
 import pytest
 import torch
 import ttnn
-from models.utility_functions import run_for_wormhole_b0, is_grayskull, profiler
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.utility_functions import is_grayskull, profiler, is_wormhole_b0, is_blackhole
 from pathlib import Path
 import os
+import numpy as np
+from tt_metal.tools.profiler.process_device_log import import_log_run_stats
+import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
+from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG, rm
+
+profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 
 
 SUBBLOCK_HW_CHOICES = [
@@ -58,32 +101,44 @@ def get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, out_sharded=False, fp
     return (1, 1)
 
 
-# This test runs different shapes for matmul_2d, with possibly the best configurations for performance.
-#
-# The inputs include:
-#   - m, k, n: Dimensions of the input tensors.
-#   - in0_sharded, out_sharded: Flags indicating whether the in0 (activation) and output tensors are sharded or not.
-#   - in0_block_w_div: A parameter to divide an in0 block into multiple chunks, helping to reduce L1 cache usage.
-#   - num_out_blocks_h: A parameter to divide an output block into multiple chunks on height dim, helping to reduce L1 cache usage.
-#   - num_out_blocks_w: A parameter to divide an output block into multiple chunks on width dim, helping to reduce L1 cache usage.
-
-from tt_metal.tools.profiler.process_device_log import import_log_run_stats
-import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
-from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
-
-profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
+# Get default value of device frequency[MHz] based on architecture.
+# Hardcoded values are used until there is python support to read freq
+# value from device. Please note that this needs to be updated if device
+# runs at different frequency.
+def get_device_frequency():
+    if is_wormhole_b0():
+        return 1000
+    elif is_blackhole():
+        return 1350
+    else:
+        return None
 
 
-def get_device_freq():
+def get_profiler_data():
+    # Import profiler log file and run perf related statistic calculation
     setup = device_post_proc_config.default_setup()
     setup.deviceInputLog = profiler_log_path
     deviceData = import_log_run_stats(setup)
-    freq = deviceData["deviceInfo"]["freq"]
-    return freq
+    data = {}
+
+    # Add device frequency from profiler log
+    data["device_freq"] = deviceData["deviceInfo"]["freq"]
+    # Add TRISC1-Math kernel average duration time - TRISC1 kernel zones is always present in profiler log
+    data["trisc1_kernel_duration"] = deviceData["devices"][0]["cores"]["DEVICE"]["analysis"][
+        "device_trisc1_kernel_duration"
+    ]["stats"]["Average"]
+
+    return data
+
+
+# Check if test is run with profiler build enabled.
+def get_profiler_build_enabled():
+    return os.getenv("TT_METAL_DEVICE_PROFILER") != None
 
 
 # These configs are all based on a 1x1 compute grid, and will be scaled by the benchmark according to the max grid size
 # M will be scaled by Y (num cols), N and K will be scaled by X (num rows)
+# (m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w)
 matmul_shapes_bfloat16 = [
     (64, 64, 64, True, True, 1, 1, 1),
     (64, 128, 128, True, True, 1, 1, 1),
@@ -137,6 +192,7 @@ matmul_shapes_bfloat4_b = [
     (2048, 2048, 2048, False, False, 4, 4, 4),
 ]
 
+# (dtype, math_fidelity, use_trace)
 matmul_configs = [
     (ttnn.bfloat16, ttnn.MathFidelity.HiFi2, False),
     (ttnn.bfloat16, ttnn.MathFidelity.HiFi4, False),
@@ -159,19 +215,31 @@ matmul_configs = [
 @pytest.mark.parametrize("num_measurement_iterations", [100])
 def test_matmul_2d_host_perf(
     device,
+    grid_size,
     tile_h,
     tile_w,
     num_warmup_iterations,
     num_measurement_iterations,
-    use_program_cache,
 ):
     ENVS = dict(os.environ)
     TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])
     ARTIFACTS_DIR = TT_METAL_HOME / "generated"
     FILE_NAME = ARTIFACTS_DIR / "matmul_2d_host_perf_report.csv"
 
+    # Calculate device utilization only when profiler build is enabled.
+    # If profiler build is enabled, kernel execution time is available in profiler log by default.
+    calc_device_utilization = get_profiler_build_enabled()
+
+    # Get maximum available grid size for compute from device
     compute_grid_size = device.compute_with_storage_grid_size()
-    grid_size = (compute_grid_size.x, compute_grid_size.y)
+    # If user did not specify grid size, use maximum available grid size for compute
+    if grid_size is None:
+        grid_size = (compute_grid_size.x, compute_grid_size.y)
+    # Check if requested grid size is within available compute grid size, skip test if not
+    if compute_grid_size.y < grid_size[1] or compute_grid_size.x < grid_size[0]:
+        pytest.skip(
+            f"Skipping test as requested compute grid size {grid_size} exceeds available compute grid {compute_grid_size}"
+        )
 
     LoFi_cycle = 16
     HiFi2_cycle = LoFi_cycle * 2
@@ -180,26 +248,32 @@ def test_matmul_2d_host_perf(
 
     with open(FILE_NAME, mode="w", newline="") as file:
         writer = csv.writer(file)
-        writer.writerow(
-            [
-                "m",
-                "k",
-                "n",
-                "use_trace",
-                "grid_size",
-                "in0_sharded",
-                "out_sharded",
-                "in0_storage_type",
-                "in1_storage_type",
-                "out_storage_type",
-                "dtype",
-                "math_fidelity",
-                "inference_time_avg (ns)",
-                "TFLOPs (avg)",
-                "Utilization (vs user grid)",
-                "Utilization (vs 8x8 full grid)",
-            ]
-        )
+        header = [
+            "m",
+            "k",
+            "n",
+            "use_trace",
+            "grid_size",
+            "in0_sharded",
+            "out_sharded",
+            "in0_storage_type",
+            "in1_storage_type",
+            "out_storage_type",
+            "dtype",
+            "math_fidelity",
+            "inference_time_avg [ns]",
+            "TFLOPs (avg)",
+            f"Host based utilization[%] (vs user selected grid {grid_size[0]}x{grid_size[1]})",
+            f"Host based utilization[%] (vs full available grid {compute_grid_size.x}x{compute_grid_size.y})",
+        ]
+        if calc_device_utilization:
+            header.extend(
+                [
+                    f"Device based utilization[%] (vs user selected grid {grid_size[0]}x{grid_size[1]})",
+                    f"Device based utilization[%] (vs full available grid {compute_grid_size.x}x{compute_grid_size.y})",
+                ]
+            )
+        writer.writerow(header)
 
         for dtype, math_fidelity, use_trace in matmul_configs:
             if dtype == ttnn.bfloat16:
@@ -209,12 +283,12 @@ def test_matmul_2d_host_perf(
             elif dtype == ttnn.bfloat4_b:
                 matmul_shapes = matmul_shapes_bfloat4_b
             for m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w in matmul_shapes:
+                profiler.clear()
+
                 # Scale the input shapes by the grid size
                 m = m * grid_size[1]
                 k = k * grid_size[0]
                 n = n * grid_size[0]
-
-                profiler.clear()
 
                 in0_shape = [1, 1, m, k]
                 in1_shape = [1, 1, k, n]
@@ -235,7 +309,9 @@ def test_matmul_2d_host_perf(
                     in0_storage_type = "L1"
                 else:
                     in0_storage_type = "DRAM"
+
                 in1_storage_type = "DRAM"
+
                 if out_sharded:
                     out_storage_type = "L1"
                 else:
@@ -258,6 +334,7 @@ def test_matmul_2d_host_perf(
                     device=device,
                     memory_config=in0_memory_config,
                 )
+
                 in1_t = ttnn.from_torch(
                     in1,
                     tile=ttnn.Tile((32, tile_w)),
@@ -291,7 +368,9 @@ def test_matmul_2d_host_perf(
                         math_approx_mode=True,
                         fp32_dest_acc_en=False,
                         packer_l1_acc=True,
+                        throttle_level=ttnn.ThrottleLevel.NO_THROTTLE,
                     )
+
                 if out_sharded:
                     out_mem_config = ttnn.MemoryConfig(
                         memory_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -299,6 +378,7 @@ def test_matmul_2d_host_perf(
                     )
                 else:
                     out_mem_config = ttnn.DRAM_MEMORY_CONFIG
+
                 if out_sharded:
                     output_tile = ttnn.Tile([tile_h, 32]) if tile_h <= 16 else ttnn.Tile([tile_h, tile_w])
                 else:
@@ -324,6 +404,14 @@ def test_matmul_2d_host_perf(
                         compute_kernel_config=compute_kernel_config,
                         output_tile=output_tile,
                     )
+
+                if calc_device_utilization:
+                    # Clear profiler log and dump profiler data after warmup iterations
+                    ttnn.DumpDeviceProfiler(device)
+                    rm(profiler_log_path)
+
+                # Synchronize device to ensure all warmup iterations are completed and device is in clean state
+                ttnn.synchronize_device(device)
 
                 if use_trace:
                     tid = ttnn.begin_trace_capture(device, cq_id=0)
@@ -358,7 +446,14 @@ def test_matmul_2d_host_perf(
                     ttnn.synchronize_device(device)
                     profiler.end(f"run")
 
-                ttnn.DumpDeviceProfiler(device)
+                if calc_device_utilization:
+                    # Dump and read profiler log data
+                    ttnn.DumpDeviceProfiler(device)
+                    profiler_data = get_profiler_data()
+                    trisc1_kernel_duration = profiler_data["trisc1_kernel_duration"]
+
+                # Read device frequency
+                device_freq = get_device_frequency()
 
                 inference_time_avg = profiler.get("run") / num_measurement_iterations
                 tflops = 2 * m * k * n / 1e12 / inference_time_avg
@@ -374,39 +469,49 @@ def test_matmul_2d_host_perf(
                 num_cores_full_grid = compute_grid_size.x * compute_grid_size.y
                 ideal_cycle_full_grid = m * k * n / tile_h / tile_w / 32 * cycle_per_tile / num_cores_full_grid
                 ideal_cycle_user_grid = m * k * n / tile_h / tile_w / 32 * cycle_per_tile / num_cores_user_grid
-                inference_cycle = inference_time_avg * get_device_freq() * 1e6
+                inference_cycle = inference_time_avg * device_freq * 1e6
                 utilization_full_grid = ideal_cycle_full_grid / inference_cycle
                 utilization_user_grid = ideal_cycle_user_grid / inference_cycle
-                utilization_full_grid_percentage = f"{utilization_full_grid * 100:.2f}%"
-                utilization_user_grid_percentage = f"{utilization_user_grid * 100:.2f}%"
+                if calc_device_utilization:
+                    # Calculate device utilization based on TRISC1 kernel duration
+                    utilization_full_grid_device = ideal_cycle_full_grid / np.mean(trisc1_kernel_duration)
+                    utilization_user_grid_device = ideal_cycle_user_grid / np.mean(trisc1_kernel_duration)
+
                 logger.info(
-                    f"M*K*N = {m}*{k}*{n} == inference time (avg): {inference_time_avg}, tflops (avg): {tflops}, utilization (vs user grid): {utilization_user_grid_percentage}, utilization (vs 8x8 grid): {utilization_full_grid_percentage}"
+                    f"M*K*N = {m}*{k}*{n} == inference time (avg): {inference_time_avg}, tflops (avg): {tflops}, utilization (vs user selected grid {grid_size[0]}x{grid_size[1]}): {utilization_user_grid * 100:.2f}%, utilization (vs full available grid {compute_grid_size.x}x{compute_grid_size.y}): {utilization_full_grid * 100:.2f}%"
                 )
 
                 output_tensor = ttnn.to_torch(output_t)
                 ttnn.deallocate(output_t)
                 ttnn.deallocate(in0_t)
                 ttnn.deallocate(in1_t)
-                writer.writerow(
-                    [
-                        m,
-                        k,
-                        n,
-                        f"{True}" if use_trace else f"{False}",
-                        grid_size,
-                        in0_sharded,
-                        out_sharded,
-                        in0_storage_type,
-                        in1_storage_type,
-                        out_storage_type,
-                        dtype,
-                        math_fidelity,
-                        f"{inference_time_avg * 1e9:.2f}",
-                        f"{tflops:.2f}",
-                        utilization_user_grid_percentage,
-                        utilization_full_grid_percentage,
-                    ]
-                )
+                csv_data = [
+                    m,
+                    k,
+                    n,
+                    f"{True}" if use_trace else f"{False}",
+                    grid_size,
+                    in0_sharded,
+                    out_sharded,
+                    in0_storage_type,
+                    in1_storage_type,
+                    out_storage_type,
+                    dtype,
+                    math_fidelity,
+                    f"{inference_time_avg * 1e9:.2f}",
+                    f"{tflops:.2f}",
+                    f"{utilization_user_grid * 100:.2f}",
+                    f"{utilization_full_grid * 100:.2f}",
+                ]
+                if calc_device_utilization:
+                    csv_data.extend(
+                        [
+                            f"{utilization_user_grid_device * 100:.2f}",
+                            f"{utilization_full_grid_device * 100:.2f}",
+                        ]
+                    )
+                writer.writerow(csv_data)
+                file.flush()
 
 
 matmul_shapes_oob = [
@@ -443,19 +548,32 @@ matmul_configs_oob = [
 @pytest.mark.parametrize("num_measurement_iterations", [100])
 def test_matmul_2d_host_perf_out_of_box(
     device,
+    grid_size,
     tile_h,
     tile_w,
     num_warmup_iterations,
     num_measurement_iterations,
-    use_program_cache,
 ):
     ENVS = dict(os.environ)
     TT_METAL_HOME = Path(ENVS["TT_METAL_HOME"])
     ARTIFACTS_DIR = TT_METAL_HOME / "generated"
     FILE_NAME = ARTIFACTS_DIR / "matmul_2d_host_perf_out_of_box_report.csv"
 
+    # Calculate device utilization only when profiler build is enabled.
+    # If profiler build is enabled, kernel execution time is available in profiler log by default.
+    calc_device_utilization = get_profiler_build_enabled()
+
+    # Get maximum available grid size for compute from device
     compute_grid_size = device.compute_with_storage_grid_size()
-    grid_size = (compute_grid_size.x, compute_grid_size.y)
+    # If user did not specify grid size, use maximum available grid size for compute
+    if grid_size is None:
+        grid_size = (compute_grid_size.x, compute_grid_size.y)
+    # Check if requested grid size is within available compute grid size, skip test if not
+    if compute_grid_size.y < grid_size[1] or compute_grid_size.x < grid_size[0]:
+        pytest.skip(
+            f"Skipping test as requested compute grid size {grid_size} exceeds available compute grid {compute_grid_size}"
+        )
+
     LoFi_cycle = 16
     HiFi2_cycle = LoFi_cycle * 2
     HiFi3_cycle = LoFi_cycle * 3
@@ -463,24 +581,30 @@ def test_matmul_2d_host_perf_out_of_box(
 
     with open(FILE_NAME, mode="w", newline="") as file:
         writer = csv.writer(file)
-        writer.writerow(
-            [
-                "m",
-                "k",
-                "n",
-                "use_trace",
-                "grid_size",
-                "in0_storage_type",
-                "in1_storage_type",
-                "out_storage_type",
-                "dtype",
-                "math_fidelity",
-                "inference_time_avg (ns)",
-                "TFLOPs (avg)",
-                "Utilization (vs user grid)",
-                "Utilization (vs 8x8 full grid)",
-            ]
-        )
+        header = [
+            "m",
+            "k",
+            "n",
+            "use_trace",
+            "grid_size",
+            "in0_storage_type",
+            "in1_storage_type",
+            "out_storage_type",
+            "dtype",
+            "math_fidelity",
+            "inference_time_avg [ns]",
+            "TFLOPs (avg)",
+            f"Host based utilization[%] (vs user selected grid {grid_size[0]}x{grid_size[1]})",
+            f"Host based utilization[%] (vs full available grid {compute_grid_size.x}x{compute_grid_size.y})",
+        ]
+        if calc_device_utilization:
+            header.extend(
+                [
+                    f"Device based utilization[%] (vs user selected grid {grid_size[0]}x{grid_size[1]})",
+                    f"Device based utilization[%] (vs full available grid {compute_grid_size.x}x{compute_grid_size.y})",
+                ]
+            )
+        writer.writerow(header)
 
         for dtype, use_trace in matmul_configs_oob:
             matmul_shapes = matmul_shapes_oob
@@ -491,12 +615,12 @@ def test_matmul_2d_host_perf_out_of_box(
             elif dtype == ttnn.bfloat4_b:
                 math_fidelity = ttnn.MathFidelity.LoFi
             for m, k, n in matmul_shapes:
+                profiler.clear()
+
                 # Scale the input shapes by the grid size
                 m = m * grid_size[1]
                 k = k * grid_size[0]
                 n = n * grid_size[0]
-
-                profiler.clear()
 
                 in0_shape = [1, 1, m, k]
                 in1_shape = [1, 1, k, n]
@@ -530,6 +654,14 @@ def test_matmul_2d_host_perf_out_of_box(
                 for iter in range(0, num_warmup_iterations):
                     output_t = in0_t @ in1_t
 
+                if calc_device_utilization:
+                    # Clear profiler log and dump profiler data after warmup iterations
+                    ttnn.DumpDeviceProfiler(device)
+                    rm(profiler_log_path)
+
+                # Synchronize device to ensure all warmup iterations are completed and device is in clean state
+                ttnn.synchronize_device(device)
+
                 if use_trace:
                     tid = ttnn.begin_trace_capture(device, cq_id=0)
                     for iter in range(0, num_measurement_iterations):
@@ -547,7 +679,14 @@ def test_matmul_2d_host_perf_out_of_box(
                     ttnn.synchronize_device(device)
                     profiler.end(f"run")
 
-                ttnn.DumpDeviceProfiler(device)
+                if calc_device_utilization:
+                    # Dump and read profiler log data
+                    ttnn.DumpDeviceProfiler(device)
+                    profiler_data = get_profiler_data()
+                    trisc1_kernel_duration = profiler_data["trisc1_kernel_duration"]
+
+                # Read device frequency
+                device_freq = get_device_frequency()
 
                 inference_time_avg = profiler.get("run") / num_measurement_iterations
                 tflops = 2 * m * k * n / 1e12 / inference_time_avg
@@ -563,34 +702,43 @@ def test_matmul_2d_host_perf_out_of_box(
                 num_cores_full_grid = compute_grid_size.x * compute_grid_size.y
                 ideal_cycle_full_grid = m * k * n / tile_h / tile_w / 32 * cycle_per_tile / num_cores_full_grid
                 ideal_cycle_user_grid = m * k * n / tile_h / tile_w / 32 * cycle_per_tile / num_cores_user_grid
-                inference_cycle = inference_time_avg * get_device_freq() * 1e6
+                inference_cycle = inference_time_avg * device_freq * 1e6
                 utilization_full_grid = ideal_cycle_full_grid / inference_cycle
                 utilization_user_grid = ideal_cycle_user_grid / inference_cycle
-                utilization_full_grid_percentage = f"{utilization_full_grid * 100:.2f}%"
-                utilization_user_grid_percentage = f"{utilization_user_grid * 100:.2f}%"
+                if calc_device_utilization:
+                    # Calculate device utilization based on TRISC1 kernel duration
+                    utilization_full_grid_device = ideal_cycle_full_grid / np.mean(trisc1_kernel_duration)
+                    utilization_user_grid_device = ideal_cycle_user_grid / np.mean(trisc1_kernel_duration)
                 logger.info(
-                    f"M*K*N = {m}*{k}*{n} == inference time (avg): {inference_time_avg}, tflops (avg): {tflops}, utilization (vs user grid): {utilization_user_grid_percentage}, utilization (vs 8x8 grid): {utilization_full_grid_percentage}"
+                    f"M*K*N = {m}*{k}*{n} == inference time (avg): {inference_time_avg}, tflops (avg): {tflops}, utilization (vs user selected grid {grid_size[0]}x{grid_size[1]}): {utilization_user_grid * 100:.2f}%, utilization (vs full available grid {compute_grid_size.x}x{compute_grid_size.y}): {utilization_full_grid * 100:.2f}%"
                 )
 
                 output_tensor = ttnn.to_torch(output_t)
                 ttnn.deallocate(output_t)
                 ttnn.deallocate(in0_t)
                 ttnn.deallocate(in1_t)
-                writer.writerow(
-                    [
-                        m,
-                        k,
-                        n,
-                        f"{True}" if use_trace else f"{False}",
-                        grid_size,
-                        in0_storage_type,
-                        in1_storage_type,
-                        out_storage_type,
-                        dtype,
-                        math_fidelity,
-                        f"{inference_time_avg * 1e9:.2f}",
-                        f"{tflops:.2f}",
-                        utilization_user_grid_percentage,
-                        utilization_full_grid_percentage,
-                    ]
-                )
+                csv_data = [
+                    m,
+                    k,
+                    n,
+                    f"{True}" if use_trace else f"{False}",
+                    grid_size,
+                    in0_storage_type,
+                    in1_storage_type,
+                    out_storage_type,
+                    dtype,
+                    math_fidelity,
+                    f"{inference_time_avg * 1e9:.2f}",
+                    f"{tflops:.2f}",
+                    f"{utilization_user_grid * 100:.2f}",
+                    f"{utilization_full_grid * 100:.2f}",
+                ]
+                if calc_device_utilization:
+                    csv_data.extend(
+                        [
+                            f"{utilization_user_grid_device * 100:.2f}",
+                            f"{utilization_full_grid_device * 100:.2f}",
+                        ]
+                    )
+                writer.writerow(csv_data)
+                file.flush()

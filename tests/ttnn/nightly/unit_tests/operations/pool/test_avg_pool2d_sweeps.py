@@ -70,7 +70,6 @@ def test_ttnn_pytorch_sweep(device, tensor_map, input_spec):
 
     run_avg_pool2d(
         device=device,
-        use_program_cache=True,
         tensor_map=tensor_map,
         input_shape=(in_n, in_c, in_h, in_w),
         kernel_size=(kernel_h, kernel_w),
@@ -79,5 +78,5 @@ def test_ttnn_pytorch_sweep(device, tensor_map, input_spec):
         ceil_mode=ceil_mode,
         divisor_override=None,
         count_include_pad=count_include_pad,
-        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        shard_scheme=None,
     )

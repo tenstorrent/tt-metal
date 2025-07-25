@@ -215,7 +215,7 @@ void MAIN {
 #else
     constexpr uint32_t cb_in_rm = cb_in0;
 #endif
-    tilize_init_short(cb_in_rm, per_core_N, cb_in);
+    tilize_init(cb_in_rm, per_core_N, cb_in);
     for (uint32_t m = 0; m < per_core_M; ++m) {
 #ifdef READER_REPACK
         cb_wait_front(cb_in_rm, per_core_N);
@@ -772,7 +772,7 @@ void MAIN {
 
 #ifdef UNTILIZE_OUT
                 // untilize
-                untilize_init_short(cb_untilize_in);
+                untilize_init(cb_untilize_in);
                 cb_wait_front(cb_untilize_in, per_core_MN);
                 for (uint32_t m = 0; m < per_core_M; ++m) {
                     cb_reserve_back(cb_untilize_out, per_core_N);

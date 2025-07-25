@@ -90,7 +90,7 @@ tt::tt_metal::Program initialize_program_data_movement_rta(
 
     uint32_t rta_base_dm = get_runtime_arg_addr(
         device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1), tt::RISCV::BRISC, common_rtas);
-    std::map<string, string> dm_defines = {
+    std::map<std::string, std::string> dm_defines = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_unique_rt_args)},
         {"RESULTS_ADDR", std::to_string(rta_base_dm)}};
@@ -160,6 +160,7 @@ std::pair<tt::tt_metal::Program, std::vector<tt::tt_metal::KernelHandle>> initia
     tt::tt_metal::Program program = tt_metal::CreateProgram();
     std::vector<tt::tt_metal::KernelHandle> kernel_ids;
 
+    kernel_ids.reserve(core_range_sets.size());
     for (const auto& core_range_set : core_range_sets) {
         kernel_ids.push_back(initialize_program_compute(device, program, core_range_set, num_unique_rt_args, num_common_rt_args));
     }
@@ -212,7 +213,7 @@ void verify_results(
 
         // Verify Unique RT Args (per core)
         for (const auto& logical_core : kernel->cores_with_runtime_args()) {
-            auto expected_rt_args = core_to_rt_args.at(logical_core);
+            const auto& expected_rt_args = core_to_rt_args.at(logical_core);
             auto rt_args = kernel->runtime_args(logical_core);
             EXPECT_EQ(rt_args, expected_rt_args) << "(unique rta)";
 
@@ -425,6 +426,7 @@ TEST_F(DeviceFixture, TensixSetRuntimeArgsVaryingLengthPerCore) {
                     uint32_t val_offset = x * 100 + y * 10;
                     uint32_t num_rt_args = 2 + x + y;
                     std::vector<uint32_t> initial_runtime_args;
+                    initial_runtime_args.reserve(num_rt_args);
                     for (uint32_t i = 0; i < num_rt_args; i++) {
                         initial_runtime_args.push_back(101 + val_offset + (i * 66));
                     }

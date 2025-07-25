@@ -12,7 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
-#include <algorithm>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <cstdint>
 #include <exception>
 #include <iomanip>
@@ -221,7 +221,7 @@ int main(int argc, char** argv) {
 
         tt_metal::Program program = tt_metal::CreateProgram();
 
-        string src_mem;
+        std::string src_mem;
         uint32_t noc_addr_x, noc_addr_y;
         uint64_t noc_mem_addr = 0;
         uint32_t dram_banked = 0;
@@ -301,7 +301,7 @@ int main(int argc, char** argv) {
             } break;
         }
 
-        std::map<string, string> defines = {
+        std::map<std::string, std::string> defines = {
             {"ITERATIONS", std::to_string(iterations_g)},
             {"PAGE_COUNT", std::to_string(page_count_g)},
             {"LATENCY", std::to_string(latency_g)},
@@ -319,7 +319,7 @@ int main(int argc, char** argv) {
             {"NOP_COUNT", std::to_string(nop_count_g)},
         };
         if (!page_size_as_runtime_arg_g) {
-            defines.insert(std::pair<string, string>("PAGE_SIZE", std::to_string(page_size_g)));
+            defines.insert(std::pair<std::string, std::string>("PAGE_SIZE", std::to_string(page_size_g)));
         }
 
         tt_metal::CircularBufferConfig cb_config =
@@ -343,7 +343,7 @@ int main(int argc, char** argv) {
 
         CoreCoord w = device->worker_core_from_logical_core(worker_g.start_coord);
         log_info(LogTest, "Master core: {}", w.str());
-        string direction = test_write ? "Writing" : "Reading";
+        std::string direction = test_write ? "Writing" : "Reading";
         if (source_mem_g == 3) {
             log_info(LogTest, "{}: {}", direction, src_mem);
         } else if (source_mem_g == 4) {
@@ -365,7 +365,7 @@ int main(int argc, char** argv) {
         }
         if (source_mem_g < 4 || source_mem_g == 6) {
             std::string api;
-            string read_write = test_write ? "write" : "read";
+            std::string read_write = test_write ? "write" : "read";
             if (issue_mcast) {
                 api = "noc_async_" + read_write + "_multicast";
             } else if (read_one_packet_g) {

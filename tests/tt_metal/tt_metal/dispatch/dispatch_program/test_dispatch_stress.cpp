@@ -131,11 +131,13 @@ TEST(DispatchStress, TensixRunManyTimes) {
         // Need to open/close the device each time in order to reproduce original issue.
         auto num_devices = tt::tt_metal::GetNumAvailableDevices();
         std::vector<chip_id_t> chip_ids;
+        chip_ids.reserve(num_devices);
         for (unsigned int id = 0; id < num_devices; id++) {
             chip_ids.push_back(id);
         }
         vector<IDevice*> devices_;
         auto reserved_devices_ = tt::tt_metal::detail::CreateDevices(chip_ids);
+        devices_.reserve(reserved_devices_.size());
         for (const auto& [id, device] : reserved_devices_) {
             devices_.push_back(device);
         }

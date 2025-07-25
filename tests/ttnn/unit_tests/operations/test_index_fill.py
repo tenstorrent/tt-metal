@@ -128,7 +128,7 @@ def test_index_fill_int(shape, dim, value, device):
         2002,
     ],
 )
-def test_index_fill_callback(shape, dim, value, device, use_program_cache):
+def test_index_fill_callback(shape, dim, value, device):
     torch.manual_seed(2024)
     for i in range(2):
         run_index_fill_test(shape, dim, value, torch.int32, device)

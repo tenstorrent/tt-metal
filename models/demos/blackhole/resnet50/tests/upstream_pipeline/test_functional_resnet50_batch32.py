@@ -5,7 +5,7 @@
 import pytest
 
 import ttnn
-from tests.ttnn.integration_tests.resnet.test_ttnn_functional_resnet50 import run_resnet_50
+from models.demos.wormhole.resnet50.tests.test_resnet50_functional import run_resnet_50
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -24,7 +24,6 @@ from tests.ttnn.integration_tests.resnet.test_ttnn_functional_resnet50 import ru
 )
 def test_resnet_50(
     device,
-    use_program_cache,
     batch_size,
     act_dtype,
     weight_dtype,
@@ -34,7 +33,6 @@ def test_resnet_50(
 ):
     run_resnet_50(
         device,
-        use_program_cache,
         batch_size,
         act_dtype,
         weight_dtype,

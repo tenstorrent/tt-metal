@@ -19,7 +19,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @skip_for_grayskull(reason_str="#10797: OOM")
 @pytest.mark.parametrize("ttnn_model", [ttnn_functional_bloom, ttnn_optimized_functional_bloom])
-def test_bloom_for_question_answering(device, use_program_cache, ttnn_model, batch_size=8, max_length=384):
+def test_bloom_for_question_answering(device, ttnn_model, batch_size=8, max_length=384):
     torch.manual_seed(0)
 
     model_name = "bigscience/bloom-560m"

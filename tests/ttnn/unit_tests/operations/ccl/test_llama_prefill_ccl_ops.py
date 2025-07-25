@@ -8,7 +8,7 @@ import torch
 import math
 import pytest
 from loguru import logger
-from tests.ttnn.unit_tests.operations.ccl.test_new_reduce_scatter import run_reduce_scatter_impl
+from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 
@@ -61,7 +61,6 @@ def run_all_gather_impl(
     ag_input_dtype,
     layout,
     all_gather_topology,
-    use_program_cache,
     num_iters=1,
     enable_trace=True,
 ):
@@ -133,11 +132,14 @@ def run_all_gather_impl(
     for i in range(num_iters):
         ag_output_tensor = torch.randn(ag_output_shape).bfloat16()
         ag_output_tensor_goldens_list.append(ag_output_tensor)
-        input_tensors = torch.chunk(ag_output_tensor, num_devices, dim)
-        tt_input_tensors = []
-        for i, t in enumerate(input_tensors):
-            tt_input_tensors.append(ttnn.Tensor(t, ag_input_dtype).to(layout))
-        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(t3k_mesh_device, mem_config)
+        input_tensor_mesh = ttnn.from_torch(
+            ag_output_tensor,
+            device=t3k_mesh_device,
+            layout=layout,
+            dtype=ag_input_dtype,
+            memory_config=mem_config,
+            mesh_mapper=ttnn.ShardTensorToMesh(t3k_mesh_device, dim=dim),
+        )
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
@@ -246,7 +248,6 @@ def test_all_gather_async(
     layout,
     enable_trace,
     num_iters,
-    use_program_cache,
     all_gather_topology,
 ):
     run_all_gather_impl(
@@ -257,7 +258,6 @@ def test_all_gather_async(
         num_links,
         ag_input_dtype,
         layout,
-        use_program_cache=use_program_cache,
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
@@ -312,7 +312,6 @@ def test_reduce_scatter_async(
     mem_config_rs,
     enable_trace,
     num_iters,
-    use_program_cache,
     rs_topology,
 ):
     run_reduce_scatter_impl(
@@ -325,7 +324,6 @@ def test_reduce_scatter_async(
         layout,
         mem_config_input,
         mem_config_rs,
-        use_program_cache=use_program_cache,
         rs_topology=rs_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,

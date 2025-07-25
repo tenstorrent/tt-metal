@@ -664,6 +664,8 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
         os.system(f"cp {logFolder / TRACY_FILE_NAME} {outFolder}")
     if os.path.isfile(f"{logFolder / PROFILER_DEVICE_SIDE_LOG}"):
         os.system(f"cp {logFolder / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
+    if os.path.isdir(f"{logFolder.parent / 'npe_viz'}"):
+        os.system(f"cp -r {logFolder.parent / 'npe_viz'} {outFolder}")
 
     logger.info(f"Generating OPs CSV")
     allOpsCSVPath = os.path.join(outFolder, f"{name}.csv")
@@ -905,12 +907,18 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
 
 def analyzeNoCTraces(logFolder):
     """Attempts to import tt-npe from $PYTHONPATH and process noc traces to
-    obtain per-operation DRAM BW and NoC utilization statistics"""
+    obtain per-operation DRAM BW and NoC utilization statistics and create
+    visualizer timeline files"""
     try:
         from npe_analyze_noc_trace_dir import analyze_noc_traces_in_dir
 
         logger.info(f"tt-npe module imported successfully; analyzing noc traces ... ")
-        return analyze_noc_traces_in_dir(logFolder, False, True)
+        return analyze_noc_traces_in_dir(
+            noc_trace_dir=logFolder,
+            emit_viz_timeline_files=True,
+            quiet=True,
+            compress_timeline_files=True,
+        )
     except ImportError:
         logger.warning("Could not import tt-npe module. Ensure tt-npe is built, then source 'tt-npe/ENV_SETUP'")
         return None

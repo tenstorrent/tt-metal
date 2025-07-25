@@ -66,7 +66,6 @@ def test_residual_block(
     use_pretrained_weights: bool,
     layer: int,
     device: ttnn.Device,
-    use_program_cache,
     reset_seeds,
 ):
     load_reference_model = Mamba.from_pretrained if use_pretrained_weights else Mamba.from_random

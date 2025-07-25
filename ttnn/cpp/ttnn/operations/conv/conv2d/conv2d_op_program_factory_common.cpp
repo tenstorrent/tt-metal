@@ -24,9 +24,11 @@ std::vector<CBInfo> get_cb_info(
     std::array<uint32_t, 2> kernel_size,
     const Conv2dConfig& conv_config,
     DataType input_datatype,
+    DataType output_datatype,
     std::array<uint32_t, 2> conv_input_shard_shape,
     bool enable_bias,
-    bool is_1d_depthwise_conv) {
+    bool is_1d_depthwise_conv,
+    bool skip_act_cb_create) {
     const uint32_t num_cbs = static_cast<uint32_t>(Conv2dCb::COUNT);
     std::vector<CBInfo> cb_info;
     cb_info.reserve(num_cbs);
@@ -49,7 +51,7 @@ std::vector<CBInfo> get_cb_info(
     TT_FATAL(conv_config.weights_dtype.has_value(), "get_cb_info expects conv_config.weights_dtype to be already set");
     const tt::DataFormat weights_df = datatype_to_dataformat_converter(conv_config.weights_dtype.value());
     const tt::DataFormat bias_df = weights_df;
-    const tt::DataFormat output_df = datatype_to_dataformat_converter(conv_config.dtype);
+    const tt::DataFormat output_df = datatype_to_dataformat_converter(output_datatype);
 
     const uint32_t weights_tile_size = tt::tile_size(weights_df);
     const uint32_t bias_tile_size = weights_tile_size;
@@ -75,7 +77,7 @@ std::vector<CBInfo> get_cb_info(
         sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED ? num_blocks_act_w * conv_act_c_blocks : num_blocks_act_w;
     packer_l1_acc = determine_packer_l1_acc(packer_l1_acc, enable_bias, in0_num_blocks_w);
     const tt::tt_metal::DataType partial_dtype =
-        packer_l1_acc ? (fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16) : conv_config.dtype;
+        packer_l1_acc ? (fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16) : output_datatype;
     const tt::DataFormat partial_df = datatype_to_dataformat_converter(partial_dtype);
     const uint32_t partial_tile_size = tt::tile_size(partial_df);
 
@@ -107,7 +109,7 @@ std::vector<CBInfo> get_cb_info(
         .name = Conv2dCb::MATMUL_PARTIALS,
         .num_pages = is_1d_depthwise_conv ? 1 : per_core_out_ntiles,
         .page_size = partial_tile_size,
-        .is_globally_allocated = (!untilize_out && partial_dtype == conv_config.dtype && !is_1d_depthwise_conv),
+        .is_globally_allocated = (!untilize_out && partial_dtype == output_datatype && !is_1d_depthwise_conv),
         .data_format = partial_df});
 
     {
@@ -135,7 +137,7 @@ std::vector<CBInfo> get_cb_info(
             sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? conv_input_df : output_df;
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT,
-            .num_pages = act_cb_num_tiles,
+            .num_pages = skip_act_cb_create ? 0 : act_cb_num_tiles,
             .page_size = act_cb_tile_size,
             .data_format = act_cb_data_format});
         cb_info.emplace_back(CBInfo{
@@ -179,10 +181,11 @@ std::vector<CBInfo> get_cb_info(
         const bool overlap_act_cb = sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && conv_input_df == output_df;
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT_ROW_MAJOR_BFLOAT16,
-            .num_pages = overlap_act_cb ? 0 : row_major_act_cb_num_tiles,
+            .num_pages = overlap_act_cb && !skip_act_cb_create ? 0 : row_major_act_cb_num_tiles,
             .page_size = input_tile_size,
             .data_format = conv_input_df,
-            .overlapped_by_cb = overlap_act_cb ? std::optional<Conv2dCb>(Conv2dCb::ACT) : std::nullopt});
+            .overlapped_by_cb =
+                overlap_act_cb && !skip_act_cb_create ? std::optional<Conv2dCb>(Conv2dCb::ACT) : std::nullopt});
     }
 
     // Output CB

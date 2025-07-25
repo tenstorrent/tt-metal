@@ -36,7 +36,8 @@ struct ExecuteAllReduceCreateQkvHeads {
         std::optional<const uint32_t> num_kv_heads,
         std::optional<const uint32_t> slice_size = std::nullopt,
         const std::optional<MemoryConfig>& final_memory_config = std::nullopt,
-        std::optional<const DataType> dtype = std::nullopt);
+        std::optional<const DataType> dtype = std::nullopt,
+        bool use_noc1_only = false);
 };
 
 }  // namespace transformer

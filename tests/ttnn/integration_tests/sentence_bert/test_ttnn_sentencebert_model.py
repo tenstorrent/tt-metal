@@ -8,9 +8,9 @@ import transformers
 import pytest
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.sentence_bert.ttnn.common import custom_preprocessor, preprocess_inputs
-from models.experimental.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
-from models.experimental.sentence_bert.ttnn.ttnn_sentence_bert_model import TtnnSentenceBertModel
+from models.demos.sentence_bert.ttnn.common import custom_preprocessor, preprocess_inputs
+from models.demos.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
+from models.demos.sentence_bert.ttnn.ttnn_sentence_bert_model import TtnnSentenceBertModel
 
 
 @pytest.mark.parametrize(
@@ -29,7 +29,11 @@ def test_ttnn_sentence_bert_model(device, inputs):
     reference_module = BertModel(config).to(torch.bfloat16)
     reference_module.load_state_dict(transformers_model.state_dict())
     reference_out = reference_module(
-        input_ids, attention_mask=extended_mask, token_type_ids=token_type_ids, position_ids=position_ids
+        input_ids,
+        extended_attention_mask=extended_mask,
+        token_type_ids=token_type_ids,
+        position_ids=position_ids,
+        attention_mask=attention_mask,
     )
     parameters = preprocess_model_parameters(
         initialize_model=lambda: reference_module,
@@ -37,9 +41,20 @@ def test_ttnn_sentence_bert_model(device, inputs):
         device=device,
     )
     ttnn_module = TtnnSentenceBertModel(parameters=parameters, config=config)
-    ttnn_input_ids, ttnn_token_type_ids, ttnn_position_ids, ttnn_attention_mask = preprocess_inputs(
-        input_ids, token_type_ids, position_ids, extended_mask, device
+    (
+        ttnn_input_ids,
+        ttnn_token_type_ids,
+        ttnn_position_ids,
+        ttnn_extended_attention_mask,
+        ttnn_attention_mask,
+    ) = preprocess_inputs(input_ids, token_type_ids, position_ids, extended_mask, attention_mask, device)
+    ttnn_out = ttnn_module(
+        ttnn_input_ids,
+        ttnn_extended_attention_mask,
+        ttnn_attention_mask,
+        ttnn_token_type_ids,
+        ttnn_position_ids,
+        device=device,
     )
-    ttnn_out = ttnn_module(ttnn_input_ids, ttnn_attention_mask, ttnn_token_type_ids, ttnn_position_ids, device=device)
-    ttnn_out = ttnn.to_torch(ttnn_out[0]).squeeze(dim=1)
-    assert_with_pcc(reference_out.last_hidden_state, ttnn_out, 0.986)
+    ttnn_out = ttnn.to_torch(ttnn_out[0])
+    assert_with_pcc(reference_out.post_processed_output, ttnn_out, 0.986)

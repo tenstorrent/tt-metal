@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdio>
-
 #include "moreh_dot_backward_device_operation.hpp"
 #include <tt-metalium/util.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -102,7 +100,7 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
 
     std::vector<uint32_t> compute_kernel_args = {};
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
 
     const auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_dot_backward/device/kernels/moreh_dot_backward.cpp";
@@ -146,8 +144,8 @@ void MorehDotBackwardOperation::SingleCore::override_runtime_arguments(
     const auto& output_grad_buffer = tensor_args.output_grad.buffer();
     const auto& input_buffer = tensor_args.input.buffer();
     const auto& other_buffer = tensor_args.other.buffer();
-    const auto input_grad_buffer = tensor_return_value.at(0);
-    const auto other_grad_buffer = tensor_return_value.at(1);
+    const auto& input_grad_buffer = tensor_return_value.at(0);
+    const auto& other_grad_buffer = tensor_return_value.at(1);
 
     {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, CoreCoord{0, 0});

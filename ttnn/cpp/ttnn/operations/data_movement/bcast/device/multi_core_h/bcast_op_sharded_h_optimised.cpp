@@ -17,8 +17,8 @@ using namespace tt::constants;
 namespace ttnn::operations::data_movement {
 operation::ProgramWithCallbacks bcast_sharded_h_optimised(
     const Tensor& a, const Tensor& b, const Tensor& output, BcastOpMath bcast_math /*, BcastOpDim bcast_dim*/) {
-    const auto ashape = a.padded_shape();
-    const auto bshape = b.padded_shape();
+    const auto& ashape = a.padded_shape();
+    const auto& bshape = b.padded_shape();
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1, C = ashape.rank() >= 3 ? ashape[-3] : 1, H = ashape[-2],
              W = ashape[-1];
     uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1, bC = bshape.rank() >= 3 ? bshape[-3] : 1, bH = bshape[-2],
@@ -210,8 +210,8 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(
         auto dst_buffer = output_tensors.at(0).buffer();
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
         UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
-        auto a = input_tensors.at(0);
-        auto b = input_tensors.at(1);
+        const auto& a = input_tensors.at(0);
+        const auto& b = input_tensors.at(1);
         auto shard_spec = a.shard_spec().value();
         auto all_cores = shard_spec.grid;
         uint32_t ncores = shard_spec.num_cores();

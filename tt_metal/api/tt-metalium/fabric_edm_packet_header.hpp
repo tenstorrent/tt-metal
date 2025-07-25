@@ -90,11 +90,10 @@ static_assert(
 struct NocUnicastCommandHeader {
     uint64_t noc_address;
 };
-
+#define NOC_SCATTER_WRITE_MAX_CHUNKS 2
 struct NocUnicastScatterCommandHeader {
-    uint64_t noc_address1;
-    uint64_t noc_address2;
-    uint16_t chunk_size1;
+    uint64_t noc_address[NOC_SCATTER_WRITE_MAX_CHUNKS];
+    uint16_t chunk_size[NOC_SCATTER_WRITE_MAX_CHUNKS - 1];  // last chunk size is implicit
 };
 struct NocUnicastInlineWriteCommandHeader {
     uint64_t noc_address;
@@ -305,23 +304,18 @@ struct PacketHeaderBase {
         const NocUnicastScatterCommandHeader& noc_unicast_scatter_command_header, size_t payload_size_bytes) volatile {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
         this->noc_send_type = NOC_UNICAST_SCATTER_WRITE;
-        auto noc_address_components = get_noc_address_components(noc_unicast_scatter_command_header.noc_address1);
-        auto noc_addr1 = safe_get_noc_addr(
-            noc_address_components.first.x,
-            noc_address_components.first.y,
-            noc_address_components.second,
-            edm_to_local_chip_noc);
-
-        noc_address_components = get_noc_address_components(noc_unicast_scatter_command_header.noc_address2);
-        auto noc_addr2 = safe_get_noc_addr(
-            noc_address_components.first.x,
-            noc_address_components.first.y,
-            noc_address_components.second,
-            edm_to_local_chip_noc);
-
-        this->command_fields.unicast_scatter_write.noc_address1 = noc_addr1;
-        this->command_fields.unicast_scatter_write.noc_address2 = noc_addr2;
-        this->command_fields.unicast_scatter_write.chunk_size1 = noc_unicast_scatter_command_header.chunk_size1;
+        for (int i = 0; i < NOC_SCATTER_WRITE_MAX_CHUNKS; i++) {
+            auto noc_address_components = get_noc_address_components(noc_unicast_scatter_command_header.noc_address[i]);
+            auto noc_addr = safe_get_noc_addr(
+                noc_address_components.first.x,
+                noc_address_components.first.y,
+                noc_address_components.second,
+                edm_to_local_chip_noc);
+            this->command_fields.unicast_scatter_write.noc_address[i] = noc_addr;
+            if (i < NOC_SCATTER_WRITE_MAX_CHUNKS - 1) {
+                this->command_fields.unicast_scatter_write.chunk_size[i] = noc_unicast_scatter_command_header.chunk_size[i];
+            }
+        }
         this->payload_size_bytes = payload_size_bytes;
 #else
         TT_THROW("Calling to_noc_unicast_write from host is unsupported");
@@ -560,11 +554,30 @@ struct LowLatencyMeshRoutingFields {
     static constexpr uint32_t NOOP = 0b0000;
     static constexpr uint32_t FORWARD_EAST = 0b0001;
     static constexpr uint32_t FORWARD_WEST = 0b0010;
-    static constexpr uint32_t FORWARD_NORTH = 0b0100;
-    static constexpr uint32_t FORWARD_SOUTH = 0b1000;
     static constexpr uint32_t WRITE_AND_FORWARD_EW = 0b0011;
+    static constexpr uint32_t FORWARD_NORTH = 0b0100;
+    static constexpr uint32_t WRITE_AND_FORWARD_NE = 0b0101;
+    static constexpr uint32_t WRITE_AND_FORWARD_NW = 0b0110;
+    static constexpr uint32_t WRITE_AND_FORWARD_NEW = 0b0111;
+    static constexpr uint32_t FORWARD_SOUTH = 0b1000;
+    static constexpr uint32_t WRITE_AND_FORWARD_SE = 0b1001;
+    static constexpr uint32_t WRITE_AND_FORWARD_SW = 0b1010;
+    static constexpr uint32_t WRITE_AND_FORWARD_SEW = 0b1011;
     static constexpr uint32_t WRITE_AND_FORWARD_NS = 0b1100;
-    uint32_t value;
+    static constexpr uint32_t WRITE_AND_FORWARD_NSE = 0b1101;
+    static constexpr uint32_t WRITE_AND_FORWARD_NSW = 0b1110;
+    static constexpr uint32_t WRITE_AND_FORWARD_NSEW = 0b1111;
+
+    union {
+        uint32_t value;  // Referenced for fast increment when updating hop count in packet header.
+                         // Also used when doing noc inline dword write to update packet header in next hop
+                         // router.
+        struct {
+            uint16_t hop_index;
+            uint8_t branch_east_offset;  // Referenced when updating hop index for mcast east branch
+            uint8_t branch_west_offset;  // Referenced when updating hop index for mcast east branch
+        };
+    };
 };
 
 struct LowLatencyMeshPacketHeader : public PacketHeaderBase<LowLatencyMeshPacketHeader> {
@@ -578,10 +591,19 @@ struct LowLatencyMeshPacketHeader : public PacketHeaderBase<LowLatencyMeshPacket
 };
 
 struct MeshPacketHeader : public PacketHeaderBase<MeshPacketHeader> {
-    uint16_t dst_start_chip_id;
-    uint16_t dst_start_mesh_id;
-    uint16_t mcast_params[4];
+    union {
+        struct {
+            uint16_t dst_start_chip_id;
+            uint16_t dst_start_mesh_id;
+        };
+        uint32_t dst_start_node_id;  // Used for efficiently writing the dst info
+    };
+    union {
+        uint16_t mcast_params[4];  // Array representing the hops in each direction
+        uint64_t mcast_params_64;  // Used for efficiently writing to the mcast_params array
+    };
     uint8_t is_mcast_active;
+    uint8_t reserved[7];
     void to_chip_unicast_impl(uint8_t distance_in_hops) {}
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) {}
 
@@ -594,7 +616,8 @@ static_assert(sizeof(PacketHeader) == 32, "sizeof(PacketHeader) is not equal to 
 // Host code still hardcoded to sizeof(PacketHeader) so we need to keep this check
 static_assert(
     sizeof(LowLatencyPacketHeader) == sizeof(PacketHeader), "sizeof(LowLatencyPacketHeader) is not equal to 32B");
-static_assert(sizeof(LowLatencyMeshPacketHeader) == 64, "sizeof(LowLatencyPacketHeader) is not equal to 64B");
+static_assert(sizeof(LowLatencyMeshPacketHeader) == 64, "sizeof(LowLatencyMeshPacketHeader) is not equal to 64B");
+static_assert(sizeof(MeshPacketHeader) == 48, "sizeof(MeshPacketHeader) is not equal to 48B");
 
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)

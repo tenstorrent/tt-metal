@@ -49,6 +49,9 @@ struct ProgramCache;
 }  // namespace tt_metal
 }  // namespace tt
 
+namespace tt::tt_fabric {
+class FabricNodeId;
+}
 namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
@@ -68,8 +71,10 @@ private:
     // Resource management class / RAII wrapper for *physical devices* of the mesh
     class ScopedDevices {
     private:
-        std::map<chip_id_t, IDevice*> opened_devices_;
-        std::vector<IDevice*> devices_;
+        std::vector<MaybeRemote<IDevice*>> devices_;
+
+        std::vector<IDevice*> local_devices_;
+        std::map<chip_id_t, IDevice*> opened_local_devices_;
 
     public:
         // Constructor acquires physical resources
@@ -81,7 +86,7 @@ private:
             const DispatchCoreConfig& dispatch_core_config,
             const MeshDeviceConfig& config);
         ScopedDevices(
-            const std::vector<int>& device_ids,
+            const std::vector<MaybeRemote<int>>& device_ids,
             size_t l1_small_size,
             size_t trace_region_size,
             size_t num_command_queues,
@@ -94,9 +99,15 @@ private:
         ScopedDevices& operator=(const ScopedDevices&) = delete;
 
         // Returns the list of devices opened by the root mesh device (i.e. not submeshes).
-        const std::vector<IDevice*>& root_devices() const;
+        const std::vector<IDevice*>& local_root_devices() const;
+
+        const std::vector<MaybeRemote<IDevice*>>& root_devices() const;
     };
 
+    // THREAD SAFETY: Enqueueing work on the device should be thread safe. Operations that modify state should be
+    // protected by api_mutex_. Operations that reconfigure global state (e.g. setting subdevices or enabling tracing)
+    // on the device may not be thread safe.
+    std::mutex api_mutex_;
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
@@ -122,6 +133,8 @@ private:
     std::vector<IDevice*> get_row_major_devices(const MeshShape& new_shape) const;
 
     std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
+
+    std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
 
 public:
     MeshDevice(
@@ -154,8 +167,7 @@ public:
 
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>&logical_cores) const override;
     std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const override;
-    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment() override;
-
+    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
@@ -218,8 +230,6 @@ public:
         size_t worker_l1_size,
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) override;
-    void reset_cores() override;
-    void initialize_and_launch_firmware() override;
     void init_command_queue_host() override;
     void init_command_queue_device() override;
     bool compile_fabric() override;
@@ -227,6 +237,7 @@ public:
     void init_fabric() override;
     bool close() override;
     void enable_program_cache() override;
+    void clear_program_cache() override;
     void disable_and_clear_program_cache() override;
     program_cache::detail::ProgramCache& get_program_cache() override;
     std::size_t num_program_cache_entries() override;
@@ -247,9 +258,6 @@ public:
     void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
-    // TODO #16526: Temporary api until migration to actual fabric is complete
-    std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     bool is_mmio_capable() const override;
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
 
@@ -260,6 +268,7 @@ public:
     std::vector<IDevice*> get_devices() const;
     IDevice* get_device(chip_id_t physical_device_id) const;
     IDevice* get_device(const MeshCoordinate& coord) const;
+    tt_fabric::FabricNodeId get_device_fabric_node_id(const MeshCoordinate& coord) const;
 
     DeviceIds get_device_ids() const;
 
@@ -270,6 +279,10 @@ public:
     size_t num_rows() const;
     size_t num_cols() const;
     IDevice* get_device(size_t row_idx, size_t col_idx) const;
+
+    // Returns true if the coordinate is local to this mesh device.
+    // Throws if the coordinate is out of bounds of this mesh device.
+    bool is_local(const MeshCoordinate& coord) const;
 
     const MeshShape& shape() const;
 

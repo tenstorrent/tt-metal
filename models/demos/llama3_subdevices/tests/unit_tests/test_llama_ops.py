@@ -55,7 +55,6 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_embedding import r
 )
 def test_llama_tg_LayerNorm(
     device,
-    use_program_cache,
     input_width,
     num_devices,
     is_rmsnorm,
@@ -163,19 +162,19 @@ def test_llama_tg_LayerNorm(
     "start_core, sub_core_grids",
     [
         (
-            ttnn.CoreCoord(1, 0),
+            ttnn.CoreCoord(3, 0),
             ttnn.CoreRangeSet(
                 [
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+                    # ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(6, 9)),
                 ]
             ),
         ),
     ],
 )
-@pytest.mark.parametrize("q_layout", [ttnn.TILE_LAYOUT], ids=["tile"])
+@pytest.mark.parametrize("q_layout", [ttnn.ROW_MAJOR_LAYOUT], ids=["row_major"])
 def test_llama_tg_ScaledDotProductAttentionDecode(
-    device, use_program_cache, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids, q_layout
+    device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids, q_layout
 ):
     run_test_sdpa_decode_paged_attention_single_iter(
         device,
@@ -212,7 +211,7 @@ def test_llama_tg_ScaledDotProductAttentionDecode(
 @pytest.mark.parametrize("num_heads", [1])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("pcc", [0.9995])
-def test_llama_tg_BinaryDeviceOperation(use_program_cache, device, batch_size, seq_len, dim, num_heads, dtype, pcc):
+def test_llama_tg_BinaryDeviceOperation(device, batch_size, seq_len, dim, num_heads, dtype, pcc):
     in_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -275,31 +274,49 @@ def test_llama_tg_BinaryDeviceOperation(use_program_cache, device, batch_size, s
         ),
     ],
 )
-@pytest.mark.parametrize("q_layout", [ttnn.ROW_MAJOR_LAYOUT], ids=["row_major"])
-def test_llama_tg_ScaledDotProductAttentionDecodeRMQ(
-    device, use_program_cache, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids, q_layout
+@pytest.mark.parametrize(
+    "chunk_sizes, cur_positions",
+    (([0, 128, 256, 512], [31, 63, 95, 127, 255, 511, 1023, 2559, 4095]),),
+)
+def test_llama_tg_ScaledDotProductAttentionDecodeSweep(
+    device,
+    chunk_sizes,
+    cur_positions,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    dtype,
+    grid_size,
+    q_dtype,
+    start_core,
+    sub_core_grids,
 ):
-    run_test_sdpa_decode_paged_attention_single_iter(
-        device,
-        b,
-        nh,
-        nkv,
-        s,
-        d,
-        dtype,
-        grid_size,
-        q_dtype,
-        cur_pos=127,
-        block_size=32,
-        q_chunk_size=0,
-        k_chunk_size=0,
-        sharded_in=True,
-        sharded_out=True,
-        start_core=start_core,
-        sub_core_grids=sub_core_grids,
-        q_layout=q_layout,
-    )
-    assert device.num_program_cache_entries() == 1
+    for chunk_size in chunk_sizes:
+        for cur_pos in cur_positions:
+            run_test_sdpa_decode_paged_attention_single_iter(
+                device,
+                b,
+                nh,
+                nkv,
+                s,
+                d,
+                dtype,
+                grid_size,
+                q_dtype,
+                cur_pos=cur_pos,
+                block_size=32,
+                q_chunk_size=chunk_size,
+                k_chunk_size=chunk_size,
+                sharded_in=True,
+                sharded_out=True,
+                start_core=start_core,
+                sub_core_grids=sub_core_grids,
+            )
+
+    # OP caches on chunk size
+    assert device.num_program_cache_entries() == len(chunk_sizes)
 
 
 @skip_for_blackhole("Requires eth connected devices to run, see #12349")
@@ -330,7 +347,6 @@ def test_llama_tg_NLPCreateHeadsDecodeDeviceOperation(
     n_local_kv_heads,
     head_dim,
     overlap_coregrid,
-    use_program_cache,
     sub_core_grids,
 ):
     batch_offset_tensor = torch.tensor([batch_offset], dtype=torch.int32)
@@ -376,7 +392,6 @@ def test_llama_tg_NLPConcatHeadsDecodeDeviceOperation(
     head_dim,
     batch_size,
     sub_core_grids,
-    use_program_cache,
 ):
     torch.manual_seed(0)
 
@@ -404,7 +419,6 @@ def test_llama_tg_PagedUpdateCacheDeviceOperation(
     num_heads,
     input_dtype,
     cache_dtype,
-    use_program_cache,
     pcc,
 ):
     run_test_paged_fused_update_cache_decode(
@@ -443,7 +457,6 @@ def test_llama_tg_RowMajorPagedUpdateCacheDeviceOperation(
     num_heads,
     input_dtype,
     cache_dtype,
-    use_program_cache,
     pcc,
 ):
     for _ in range(2):
@@ -510,7 +523,6 @@ def test_llama_tg_RowMajorRotaryEmbeddingLlamaFusedQK(
     datatype,
     pcc,
     mesh_device,
-    use_program_cache,
 ):
     run_test_row_major_rotary_embedding_llama(
         mesh_device, batch, seq_len, pcc, n_heads, n_kv_heads, head_dim, 1, datatype, fuse_qk=True

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@ from models.utility_functions import run_for_wormhole_b0
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_run_vgg_unet_inference(device, use_program_cache, model_location_generator):
+def test_run_vgg_unet_inference(device, model_location_generator):
     run_vgg_unet_inference(device, model_location_generator)
 
 
@@ -20,7 +20,6 @@ def test_run_vgg_unet_inference(device, use_program_cache, model_location_genera
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1843200}], indirect=True)
 def test_run_vgg_unet_trace_inference(
     device,
-    use_program_cache,
     model_location_generator,
 ):
     run_vgg_unet_trace_inference(
@@ -35,7 +34,6 @@ def test_run_vgg_unet_trace_inference(
 )
 def test_run_vgg_unet_trace_2cqs_inference(
     device,
-    use_program_cache,
     model_location_generator,
 ):
     vgg_unet_trace_2cq = VggUnetTrace2CQ()

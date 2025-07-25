@@ -6,6 +6,7 @@
 #include "joint_sdpa_op.hpp"
 
 #include <optional>
+#include <string>
 #include <cmath>
 
 #include <tt-metalium/buffer.hpp>
@@ -47,8 +48,8 @@ operation::ProgramWithCallbacks joint_sdpa(
     V_joint: B x NH x L x DH
     */
 
-    const auto q_shape = input_tensor_q.logical_shape();
-    const auto joint_q_shape = joint_tensor_q.logical_shape();
+    const auto& q_shape = input_tensor_q.logical_shape();
+    const auto& joint_q_shape = joint_tensor_q.logical_shape();
     const uint32_t B = q_shape[0], NH = q_shape[1], N = q_shape[2], DH = q_shape[3];
     const uint32_t L = joint_q_shape[2];
 
@@ -381,7 +382,7 @@ operation::ProgramWithCallbacks joint_sdpa(
         scale_union.u,
     };
 
-    std::map<string, string> defines;
+    std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
     defines["LOG2_STATS_GRANULARITY"] = std::to_string(log2_stats_granularity);
     defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);

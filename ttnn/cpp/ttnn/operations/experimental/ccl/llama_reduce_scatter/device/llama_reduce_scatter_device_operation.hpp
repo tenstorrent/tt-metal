@@ -16,6 +16,7 @@
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -29,6 +30,7 @@ struct LlamaReduceScatterDeviceOperation {
         const uint32_t ring_devices;
         const uint32_t num_links;
         tt::tt_fabric::Topology topology;
+        bool use_noc1_only;
     };
     struct tensor_args_t {
         const Tensor input_tensor;
@@ -75,7 +77,8 @@ struct LlamaReduceScatterDeviceOperation {
             const ttnn::MeshCoordinate& mesh_coordinate,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value,
-            tt::tt_metal::Program& program);
+            tt::tt_metal::Program& program,
+            const std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& signaler);
         static void override_runtime_arguments_per_program(
             const shared_variables_t& shared_variables,
             tt::tt_metal::Program& program,
@@ -107,6 +110,9 @@ struct LlamaReduceScatterDeviceOperation {
 
     // Create the output tensors based on the operation attributes and tensor args
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+    static std::tuple<CoreRangeSet, CoreRangeSet> get_rs_core_grids(
+        const LlamaReduceScatterDeviceOperation::operation_attributes_t& operation_attributes,
+        const LlamaReduceScatterDeviceOperation::tensor_args_t& tensor_args);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const ttnn::Tensor& input_tensor,
@@ -118,7 +124,8 @@ struct LlamaReduceScatterDeviceOperation {
         uint32_t ring_devices,
         uint32_t num_links,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear);
+        tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear,
+        bool use_noc1_only = false);
 };
 }  // namespace ttnn::operations::experimental::ccl
 

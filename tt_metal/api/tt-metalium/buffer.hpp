@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -145,7 +145,6 @@ struct BufferConfig {
     DeviceAddr size;       // Size in bytes
     DeviceAddr page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type;
-    TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED;
 };
 
 using InterleavedBufferConfig = BufferConfig;
@@ -159,6 +158,45 @@ struct ShardedBufferConfig {
     BufferType buffer_type = BufferType::L1;
     TensorMemoryLayout buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED;
     ShardSpecBuffer shard_parameters;
+};
+
+class BufferShardingArgs {
+public:
+    BufferShardingArgs() = default;
+    BufferShardingArgs(std::nullopt_t) {}
+
+    BufferShardingArgs(BufferDistributionSpec buffer_distribution_spec) :
+        buffer_distribution_spec_(std::move(buffer_distribution_spec)),
+        buffer_layout_(TensorMemoryLayout::BLOCK_SHARDED) {}
+    BufferShardingArgs(std::optional<BufferDistributionSpec> buffer_distribution_spec) :
+        buffer_distribution_spec_(std::move(buffer_distribution_spec)),
+        buffer_layout_(
+            buffer_distribution_spec_.has_value() ? TensorMemoryLayout::BLOCK_SHARDED
+                                                  : TensorMemoryLayout::INTERLEAVED) {}
+
+    BufferShardingArgs(ShardSpecBuffer shard_spec, TensorMemoryLayout buffer_layout) :
+        shard_spec_(std::move(shard_spec)), buffer_layout_(buffer_layout) {}
+    BufferShardingArgs(std::optional<ShardSpecBuffer> shard_spec, TensorMemoryLayout buffer_layout) :
+        shard_spec_(std::move(shard_spec)), buffer_layout_(buffer_layout) {}
+
+    BufferShardingArgs(
+        std::optional<BufferDistributionSpec> buffer_distribution_spec,
+        std::optional<ShardSpecBuffer> shard_spec,
+        TensorMemoryLayout buffer_layout) :
+        buffer_distribution_spec_(std::move(buffer_distribution_spec)),
+        shard_spec_(std::move(shard_spec)),
+        buffer_layout_(buffer_layout) {}
+
+    const std::optional<BufferDistributionSpec>& buffer_distribution_spec() const { return buffer_distribution_spec_; }
+
+    const std::optional<ShardSpecBuffer>& shard_spec() const { return shard_spec_; }
+
+    TensorMemoryLayout buffer_layout() const { return buffer_layout_; }
+
+private:
+    std::optional<BufferDistributionSpec> buffer_distribution_spec_;
+    std::optional<ShardSpecBuffer> shard_spec_;
+    TensorMemoryLayout buffer_layout_ = TensorMemoryLayout::INTERLEAVED;
 };
 
 bool is_sharded(const TensorMemoryLayout& layout);
@@ -179,22 +217,12 @@ class Buffer final : public std::enable_shared_from_this<Buffer> {
     };
 
 public:
-    // Buffer::create APIs provide single entry point for creating buffers with ShardSpec or BufferDistributionSpec
-    // - Validation is done in Buffer constructor with validate_buffer_parameters
-    // - Only one of ShardSpec or BufferDistributionSpec can be set
-    // TODO: buffer_layout should not be needed with BufferDistributionSpec since layout is implicit in the spec
-    // - ie. It's possible to fully unify interleaved and sharding
-    // - For now, must pass TensorMemoryLayout::BLOCK_SHARDED (seems like the most sensible option)
-    // TODO: Unify Buffer parameters with MeshBuffer (ie. use DeviceLocalBufferConfig as well)
-    // - BufferDistributionSpec is added to the end with default std::nullopt value to avoid breaking existing usages
-    // - Eventually, do we even need to expose single-device Buffer::create to users?
     static std::shared_ptr<Buffer> create(
         IDevice* device,
         DeviceAddr size,
         DeviceAddr page_size,
         BufferType buffer_type,
-        TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        const std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>>& shard_parameter = std::nullopt,
+        const BufferShardingArgs& sharding_args = std::nullopt,
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
     static std::shared_ptr<Buffer> create(
@@ -203,8 +231,7 @@ public:
         DeviceAddr size,
         DeviceAddr page_size,
         BufferType buffer_type,
-        TensorMemoryLayout buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        const std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>>& shard_parameter = std::nullopt,
+        const BufferShardingArgs& sharding_args = std::nullopt,
         std::optional<bool> bottom_up = std::nullopt,
         std::optional<SubDeviceId> sub_device_id = std::nullopt);
 
@@ -248,7 +275,7 @@ public:
 
     bool bottom_up() const { return bottom_up_; }
 
-    DeviceAddr page_address(uint32_t bank_id, uint32_t page_index) const;
+    DeviceAddr page_address(DeviceAddr bank_id, DeviceAddr page_index) const;
 
     uint32_t alignment() const;
     DeviceAddr aligned_page_size() const;
@@ -257,6 +284,7 @@ public:
 
     // SHARDED API STARTS HERE
     const std::optional<BufferDistributionSpec>& buffer_distribution_spec() const;
+    bool has_shard_spec() const { return shard_spec_.has_value(); }
     ShardSpecBuffer shard_spec() const;
     void set_shard_spec(const ShardSpecBuffer& shard_spec);
     std::optional<uint32_t> num_cores() const;
@@ -279,8 +307,7 @@ public:
         DeviceAddr size,
         DeviceAddr page_size,
         BufferType buffer_type,
-        TensorMemoryLayout buffer_layout,
-        const std::optional<std::variant<ShardSpecBuffer, BufferDistributionSpec>>& shard_parameter,
+        const BufferShardingArgs& sharding_args,
         std::optional<bool> bottom_up,
         std::optional<SubDeviceId> sub_device_id,
         bool owns_data,
@@ -300,7 +327,7 @@ private:
     void deallocate_impl();
     friend void DeallocateBuffer(Buffer& buffer);
 
-    DeviceAddr translate_page_address(uint64_t offset, uint32_t bank_id) const;
+    DeviceAddr translate_page_address(DeviceAddr offset, uint32_t bank_id) const;
 
     IDevice* const device_;
     const DeviceAddr size_;  // Size in bytes
@@ -319,7 +346,7 @@ private:
 
     // These members must be only accessed on the device worker thread
     DeviceAddr page_size_;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
-    std::optional<ShardSpecBuffer> shard_parameters_;
+    std::optional<ShardSpecBuffer> shard_spec_;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping_;
 
     std::optional<BufferDistributionSpec> buffer_distribution_spec_;

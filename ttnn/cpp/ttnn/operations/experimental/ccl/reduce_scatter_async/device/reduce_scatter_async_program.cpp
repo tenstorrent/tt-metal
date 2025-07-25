@@ -635,7 +635,7 @@ static ReduceScatterKernelHandles build_line_reduce_scatter_worker_ct(
     std::vector<uint32_t> compute_kernel_args = {};
     constexpr bool fp32_dest_acc_en = false;
     constexpr bool math_approx_mode = false;
-    std::map<string, string> eltwise_defines = ttnn::operations::binary::utils::get_defines(reduce_op);
+    std::map<std::string, std::string> eltwise_defines = ttnn::operations::binary::utils::get_defines(reduce_op);
     auto math_kernel_id = tt::tt_metal::CreateKernel(
         program,
         reduce_kernel_path,
@@ -2469,32 +2469,15 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     const uint32_t line_size,
     const uint32_t line_index,
     ttnn::ccl::Topology topology,
-    std::optional<size_t> num_links_preferred,
+    size_t num_links,
     const tt::tt_metal::GlobalSemaphore& from_remote_sem,
     const tt::tt_metal::GlobalSemaphore& to_remote_sem,
     const std::optional<SubDeviceId>& sub_device_id) {
     auto program = tt::tt_metal::Program();
 
     fabric_lifetime_mode fabric_mode = fabric_lifetime_mode::PERSISTENT;
-    // Link Counting Scheme: By default use all the links between the current device
-    // and its neighbors. If a user specifies a value through num_links_preferred, use
-    // that instead (and cap at the maximum number of physical links).
-    const size_t max_num_links = num_links_preferred.value_or(std::numeric_limits<std::size_t>::max());
-    std::optional<size_t> num_links = std::nullopt;
-    std::array<std::pair<tt::tt_metal::IDevice*, std::optional<tt::tt_metal::IDevice*>>, 2> device_pairs = {
-        std::pair<tt::tt_metal::IDevice*, std::optional<tt::tt_metal::IDevice*>>{target_device, forward_device},
-        std::pair<tt::tt_metal::IDevice*, std::optional<tt::tt_metal::IDevice*>>{target_device, backward_device}};
 
-    for (const auto& pair : device_pairs) {
-        if (!num_links.has_value()) {
-            if (pair.second.has_value()) {
-                auto remote_chip_id = pair.second.value()->id();
-                num_links = std::min(target_device->get_ethernet_sockets(remote_chip_id).size(), max_num_links);
-            }
-        }
-    }
-
-    TT_FATAL(num_links.has_value(), "No links were found between the current device and its neighbors.");
+    TT_FATAL(num_links > 0, "No links were specified for Reduce scatter op.");
     TT_FATAL(fabric_mode == fabric_lifetime_mode::PERSISTENT, "Reduce scatter doesn't support transient fabric mode");
     return reduce_scatter_async_on_instantiated_edm_fabric(
         program,
@@ -2513,7 +2496,7 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
         line_size,
         line_index,
         dim,
-        num_links.value(),
+        num_links,
         ttnn::ccl::Topology::Linear,
         fabric_mode,
         from_remote_sem,

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+
 import gc
 from loguru import logger
 import torch
@@ -32,7 +33,6 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-@pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
 def test_resnetblock2d(
     device,
     temb_shape,
@@ -43,12 +43,15 @@ def test_resnetblock2d(
     split_in,
     block,
     pcc,
-    use_program_cache,
+    is_ci_env,
     reset_seeds,
-    conv_weights_dtype,
 ):
     unet = UNet2DConditionModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        subfolder="unet",
+        local_files_only=is_ci_env,
     )
     unet.eval()
     state_dict = unet.state_dict()
@@ -60,7 +63,7 @@ def test_resnetblock2d(
     else:
         assert "Incorrect block name"
 
-    model_config = ModelOptimisations(conv_w_dtype=conv_weights_dtype)
+    model_config = ModelOptimisations()
     tt_resnet = TtResnetBlock2D(
         device,
         state_dict,
@@ -94,7 +97,6 @@ def test_resnetblock2d(
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_output_tensor, output_shape = tt_resnet.forward(ttnn_input_tensor, ttnn_temb_tensor, [B, C, H, W])
-    model_config.clear_weight_preprocess()
 
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
     output_tensor = output_tensor.reshape(input_shape[0], output_shape[1], output_shape[2], output_shape[0])

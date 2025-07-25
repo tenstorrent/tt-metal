@@ -1,6 +1,6 @@
 include "tensor_spec.fbs";
 include "mesh_shape.fbs";
-include "mesh_coordinate.fbs";
+include "tt-metalium/serialized_descriptors/mesh_coordinate.fbs";
 
 namespace ttnn.flatbuffer;
 
@@ -17,26 +17,13 @@ struct InlineFileStorage {
 
 table TensorShard {
     buffer: TensorBuffer;
-    mesh_coordinate: MeshCoordinate;
-}
-
-union TensorType {
-    ReplicatedTensor = 1,
-    ShardedTensor = 2,
-}
-
-table ReplicatedTensor {
-    buffer: TensorBuffer;
-}
-
-table ShardedTensor {
-    mesh_shape: MeshShape;
-    shards: [TensorShard];
+    mesh_coordinate: tt.tt_metal.distributed.flatbuffer.MeshCoordinate;
 }
 
 table Tensor {
     tensor_spec: TensorSpec;
-    tensor_type: TensorType;
+    mesh_shape: MeshShape;
+    shards: [TensorShard];
 }
 
 root_type Tensor;

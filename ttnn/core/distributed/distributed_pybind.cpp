@@ -18,6 +18,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/system_mesh.hpp>
 #include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -31,6 +32,20 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::distributed {
+
+class SystemMeshDescriptor {
+private:
+    MeshShape global_shape_;
+    MeshShape local_shape_;
+
+public:
+    SystemMeshDescriptor() :
+        global_shape_(tt::tt_metal::distributed::SystemMesh::instance().shape()),
+        local_shape_(tt::tt_metal::distributed::SystemMesh::instance().local_shape()) {}
+
+    const MeshShape& shape() const { return global_shape_; }
+    const MeshShape& local_shape() const { return local_shape_; }
+};
 
 namespace py = pybind11;
 
@@ -49,6 +64,7 @@ void py_module_types(py::module& module) {
     py::class_<MeshCoordinateRange>(module, "MeshCoordinateRange", "Range of coordinates within a mesh device.");
     py::class_<MeshCoordinateRangeSet>(
         module, "MeshCoordinateRangeSet", "Set of coordinate ranges within a mesh device.");
+    py::class_<SystemMeshDescriptor>(module, "SystemMeshDescriptor");
 }
 
 void py_module(py::module& module) {
@@ -149,6 +165,11 @@ void py_module(py::module& module) {
             return str.str();
         });
 
+    static_cast<py::class_<SystemMeshDescriptor>>(module.attr("SystemMeshDescriptor"))
+        .def(py::init([]() { return SystemMeshDescriptor(); }))
+        .def("shape", &SystemMeshDescriptor::shape)
+        .def("local_shape", &SystemMeshDescriptor::local_shape);
+
     auto py_mesh_device = static_cast<py::class_<MeshDevice, std::shared_ptr<MeshDevice>>>(module.attr("MeshDevice"));
     py_mesh_device
         .def(
@@ -245,6 +266,12 @@ void py_module(py::module& module) {
                Enable program cache across all devices in the mesh.
            )doc")
         .def(
+            "clear_program_cache",
+            &MeshDevice::clear_program_cache,
+            R"doc(
+               Clear program cache across all devices in the mesh.
+           )doc")
+        .def(
             "disable_and_clear_program_cache",
             &MeshDevice::disable_and_clear_program_cache,
             R"doc(
@@ -315,28 +342,6 @@ void py_module(py::module& module) {
 
                Returns:
                    SubDeviceManagerId: The ID of the created sub-device manager.
-           )doc")
-        .def(
-            "create_sub_device_manager_with_fabric",
-            [](MeshDevice& self, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
-                return self.create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
-            },
-            py::arg("sub_devices"),
-            py::arg("local_l1_size"),
-            R"doc(
-               Creates a sub-device manager for the given mesh device. This will automatically create a sub-device of ethernet cores for use with fabric.
-               Note that this is a temporary API until migration to actual fabric is complete.
-
-
-               Args:
-                   sub_devices (List[ttnn.SubDevice]): The sub-devices to include in the sub-device manager. No ethernet cores should be included in this list.
-                   This configuration will be used for each device in the MeshDevice.
-                   local_l1_size (int): The size of the local allocators of each sub-device. The global allocator will be shrunk by this amount.
-
-
-               Returns:
-                   SubDeviceManagerId: The ID of the created sub-device manager.
-                   SubDeviceId: The ID of the sub-device that will be used for fabric.
            )doc")
         .def(
             "load_sub_device_manager",
@@ -426,10 +431,20 @@ void py_module(py::module& module) {
     module.def("close_mesh_device", &close_mesh_device, py::arg("mesh_device"), py::kw_only());
 
     auto py_placement_shard = static_cast<py::class_<MeshMapperConfig::Shard>>(module.attr("PlacementShard"));
-    py_placement_shard.def(py::init([](size_t dim) { return MeshMapperConfig::Shard{dim}; }));
+    py_placement_shard.def(py::init([](int dim) { return MeshMapperConfig::Shard{dim}; }))
+        .def("__repr__", [](const MeshMapperConfig::Shard& shard) {
+            std::ostringstream str;
+            str << shard;
+            return str.str();
+        });
     auto py_placement_replicate =
         static_cast<py::class_<MeshMapperConfig::Replicate>>(module.attr("PlacementReplicate"));
-    py_placement_replicate.def(py::init([]() { return MeshMapperConfig::Replicate{}; }));
+    py_placement_replicate.def(py::init([]() { return MeshMapperConfig::Replicate{}; }))
+        .def("__repr__", [](const MeshMapperConfig::Replicate& replicate) {
+            std::ostringstream str;
+            str << replicate;
+            return str.str();
+        });
     auto py_mesh_mapper_config = static_cast<py::class_<MeshMapperConfig>>(module.attr("MeshMapperConfig"));
 
     py_mesh_mapper_config
@@ -649,18 +664,22 @@ void py_module(py::module& module) {
                 Tensor: The aggregated tensor.
             )doc");
     module.def(
-        "aggregate_as_tensor",
-        [](const std::vector<Tensor>& tensors) -> Tensor { return aggregate_as_tensor(tensors, AllGatherTensor{}); },
+        "from_host_shards",
+        [](const std::vector<Tensor>& tensors, const MeshShape& mesh_shape) -> Tensor {
+            return from_host_shards(tensors, mesh_shape);
+        },
         py::arg("tensors"),
+        py::arg("mesh_shape"),
         py::kw_only(),
         R"doc(
-            Aggregates a set of shards into one tensor. Device shards will remain on device and be packed into a multidevice storage object.
+            Creates a multi-device host tensor from a set of individual host shards.
 
             Args:
-                tensor (Tensor): The tensor to aggregate.
+                tensors (List[Tensor]): The tensor shards to aggregate.
+                mesh_shape (MeshShape): The shape of the mesh to aggregate the shards over.
 
             Returns:
-                Tensor: The aggregated tensor.
+                Tensor: The multi-device host tensor.
             )doc");
     module.def(
         "combine_device_tensors",

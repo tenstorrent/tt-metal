@@ -23,14 +23,14 @@ autograd::TensorPtr embedding_op(const autograd::TensorPtr& tensor, const autogr
     auto batch_size = embeddings_shape[0];
     auto sentence_size = embeddings_shape[1];
     auto embedding_dim = embeddings_shape[2];
-    embeddings = ttnn::reshape(embeddings, core::create_shape({batch_size, 1, sentence_size, embedding_dim}));
+    embeddings = ttnn::reshape(embeddings, ttnn::Shape({batch_size, 1, sentence_size, embedding_dim}));
     auto out = autograd::create_tensor(embeddings);
 
     autograd::GradFunction grad = [tensor, weight, out]() {
         auto out_grad = out->get_grad();
         auto tensor_shape = tensor->get_value().logical_shape();
         out_grad = ttnn::reshape(
-            out_grad, core::create_shape({1, 1, tensor_shape[0] * tensor_shape[-1], out_grad.logical_shape()[-1]}));
+            out_grad, ttnn::Shape({1, 1, tensor_shape[0] * tensor_shape[-1], out_grad.logical_shape()[-1]}));
         auto weight_grad = ttnn::embedding_bw(tensor->get_value(), weight->get_value(), out_grad);
         weight->add_grad(weight_grad);
     };

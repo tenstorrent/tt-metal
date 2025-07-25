@@ -43,7 +43,7 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim0) {
     uint32_t size = 64U;
     std::vector<float> data(size);
     std::iota(data.begin(), data.end(), 0);
-    auto shape = ttml::core::create_shape({size, 1, 1, 1});
+    auto shape = ttnn::Shape({size, 1, 1, 1});
     auto tensor = ttml::core::from_vector(data, shape, device);
 
     auto scattered_tensor = ttml::ttnn_fixed::distributed::scatter(tensor, /* dim */ 0);
@@ -70,7 +70,7 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim1) {
     uint32_t size = 64U;
     std::vector<float> data(size);
     std::iota(data.begin(), data.end(), 0);
-    auto shape = ttml::core::create_shape({1, size, 1, 1});
+    auto shape = ttnn::Shape({1, size, 1, 1});
     auto tensor = ttml::core::from_vector(data, shape, device);
 
     auto scattered_tensor = ttml::ttnn_fixed::distributed::scatter(tensor, /* dim */ 1);
@@ -97,7 +97,7 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim2) {
     uint32_t size = 64U;
     std::vector<float> data(size);
     std::iota(data.begin(), data.end(), 0);
-    auto shape = ttml::core::create_shape({1, 1, size, 1});
+    auto shape = ttnn::Shape({1, 1, size, 1});
     auto tensor = ttml::core::from_vector(data, shape, device);
 
     auto scattered_tensor = ttml::ttnn_fixed::distributed::scatter(tensor, /* dim */ 2);
@@ -124,7 +124,7 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim3) {
     uint32_t size = 64U;
     std::vector<float> data(size);
     std::iota(data.begin(), data.end(), 0);
-    auto shape = ttml::core::create_shape({1, 1, 1, size});
+    auto shape = ttnn::Shape({1, 1, 1, size});
     auto tensor = ttml::core::from_vector(data, shape, device);
 
     auto scattered_tensor = ttml::ttnn_fixed::distributed::scatter(tensor, /* dim */ 3);

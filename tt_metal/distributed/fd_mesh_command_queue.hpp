@@ -53,6 +53,9 @@ private:
         bool stall_first,
         bool stall_before_program,
         uint32_t program_runtime_id);
+    // Captures a dispatch command to reset the expected number of workers. Used when the worker
+    // counter on the host overflows.
+    void capture_expected_worker_count_reset_cmd(uint32_t previous_expected_workers, SubDeviceId sub_device);
     // For a given MeshWorkload, a subgrid is unused if no programs are run on it. Go signals
     // must be sent to this subgrid, to ensure consistent global state across the Virtual Mesh.
     // When running trace, the dispatch commands responsible for forwarding go signals must be
@@ -180,6 +183,10 @@ protected:
         std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
     void submit_memcpy_request(std::unordered_map<IDevice*, uint32_t>& num_txns_per_device, bool blocking) override;
+    void finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
+    MeshEvent enqueue_record_event_to_host_nolock(
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
 
 public:
     FDMeshCommandQueue(
@@ -187,7 +194,8 @@ public:
         uint32_t id,
         std::shared_ptr<ThreadPool>& dispatch_thread_pool,
         std::shared_ptr<ThreadPool>& reader_thread_pool,
-        std::shared_ptr<CQSharedState>& cq_shared_state);
+        std::shared_ptr<CQSharedState>& cq_shared_state,
+        std::function<std::lock_guard<std::mutex>()> lock_api_function);
 
     ~FDMeshCommandQueue() override;
 

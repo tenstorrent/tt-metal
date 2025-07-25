@@ -392,7 +392,6 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
         TT_THROW("deprecated code path for ");
     }
 
-   public:
     std::vector<tt_xy_pair> get_worker_slice_shapes() const { return this->worker_slice_shapes; }
     uint32_t get_worker_slice_size_bytes(std::size_t worker_index) {
         TT_ASSERT(this->worker_slice_shapes.size() > worker_index, "Invalid worker index {} in `worker_slice_shapes` of size {}", worker_index, worker_slice_shapes.size());
@@ -497,8 +496,8 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
 
         if (row_major) {
             this->num_cols = input_tensor.padded_shape()[-1];
-            auto input_shape = input_tensor.padded_shape();
-            auto output_shape = output_tensor.padded_shape();
+            const auto& input_shape = input_tensor.padded_shape();
+            const auto& output_shape = output_tensor.padded_shape();
             this->num_rows =
                 std::accumulate(input_shape.cbegin() + slice_dim, input_shape.cend() - 1, 1, std::multiplies<uint32_t>());
             this->row_offset =
@@ -507,7 +506,7 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
                 num_rows;
         } else {
             auto input_shape = input_tensor.padded_shape();
-            auto output_shape = output_tensor.padded_shape();
+            const auto& output_shape = output_tensor.padded_shape();
             auto input_tile = input_tensor.tensor_spec().tile();
             auto output_tile = output_tensor.tensor_spec().tile();
             this->num_cols = input_shape[-1] / input_tile.get_width();

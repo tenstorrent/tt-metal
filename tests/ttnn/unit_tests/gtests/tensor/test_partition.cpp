@@ -40,6 +40,7 @@ using ::tt::tt_metal::Tensor;
 using ::ttnn::experimental::xtensor::chunk;
 using ::ttnn::experimental::xtensor::chunk_ndim;
 using ::ttnn::experimental::xtensor::concat;
+using ::ttnn::experimental::xtensor::concat_ndim;
 
 TEST(PartitionTest, ChunkBasicNonDivisible3) {
     // Create a 1D tensor: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
@@ -103,32 +104,32 @@ TEST(PartitionTest, DefaultAxis) {
     xt::xarray<double> b = {{5.0, 6.0}, {7.0, 8.0}};
     std::vector<xt::xarray<double>> input = {a, b};
 
-    xt::xarray<double> result = concat(input);  // axis=0 by default
+    auto result = concat(input);  // axis=0 by default
     xt::xarray<double> expected = {{1.0, 2.0}, {3.0, 4.0}, {5.0, 6.0}, {7.0, 8.0}};
 
-    EXPECT_TRUE(xt::allclose(result, expected));
+    EXPECT_TRUE(xt::allclose(result.expr(), expected));
 }
 
 TEST(PartitionTest, AxisOne) {
     xt::xarray<int> x = {{1, 2, 3}, {4, 5, 6}};
-    xt::xarray<int> y = {{7, 8}, {9, 10}};
+    xt::xarray<int> y = {{7, 8, 9}, {10, 11, 12}};
     std::vector<xt::xarray<int>> input = {x, y};
 
-    xt::xarray<int> result = concat(input, 1);
-    xt::xarray<int> expected = {{1, 2, 3, 7, 8}, {4, 5, 6, 9, 10}};
+    auto result = concat(input, 1);
+    xt::xarray<int> expected = {{1, 2, 3, 7, 8, 9}, {4, 5, 6, 10, 11, 12}};
 
-    EXPECT_TRUE(xt::allclose(result, expected));
+    EXPECT_TRUE(xt::allclose(result.expr(), expected));
 }
 
 TEST(PartitionTest, ConcatNegativeDim) {
     xt::xarray<int> x = {{1, 2, 3}, {4, 5, 6}};
-    xt::xarray<int> y = {{7, 8}, {9, 10}};
+    xt::xarray<int> y = {{7, 8, 9}, {10, 11, 12}};
     std::vector<xt::xarray<int>> input = {x, y};
 
-    xt::xarray<int> result = concat(input, -1);
-    xt::xarray<int> expected = {{1, 2, 3, 7, 8}, {4, 5, 6, 9, 10}};
+    auto result = concat(input, -1);
+    xt::xarray<int> expected = {{1, 2, 3, 7, 8, 9}, {4, 5, 6, 10, 11, 12}};
 
-    EXPECT_TRUE(xt::allclose(result, expected));
+    EXPECT_TRUE(xt::allclose(result.expr(), expected));
 }
 
 TEST(PartitionTest, MultipleArraysAxis0) {
@@ -137,10 +138,10 @@ TEST(PartitionTest, MultipleArraysAxis0) {
     xt::xarray<float> c = {5.0f, 6.0f};
     std::vector<xt::xarray<float>> input = {a, b, c};
 
-    xt::xarray<float> result = concat(input, 0);
+    auto result = concat(input, 0);
     xt::xarray<float> expected = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
 
-    EXPECT_TRUE(xt::allclose(result, expected));
+    EXPECT_TRUE(xt::allclose(result.expr(), expected));
 }
 
 TEST(PartitionTest, EmptyArray) {
@@ -148,7 +149,7 @@ TEST(PartitionTest, EmptyArray) {
     xt::xarray<int> b;  // Empty
     std::vector<xt::xarray<int>> input = {a, b};
 
-    EXPECT_ANY_THROW({ xt::xarray<int> result = concat(input, 0); });
+    EXPECT_ANY_THROW({ auto result = concat(input, 0); });
 }
 
 TEST(PartitionTest, HigherDimensions) {
@@ -158,12 +159,12 @@ TEST(PartitionTest, HigherDimensions) {
     arr2.reshape({2, 2, 2});
 
     std::vector<xt::xarray<int>> input = {arr1, arr2};
-    xt::xarray<int> result = concat(input, 0);
+    auto result = concat(input, 0);
 
     // Expected: shape (4,2,2) with arr1 stacked over arr2 along axis 0
     xt::xarray<int> expected = xt::concatenate(xt::xtuple(arr1, arr2), 0);
 
-    EXPECT_TRUE(xt::allclose(result, expected));
+    EXPECT_TRUE(xt::allclose(result.expr(), expected));
 }
 
 TEST(PartitionTest, HigherAxis) {
@@ -172,25 +173,22 @@ TEST(PartitionTest, HigherAxis) {
     // Both have shape (2,2,2)
 
     std::vector<xt::xarray<int>> input = {arr1, arr2};
-    xt::xarray<int> result = concat(input, 2);
+    auto result = concat(input, 2);
     // Expected shape: (2,2,4)
     xt::xarray<int> expected = {{{1, 2, 9, 10}, {3, 4, 11, 12}}, {{5, 6, 13, 14}, {7, 8, 15, 16}}};
 
-    EXPECT_TRUE(xt::allclose(result, expected));
+    EXPECT_TRUE(xt::allclose(result.expr(), expected));
 }
 
 TEST(PartitionTest, UnmatchedDimensions) {
     xt::xarray<int> arr1 = {{{1, 2}, {3, 4}}, {{5, 6}, {7, 8}}};
     xt::xarray<int> arr2 = {{{9, 10}, {11, 12}}, {{13, 14}, {15, 16}}, {{17, 18}, {19, 20}}};
     // arr1 has shape (2,2,2), arr2 has shape (3,2,2)
-    xt::xarray<int> result_dim0 = xt::concatenate(xt::xtuple(arr1, arr2), 0);
 
     std::vector<xt::xarray<int>> input = {arr1, arr2};
-    EXPECT_NO_THROW(concat(input, 0));
-    EXPECT_TRUE(xt::allclose(concat(input, 0), result_dim0));
-
-    EXPECT_ANY_THROW(concat(input, 1));  // Should throw for axis 1
-    EXPECT_ANY_THROW(concat(input, 2));  // Should throw for axis 2
+    EXPECT_ANY_THROW(concat(input, 0));
+    EXPECT_ANY_THROW(concat(input, 1));
+    EXPECT_ANY_THROW(concat(input, 2));
 }
 
 TEST(PartitionTest, UnmatchedDimensionCount) {
@@ -199,9 +197,9 @@ TEST(PartitionTest, UnmatchedDimensionCount) {
     // arr1 has shape (2,2), arr2 has shape (2,2,2)
 
     std::vector<xt::xarray<int>> input = {arr1, arr2};
-    EXPECT_ANY_THROW(concat(input, 0));  // Should throw for axis 0
-    EXPECT_ANY_THROW(concat(input, 1));  // Should throw for axis 1
-    EXPECT_ANY_THROW(concat(input, 2));  // Should throw for axis 2
+    EXPECT_ANY_THROW(concat(input, 0));
+    EXPECT_ANY_THROW(concat(input, 1));
+    EXPECT_ANY_THROW(concat(input, 2));
 }
 
 TEST(PartitionTest, DimensionOutofRange) {
@@ -216,7 +214,7 @@ TEST(PartitionTest, DimensionOutofRange) {
 TEST(PartitionTest, EmptyInput) {
     std::vector<xt::xarray<int>> input;
     EXPECT_NO_THROW(concat(input, 0));
-    EXPECT_TRUE(xt::allclose(concat(input, 0), xt::xarray<int>{}));
+    EXPECT_TRUE(concat(input, 0).data().empty());
 }
 
 TEST(PartitionTest, ChunkDoesNotAccessData) {
@@ -469,6 +467,212 @@ TEST(PartitionTest, ChunkNdimNonContiguousDims) {
     EXPECT_TRUE(xt::allclose(chunks[1], xt::view(tensor, xt::range(0, 1), xt::all(), xt::range(2, 4), xt::all())));
     EXPECT_TRUE(xt::allclose(chunks[2], xt::view(tensor, xt::range(1, 2), xt::all(), xt::range(0, 2), xt::all())));
     EXPECT_TRUE(xt::allclose(chunks[3], xt::view(tensor, xt::range(1, 2), xt::all(), xt::range(2, 4), xt::all())));
+}
+
+TEST(PartitionTest, ConcatNdimBasic) {
+    // Create 4 2x3 arrays to concatenate in a 2x2 grid
+    xt::xarray<float> a = {{1.0f, 2.0f, 3.0f}, {4.0f, 5.0f, 6.0f}};
+    xt::xarray<float> b = {{7.0f, 8.0f, 9.0f}, {10.0f, 11.0f, 12.0f}};
+    xt::xarray<float> c = {{13.0f, 14.0f, 15.0f}, {16.0f, 17.0f, 18.0f}};
+    xt::xarray<float> d = {{19.0f, 20.0f, 21.0f}, {22.0f, 23.0f, 24.0f}};
+
+    std::vector<xt::xarray<float>> expressions = {a, b, c, d};
+
+    // Concatenate along dimensions [0, 1] with 2 chunks each
+    auto result = concat_ndim(expressions, {2, 2}, {0, 1});
+
+    // Expected shape: (4, 6)
+    EXPECT_EQ(result.expr().shape()[0], 4u);
+    EXPECT_EQ(result.expr().shape()[1], 6u);
+
+    // Verify content - should be arranged as:
+    // a b
+    // c d
+    xt::xarray<float> expected = {
+        {1.0f, 2.0f, 3.0f, 7.0f, 8.0f, 9.0f},
+        {4.0f, 5.0f, 6.0f, 10.0f, 11.0f, 12.0f},
+        {13.0f, 14.0f, 15.0f, 19.0f, 20.0f, 21.0f},
+        {16.0f, 17.0f, 18.0f, 22.0f, 23.0f, 24.0f}};
+    EXPECT_TRUE(xt::allclose(result.expr(), expected));
+}
+
+TEST(PartitionTest, ConcatNdimEmpty) {
+    std::vector<xt::xarray<int>> expressions;
+    auto result = concat_ndim(expressions, {}, {});
+    EXPECT_EQ(result.expr().size(), 0u);
+}
+
+TEST(PartitionTest, ConcatNdimSingleExpression) {
+    xt::xarray<int> a = {{1, 2, 3}, {4, 5, 6}};
+    std::vector<xt::xarray<int>> expressions = {a};
+
+    auto result = concat_ndim(expressions, {}, {});
+    EXPECT_TRUE(xt::allclose(result.expr(), a));
+}
+
+TEST(PartitionTest, ConcatNdimMismatchedSizes) {
+    xt::xarray<float> a = {1.0f, 2.0f};
+    std::vector<xt::xarray<float>> expressions = {a};
+
+    // Mismatched num_chunks and dims sizes
+    EXPECT_ANY_THROW(concat_ndim(expressions, {2, 2}, {0}));
+    EXPECT_ANY_THROW(concat_ndim(expressions, {2}, {0, 1}));
+}
+
+TEST(PartitionTest, ConcatNdimInvalidNumChunks) {
+    xt::xarray<double> a = {{1.0, 2.0}, {3.0, 4.0}};
+    std::vector<xt::xarray<double>> expressions = {a};
+
+    // Zero or negative num_chunks
+    EXPECT_ANY_THROW(concat_ndim(expressions, {0}, {0}));
+    EXPECT_ANY_THROW(concat_ndim(expressions, {-1}, {0}));
+    EXPECT_ANY_THROW(concat_ndim(expressions, {2, 0}, {0, 1}));
+}
+
+TEST(PartitionTest, ConcatNdimWrongNumberOfExpressions) {
+    xt::xarray<int> a = {1, 2, 3};
+    xt::xarray<int> b = {4, 5, 6};
+    std::vector<xt::xarray<int>> expressions = {a, b};
+
+    // Expected 4 expressions (2*2) but only have 2
+    EXPECT_ANY_THROW(concat_ndim(expressions, {2, 2}, {0, 1}));
+}
+
+TEST(PartitionTest, ConcatNdimMismatchedShapes) {
+    xt::xarray<float> a = {{1.0f, 2.0f}, {3.0f, 4.0f}};
+    xt::xarray<float> b = {5.0f, 6.0f, 7.0f};  // Different shape
+    std::vector<xt::xarray<float>> expressions = {a, b};
+
+    EXPECT_ANY_THROW(concat_ndim(expressions, {2}, {0}));
+}
+
+TEST(PartitionTest, ConcatNdimNegativeDims) {
+    xt::xarray<int> a = {{1, 2}};
+    xt::xarray<int> b = {{3, 4}};
+    xt::xarray<int> c = {{5, 6}};
+    xt::xarray<int> d = {{7, 8}};
+    std::vector<xt::xarray<int>> expressions = {a, b, c, d};
+
+    // Use negative dimensions
+    auto result = concat_ndim(expressions, {2, 2}, {-2, -1});
+
+    xt::xarray<int> expected = {{1, 2, 3, 4}, {5, 6, 7, 8}};
+    EXPECT_TRUE(xt::allclose(result.expr(), expected));
+}
+
+TEST(PartitionTest, ConcatNdimNonUniqueDims) {
+    xt::xarray<int> a = {1, 2, 3};
+    std::vector<xt::xarray<int>> expressions = {a};
+
+    // Duplicate dimensions
+    EXPECT_ANY_THROW(concat_ndim(expressions, {2, 2}, {0, 0}));
+    EXPECT_ANY_THROW(concat_ndim(expressions, {2, 2}, {1, -1}));  // Both refer to last dim
+}
+
+TEST(PartitionTest, ConcatNdimDimsOutOfRange) {
+    xt::xarray<double> a = {{1.0, 2.0}, {3.0, 4.0}};
+    std::vector<xt::xarray<double>> expressions = {a};
+
+    EXPECT_ANY_THROW(concat_ndim(expressions, {2}, {3}));
+    EXPECT_ANY_THROW(concat_ndim(expressions, {2}, {-3}));
+}
+
+TEST(PartitionTest, ConcatNdimSingleDimension) {
+    // Should behave like regular concat
+    xt::xarray<int> a = {1, 2, 3};
+    xt::xarray<int> b = {4, 5, 6};
+    xt::xarray<int> c = {7, 8, 9};
+    std::vector<xt::xarray<int>> expressions = {a, b, c};
+
+    auto result_ndim = concat_ndim(expressions, {3}, {0});
+    auto result_regular = concat(expressions, 0);
+
+    EXPECT_TRUE(xt::allclose(result_ndim.expr(), result_regular.expr()));
+}
+
+TEST(PartitionTest, ConcatNdimThreeDimensions) {
+    // Create 8 small tensors of shape (1, 1, 2)
+    std::vector<xt::xarray<int>> expressions;
+    for (int i = 0; i < 8; ++i) {
+        xt::xarray<int> tensor = {{{i * 2, i * 2 + 1}}};
+        expressions.push_back(tensor);
+    }
+
+    // Concatenate along all 3 dimensions with 2 chunks each
+    auto result = concat_ndim(expressions, {2, 2, 2}, {0, 1, 2});
+
+    // Expected shape: (2, 2, 4)
+    EXPECT_EQ(result.expr().shape()[0], 2u);
+    EXPECT_EQ(result.expr().shape()[1], 2u);
+    EXPECT_EQ(result.expr().shape()[2], 4u);
+
+    // Verify row-major ordering
+    xt::xarray<int> expected = {{{0, 1, 2, 3}, {4, 5, 6, 7}}, {{8, 9, 10, 11}, {12, 13, 14, 15}}};
+    EXPECT_TRUE(xt::allclose(result.expr(), expected));
+}
+
+TEST(PartitionTest, ConcatNdimNonContiguousDims) {
+    // Create 4 tensors of shape (1, 2, 1, 3)
+    xt::xarray<float> a = {{{{1.0f, 2.0f, 3.0f}}, {{4.0f, 5.0f, 6.0f}}}};
+    xt::xarray<float> b = {{{{7.0f, 8.0f, 9.0f}}, {{10.0f, 11.0f, 12.0f}}}};
+    xt::xarray<float> c = {{{{13.0f, 14.0f, 15.0f}}, {{16.0f, 17.0f, 18.0f}}}};
+    xt::xarray<float> d = {{{{19.0f, 20.0f, 21.0f}}, {{22.0f, 23.0f, 24.0f}}}};
+
+    std::vector<xt::xarray<float>> expressions = {a, b, c, d};
+
+    // Concatenate along dimensions 0 and 2 (skipping 1 and 3)
+    auto result = concat_ndim(expressions, {2, 2}, {0, 2});
+
+    // Expected shape: (2, 2, 2, 3)
+    EXPECT_EQ(result.expr().shape()[0], 2u);
+    EXPECT_EQ(result.expr().shape()[1], 2u);
+    EXPECT_EQ(result.expr().shape()[2], 2u);
+    EXPECT_EQ(result.expr().shape()[3], 3u);
+
+    // Verify dimensions 1 and 3 remain unchanged
+    EXPECT_TRUE(xt::allclose(xt::view(result.expr(), xt::range(0, 1), xt::all(), xt::range(0, 1), xt::all()), a));
+    EXPECT_TRUE(xt::allclose(xt::view(result.expr(), xt::range(0, 1), xt::all(), xt::range(1, 2), xt::all()), b));
+    EXPECT_TRUE(xt::allclose(xt::view(result.expr(), xt::range(1, 2), xt::all(), xt::range(0, 1), xt::all()), c));
+    EXPECT_TRUE(xt::allclose(xt::view(result.expr(), xt::range(1, 2), xt::all(), xt::range(1, 2), xt::all()), d));
+}
+
+TEST(PartitionTest, ConcatNdimInverseOfChunkNdim) {
+    // Create a tensor and chunk it
+    xt::xarray<double> original = xt::arange<double>(120);
+    original.reshape({4, 5, 6});
+
+    // Chunk along dimensions 0 and 2
+    auto chunks = chunk_ndim(original, {2, 3}, {0, 2});
+
+    // Convert to vector of xarrays for concat_ndim
+    std::vector<xt::xarray<double>> expressions;
+    for (const auto& chunk : chunks) {
+        expressions.push_back(xt::xarray<double>(chunk));
+    }
+
+    // Concatenate back
+    auto reconstructed = concat_ndim(expressions, {2, 3}, {0, 2});
+
+    // Should get back the original
+    EXPECT_TRUE(xt::allclose(reconstructed.expr(), original));
+}
+
+TEST(PartitionTest, ConcatNdimRowMajorOrder) {
+    // Create 6 small tensors of shape (1, 2)
+    std::vector<xt::xarray<int>> expressions;
+    for (int i = 0; i < 6; ++i) {
+        xt::xarray<int> tensor = {{i * 2, i * 2 + 1}};
+        expressions.push_back(tensor);
+    }
+
+    // Concatenate with 2 chunks along dim 0, 3 chunks along dim 1
+    auto result = concat_ndim(expressions, {2, 3}, {0, 1});
+
+    // Expected row-major order:
+    // 0, 1, 2, 3, 4, 5
+    // 6, 7, 8, 9, 10, 11
+    xt::xarray<int> expected = {{0, 1, 2, 3, 4, 5}, {6, 7, 8, 9, 10, 11}};
+    EXPECT_TRUE(xt::allclose(result.expr(), expected));
 }
 
 }  // namespace

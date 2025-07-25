@@ -105,6 +105,17 @@ jobs:
       skip-tt-train: false
       publish-artifact: false
 
+  build-sweeps:
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.any-code-changed == 'true'
+        }}
+    needs: find-changes
+    uses: ./.github/workflows/build-wrapper.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+
   metalium-smoke-tests:
     needs: [find-changes, build-tsan]
     if: ${{ github.ref_name == 'main' ||
@@ -116,7 +127,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N300",
+          "N300-viommu",
           "N300-llmbox",
           "P150b-viommu",
         ]
@@ -125,7 +136,7 @@ jobs:
       docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
-      per-test-timeout: 10 # TSan can be slow; relax the timeout somewhat
+      per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
       product: tt-metalium
 
   ttnn-smoke-tests:
@@ -139,7 +150,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N300",
+          "N300-viommu",
           "N300-llmbox",
           "P150b-viommu",
         ]
@@ -148,7 +159,7 @@ jobs:
       docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-tsan.outputs.packages-artifact-name }}
       runner: ${{ matrix.platform }}
-      per-test-timeout: 10 # TSan can be slow; relax the timeout somewhat
+      per-test-timeout: 11 # TSan can be slow; relax the timeout somewhat
       product: tt-nn
 
   build-asan:
@@ -167,7 +178,7 @@ jobs:
       skip-tt-train: false
       publish-artifact: false
 
-  basic-tests:
+  metalium-basic-tests:
     if: ${{
         github.ref_name == 'main' ||
         needs.find-changes.outputs.cmake-changed == 'true' ||
@@ -179,14 +190,38 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N150",
+          "N150-viommu",
           "P150b-viommu",
         ]
     uses: ./.github/workflows/basic.yaml
     with:
       docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
       package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
+      per-test-timeout: 11
       runner: ${{ matrix.platform }}
+      product: tt-metalium
+
+  ttnn-basic-tests:
+    needs: [build-asan, find-changes]
+    if: ${{ github.ref_name == 'main' ||
+            needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-nn-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+        }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [
+          "N150-viommu",
+          "P150b-viommu",
+        ]
+    uses: ./.github/workflows/basic.yaml
+    with:
+      docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
+      package-artifact-name: ${{ needs.build-asan.outputs.packages-artifact-name }}
+      per-test-timeout: 11
+      runner: ${{ matrix.platform }}
+      product: tt-nn
 
   # GitHub has so many design limitations it's not even funny.
   # This job is purely so we can capture the essence of the workflow as a whole in our status checks.
@@ -201,13 +236,13 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, code-analysis, find-changes, build, build-docs, build-tsan, metalium-smoke-tests, ttnn-smoke-tests]
+    needs: [static-checks, code-analysis, find-changes, build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, code-analysis, find-changes"
-          optional-jobs: "build, build-docs, build-tsan, metalium-smoke-tests, ttnn-smoke-tests"
+          optional-jobs: "build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'

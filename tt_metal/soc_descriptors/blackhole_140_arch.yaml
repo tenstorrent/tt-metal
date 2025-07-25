@@ -20,57 +20,57 @@ dram:
       [9-5, 9-7, 9-6],
   ]
 
-# Dram view parameters are used by tt-metal and are not recognized by UMD.
-# Eth and worker dram endpoints represent subchannel id from dram array.
-# For example, a dram view where channel is 0 and worker_endpoint is 2 would resolve to dram core at position [0,2] which is 0-11.
+# Eth and worker dram endpoints represent subchannel id from dram array for each noc.
+# For example, a dram view where channel is 0 and worker_endpoint is [1, 2] would resolve to dram core at position [0,2] for noc1 which is 0-11.
+# Endpoint assignment for noc0 needs to be the same endpoint used by CMFW to read DRAM telemetry to avoid SYS-1419.
 dram_views:
   [
     {
       channel: 0,
-      eth_endpoint: 2,
-      worker_endpoint: 2,
+      eth_endpoint: [0, 1],
+      worker_endpoint: [0, 1],
       address_offset: 0
     },
     {
       channel: 1,
-      eth_endpoint: 2,
-      worker_endpoint: 2,
+      eth_endpoint: [0, 1],
+      worker_endpoint: [0, 1],
       address_offset: 0
     },
     {
       channel: 2,
-      eth_endpoint: 2,
-      worker_endpoint: 2,
+      eth_endpoint: [0, 1],
+      worker_endpoint: [0, 1],
       address_offset: 0
     },
     {
       channel: 3,
-      eth_endpoint: 2,
-      worker_endpoint: 2,
+      eth_endpoint: [0, 1],
+      worker_endpoint: [0, 1],
       address_offset: 0
     },
     {
       channel: 4,
-      eth_endpoint: 2,
-      worker_endpoint: 2,
+      eth_endpoint: [2, 1],
+      worker_endpoint: [2, 1],
       address_offset: 0
     },
     {
       channel: 5,
-      eth_endpoint: 2,
-      worker_endpoint: 2,
+      eth_endpoint: [2, 1],
+      worker_endpoint: [2, 1],
       address_offset: 0
     },
     {
       channel: 6,
-      eth_endpoint: 2,
-      worker_endpoint: 2,
+      eth_endpoint: [2, 1],
+      worker_endpoint: [2, 1],
       address_offset: 0
     },
     {
       channel: 7,
-      eth_endpoint: 2,
-      worker_endpoint: 2,
+      eth_endpoint: [2, 1],
+      worker_endpoint: [2, 1],
       address_offset: 0
     }
   ]

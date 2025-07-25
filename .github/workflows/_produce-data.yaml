@@ -33,17 +33,21 @@ on:
       - "(T3K) T3000 profiler tests"
       - "(T3K) T3000 unit tests"
       - "(T3K) T3000 fast tests"
+      - "(T3K) Choose your pipeline"
       - "(TG) TG unit tests"
       - "(TG) TG demo tests"
       - "(TG) TG frequent tests"
       - "(TG) TG model perf tests"
       - "(TG) TG nightly tests"
+      - "(TG) Choose your pipeline"
       - "Galaxy Quick"
       - "ttnn - Run sweeps"
       - "Blackhole post-commit tests"
       - "(Blackhole) Blackhole nightly tests"
       - "(Blackhole) Demo tests"
+      - "(Blackhole) LLMBox unit tests"
       - "PR Gate"
+      - "Merge Gate"
       - "Nightly tt-metal L2 tests"
       - "Package and release"
       - "Build test and publish upstream tests"
@@ -111,12 +115,7 @@ jobs:
           echo "Sleeping for 60 seconds for github to fully sync the workflow run before calling the API"
           sleep 60
           echo "[Info] Workflow run attempt"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} > workflow.json
-          echo "[Info] Workflow run attempt jobs"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs --paginate
-          # GitHub chunks the jobs array into multiple objects side-by-side if there are more than 100 jobs, so we need to slurp them into one giant object for later Python processing
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs --paginate | jq -s '{total_count: .[0].total_count, jobs: map(.jobs) | add}' > workflow_jobs.json
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} | tee workflow.json
       - name: Collect workflow artifact and job logs
         shell: bash
         env:

@@ -19,7 +19,8 @@ Mesh: [
 {
   id: 0,
   board: Galaxy,
-  topology: [1, 2],
+  device_topology: [8, 8],
+  host_topology: [1, 2],
   host_ranks: [[0, 1]]}
 ]
 

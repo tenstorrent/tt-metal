@@ -30,11 +30,11 @@ from ultralytics import YOLO
     "model_task",
     [
         "segment",  # To run the demo for instance segmentation
-        # "detect",  # Uncomment to run the demo for Object Detection
+        "detect",  # Uncomment to run the demo for Object Detection
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
-def test_yolov9c(use_weights_from_ultralytics, model_task, device, use_program_cache, reset_seeds):
+def test_yolov9c(use_weights_from_ultralytics, model_task, device, reset_seeds):
     torch_input, ttnn_input = create_yolov9c_input_tensors(device, model=True)
     state_dict = None
 

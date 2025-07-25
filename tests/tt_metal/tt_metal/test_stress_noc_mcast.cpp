@@ -227,6 +227,7 @@ int main(int argc, char** argv) {
         }
 
         std::vector<uint32_t> runtime_args;
+        runtime_args.reserve(128);
         for (int i = 0; i < 128; i++) {
             runtime_args.push_back(rand());
         }

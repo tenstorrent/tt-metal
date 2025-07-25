@@ -169,6 +169,7 @@ def split_conv2d(
     compute_config,
     conv_config,
     conv_params,
+    conv_dtype,
     stride,
     padding,
     dilation,
@@ -212,6 +213,7 @@ def split_conv2d(
                 memory_config=None,
                 return_output_dim=True,
                 return_weights_and_bias=True,
+                dtype=conv_dtype,
             )
 
             device_weights[idx_out].append(d_w)
@@ -222,7 +224,9 @@ def split_conv2d(
                 dram_intermediate = ttnn.to_memory_config(intermediate, ttnn.DRAM_MEMORY_CONFIG)
                 intermediate.deallocate(True)
             else:
-                dram_intermediate = ttnn.add(dram_intermediate, intermediate, output_tensor=dram_intermediate)
+                dram_intermediate = ttnn.add(
+                    dram_intermediate, intermediate, output_tensor=dram_intermediate, use_legacy=False
+                )
                 intermediate.deallocate(True)
 
         if dram_intermediate.memory_config() != ttnn.DRAM_MEMORY_CONFIG:

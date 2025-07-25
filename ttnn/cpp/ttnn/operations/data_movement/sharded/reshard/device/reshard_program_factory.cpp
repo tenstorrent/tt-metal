@@ -109,13 +109,10 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
                             break;
                         }
                         // next page is padding
-                        consecutive_it = consecutive_it + 1;
                         last_it_consec = consecutive_it;
+                        consecutive_it = consecutive_it + 1;
                     }
-                    uint32_t stride_size = std::distance(it, last_it_consec);
-                    if (last_it_consec == it) {
-                        stride_size = 1;
-                    }
+                    uint32_t stride_size = std::distance(it, last_it_consec) + 1;
                     auto stride_it = it + stride_size;
                     auto last_it_stride = it;
 
@@ -515,7 +512,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     }
 
     for (const auto& core : cores) {
-        auto page_stride_vector = output_core_to_page_range_pair.at(core);
+        const auto& page_stride_vector = output_core_to_page_range_pair.at(core);
         uint32_t num_ranges = page_stride_vector.size();
         auto runtime_args_0 = get_runtime_args_for_given_ranges(
             physical_core_coords,

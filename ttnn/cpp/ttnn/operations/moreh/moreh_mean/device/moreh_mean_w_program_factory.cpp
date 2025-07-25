@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -23,7 +24,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     auto input = tensor_args.input;
     auto compute_kernel_config =
         init_device_compute_kernel_config(input.device()->arch(), operation_attributes.compute_kernel_config);
-    const auto shape = input.padded_shape();
+    const auto& shape = input.padded_shape();
 
     auto device = input.device();
     auto kernel_config_val =
@@ -39,7 +40,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     uint32_t Ht = H / constants::TILE_HEIGHT;
 
     // check mask for w-dim
-    const auto input_shape_without_padding = input.logical_shape();
+    const auto& input_shape_without_padding = input.logical_shape();
     const auto origin_W = input_shape_without_padding[-1];
     const bool do_mask_w = (origin_W % constants::TILE_WIDTH) != 0;
     const auto mask_w = do_mask_w ? origin_W % constants::TILE_WIDTH : constants::TILE_WIDTH;
@@ -85,7 +86,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     std::vector<uint32_t> writer_compile_time_args = {
         static_cast<uint32_t>(CBIndex::c_16), static_cast<uint32_t>(is_dram(output))};
 
-    std::map<string, string> reader_defines{};
+    std::map<std::string, std::string> reader_defines{};
     if (do_mask_w) {
         reader_defines["DO_MASK_W"] = "1";
     }
@@ -105,10 +106,10 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ///////////////////////////////////////////////////////////////////////////
-    string compute_kernel_name = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_w.cpp";
+    std::string compute_kernel_name = "ttnn/cpp/ttnn/operations/moreh/moreh_mean/device/kernels/moreh_mean_w.cpp";
     auto reduce_op = ReduceOpMath::SUM;
     auto reduce_dim = ReduceOpDim::W;
-    std::map<string, string> compute_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
+    std::map<std::string, std::string> compute_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = 1;
     }
