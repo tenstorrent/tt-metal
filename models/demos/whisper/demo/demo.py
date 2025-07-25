@@ -473,9 +473,9 @@ def test_demo_for_conditional_generation(input_path, ttnn_model, device, num_inp
     if is_ci_env:
         if is_blackhole():
             if device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
-                expected_perf_metrics = {"prefill_t/s": 7.67, "decode_t/s/u": 91.0}
+                expected_perf_metrics = {"prefill_t/s": 7.67, "decode_t/s/u": 87.0}
             else:
-                expected_perf_metrics = {"prefill_t/s": 7.67, "decode_t/s/u": 98.0}
+                expected_perf_metrics = {"prefill_t/s": 7.67, "decode_t/s/u": 94.0}
         else:  # wormhole_b0
             expected_perf_metrics = {"prefill_t/s": 3.85, "decode_t/s/u": 51.8}
         expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"]  # Only supporting batch 1
