@@ -433,7 +433,8 @@ tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_
     std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
     auto mesh_device = input_tensors[0].mesh_device();
-    AllGatherReplicateAsyncVersion version = this->all_gather_replicate_async_struct.select_version(input_tensors[0]);
+    ttnn::AllGatherReplicateAsyncVersion version =
+        this->all_gather_replicate_async_struct.select_version(input_tensors[0]);
     IDevice* target_device = mesh_device ? mesh_device->get_device(mesh_coordinate) : input_tensors[0].device();
     std::vector<IDevice*> devices_to_use = {};
     if (this->all_gather_replicate_async_struct.cluster_axis.has_value()) {
@@ -468,7 +469,7 @@ tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
 
     switch (version) {
-        case AllGatherReplicateAsyncVersion::LLAMA_MINIMAL_SHARDED:
+        case ttnn::AllGatherReplicateAsyncVersion::LLAMA_MINIMAL_SHARDED:
         default:
             log_trace(
                 tt::LogOp,
@@ -492,9 +493,11 @@ tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_
 }
 
 tt::tt_metal::operation::Hash LlamaAllGatherMatmulAsync::compute_program_hash(
-    const std::vector<Tensor>& input_tensors) const {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");
-    AllGatherReplicateAsyncVersion version = this->all_gather_replicate_async_struct.select_version(input_tensors[0]);
+    ttnn::AllGatherReplicateAsyncVersion version =
+        this->all_gather_replicate_async_struct.select_version(input_tensors[0]);
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
 
     // Input tensor
@@ -514,8 +517,9 @@ tt::tt_metal::operation::Hash LlamaAllGatherMatmulAsync::compute_program_hash(
     auto intermediate_dtype = input_tensors[1].dtype();
     auto intermediate_memory_config = input_tensors[1].memory_config();
 
-    uint32_t semaphore_address = this->all_gather_replicate_async_struct.semaphore.address();
-    return tt::tt_metal::operation::hash_operation<AllGatherReplicateAsync>(
+    uint32_t semaphore_address = this->all_gather_replicate_async_struct.semaphore
+                                     .address();  // semaphore address is not used in the hash operation
+    return tt::tt_metal::operation::hash_operation<LlamaAllGatherMatmulAsync>(
         this->all_gather_replicate_async_struct.dim,
         this->all_gather_replicate_async_struct.num_links,
         this->all_gather_replicate_async_struct.ring_size,
@@ -543,11 +547,11 @@ namespace ccl {
 
 namespace {
 
-LlamaAllGatherMatmulAsync create_llama_all_gather_matmul_async_struct(
+ttnn::LlamaAllGatherMatmulAsync create_llama_all_gather_matmul_async_struct(
     const ttnn::AllGatherReplicateAsync& all_gather_replicate_async_struct,
     const operations::matmul::Matmul& matmul_struct,
     const std::vector<IDevice*>& devices) {
-    return LlamaAllGatherMatmulAsync{all_gather_replicate_async_struct, matmul_struct, devices};
+    return ttnn::LlamaAllGatherMatmulAsync{all_gather_replicate_async_struct, matmul_struct, devices};
 }
 
 Tensor llama_all_gather_matmul_async_impl(
@@ -575,6 +579,8 @@ Tensor llama_all_gather_matmul_async_impl(
     int32_t rank = input_tensor.logical_shape().rank();
 
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
+
+    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
 
     TT_FATAL(
         gather_dim >= -rank && gather_dim <= rank - 1,
@@ -629,16 +635,17 @@ Tensor llama_all_gather_matmul_async_impl(
             /*output_tile=*/std::nullopt,
             /*global_cb=*/std::nullopt});
 
-    LlamaAllGatherMatmulAsync llama_all_gather_matmul_async_struct{
-        all_gather_struct, matmul_struct, mesh_device.get_devices()};
+    ttnn::LlamaAllGatherMatmulAsync llama_all_gather_matmul_async_struct =
+        ttnn::LlamaAllGatherMatmulAsync{all_gather_struct, matmul_struct, devices};
     // return input_tensor;  // TODO: Implement the actual logic
-    return tt::tt_metal::operation::run(all_gather_struct, {input_tensor, intermediate_tensor, aggregated_tensor})
-        .at(0);
-    // return tt::tt_metal::operation::run(llama_all_gather_matmul_async_struct,
-    //  {input_tensor, input_tensor_b, intermediate_tensor, aggregated_tensor},
-    //  optional_input_tensors,
-    //  optional_output_tensors)
+    // return tt::tt_metal::operation::run(all_gather_struct, {input_tensor, intermediate_tensor, aggregated_tensor})
     //     .at(0);
+    return tt::tt_metal::operation::run(
+               llama_all_gather_matmul_async_struct,
+               {input_tensor, input_tensor_b, aggregated_tensor},
+               optional_input_tensors,
+               optional_output_tensors)
+        .at(1);
 }
 }  // namespace
 
