@@ -248,6 +248,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherReplicateAsync::create_pr
             return all_gather_replicate_async_sharded(
                 input_tensors[0],
                 input_tensors[1],
+                input_tensors[1],
                 input_tensors[2],
                 output_tensors[0],
                 target_device,
@@ -335,7 +336,9 @@ void LlamaAllGatherMatmulAsync::validate_with_output_tensors(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Unsupported memory layout {}.",
         input_tensor.memory_config().memory_layout());
-
+    Tensor intermediate_tensor = output_tensors[0].value();
+    log_info(tt::LogOp, "LLONG intermediate_tensor: {}", intermediate_tensor.padded_shape());
+    /*
     if (input_tensors.size() > 1) {
         const auto& intermediate_tensor = input_tensors[2];
 
@@ -386,6 +389,7 @@ void LlamaAllGatherMatmulAsync::validate_with_output_tensors(
             "Error, intermediate tensor memory layout should be same as input tensor memory layout but has {}",
             intermediate_tensor.memory_config().memory_layout());
     }
+    */
 
     // TODO: Add validation for output_mem_config
 }
@@ -476,10 +480,11 @@ tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_
                 tt::LogOp,
                 "Detected all gather replicate specialized shape. all_gather_replicate_async_sharded is called");
             return all_gather_replicate_async_sharded(
-                input_tensors[0],
-                input_tensors[1],
-                input_tensors[2],
-                output_tensors[0],
+                input_tensors[0],   // in0
+                input_tensors[1],   // in1
+                output_tensors[0],  // intermediate_tensor
+                input_tensors[2],   // aggregated_tensor
+                output_tensors[1],  // mm output tensor
                 target_device,
                 forward_device,
                 backward_device,
@@ -641,14 +646,14 @@ Tensor llama_all_gather_matmul_async_impl(
     ttnn::LlamaAllGatherMatmulAsync llama_all_gather_matmul_async_struct =
         ttnn::LlamaAllGatherMatmulAsync{all_gather_struct, matmul_struct, devices};
     // return input_tensor;  // TODO: Implement the actual logic
-    return tt::tt_metal::operation::run(all_gather_struct, {input_tensor, intermediate_tensor, aggregated_tensor})
-        .at(0);
-    // return tt::tt_metal::operation::run(
-    //            llama_all_gather_matmul_async_struct,
-    //            {input_tensor, input_tensor_b, aggregated_tensor},
-    //            optional_input_tensors,
-    //            optional_output_tensors)
-    //     .at(1);
+    // return tt::tt_metal::operation::run(all_gather_struct, {input_tensor, intermediate_tensor, aggregated_tensor})
+    //     .at(0);
+    return tt::tt_metal::operation::run(
+               llama_all_gather_matmul_async_struct,
+               {input_tensor, input_tensor_b, aggregated_tensor},
+               optional_input_tensors,
+               optional_output_tensors)
+        .at(1);
 }
 }  // namespace
 

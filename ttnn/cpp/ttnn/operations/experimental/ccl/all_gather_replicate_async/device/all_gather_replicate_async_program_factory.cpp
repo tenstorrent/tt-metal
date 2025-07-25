@@ -38,6 +38,7 @@ using namespace ccl;
 
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_replicate_async_sharded(
     const Tensor& input_tensor,
+    const Tensor& input_tensor_b,
     const Tensor& intermediate_tensor,
     const Tensor& aggregated_tensor,
     Tensor& output_tensor,
