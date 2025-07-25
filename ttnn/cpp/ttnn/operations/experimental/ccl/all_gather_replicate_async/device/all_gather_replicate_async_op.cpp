@@ -493,7 +493,10 @@ tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_
                 device_index,
                 this->all_gather_replicate_async_struct.topology,
                 this->all_gather_replicate_async_struct.semaphore,
-                this->all_gather_replicate_async_struct.sub_device_id);
+                this->all_gather_replicate_async_struct.sub_device_id,
+                // MM params
+                this->matmul_struct.compute_kernel_config.value(),
+                this->matmul_struct.program_config.value());
     }
 }
 

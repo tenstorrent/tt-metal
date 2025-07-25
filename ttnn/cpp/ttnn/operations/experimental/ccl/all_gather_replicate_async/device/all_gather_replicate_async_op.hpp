@@ -170,7 +170,9 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const operations::matmul::MatmulProgramConfig& program_config);
 
 namespace operations {
 namespace experimental {
