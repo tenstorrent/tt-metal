@@ -675,13 +675,16 @@ FORCE_INLINE void forward_to_downstream_edm(
     ROUTING_FIELDS_TYPE cached_routing_fields,
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>& downstream_edm_interface,
     uint8_t transaction_id) {
+    // TODO: this check breaks inter-mesh routing since we do not route in a global dimension-ordered routing fashion
+    // need to relax this constraint for inter-mesh links maybe?
+    /*
     if constexpr (
         (my_direction == eth_chan_directions::EAST || my_direction == eth_chan_directions::WEST) &&
         (downstream_direction == eth_chan_directions::NORTH || downstream_direction == eth_chan_directions::SOUTH)) {
         // E/W routers cannot forward to N/S because of dimension order routing
         // TODO: should we assert or just return?
         return;
-    }
+    }*/
 
     uint16_t payload_size_bytes = packet_start->payload_size_bytes;
 
