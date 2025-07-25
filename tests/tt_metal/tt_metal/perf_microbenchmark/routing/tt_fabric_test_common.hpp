@@ -1310,7 +1310,7 @@ public:
         uint32_t master_seed = std::random_device()();
         log_info(tt::LogTest, "No master seed provided. Using randomly generated seed: {}", master_seed);
 
-        auto distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+        const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
         // only need to handshake if we need to generate seed, since each host will have the same commandline arguments.
         if (*(distributed_context->size()) > 1) {
             if (*(distributed_context->rank()) == 0) {
@@ -1336,7 +1336,7 @@ public:
     }
 
     void barrier() const override {
-        auto distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+        const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
         distributed_context->barrier();
     }
 
