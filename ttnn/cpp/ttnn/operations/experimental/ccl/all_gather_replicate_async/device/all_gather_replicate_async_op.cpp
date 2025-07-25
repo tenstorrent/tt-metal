@@ -303,7 +303,9 @@ tt::tt_metal::operation::Hash AllGatherReplicateAsync::compute_program_hash(
 
 /* LlamaAllGatherMatmulAsync Implementation starts here*/
 void LlamaAllGatherMatmulAsync::validate_with_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(input_tensors.size() == 4, "Error, Input tensor size should be 4 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].layout();
@@ -416,16 +418,18 @@ std::vector<Tensor> LlamaAllGatherMatmulAsync::create_output_tensors(
 tt::tt_metal::operation::MeshWorkloadWithCallbacks LlamaAllGatherMatmulAsync::create_mesh_workload(
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
     return ccl::create_mesh_workload_from_programs(
         tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
-            return create_program_at(coord, input_tensors, output_tensors);
+            return create_program_at(coord, input_tensors, optional_input_tensors, output_tensors);
         });
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_program_at(
     const ttnn::MeshCoordinate& mesh_coordinate,
     const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
     auto mesh_device = input_tensors[0].mesh_device();
@@ -578,6 +582,9 @@ Tensor llama_all_gather_matmul_async_impl(
         rank,
         rank - 1,
         dim);
+
+    std::vector<std::optional<const Tensor>> optional_input_tensors = {};
+    std::vector<std::optional<Tensor>> optional_output_tensors = {intermediate_tensor};
     // return tt::tt_metal::operation::run(
     //            ttnn::AllGatherReplicateAsync{
     //                {},
@@ -627,6 +634,11 @@ Tensor llama_all_gather_matmul_async_impl(
     // return input_tensor;  // TODO: Implement the actual logic
     return tt::tt_metal::operation::run(all_gather_struct, {input_tensor, intermediate_tensor, aggregated_tensor})
         .at(0);
+    // return tt::tt_metal::operation::run(llama_all_gather_matmul_async_struct,
+    //  {input_tensor, input_tensor_b, intermediate_tensor, aggregated_tensor},
+    //  optional_input_tensors,
+    //  optional_output_tensors)
+    //     .at(0);
 }
 }  // namespace
 
