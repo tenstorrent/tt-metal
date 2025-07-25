@@ -183,6 +183,7 @@ void __attribute__((noinline)) Application() {
             }
         }
         WAYPOINT("GD");
+        debug_dump_addr[0] = 0xcccccccc;
 
         {
             // Only include this iteration in the device profile if the launch message is valid. This is because all

@@ -952,7 +952,6 @@ void MetalContext::initialize_firmware(
                     tt_cxy_pair(device_id, virtual_core),
                     jit_build_config.fw_launch_addr);
             } else {
-                tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, true);
                 // Active ethernet firmware launched immediately. Note, reset_cores (called before this),
                 // enable_fw_flag is set to 0. So we when launch, active_erisc.cc will stall until we set it to 1.
                 tt::llrt::internal_::send_msg_to_eth_mailbox(
@@ -961,6 +960,7 @@ void MetalContext::initialize_firmware(
                     tt_metal::FWMailboxMsg::ETH_MSG_RELEASE_CORE,
                     {/*l1 addr to exec*/ jit_build_config.fw_launch_addr_value},
                     true);  // Wait for ack is not needed because we will wait for cores to be ready
+                tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, true);
             }
 
             break;

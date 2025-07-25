@@ -332,8 +332,8 @@ void send_msg_to_eth_mailbox(
         const auto start_time = std::chrono::steady_clock::now();
         while (msg_status != done_message && msg_status != 0) {
             tt_driver_atomics::lfence();
-            msg_status =
-                read_hex_vec_from_core(device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0] & status_mask;
+            uint32_t mailbox_val = read_hex_vec_from_core(device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0];
+            msg_status = mailbox_val & status_mask;
             const auto timenow = std::chrono::steady_clock::now();
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(timenow - start_time).count();
             if (elapsed > timeout_ms) {
@@ -385,8 +385,8 @@ void send_msg_to_eth_mailbox(
         const auto start_time = std::chrono::steady_clock::now();
         do {
             tt_driver_atomics::lfence();
-            msg_status =
-                read_hex_vec_from_core(device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0] & status_mask;
+            uint32_t mailbox_val = read_hex_vec_from_core(device_id, virtual_core, mailbox_addr, sizeof(uint32_t))[0];
+            msg_status = mailbox_val & status_mask;
             const auto timenow = std::chrono::steady_clock::now();
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(timenow - start_time).count();
             if (elapsed > timeout_ms) {
@@ -400,7 +400,7 @@ void send_msg_to_eth_mailbox(
                     "tt-firmware version is 18.2.0. Start time: {}. End time: {}. Metal fw enable flag: {:#x}",
                     device_id,
                     virtual_core.str(),
-                    msg_status,
+                    mailbox_val,
                     get_retrain_count(device_id, virtual_core),
                     std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch()).count(),
                     std::chrono::duration_cast<std::chrono::milliseconds>(timenow.time_since_epoch()).count(),
@@ -483,6 +483,19 @@ void set_metal_eth_fw_run_flag(chip_id_t device_id, const CoreCoord& virtual_cor
     std::vector<uint32_t> en = {enable};
     write_hex_vec_to_core(device_id, virtual_core, en, run_flag_addr);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
+
+    // The l1_barrier is not sufficient to guarantee a PCIe write has landed, especially
+    // if the TLB mapping might be torn down during shutdown. A blocking read from the same address
+    // will act as a flush and also verify the write was successful.
+    auto result = read_hex_vec_from_core(device_id, virtual_core, run_flag_addr, sizeof(uint32_t));
+    if (result.at(0) != enable) {
+        TT_THROW(
+            "Failed to write ETH FW run flag to device {}, core {}. Expected {}, got {}",
+            device_id,
+            virtual_core.str(),
+            enable,
+            result.at(0));
+    }
 }
 
 }  // namespace internal_

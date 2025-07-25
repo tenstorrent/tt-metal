@@ -156,18 +156,18 @@ jobs:
   #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   #     enable-watcher: ${{ inputs.enable-watcher || false }}
   # # FD C++ Unit Tests
-  # cpp-unit-tests:
-  #   needs: build-artifact
-  #   secrets: inherit
-  #   uses: ./.github/workflows/cpp-post-commit.yaml
-  #   with:
-  #     arch: blackhole
-  #     runner-label: ${{ inputs.runner-label || 'BH' }}
-  #     timeout: 20
-  #     docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-  #     build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-  #     wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-  #     enable-watcher: ${{ inputs.enable-watcher || false }}
+  cpp-unit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/cpp-post-commit.yaml
+    with:
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      timeout: 20
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
   # models-unit-tests:
   #   needs: [build-artifact, generate-matrix]
   #   secrets: inherit
