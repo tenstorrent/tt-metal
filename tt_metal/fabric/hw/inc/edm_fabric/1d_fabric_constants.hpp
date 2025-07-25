@@ -171,14 +171,16 @@ constexpr uint32_t SWITCH_INTERVAL =
 #endif
 constexpr bool enable_first_level_ack = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 1);
 constexpr bool fuse_receiver_flush_and_completion_ptr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 2);
-constexpr bool enable_ring_support = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 3);
+constexpr bool enable_deadlock_avoidance = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 3);
 constexpr bool dateline_connection = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 4);
 constexpr bool is_handshake_sender = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 5) != 0;
 constexpr size_t handshake_addr = get_compile_time_arg_val(MAIN_CT_ARGS_START_IDX + 6);
 
 static_assert(enable_first_level_ack == 0, "enable_first_level_ack must be 0");
 static_assert(fuse_receiver_flush_and_completion_ptr == 1, "fuse_receiver_flush_and_completion_ptr must be 0");
-static_assert(!enable_ring_support || NUM_RECEIVER_CHANNELS > 1, "Ring support requires at least 2 receiver channels");
+static_assert(
+    !enable_deadlock_avoidance || NUM_RECEIVER_CHANNELS > 1,
+    "Deadlock avoidance requires at least 2 receiver channels");
 // TODO: Pipe from host
 constexpr size_t NUM_USED_RECEIVER_CHANNELS = NUM_FORWARDING_PATHS;
 
@@ -434,7 +436,7 @@ constexpr size_t receiver_channel_base_id = NUM_SENDER_CHANNELS;
 
 // TRANSACTION IDS
 // TODO: Pass this value from host
-constexpr uint8_t NUM_TRANSACTION_IDS = enable_ring_support ? 8 : 4;
+constexpr uint8_t NUM_TRANSACTION_IDS = enable_deadlock_avoidance ? 8 : 4;
 
 constexpr std::array<uint8_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS =
     initialize_receiver_channel_trid_starts<MAX_NUM_RECEIVER_CHANNELS, NUM_TRANSACTION_IDS>();

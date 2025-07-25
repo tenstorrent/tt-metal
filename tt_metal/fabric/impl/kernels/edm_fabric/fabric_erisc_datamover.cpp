@@ -586,7 +586,7 @@ FORCE_INLINE uint32_t get_processing_mask(
 template <uint8_t rx_channel_id, eth_chan_directions downstream_direction>
 FORCE_INLINE size_t get_downstream_edm_interface_index() {
     size_t downstream_edm_interface_index = downstream_direction;
-    if constexpr (enable_ring_support) {
+    if constexpr (enable_deadlock_avoidance) {
         if constexpr (rx_channel_id == 1) {
             // when we are on VC1, we stay on VC1 if traffic does not make turns
             if constexpr (
@@ -697,7 +697,7 @@ FORCE_INLINE void forward_to_downstream_edm(
 
         size_t idx = get_downstream_edm_interface_index<rx_channel_id, downstream_direction>();
         constexpr bool increment_pointers = !has_both_axes;
-        forward_payload_to_downstream_edm<enable_ring_support, false, increment_pointers>(
+        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, increment_pointers>(
             packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface[idx], transaction_id);
     }
 }
@@ -946,7 +946,7 @@ FORCE_INLINE void receiver_forward_packet(
         bool not_last_destination_device = cached_routing_fields.value != tt::tt_fabric::RoutingFields::LAST_MCAST_VAL;
         // disable when dprint enabled due to noc cmd buf usage of DPRINT
         if (not_last_destination_device) {
-            forward_payload_to_downstream_edm<enable_ring_support, ENABLE_STATEFUL_NOC_APIS>(
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
         }
         if (start_distance_is_terminal_value) {
@@ -960,11 +960,11 @@ FORCE_INLINE void receiver_forward_packet(
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
             case tt::tt_fabric::LowLatencyRoutingFields::FORWARD_ONLY:
-                forward_payload_to_downstream_edm<enable_ring_support, ENABLE_STATEFUL_NOC_APIS>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
                 break;
             case tt::tt_fabric::LowLatencyRoutingFields::WRITE_AND_FORWARD:
-                forward_payload_to_downstream_edm<enable_ring_support, ENABLE_STATEFUL_NOC_APIS>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
@@ -1072,7 +1072,7 @@ void run_sender_channel_step_impl(
         if constexpr (!enable_first_level_ack) {
             if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
                 local_sender_channel_worker_interface
-                    .template update_persistent_connection_copy_of_free_slots<enable_ring_support>(
+                    .template update_persistent_connection_copy_of_free_slots<enable_deadlock_avoidance>(
                         completions_since_last_check);
             } else {
                 // Connection liveness checks are only done for connections that are not persistent
@@ -1100,7 +1100,7 @@ void run_sender_channel_step_impl(
         if (acks_since_last_check > 0) {
             if constexpr (SKIP_CONNECTION_LIVENESS_CHECK) {
                 local_sender_channel_worker_interface
-                    .template update_persistent_connection_copy_of_free_slots<enable_ring_support>();
+                    .template update_persistent_connection_copy_of_free_slots<enable_deadlock_avoidance>();
             } else {
                 if (channel_connection_established) {
                     local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
@@ -1430,7 +1430,7 @@ void run_fabric_edm_main_loop(
                     port_direction_table,
                     receiver_channel_response_credit_senders);
             }
-            if constexpr (enable_ring_support && !skip_receiver_channel_1_connection) {
+            if constexpr (enable_deadlock_avoidance && !skip_receiver_channel_1_connection) {
                 run_receiver_channel_step<1>(
                     local_receiver_channels,
                     downstream_edm_noc_interfaces,
@@ -1471,7 +1471,7 @@ void run_fabric_edm_main_loop(
                     local_sender_channel_free_slots_stream_ids_ordered,
                     sender_channel_from_receiver_credits);
             }
-            if constexpr (enable_ring_support && !dateline_connection && !skip_sender_vc1_channel_connection) {
+            if constexpr (enable_deadlock_avoidance && !dateline_connection && !skip_sender_vc1_channel_connection) {
                 run_sender_channel_step<enable_packet_header_recording, VC1_RECEIVER_CHANNEL, NUM_SENDER_CHANNELS - 1>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
@@ -2148,8 +2148,8 @@ void kernel_main() {
         }
     }
 
-    static_assert(!enable_ring_support || !is_2d_fabric, "2D mode does not yet support ring/torus");
-    if constexpr (enable_ring_support && is_receiver_channel_serviced[NUM_USED_RECEIVER_CHANNELS - 1]) {
+    static_assert(!enable_deadlock_avoidance || !is_2d_fabric, "2D mode does not yet support ring/torus");
+    if constexpr (enable_deadlock_avoidance && is_receiver_channel_serviced[NUM_USED_RECEIVER_CHANNELS - 1]) {
         if (has_downstream_edm_vc1_buffer_connection) {
             const auto local_sem_address_for_acks =
                 is_2d_fabric ? local_sem_for_acks_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1]
@@ -2332,7 +2332,7 @@ void kernel_main() {
             edm_index++;
             has_downstream_edm >>= 1;
         }
-        if constexpr (enable_ring_support) {
+        if constexpr (enable_deadlock_avoidance) {
             if (has_downstream_edm_vc1_buffer_connection) {
                 open_downstream_edm_noc_interface(NUM_USED_RECEIVER_CHANNELS - 1);
             }
