@@ -122,7 +122,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Batch) {
 
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
         42);
@@ -169,7 +169,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Batch) {
 
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
         42);
@@ -215,7 +215,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Forward) {
 
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
         42);
@@ -261,7 +261,7 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Huge_Forward) {
 
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
         42);

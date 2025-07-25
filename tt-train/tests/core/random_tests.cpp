@@ -35,9 +35,9 @@ TEST_F(RandomGenerationTests, ParallelUniformInitDeterminism) {
     std::vector<float> vec1(size);
     std::vector<float> vec2(size);
 
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{vec1.data(), vec1.size()}, []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); }, 42);
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{vec2.data(), vec2.size()}, []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); }, 42);
 
     // Results should be identical
@@ -51,13 +51,13 @@ TEST_F(RandomGenerationTests, UniformInitsGoodMeanAndRange) {
     std::vector<float> parallel_vec(size);
     std::vector<float> sequential_vec(size);
 
-    ttml::core::random::parallel_generate(
+    ttml::core::parallel_generate(
         std::span{parallel_vec.data(), parallel_vec.size()},
         []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
         42);
 
     // Initialize with sequential method
-    ttml::core::random::sequential_generate(
+    ttml::core::sequential_generate(
         std::span{sequential_vec.data(), sequential_vec.size()},
         []() { return std::uniform_real_distribution<float>(-1.0f, 1.0f); },
         42);
