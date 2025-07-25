@@ -26,7 +26,6 @@ using DistributedContext = tt::tt_metal::distributed::multihost::DistributedCont
 struct ResolvedSocketConfig {
     SocketConfig tt_socket_config;
     MemoryConfig memory;
-    uint32_t num_iterations;
 };
 
 struct ResolvedTestConfig {
@@ -40,14 +39,6 @@ struct TestExecutionContext {
     uint32_t current_rank;
     uint32_t total_ranks;
     std::shared_ptr<DistributedContext> distributed_context;
-};
-
-struct TestExecutionStats {
-    uint32_t tests_run = 0;
-    uint32_t tests_passed = 0;
-    uint32_t tests_failed = 0;
-    uint32_t sockets_tested = 0;
-    std::chrono::milliseconds total_execution_time{0};
 };
 
 // Main test runner class
