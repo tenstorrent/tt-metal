@@ -10,9 +10,10 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_prefill_rot_mat, preprocess_inputs_prefill
+from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
+from models.tt_transformers.tt.rope import get_rot_mats
 
 
 def get_accuracy_thresholds(model_args, optimizations):
@@ -137,7 +138,9 @@ def test_tt_model_acc(
         optimizations = request.config.getoption("--optimizations") or optimizations
 
     # Load model args and tokenizer
-    model_args = ModelArgs(mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = ModelArgs(
+        mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True
+    )
     logger.info(f"Optimizations: {model_args.optimizations._full_name}")
 
     tokenizer = model_args.tokenizer
@@ -235,15 +238,13 @@ def test_tt_model_acc(
         pt_prefill_input = [embd(input_tokens_prefill_pt[b]).view(1, prefill_lens[b], -1) for b in range(1)]
 
         # Pre-compute the rotational embedding matrix and send to device
-        rot_mats_prefill = get_prefill_rot_mat(
-            model_args.head_dim,
-            mesh_device,
-            prefill_lens[0],
-            model_args.rope_theta,
-            model_args.rope_scaling_factor,
-            model_args.orig_context_len,
+        rot_mats_prefill = get_rot_mats(
+            head_dim=model_args.head_dim,
+            device=mesh_device,
+            seq_len=prefill_lens[0],
+            theta=model_args.rope_theta,
+            rope_scaling=model_args.rope_scaling,
         )
-
         prefill_input = model_args.prepare_residual_tensor_prefill(
             pt_prefill_input[batch_id],
         )

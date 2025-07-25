@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -69,17 +70,27 @@ int main() {
         tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         // Create the 2 data movement kernels and the compute kernel.
+        std::vector<uint32_t> reader_compile_time_args;
+        TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
         KernelHandle unary_reader_kernel_id = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/dataflow/read_tile.cpp",
             core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_1_default,
+                .compile_args = reader_compile_time_args});
 
+        std::vector<uint32_t> writer_compile_time_args;
+        TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
         KernelHandle unary_writer_kernel_id = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/dataflow/write_tile.cpp",
             core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = writer_compile_time_args});
         KernelHandle eltwise_sfpu_kernel_id = CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "eltwise_sfpu/kernels/compute/eltwise_sfpu.cpp",

@@ -359,12 +359,11 @@ void DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(
     const Hal& hal = MetalContext::instance().hal();
     const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, worker_core);
     profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-    const uint32_t num_risc_processors = hal.get_num_risc_processors(core_type);
     core_l1_data_buffer = tt::llrt::read_hex_vec_from_core(
         device_id,
         worker_core,
         reinterpret_cast<uint64_t>(profiler_msg->buffer),
-        kernel_profiler::PROFILER_L1_BUFFER_SIZE * num_risc_processors);
+        kernel_profiler::PROFILER_L1_BUFFER_SIZE * hal.get_num_risc_processors(core_type));
 }
 
 void DeviceProfiler::readL1DataBufferForCore(
@@ -503,9 +502,13 @@ void DeviceProfiler::readRiscProfilerResults(
     };
 
     HalProgrammableCoreType CoreType = tt::llrt::get_core_type(device_id, worker_core);
-    const uint32_t riscCount = MetalContext::instance().hal().get_num_risc_processors(CoreType);
+    int riscCount = 1;
 
-    for (uint32_t riscEndIndex = 0; riscEndIndex < riscCount; riscEndIndex++) {
+    if (CoreType == HalProgrammableCoreType::TENSIX) {
+        riscCount = 5;
+    }
+
+    for (int riscEndIndex = 0; riscEndIndex < riscCount; riscEndIndex++) {
         uint32_t bufferEndIndex = control_buffer[riscEndIndex];
         if (data_source == ProfilerDataBufferSource::L1) {
             // Just grab the device end index
@@ -1330,6 +1333,12 @@ CoreCoord DeviceProfiler::getPhysicalAddressFromVirtual(chip_id_t device_id, con
     return c;
 }
 
+void DeviceProfiler::setLastFDDumpAsNotDone() { this->is_last_fd_dump_done = false; }
+
+void DeviceProfiler::setLastFDDumpAsDone() { this->is_last_fd_dump_done = true; }
+
+bool DeviceProfiler::isLastFDDumpDone() const { return this->is_last_fd_dump_done; }
+
 DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
 #if defined(TRACY_ENABLE)
     ZoneScopedC(tracy::Color::Green);
@@ -1341,6 +1350,7 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
         std::filesystem::remove(log_path);
     }
 
+    this->is_last_fd_dump_done = false;
     this->current_zone_it = device_events.begin();
     device_events.reserve(
         (MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC * device->compute_with_storage_grid_size().x *
