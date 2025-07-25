@@ -522,21 +522,6 @@ Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const std::optio
         result);
 }
 
-Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    tt::tt_metal::Array4D start_index = {0, 0, 0, 0};
-    Tensor index_pad = ttnn::pad(
-        ttnn::DefaultQueueId,
-        ttnn::ones_like(input_a),
-        input_b.padded_shape().to_array_4D(),
-        start_index,
-        0,
-        false,
-        std::nullopt);
-    Tensor temp_a = ttnn::pad(
-        ttnn::DefaultQueueId, input_a, input_b.padded_shape().to_array_4D(), start_index, 0, false, std::nullopt);
-    return ttnn::where(index_pad, temp_a, input_b);
-}
-
 /**
  * outer product = matrix multiply when a = [1,1,N,1] and b = [1,1,1,M]
  * and result is of size [1,1,N,M].

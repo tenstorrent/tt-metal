@@ -23,10 +23,10 @@ def reference_model(hf_config):
 
 
 # Unit Tests
-def test_convert_weights(reference_model, hf_config_single_layer, temp_dir, mesh_row):
+def test_convert_weights(reference_model, hf_config, tmp_path, mesh_row):
     """Test that weights are correctly converted to TTNN format."""
     # Convert weights - now returns weight_config
-    weight_config = MLP1D.convert_weights(hf_config_single_layer, reference_model.state_dict(), temp_dir, mesh_row)
+    weight_config = MLP1D.convert_weights(hf_config, reference_model.state_dict(), tmp_path, mesh_row)
 
     # Verify weight_config structure
     assert "w1" in weight_config
@@ -49,7 +49,7 @@ def test_convert_weights(reference_model, hf_config_single_layer, temp_dir, mesh
     )
 
     # Weight should be transposed from PyTorch format
-    expected_shape = (hf_config_single_layer.hidden_size, hf_config_single_layer.intermediate_size)
+    expected_shape = (hf_config.hidden_size, hf_config.intermediate_size)
     assert w1_torch.shape[-2:] == expected_shape
 
     # Verify the values match (accounting for transpose and bfloat8 conversion)
@@ -73,8 +73,8 @@ def test_forward_pass(
     mode,
     seq_len,
     reference_model,
-    hf_config_single_layer,
-    temp_dir,
+    hf_config,
+    tmp_path,
     mesh_row,
 ):
     """Test forward pass against reference model."""
@@ -84,22 +84,22 @@ def test_forward_pass(
     hf_state_dict = reference_model.state_dict()
 
     # Setup: Convert weights and get weight_config
-    weight_config = MLP1D.convert_weights(hf_config_single_layer, hf_state_dict, temp_dir, mesh_row)
+    weight_config = MLP1D.convert_weights(hf_config, hf_state_dict, tmp_path, mesh_row)
 
     # Generate appropriate config
     if mode == "prefill":
-        model_config = MLP1D.prefill_model_config(hf_config_single_layer, mesh_row)
+        model_config = MLP1D.prefill_model_config(hf_config, mesh_row)
     else:
-        model_config = MLP1D.decode_model_config(hf_config_single_layer, mesh_row)
+        model_config = MLP1D.decode_model_config(hf_config, mesh_row)
 
     # Create a new model state
-    model_state = MLP1D.create_state(hf_config_single_layer, mesh_device=mesh_row)
+    model_state = MLP1D.create_state(hf_config, mesh_device=mesh_row)
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Create input tensor
-    torch_input = torch.randn(batch_size, 1, seq_len, hf_config_single_layer.hidden_size)
+    torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
 
     # Reference forward pass
     reference_output = reference_model(torch_input)
