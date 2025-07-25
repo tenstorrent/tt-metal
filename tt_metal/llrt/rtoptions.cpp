@@ -75,6 +75,12 @@ RunTimeOptions::RunTimeOptions() {
         }
     }
 
+    const char* custom_fabric_mesh_graph_desc_path_str = std::getenv("TT_MESH_GRAPH_DESC_PATH");
+    if (custom_fabric_mesh_graph_desc_path_str != nullptr) {
+        this->is_custom_fabric_mesh_graph_desc_path_set = true;
+        this->custom_fabric_mesh_graph_desc_path = std::string(custom_fabric_mesh_graph_desc_path_str);
+    }
+
     build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);
 
     ParseWatcherEnv();

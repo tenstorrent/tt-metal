@@ -38,7 +38,7 @@ def test_forward_pass_for_decoder_norm(
     mode,
     seq_len,
     hf_config,
-    tmpdir,
+    tmp_path,
     mesh_row,
 ):
     """Test rmsnorm forward pass against reference model."""
@@ -54,7 +54,7 @@ def test_forward_pass_for_decoder_norm(
 
     # Generate the weight config
     hf_state_dict = reference_model.state_dict()
-    weight_config = DistributedRMSNorm.convert_weights(hf_config, hf_state_dict, tmpdir, mesh_row)
+    weight_config = DistributedRMSNorm.convert_weights(hf_config, hf_state_dict, tmp_path, mesh_row)
 
     # Generate the model config
     if mode == "prefill":
@@ -134,7 +134,7 @@ def test_rmsnorm_forward_pass_for_kq_norm(
     hf_config_size_attr,
     reference_model,
     hf_config,
-    tmpdir,
+    tmp_path,
     mesh_row,
 ):
     """Test rmsnorm forward pass against reference model."""
@@ -153,7 +153,7 @@ def test_rmsnorm_forward_pass_for_kq_norm(
 
     # Generate the weight config
     hf_state_dict = reference_model.state_dict()
-    weight_config = RMSNorm.convert_weights(hf_config, hf_state_dict, tmpdir, mesh_row)
+    weight_config = RMSNorm.convert_weights(hf_config, hf_state_dict, tmp_path, mesh_row)
 
     # Generate the model config
     if mode == "prefill":

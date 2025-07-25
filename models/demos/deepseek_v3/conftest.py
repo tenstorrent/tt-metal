@@ -13,7 +13,6 @@ from transformers import AutoConfig
 
 import ttnn
 from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
-from models.demos.deepseek_v3.utils.hf_model_utils import load_model_weights  # noqa: F401
 from tests.scripts.common import get_updated_device_params
 
 
@@ -107,10 +106,8 @@ def state_dict(request, model_path):
             "State dict fixture requires either a module path to load the weights for (empty string to load the entire state dict)."
         )
 
-    if not param:
-        return load_model_weights(model_path)
-
-    param += "."  # So that the later matches include the separating dot
+    if param:
+        param += "."  # So that the later matches include the separating dot
 
     weight_paths = json.load(open(model_path / "model.safetensors.index.json", "r"))["weight_map"]
     per_safetensor_weights = {}

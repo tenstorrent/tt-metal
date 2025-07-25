@@ -3,6 +3,9 @@ Tests:
     fabric_setup:
       topology: Linear
 
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -16,6 +19,9 @@ Tests:
     fabric_setup:
       topology: Linear
 
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -28,6 +34,9 @@ Tests:
   - name: "SingleSenderLinearUnicastAllDevices"
     fabric_setup:
       topology: Linear
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
 
     defaults:
       ftype: unicast
@@ -58,6 +67,9 @@ Tests:
     fabric_setup:
       topology: Ring
 
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
+
     defaults:
       ftype: mcast
       ntype: unicast_write
@@ -70,6 +82,10 @@ Tests:
   - name: "HalfRingMulticast"
     fabric_setup:
       topology: Ring
+      num_links: 1
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
 
     defaults:
       ftype: mcast
@@ -83,6 +99,8 @@ Tests:
   - name: "MeshMulticast"
     fabric_setup:
       topology: Mesh
+      # more links caused rt args exceed 256
+      num_links: 1
 
     defaults:
       ftype: mcast
@@ -97,6 +115,8 @@ Tests:
     fabric_setup:
       topology: Mesh
       routing_type: Dynamic
+      # more links caused rt args exceed 256
+      num_links: 1
 
     defaults:
       ftype: mcast
@@ -110,6 +130,9 @@ Tests:
   - name: "SingleSenderMeshUnicastAllDevices"
     fabric_setup:
       topology: Mesh
+
+    parametrization_params:
+      num_links: [1, 2, 3, 4]
 
     defaults:
       ftype: unicast
