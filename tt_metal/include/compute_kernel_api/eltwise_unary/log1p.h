@@ -6,7 +6,8 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_log1p.h"
+#include "ckernel_sfpu_log1p.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -18,7 +19,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void log1p_tile_init() { MATH((llk_math_eltwise_unary_sfpu_log1p_init<APPROX>())); }
+ALWI void log1p_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(log1p, sfpu::log1p_init, APPROX)); }
 
 // clang-format off
 /**
@@ -34,6 +35,6 @@ ALWI void log1p_tile_init() { MATH((llk_math_eltwise_unary_sfpu_log1p_init<APPRO
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void log1p_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_log1p<APPROX>(idst))); }
+ALWI void log1p_tile(uint32_t idst) { MATH(SFPU_UNARY_NO_PARAM_KERNEL(log1p, RC, APPROX, idst)); }
 
 }  // namespace ckernel
