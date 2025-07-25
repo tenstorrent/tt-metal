@@ -13,14 +13,13 @@ from PIL import Image as PIL_Image
 from torch import Tensor
 
 import ttnn
-from models.tt_transformers.tt.common import copy_host_to_device, get_padded_prefill_len
+from models.tt_transformers.tt.common import copy_host_to_device, get_padded_prefill_len, get_prefill_rot_mat
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
 )
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_vision import (
     TtLlamaCrossAttentionTransformerVision,
 )
-from models.tt_transformers.tt.rope import get_rot_mats
 from models.utility_functions import nearest_32
 
 logger = logging.getLogger(__name__)
@@ -351,12 +350,13 @@ class CrossAttentionTransformer(torch.nn.Module):
         tt_h = self.configuration.prepare_residual_tensor_prefill(
             h,
         )
-        rot_mats = get_rot_mats(
-            head_dim=self.configuration.head_dim,
-            device=self.mesh_device,
+        rot_mats = get_prefill_rot_mat(
+            self.configuration.head_dim,
+            self.mesh_device,
             seq_len=S,
             theta=self.configuration.rope_theta,
-            rope_scaling=self.configuration.rope_scaling,
+            scale_factor=self.configuration.rope_scaling_factor,
+            orig_context_len=self.configuration.orig_context_len,
         )
 
         if isinstance(page_table, torch.Tensor):
