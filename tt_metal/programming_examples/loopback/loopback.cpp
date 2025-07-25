@@ -8,6 +8,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 // This example demonstrates a simple data copy from DRAM into L1(SRAM) and to another place in DRAM.
 // The general flow is as follows:
@@ -35,22 +36,6 @@ int main() {
         // In Metalium, submitting operations to the device is done through a command queue. This includes
         // uploading/downloading data to/from the device, and executing programs.
         CommandQueue& cq = device->command_queue();
-        // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
-        // same kernel at a given time. Metalium allows you to run different kernels on different cores
-        // simultaneously.
-        Program program = CreateProgram();
-
-        // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
-        constexpr CoreCoord core = {0, 0};
-
-        // Create the data movement kernel. This kernel will be used to copy data from DRAM to DRAM (see the
-        // `loopback_dram_copy.cpp` file for the actual implementation). The kernel is created on the Tensix core
-        // {0, 0} and uses the default NoC.
-        KernelHandle dram_copy_kernel_id = CreateKernel(
-            program,
-            OVERRIDE_KERNEL_PREFIX "loopback/kernels/loopback_dram_copy.cpp",
-            core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
         // Data on Tensix is stored in tiles. A tile is a 2D array of (usually) 32x32 values. And the Tensix uses
         // BFloat16 as the most well supported data type. Thus the tile size is 32x32x2 = 2048 bytes.
@@ -76,6 +61,29 @@ int main() {
         auto l1_buffer = CreateBuffer(l1_config);
         auto input_dram_buffer = CreateBuffer(dram_config);
         auto output_dram_buffer = CreateBuffer(dram_config);
+
+        // A program is a collection of kernels. Note that unlike OpenCL/CUDA where every core must run the
+        // same kernel at a given time. Metalium allows you to run different kernels on different cores
+        // simultaneously.
+        Program program = CreateProgram();
+
+        // This example program will only use 1 Tensix core. So we set the core to {0, 0}.
+        constexpr CoreCoord core = {0, 0};
+
+        // Create the data movement kernel. This kernel will be used to copy data from DRAM to DRAM (see the
+        // `loopback_dram_copy.cpp` file for the actual implementation). The kernel is created on the Tensix core
+        // {0, 0} and uses the default NoC.
+        std::vector<uint32_t> dram_copy_compile_time_args;
+        TensorAccessorArgs(*input_dram_buffer).append_to(dram_copy_compile_time_args);
+        TensorAccessorArgs(*output_dram_buffer).append_to(dram_copy_compile_time_args);
+        KernelHandle dram_copy_kernel_id = CreateKernel(
+            program,
+            OVERRIDE_KERNEL_PREFIX "loopback/kernels/loopback_dram_copy.cpp",
+            core,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = dram_copy_compile_time_args});
 
         // Initialize the input buffer with random data.
         std::vector<bfloat16> input_vec(elements_per_tile * num_tiles);

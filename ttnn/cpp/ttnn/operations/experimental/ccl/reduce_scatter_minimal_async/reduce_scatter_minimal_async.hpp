@@ -17,6 +17,7 @@ struct ExecuteReduceScatterMinimalAsync {
         const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
         int32_t dim,
         const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+        const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
         uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,

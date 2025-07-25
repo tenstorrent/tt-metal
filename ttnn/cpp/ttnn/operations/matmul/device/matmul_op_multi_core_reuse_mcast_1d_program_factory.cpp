@@ -16,6 +16,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -1638,7 +1639,8 @@ process_gather_in0_program_and_create_override_variables(
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    std::optional<CoreRangeSet> restricted_cores) {
+    std::optional<CoreRangeSet> restricted_cores,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
     const auto& b = b_tensors[0];
     const auto num_output_cb = out_buffers.size();
     const auto batch = b_tensors.size();
@@ -1915,6 +1917,7 @@ process_gather_in0_program_and_create_override_variables(
         (std::uint32_t)sync_cb_index,
         (std::uint32_t)sync_cb2_index,
         (std::uint32_t)remote_cb_index,
+        (std::uint32_t)fused_op_signaler.has_value(),
     };
 
     /* compute kernel args */
@@ -1996,6 +1999,11 @@ process_gather_in0_program_and_create_override_variables(
     tt_metal::NOC_MODE noc_mode =
         use_dedicated_noc ? tt_metal::NOC_MODE::DM_DEDICATED_NOC : tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
 
+    // Init the signaler
+    if (fused_op_signaler.has_value()) {
+        ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
+        signaler.init_llama_rs_cores_mm(all_cores, program, device, 0);
+    }
     /* Create the kernels */
     auto mm_kernel_in0_id = tt_metal::CreateKernel(
         program,
@@ -2006,7 +2014,7 @@ process_gather_in0_program_and_create_override_variables(
             .noc = in0_noc,
             .noc_mode = noc_mode,
             .compile_args = in0_sender_compile_time_args});
-
+    // Each core needs to signal to all RS cores, need to get a count of how many cores are in all_cores
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_ring_all_gather.cpp",
@@ -2055,6 +2063,11 @@ process_gather_in0_program_and_create_override_variables(
             // in1
             std::vector<uint32_t> mm_kernel_in1_sender_writer_args;
             mm_kernel_in1_sender_writer_args.push_back((std::uint32_t)core_type);
+            if (fused_op_signaler.has_value()) {
+                ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
+                signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, device);
+            }
+
             tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_kernel_in1_sender_writer_args);
 
             // compute
@@ -2150,6 +2163,10 @@ process_gather_in0_program_and_create_override_variables(
             mm_in1_args.push_back((std::uint32_t)vc);
             mm_in1_args.push_back((std::uint32_t)dram_read_offset);
         }
+        if (fused_op_signaler.has_value()) {
+            ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
+            signaler.push_llama_rs_rt_args_for_mm(mm_in1_args, core, in1_noc, device);
+        }
         tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_in1_args);
 
         /* compute */
@@ -2191,6 +2208,10 @@ process_gather_in0_program_and_create_override_variables(
         // in1
         std::vector<uint32_t> mm_kernel_in1_sender_writer_args;
         mm_kernel_in1_sender_writer_args.push_back((std::uint32_t)core_type);
+        if (fused_op_signaler.has_value()) {
+            ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
+            signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, device);
+        }
         tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_kernel_in1_sender_writer_args);
 
         // compute
@@ -2609,7 +2630,8 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
             global_cb,
             num_global_cb_receivers,
             sub_device_id,
-            restricted_cores);
+            restricted_cores,
+            fused_op_signaler);
     }
     TT_FATAL(start_cb_index == tt::CBIndex::c_0, "mcast does not support a non-zero start cb index");
     if (mcast_in0) {
@@ -2721,7 +2743,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     uint32_t num_global_cb_receivers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt_metal::Program program{}; /* Create a program */
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler = std::nullopt;
 
     ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t shared_vars =
         matmul_multi_core_reuse_mcast_1d_optimized_(

@@ -8,7 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "ttnn/tensor/tensor_accessor_args.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
 using namespace tt::constants;
@@ -137,7 +137,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     } else {
         std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, chunk_size, packed_scaler_value};
-        TensorAccessorArgs(*src0_buffer).append_args(reader_compile_time_args);
+        TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
         reader_kernel_id = tt_metal::CreateKernel(
             program,
@@ -161,7 +161,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             WriterDataMovementConfig(writer_ct_args));
     } else {
         std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-        TensorAccessorArgs(*dst_buffer).append_args(writer_compile_time_args);
+        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
         writer_kernel_id = tt_metal::CreateKernel(
             program,

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <cstdint>
 #include <vector>
@@ -73,11 +74,13 @@ int main() {
 
     // Kernels setup
     // Core 0 kernels
+    std::vector<uint32_t> reader_compile_time_args = {src0_cb_index};
+    TensorAccessorArgs(*src_dram_buffer).append_to(reader_compile_time_args);
     KernelHandle core0_reader_kernel_id = CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "NoC_tile_transfer/kernels/dataflow/reader0.cpp",
         core0,
-        tt::tt_metal::ReaderDataMovementConfig{{src0_cb_index, static_cast<uint32_t>(input_tensor_is_dram)}});
+        tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
     KernelHandle core0_writer_kernel_id = CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "NoC_tile_transfer/kernels/dataflow/writer0.cpp",
@@ -90,11 +93,13 @@ int main() {
         OVERRIDE_KERNEL_PREFIX "NoC_tile_transfer/kernels/dataflow/reader1.cpp",
         core1,
         tt::tt_metal::ReaderDataMovementConfig{{src0_cb_index, src1_cb_index}});
+    std::vector<uint32_t> writer_compile_time_args = {src1_cb_index};
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
     KernelHandle core1_writer_kernel_id = CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "NoC_tile_transfer/kernels/dataflow/writer1.cpp",
         core1,
-        tt::tt_metal::WriterDataMovementConfig{{src1_cb_index, static_cast<uint32_t>(output_tensor_is_dram)}});
+        tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
 
     // Runtime args setup
     SetRuntimeArgs(program, core0_reader_kernel_id, core0, {src_dram_buffer->address()});

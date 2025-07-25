@@ -61,9 +61,9 @@ def test_forward_pass(
     mode: Literal["decode"] | Literal["prefill"],
     seq_len: Literal[128] | Literal[256] | Literal[2048],
     reference_model: DeepseekV3MoE_Experts,
-    hf_config_single_layer: Any,
-    temp_dir: Path,
-    galaxy_or_t3k_mesh: Any,
+    hf_config: Any,
+    tmp_path: Path,
+    mesh_device: Any,
 ):
     """Test forward pass against reference model."""
 
@@ -74,22 +74,23 @@ def test_forward_pass(
     hf_state_dict = reference_model.state_dict()
 
     # Setup: Convert weights and get weight_config
-    weight_config = TTExpert.convert_weights_moe(hf_config_single_layer, hf_state_dict, temp_dir, galaxy_or_t3k_mesh)
+    weight_config = TTExpert.convert_weights(hf_config, hf_state_dict, tmp_path, mesh_device)
     # Generate appropriate config
+
     if mode == "prefill":
-        model_config = TTExpert.prefill_model_config(hf_config_single_layer, galaxy_or_t3k_mesh)
+        model_config = TTExpert.prefill_model_config(hf_config, mesh_device)
     else:
-        model_config = TTExpert.decode_model_config(hf_config_single_layer, galaxy_or_t3k_mesh)
+        model_config = TTExpert.decode_model_config(hf_config, mesh_device)
 
     # Create a new model state
-    model_state = TTExpert.create_state(hf_config_single_layer, mesh_device=galaxy_or_t3k_mesh)
+    model_state = TTExpert.create_state(hf_config, mesh_device=mesh_device)
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Create input tensor
     # TODO: Add tests for real weitghts
-    torch_input = torch.randn(batch_size, 1, seq_len, hf_config_single_layer.hidden_size)
+    torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
 
     # Reference forward pass
     reference_output = reference_model(torch_input)
@@ -97,8 +98,8 @@ def test_forward_pass(
     # Convert input to TTNN
     tt_input = ttnn.from_torch(
         torch_input.repeat(1, run_config["num_experts_per_device"], 1, 1),  # repeating activations for each expert
-        device=galaxy_or_t3k_mesh,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(galaxy_or_t3k_mesh),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
@@ -126,12 +127,10 @@ def test_forward_pass(
     # Convert output back to torch
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(
-            galaxy_or_t3k_mesh, dims=(0, 1), mesh_shape=tuple(galaxy_or_t3k_mesh.shape)
-        ),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=tuple(mesh_device.shape)),
     )
     # example shape (4, experts_per_device*8, seq_len, hidden_size) for TG
-    tt_output_torch = tt_output_torch.reshape(batch_size, -1, seq_len, hf_config_single_layer.hidden_size)
+    tt_output_torch = tt_output_torch.reshape(batch_size, -1, seq_len, hf_config.hidden_size)
     # example shape (1, experts_per_device*8*4, seq_len, hidden_size) for TG
     tt_output_torch = tt_output_torch[0].unsqueeze(1)
 

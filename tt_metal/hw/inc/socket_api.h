@@ -30,20 +30,10 @@ void fabric_set_unicast_route(volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_head
 #if defined(DYNAMIC_ROUTING_ENABLED)
     if constexpr (std::is_same_v<SocketT, SocketSenderInterface>) {
         fabric_set_unicast_route(
-            (MeshPacketHeader*)fabric_header_addr,
-            eth_chan_directions::COUNT,
-            0,
-            socket.downstream_chip_id,
-            socket.downstream_mesh_id,
-            0);
+            fabric_header_addr, eth_chan_directions::COUNT, 0, socket.downstream_chip_id, socket.downstream_mesh_id, 0);
     } else if constexpr (std::is_same_v<SocketT, SocketReceiverInterface>) {
         fabric_set_unicast_route(
-            (MeshPacketHeader*)fabric_header_addr,
-            eth_chan_directions::COUNT,
-            0,
-            socket.upstream_chip_id,
-            socket.upstream_mesh_id,
-            0);
+            fabric_header_addr, eth_chan_directions::COUNT, 0, socket.upstream_chip_id, socket.upstream_mesh_id, 0);
     } else {
         static_assert(always_false<SocketT>, "Unsupported socket type passed to set_fabric_unicast_route");
     }

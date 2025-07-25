@@ -137,7 +137,6 @@ class MLP1D(AbstractModule):
             mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, mesh_sharded_dim),
         )
 
-    @final
     @classmethod
     def is_device_supported(cls, mesh_device: ttnn.Device) -> bool:
         """

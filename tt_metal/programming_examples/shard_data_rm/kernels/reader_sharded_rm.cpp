@@ -17,8 +17,8 @@ void kernel_main() {
     const uint32_t current_core = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr bool src_is_dram = get_compile_time_arg_val(1) == 1;
-    const InterleavedAddrGen<src_is_dram> s0 = {.bank_base_address = src_addr, .page_size = stick_size};
+    constexpr auto s0_args = TensorAccessorArgs<1>();
+    const auto s0 = TensorAccessor(s0_args, src_addr, stick_size);
     uint32_t stick_id = start_id;
     cb_reserve_back(cb_id_in0, shard_height);
     uint32_t l1_write_addr = get_write_ptr(cb_id_in0);

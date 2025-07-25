@@ -33,6 +33,7 @@ struct ReduceScatterMinimalAsync {
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
     const std::vector<GlobalSemaphore> semaphore;
+    const std::optional<GlobalSemaphore>& barrier_semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
 
@@ -44,6 +45,7 @@ struct ReduceScatterMinimalAsync {
         MemoryConfig output_mem_config,
         ccl::Topology topology,
         std::vector<GlobalSemaphore> semaphore,
+        const std::optional<GlobalSemaphore>& barrier_semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         std::optional<uint32_t> cluster_axis = std::nullopt) :
         devices(std::move(devices)),
@@ -53,6 +55,7 @@ struct ReduceScatterMinimalAsync {
         output_mem_config(output_mem_config),
         topology(topology),
         semaphore(semaphore),
+        barrier_semaphore(barrier_semaphore),
         sub_device_id(sub_device_id),
         cluster_axis(cluster_axis) {}
 
@@ -67,6 +70,7 @@ struct ReduceScatterMinimalAsync {
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("semaphore", semaphore);
+        attrs.emplace_back("barrier_semaphore", barrier_semaphore);
         return attrs;
     }
 
@@ -100,6 +104,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
     uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const std::optional<uint32_t>& cluster_axis);
 
@@ -117,6 +122,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     CoreCoord core_grid_offset = CoreCoord(0, 0));
@@ -135,6 +141,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     CoreCoord core_grid_offset = CoreCoord(0, 0));
@@ -153,6 +160,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     CoreCoord core_grid_offset = CoreCoord(0, 0));
@@ -166,6 +174,7 @@ Tensor reduce_scatter_minimal_async(
     const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
     uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,

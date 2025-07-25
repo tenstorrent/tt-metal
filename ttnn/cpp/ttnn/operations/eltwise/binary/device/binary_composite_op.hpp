@@ -21,7 +21,6 @@ enum class BinaryCompositeOpType {
     ATAN2,
     DIV_NO_NAN,
     FLOOR_DIV,
-    SCATTER,
     OUTER,
     POLYVAL,
 };
@@ -35,7 +34,6 @@ Tensor _div_no_nan(const Tensor&, const Tensor&, const std::optional<MemoryConfi
 Tensor _div_no_nan_overload(const Tensor&, float, const std::optional<MemoryConfig>&);
 Tensor _floor_div(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _floor_div_overload(const Tensor&, float, const std::optional<MemoryConfig>&);
-Tensor _scatter(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _outer(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _polyval(const Tensor&, const std::vector<float>&, const std::optional<MemoryConfig>&);
 
@@ -101,13 +99,6 @@ struct OpHandler<BinaryCompositeOpType::FLOOR_DIV> {
     }
     static Tensor handle(const Tensor& t1, float value, const std::optional<MemoryConfig>& mem_cfg) {
         return _floor_div_overload(t1, value, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<BinaryCompositeOpType::SCATTER> {
-    static Tensor handle(const Tensor& t1, const Tensor& t2, const std::optional<MemoryConfig>& mem_cfg) {
-        return _scatter(t1, t2, mem_cfg);
     }
 };
 

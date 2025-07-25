@@ -96,6 +96,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
     uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     CoreCoord core_grid_offset,
 
@@ -113,7 +114,7 @@ namespace ccl {
 std::vector<Tensor> all_gather_matmul_async(
     const Tensor& input_tensor,
     const Tensor& weight_tensor,
-    Tensor& persistent_output_buffer,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
     uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     CoreCoord all_gather_core_grid_offset,
@@ -121,6 +122,7 @@ std::vector<Tensor> all_gather_matmul_async(
     uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config_ag = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
+    const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     const std::optional<MemoryConfig>& memory_config_mm = std::nullopt,
     bool transpose_a = false,

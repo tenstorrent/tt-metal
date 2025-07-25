@@ -2119,7 +2119,6 @@ eltwise_max = make_binary_op(ttnn.maximum)
 matmul = make_binary_op_ttnn(ttnn.matmul)
 outer = make_binary_op(ttnn.outer)
 
-eltwise_scatter = make_binary_op(ttnn.scatter)
 eltwise_nextafter = make_binary_op_ttnn(ttnn.nextafter)
 
 

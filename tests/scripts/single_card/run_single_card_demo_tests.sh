@@ -72,12 +72,13 @@ run_llama3_func() {
 }
 
 ## comment out ufld_v2 from CI tests for now unitl dataset_evaluation test failure is debugged.
-#run_ufld_v2_func() {
-#  #ufld_v2
-#  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/demo/demo.py --timeout 600
-#  #ufld_v2 eval
-#  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/demo/dataset_evaluation.py --timeout 1500
-#}
+run_ufld_v2_func() {
+  #ufld_v2
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/demo/demo.py --timeout 600
+  #ufld_v2 eval
+  ## Commenting out UFLDv2 eval since CIv2 does not support dataset download from Kaggle
+  #WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/demo/dataset_evaluation.py --timeout 1500
+}
 run_vgg_func() {
 
   #VGG11/VGG16
@@ -267,8 +268,9 @@ run_yolov8x_perf() {
 
 }
 run_yolov4_perf() {
-
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov4/demo.py --timeout 600
+## Removed coco dataset evaluation for now because CIv2 does not support downloading of the dataset.
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4 --timeout 600
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4_dp --timeout 600
 }
 run_yolov10x_demo() {
 

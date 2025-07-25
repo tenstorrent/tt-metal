@@ -15,7 +15,7 @@
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 
-#include <ttnn/tensor/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace accessor_benchmarks {
 

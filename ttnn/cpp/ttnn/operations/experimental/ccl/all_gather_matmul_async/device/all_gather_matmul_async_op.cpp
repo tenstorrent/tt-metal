@@ -90,7 +90,8 @@ std::vector<ttnn::TensorSpec> AllGatherMatmulAsync::compute_output_specs(
 std::vector<Tensor> AllGatherMatmulAsync::create_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
     // All Gather output tensor
-    auto& all_gather_output_tensor = optional_output_tensors.at(0).value();
+    ttnn::Tensor all_gather_output_tensor =
+        this->all_gather_async_struct.create_output_tensors({input_tensors[0]}, {optional_output_tensors[0]})[0];
 
     // Matmul output tensor
     ttnn::Tensor matmul_output_tensor =
@@ -161,6 +162,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmulAsync::create_progr
         device_index,
         this->all_gather_async_struct.topology,
         this->all_gather_async_struct.semaphore,
+        this->all_gather_async_struct.barrier_semaphore,
         this->all_gather_async_struct.sub_device_id,
         this->all_gather_core_grid_offset,
 
@@ -204,7 +206,7 @@ namespace ccl {
 std::vector<ttnn::Tensor> all_gather_matmul_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    ttnn::Tensor& persistent_output_buffer,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const CoreCoord all_gather_core_grid_offset,
@@ -212,6 +214,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config_ag,
     const ttnn::ccl::Topology topology,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     const std::optional<MemoryConfig>& memory_config_mm,
     const bool transpose_a,
@@ -247,7 +250,8 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
         multi_device_global_semaphore,
         sub_device_id,
         /*cluster_axis=*/std::nullopt,
-        false);
+        false,
+        barrier_semaphore);
 
     // Create the all gather output tensor used as input (activation) to the matmul
     ttnn::Tensor all_gather_out_tensor =
