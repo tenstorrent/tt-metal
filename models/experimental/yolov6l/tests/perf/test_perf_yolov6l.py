@@ -45,6 +45,7 @@ def test_perf_yolov6l(
     act_dtype,
     weight_dtype,
     resolution,
+    model_location_generator,
 ):
     disable_persistent_kernel_cache()
     performant_runner = YOLOv6lPerformantRunner(
@@ -53,7 +54,7 @@ def test_perf_yolov6l(
         act_dtype,
         weight_dtype,
         resolution=resolution,
-        model_location_generator=None,
+        model_location_generator=model_location_generator,
     )
     performant_runner._capture_yolov6l_trace_2cqs()
     input_shape = (1, 3, *resolution)
@@ -92,17 +93,17 @@ def test_perf_yolov6l(
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 66],
+        [1, 77.8],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_perf_device_bare_metal_yolov6l(batch_size, expected_perf):
+def test_perf_device_yolov6l(batch_size, expected_perf):
     subdir = "ttnn_yolov6l"
     num_iterations = 1
     margin = 0.05
     expected_perf = expected_perf if is_wormhole_b0() else 0
 
-    command = f"pytest tests/ttnn/integration_tests/yolov6l/test_ttnn_yolov6l.py::test_yolov6l"
+    command = f"pytest models/experimental/yolov6l/tests/pcc/test_ttnn_yolov6l.py::test_yolov6l"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"

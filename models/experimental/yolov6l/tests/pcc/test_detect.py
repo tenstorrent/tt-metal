@@ -9,15 +9,15 @@ import torch
 import ttnn
 from models.experimental.yolov6l.tt.model_preprocessing import (
     create_yolov6l_model_parameters_detect,
-    load_torch_model_yolov6l,
 )
 from models.experimental.yolov6l.tt.ttnn_detect import TtDetect
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.experimental.yolov6l.common import load_torch_model
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_detect(device, reset_seeds):
-    model = load_torch_model_yolov6l()
+def test_detect(device, reset_seeds, model_location_generator):
+    model = load_torch_model(model_location_generator)
 
     model = model.detect
 

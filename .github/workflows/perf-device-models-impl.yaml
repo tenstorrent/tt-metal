@@ -255,7 +255,7 @@ jobs:
         with:
           model_name: "yolov6l"
           commands: |
-            # WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov6l/tests -m models_device_performance_bare_metal
+            WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov6l/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
