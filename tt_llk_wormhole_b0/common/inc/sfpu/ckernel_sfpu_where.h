@@ -79,7 +79,7 @@ inline void _calculate_where_fp32_()
     }
 }
 
-template <bool APPROXIMATION_MODE, DataFormat data_format>
+template <bool APPROXIMATION_MODE, DataFormat data_format, int ITERATIONS>
 inline void _calculate_where_()
 {
     // Add a compile-time check to ensure only supported formats are used.
@@ -88,11 +88,11 @@ inline void _calculate_where_()
         "Unsupported data format for _calculate_where_(). Only Float32 and Float16_b are allowed.");
     if constexpr (data_format == DataFormat::Float32)
     {
-        _calculate_where_fp32_<APPROXIMATION_MODE, 32>();
+        _calculate_where_fp32_<APPROXIMATION_MODE, ITERATIONS>();
     }
     else
     {
-        _calculate_where_fp16_b_<APPROXIMATION_MODE, 32>();
+        _calculate_where_fp16_b_<APPROXIMATION_MODE, ITERATIONS>();
     }
 }
 

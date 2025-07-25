@@ -107,7 +107,9 @@ void run_kernel()
     _llk_math_eltwise_ternary_sfpu_init_<SfpuType::where>();
     _llk_math_eltwise_ternary_sfpu_start_<DstSync::SyncHalf>(0);
 
-    ckernel::sfpu::_calculate_where_<false, static_cast<DataFormat>(UNPACK_A_IN)>();
+    constexpr int iterations = 32;
+
+    ckernel::sfpu::_calculate_where_<false, static_cast<DataFormat>(UNPACK_A_IN), iterations>();
 
     _llk_math_eltwise_ternary_sfpu_done_();
 
