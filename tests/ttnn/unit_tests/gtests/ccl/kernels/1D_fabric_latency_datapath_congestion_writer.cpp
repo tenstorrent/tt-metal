@@ -5,6 +5,7 @@
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "dataflow_api.h"
 
@@ -23,8 +24,6 @@ void kernel_main() {
     const size_t dest_noc_y = get_arg_val<uint32_t>(arg_idx++);
     const size_t message_num_hops = get_arg_val<uint32_t>(arg_idx++);
     auto teardown_signal_addr = reinterpret_cast<volatile uint32_t*>(get_arg_val<uint32_t>(arg_idx++));
-    const size_t packet_header_cb = get_arg_val<uint32_t>(arg_idx++);
-    const size_t packet_header_size_in_headers = get_arg_val<uint32_t>(arg_idx++);
     const bool is_downstream = get_arg_val<uint32_t>(arg_idx++) != 0;
     const size_t latency_writer_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const size_t latency_writer_noc_y = get_arg_val<uint32_t>(arg_idx++);
@@ -41,12 +40,9 @@ void kernel_main() {
     }
 
     fabric_connection.open();
-    cb_reserve_back(packet_header_cb, packet_header_size_in_headers);
-    const auto packet_header_buffer_address = get_write_ptr(packet_header_cb);
 
-    auto* packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
-    auto* ready_packet_header =
-        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
+    auto* packet_header = PacketHeaderPool::allocate_header();
+    auto* ready_packet_header = PacketHeaderPool::allocate_header();
     // Setup data packet header
     if constexpr (use_mcast_mode) {
         packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(message_num_hops)});

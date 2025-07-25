@@ -45,7 +45,6 @@ std::random_device rd;  // Non-deterministic seed source
 std::mt19937 global_rng(rd());
 
 struct WorkerMemMap {
-    uint32_t packet_header_address;
     uint32_t source_l1_buffer_address;
     uint32_t packet_payload_size_bytes;
     uint32_t test_results_address;
@@ -62,7 +61,6 @@ WorkerMemMap generate_worker_mem_map(tt_metal::IDevice* device, Topology topolog
     uint32_t NOTIFICATION_MAILBOX_ADDR_SIZE_BYTES = tt::tt_metal::hal::get_l1_alignment();
 
     uint32_t base_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
-    uint32_t packet_header_address = base_addr;
     uint32_t source_l1_buffer_address = base_addr + PACKET_HEADER_RESERVED_BYTES;
     uint32_t test_results_address = source_l1_buffer_address + DATA_SPACE_RESERVED_BYTES;
     uint32_t target_address = source_l1_buffer_address;
@@ -71,7 +69,6 @@ WorkerMemMap generate_worker_mem_map(tt_metal::IDevice* device, Topology topolog
     uint32_t packet_payload_size_bytes = (topology == Topology::Mesh) ? 2048 : 4096;
 
     return {
-        packet_header_address,
         source_l1_buffer_address,
         packet_payload_size_bytes,
         test_results_address,
@@ -266,7 +263,6 @@ void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRouting
             .defines = defines});
 
     std::vector<uint32_t> sender_runtime_args = {
-        worker_mem_map.packet_header_address,
         worker_mem_map.source_l1_buffer_address,
         worker_mem_map.packet_payload_size_bytes,
         num_packets,
@@ -473,7 +469,6 @@ void RunTestUnicastRaw(
             .defines = defines});
 
     std::vector<uint32_t> sender_runtime_args = {
-        worker_mem_map.packet_header_address,
         worker_mem_map.source_l1_buffer_address,
         worker_mem_map.packet_payload_size_bytes,
         num_packets,
@@ -615,7 +610,6 @@ void run_unicast_test_bw_chips(
         use_dram_dst ? receiver_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::DRAM) : 0;
 
     std::vector<uint32_t> sender_runtime_args = {
-        worker_mem_map.packet_header_address,
         worker_mem_map.source_l1_buffer_address,
         worker_mem_map.packet_payload_size_bytes,
         num_packets,
@@ -917,7 +911,6 @@ void RunTestMCastConnAPI(
     log_info(tt::LogTest, "Mcast Bwd Dst Device is {} hops in direction: {}", bwd_hops, bwd_dir);
 
     std::vector<uint32_t> sender_runtime_args = {
-        worker_mem_map.packet_header_address,
         worker_mem_map.source_l1_buffer_address,
         worker_mem_map.packet_payload_size_bytes,
         num_packets,
@@ -1209,7 +1202,6 @@ void RunTest2DMCastConnAPI(
             .defines = defines});
 
     std::vector<uint32_t> sender_runtime_args = {
-        worker_mem_map.packet_header_address,
         worker_mem_map.source_l1_buffer_address,
         worker_mem_map.packet_payload_size_bytes,
         num_packets,
@@ -1442,7 +1434,6 @@ void RunTestChipMCast1D(
         receiver_logical_core.y);
 
     std::vector<uint32_t> sender_runtime_args = {
-        worker_mem_map.packet_header_address,
         worker_mem_map.source_l1_buffer_address,
         worker_mem_map.packet_payload_size_bytes,
         num_packets,
@@ -1647,19 +1638,12 @@ TEST_F(Fabric1DFixture, DISABLED_TestEDMConnectionStressTestQuick) {
 
                     // Create source packet buffer (one per worker)
                     static constexpr uint32_t source_l1_cb_index = tt::CB::c_in0;
-                    static constexpr uint32_t packet_header_cb_index = tt::CB::c_in1;
                     static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
                     auto max_payload_size = *std::max_element(packet_sizes.begin(), packet_sizes.end());
                     auto source_l1_cb_config =
                         tt_metal::CircularBufferConfig(max_payload_size * 2, {{source_l1_cb_index, cb_df}})
                             .set_page_size(source_l1_cb_index, max_payload_size);
                     CreateCircularBuffer(program, worker_logical_cores, source_l1_cb_config);
-
-                    // Create packet header buffer (one per worker)
-                    auto packet_header_cb_config =
-                        tt_metal::CircularBufferConfig(1024, {{packet_header_cb_index, cb_df}})
-                            .set_page_size(packet_header_cb_index, 32);
-                    CreateCircularBuffer(program, worker_logical_cores, packet_header_cb_config);
 
                     // Configure common compile time args for all workers
                     std::vector<uint32_t> compile_time_args = {
@@ -1719,9 +1703,7 @@ TEST_F(Fabric1DFixture, DISABLED_TestEDMConnectionStressTestQuick) {
                         }
 
                         // Circular buffer indices for source data and packet headers
-                        worker_args.push_back(source_l1_cb_index);      // Source L1 circular buffer index
-                        worker_args.push_back(packet_header_cb_index);  // Packet header circular buffer index
-                        worker_args.push_back(1);                       // Number of headers (size units in words)
+                        worker_args.push_back(source_l1_cb_index);  // Source L1 circular buffer index
 
                         worker_args.push_back(i % stall_durations_cycles.size());
                         worker_args.push_back(i % packet_sizes.size());
