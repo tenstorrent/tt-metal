@@ -208,7 +208,6 @@ tt::tt_metal::operation::Hash ReduceScatterMinimalAsync::compute_program_hash(
     auto input_memory_layout = input_tensors[0].layout();
     auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
-    uint32_t semaphore_address = this->semaphore.at(0).address();
     return tt::tt_metal::operation::hash_operation<ReduceScatterMinimalAsync>(
         this->dim,
         this->num_links,
@@ -219,8 +218,7 @@ tt::tt_metal::operation::Hash ReduceScatterMinimalAsync::compute_program_hash(
         input_shape,
         input_memory_layout,
         input_dtype,
-        input_memory_config,
-        semaphore_address);
+        input_memory_config);
 }
 
 namespace operations {
