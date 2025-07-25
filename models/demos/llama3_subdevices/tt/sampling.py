@@ -72,8 +72,6 @@ class TTSampling(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.args.cluster_shape),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
-        assert per_device_vocab_size == 16 * 1024, "Per device vocab size is incorrect (should be 16k)"
         indices_tensor_torch = torch.zeros(1, 1, self.max_batch_size, per_device_vocab_size, dtype=torch.int32)
         for i in range(per_device_vocab_size):
             indices_tensor_torch[:, :, :, i] = i
