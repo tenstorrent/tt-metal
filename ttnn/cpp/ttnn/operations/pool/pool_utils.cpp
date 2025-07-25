@@ -152,13 +152,14 @@ uint32_t calculate_L1_usage(
 
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
     const uint32_t max_rows_for_reduction =
-        !is_partial_tile ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
+        !last_tile_is_partial ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
     const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
     const uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
     // ToDo: enable 32 sticks per tile for reduction for all cases.
-    const uint32_t max_rows_for_reduction = tt::constants::TILE_HEIGHT;
+    const uint32_t max_rows_for_reduction =
+        last_tile_is_partial ? tt::constants::TILE_HEIGHT / 2 : tt::constants::TILE_HEIGHT;
     const bool is_blackhole = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE;
 
     if (input_shape[3] < tt::constants::TILE_WIDTH) {

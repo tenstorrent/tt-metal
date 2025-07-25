@@ -278,7 +278,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     // Hardware can do reduction of 8 tiles at a time.
     // CB sizes can be restricted to this in case input channels are more than 256 to perform reduction iteratively.
-    const bool is_large_kernel = kernel_size_hw > tt::constants::TILE_HEIGHT;
+    const bool is_large_kernel = last_tile_is_partial ? kernel_size_hw > tt::constants::TILE_HEIGHT / 2
+                                                      : kernel_size_hw > tt::constants::TILE_HEIGHT;
 
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
     const uint32_t max_rows_for_reduction =
@@ -288,14 +289,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     // reduction stages, so we can only reduce 4 tiles at a time, otherwise we can reduce 8 tiles at a time.
     const uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
-    const uint32_t in_aligned_nbytes_c =
-        is_wide_reduction &&
-                (input_shape[3] / num_shards_c) % (MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH) != 0
-            ? tt::round_up(
-                  (input_shape[3] / num_shards_c) % (MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH),
-                  tt::constants::TILE_WIDTH) *
-                  in_nbytes
-            : tt::round_up(input_shape[3] / num_shards_c, tt::constants::TILE_WIDTH) * in_nbytes;
 
     TT_FATAL(dilation_h == 1 && dilation_w == 1, "Dilation is not yet supported by the maxpool reader");
 
@@ -395,6 +388,15 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     tt::tt_metal::create_cb(in_cb_id_0, program, all_cores, in_cb_pagesize, in_cb_npages, in_df);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_0, in_cb_pagesize, in_cb_npages);
+
+    const uint32_t in_aligned_nbytes_c =
+        is_wide_reduction &&
+                (input_shape[3] / num_shards_c) % (MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH) != 0
+            ? tt::round_up(
+                  (input_shape[3] / num_shards_c) % (MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH),
+                  tt::constants::TILE_WIDTH) *
+                  in_nbytes
+            : tt::round_up(input_shape[3] / num_shards_c, tt::constants::TILE_WIDTH) * in_nbytes;
 
     if (split_reader) {
         in_cb_id_1 = next_cb_index++;

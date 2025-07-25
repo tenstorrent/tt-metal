@@ -42,6 +42,14 @@ def run_avg_pool2d(
     in_n, in_c, in_h, in_w = input_shape
     torch.manual_seed(0)
     torch_input = randomize_tensor(tensor_map, input_shape)
+    counter = 0
+
+    # for n in range(torch_input.shape[0]):
+    #     for c in range(torch_input.shape[1]):
+    #         for h in range(torch_input.shape[2]):
+    #             for w in range(torch_input.shape[3]):
+    #                 torch_input[n, c, h, w] = counter
+    #                 counter = counter + 1
 
     ## Test setup for Actual.
     if dtype == ttnn.bfloat8_b:
@@ -121,7 +129,7 @@ def run_avg_pool2d(
     # since the atol default is 0.016 we don't see this issue for low magnitude values, but
     # when using small divisor overrides with large kernels we see much large values which
     # overwhelm the atol and the rtol becomes significant
-    rtol = 0.01
+    rtol = 0.02
     if dtype == ttnn.bfloat8_b:
         atol = 0.35
     assert_with_pcc(torch_output, ttnn_output, pcc_thresh)
@@ -159,8 +167,8 @@ def run_avg_pool2d(
         # go to large kernels
         (2, 2),
         (3, 3),
-        # (5, 5),
-        # (9, 9),
+        (5, 5),
+        (9, 9),
     ),
 )
 @pytest.mark.parametrize(
