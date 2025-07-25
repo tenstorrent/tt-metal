@@ -11,10 +11,10 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.yolov8s_world.common import load_torch_model
 from models.demos.yolov8s_world.demo.demo_utils import LoadImages, load_coco_class_names, postprocess, preprocess
 from models.demos.yolov8s_world.reference import yolov8s_world
 from models.demos.yolov8s_world.runner.performant_runner import YOLOv8sWorldPerformantRunner
-from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import attempt_load
 from models.utility_functions import disable_persistent_kernel_cache
 
 
@@ -77,12 +77,12 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
     ],
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_demo(device, source, model_type, res, use_pretrained_weight):
+def test_demo(device, source, model_type, res, use_pretrained_weight, model_location_generator):
     disable_persistent_kernel_cache()
 
     if model_type == "torch_model":
         if use_pretrained_weight:
-            model = attempt_load("yolov8s-world.pt", map_location="cpu")
+            model = load_torch_model(model_location_generator)
         else:
             model = yolov8s_world.YOLOWorld()
 

@@ -83,6 +83,9 @@ run_python_model_tests_wormhole_b0() {
     #Yolov6l
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/yolov6l/tests/pcc/test_ttnn_yolov6l.py
 
+    #Yolov8s_world
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/yolov8s_world/tests/pcc/test_ttnn_yolov8s_world.py::test_YoloModel
+
     # Llama3.1-8B
     llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
     # Llama3.2-1B

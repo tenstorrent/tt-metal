@@ -8,7 +8,7 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.demos.yolov8s_world.demo.demo_utils import load_torch_model
+from models.demos.yolov8s_world.common import load_torch_model
 from models.demos.yolov8s_world.tt.ttnn_yolov8s_world import TtYOLOWorld
 from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import create_custom_preprocessor, move_to_device
 from models.utility_functions import divup, is_wormhole_b0
@@ -37,7 +37,8 @@ class YOLOv8sWorldPerformanceRunnerInfra:
         self.model_location_generator = model_location_generator
         self.torch_input_tensor = torch_input_tensor
 
-        self.torch_model = load_torch_model()
+        self.torch_model = load_torch_model(model_location_generator)
+        self.torch_model = self.torch_model.model
         self.torch_input_tensor = (
             torch.randn((1, 3, 640, 640), dtype=torch.float32)
             if self.torch_input_tensor is None
