@@ -139,9 +139,9 @@ def perf_benchmark(test_config, run_types: list[PerfRunType], run_count=8):
 
         runs = []
         for _ in range(run_count):
+            reset_mailboxes()
             run_elf_files(test_config["testname"])
             wait_for_tensix_operations_finished()
-            reset_mailboxes()
 
             profiler_data = Profiler.get_data(test_config["testname"])
             perf_data = process_profiler_data(profiler_data)
