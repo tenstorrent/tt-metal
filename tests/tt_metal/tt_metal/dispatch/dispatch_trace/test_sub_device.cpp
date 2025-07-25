@@ -108,7 +108,7 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixActiveEthTestSubDeviceTraceBasi
 
     // Compile the programs
     EnqueueProgram(device->command_queue(), waiter_program, false);
-    device->set_sub_device_stall_group({SubDeviceId{0}});
+    device->set_sub_device_stall_group({{SubDeviceId{0}}});
     // Test blocking on one sub-device
     EnqueueProgram(device->command_queue(), syncer_program, true);
     EnqueueProgram(device->command_queue(), incrementer_program, false);
@@ -193,7 +193,7 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixActiveEthTestSubDeviceTraceProg
 
     // Compile the programs
     EnqueueProgram(device->command_queue(), waiter_program_2, false);
-    device->set_sub_device_stall_group({SubDeviceId{0}});
+    device->set_sub_device_stall_group({{SubDeviceId{0}}});
     EnqueueProgram(device->command_queue(), syncer_program_2, false);
     EnqueueProgram(device->command_queue(), incrementer_program_2, false);
     device->reset_sub_device_stall_group();
