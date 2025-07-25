@@ -185,16 +185,30 @@ jobs:
     needs:
       - get-image-tags
       - build-images
+    strategy:
+      matrix:
+        bh_box:
+          - name: BH-LLMBox
+            num_devices: 4
+          - name: BH-DeskBox
+            num_devices: 2
+          # - name: BH-RackBox
+          #   num_devices: 8
     runs-on:
-      - BH-LLMBox
+      - ${{ matrix.bh_box.name }}
       - in-service
       - cloud-virtual-machine
     steps:
+      - name: Show box config
+        run: |
+          echo "Box: ${{ matrix.bh_box.name }}"
+          echo "NUM_DEVICES: ${{ matrix.bh_box.num_devices }}"
       - name: Run image
         timeout-minutes: 30
         env:
+          NUM_DEVICES: ${{ matrix.bh_box.num_devices }}
           LLAMA_DIR: ${{ contains(runner.name, 'tt-metal-ci-vm') && '/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct' || '/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct' }}
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR=$LLAMA_DIR -e NUM_DEVICES=$NUM_DEVICES ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
   test-bh-image:
     needs:
       - get-image-tags
