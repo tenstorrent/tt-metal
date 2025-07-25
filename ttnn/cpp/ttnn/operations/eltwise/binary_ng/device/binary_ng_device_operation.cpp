@@ -14,28 +14,26 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
     using enum DataType;
     switch (val) {
         case ADD:
-        case SUB:
             return (
                 (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT32 && b == UINT32) ||
                 (a == UINT16 && b == UINT16));
-        case MUL:
-        case EQ:
-        case NE:
-        case LOGICAL_AND:
-        case LOGICAL_OR:
-        case LOGICAL_XOR:
-        case SQUARED_DIFFERENCE:
-            return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
-        case DIV:
+        case SUB:
+        case MUL: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
+        case RSUB:
         case LOGADDEXP:
         case LOGADDEXP2:
         case LDEXP:
         case BIAS_GELU: return (a == FLOAT32 && b == FLOAT32);
-        case RSUB:
+        case LOGICAL_AND:
+        case LOGICAL_OR:
+        case LOGICAL_XOR:
+        case SQUARED_DIFFERENCE:
         case GT:
         case LT:
         case GE:
-        case LE: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32));
+        case LE:
+        case EQ:
+        case NE: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32));
         case LCM:
         case GCD: return (a == INT32 && b == INT32);
         case LEFT_SHIFT:
@@ -51,6 +49,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case MAXIMUM:
         case MINIMUM:
         case XLOGY:
+        case DIV:
         case POWER: return true;
         default: return false;
     }
@@ -167,19 +166,6 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     const auto& output_tensor = tensor_args.output_tensor;
-
-    // Validate storage type for input tensors
-    TT_FATAL(
-        input_tensor_a.storage_type() == StorageType::DEVICE,
-        "Input tensor A must be on device, got storage type: {}",
-        input_tensor_a.storage_type());
-
-    if (input_tensor_b.has_value()) {
-        TT_FATAL(
-            input_tensor_b->storage_type() == StorageType::DEVICE,
-            "Input tensor B must be on device, got storage type: {}",
-            input_tensor_b->storage_type());
-    }
 
     TT_FATAL(
         input_tensor_b.has_value() != attributes.scalar.has_value(), "Either the tensor b or scalar should be set");
@@ -455,6 +441,7 @@ BinaryNgDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor,
+
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
     tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations) {
@@ -488,8 +475,7 @@ BinaryNgDeviceOperation::invoke(
             std::nullopt,
             memory_config.value_or(
                 output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config()),
-            input_tensor_a.dtype(),  // TODO: For mixed dtypes we need to set this value to the appropriate dtype
-                                     // depending on which LLK is meant to be used.
+            input_tensor_a.dtype(),
             output_dtype,
             get_worker_grid(input_tensor_a, &input_tensor_b, output_tensor),
             std::nullopt,
