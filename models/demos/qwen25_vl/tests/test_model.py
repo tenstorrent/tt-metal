@@ -34,6 +34,21 @@ from models.utility_functions import comp_allclose, comp_pcc
     [None, 1, 2],  # None means all layers, specific numbers will run fewer layers
     ids=["all_layers", "single_layer", "two_layers"],
 )
+@pytest.mark.parametrize(
+    # image_grid_thw: The temporal, height and width of feature shape of each image in LLM.
+    "seq_len, image_grid_thw",
+    [
+        (
+            42952,
+            torch.tensor([[1, 236, 182]]),
+        ),  # 300 DPI scanned doc with Letter paper (8.5x11 inches) has resolution around 2550x3300
+        (
+            14308,
+            torch.tensor([[1, 98, 146]]),
+        ),  # 100 DPI scanned doc with Letter paper (8.5x11 inches) has resolution around 850x1100
+    ],
+    ids=["300dpi", "100dpi"],
+)
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_vision_model_inference(
     mesh_device,
@@ -42,6 +57,8 @@ def test_vision_model_inference(
     num_layers,
     is_ci_env,
     request,
+    seq_len,
+    image_grid_thw,
 ):
     test_id = request.node.callspec.id
     if is_ci_env and "two_layers" not in test_id:
@@ -55,13 +72,9 @@ def test_vision_model_inference(
 
     # Example inputs for http://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg
     # pixel_values are produced by Qwen2_5_VLImageProcessor, these come from the above img
-    pt_pixel_values = torch.randn([14308, 1176]) * 0.8320 + 1.2969  # std and mean from above img
-    # image_grid_thw (`torch.LongTensor` of shape `(num_images, 3)`, *optional*):
-    #     The temporal, height and width of feature shape of each image in LLM.
-    # for this test assume 1 image of size 98 x 146 patches as used in with their repo example img
-    image_grid_thw = torch.tensor([[1, 98, 146]])
+    pt_pixel_values = torch.randn([seq_len, 1176]) * 0.8320 + 1.2969  # std and mean from above img
     ref_seq_len = image_grid_thw[0, 1] * image_grid_thw[0, 2]
-    # pad seq_len to be divisible by 128 (MAX_QKV_MM_SEQ_LEN from tt_transformers model)
+    seq_len = ((ref_seq_len // 2048) + 1) * 2048
     seq_len = ((ref_seq_len // 128) + 1) * 128
 
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=seq_len)
