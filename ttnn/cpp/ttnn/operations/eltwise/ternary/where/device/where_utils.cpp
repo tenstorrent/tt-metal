@@ -120,18 +120,11 @@ std::map<std::string, std::string> make_dataflow_defines(const DataType dtype, c
     return defines;
 }
 
-uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const bool is_quant_op) {
-    // Always pass the more accurate fp32 when the quantization scale is passed as a scalar
-    if ((dtype == DataType::FLOAT32) || is_quant_op) {
-        return std::bit_cast<uint32_t>(scalar);
-    }
+uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype) {
     if (dtype == DataType::INT32) {
         return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
     }
-    if (dtype == DataType::UINT32) {
-        return std::bit_cast<uint32_t>(scalar);
-    }
-    return pack_two_bfloat16_into_uint32({scalar, scalar});
+    return std::bit_cast<uint32_t>(scalar);
 }
 
 }  // namespace ttnn::operations::ternary

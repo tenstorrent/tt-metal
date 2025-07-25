@@ -37,7 +37,7 @@ struct WhereKernelConfig {
 
 std::string get_kernel_file_path(KernelName kernel_name);
 
-uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype, bool is_quant_op);
+uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype);
 
 std::map<std::string, std::string> make_dataflow_defines(DataType dtype, DataType b_dtype);
 

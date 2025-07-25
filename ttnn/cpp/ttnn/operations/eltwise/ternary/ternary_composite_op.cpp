@@ -56,17 +56,6 @@ Tensor _addcdiv(
         output_mem_config);
     result = ttnn::where(ttnn::eqz(input_c, output_mem_config), t_inf, result, output_mem_config);
     return result;
-
-    // return ttnn::where(
-    //     ttnn::eqz(input_c, output_mem_config),
-    //     (value == 0)
-    //         ? t_nan
-    //         : ttnn::where(
-    //               ttnn::eqz(input_b, output_mem_config),
-    //               t_nan,
-    //               ttnn::multiply(ttnn::sign(input_b, output_mem_config), t_inf, std::nullopt, output_mem_config)),
-    //     result,
-    //     output_mem_config);
 }
 
 // lerp(input, end, weight) = start   weight * (end - start)

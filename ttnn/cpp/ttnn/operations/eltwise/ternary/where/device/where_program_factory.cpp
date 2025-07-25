@@ -104,12 +104,12 @@ void set_or_update_runtime_arguments(
         // All variants use same compute runtime args now
         if (variant == WhereVariant::TTS) {
             auto bit_cast_scalar =
-                pack_scalar_runtime_arg(operation_attributes.value_false_scalar.value(), output.dtype(), false);
+                pack_scalar_runtime_arg(operation_attributes.value_false_scalar.value(), output.dtype());
             std::array compute_runtime_args = {num_tiles_per_core, bit_cast_scalar};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         } else if (variant == WhereVariant::TST) {
             auto bit_cast_scalar =
-                pack_scalar_runtime_arg(operation_attributes.value_true_scalar.value(), output.dtype(), false);
+                pack_scalar_runtime_arg(operation_attributes.value_true_scalar.value(), output.dtype());
             std::array compute_runtime_args = {num_tiles_per_core, bit_cast_scalar};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         } else {
@@ -354,12 +354,10 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     // All variants use the same compile args now
     std::vector<uint32_t> compute_kernel_args;
     if (variant == WhereVariant::TTS) {
-        auto bit_cast_scalar =
-            pack_scalar_runtime_arg(operation_attributes.value_false_scalar.value(), output.dtype(), false);
+        auto bit_cast_scalar = pack_scalar_runtime_arg(operation_attributes.value_false_scalar.value(), output.dtype());
         compute_kernel_args = {num_tiles_per_cycle, bit_cast_scalar};
     } else if (variant == WhereVariant::TST) {
-        auto bit_cast_scalar =
-            pack_scalar_runtime_arg(operation_attributes.value_true_scalar.value(), output.dtype(), false);
+        auto bit_cast_scalar = pack_scalar_runtime_arg(operation_attributes.value_true_scalar.value(), output.dtype());
         compute_kernel_args = {num_tiles_per_cycle, bit_cast_scalar};
     } else {
         compute_kernel_args = {num_tiles_per_cycle};

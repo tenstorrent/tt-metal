@@ -338,24 +338,24 @@ Tensor ExecuteDiv::invoke(
     }
 
     // Accurate mode: handles division by zero (inf/nan cases) for non-fp32 inputs
-    // If b=0 in round_mode == "floor" or "trunc", then for b/0  Golden = +/-inf   TT= +/-2147483648.0
     if (accurate_mode) {
         float t_nan = std::nanf("");
         result = typecast(queue_id, result, input_dtype, std::nullopt, output_tensor);
-        Tensor condition =
-            ttnn::logical_and(ttnn::eqz(input_b, output_mem_config), ttnn::eqz(input_a, output_mem_config));
-        result = ttnn::where(condition, t_nan, result, output_mem_config, output_tensor);
+        Tensor is_b_zero = ttnn::eqz(input_b, output_mem_config);
+        result = ttnn::where(
+            ttnn::logical_and(is_b_zero, ttnn::eqz(input_a, output_mem_config)),
+            t_nan,
+            result,
+            output_mem_config,
+            output_tensor);
 
+        // If b=0 in round_mode == "floor" or "trunc", then for b/0  Golden = +/-inf   TT= +/-2147483648.0, assuming the
+        // sign of a
         if (round_mode == "floor" || round_mode == "trunc") {
-            std::cout << "here floor or trunc" << std::endl;
             float t_inf = std::numeric_limits<float>::infinity();
-            condition = ttnn::eqz(input_b, output_mem_config);
-            result = ttnn::where(
-                condition,
-                ttnn::multiply(ttnn::sign(input_b, output_mem_config), t_inf),
-                result,
-                output_mem_config,
-                output_tensor);
+            Tensor sign_inf = ttnn::sign(input_b, output_mem_config);
+            sign_inf = ttnn::where(is_b_zero, ttnn::sign(input_a, output_mem_config), sign_inf);
+            result = ttnn::where(is_b_zero, ttnn::multiply(sign_inf, t_inf), result, output_mem_config, output_tensor);
         }
     }
 

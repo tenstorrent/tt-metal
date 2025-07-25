@@ -28,7 +28,7 @@ struct WhereDeviceOperation {
         std::optional<DataType> dtype;
         std::optional<DeviceComputeKernelConfig> compute_kernel_config;
 
-        // Scalar values for TTS/TST/TSS variants
+        // Scalar values for TTS/TST variants
         std::optional<float> value_true_scalar;
         std::optional<float> value_false_scalar;
 
