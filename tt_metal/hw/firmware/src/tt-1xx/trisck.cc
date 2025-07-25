@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
 // This c-file's purpose is:
 // 1) include the generated list of kernels
 //      The files hold run_kernel() definition and inline kernel_main functions for every ckernel
@@ -27,8 +26,7 @@ uint32_t math_sync_tile_dst_index = 0;
 uint32_t gl_alu_format_spec_reg = 0;
 uint32_t op_info_offset = 0;
 
-namespace ckernel
-{
+namespace ckernel {
 volatile tt_reg_ptr uint* regfile = reinterpret_cast<volatile uint*>(REGFILE_BASE);
 #if !defined(INSTRN_BUFFER_TNG)
 // Once tt_llk is using an instrn_buffer array, this definition can be
@@ -38,12 +36,13 @@ extern volatile uint __instrn_buffer[];
 namespace ckernel {
 volatile tt_reg_ptr uint* instrn_buffer = &__instrn_buffer[0];
 #endif  // !INSTRN_BUF_TNG
-volatile tt_reg_ptr uint * pc_buf_base = reinterpret_cast<volatile uint *>(PC_BUF_BASE);
-volatile tt_reg_ptr uint * mailbox_base[4] = {
-    reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_MAILBOX0_BASE), reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_MAILBOX1_BASE),
-    reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_MAILBOX2_BASE), reinterpret_cast<volatile uint tt_reg_ptr *>(TENSIX_MAILBOX3_BASE)
-};
-}
+volatile tt_reg_ptr uint* pc_buf_base = reinterpret_cast<volatile uint*>(PC_BUF_BASE);
+volatile tt_reg_ptr uint* mailbox_base[4] = {
+    reinterpret_cast<volatile uint tt_reg_ptr*>(TENSIX_MAILBOX0_BASE),
+    reinterpret_cast<volatile uint tt_reg_ptr*>(TENSIX_MAILBOX1_BASE),
+    reinterpret_cast<volatile uint tt_reg_ptr*>(TENSIX_MAILBOX2_BASE),
+    reinterpret_cast<volatile uint tt_reg_ptr*>(TENSIX_MAILBOX3_BASE)};
+}  // namespace ckernel
 
 extern "C" [[gnu::section(".start")]]
 uint32_t _start() {
@@ -58,7 +57,7 @@ uint32_t _start() {
 #endif
 #else
     extern uint32_t __kernel_data_lma[];
-    do_crt1((uint32_t tt_l1_ptr *)__kernel_data_lma);
+    do_crt1((uint32_t tt_l1_ptr*)__kernel_data_lma);
 
 #if defined(UCK_CHLKC_UNPACK)
     // Make sure DBG_FEATURE_DISABLE register is cleared before every kernel is executed
