@@ -29,14 +29,24 @@ bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
     return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D ||
            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING ||
            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY;
 }
 
 bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
     return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY;
 }
 
 uint32_t get_sender_channel_count(tt::tt_fabric::Topology topology) {
@@ -55,11 +65,17 @@ uint32_t get_downstream_edm_count(tt::tt_fabric::Topology topology) {
     }
 }
 
-FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, tt::ClusterType cluster_type) {
-    if (cluster_type == tt::ClusterType::GALAXY && fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {
-        return FabricType::TORUS_XY;
+FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
+    switch (fabric_config) {
+        case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: return FabricType::TORUS_XY;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X: return FabricType::TORUS_X;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y: return FabricType::TORUS_Y;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: return FabricType::TORUS_XY;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X: return FabricType::TORUS_X;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y: return FabricType::TORUS_Y;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY: return FabricType::TORUS_XY;
+        default: return FabricType::MESH;
     }
-    return FabricType::MESH;
 }
 
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(

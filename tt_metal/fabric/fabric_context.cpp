@@ -48,8 +48,13 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
         case tt::tt_fabric::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
         case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
         case tt::tt_fabric::FabricConfig::FABRIC_2D: return tt::tt_fabric::Topology::Mesh;
-        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS: return tt::tt_fabric::Topology::Torus;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X: return tt::tt_fabric::Topology::Torus;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y: return tt::tt_fabric::Topology::Torus;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: return tt::tt_fabric::Topology::Torus;
         case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC: return tt::tt_fabric::Topology::Mesh;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X: return tt::tt_fabric::Topology::Torus;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y: return tt::tt_fabric::Topology::Torus;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY: return tt::tt_fabric::Topology::Torus;
         case tt::tt_fabric::FabricConfig::DISABLED:
         case tt::tt_fabric::FabricConfig::CUSTOM:
             TT_THROW("Unsupported fabric config: {}", magic_enum::enum_name(fabric_config));

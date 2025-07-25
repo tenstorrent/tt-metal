@@ -10,12 +10,23 @@ namespace tt::tt_fabric {
 
 enum class FabricConfig : uint32_t {
     DISABLED = 0,
-    FABRIC_1D = 1,          // Instatiates fabric with 1D routing and no deadlock avoidance
-    FABRIC_1D_RING = 2,     // Instatiates fabric with 1D routing and with deadlock avoidance using datelines
-    FABRIC_2D = 3,          // Instatiates fabric with 2D routing
-    FABRIC_2D_TORUS = 4,    // Instatiates fabric with 2D routing and with deadlock avoidance using datelines
-    FABRIC_2D_DYNAMIC = 5,  // Instatiates fabric with 2D routing with dynamic routing
-    CUSTOM = 6
+    FABRIC_1D = 1,       // Instatiates fabric with 1D routing and no deadlock avoidance
+    FABRIC_1D_RING = 2,  // Instatiates fabric with 1D routing and with deadlock avoidance using datelines
+    FABRIC_2D = 3,       // Instatiates fabric with 2D routing
+    FABRIC_2D_TORUS_X =
+        4,  // Instatiates fabric with 2D routing and with deadlock avoidance using datelines along X axis
+    FABRIC_2D_TORUS_Y =
+        5,  // Instatiates fabric with 2D routing and with deadlock avoidance using datelines along Y axis
+    FABRIC_2D_TORUS_XY =
+        6,  // Instatiates fabric with 2D routing and with deadlock avoidance using datelines along XY axes
+    FABRIC_2D_DYNAMIC = 7,            // Instatiates fabric with 2D routing with dynamic routing
+    FABRIC_2D_DYNAMIC_TORUS_X = 8,    // Instatiates fabric with 2D routing with dynamic routing and with deadlock
+                                      // avoidance using datelines along X axis
+    FABRIC_2D_DYNAMIC_TORUS_Y = 9,    // Instatiates fabric with 2D routing with dynamic routing and with deadlock
+                                      // avoidance using datelines along Y axis
+    FABRIC_2D_DYNAMIC_TORUS_XY = 10,  // Instatiates fabric with 2D routing with dynamic routing and with deadlock
+                                      // avoidance using datelines along XY axes
+    CUSTOM = 11
 };
 
 enum class FabricReliabilityMode : uint32_t {
