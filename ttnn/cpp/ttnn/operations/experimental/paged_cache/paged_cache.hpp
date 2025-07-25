@@ -34,7 +34,8 @@ struct PagedFusedUpdateCacheOperation {
         std::optional<bool> share_cache,
         const std::optional<const Tensor>& page_table,
         uint32_t batch_offset,
-        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+        std::optional<const std::set<ttnn::MeshCoordinate>> mesh_coords);
 };
 
 struct PagedFillCacheOperation {
