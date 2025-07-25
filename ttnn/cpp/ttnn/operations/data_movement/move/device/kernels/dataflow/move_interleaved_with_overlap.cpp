@@ -33,8 +33,8 @@ void kernel_main() {
     bool do_third_multicast = get_arg_val<uint32_t>(24) == 1;
 
     constexpr uint32_t cb_id = get_compile_time_arg_val(0);
-    constexpr bool src_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr bool dst_is_dram = get_compile_time_arg_val(2) == 1;
+    constexpr auto src_tensor_args = TensorAccessorArgs<1>();
+    constexpr auto dst_tensor_args = TensorAccessorArgs<1 + src_tensor_args.compile_time_args_skip()>();
 
     const DataFormat data_format = get_dataformat(cb_id);
 
@@ -47,11 +47,8 @@ void kernel_main() {
     constexpr uint32_t ublock_size_tiles = 1;
     uint32_t tile_bytes = get_tile_size(cb_id);
 
-    const InterleavedAddrGenFast<src_is_dram> src_addrgen = {
-        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
-
-    const InterleavedAddrGenFast<dst_is_dram> dst_addrgen = {
-        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto src_addrgen = TensorAccessor(src_tensor_args, src_addr, tile_bytes);
+    const auto dst_addrgen = TensorAccessor(dst_tensor_args, dst_addr, tile_bytes);
 
     // read a ublock of tiles from src to CB
     cb_reserve_back(cb_id, num_tiles);

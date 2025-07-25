@@ -18,8 +18,8 @@ void kernel_main() {
     uint32_t output_Ht = get_arg_val<uint32_t>(4);
     uint32_t output_Wt = get_arg_val<uint32_t>(5);
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t ALIGNMENT = get_compile_time_arg_val(1);
+    constexpr auto tensor_args = TensorAccessorArgs<0>();
+    constexpr uint32_t ALIGNMENT = get_compile_time_arg_val(0 + tensor_args.compile_time_args_skip());
 
     uint32_t num_sticks_per_input_tile_row = input_Wt << 5;  // Tile height is 32
     uint32_t num_sticks_per_output_tile_row = output_Wt << 5;
@@ -35,8 +35,7 @@ void kernel_main() {
     const uint32_t tile_bytes = get_tile_size(cb_id_in0);
     const DataFormat data_format = get_dataformat(cb_id_in0);
 
-    const InterleavedAddrGenFast<src0_is_dram> s0 = {
-        .bank_base_address = src0_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto s0 = TensorAccessor(tensor_args, src0_addr, tile_bytes);
 
     // Sticks are a row of elements in a single tile (32 elements)
     // Stick id increments row-wise

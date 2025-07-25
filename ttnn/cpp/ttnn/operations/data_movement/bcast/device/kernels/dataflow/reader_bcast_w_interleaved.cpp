@@ -16,8 +16,8 @@ void kernel_main() {
     uint32_t Wt = get_arg_val<uint32_t>(11);
     uint32_t nc1 = get_arg_val<uint32_t>(12);  // if 1 we expect the bcast tensor to have NC=1
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr auto src0_tensor_args = TensorAccessorArgs<0>();
+    constexpr auto src1_tensor_args = TensorAccessorArgs<0 + src0_tensor_args.compile_time_args_skip()>();
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -36,11 +36,8 @@ void kernel_main() {
     uint32_t i = 0;
     uint32_t i_bcast = 0;
 
-    const InterleavedAddrGenFast<src0_is_dram> s0 = {
-        .bank_base_address = src0_addr, .page_size = in0_tile_bytes, .data_format = in0_data_format};
-
-    const InterleavedAddrGenFast<src1_is_dram> s1 = {
-        .bank_base_address = src1_addr, .page_size = in1_tile_bytes, .data_format = in1_data_format};
+    const auto s0 = TensorAccessor(src0_tensor_args, src0_addr, in0_tile_bytes);
+    const auto s1 = TensorAccessor(src1_tensor_args, src1_addr, in1_tile_bytes);
 
     for (uint32_t nc = 0; nc < NC; nc++) {
         for (uint32_t ht = 0; ht < Ht; ht++) {

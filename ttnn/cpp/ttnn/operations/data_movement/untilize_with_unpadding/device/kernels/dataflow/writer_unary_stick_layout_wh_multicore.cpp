@@ -16,14 +16,13 @@ void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t unpadded_X_size = get_arg_val<uint32_t>(1);
 
-    constexpr bool dst0_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr auto tensor_args = TensorAccessorArgs<0>();
 
 #if (STICK_SIZE_IS_POW2 == 1)
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(1);
-    const InterleavedPow2AddrGen<dst0_is_dram> s = {
-        .bank_base_address = dst_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(0 + tensor_args.compile_time_args_skip());
+    const auto s = TensorAccessor(tensor_args, dst_addr, log_base_2_of_page_size, true);
 #else
-    const InterleavedAddrGen<dst0_is_dram> s = {.bank_base_address = dst_addr, .page_size = unpadded_X_size};
+    const auto s = TensorAccessor(tensor_args, dst_addr, unpadded_X_size);
 #endif
     auto write_block = [&](uint32_t num_rows,
                            uint32_t start_row_id,

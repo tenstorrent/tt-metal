@@ -21,34 +21,24 @@ void kernel_main() {
     const uint32_t tile_size_bytes = get_tile_size(cb_id_in);
     const DataFormat data_format = get_dataformat(cb_id_in);
 
-    uint8_t l1_src_addr_gens_memblk[sizeof(InterleavedAddrGenFast<false>) * num_tensors];
-    uint8_t dram_src_addr_gens_memblk[sizeof(InterleavedAddrGenFast<true>) * num_tensors];
+    // Since we have multiple tensors, we need to store multiple TensorAccessorArgs
+    // Each tensor will have its own args starting at different offsets
+    constexpr uint32_t tensor_accessor_args_size = 2;  // Each TensorAccessorArgs uses 2 compile-time args
 
-    InterleavedAddrGenFast<false>* l1_src_addr_gens =
-        reinterpret_cast<InterleavedAddrGenFast<false>*>(l1_src_addr_gens_memblk);
-    InterleavedAddrGenFast<true>* dram_src_addr_gens =
-        reinterpret_cast<InterleavedAddrGenFast<true>*>(dram_src_addr_gens_memblk);
-
-    bool is_dram[num_tensors];
     uint32_t num_tiles_per_block[num_tensors];
     uint32_t tile_id_per_tensor[num_tensors];
+    uint32_t src_addr[num_tensors];
     constexpr uint32_t src_addr_base_idx = 3;
-    constexpr uint32_t is_dram_base_offset = num_tensors;
-    constexpr uint32_t num_tiles_per_block_base_offset = is_dram_base_offset + num_tensors;
+    constexpr uint32_t num_tiles_per_block_base_offset = num_tensors;
     constexpr uint32_t tile_id_per_tensor_offset = num_tiles_per_block_base_offset + num_tensors;
     tt_l1_ptr uint32_t* arg_ptr = (tt_l1_ptr uint32_t*)get_arg_addr(src_addr_base_idx);
+
+    // Parse runtime arguments for all tensors
     for (uint32_t i = 0; i < num_tensors; ++i) {
-        uint32_t src_addr = arg_ptr[i];
-        is_dram[i] = (bool)arg_ptr[is_dram_base_offset + i];
+        src_addr[i] = arg_ptr[i];
+        // Skip is_dram since TensorAccessor handles this automatically
         num_tiles_per_block[i] = arg_ptr[num_tiles_per_block_base_offset + i];
         tile_id_per_tensor[i] = arg_ptr[tile_id_per_tensor_offset + i];
-        if (is_dram[i]) {
-            new (&dram_src_addr_gens[i]) InterleavedAddrGenFast<true>{
-                .bank_base_address = src_addr, .page_size = tile_size_bytes, .data_format = data_format};
-        } else {
-            new (&l1_src_addr_gens[i]) InterleavedAddrGenFast<false>{
-                .bank_base_address = src_addr, .page_size = tile_size_bytes, .data_format = data_format};
-        }
     }
 
     uint32_t curr_tensor = start_tensor;
@@ -56,11 +46,13 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_tiles; ++i) {
         cb_reserve_back(cb_id_in, ublock_size_tiles);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in);
-        if (is_dram[curr_tensor]) {
-            noc_async_read_tile(tile_id_per_tensor[curr_tensor], dram_src_addr_gens[curr_tensor], l1_write_addr);
-        } else {
-            noc_async_read_tile(tile_id_per_tensor[curr_tensor], l1_src_addr_gens[curr_tensor], l1_write_addr);
-        }
+
+        // Create TensorAccessorArgs for the current tensor
+        // Each tensor's args start at offset: curr_tensor * tensor_accessor_args_size
+        const auto tensor_args = TensorAccessorArgs<2>(curr_tensor * tensor_accessor_args_size);
+        const auto s = TensorAccessor(tensor_args, src_addr[curr_tensor], tile_size_bytes);
+
+        noc_async_read_tile(tile_id_per_tensor[curr_tensor], s, l1_write_addr);
         noc_async_read_barrier();
         cb_push_back(cb_id_in, ublock_size_tiles);
 

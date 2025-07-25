@@ -51,8 +51,9 @@ void kernel_main() {
     const uint32_t full_unpadded_X_nbytes = get_arg_val<uint32_t>(23);
     const uint32_t num_local_W = get_arg_val<uint32_t>(26);
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool src_stick_size_is_pow2 = get_compile_time_arg_val(2) == 1;
+    constexpr auto src_tensor_args = TensorAccessorArgs<0>();
+    constexpr bool src_stick_size_is_pow2 =
+        get_compile_time_arg_val(0 + src_tensor_args.compile_time_args_skip() + 1) == 1;
 
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
 
@@ -61,20 +62,10 @@ void kernel_main() {
     const uint32_t l1_addr_align_offset =
         32 - l1_addr_partial % 32;  // NOTE: this is fine with double buffering since offset will be same for each page
 
-    // #if (src_stick_size_is_pow2)
-    //     constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(3);
-    //     const InterleavedPow2AddrGen<src0_is_dram> s0 = {
-    //         .bank_base_address = src_addr,
-    //         .log_base_2_of_page_size = src_log_base_2_of_page_size
-    //     };
-    // #else
-    const InterleavedAddrGen<src0_is_dram> s0 = {.bank_base_address = src_addr, .page_size = full_unpadded_X_nbytes};
-    // #endif
+    const auto s0 = TensorAccessor(src_tensor_args, src_addr, full_unpadded_X_nbytes);
 
-    const InterleavedPow2AddrGen<false> s_const = {
-        .bank_base_address = pad_value_const_buffer_addr,
-        .log_base_2_of_page_size = 6  // TODO: generalize. Currently hardcoded for 32 16b values (2^6 = 64)
-    };
+    constexpr auto const_tensor_args = TensorAccessorArgs<false, false, false>();
+    const auto s_const = TensorAccessor(const_tensor_args, pad_value_const_buffer_addr, 64);
     const uint64_t const_buffer_noc_addr = get_noc_addr(0, s_const);
 
     uint16_t pad_value = pad_value_packed >> 16;

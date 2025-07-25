@@ -9,6 +9,7 @@
 
 #include "ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_accessor_args.hpp"
 
 #include <tt-metalium/tt_align.hpp>
 
@@ -603,7 +604,8 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
 
     bool dst_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {num_input_tensors};
-    std::vector<uint32_t> writer_compile_time_args = {num_input_tensors, std::uint32_t(dst_is_dram)};
+    std::vector<uint32_t> writer_compile_time_args = {num_input_tensors};
+    TensorAccessorArgs(*output.buffer()).append_args(writer_compile_time_args);
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -842,11 +844,15 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     // Reader compile-time args
     // Data is 32 byte aligned
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)num_input_tensors,
-    };
+    std::vector<uint32_t> reader_compile_time_args = {};
+
+    // Add TensorAccessorArgs for each input tensor
+    for (uint32_t i = 0; i < num_input_tensors; ++i) {
+        TensorAccessorArgs(*input_tensors[i].buffer()).append_args(reader_compile_time_args);
+    }
+
+    reader_compile_time_args.push_back((std::uint32_t)src0_cb_index);
+    reader_compile_time_args.push_back((std::uint32_t)num_input_tensors);
 
     std::map<std::string, std::string> concat_defines;
 

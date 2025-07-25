@@ -10,31 +10,27 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(1);
     uint32_t num_hw_blocks_per_core = get_arg_val<uint32_t>(2);
 
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t Ht = get_compile_time_arg_val(1);
-    constexpr uint32_t H_per_tile = get_compile_time_arg_val(2);
-    constexpr uint32_t H_per_tile_last = get_compile_time_arg_val(3);
-    constexpr uint32_t Wt = get_compile_time_arg_val(4);
-    constexpr uint32_t W = get_compile_time_arg_val(5);
-    constexpr uint32_t HtWt = get_compile_time_arg_val(6);
-    constexpr uint32_t W_size_bytes = get_compile_time_arg_val(7);
-    constexpr uint32_t l1_write_offset_bytes = get_compile_time_arg_val(8);
+    constexpr auto tensor_args = TensorAccessorArgs<0>();
+    constexpr uint32_t Ht = get_compile_time_arg_val(0 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t H_per_tile = get_compile_time_arg_val(1 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t H_per_tile_last = get_compile_time_arg_val(2 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t Wt = get_compile_time_arg_val(3 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t W = get_compile_time_arg_val(4 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t HtWt = get_compile_time_arg_val(5 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t W_size_bytes = get_compile_time_arg_val(6 + tensor_args.compile_time_args_skip());
+    constexpr uint32_t l1_write_offset_bytes = get_compile_time_arg_val(7 + tensor_args.compile_time_args_skip());
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
 
     const uint32_t stick_size_bytes = W_size_bytes;
 
-    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(9) == 1;
+    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(8 + tensor_args.compile_time_args_skip()) == 1;
 #if (stick_size_is_pow2)
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(10);
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(9 + tensor_args.compile_time_args_skip());
+    const auto s = TensorAccessor(tensor_args, src_addr, log_base_2_of_page_size, true);
 #else
-    constexpr uint32_t page_size = get_compile_time_arg_val(10);
-#endif
-#if (stick_size_is_pow2)
-    const InterleavedPow2AddrGen<src_is_dram> s = {
-        .bank_base_address = src_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
-#else
-    const InterleavedAddrGen<src_is_dram> s = {.bank_base_address = src_addr, .page_size = page_size};
+    constexpr uint32_t page_size = get_compile_time_arg_val(9 + tensor_args.compile_time_args_skip());
+    const auto s = TensorAccessor(tensor_args, src_addr, page_size);
 #endif
 
     uint32_t i_stick = start_id;

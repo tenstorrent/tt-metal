@@ -12,7 +12,6 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
 
 #ifdef OUT_SHARDED
     cb_wait_front(cb_id_out, num_tiles);
@@ -24,6 +23,7 @@ void kernel_main() {
     const DataFormat data_format = get_dataformat(cb_id_out);
 
 #ifdef SHARDED
+    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
     typedef ShardedInfo<
         get_compile_time_arg_val(2),
         get_compile_time_arg_val(3),
@@ -38,8 +38,8 @@ void kernel_main() {
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(3));
     experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = dst_addr, .shard_array = mapping_table};
 #else
-    const InterleavedAddrGenFast<dst_is_dram> s = {
-        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
+    constexpr auto tensor_args = TensorAccessorArgs<1>();
+    const auto s = TensorAccessor(tensor_args, dst_addr, tile_bytes);
 #endif
 
 #ifdef BACKWARDS

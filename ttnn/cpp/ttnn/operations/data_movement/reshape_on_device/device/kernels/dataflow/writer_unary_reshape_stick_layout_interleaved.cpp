@@ -13,7 +13,7 @@ void kernel_main() {
     uint32_t num_sticks = get_arg_val<uint32_t>(1);
     uint32_t stick_size = get_arg_val<uint32_t>(2);
 
-    constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr auto tensor_args = TensorAccessorArgs<0>();
 
     // TODO(agrebenisan): This isn't good... here we are assuming
     // that the stick size dictates tiles c, but stick size
@@ -22,19 +22,13 @@ void kernel_main() {
     const uint32_t num_tiles_c = stick_size / 64;  // Assuming 2 bytes per datum, there are 64 bytes per tile row
     uint32_t stick_id = 0;
 
-    constexpr bool stick_size_is_power_of_two = (get_compile_time_arg_val(1) == 1);
+    constexpr bool stick_size_is_power_of_two =
+        (get_compile_time_arg_val(0 + tensor_args.compile_time_args_skip()) == 1);
 #if (stick_size_is_power_of_two)
     const uint32_t log_base_2_of_page_size = get_arg_val<uint32_t>(3);
-    const InterleavedPow2AddrGen<dst_is_dram> s = {
-        .bank_base_address = dst_addr,
-
-        .log_base_2_of_page_size = log_base_2_of_page_size  // TODO(AP): refactor
-    };
+    const auto s = TensorAccessor(tensor_args, dst_addr, log_base_2_of_page_size, true);
 #else
-    const InterleavedAddrGen<dst_is_dram> s = {
-        .bank_base_address = dst_addr,
-
-        .page_size = stick_size};
+    const auto s = TensorAccessor(tensor_args, dst_addr, stick_size);
 #endif
 
     for (uint32_t i = 0; i < num_sticks / 32; i++) {

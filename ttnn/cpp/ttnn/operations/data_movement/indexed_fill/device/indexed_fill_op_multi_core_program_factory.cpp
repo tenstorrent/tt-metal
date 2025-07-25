@@ -11,6 +11,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/util.hpp>
+#include "ttnn/tensor/tensor_accessor_args.hpp"
 
 using namespace tt::tt_metal;
 
@@ -63,14 +64,12 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
 
     // Create Kernels
     // reader
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)cb_index,
-        (std::uint32_t)batch_cb_index,
-        (std::uint32_t)batch_ids_is_dram,
-        (std::uint32_t)in0_is_dram,
-        (std::uint32_t)in1_is_dram,
-        (std::uint32_t)stick_size_is_power_of_two,
-        (std::uint32_t)log2_stick_size};
+    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)cb_index, (std::uint32_t)batch_cb_index};
+    TensorAccessorArgs(*batch_ids.buffer()).append_args(reader_compile_time_args);
+    TensorAccessorArgs(*input_a.buffer()).append_args(reader_compile_time_args);
+    TensorAccessorArgs(*input_b.buffer()).append_args(reader_compile_time_args);
+    reader_compile_time_args.push_back((std::uint32_t)stick_size_is_power_of_two);
+    reader_compile_time_args.push_back((std::uint32_t)log2_stick_size);
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

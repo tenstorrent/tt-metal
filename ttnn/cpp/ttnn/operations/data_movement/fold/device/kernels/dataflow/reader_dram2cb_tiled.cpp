@@ -19,8 +19,8 @@ void kernel_main() {
     constexpr DataFormat data_format = get_dataformat(cb_id_in0);
 
     // Initialize interleaved address generator for DRAM access
-    const InterleavedAddrGenFast<true> s = {
-        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
+    constexpr auto tensor_args = TensorAccessorArgs<2>();
+    const auto s = TensorAccessor(tensor_args, src_addr, tile_bytes);
 
     // Process each block of data
     uint32_t end_block_id = start_block_id + num_blocks;

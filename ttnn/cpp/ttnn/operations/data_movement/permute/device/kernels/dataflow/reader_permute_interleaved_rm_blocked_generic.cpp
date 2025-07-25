@@ -7,18 +7,18 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    constexpr bool src0_is_dram = (bool)get_compile_time_arg_val(0);
-    constexpr uint32_t N = get_compile_time_arg_val(1);
-    constexpr uint32_t input_cb_page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t num_rows = get_compile_time_arg_val(3);
-    constexpr uint32_t x_dim = get_compile_time_arg_val(4);
-    constexpr uint32_t num_blocks_total = get_compile_time_arg_val(5);
-    constexpr uint32_t x_blocks = get_compile_time_arg_val(6);
-    constexpr uint32_t w_blocks = get_compile_time_arg_val(7);
-    constexpr uint32_t x_block_size = get_compile_time_arg_val(8);
-    constexpr uint32_t w_block_size = get_compile_time_arg_val(9);
-    constexpr uint32_t element_size = get_compile_time_arg_val(10);
-    constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(11);
+    constexpr auto src_tensor_args = TensorAccessorArgs<0>();
+    constexpr uint32_t N = get_compile_time_arg_val(0 + src_tensor_args.compile_time_args_skip());
+    constexpr uint32_t input_cb_page_size = get_compile_time_arg_val(1 + src_tensor_args.compile_time_args_skip());
+    constexpr uint32_t num_rows = get_compile_time_arg_val(2 + src_tensor_args.compile_time_args_skip());
+    constexpr uint32_t x_dim = get_compile_time_arg_val(3 + src_tensor_args.compile_time_args_skip());
+    constexpr uint32_t num_blocks_total = get_compile_time_arg_val(4 + src_tensor_args.compile_time_args_skip());
+    constexpr uint32_t x_blocks = get_compile_time_arg_val(5 + src_tensor_args.compile_time_args_skip());
+    constexpr uint32_t w_blocks = get_compile_time_arg_val(6 + src_tensor_args.compile_time_args_skip());
+    constexpr uint32_t x_block_size = get_compile_time_arg_val(7 + src_tensor_args.compile_time_args_skip());
+    constexpr uint32_t w_block_size = get_compile_time_arg_val(8 + src_tensor_args.compile_time_args_skip());
+    constexpr uint32_t element_size = get_compile_time_arg_val(9 + src_tensor_args.compile_time_args_skip());
+    constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(10 + src_tensor_args.compile_time_args_skip());
 
     // Precomputed constants: size of a 32 element block along the W dimension (measured in bytes)
     constexpr uint32_t w_block_size_bytes = w_block_size * element_size;
@@ -50,7 +50,7 @@ void kernel_main() {
     uint32_t X = input_shape[x_dim];
     uint32_t X_stride = src_strides[x_dim];
 
-    const InterleavedAddrGen<src0_is_dram> s0 = {.bank_base_address = src_addr, .page_size = input_tensor_page_size};
+    const auto s0 = TensorAccessor(src_tensor_args, src_addr, input_tensor_page_size);
 
     uint32_t idxs[N];
     idxs[N - 1] = 0;
