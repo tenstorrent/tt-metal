@@ -43,7 +43,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_unicast
+      - type: all_to_all
 
   - name: "AllToAllUnicastTestNocSendTypesLinear"
     sync: true
@@ -59,7 +59,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_unicast
+      - type: all_to_all
 
   - name: "AllToAllMulticastLinear"
     sync: true
@@ -73,7 +73,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_multicast
+      - type: all_to_all
 
   - name: "UnidirectionalMulticastLinear"
     sync: true
@@ -87,7 +87,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: unidirectional_linear_multicast
+      - type: unidirectional_linear
 
   - name: "FullDevicePairingLinear"
     sync: true
@@ -145,7 +145,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_unicast
+      - type: all_to_all
 
   - name: "AllToAllUnicastTestNocSendTypesMesh"
     fabric_setup:
@@ -160,7 +160,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_unicast
+      - type: all_to_all
 
   - name: "FullDevicePairingMesh"
     fabric_setup:
@@ -220,7 +220,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_unicast
+      - type: all_to_all
 
   - name: "AllToAllUnicastTestNocSendTypesMeshDynamic"
     fabric_setup:
@@ -236,7 +236,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_unicast
+      - type: all_to_all
 
   - name: "FullDevicePairingMeshDynamic"
     fabric_setup:

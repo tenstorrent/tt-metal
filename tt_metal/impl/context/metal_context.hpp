@@ -72,6 +72,7 @@ public:
     void teardown();
 
     // Control plane accessors
+    void initialize_control_plane();
     tt::tt_fabric::ControlPlane& get_control_plane();
     void set_custom_fabric_topology(
         const std::string& mesh_graph_desc_file,
@@ -95,7 +96,6 @@ private:
     void clear_l1_state(chip_id_t device_id);
     void clear_dram_state(chip_id_t device_id);
     void clear_launch_messages_on_eth_cores(chip_id_t device_id);
-    void initialize_control_plane();
     void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
     void teardown_fabric_config();
 
