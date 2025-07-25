@@ -146,18 +146,20 @@ public:
         ValidateEnvironment();
 
         const MeshShape cluster_shape = GetDeterminedMeshShape();
-        const auto& physical_device_ids =
-            extract_locals(SystemMesh::instance().get_mapped_physical_device_ids(cluster_shape).values());
+
+        auto mapped_devices = SystemMesh::instance().get_mapped_devices(cluster_shape);
+
+        const std::vector<int> physical_device_ids = extract_locals(mapped_devices.device_ids);
+        TT_FATAL(physical_device_ids.size() == cluster_shape.mesh_size(), "Some of the devices are remote");
         physical_devices_ = tt::tt_metal::detail::CreateDevices(physical_device_ids);
 
-        std::vector<IDevice*> devices = {};
+        std::vector<IDevice*> devices;
         devices.reserve(physical_device_ids.size());
         for (auto device_id : physical_device_ids) {
             devices.push_back(physical_devices_.at(device_id));
         }
 
-        MeshContainer<IDevice*> device_container(cluster_shape, devices);
-        view_ = std::make_shared<MeshDeviceView>(device_container);
+        view_ = std::make_shared<MeshDeviceView>(cluster_shape, devices, mapped_devices.fabric_node_ids);
         device_open = true;
     }
 
