@@ -118,7 +118,7 @@ MorehSumOperation::MorehSumWFactory::cached_program_t MorehSumOperation::MorehSu
             .set_page_size(output_cb_index, dst_single_tile_size);
     auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    class bfloat16 bfloat_scaler_value = *(new class bfloat16(scaler));
+    bfloat16 bfloat_scaler_value(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     tt::tt_metal::Buffer* src_buffer = input.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
