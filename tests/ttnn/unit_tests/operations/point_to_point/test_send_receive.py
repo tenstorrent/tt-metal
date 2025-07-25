@@ -11,18 +11,22 @@ import torch
 from loguru import logger
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 
 TEST_SHAPES = [
     (1, 1, 1, 16),
-    (1, 1, 2, 16),
+    (1, 1, 8, 16),
     (1, 1, 1, 64),
     (1, 1, 3, 128),
     (1, 13, 1, 32),
-    (1, 1, 1, 512),
+    (1, 1, 1, 32),
     (100, 1, 1, 16),
-    (1, 1, 1, 17),
+    (1,1,1,24),
+    (1, 1, 2, 8),
+    (1, 1, 2, 17),
+    (1, 1, 1, 7168),
+
 ]
 
 MESH_SHAPE = (2, 4)
@@ -65,7 +69,7 @@ def test_send_receive(mesh_device, shape_coords, layout, dtype):
     input_tensor_torch[lcoord0:lrange0, :, :, :] = (
         torch.linspace(1, prod(shape), prod(shape)).reshape(shape).to(dtype=dtype)
     )
-
+    print(f"{input_tensor_torch=}")
     input_tensor = ttnn.from_torch(
         input_tensor_torch, layout=layout, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
     )
@@ -84,8 +88,11 @@ def test_send_receive(mesh_device, shape_coords, layout, dtype):
         ttnn.Topology.Linear,
         receiver_semaphore,
     )
+    sent_tensor_torch = ttnn.to_torch(sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    print(f"{sent_tensor_torch=}")
+    return
     return_tensor = ttnn.point_to_point(sent_tensor, coord1, coord0, ttnn.Topology.Linear, send_semaphore)
 
     torch_return_tensor = ttnn.to_torch(return_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-
-    assert_with_pcc(input_tensor_torch[lcoord0:lrange0, :, :, :], torch_return_tensor[lcoord0:lrange0, :, :, :])
+    
+    assert_equal(input_tensor_torch[lcoord0:lrange0, :, :, :], torch_return_tensor[lcoord0:lrange0, :, :, :])

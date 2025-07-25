@@ -18,7 +18,7 @@ namespace detail {
 
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> compute_aligned_packet_dims(
     const DataType& dtype, const uint32_t page_size_bytes, const uint32_t num_pages, const uint32_t alignment) {
-    const auto fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t fabric_max_packet_size_bytes = 32; //tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
 
     const uint32_t max_packet_size_bytes =
         dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
@@ -34,7 +34,7 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> compute_aligned_packet_dims(
     } else {
         max_num_pages_per_packet = 1;
         num_page_segments = tt::div_up(aligned_page_size_bytes, max_packet_size_bytes);
-        packet_size_bytes = max_packet_size_bytes;
+        packet_size_bytes = fabric_max_packet_size_bytes;
         total_packets = num_page_segments * num_pages;
     }
 

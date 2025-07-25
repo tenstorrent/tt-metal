@@ -20,7 +20,6 @@ inline auto& connection_direction_collection(const bool dst_is_forward, FabricCo
 }
 
 void kernel_main() {
-    DPRINT << "SEND WRITER START \n";
 
     constexpr uint32_t sender_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t packet_cb_id = get_compile_time_arg_val(1);
@@ -42,7 +41,7 @@ void kernel_main() {
     const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(8);
     const bool dst_is_forward = get_arg_val<uint32_t>(9);
 
-    const uint32_t aligned_page_segment_size_bytes = round_up(page_size_bytes / page_segments, alignment);
+    //const uint32_t aligned_page_segment_size_bytes = round_up(page_size_bytes / page_segments, alignment);
     const uint32_t aligned_page_size_bytes = round_up(page_size_bytes, alignment);
 
     // reusing the last arg for fabric setup, therefore index overlaps.
@@ -79,21 +78,21 @@ void kernel_main() {
         const uint32_t src_page_base_addr = get_read_ptr(sender_cb_id);
 
         for (uint32_t page_segment_idx = 0; page_segment_idx < page_segments; ++page_segment_idx) {
-            const uint32_t page_offset = page_segment_idx * aligned_page_segment_size_bytes;
+            const uint32_t page_offset = page_segment_idx * payload_size_bytes;
             const uint32_t src_addr = src_page_base_addr + page_offset;
             const uint32_t transfer_size_bytes =
-                std::min(page_size_bytes - page_offset, aligned_page_segment_size_bytes);
+                std::min(page_size_bytes - page_offset, payload_size_bytes);
 
             // copy page to packet buffer with offset
             const uint32_t packet_addr = packet_base_addr + packet_page_idx * aligned_page_size_bytes;
             tt_memmove<false, false, false, 0>(packet_addr, src_addr, transfer_size_bytes);
-
+            tt::data_movement::common::print_bf16_pages(packet_addr, transfer_size_bytes,1);
             ++packet_page_idx;
             if (packet_page_idx == curr_pages_per_packet) {
                 const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer_addrgen, 0, 0);
-
+                
                 packet_header_ptr->to_noc_unicast_write(
-                    tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, payload_size_bytes);
+                    tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, align(payload_size_bytes, alignment));
 
                 connection_direction.wait_for_empty_write_slot();
                 connection_direction.send_payload_without_header_non_blocking_from_address(
