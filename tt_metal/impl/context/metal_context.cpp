@@ -510,34 +510,19 @@ void MetalContext::initialize_control_plane() {
         return;
     }
 
-    // Default mode, auto select mesh graph descriptor. In future, we can add a way for user to specify custom
-    // descriptors
-    std::string mesh_graph_descriptor;
+    std::filesystem::path mesh_graph_desc_path = cluster_->get_mesh_graph_descriptor_path();
+
+    // If the cluster is a GALAXY and the fabric type is TORUS_XY, override the mesh graph descriptor path
     auto cluster_type = cluster_->get_cluster_type();
-    switch (cluster_type) {
-        case tt::ClusterType::N150: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::N300: mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::T3K: mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::GALAXY:
-            if (tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_type) ==
-                tt::tt_fabric::FabricType::TORUS_XY) {
-                mesh_graph_descriptor = "single_galaxy_torus_xy_graph_descriptor.yaml";
-            } else {
-                mesh_graph_descriptor = "single_galaxy_mesh_graph_descriptor.yaml";
-            }
-            break;
-        case tt::ClusterType::TG: mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P100: mesh_graph_descriptor = "p100_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P150: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P150_X2: mesh_graph_descriptor = "p150_x2_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P150_X4: mesh_graph_descriptor = "p150_x4_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::SIMULATOR_WORMHOLE_B0: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::SIMULATOR_BLACKHOLE: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::N300_2x2: mesh_graph_descriptor = "n300_2x2_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::INVALID: TT_THROW("Unknown cluster type");
+    auto fabric_type = tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_type);
+    if (cluster_type == tt::ClusterType::GALAXY && fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
+        mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
+                               "tt_metal/fabric/mesh_graph_descriptors" /
+                               "single_galaxy_torus_xy_graph_descriptor.yaml";
     }
-    const std::filesystem::path mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
-                                                       "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
+
+    TT_FATAL(!mesh_graph_desc_path.empty(), "No mesh graph descriptor found for cluster type");
+    TT_FATAL(std::filesystem::exists(mesh_graph_desc_path), "Mesh graph descriptor file not found: {}", mesh_graph_desc_path.string());
 
     this->construct_control_plane(mesh_graph_desc_path);
 }

@@ -19,6 +19,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <filesystem>
 
 #include "assert.hpp"
 #include "core_coord.hpp"
@@ -78,6 +79,25 @@ enum class ClusterType : std::uint8_t {
     SIMULATOR_BLACKHOLE = 11,    // Simulator Blackhole
     N300_2x2 = 12,               // 2 N300 cards, ethernet connected to form 2x2
 };
+
+// Map from ClusterType to mesh graph descriptor name
+static const std::map<ClusterType, std::string> cluster_type_to_mesh_graph_descriptor = {
+    {ClusterType::N150, "n150_mesh_graph_descriptor.yaml"},
+    {ClusterType::N300, "n300_mesh_graph_descriptor.yaml"},
+    {ClusterType::T3K, "t3k_mesh_graph_descriptor.yaml"},
+    {ClusterType::GALAXY, "single_galaxy_mesh_graph_descriptor.yaml"},
+    {ClusterType::TG, "tg_mesh_graph_descriptor.yaml"},
+    {ClusterType::P100, "p100_mesh_graph_descriptor.yaml"},
+    {ClusterType::P150, "p150_mesh_graph_descriptor.yaml"},
+    {ClusterType::P150_X2, "p150_x2_mesh_graph_descriptor.yaml"},
+    {ClusterType::P150_X4, "p150_x4_mesh_graph_descriptor.yaml"},
+    {ClusterType::SIMULATOR_WORMHOLE_B0, "n150_mesh_graph_descriptor.yaml"},
+    {ClusterType::SIMULATOR_BLACKHOLE, "p150_mesh_graph_descriptor.yaml"},
+    {ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.yaml"}
+};
+
+// Directory for mesh graph descriptor YAML files
+static constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
 
 enum class EthRouterMode : uint32_t {
     IDLE = 0,
@@ -302,6 +322,12 @@ public:
     BoardType get_board_type(chip_id_t chip_id) const;
 
     ClusterType get_cluster_type() const;
+
+    // Returns the mesh graph descriptor filename for this cluster type.
+    std::string get_mesh_graph_descriptor() const;
+
+    // Returns the full path to the mesh graph descriptor YAML file for this cluster type.
+    std::filesystem::path get_mesh_graph_descriptor_path() const;
 
     bool is_base_routing_fw_enabled() const;
 
