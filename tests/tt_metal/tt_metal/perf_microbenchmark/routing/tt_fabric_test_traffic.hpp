@@ -419,15 +419,18 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
         } break;
         case NocSendType::NOC_UNICAST_SCATTER_WRITE: {
             // For scatter write, we need to split the payload into chunks
-            // Create two destination addresses (scatter to 2 chunks)
             const auto max_chunks = NocUnicastScatterWriteFields::MAX_CHUNKS;
-            std::array<uint32_t, max_chunks> dst_addresses = {
-                static_cast<uint32_t>(this->target_address),
-                static_cast<uint32_t>(this->target_address + this->parameters.payload_size_bytes / 2)};
+            const auto chunk_size = (this->parameters.payload_size_bytes + max_chunks - 1) / max_chunks;
 
-            // Create chunk sizes (last chunk size is implicit)
-            std::array<uint16_t, max_chunks - 1> chunk_sizes = {
-                static_cast<uint16_t>(this->parameters.payload_size_bytes / 2)};
+            std::array<uint32_t, max_chunks> dst_addresses;
+            for (uint32_t i = 0; i < max_chunks; i++) {
+                dst_addresses[i] = static_cast<uint32_t>(this->target_address + i * chunk_size);
+            }
+
+            std::array<uint16_t, max_chunks - 1> chunk_sizes;
+            for (uint32_t i = 0; i < max_chunks - 1; i++) {
+                chunk_sizes[i] = static_cast<uint16_t>(chunk_size);
+            }
 
             const auto scatter_write_fields = NocUnicastScatterWriteFields(
                 this->parameters.payload_size_bytes, dst_addresses, chunk_sizes, this->dst_noc_encoding);
@@ -488,15 +491,18 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
         }
         case NocSendType::NOC_UNICAST_SCATTER_WRITE: {
             // For scatter write, we need to split the payload into chunks
-            // Create two destination addresses (scatter to 2 chunks)
             const auto max_chunks = NocUnicastScatterWriteFields::MAX_CHUNKS;
-            std::array<uint32_t, max_chunks> dst_addresses = {
-                static_cast<uint32_t>(this->target_address),
-                static_cast<uint32_t>(this->target_address + this->parameters.payload_size_bytes / max_chunks)};
+            const auto chunk_size = (this->parameters.payload_size_bytes + max_chunks - 1) / max_chunks;
 
-            // Create chunk sizes (last chunk size is implicit)
-            std::array<uint16_t, max_chunks - 1> chunk_sizes = {
-                static_cast<uint16_t>(this->parameters.payload_size_bytes / max_chunks)};
+            std::array<uint32_t, max_chunks> dst_addresses;
+            for (uint32_t i = 0; i < max_chunks; i++) {
+                dst_addresses[i] = static_cast<uint32_t>(this->target_address + i * chunk_size);
+            }
+
+            std::array<uint16_t, max_chunks - 1> chunk_sizes;
+            for (uint32_t i = 0; i < max_chunks - 1; i++) {
+                chunk_sizes[i] = static_cast<uint16_t>(chunk_size);
+            }
 
             const auto scatter_write_fields =
                 NocUnicastScatterWriteFields(this->parameters.payload_size_bytes, dst_addresses, chunk_sizes);

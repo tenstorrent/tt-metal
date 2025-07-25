@@ -1336,7 +1336,6 @@ private:
 
                 ParsedTrafficPatternConfig specific_pattern;
                 specific_pattern.destination = ParsedDestinationConfig{.hops = hops};
-                specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
 
                 auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
                 test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
@@ -1400,7 +1399,6 @@ private:
 
                     ParsedTrafficPatternConfig specific_pattern;
                     specific_pattern.destination = ParsedDestinationConfig{.hops = hops};
-                    specific_pattern.ftype = ChipSendType::CHIP_MULTICAST;
 
                     auto merged_pattern = merge_patterns(base_pattern, specific_pattern);
                     test.senders.push_back(ParsedSenderConfig{.device = src_node, .patterns = {merged_pattern}});
