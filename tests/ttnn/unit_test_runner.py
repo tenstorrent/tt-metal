@@ -78,6 +78,20 @@ def get_initiated_by():
         return get_username()
 
 
+def get_device_arch_name():
+    """Get the real device architecture name using ttnn, with fallback to environment variable."""
+    try:
+        import ttnn
+
+        return ttnn.get_arch_name()
+    except ImportError:
+        print("Warning: ttnn not available, falling back to ARCH_NAME environment variable")
+        return os.getenv("ARCH_NAME", "unknown")
+    except Exception as e:
+        print(f"Warning: Failed to get device arch from ttnn ({e}), falling back to ARCH_NAME environment variable")
+        return os.getenv("ARCH_NAME", "unknown")
+
+
 def get_postgres_config(env="prod"):
     config = {
         "host": os.getenv("POSTGRES_HOST"),
@@ -185,7 +199,7 @@ def push_run(pg_config, start_time_ts, status="success", run_contents=None):
         run_data = (
             get_initiated_by(),
             get_hostname(),
-            os.getenv("ARCH_NAME"),
+            get_device_arch_name(),
             run_contents,
             get_git_author(),
             get_git_branch(),
