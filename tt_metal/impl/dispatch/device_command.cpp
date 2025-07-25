@@ -16,7 +16,7 @@
 namespace tt::tt_metal {
 
 template <bool hugepage_write>
-DeviceCommand<hugepage_write>::DeviceCommand(void* cmd_region, uint32_t cmd_sequence_sizeB) :
+DeviceCommand<hugepage_write>::DeviceCommand(void* cmd_region, SystemMemoryAddressWidth cmd_sequence_sizeB) :
     cmd_sequence_sizeB(cmd_sequence_sizeB), cmd_region(cmd_region), cmd_write_offsetB(0) {
     TT_FATAL(
         cmd_sequence_sizeB % sizeof(uint32_t) == 0,
@@ -27,7 +27,7 @@ DeviceCommand<hugepage_write>::DeviceCommand(void* cmd_region, uint32_t cmd_sequ
 
 template <bool hugepage_write>
 template <bool hp_w, typename std::enable_if_t<!hp_w, int>>
-DeviceCommand<hugepage_write>::DeviceCommand(uint32_t cmd_sequence_sizeB) :
+DeviceCommand<hugepage_write>::DeviceCommand(SystemMemoryAddressWidth cmd_sequence_sizeB) :
     cmd_sequence_sizeB(cmd_sequence_sizeB), cmd_write_offsetB(0) {
     TT_FATAL(
         cmd_sequence_sizeB % sizeof(uint32_t) == 0,
@@ -82,7 +82,7 @@ DeviceCommand<hugepage_write>::DeviceCommand(DeviceCommand&& other) noexcept :
 }
 
 template <bool hugepage_write>
-uint32_t DeviceCommand<hugepage_write>::size_bytes() const {
+SystemMemoryAddressWidth DeviceCommand<hugepage_write>::size_bytes() const {
     return this->cmd_sequence_sizeB;
 }
 
@@ -92,7 +92,7 @@ void* DeviceCommand<hugepage_write>::data() const {
 }
 
 template <bool hugepage_write>
-uint32_t DeviceCommand<hugepage_write>::write_offset_bytes() const {
+SystemMemoryAddressWidth DeviceCommand<hugepage_write>::write_offset_bytes() const {
     return this->cmd_write_offsetB;
 }
 
@@ -951,7 +951,7 @@ void DeviceCommand<hugepage_write>::add_dispatch_write_packed_large_internal(
 
 template <bool hugepage_write>
 void DeviceCommand<hugepage_write>::validate_cmd_write(uint32_t data_sizeB) const {
-    uint32_t data_endB = this->cmd_write_offsetB + data_sizeB;
+    SystemMemoryAddressWidth data_endB = this->cmd_write_offsetB + data_sizeB;
     TT_ASSERT(
         data_endB <= this->cmd_sequence_sizeB,
         "Out of bounds command sequence write: attemping to write {} B but only {} B available",
@@ -983,7 +983,7 @@ void DeviceCommand<hugepage_write>::memcpy(void* __restrict dst, const void* __r
 template class DeviceCommand<true>;
 template class DeviceCommand<false>;
 
-template DeviceCommand<false>::DeviceCommand(uint32_t);
+template DeviceCommand<false>::DeviceCommand(SystemMemoryAddressWidth);
 
 template void DeviceCommand<true>::add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(uint8_t, uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedUnicastSubCmd>&, const std::vector<std::pair<const void*, uint32_t>>&, uint32_t, const uint32_t, const bool, uint32_t);
 template void DeviceCommand<true>::add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(uint8_t, uint16_t, uint32_t, uint16_t, uint32_t, const std::vector<CQDispatchWritePackedMulticastSubCmd>&, const std::vector<std::pair<const void*, uint32_t>>&, uint32_t, const uint32_t, const bool, uint32_t);

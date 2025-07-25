@@ -18,6 +18,7 @@
 using chip_id_t = int;
 
 namespace tt::tt_metal {
+using SystemMemoryAddressWidth = uint64_t;
 
 class SystemMemoryManager {
 public:
@@ -63,12 +64,12 @@ public:
 
     std::vector<SystemMemoryCQInterface>& get_cq_interfaces();
 
-    void* issue_queue_reserve(uint32_t cmd_size_B, uint8_t cq_id);
+    void* issue_queue_reserve(SystemMemoryAddressWidth cmd_size_B, uint8_t cq_id);
 
     void cq_write(const void* data, uint32_t size_in_bytes, uint32_t write_ptr);
 
     // TODO: RENAME issue_queue_stride ?
-    void issue_queue_push_back(uint32_t push_size_B, uint8_t cq_id);
+    void issue_queue_push_back(SystemMemoryAddressWidth push_size_B, uint8_t cq_id);
 
     uint32_t completion_queue_wait_front(uint8_t cq_id, std::atomic<bool>& exit_condition) const;
 
@@ -82,7 +83,7 @@ public:
 
     void fetch_queue_reserve_back(uint8_t cq_id);
 
-    void fetch_queue_write(uint32_t command_size_B, uint8_t cq_id, bool stall_prefetcher = false);
+    void fetch_queue_write(SystemMemoryAddressWidth command_size_B, uint8_t cq_id, bool stall_prefetcher = false);
 
 private:
     chip_id_t device_id = 0;

@@ -12,11 +12,12 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_align.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
+#include "impl/dispatch/system_memory_manager.hpp"
 
 namespace tt::tt_metal {
 class DeviceCommandCalculator {
 public:
-    uint32_t write_offset_bytes() const { return this->cmd_write_offsetB; }
+    SystemMemoryAddressWidth write_offset_bytes() const { return this->cmd_write_offsetB; }
 
     void add_dispatch_wait() {
         this->add_prefetch_relay_inline();
@@ -235,7 +236,7 @@ public:
 
 private:
     void add_prefetch_relay_inline() { this->cmd_write_offsetB += sizeof(CQPrefetchCmd); }
-    uint32_t cmd_write_offsetB = 0;
+    SystemMemoryAddressWidth cmd_write_offsetB = 0;
     uint32_t pcie_alignment =
         tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
     uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);

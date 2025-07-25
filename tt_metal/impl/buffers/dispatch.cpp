@@ -480,7 +480,7 @@ void populate_interleaved_buffer_write_dispatch_cmds(
         uint32_t num_partial_pages_written_curr_txn = 0;
         for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes;
              sysmem_address_offset += dispatch_params.page_size_to_write) {
-            const uint32_t src_address_offset =
+            const SystemMemoryAddressWidth src_address_offset =
                 num_full_pages_written * buffer.page_size() +
                 num_partial_pages_written_per_curr_full_pages * dispatch_params.partial_page_size() +
                 num_partial_pages_written_curr_txn * buffer.page_size();
@@ -489,7 +489,8 @@ void populate_interleaved_buffer_write_dispatch_cmds(
             num_partial_pages_written_curr_txn += 1;
         }
     } else {
-        uint32_t src_address_offset = dispatch_params.total_pages_written * buffer.page_size();
+        SystemMemoryAddressWidth src_address_offset =
+            SystemMemoryAddressWidth(dispatch_params.total_pages_written) * buffer.page_size();
         if (buffer.page_size() % buffer.alignment() != 0 and buffer.page_size() != buffer.size()) {
             // If page size is not aligned, we cannot do a contiguous write
             for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes;
@@ -525,7 +526,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
 
     uint8_t* dst = command_sequence.reserve_space<uint8_t*, true>(data_size_bytes);
     // TODO: Expose getter for cmd_write_offsetB?
-    uint32_t dst_offset = dst - (uint8_t*)command_sequence.data();
+    SystemMemoryAddressWidth dst_offset = dst - (uint8_t*)command_sequence.data();
     if (dispatch_params.write_large_pages()) {
         for (uint32_t i = 0; i < dispatch_params.pages_per_txn; ++i) {
             const auto cur_host_page = *dispatch_params.core_page_mapping_it;
@@ -533,7 +534,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
                 dst_offset += dispatch_params.page_size_to_write;
                 continue;
             }
-            const uint32_t src_offset =
+            const SystemMemoryAddressWidth src_offset =
                 (*cur_host_page * buffer.page_size()) +
                 (dispatch_params.num_partial_pages_written_for_current_transaction_full_page() + i) *
                     dispatch_params.partial_page_size();
@@ -562,7 +563,7 @@ void populate_sharded_buffer_write_dispatch_cmds(
                 dst_offset += dispatch_params.page_size_to_write;
                 continue;
             }
-            const uint32_t src_offset = *cur_host_page * buffer.page_size();
+            const SystemMemoryAddressWidth src_offset = *cur_host_page * buffer.page_size();
             command_sequence.update_cmd_sequence(dst_offset, (char*)(src) + src_offset, buffer.page_size());
             dst_offset += dispatch_params.page_size_to_write;
         }
@@ -586,7 +587,7 @@ void issue_buffer_dispatch_command_sequence(
             calculator.add_dispatch_wait();
         }
     }
-    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
+    const SystemMemoryAddressWidth cmd_sequence_sizeB = calculator.write_offset_bytes();
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
 

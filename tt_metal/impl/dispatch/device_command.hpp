@@ -23,6 +23,7 @@
 #include "tt_align.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "vector_aligned.hpp"
+#include "impl/dispatch/system_memory_manager.hpp"
 
 namespace tt::tt_metal {
 
@@ -30,10 +31,10 @@ template <bool hugepage_write = false>
 class DeviceCommand {
 public:
     DeviceCommand() = default;
-    DeviceCommand(void* cmd_region, uint32_t cmd_sequence_sizeB);
+    DeviceCommand(void* cmd_region, SystemMemoryAddressWidth cmd_sequence_sizeB);
 
     template <bool hp_w = hugepage_write, typename std::enable_if_t<!hp_w, int> = 0>
-    DeviceCommand(uint32_t cmd_sequence_sizeB);
+    DeviceCommand(SystemMemoryAddressWidth cmd_sequence_sizeB);
 
     DeviceCommand& operator=(const DeviceCommand& other);
     DeviceCommand& operator=(DeviceCommand&& other) noexcept;
@@ -44,11 +45,11 @@ public:
     static constexpr uint32_t PROGRAM_PAGE_SIZE = 2048;  // TODO: Move this somewhere else
     static constexpr uint32_t LOG2_PROGRAM_PAGE_SIZE = std::bit_width(PROGRAM_PAGE_SIZE) - 1;
 
-    uint32_t size_bytes() const;
+    SystemMemoryAddressWidth size_bytes() const;
 
     void* data() const;
 
-    uint32_t write_offset_bytes() const;
+    SystemMemoryAddressWidth write_offset_bytes() const;
 
     vector_aligned<uint32_t> cmd_vector() const;
 
@@ -231,9 +232,9 @@ private:
         }
     }
 
-    uint32_t cmd_sequence_sizeB = 0;
+    SystemMemoryAddressWidth cmd_sequence_sizeB = 0;
     void* cmd_region = nullptr;
-    uint32_t cmd_write_offsetB = 0;
+    SystemMemoryAddressWidth cmd_write_offsetB = 0;
     uint32_t pcie_alignment =
         tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST);
     uint32_t l1_alignment = tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1);

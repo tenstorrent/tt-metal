@@ -241,7 +241,7 @@ chip_id_t SystemMemoryManager::get_device_id() const { return this->device_id; }
 
 std::vector<SystemMemoryCQInterface>& SystemMemoryManager::get_cq_interfaces() { return this->cq_interfaces; }
 
-void* SystemMemoryManager::issue_queue_reserve(uint32_t cmd_size_B, const uint8_t cq_id) {
+void* SystemMemoryManager::issue_queue_reserve(SystemMemoryAddressWidth cmd_size_B, const uint8_t cq_id) {
     if (this->bypass_enable) {
         uint32_t curr_size = this->bypass_buffer.size();
         uint32_t new_size = curr_size + (cmd_size_B / sizeof(uint32_t));
@@ -295,14 +295,14 @@ void SystemMemoryManager::cq_write(const void* data, uint32_t size_in_bytes, uin
 }
 
 // TODO: RENAME issue_queue_stride ?
-void SystemMemoryManager::issue_queue_push_back(uint32_t push_size_B, const uint8_t cq_id) {
+void SystemMemoryManager::issue_queue_push_back(SystemMemoryAddressWidth push_size_B, const uint8_t cq_id) {
     if (this->bypass_enable) {
         this->bypass_buffer_write_offset += push_size_B;
         return;
     }
 
     // All data needs to be PCIE_ALIGNMENT aligned
-    uint32_t push_size_16B =
+    SystemMemoryAddressWidth push_size_16B =
         align(
             push_size_B, tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::HOST)) >>
         4;
@@ -430,7 +430,8 @@ void SystemMemoryManager::completion_queue_pop_front(uint32_t num_pages_read, co
     this->send_completion_queue_read_ptr(cq_id);
 }
 
-void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8_t cq_id, bool stall_prefetcher) {
+void SystemMemoryManager::fetch_queue_write(
+    SystemMemoryAddressWidth command_size_B, const uint8_t cq_id, bool stall_prefetcher) {
     uint32_t max_command_size_B = MetalContext::instance().dispatch_mem_map().max_prefetch_command_size();
     TT_ASSERT(
         command_size_B <= max_command_size_B,
