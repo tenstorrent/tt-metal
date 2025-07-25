@@ -306,7 +306,7 @@ void LlamaAllGatherMatmulAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     const std::vector<std::optional<Tensor>>& output_tensors) const {
-    TT_FATAL(input_tensors.size() == 4, "Error, Input tensor size should be 4 but has {}", input_tensors.size());
+    TT_FATAL(input_tensors.size() == 3, "Error, Input tensor size should be 3 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].layout();
     const auto& dtype = input_tensors[0].dtype();
@@ -399,6 +399,7 @@ std::vector<ttnn::TensorSpec> LlamaAllGatherMatmulAsync::compute_output_specs(
     // Matmul shape
     ttnn::TensorSpec matmul_output_specs =
         this->matmul_struct.compute_output_specs({input_tensors[0], input_tensors[1]}, {})[0];
+    log_info(tt::LogOp, "LLONG matmul_output_specs: {}", matmul_output_specs);
 
     return {all_gather_output_shape, matmul_output_specs};
 }
@@ -564,7 +565,8 @@ Tensor llama_all_gather_matmul_async_impl(
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const GlobalSemaphore& multi_device_global_semaphore,
-    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<MemoryConfig>& ag_memory_config,
+    const std::optional<MemoryConfig>& mm_memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
@@ -590,6 +592,7 @@ Tensor llama_all_gather_matmul_async_impl(
         dim);
 
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
+    optional_input_tensors.push_back(std::nullopt);
     std::vector<std::optional<Tensor>> optional_output_tensors = {intermediate_tensor};
     // return tt::tt_metal::operation::run(
     //            ttnn::AllGatherReplicateAsync{
@@ -610,7 +613,7 @@ Tensor llama_all_gather_matmul_async_impl(
         gather_dim,
         num_preferred_links.has_value() ? num_preferred_links.value() : 1,
         num_devices,
-        memory_config.value_or(input_tensor.memory_config()),
+        ag_memory_config.value_or(input_tensor.memory_config()),
         topology,
         multi_device_global_semaphore,
         sub_device_id,
@@ -623,7 +626,7 @@ Tensor llama_all_gather_matmul_async_impl(
         operations::matmul::Matmul{
             program_config,
             /*bcast_batch=*/std::nullopt,
-            memory_config.value_or(input_tensor.memory_config()),
+            mm_memory_config.value_or(input_tensor.memory_config()),
             dtype.value_or(input_tensor.dtype()),
             compute_kernel_config,
             /*untilize_out=*/false,
@@ -638,14 +641,14 @@ Tensor llama_all_gather_matmul_async_impl(
     ttnn::LlamaAllGatherMatmulAsync llama_all_gather_matmul_async_struct =
         ttnn::LlamaAllGatherMatmulAsync{all_gather_struct, matmul_struct, devices};
     // return input_tensor;  // TODO: Implement the actual logic
-    // return tt::tt_metal::operation::run(all_gather_struct, {input_tensor, intermediate_tensor, aggregated_tensor})
-    //     .at(0);
-    return tt::tt_metal::operation::run(
-               llama_all_gather_matmul_async_struct,
-               {input_tensor, input_tensor_b, aggregated_tensor},
-               optional_input_tensors,
-               optional_output_tensors)
-        .at(1);
+    return tt::tt_metal::operation::run(all_gather_struct, {input_tensor, intermediate_tensor, aggregated_tensor})
+        .at(0);
+    // return tt::tt_metal::operation::run(
+    //            llama_all_gather_matmul_async_struct,
+    //            {input_tensor, input_tensor_b, aggregated_tensor},
+    //            optional_input_tensors,
+    //            optional_output_tensors)
+    //     .at(1);
 }
 }  // namespace
 
@@ -659,7 +662,8 @@ Tensor llama_all_gather_matmul_async(
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const GlobalSemaphore& multi_device_global_semaphore,
-    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<MemoryConfig>& ag_memory_config,
+    const std::optional<MemoryConfig>& mm_memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
@@ -675,7 +679,8 @@ Tensor llama_all_gather_matmul_async(
         mesh_device,
         topology,
         multi_device_global_semaphore,
-        memory_config,
+        ag_memory_config,
+        mm_memory_config,
         num_preferred_links,
         sub_device_id,
         program_config,

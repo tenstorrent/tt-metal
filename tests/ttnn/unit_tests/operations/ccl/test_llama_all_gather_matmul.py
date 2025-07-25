@@ -225,7 +225,6 @@ def run_llama_all_gather_matmul_impl(
     )
     intermediate_shape = [*cluster_shape, M, K_per_device * cluster_shape[cluster_axis]]
     aggregated_shape = [*cluster_shape, M, K_per_device * intermediate_num_cores * MCAST_NUM_CORES]
-
     interemediate_N_per_shard = round_up(math.ceil(intermediate_shape[-1] / intermediate_num_cores), ttnn.TILE_SIZE)
 
     # Output shapes
@@ -238,7 +237,7 @@ def run_llama_all_gather_matmul_impl(
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
             input_core_range_set,
-            [M, N_per_shard],
+            [M, K_per_device_per_shard],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
@@ -270,12 +269,21 @@ def run_llama_all_gather_matmul_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
-    output_mem_config = ttnn.MemoryConfig(
+    ag_output_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(
             output_core_range_set,
             [M, output_N_per_shard],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    mm_output_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            output_core_range_set,
+            [M, N_per_shard],
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
@@ -351,7 +359,8 @@ def run_llama_all_gather_matmul_impl(
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
                 multi_device_global_semaphore=ccl_semaphore_handles[i % num_buffers],
-                memory_config=output_mem_config,
+                ag_memory_config=ag_output_mem_config,
+                mm_memory_config=mm_output_sharded_mem_config,
                 topology=all_gather_replicate_topology,
                 num_links=num_links,
                 subdevice_id=worker_sub_device_id,
