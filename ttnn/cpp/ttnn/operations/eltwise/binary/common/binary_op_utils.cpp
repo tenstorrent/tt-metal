@@ -108,10 +108,8 @@ std::map<std::string, std::string> get_defines(
             op_binary_type = "EltwiseBinaryType::ELWADD";
             break;
         case BinaryOpType::DIV:
-            // Divide by a non-zero tensor
-            defines.merge(get_defines(UnaryOpType::RECIP, std::nullopt, "PRE_IN1_0"));
-            op_name = "mul_tiles";
-            op_binary_type = "EltwiseBinaryType::ELWMUL";
+            defines.insert({"BINOP_INIT", fmt::format("div_binary_tile_init();")});
+            op_name = "div_binary_tile";
             break;
         case BinaryOpType::LOGICAL_OR:
             defines.merge(get_defines(UnaryOpType::NEZ, std::nullopt, "PRE_IN0_0", "0", input_dtype));
