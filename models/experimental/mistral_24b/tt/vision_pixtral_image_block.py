@@ -73,7 +73,7 @@ class TtPixtralImageTransformerBlock(LightweightModule):
         attn_out = self.attention(
             self.attention_norm(x_input, mode=mode), position_embeddings=position_embeddings, mask=mask
         )
-        res = ttnn.add(x_input, attn_out)
+        res = ttnn.add(x_input, attn_out, use_legacy=True)
         mlp_out = self.mlp(self.ffn_norm(res, mode=mode))
         out = ttnn.add(res, mlp_out)
         return out

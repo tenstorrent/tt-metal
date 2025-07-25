@@ -6,6 +6,7 @@ import torch
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
 import ttnn
+from ttnn import ConcatMeshToTensor
 
 
 class TTMistral3PatchMerger(LightweightModule):
@@ -23,6 +24,7 @@ class TTMistral3PatchMerger(LightweightModule):
         hidden_size = args.vision_dim
         self.spatial_merge_size = 2  # TODO Handle in Model_config spatial_merge_size
         self.patch_size = args.vision_patch_size
+        self.args = args
         # self.patch_size = ttnn.from_torch(
         #     torch.tensor(args.vision_patch_size, dtype=torch.int32),
         #     device=mesh_device,
@@ -75,7 +77,12 @@ class TTMistral3PatchMerger(LightweightModule):
             image_grid = ttnn.permute(image_grid, (2, 0, 1))  # Channels first
             image_grid = ttnn.unsqueeze(image_grid, dim=0)  # Add batch dimension
             # Reshape the grid to merge patches
-            image_grid_torch = ttnn.to_torch(image_grid).to(dtype=torch.bfloat16)
+            if self.args.num_devices > 1:
+                image_grid_torch = ttnn.to_torch(image_grid, mesh_composer=ConcatMeshToTensor(self.device, dim=0))
+                image_grid_torch = image_grid_torch[0].unsqueeze(0)  # shape: [1, 1024, 30, 44]
+                image_grid_torch = image_grid_torch.to(dtype=torch.bfloat16)
+            else:
+                image_grid_torch = ttnn.to_torch(image_grid).to(dtype=torch.bfloat16)
 
             grid = torch.nn.functional.unfold(
                 image_grid_torch, kernel_size=self.spatial_merge_size, stride=self.spatial_merge_size

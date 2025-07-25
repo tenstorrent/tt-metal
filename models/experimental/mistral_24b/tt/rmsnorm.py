@@ -74,7 +74,7 @@ class RMSNorm(LightweightModule):
         is_mesh_device = device.__class__.__name__ == "MeshDevice"
 
         self.weight = ttnn.as_tensor(
-            torch_weight,
+            state_dict[weight_name].unsqueeze(0).view(1, 1, dim),
             device=device,
             dtype=weight_dtype,
             layout=ttnn.TILE_LAYOUT if weight_dtype == ttnn.bfloat8_b else ttnn.ROW_MAJOR_LAYOUT,

@@ -12,6 +12,7 @@ from loguru import logger
 from pydantic import BaseModel, Field
 
 import ttnn
+from ttnn import ConcatMeshToTensor
 
 
 class HostEmbedding(torch.nn.Module):
@@ -81,7 +82,7 @@ def rope_scaling_model_factory(rope_scaling_params: dict) -> RopeScaling:
         raise ValueError(f"Unexpected RoPE scaling type: {rope_scaling_type}")
 
 def generate_block_attention_mask_tt(patch_embeds_list, tensor, tt_device):
-    tensor = ttnn.to_torch(tensor)
+    tensor = ttnn.to_torch(tensor, mesh_composer=ConcatMeshToTensor(tt_device, dim=0))
     device = tensor.device
     dtype = tensor.dtype
     seq_len = tensor.shape[-2]

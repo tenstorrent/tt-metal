@@ -29,7 +29,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     indirect=True,
 )
 def test_image_transformer_inference(batch, num_chunks, mesh_device):
-    pcc_required = 0.98
+    pcc_required = 0.99
 
     model_args = ModelArgs(mesh_device)
     dtype = ttnn.bfloat16
@@ -56,7 +56,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
         mesh_device,
         state_dict,
         state_dict_prefix=first_layer_prefix,
-        weight_cache_path=model_args.weight_cache_path(dtype),
+        weight_cache_path=None,
         dtype=dtype,
         configuration=model_args,
         layers=n_layers,
@@ -72,11 +72,21 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
 
     # positional_embedding = (cos, sin)
 
-    # attention_mask = torch.load("ref_attention_mask.pt")
-    # pt_attention_input = torch.load("ref_patch_embeds.pt")
-    # position_embeddings = torch.load("ref_position_embeddings.pt")
+    attention_mask = torch.load("real_inputs/pixtral_transformer_inputs/pixtral_attention_mask.pt")
+    pt_attention_input = torch.load("real_inputs/pixtral_transformer_inputs/pixtral_transformer.pt")
+    position_embeddings = torch.load("real_inputs/pixtral_transformer_inputs/pixtral_position_embeddings.pt")
 
-    # cos, sin = position_embeddings
+    position_embeddings_updated = []
+    for pe in position_embeddings:
+        pe = pe.unsqueeze(0)
+        position_embeddings_updated.append(pe)
+
+    print("Loaded real inputs")
+    print("pt_attention_input", pt_attention_input.shape)
+    print("attention_mask", attention_mask.shape)
+    print("position_embeddings", position_embeddings_updated[0].shape)
+
+    cos, sin = position_embeddings_updated
 
     cos_t = ttnn.from_torch(
         cos,
@@ -103,7 +113,7 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
     tt_mask = ttnn.from_torch(
         attention_mask,
         device=mesh_device,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),

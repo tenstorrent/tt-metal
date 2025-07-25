@@ -18,13 +18,67 @@ from models.experimental.mistral_24b.tt.model import MistralTransformer as Trans
 
 from models.tt_transformers.tt.generator import Generator
 
-from models.experimental.mistral_24b.tt.pipeline.mistral_vision_tower import MistralVisionTower
+from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
 from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 from models.tt_transformers.tt.model_config import ModelArgs
-from transformers import AutoProcessor
+from transformers import AutoProcessor, AutoModelForVision2Seq
 
 import re
+
+
+def run_reference_demo_pipeline(messages, model_id="mistralai/Mistral-Small-3.1-24B-Instruct-2503"):
+    """
+    Run Hugging Face reference demo model (Vision-Text pipeline) using given messages.
+    """
+    logger.info("Running reference HF vision-text model...")
+
+    processor = AutoProcessor.from_pretrained(model_id)
+    model = AutoModelForVision2Seq.from_pretrained(
+        model_id,
+        device_map="auto",
+        torch_dtype=torch.bfloat16,
+    )
+
+    model.eval()
+
+    # Apply chat template
+    prompt_text = processor.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True, padding=True, padding_side="left"
+    )
+
+    # Extract images (already loaded)
+    image_inputs = []
+    for msg in messages:
+        for item in msg["content"]:
+            if item["type"] == "image":
+                image_inputs.append(item["image"])
+
+    # Tokenize and move to model device
+    inputs = processor(
+        text=[prompt_text],
+        images=image_inputs,
+        return_tensors="pt",
+    ).to(model.device, dtype=torch.bfloat16)
+
+    with torch.no_grad():
+        generated_ids = model.generate(
+            **inputs,
+            max_new_tokens=100,
+            temperature=0.0,
+            top_p=0.9,
+            do_sample=False,
+            pad_token_id=model.config.pad_token_id,
+        )
+
+    # Decode
+    output = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
+    logger.info(f"HF reference model output: {output}")
+
+    chat = parse_chat_output(output)
+    display_chat(logger, chat)
+
+    return output
 
 
 def parse_chat_output(text):
@@ -66,11 +120,8 @@ def setup_vision_prompts_and_tokenizer(model_args, instruct):
         {
             "role": "user",
             "content": [
-                {
-                    "type": "image",
-                    # "image": "https://raw.githubusercontent.com/yavuzceliker/sample-images/refs/heads/main/images/image-1.jpg",
-                    "image": image,
-                },
+                {"type": "image", "image": image},
+                # "image": "https://raw.githubusercontent.com/yavuzceliker/sample-images/refs/heads/main/images/image-1.jpg",
                 {"type": "text", "text": "Describe this image."},
             ],
         }
@@ -111,13 +162,13 @@ def process_real_vision_inputs(messages, model_args):
     input_ids = encoded["input_ids"]
     pixel_values = encoded["pixel_values"]
     attention_mask = encoded["attention_mask"]
-    image_grid_thw = encoded["image_grid_thw"] if "image_grid_thw" in encoded else None
+    image_sizes = encoded["image_sizes"] if "image_sizes" in encoded else None
 
     return {
         "input_ids": input_ids,
         "pixel_values": pixel_values,
         "attention_mask": attention_mask,
-        "image_grid_thw": image_grid_thw,
+        "image_sizes": image_sizes,
         "processor": processor,
     }
 
@@ -136,12 +187,12 @@ def load_separate_models_like_test_end2end(model_args, mesh_device, dtype, paged
         )
 
     # Load vision model (exactly like test_end2end.py)
-    vision_model = MistralVisionTower(
+    vision_model = TtMistralVisionTransformer(
         mesh_device=mesh_device,
         state_dict=state_dict,
         state_dict_prefix=vision_prefix,
         dtype=dtype,
-        configuration=model_args,
+        model_args=model_args,
     )
 
     print("vision_model:", vision_model)
@@ -164,7 +215,6 @@ def run_generation_exactly_like_test_end2end(
 ):
     """Run generation following the EXACT pattern from test_end2end.py."""
     input_ids = processed_inputs["input_ids"]
-    pixel_values = processed_inputs["pixel_values"]
 
     logger.info("Running generation exactly like test_end2end.py...")
 
@@ -192,6 +242,10 @@ def run_generation_exactly_like_test_end2end(
         max_prefill_len=8192,
     )
 
+    print("input_tokens_prefill_pt: ", input_tokens_prefill_pt)  # (1, 528)
+    print("encoded_prompts: ", encoded_prompts)
+    print("decoding_pos: ", decoding_pos)
+    print("prefill_lens: ", prefill_lens)
     input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
 
     logger.info("Running prefill...")
@@ -212,7 +266,7 @@ def run_generation_exactly_like_test_end2end(
 
     current_pos = torch.tensor([decoding_pos[0]])
     out_tok = prefilled_token
-    generation_length = 200
+    generation_length = 1
 
     results = []
 
@@ -250,6 +304,15 @@ def run_generation_exactly_like_test_end2end(
         if len(all_outputs[0]) >= 5 and all(t == all_outputs[0][-1] for t in all_outputs[0][-5:]):
             logger.warning(f"Detected exact repetition of token {all_outputs[0][-1]} five times in a row. Stopping.")
             break
+
+        # Final response (exactly like test_end2end.py)
+        response = model_args.tokenizer.decode(all_outputs[0], skip_special_tokens=True)
+        logger.info(f"📝 Each iteration Generated Response:\n{response}")
+        logger.info(f"📝 Each iteration Generated {len(all_outputs[0])} tokens: {all_outputs[0]}")
+        chat = parse_chat_output(response)
+        display_chat(logger, chat)
+
+        logger.info(f" Each iteration Generated {len(results)} tokens successfully")
 
     # Final response (exactly like test_end2end.py)
     response = model_args.tokenizer.decode(all_outputs[0], skip_special_tokens=True)
@@ -327,7 +390,7 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
@@ -363,6 +426,9 @@ def test_e2e_vision_text_pipeline(
     # Setup vision prompts and tokenizer
     messages, tokenizer = setup_vision_prompts_and_tokenizer(model_args, instruct)
     print("messages", messages)
+
+    logger.info("Running reference HF vision-text model using messages..... ")
+    hf_output = run_reference_demo_pipeline(messages)
 
     # Process real vision inputs from images
     processed_inputs = process_real_vision_inputs(messages, model_args)

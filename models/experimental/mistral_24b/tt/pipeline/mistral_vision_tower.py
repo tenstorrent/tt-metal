@@ -11,36 +11,7 @@ from models.tt_transformers.tt.common import position_ids_in_meshgrid_tt, genera
 from models.experimental.mistral_24b.tt.vision_rope import VisionRotarySetup as RotarySetup
 
 from models.experimental.mistral_24b.tt.vision_pixtral_transformer import TtPixtralTransformer
-from models.utility_functions import comp_allclose, comp_pcc
-from loguru import logger
-import torch
-
-
-def position_ids_in_meshgrid(patch_embeds_list, max_width):
-    positions = []
-    for patch in patch_embeds_list:
-        height, width = patch.shape[-2:]
-        mesh = torch.meshgrid(torch.arange(height), torch.arange(width), indexing="ij")
-        h_grid, v_grid = torch.stack(mesh, dim=-1).reshape(-1, 2).chunk(2, -1)
-        ids = h_grid * max_width + v_grid
-        positions.append(ids[:, 0])
-    return torch.cat(positions)
-
-
-def generate_block_attention_mask(patch_embeds_list, tensor):
-    dtype = tensor.dtype
-    device = tensor.device
-    seq_len = tensor.shape[1]
-    d_min = torch.finfo(dtype).min
-    causal_mask = torch.full((seq_len, seq_len), fill_value=d_min, dtype=dtype, device=device)
-
-    block_end_idx = torch.tensor(patch_embeds_list).cumsum(-1)
-    block_start_idx = torch.tensor([0] + patch_embeds_list[:-1]).cumsum(-1)
-    for start, end in zip(block_start_idx, block_end_idx):
-        causal_mask[start:end, start:end] = 0
-
-    causal_mask = causal_mask[None, None, :, :].expand(tensor.shape[0], 1, -1, -1)
-    return causal_mask
+from ttnn import ConcatMeshToTensor
 
 
 class MistralVisionTower(LightweightModule):
@@ -134,12 +105,11 @@ class MistralVisionTower(LightweightModule):
             layers=self.n_layers,
         )
 
-    def forward(self, input_tensor, image_sizes=None, ref_model=None):
+    def forward(self, input_tensor, image_sizes=None):
         """
         input_tensor shape: (B, C, H, W)
         """
         print("MistralVisionTower forward called with input_tensor shape:", input_tensor.shape)
-        ref_patch_conv = ref_model.patch_conv(input_tensor)
         patch_embeds = self.patch_conv(input_tensor)
         patch_embeds = ttnn.transpose(patch_embeds, 1, 2)
         height, width = image_sizes[0]
@@ -147,20 +117,6 @@ class MistralVisionTower(LightweightModule):
             patch_embeds,
             [patch_embeds.shape[0], self.width, height // self.patch_size, width // self.patch_size],
         )
-
-        pcc_required = 0.99
-        passing, pcc_message = comp_pcc(ref_patch_conv, ttnn.to_torch(patch_embeds), pcc_required)
-
-        logger.info(comp_allclose(ref_patch_conv, ttnn.to_torch(patch_embeds)))
-        logger.info(f"========= Stage1 ref_patch_conv PCC: {pcc_message}")
-        assert passing, f"========= Stage1 ref_patch_conv PCC below {pcc_required}. {pcc_message}"
-
-        ref_patch_embeds_list = [
-            embed[..., : (size[0] // self.patch_size), : (size[1] // self.patch_size)]
-            for embed, size in zip(ref_patch_conv, image_sizes)
-        ]
-        # flatten to a single sequence
-        ref_patch_embeds = torch.cat([p.flatten(1).T for p in ref_patch_embeds_list], dim=0).unsqueeze(0)
 
         patch_embeds_list = [
             ttnn.slice(
@@ -179,32 +135,9 @@ class MistralVisionTower(LightweightModule):
 
         patch_embeds = ttnn.concat(reshaped_patches, dim=0)
 
-        passing, pcc_message = comp_pcc(ref_patch_embeds, ttnn.to_torch(patch_embeds), pcc_required)
-        logger.info(comp_allclose(ref_patch_embeds, ttnn.to_torch(patch_embeds)))
-        logger.info(f"========= Stage2 patch_embeds PCC: {pcc_message}")
-        assert passing, f"========= Stage2 patch_embeds PCC below {pcc_required}. {pcc_message}"
-
-        passing, pcc_message = comp_pcc(
-            ref_patch_embeds_list[0], ttnn.to_torch(patch_embeds_list[0]).squeeze(0), pcc_required
-        )
-        logger.info(comp_allclose(ref_patch_embeds_list[0], ttnn.to_torch(patch_embeds_list[0]).squeeze(0)))
-        logger.info(f"========= Stage3 Patch_embeds_list PCC: {pcc_message}")
-        assert passing, f"========= Stage3 Patch_embeds_list PCC below {pcc_required}. {pcc_message}"
-
         # ln_pre RMS Norm
-        ref_patch_embeds = ref_model.ln_pre(ref_patch_embeds)
         mode = "prefill"  # if self.max_seq_len <= 32 else "prefill"
         patch_embeds = self.ln_pre(patch_embeds, mode=mode)
-
-        passing, pcc_message = comp_pcc(ref_patch_embeds, ttnn.to_torch(patch_embeds), pcc_required)
-        logger.info(comp_allclose(ref_patch_embeds, ttnn.to_torch(patch_embeds)))
-        logger.info(f"========= Stage4 ln_pre PCC: {pcc_message}")
-        assert passing, f"========= Stage4 ln_pre PCC below {pcc_required}. {pcc_message}"
-
-        ref_position_ids = position_ids_in_meshgrid(
-            ref_patch_embeds_list,
-            max_width=self.config.vision_image_size // self.config.vision_patch_size,
-        )
 
         # # positional embeddings
         position_ids = position_ids_in_meshgrid_tt(
@@ -212,41 +145,20 @@ class MistralVisionTower(LightweightModule):
             max_width=self.config.vision_image_size // self.config.vision_patch_size,
             device=self.mesh_device,
         )
-        passing, pcc_message = comp_pcc(ref_position_ids, ttnn.to_torch(position_ids), pcc_required)
-        logger.info(comp_allclose(ref_position_ids, ttnn.to_torch(position_ids)))
-        logger.info(f"========= Stage5 position_ids PCC: {pcc_message}")
-        assert passing, f"========= Stage5 position_ids PCC below {pcc_required}. {pcc_message}"
 
-        ref_position_embeddings = ref_model.patch_positional_embedding(ref_patch_embeds, ref_position_ids)
-        position_embeddings = self.patch_positional_embedding.get_rot_mats(ttnn.to_torch(position_ids))
+        # torch_position_ids = ttnn.to_torch(position_ids)
+        print("position_ids:", position_ids)
+        print("position_ids shape:", position_ids.shape)
+        torch_position_ids = ttnn.to_torch(position_ids, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=0))[
+            : position_ids.shape[-1]
+        ]
 
-        passing, pcc_message = comp_pcc(
-            ref_position_embeddings[0], ttnn.to_torch(position_embeddings[0]).squeeze(0), pcc_required
-        )
-        logger.info(comp_allclose(ref_position_embeddings[0], ttnn.to_torch(position_embeddings[0]).squeeze(0)))
-        logger.info(f"========= Stage6 position_embeddings PCC: {pcc_message}")
-        assert passing, f"========= Stage6 position_embeddings PCC below {pcc_required}. {pcc_message}"
-
-        ref_attention_mask = generate_block_attention_mask(
-            [p.shape[-2] * p.shape[-1] for p in ref_patch_embeds_list], ref_patch_embeds
-        )
+        print("torch_position_ids shape:", torch_position_ids.shape)
+        position_embeddings = self.patch_positional_embedding.get_rot_mats(torch_position_ids)
+        print("position_embeddings[0] Cos shape:", position_embeddings[0].shape)
 
         attention_mask = generate_block_attention_mask_tt(
             [p.shape[-2] * p.shape[-1] for p in patch_embeds_list], patch_embeds, tt_device=self.mesh_device
-        )
-
-        passing, pcc_message = comp_pcc(ref_attention_mask, ttnn.to_torch(attention_mask), pcc_required)
-        logger.info(comp_allclose(ref_attention_mask, ttnn.to_torch(attention_mask)))
-        logger.info(f"========= Stage7 attention_mask PCC: {pcc_message}")
-        assert passing, f"========= Stage7 attention_mask PCC below {pcc_required}. {pcc_message}"
-
-        ref_out = ref_model.transformer(
-            ref_patch_embeds,
-            attention_mask=ref_attention_mask,
-            position_embeddings=ref_position_embeddings,
-            output_hidden_states=None,
-            output_attentions=None,
-            return_dict=None,
         )
 
         patch_embeds = ttnn.unsqueeze(patch_embeds, 0)
@@ -254,8 +166,5 @@ class MistralVisionTower(LightweightModule):
         # deallocate position_embeddings
         ttnn.deallocate(position_embeddings[0])
         ttnn.deallocate(position_embeddings[1])
-        passing, pcc_message = comp_pcc(ref_out.last_hidden_state, ttnn.to_torch(out).squeeze(0), pcc_required)
-        logger.info(comp_allclose(ref_out.last_hidden_state, ttnn.to_torch(out).squeeze(0)))
-        logger.info(f"========= Stage8 transformer out PCC: {pcc_message}")
 
         return out

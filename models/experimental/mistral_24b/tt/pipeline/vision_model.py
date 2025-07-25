@@ -34,13 +34,15 @@ class TtMistralVisionTransformer(LightweightModule):
             eps=1e-06,  # layer_norm_eps
         )
 
-    def forward(self, input_tensor, image_sizes=None, ref_model=None):
+    def forward(self, input_tensor, image_sizes=None):
         """
         input_tensor shape: (B, C, H, W)
         """
 
-        x = self.vision_tower(input_tensor, image_sizes=image_sizes, ref_model=ref_model)
+        x = self.vision_tower(input_tensor, image_sizes=image_sizes)
+        print("===================== Vision Tower output shape ==========================:", x.shape)
         x = ttnn.squeeze(ttnn.squeeze(x, 0), 0)
+        print("===================== MMP input shape ==========================:", x.shape)
         x = self.mmp(x, image_sizes)
-
+        print("===================== Final MMP output shape ==========================:", x.shape)
         return x
