@@ -2080,6 +2080,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, WriteOneTileToAllL1BanksTwiceRou
         auto device = mesh_device->get_devices()[0];
         log_info(tt::LogTest, "Running On Device {}", device->id());
         auto compute_with_storage_grid = mesh_device->compute_with_storage_grid_size();
+
         TestBufferConfig config = {
             .num_pages = 2 * uint32_t(compute_with_storage_grid.x * compute_with_storage_grid.y),
             .page_size = 2048,
