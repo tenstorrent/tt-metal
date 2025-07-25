@@ -6,7 +6,7 @@ import torch
 import pytest
 import ttnn
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_allclose
 
 
 @pytest.mark.parametrize(
@@ -207,6 +207,64 @@ def test_binary_sfpu_pow_bug(device, input_shapes, dtype):
 
     pcc = ttnn.pearson_correlation_coefficient(torch_output_tensor, output)
     assert pcc >= 0.999
+
+
+@pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
+def test_binary_sfpu_accuracy(device, dtype):
+    if ttnn.get_arch_name() == "blackhole":
+        pytest.skip("Blackhole implementation of pow is stil legacy and inaccurate")
+
+    torch.manual_seed(0)
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+    torch_input_tensor_a = torch.tensor([[10.0, 10.0, 9.0, 9.0, 5.0, 100000, 10.0, 10.0, 2.0, 2.0]], dtype=torch_dtype)
+    torch_input_tensor_b = torch.tensor([[2.0, 3.0, 2.0, 3.0, 3.0, 1.7984, -1.0, -2.0, 1.0, 10.0]], dtype=torch_dtype)
+
+    golden_fn = ttnn.get_golden_function(ttnn.pow)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.pow(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+
+    if dtype == "bfloat16":
+        assert_with_ulp(torch_output_tensor, output, 1)
+    else:
+        assert_allclose(torch_output_tensor, output, rtol=0.005, atol=1e-3)  # Ensures > 99.5% accuracy
+
+
+@pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
+def test_binary_sfpu_accuracy_pos(device, dtype):
+    if ttnn.get_arch_name() == "blackhole":
+        pytest.skip("Blackhole implementation of pow is stil legacy and inaccurate")
+
+    torch.manual_seed(0)
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+
+    def gen_uniform(shape, dtype, a, b):
+        tensor = torch.rand(shape, dtype=dtype)
+        tensor = tensor * (b - a) + a
+        return tensor
+
+    torch_input_tensor_a = gen_uniform([256, 256], torch_dtype, 1e-9, 1e3)
+    torch_input_tensor_b = gen_uniform([256, 256], torch_dtype, 0.125, 4)
+
+    golden_fn = ttnn.get_golden_function(ttnn.pow)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.pow(input_tensor_a, input_tensor_b)
+    output = ttnn.to_torch(output)
+
+    if dtype == "bfloat16":
+        assert_with_ulp(torch_output_tensor, output, 5)
+    else:
+        assert_allclose(torch_output_tensor, output, rtol=0.02, atol=1e-5)  # Ensure > 98% accuracy
 
 
 @pytest.mark.parametrize(

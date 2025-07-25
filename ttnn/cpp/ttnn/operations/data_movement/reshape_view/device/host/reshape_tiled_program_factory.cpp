@@ -369,7 +369,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/reader_reshape_tiled.cpp",
-        total_cores,
+        all_cores,
         tt::tt_metal::ReaderDataMovementConfig(
             {input_is_dram, mapping_page_size_bytes, input_tile_size_bytes, mapping_cb_idx, input_cb_idx}));
 
@@ -387,7 +387,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reshape_tiled_program_factory(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/reshape_view/device/device/dataflow/"
         "writer_reshape_tiled.cpp",
-        total_cores,
+        all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     uint32_t page_idx_start = 0, page_idx_end = 0;
     std::vector<CoreCoord> utilized_cores;
