@@ -34,7 +34,7 @@ using namespace tt::tt_metal::distributed;
 ////////////////////////////////////////////////////////////////////////////////
 // This test measures the bandwidth of host-to-device data transfer and
 // device-to-host data transfer. It uses EnqueueWriteMeshBuffer and
-// EnqueueReadMeshBuffer APIs to transfer the data. The device memory object
+// ReadShard APIs to transfer the data. The device memory object
 // (mesh buffer) will be in DRAM.
 //
 // Benchmark Matrix:
