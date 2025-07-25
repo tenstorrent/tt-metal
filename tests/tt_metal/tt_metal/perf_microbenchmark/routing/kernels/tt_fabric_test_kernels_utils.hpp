@@ -12,6 +12,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
@@ -468,19 +469,16 @@ struct NocFusedSenderOperations {
 
 // line sync for each fabric connection.
 struct LineSyncConfig {
-    LineSyncConfig(
-        WorkerToFabricEdmSender* fabric_connection_handle,
-        const uint32_t packet_header_address,
-        const uint32_t line_sync_val) :
+    LineSyncConfig(WorkerToFabricEdmSender* fabric_connection_handle, const uint32_t line_sync_val) :
         fabric_connection_handle(fabric_connection_handle), line_sync_val(line_sync_val) {
-        packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_address);
+        packet_header = PacketHeaderPool::allocate_header();
     }
 
     template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
-    void setup_packet_header(size_t& arg_idx, uint32_t packet_header_address) {
+    void setup_packet_header(size_t& arg_idx) {
         // setup header fields. 2 rt args for 1D
         ChipSendTypeHandler<ChipSendType::CHIP_MULTICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
-            arg_idx, packet_header_address, packet_header, fabric_connection_handle);
+            arg_idx, (uint32_t)packet_header, packet_header, fabric_connection_handle);
 
         // set up noc fields, 4 rt args
         auto fields = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
@@ -550,14 +548,12 @@ private:
 
 struct SenderKernelTrafficConfig {
     SenderKernelTrafficConfig(
-        WorkerToFabricEdmSender* fabric_connection_handle,
-        const SenderTrafficConfigMetadata& metadata,
-        const uint32_t packet_header_address) :
+        WorkerToFabricEdmSender* fabric_connection_handle, const SenderTrafficConfigMetadata& metadata) :
         fabric_connection_handle(fabric_connection_handle),
         metadata(metadata),
         noc_send_type_(static_cast<NocSendType>(0)),
         payload_buffer_(nullptr) {
-        packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_address);
+        packet_header = PacketHeaderPool::allocate_header();
 
         // Initialize function pointers to null (will be set in parse_and_setup_noc_send_type)
         noc_ops_.parse_and_setup = nullptr;
@@ -565,8 +561,9 @@ struct SenderKernelTrafficConfig {
     }
 
     template <bool IS_2D_FABRIC, bool USE_DYNAMIC_ROUTING>
-    void parse_and_setup_chip_send_type(size_t& arg_idx, uint32_t packet_header_address) {
+    void parse_and_setup_chip_send_type(size_t& arg_idx) {
         ChipSendType chip_send_type = static_cast<ChipSendType>(get_local_arg_val<uint32_t>(arg_idx++));
+        uint32_t packet_header_address = (uint32_t)packet_header;
 
         if (chip_send_type == ChipSendType::CHIP_UNICAST) {
             ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, IS_2D_FABRIC, USE_DYNAMIC_ROUTING>::parse_and_setup(
@@ -839,13 +836,6 @@ struct SenderKernelMemoryMap {
 
     static SenderKernelMemoryMap build_from_args(size_t& rt_args_idx) { return SenderKernelMemoryMap(rt_args_idx); }
 
-    uint32_t get_packet_header_address() {
-        uint32_t addr = curr_packet_header_address_;
-        ASSERT(addr + sizeof(PACKET_HEADER_TYPE) < payload_buffer_region_base_);
-        curr_packet_header_address_ += sizeof(PACKET_HEADER_TYPE);
-        return addr;
-    }
-
     uint32_t get_payload_buffer_address(uint32_t size) {
         uint32_t addr = curr_payload_buffer_address_;
         ASSERT(addr + size < highest_usable_address_);
@@ -858,24 +848,20 @@ struct SenderKernelMemoryMap {
 private:
     SenderKernelMemoryMap(size_t& rt_args_idx) {
         // Parse all memory map arguments from runtime args:
-        // [local_args_base, local_args_size, result_buffer_base, result_buffer_size, packet_header_base,
+        // [local_args_base, local_args_size, result_buffer_base, result_buffer_size,
         // payload_buffer_base, highest_usable_address]
 
         // Parse common memory map
         common = CommonMemoryMap::build_from_args(rt_args_idx);
-        packet_header_region_base_ = get_arg_val<uint32_t>(rt_args_idx++);
         payload_buffer_region_base_ = get_arg_val<uint32_t>(rt_args_idx++);
         highest_usable_address_ = get_arg_val<uint32_t>(rt_args_idx++);
 
         // set the current addresses to the base
-        curr_packet_header_address_ = packet_header_region_base_;
         curr_payload_buffer_address_ = payload_buffer_region_base_;
     }
 
-    uint32_t packet_header_region_base_;
     uint32_t payload_buffer_region_base_;
     uint32_t highest_usable_address_;
-    uint32_t curr_packet_header_address_;
     uint32_t curr_payload_buffer_address_;
 };
 
@@ -983,16 +969,14 @@ private:
             const auto fabric_connection_idx = traffic_config_to_fabric_connection_map[i];
             ASSERT(fabric_connection_idx < NUM_FABRIC_CONNECTIONS);
 
-            uint32_t packet_header_address = this->memory_map.get_packet_header_address();
             // Get pointer to pre-allocated storage and initialize with placement new
             SenderKernelTrafficConfig* config_ptr = traffic_configs(i);
             traffic_config_ptrs[i] = config_ptr;
 
-            new (config_ptr) SenderKernelTrafficConfig(
-                &fabric_connections()[fabric_connection_idx], metadata, packet_header_address);
+            new (config_ptr) SenderKernelTrafficConfig(&fabric_connections()[fabric_connection_idx], metadata);
 
             traffic_config_ptrs[i]->template parse_and_setup_chip_send_type<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
-                local_args_idx, packet_header_address);
+                local_args_idx);
             traffic_config_ptrs[i]->parse_and_setup_noc_send_type(local_args_idx);
 
             // the payload buffer size here is the virtual size of the buffer, not the physical size
@@ -1318,13 +1302,10 @@ private:
         // Initialize line sync configurations
         uint32_t line_sync_val = get_local_arg_val<uint32_t>(local_args_idx++);
         for (uint8_t i = 0; i < NUM_SYNC_FABRIC_CONNECTIONS; i++) {
-            uint32_t packet_header_address = this->memory_map.get_packet_header_address();
-            new (&line_sync_configs()[i])
-                LineSyncConfig(&sync_fabric_connections()[i], packet_header_address, line_sync_val);
+            new (&line_sync_configs()[i]) LineSyncConfig(&sync_fabric_connections()[i], line_sync_val);
 
             // setup packet header fields
-            line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(
-                local_args_idx, packet_header_address);
+            line_sync_configs()[i].template setup_packet_header<IS_2D_FABRIC, USE_DYNAMIC_ROUTING>(local_args_idx);
         }
 
         // Initialize local sync config
