@@ -36,7 +36,7 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
         return even_int_div(hf_config.n_routed_experts, mesh_device.get_num_devices())
 
     @classmethod
-    def convert_weights_moe(
+    def convert_weights(
         cls,
         hf_config: PretrainedConfig,
         state_dict: dict[str, torch.Tensor],
@@ -74,7 +74,7 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
             experts_group: {
                 "input_tensor_b": save_and_get_path(
                     output_path / f"{experts_group}.input_tensor_b",
-                    cls._convert_weight_moe(
+                    cls._convert_weight(
                         weight_groups[weight_key],
                         mesh_device,
                     ),
@@ -85,7 +85,7 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
 
     @final
     @classmethod
-    def _convert_weight_moe(
+    def _convert_weight(
         cls,
         wx_per_device_state_dict_group: list[torch.Tensor],
         mesh_device: ttnn.Device,
@@ -117,32 +117,51 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
         return multi_dev_weights
 
     @classmethod
+    def is_device_supported(cls, mesh_device: ttnn.Device) -> bool:
+        """
+        As we only support 1D tensor parallelism, we only support 1D mesh devices.
+
+        Args:
+            mesh_device: The mesh device to check.
+
+        Returns:
+            True if the device is supported, False otherwise.
+        """
+        return tuple(mesh_device.shape) == (1, 8) or tuple(mesh_device.shape) == (4, 8)
+
+    @classmethod
     def _create_model_config(
-        cls, mesh_device: ttnn.Device, mem_config: ttnn.MemoryConfig, num_experts_per_device: int
-    ) -> ModelPrefillConfig:
+        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, mode: str
+    ) -> ModelPrefillConfig | ModelDecodeConfig:
+        num_experts_per_device = cls._get_num_experts_per_device(hf_config, mesh_device)
+
         # Calculate input and output memory configurations
-        input_memory_config = mem_config
-        output_memory_config = mem_config
+        if mode == "decode":
+            input_memory_config = ttnn.L1_MEMORY_CONFIG
+            output_memory_config = ttnn.L1_MEMORY_CONFIG
+        else:
+            input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+            output_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
         # Construct the config
         return {
             "w1_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=mem_config,
+                memory_config=output_memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
             "w2_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=mem_config,
+                memory_config=output_memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
             "w3_experts": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-                memory_config=mem_config,
+                memory_config=output_memory_config,
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
             "mul_experts": MulConfig(
-                memory_config=mem_config,
+                memory_config=output_memory_config,
                 input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             ),
             "input_memory_config": input_memory_config,  # For asserting the input to the MLP
@@ -161,8 +180,7 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
         Returns:
             ModelPrefillConfig containing operator configurations for prefill mode
         """
-        num_experts_per_device = cls._get_num_experts_per_device(hf_config, mesh_device)
-        return cls._create_model_config(mesh_device, ttnn.L1_MEMORY_CONFIG, num_experts_per_device)
+        return cls._create_model_config(hf_config, mesh_device, "decode")
 
     @classmethod
     def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelPrefillConfig:
@@ -175,12 +193,11 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
         Returns:
             ModelPrefillConfig containing operator configurations for prefill mode
         """
-        num_experts_per_device = even_int_div(hf_config.n_routed_experts, mesh_device.get_num_devices())
-        return cls._create_model_config(mesh_device, ttnn.DRAM_MEMORY_CONFIG, num_experts_per_device)
+        return cls._create_model_config(hf_config, mesh_device, "prefill")
 
     @classmethod
-    def _forward_util(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        assert x.memory_config() == cfg["input_memory_config"]
+    def _forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
+        assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
         # Gate and up projections
         w1_out = ttnn.linear(x, **cfg["w1_experts"])
@@ -200,8 +217,8 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
 
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
-        return cls._forward_util(x, cfg)
+        return cls._forward(x, cfg)
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        return cls._forward_util(x, cfg)
+        return cls._forward(x, cfg)
