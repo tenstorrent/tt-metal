@@ -126,8 +126,8 @@ uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_
             return src_row < dest_row ? eth_chan_directions::SOUTH : eth_chan_directions::NORTH;
         } else {
             // with wrap around, we can go either North or South. Choose the shorter route
-            uint32_t north_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, true);
-            uint32_t south_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, false);
+            uint32_t north_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, false);
+            uint32_t south_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, true);
             return north_distance < south_distance ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
         }
     } else {
@@ -137,8 +137,8 @@ uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_
             return src_row < dest_row ? eth_chan_directions::SOUTH : eth_chan_directions::NORTH;
         } else {
             // with wrap around, we can go either North or South. Choose the shorter route
-            uint32_t north_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, true);
-            uint32_t south_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, false);
+            uint32_t north_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, false);
+            uint32_t south_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, true);
             return north_distance < south_distance ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
         }
     }
