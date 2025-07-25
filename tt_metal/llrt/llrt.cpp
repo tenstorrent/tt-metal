@@ -394,16 +394,20 @@ void send_msg_to_eth_mailbox(
             const auto timenow = std::chrono::steady_clock::now();
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(timenow - start_time).count();
             if (elapsed > timeout_ms) {
+                const auto run_flag_addr = hal.get_dev_addr(k_CoreType, tt_metal::HalL1MemAddrType::ETH_METAL_RUN_FLAG);
+                auto run_flag_val = read_hex_vec_from_core(device_id, virtual_core, run_flag_addr, sizeof(uint32_t))[0];
+
                 TT_THROW(
                     "Device {}: Timed out while waiting for ack when trying to launch Metal ethernet firmware on "
                     "ethernet core {}. Last message status: {:#x}. Retrain count: {}. Is the firmware updated? Minimum "
-                    "tt-firmware version is 18.2.0. Start time: {}. End time: {}",
+                    "tt-firmware version is 18.2.0. Start time: {}. End time: {}. Metal fw enable flag: {:#x}",
                     device_id,
                     virtual_core.str(),
                     msg_status,
                     get_retrain_count(device_id, virtual_core),
                     std::chrono::duration_cast<std::chrono::milliseconds>(start_time.time_since_epoch()).count(),
-                    std::chrono::duration_cast<std::chrono::milliseconds>(timenow.time_since_epoch()).count());
+                    std::chrono::duration_cast<std::chrono::milliseconds>(timenow.time_since_epoch()).count(),
+                    run_flag_val);
             }
             std::this_thread::sleep_for(k_sleep_time);
         } while (msg_status != done_message);
