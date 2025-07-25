@@ -8,7 +8,7 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
-from models.demos.deepseek_v3.tt.mlp_1d import MLP1D
+from models.demos.deepseek_v3.tt.mlp.mlp_1d import MLP1D
 from models.demos.deepseek_v3.utils.config_helpers import dequantize, save_and_get_path
 from models.demos.deepseek_v3.utils.run_config import WeightConfig
 
@@ -72,7 +72,7 @@ class MLP1DDequant(MLP1D):
         return cls.convert_weight(
             hf_config=hf_config,
             weight_tensor=dequantize(
-                quantized_weight_tensor, scale_inv_tensor, hf_config.quantization_config.weight_block_size
+                quantized_weight_tensor, scale_inv_tensor, hf_config.quantization_config["weight_block_size"]
             ),
             mesh_device=mesh_device,
             is_w2=is_w2,

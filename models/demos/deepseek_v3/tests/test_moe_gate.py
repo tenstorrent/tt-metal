@@ -34,11 +34,9 @@ def test_forward_pass(
     seq_len,
     reference_model,
     hf_config_single_layer,
-    temp_dir,
-    galaxy_or_t3k_mesh,
+    tmp_path,
+    mesh_device,
 ):
-    mesh_device = galaxy_or_t3k_mesh
-
     """Test forward pass against reference model."""
     batch_size = 1
 
@@ -46,7 +44,7 @@ def test_forward_pass(
     hf_state_dict = reference_model.state_dict()
 
     # Setup: Convert weights and get weight_config
-    weight_config = MoEGate.convert_weights(hf_config_single_layer, hf_state_dict, temp_dir, mesh_device)
+    weight_config = MoEGate.convert_weights(hf_config_single_layer, hf_state_dict, tmp_path, mesh_device)
 
     # Generate appropriate config
     if mode == "prefill":
