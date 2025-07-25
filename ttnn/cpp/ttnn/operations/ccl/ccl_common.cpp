@@ -125,7 +125,9 @@ SenderRecieverConfig get_device_sender_receiver_config_in_ring(
         } else {
             new_col = line_index % ring_size;
         }
-        return mesh_view.find_device_id(MeshCoordinate(new_row, new_col));
+        auto* device = mesh_view.get_device(MeshCoordinate(new_row, new_col));
+        TT_FATAL(device != nullptr, "Device not found at coordinate {}", MeshCoordinate(new_row, new_col));
+        return device->id();
     };
 
     bool is_last_chip_in_clockwise_direction = config.device_index == (ring_size - 1);
