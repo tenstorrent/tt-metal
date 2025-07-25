@@ -1,0 +1,80 @@
+name: "(APC) Select and Run Post-Commit Tests"
+
+on:
+  workflow_dispatch:
+    inputs:
+      build-type:
+        description: "Build type"
+        required: false
+        type: choice
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        default: Release
+      version:
+        description: "OS version"
+        required: false
+        type: choice
+        options:
+          - "22.04"
+          - "24.04"
+        default: "22.04"
+
+      core-unit-tests:
+        description: "Run Core Unit Tests (sd-unit-tests, fast-dispatch-unit-tests, fabric-unit-tests, cpp-unit-tests)"
+        required: false
+        type: boolean
+        default: true
+
+      ttnn-model-train-tests:
+        description: "Run TTNN/Model/Train Tests (ttnn-unit-tests, models-unit-tests, tt-train-cpp-unit-tests)"
+        required: false
+        type: boolean
+        default: true
+
+      regression-performance:
+        description: "Run Regression/Performance (run-profiler-regression, t3000-fast-tests)"
+        required: false
+        type: boolean
+        default: true
+
+      build-and-docs:
+        description: "Run Build and Build Docs"
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  call-post-commit:
+    uses: ./.github/workflows/all-post-commit-workflows.yaml
+    with:
+      build-type: ${{ inputs.build-type }}
+      version: ${{ inputs.version }}
+      tests-to-run: ${{ join(
+        (inputs['core-unit-tests'] && [
+          'sd-unit-tests',
+          'fast-dispatch-unit-tests',
+          'fabric-unit-tests',
+          'cpp-unit-tests'
+        ] || [])
+        +
+        (inputs['ttnn-model-train-tests'] && [
+          'ttnn-unit-tests',
+          'models-unit-tests',
+          'tt-train-cpp-unit-tests'
+        ] || [])
+        +
+        (inputs['regression-performance'] && [
+          'run-profiler-regression',
+          't3000-fast-tests'
+        ] || [])
+        +
+        (inputs['build-and-docs'] && [
+          'build',
+          'build-docs'
+        ] || [])
+        , ','
+        ) }}
