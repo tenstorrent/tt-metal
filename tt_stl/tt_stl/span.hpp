@@ -40,15 +40,3 @@ namespace [[deprecated("Use ttsl namespace instead")]] stl {
 using namespace ::ttsl;
 }  // namespace stl
 }  // namespace tt
-
-// #if __cplusplus >= 202002L
-// namespace std::ranges {
-
-// template <typename T>
-// inline constexpr bool enable_view<ttsl::Span<T>> = true;
-
-// template <typename T>
-// inline constexpr bool enable_borrowed_range<ttsl::Span<T>> = true;
-
-// }  // namespace std::ranges
-// #endif
