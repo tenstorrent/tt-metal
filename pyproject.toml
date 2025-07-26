@@ -65,6 +65,7 @@ cmake.args = [
     "-DTT_USE_SYSTEM_SFPI=ON",
     "-DENABLE_CCACHE=TRUE",
     "-DCMAKE_INSTALL_LIBDIR=ttnn",
+    "-DCMAKE_INSTALL_LIBEXECDIR=ttnn",
 ]
 
 # Support for different build environments

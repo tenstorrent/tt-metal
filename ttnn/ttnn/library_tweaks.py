@@ -158,7 +158,7 @@ def _setup_env(ttnn_package_path, cwd):
 
 
 def setup_ttnn_so():
-    ttnn_package_path = Path(__file__).resolve().parent.parent / "libexec" / "tt-metalium"
+    ttnn_package_path = Path(__file__).resolve().parent / "tt-metalium"
 
     cwd = Path(os.getcwd())
 
