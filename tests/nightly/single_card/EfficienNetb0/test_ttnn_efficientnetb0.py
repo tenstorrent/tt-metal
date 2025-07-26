@@ -1,1 +1,0 @@
-../../../tests/ttnn/integration_tests/efficientnetb0/test_ttnn_efficientnetb0.py
