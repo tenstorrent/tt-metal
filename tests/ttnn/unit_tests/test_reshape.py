@@ -202,11 +202,13 @@ def run_reshape_hw_rm_with_program_cache(device, n, c, h, w):
 @pytest.mark.parametrize("h", [256])
 @pytest.mark.parametrize("w", [8])
 def test_reshape_hw_rm_with_program_cache(device, n, c, h, w):
+    extra_torch_entries = 0
     for _ in range(2):
         run_reshape_hw_rm_with_program_cache(device, n, c, h, w)
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
+        current_entries_count = device.num_program_cache_entries()
         tt_dummy_tensor = ttnn.from_torch(
             py_dummy_tensor,
             dtype=ttnn.DataType.BFLOAT16,
@@ -214,7 +216,8 @@ def test_reshape_hw_rm_with_program_cache(device, n, c, h, w):
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 1
+        extra_torch_entries += device.num_program_cache_entries() - current_entries_count
+    assert device.num_program_cache_entries() - extra_torch_entries == 1
 
 
 @pytest.mark.parametrize("h", [32])
@@ -513,6 +516,7 @@ def test_fp32_support(input_shape, output_shape, device):
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
+        ((4, 4), (4, 4)),
         ((1, 1, 864, 128), (1, 27, 32, 128)),
         ((1, 256, 32), (32, 256)),
         ((1, 256, 1024), (1, 128, 32, 64)),

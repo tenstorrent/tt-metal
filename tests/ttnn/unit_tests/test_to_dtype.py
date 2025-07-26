@@ -8,8 +8,7 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc, tt_dtype_to_torch_dtype
 
 bfloat4_pcc = 0.960
 torch.manual_seed(0)
@@ -48,6 +47,110 @@ def test_to_dtype(height, width, from_dtype, to_dtype):
 
     output_tensor = ttnn.to_torch(output_tensor, dtype=torch_input_tensor.dtype)
     assert_with_pcc(torch_input_tensor, output_tensor, bfloat4_pcc if to_dtype == ttnn.bfloat4_b else 0.9999)
+
+
+@pytest.mark.parametrize("shape", [(4, 4), (32, 32)])
+@pytest.mark.parametrize(
+    "ttnn_dtype",
+    [
+        ttnn.float32,
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+        ttnn.bfloat16,
+        ttnn.uint8,
+        ttnn.int32,
+        ttnn.uint32,
+    ],
+)
+@pytest.mark.parametrize(
+    "torch_dtype",
+    [
+        torch.float64,
+        torch.int64,
+        torch.float16,
+        torch.float32,
+        torch.int32,
+        torch.uint8,
+    ],
+)
+@pytest.mark.parametrize("ttnn_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("convert_with_device", [True, False])
+def test_dtype_conversion_on_device(device, shape, ttnn_dtype, torch_dtype, ttnn_layout, convert_with_device):
+    ttnn_dtype_requires_tile = ttnn_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b]
+    ttnn_dtype_has_random = ttnn_dtype not in [ttnn.uint8, ttnn.int32]
+    ttnn_is_float = ttnn_dtype in [ttnn.float32, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b]
+    torch_is_float = torch_dtype in [torch.float16, torch.float32, torch.float64]
+
+    conversion_pcc = None
+
+    if (ttnn_dtype == ttnn.float32 and torch_dtype == torch.float32) or (
+        ttnn_dtype == ttnn.int32 and torch_dtype == torch.int32
+    ):
+        conversion_pcc = 1
+
+    elif ttnn_is_float != torch_is_float:
+        conversion_pcc = 0.98
+
+    elif torch_dtype == torch.bfloat16:
+        if ttnn_dtype == ttnn.bfloat16 or ttnn_dtype == ttnn.bfloat8_b:
+            conversion_pcc = 0.9999
+        elif ttnn_dtype == ttnn.bfloat4_b:
+            conversion_pcc = 0.989
+        else:
+            conversion_pcc = 0.999
+
+    else:
+        conversion_pcc = 0.999
+
+    # print("")
+
+    if ttnn_dtype_has_random:
+        for store_input_on_device in [True, False]:
+            ttnn_input_tensor = ttnn.rand(
+                shape,
+                dtype=ttnn_dtype,
+                device=device,
+                layout=ttnn.TILE_LAYOUT if ttnn_dtype_requires_tile else ttnn_layout,
+            )
+
+            if not store_input_on_device:
+                ttnn_input_tensor = ttnn.from_device(ttnn_input_tensor)
+
+            torch_result_tensor = ttnn.to_torch(
+                ttnn_input_tensor, dtype=torch_dtype, device=device if convert_with_device else None
+            )
+            assert (
+                torch_result_tensor.dtype == torch_dtype
+            ), f"Expected result {torch_dtype}, got result tensor {torch_result_tensor.dtype} when converting TTNN tensor {ttnn_input_tensor.dtype}"
+
+        assert_with_pcc(
+            expected_pytorch_result=torch_result_tensor,
+            actual_pytorch_result=ttnn_input_tensor.cpu().to_torch(),
+            pcc=conversion_pcc,
+        )
+
+    if torch_is_float:
+        torch_input_tensor = torch.rand(shape, dtype=torch_dtype) * 10
+
+    else:
+        torch_input_tensor = torch.randint(0, 100, shape, dtype=torch_dtype)
+
+    ttnn_result_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        device=device if convert_with_device else None,
+        dtype=ttnn_dtype,
+        layout=ttnn.TILE_LAYOUT if ttnn_dtype_requires_tile else ttnn_layout,
+    )
+
+    assert (
+        ttnn_result_tensor.dtype == ttnn_dtype
+    ), f"Expected result {ttnn_dtype}, got result tensor {ttnn_result_tensor.dtype} when converting torch tensor {torch_input_tensor.dtype}"
+
+    assert_with_pcc(
+        expected_pytorch_result=torch_input_tensor,
+        actual_pytorch_result=ttnn_result_tensor.cpu().to_torch(),
+        pcc=conversion_pcc,
+    )
 
 
 @pytest.mark.parametrize("height", [32])

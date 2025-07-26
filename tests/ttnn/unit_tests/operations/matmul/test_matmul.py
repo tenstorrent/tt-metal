@@ -443,8 +443,27 @@ def test_matmul_in1_dram_sharded_tiny_tile(
         assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
 
+def from_torch_without_count(extra_torch_entries, count_device, *args, **kwargs):
+    current_entries_count = count_device.num_program_cache_entries()
+    result = ttnn.from_torch(*args, **kwargs)
+    extra_torch_entries[0] += count_device.num_program_cache_entries() - current_entries_count
+    return result
+
+
 def run_matmul_2d_multiple_output_blocks_per_core(
-    device, b, m, k, n, has_bias, grid_size, in0_sharded, out_sharded, num_out_block_h, num_out_block_w, transpose_mcast
+    device,
+    b,
+    m,
+    k,
+    n,
+    has_bias,
+    grid_size,
+    in0_sharded,
+    out_sharded,
+    num_out_block_h,
+    num_out_block_w,
+    transpose_mcast,
+    extra_torch_entries=[0],
 ):
     if in0_sharded or out_sharded:
         fuse_batch = True
@@ -489,14 +508,19 @@ def run_matmul_2d_multiple_output_blocks_per_core(
         )
     else:
         in0_memory_config = ttnn.L1_MEMORY_CONFIG
-    in0_t = ttnn.from_torch(
+
+    in0_t = from_torch_without_count(
+        extra_torch_entries,
+        device,
         in0,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=in0_memory_config,
     )
-    in1_t = ttnn.from_torch(
+    in1_t = from_torch_without_count(
+        extra_torch_entries,
+        device,
         in1,
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
@@ -508,7 +532,9 @@ def run_matmul_2d_multiple_output_blocks_per_core(
         bias = torch.randn(bias_shape).bfloat16().float()
         bias_padded = bias.unsqueeze(2)
         bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, 32 - bias_padded.size(2)), "constant", 0)
-        bias_t = ttnn.from_torch(
+        bias_t = from_torch_without_count(
+            extra_torch_entries,
+            device,
             bias_padded,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
@@ -604,6 +630,9 @@ def test_matmul_2d_multiple_output_blocks_per_core(
     if grid_size[1] < required_size:
         pytest.skip("device does not have 8x8 grid")
 
+    # Do not count from entries that come from the `from_torch` conversion steps
+    extra_torch_entries = [0]
+
     for _ in range(2):
         run_matmul_2d_multiple_output_blocks_per_core(
             mesh_device,
@@ -618,18 +647,22 @@ def test_matmul_2d_multiple_output_blocks_per_core(
             num_out_block_h,
             num_out_block_w,
             transpose_mcast,
+            extra_torch_entries,
         )
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        tt_dummy_tensor = ttnn.from_torch(
+        tt_dummy_tensor = from_torch_without_count(
+            extra_torch_entries,
+            mesh_device,
             py_dummy_tensor,
             dtype=ttnn.DataType.BFLOAT16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert mesh_device.num_program_cache_entries() == 1
+
+    assert mesh_device.num_program_cache_entries() - extra_torch_entries[0] == 1
 
 
 def run_matmul_2d_tiny_tile(
@@ -956,6 +989,7 @@ def run_matmul_1d_multiple_output_blocks_per_core(
     num_out_block_w,
     mcast_in0,
     uneven_width,
+    extra_torch_entries=[0],
 ):
     if in_sharded or out_sharded:
         fuse_batch = True
@@ -1020,6 +1054,7 @@ def run_matmul_1d_multiple_output_blocks_per_core(
     else:
         in0_memory_config = ttnn.DRAM_MEMORY_CONFIG
     in1_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    current_entries_count = device.num_program_cache_entries()
     in0_t = ttnn.from_torch(
         in0,
         dtype=ttnn.bfloat16,
@@ -1034,11 +1069,13 @@ def run_matmul_1d_multiple_output_blocks_per_core(
         device=device,
         memory_config=in1_memory_config,
     )
+    extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
 
     if has_bias:
         bias = torch.randn(bias_shape).bfloat16().float()
         bias_padded = bias.unsqueeze(2)
         bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, 32 - bias_padded.size(2)), "constant", 0)
+        current_entries_count = device.num_program_cache_entries()
         bias_t = ttnn.from_torch(
             bias_padded,
             dtype=ttnn.bfloat16,
@@ -1046,6 +1083,7 @@ def run_matmul_1d_multiple_output_blocks_per_core(
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid_size,
@@ -1133,6 +1171,7 @@ def test_matmul_1d_multiple_output_blocks_per_core(
     mcast_in0,
     uneven_width,
 ):
+    extra_torch_entries = [0]
     for _ in range(2):
         run_matmul_1d_multiple_output_blocks_per_core(
             device,
@@ -1147,10 +1186,12 @@ def test_matmul_1d_multiple_output_blocks_per_core(
             num_out_block_w,
             mcast_in0,
             uneven_width,
+            extra_torch_entries=extra_torch_entries,
         )
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
+        current_entries_count = device.num_program_cache_entries()
         tt_dummy_tensor = ttnn.from_torch(
             py_dummy_tensor,
             dtype=ttnn.DataType.BFLOAT16,
@@ -1158,7 +1199,9 @@ def test_matmul_1d_multiple_output_blocks_per_core(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 1
+        extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
+
+    assert device.num_program_cache_entries() - extra_torch_entries[0] == 1
 
 
 @pytest.mark.parametrize("side", ["height", "width"])
