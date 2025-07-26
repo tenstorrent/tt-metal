@@ -367,7 +367,6 @@ jobs:
     if: inputs.recheck_tests == true
     runs-on: ubuntu-latest
     outputs:
-      tests-passed: ${{ steps.check.outputs.tests-passed }}
       pr-number: ${{ steps.check.outputs.pr-number }}
     steps:
       - name: Checkout
@@ -434,8 +433,6 @@ jobs:
               ALL_PASSED=false
             fi
           fi
-
-          echo "tests-passed=$ALL_PASSED" >> $GITHUB_OUTPUT
 
           # Comment with results
           if [ "$ALL_PASSED" = "true" ]; then
