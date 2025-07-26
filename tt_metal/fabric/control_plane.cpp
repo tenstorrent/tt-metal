@@ -26,7 +26,8 @@
 
 #include "control_plane.hpp"
 #include "core_coord.hpp"
-#include "fabric_host_interface.h"
+#include "compressed_routing_table.hpp"
+#include "hostdevcommon/fabric_common.h"
 #include "fabric_types.hpp"
 #include "hal_types.hpp"
 #include "host_api.hpp"
