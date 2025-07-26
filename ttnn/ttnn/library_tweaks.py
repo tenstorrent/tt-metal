@@ -97,7 +97,7 @@ def prepare_dir_as_metal_home(ttnn_package_path, metal_home):
     tt_metal_src = ttnn_package_path / "tt_metal"
     tt_metal_dest = metal_home / "tt_metal"
 
-    ttnn_src = ttnn_package_path
+    ttnn_src = ttnn_package_path / "ttnn"
     ttnn_dest = metal_home / "ttnn"
 
     if version_file.exists():
