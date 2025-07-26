@@ -25,6 +25,7 @@ class Conv:
     ) -> None:
         self.weights = parameters["weight"]
         self.bias = parameters["bias"]
+        # here
 
         self.kernel_size = (self.weights.shape[2], self.weights.shape[3])
         self.conv_params = conv_params
