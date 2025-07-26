@@ -2,15 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
+import pytest
 import torch
 import transformers
-import pytest
 from ttnn.model_preprocessing import preprocess_model_parameters
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.demos.sentence_bert.ttnn.common import custom_preprocessor, preprocess_inputs
+
+import ttnn
 from models.demos.sentence_bert.reference.sentence_bert import BertPooler
+from models.demos.sentence_bert.ttnn.common import custom_preprocessor
 from models.demos.sentence_bert.ttnn.ttnn_sentencebert_pooler import TtnnSentenceBertPooler
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
