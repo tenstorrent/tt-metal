@@ -250,6 +250,8 @@ class UNetMaxPool2D:
         self.device = device
 
     def __call__(self, x):
+        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+        x = x.reshape(self.pool.batch_size, 1, -1, self.channels)
         x = ttnn.max_pool2d(
             input_tensor=x,
             batch_size=self.pool.batch_size,

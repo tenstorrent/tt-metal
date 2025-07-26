@@ -60,6 +60,7 @@ Tensor optimized_conv_new(
     std::optional<const Tensor> bias,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t output_channels,
+    uint32_t logical_output_width,
     uint32_t groups,
     bool untilize_out,
     const std::string& activation,
@@ -96,6 +97,7 @@ Tensor optimized_conv_new(
     auto optimized_conv_op = OptimizedConvNew(
         sliding_window_config,
         output_channels,
+        logical_output_width,
         groups,
         untilize_out,
         bias.has_value(),
@@ -165,7 +167,7 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
 
     auto sliding_window_output_shape = sliding_window_config.get_output_shape();
     uint32_t conv_output_h = sliding_window_output_shape[1];
-    uint32_t conv_output_w = sliding_window_output_shape[2];
+    uint32_t conv_output_w = logical_output_width;
 
     // Tiled output shape is padded shape. Padded to tile shape.
     auto shape_w = batch_size * conv_output_h * conv_output_w;
@@ -173,8 +175,9 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
     auto padded_shape_w =
         parallelization_config.num_cores_nhw * parallelization_config.per_core_out_matrix_height_ntile * TILE_HEIGHT;
     auto padded_shape_c = tt::round_up(this->output_channels, TILE_WIDTH);
-    ttnn::Shape output_shape({1, 1, shape_w, shape_c});
-    ttnn::Shape padded_output_shape({1, 1, padded_shape_w, padded_shape_c});
+    // auto padded_shape_w = this->untilize_out ? conv_output_w : tt::round_up(conv_output_w, TILE_WIDTH);
+    // auto padded_shape_c = this->untilize_out ? shape_c : tt::round_up(this->output_channels, TILE_WIDTH);
+    ttnn::Shape output_shape({batch_size, conv_output_h, conv_output_w, shape_c});
 
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     if (this->memory_config.is_sharded()) {
@@ -184,6 +187,12 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
         auto shard_grid = this->memory_config.shard_spec().value().grid;
         auto shard_spec = ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec().value().orientation};
         auto mem_config = this->memory_config.with_shard_spec(shard_spec);
+        log_info(
+            tt::LogOp,
+            "Output Shape : {}, Shard Shape : {}, {}",
+            output_shape,
+            shard_shape,
+            mem_config.memory_layout());
         return {TensorSpec(
             output_shape,
             TensorLayout(
@@ -191,15 +200,14 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
                 PageConfig(output_layout),
                 mem_config,
                 Alignment(
-                    {tt::constants::TILE_HEIGHT,
+                    {output_layout == Layout::TILE ? tt::constants::TILE_HEIGHT : 1,
                      tt::constants::TILE_WIDTH})  // Conv2D always outputs in tile multiples, even if output layout is
                                                   // Row Major.
                 ))};
     }
     return {TensorSpec(
         output_shape,
-        TensorLayout::fromPaddedShape(
-            dtype, PageConfig(output_layout), memory_config, output_shape, padded_output_shape))};
+        TensorLayout::fromPaddedShape(dtype, PageConfig(output_layout), memory_config, output_shape, output_shape))};
 }
 
 operation::ProgramWithCallbacks OptimizedConvNew::create_program(

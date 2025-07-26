@@ -78,7 +78,7 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     }
 
     // Sharding is only 2D.
-    if (input.is_sharded() && logical_input_shape[0] == 1 && logical_input_shape[1] == 1) {
+    if (input.is_sharded()) {
         uint32_t calc_nhw_volume = actual_shape[0] * actual_shape[1] * actual_shape[2];
         auto shard_spec = input_tensor.shard_spec().value();
 

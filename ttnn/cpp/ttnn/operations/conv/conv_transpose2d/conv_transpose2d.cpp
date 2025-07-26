@@ -281,6 +281,7 @@ Result conv_transpose2d(
         bias_tensor_on_device,
         sliding_window_config,
         out_channels,
+        output_width,
         groups,
         conv_config.output_layout == Layout::ROW_MAJOR,
         conv_config.activation,
