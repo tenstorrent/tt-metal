@@ -1,0 +1,77 @@
+from math import prod
+
+import pytest
+import torch
+
+import ttnn
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
+def _linear_coord(coord, mesh_shape):
+    return coord[0] * mesh_shape[1] + coord[1]
+
+
+def run_test_col_step(mesh_shape, col_dim_idx, data_tensor, semaphore):
+    
+    for row_dim_idx in range(mesh_shape[1]):
+        source_coord = (col_dim_idx,row_dim_idx)
+        dest_coord = (col_dim_idx+1,row_dim_idx)
+        assert dest_coord[0] < mesh_shape[0]
+        
+        output_tensor = ttnn.point_to_point(
+            data_tensor,
+            ttnn.MeshCoordinate(source_coord),
+            ttnn.MeshCoordinate(dest_coord),
+            ttnn.Topology.Linear,
+            semaphore,
+            #optional_output_tensor=data_tensor
+        )
+    return output_tensor
+    #return data_tensor
+
+def compare_mesh_row(col_dim_idx, ref_tensor_torch, test_tensor_tt, mesh_device, mesh_shape):
+    test_tensor_torch = ttnn.to_torch(test_tensor_tt, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    
+    lrow_start_idx = _linear_coord((col_dim_idx,0), mesh_shape)
+    lrow_end_idx = _linear_coord((col_dim_idx,mesh_shape[1]-1), mesh_shape)
+    print(f"{test_tensor_torch=}")
+    try:
+        assert_with_pcc(ref_tensor_torch, test_tensor_torch[lrow_start_idx:lrow_end_idx,:,:,:])
+    except:
+        print(f"{col_dim_idx=}")
+        raise
+
+MESH_SHAPE = (4,1)    
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+@pytest.mark.parametrize("batches_per_device", [2])
+@pytest.mark.parametrize("hidden_size", [8])
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
+def test_moe_p2p(mesh_device, batches_per_device, hidden_size, dtype):
+    
+    mesh_shape = tuple(mesh_device.shape)
+    devices = prod(mesh_shape)
+    batch = batches_per_device*devices
+    
+    data_shape = (1,1,batch,hidden_size)
+    sharded_data_shape = tuple(s * (devices if i == 0 else 1) for i, s in enumerate(data_shape))
+    
+    data_tensor_torch = torch.zeros(sharded_data_shape, dtype=dtype)
+    # fill the first row
+    for row_dim_idx in range(mesh_shape[1]):
+        lc = _linear_coord((0,row_dim_idx), mesh_shape)
+        data_tensor_torch[lc,:,:,:] = torch.linspace(1, prod(data_shape), prod(data_shape)).reshape(data_shape).to(dtype=dtype)
+    print(f"{data_tensor_torch=}")
+    data_tensor = ttnn.from_torch(data_tensor_torch, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0))
+    
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
+    cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+    )
+    semaphore = ttnn.create_global_semaphore(mesh_device, cores, 0)
+    
+    # test transferring down each row of the columns
+    for col_dim_idx in range(mesh_shape[0] - 1):
+        data_tensor = run_test_col_step(mesh_shape, col_dim_idx, data_tensor, semaphore)
+        compare_mesh_row(col_dim_idx,data_tensor_torch[:mesh_shape[1]-1,:,:,:],data_tensor,mesh_device,mesh_shape)
+    
