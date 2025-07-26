@@ -6,7 +6,7 @@ import argparse
 import sys
 import pathlib
 import importlib
-import datetime
+import datetime as dt
 import os
 import json
 import enlighten
@@ -22,6 +22,9 @@ from elasticsearch import Elasticsearch, NotFoundError
 from framework.elastic_config import *
 from framework.sweeps_logger import sweeps_logger as logger
 from sweep_utils.roofline_utils import get_updated_message
+import psycopg2
+from psycopg2.extras import RealDictCursor
+import time
 
 ARCH = os.getenv("ARCH_NAME")
 
@@ -86,7 +89,7 @@ def run(test_module, input_queue, output_queue):
         device, device_name = next(device_generator)
         logger.info(f"Opened device configuration, {device_name}.")
     except AssertionError as e:
-        output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None])
+        output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None, None])
         return
     try:
         while True:
@@ -117,6 +120,13 @@ def run(test_module, input_queue, output_queue):
             logger.info(f"Closed device configuration, {device_name}.")
 
 
+def get_all_modules():
+    sweeps_path = pathlib.Path(__file__).parent / "sweeps"
+    for file in sorted(sweeps_path.glob("**/*.py")):
+        sweep_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3].replace("/", ".")
+        yield sweep_name
+
+
 def get_timeout(test_module):
     try:
         timeout = test_module.TIMEOUT
@@ -125,7 +135,7 @@ def get_timeout(test_module):
     return timeout
 
 
-def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
+def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_name, header_info):
     results = []
     input_queue = Queue()
     output_queue = Queue()
@@ -133,11 +143,25 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
     timeout = get_timeout(test_module)
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
     reset_util = tt_smi_util.ResetUtil(ARCH)
-    for test_vector in test_vectors:
+
+    if len(test_vectors) > 1 and not DRY_RUN:
+        p = Process(target=run, args=(test_module, input_queue, output_queue))
+        p.start()
+
+    for i, test_vector in enumerate(test_vectors):
+        vector_id = header_info[i].get("vector_id", "N/A")
+        logger.info(f"Executing test: Module='{module_name}', Suite='{suite_name}', Vector ID='{vector_id}'")
         if DRY_RUN:
             print(f"Would have executed test for vector {test_vector}")
+            suite_pbar.update()
             continue
         result = dict()
+
+        result["start_time_ts"] = dt.datetime.now()
+
+        # Capture the original test vector data BEFORE any modifications
+        original_vector_data = test_vector.copy()
+
         if deserialize(test_vector["validity"]) == VectorValidity.INVALID:
             result["status"] = TestStatus.NOT_RUN
             result["exception"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
@@ -146,27 +170,30 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
             test_vector.pop("invalid_reason")
             test_vector.pop("status")
             test_vector.pop("validity")
-            if p is None and len(test_vectors) > 1:
-                p = Process(target=run, args=(test_module, input_queue, output_queue))
-                p.start()
+
             try:
                 if MEASURE_PERF:
                     # Run one time before capturing result to deal with compile-time slowdown of perf measurement
                     input_queue.put(test_vector)
-                    if len(test_vectors) == 1:
+                    if p is None:
                         logger.info(
                             "Executing test (first run, e2e perf is enabled) on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
                         )
                         run(test_module, input_queue, output_queue)
                     output_queue.get(block=True, timeout=timeout)
                 input_queue.put(test_vector)
-                if len(test_vectors) == 1:
+                if p is None:
                     logger.info(
                         "Executing test on parent process (to allow debugger support) because there is only one test vector. Hang detection is disabled."
                     )
                     run(test_module, input_queue, output_queue)
                 response = output_queue.get(block=True, timeout=timeout)
-                status, message, e2e_perf, device_perf = response[0], response[1], response[2], response[3]
+                status, message, e2e_perf, device_perf = (
+                    response[0],
+                    response[1],
+                    response[2],
+                    response[3],
+                )
                 if status and MEASURE_DEVICE_PERF and device_perf is None:
                     result["status"] = TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF
                     result["message"] = message
@@ -183,8 +210,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                             "DEVICE EXCEPTION: Device could not be initialized. The following assertion was thrown: "
                             + message,
                         )
-                        logger.info("Skipping test suite because of device error, proceeding...")
-                        return []
+                        logger.info("Device error detected. The suite will be aborted after this test.")
                     if "Out of Memory: Not enough space to allocate" in message:
                         result["status"] = TestStatus.FAIL_L1_OUT_OF_MEM
                     elif "Watcher" in message:
@@ -197,18 +223,72 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name):
                 else:
                     result["e2e_perf"] = None
             except Empty as e:
-                logger.warning(f"TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
-                p.terminate()
-                p = None
-                reset_util.reset()
+                if p:
+                    logger.warning(f"TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
+                    p.terminate()
+                    p.join(5)  # Wait for a bit for the process to terminate
+                    if p.is_alive():
+                        logger.error(f"Child process {p.pid} did not terminate, killing it.")
+                        p.kill()
+                        p.join()
+                    p = None
+                    reset_util.reset()
+                    # pause for 5 seconds
+                    # time.sleep(3)
+
+                    # Restart the process for subsequent tests
+                    # if len(test_vectors) > 1:
+                    #     p = Process(target=run, args=(test_module, input_queue, output_queue))
+                    #     p.start()
+
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
                 result["e2e_perf"] = None
-        result["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                result["original_vector_data"] = original_vector_data
+                result["end_time_ts"] = dt.datetime.now()
+                result["timestamp"] = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                result["host"] = get_hostname()
+                result["user"] = get_username()
+                suite_pbar.update()
+                results.append(result)
+
+                # Skip all remaining tests in the suite
+                logger.info("Skipping remaining tests in suite due to timeout.")
+                for j in range(i + 1, len(test_vectors)):
+                    remaining_vector = test_vectors[j]
+                    skipped_result = dict()
+                    skipped_result["start_time_ts"] = dt.datetime.now()
+                    skipped_result["original_vector_data"] = remaining_vector.copy()
+                    skipped_result["status"] = TestStatus.NOT_RUN
+                    skipped_result["exception"] = "SKIPPED DUE TO PREVIOUS TIMEOUT"
+                    skipped_result["e2e_perf"] = None
+                    skipped_result["end_time_ts"] = dt.datetime.now()
+                    skipped_result["timestamp"] = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                    skipped_result["host"] = get_hostname()
+                    skipped_result["user"] = get_username()
+                    results.append(skipped_result)
+                    suite_pbar.update()
+
+                # Abort the suite
+                break
+
+        # Add the original test vector data to the result
+        result["original_vector_data"] = original_vector_data
+
+        result["end_time_ts"] = dt.datetime.now()
+        result["timestamp"] = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         result["host"] = get_hostname()
         result["user"] = get_username()
 
         suite_pbar.update()
         results.append(result)
+
+        # Abort the suite if a fatal device error was encountered
+        if "DEVICE EXCEPTION" in result.get("exception", ""):
+            logger.error("Aborting test suite due to fatal device error.")
+            if p and p.is_alive():
+                p.terminate()
+                p.join()
+            break
 
     if p is not None:
         p.join()
@@ -223,9 +303,12 @@ def sanitize_inputs(test_vectors):
     for vector in test_vectors:
         header = dict()
         for field in info_field_names:
-            header[field] = vector.pop(field)
-        vector.pop("timestamp")
-        vector.pop("tag")
+            if field in vector:
+                header[field] = vector.pop(field)
+        if "timestamp" in vector:
+            vector.pop("timestamp")
+        if "tag" in vector:
+            vector.pop("tag")
         header_info.append(header)
     return header_info, test_vectors
 
@@ -288,38 +371,657 @@ def export_test_results_json(header_info, results):
             json.dump(new_data, file, indent=2)
 
 
-def run_sweeps_json(module_name, suite_name):
+def find_vector_files_for_modules(module_names):
+    """Find vector files for specified modules in the vectors_export directory"""
+    vectors_export_dir = pathlib.Path(__file__).parent / "vectors_export"
+
+    if not vectors_export_dir.exists():
+        logger.error(f"Vectors export directory not found: {vectors_export_dir}")
+        return {}
+
+    module_files = {}
+    for module_name in module_names:
+        # Look for JSON files that match the module name pattern
+        # Module name format: "category.subcategory.test_name"
+        # File name format: "category.subcategory.test_name.json"
+        potential_files = list(vectors_export_dir.glob(f"{module_name}.json"))
+        if potential_files:
+            module_files[module_name] = potential_files[0]
+            logger.info(f"Found vector file for module '{module_name}': {potential_files[0]}")
+        else:
+            logger.warning(f"No vector file found for module '{module_name}' in {vectors_export_dir}")
+            # Try to find similar files for debugging
+            similar_files = list(vectors_export_dir.glob(f"*{module_name.split('.')[-1]}*.json"))
+            if similar_files:
+                logger.info(f"Similar files found: {[f.name for f in similar_files[:5]]}")
+
+    return module_files
+
+
+def initialize_postgres_database():
+    """Initialize PostgreSQL database with required tables"""
+    pg_config = get_postgres_config(POSTGRES_ENV)
+
+    try:
+        conn = psycopg2.connect(**pg_config)
+        cursor = conn.cursor()
+
+        # Check if tables already exist
+        check_tables_query = """
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+        AND table_name IN ('runs', 'tests', 'sweep_testcases')
+        """
+        cursor.execute(check_tables_query)
+        existing_tables = {row[0] for row in cursor.fetchall()}
+
+        if len(existing_tables) == 3:
+            logger.info("PostgreSQL database already initialized - all required tables exist")
+            return
+
+        # Create the Run table
+        create_run_table_query = """
+        CREATE TABLE IF NOT EXISTS runs (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            initiated_by VARCHAR(255) NOT NULL,
+            host VARCHAR(255),
+            device VARCHAR(255),
+            run_contents VARCHAR(1024),
+            git_author VARCHAR(255),
+            git_branch_name VARCHAR(255),
+            git_commit_hash VARCHAR(50),
+            start_time_ts TIMESTAMP NOT NULL,
+            end_time_ts TIMESTAMP,
+            status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failure', 'error', 'cancelled')),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+
+        # Create the Test table
+        create_test_table_query = """
+        CREATE TABLE IF NOT EXISTS tests (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            run_id UUID NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+            name VARCHAR(255) NOT NULL,
+            start_time_ts TIMESTAMP NOT NULL,
+            end_time_ts TIMESTAMP,
+            status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failure', 'error', 'cancelled', 'skipped')),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """
+
+        # Create the Sweep Testcase table
+        create_testcase_table_query = """
+        CREATE TABLE IF NOT EXISTS sweep_testcases (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            test_id UUID NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+            name VARCHAR(255) NOT NULL,
+            start_time_ts TIMESTAMP NOT NULL,
+            end_time_ts TIMESTAMP,
+            status VARCHAR(100) NOT NULL,
+            suite_name VARCHAR(255) NOT NULL,
+            test_vector JSONB,
+            message TEXT,
+            exception TEXT,
+            e2e_perf FLOAT,
+            device_perf JSONB,
+            error_signature VARCHAR(255)
+        );
+        """
+
+        # Execute table creation queries
+        cursor.execute(create_run_table_query)
+        cursor.execute(create_test_table_query)
+        cursor.execute(create_testcase_table_query)
+
+        # Create indexes for better query performance
+        create_indexes_query = """
+        CREATE INDEX IF NOT EXISTS idx_runs_initiated_by ON runs(initiated_by);
+        CREATE INDEX IF NOT EXISTS idx_runs_host ON runs(host);
+        CREATE INDEX IF NOT EXISTS idx_runs_device ON runs(device);
+        CREATE INDEX IF NOT EXISTS idx_runs_git_commit_hash ON runs(git_commit_hash);
+        CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
+        CREATE INDEX IF NOT EXISTS idx_runs_start_time_ts ON runs(start_time_ts);
+
+        CREATE INDEX IF NOT EXISTS idx_tests_run_id ON tests(run_id);
+        CREATE INDEX IF NOT EXISTS idx_tests_name ON tests(name);
+        CREATE INDEX IF NOT EXISTS idx_tests_status ON tests(status);
+        CREATE INDEX IF NOT EXISTS idx_tests_start_time_ts ON tests(start_time_ts);
+
+        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_test_id ON sweep_testcases(test_id);
+        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_name ON sweep_testcases(name);
+        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_suite_name ON sweep_testcases(suite_name);
+        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_status ON sweep_testcases(status);
+        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_start_time_ts ON sweep_testcases(start_time_ts);
+        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_error_signature ON sweep_testcases(error_signature);
+        """
+
+        cursor.execute(create_indexes_query)
+
+        conn.commit()
+        logger.info("Successfully initialized PostgreSQL database with runs, tests, and sweep_testcases tables")
+
+    except Exception as e:
+        logger.error(f"Failed to initialize PostgreSQL database: {e}")
+        if conn:
+            conn.rollback()
+        raise
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+def generate_error_signature(exception_message):
+    """Generate a concise error signature from an exception message."""
+    if not exception_message:
+        return None
+    # Take the first line of the exception as the signature, capped at 255 chars
+    return exception_message.splitlines()[0][:255]
+
+
+def push_run(
+    initiated_by,
+    host,
+    git_author,
+    git_branch_name,
+    git_commit_hash,
+    start_time_ts,
+    status,
+    run_contents=None,
+    device=None,
+):
+    """Export run result to PostgreSQL database"""
+    pg_config = get_postgres_config(POSTGRES_ENV)
+
+    try:
+        conn = psycopg2.connect(**pg_config)
+        cursor = conn.cursor()
+
+        # Insert run result into the runs table
+        insert_run_query = """
+        INSERT INTO runs (initiated_by, host, git_author, git_branch_name, git_commit_hash, start_time_ts, status, run_contents, device)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """
+        cursor.execute(
+            insert_run_query,
+            (
+                initiated_by,
+                host,
+                git_author,
+                git_branch_name,
+                git_commit_hash,
+                start_time_ts,
+                status,
+                run_contents,
+                device,
+            ),
+        )
+        conn.commit()
+        logger.info("Successfully exported run result to PostgreSQL database")
+        return cursor.fetchone()[0]
+
+    except Exception as e:
+        logger.error(f"Failed to export run result to PostgreSQL database: {e}")
+        if conn:
+            conn.rollback()
+        raise
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+def update_run(run_id, end_time_ts, status):
+    """Update run result in PostgreSQL database"""
+    pg_config = get_postgres_config(POSTGRES_ENV)
+
+    try:
+        conn = psycopg2.connect(**pg_config)
+        cursor = conn.cursor()
+
+        # Update run result in the runs table
+        update_run_query = """
+        UPDATE runs
+        SET status = %s, end_time_ts = %s
+        WHERE id = %s
+        """
+        cursor.execute(update_run_query, (status, end_time_ts, run_id))
+        conn.commit()
+        logger.info("Successfully updated run result in PostgreSQL database")
+
+    except Exception as e:
+        logger.error(f"Failed to update run result in PostgreSQL database: {e}")
+        if conn:
+            conn.rollback()
+        raise
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+def push_test(run_id, header_info, test_results, test_start_time, test_end_time):
+    """Push test result to PostgreSQL database"""
+    if not test_results:
+        logger.info("No test results to push to PostgreSQL database.")
+        return "success"
+    pg_config = get_postgres_config(POSTGRES_ENV)
+    try:
+        conn = psycopg2.connect(**pg_config)
+        cursor = conn.cursor()
+        sweep_name = header_info[0]["sweep_name"]
+
+        test_insert_query = """
+        INSERT INTO tests (run_id, name, start_time_ts, end_time_ts, status)
+        VALUES (%s, %s, %s, %s, %s)
+        RETURNING id
+        """
+        cursor.execute(test_insert_query, (run_id, sweep_name, test_start_time, test_end_time, "success"))
+        test_id = cursor.fetchone()[0]
+        # Create testcase record
+        testcase_insert_query = """
+        INSERT INTO sweep_testcases (
+            test_id, name, start_time_ts, end_time_ts,
+            status, suite_name, test_vector, message, exception,
+            e2e_perf, device_perf, error_signature
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        )
+        """
+        test_statuses = []
+        for i, result in enumerate(test_results):
+            # Map test status to db status
+            db_status = map_test_status_to_db_status(result.get("status", None))
+            test_statuses.append(db_status)
+            testcase_name = f"{sweep_name}_{header_info[i].get('vector_id', 'unknown')}"
+            exception_text = result.get("exception", None)
+            error_sig = generate_error_signature(exception_text)
+            # Create testcase record
+            testcase_values = (
+                test_id,
+                testcase_name,
+                result.get("start_time_ts", None),
+                result.get("end_time_ts", None),
+                db_status,
+                header_info[i].get("suite_name", None),
+                json.dumps(result.get("original_vector_data", None)),
+                result.get("message", None),
+                exception_text,
+                result.get("e2e_perf", None),
+                json.dumps(result.get("device_perf")) if result.get("device_perf") else None,
+                error_sig,
+            )
+            cursor.execute(testcase_insert_query, testcase_values)
+            logger.info(
+                f"Successfully pushed {testcase_name} testcase result to PostgreSQL database for test {test_id}"
+            )
+
+        # Update test status based on testcase results
+        test_status = map_test_status_to_run_status(test_statuses)
+        test_update_query = """
+        UPDATE tests
+        SET status = %s
+        WHERE id = %s
+        """
+        cursor.execute(test_update_query, (test_status, test_id))
+
+        conn.commit()
+        return test_status
+    except Exception as e:
+        logger.error(f"Failed to push test result to PostgreSQL database: {e}")
+        if conn:
+            conn.rollback()
+        raise
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
+
+def push_failed_test(run_id, name, test_start_time, test_end_time, status):
+    """Push failed test result to PostgreSQL database"""
+    pg_config = get_postgres_config(POSTGRES_ENV)
+    try:
+        conn = psycopg2.connect(**pg_config)
+        cursor = conn.cursor()
+
+        test_insert_query = """
+        INSERT INTO tests (run_id, name, start_time_ts, end_time_ts, status)
+        VALUES (%s, %s, %s, %s, %s)
+        RETURNING id
+        """
+        cursor.execute(test_insert_query, (run_id, name, test_start_time, test_end_time, status))
+        test_id = cursor.fetchone()[0]
+        conn.commit()
+        return test_id
+    except Exception as e:
+        logger.error(f"Failed to push failed test result to PostgreSQL database: {e}")
+        if conn:
+            conn.rollback()
+        raise
+
+
+def run_multiple_modules_json(module_names, suite_name, run_contents=None, vector_id=None):
+    """Run multiple modules using JSON files from vectors_export directory"""
     pbar_manager = enlighten.get_manager()
-    with open(READ_FILE, "r") as file:
-        print(READ_FILE)
-        data = json.load(file)
-        for suite in data:
-            if suite_name and suite_name != suite:
-                continue  # user only wants to run a specific suite
 
-            for input_hash in data[suite]:
-                data[suite][input_hash]["vector_id"] = input_hash
-            vectors = [data[suite][input_hash] for input_hash in data[suite]]
-            module_name = vectors[0]["sweep_name"]
-            test_module = importlib.import_module("sweeps." + module_name)
-            header_info, test_vectors = sanitize_inputs(vectors)
-            logger.info(f"Executing tests for module {module_name}, suite {suite}")
-            results = execute_suite(test_module, test_vectors, pbar_manager, suite)
-            logger.info(f"Completed tests for module {module_name}, suite {suite}.")
-            logger.info(f"Tests Executed - {len(results)}")
-            logger.info("Dumping results to JSON file.")
-            export_test_results_json(header_info, results)
+    # Find vector files for each module
+    module_files = find_vector_files_for_modules(module_names)
+
+    if not module_files:
+        logger.error("No vector files found for any of the specified modules")
+        return
+
+    total_vectors_run = 0
+    total_tests_run = 0  # Track total tests (module-suite combinations)
+
+    # Track detailed breakdown
+    module_suite_breakdown = {}  # module_name -> {suite_name: test_count}
+
+    # Initialize database if needed
+    if not DRY_RUN:
+        initialize_postgres_database()
+
+        initiated_by = get_initiated_by()
+        host = get_hostname()
+        git_author = get_git_author()
+        git_branch_name = get_git_branch()
+        git_commit_hash = git_hash()
+        status = "success"
+        run_start_time = dt.datetime.now()
+        device = ttnn.get_arch_name()
+        run_id = push_run(
+            initiated_by,
+            host,
+            git_author,
+            git_branch_name,
+            git_commit_hash,
+            run_start_time,
+            status,
+            run_contents,
+            device,
+        )
+    else:
+        run_id = None
+        status = "success"
+
+    should_continue = True
+
+    # Process each module
+    for module_name, vector_file in module_files.items():
+        if not should_continue:
+            break
+
+        logger.info(f"Processing module: {module_name} from file: {vector_file}")
+
+        try:
+            with open(vector_file, "r") as file:
+                data = json.load(file)
+
+            suites_to_process = []
+            if vector_id:
+                found_vector = False
+                for suite_key, suite_content in data.items():
+                    if vector_id in suite_content:
+                        vector = suite_content[vector_id]
+                        vector["vector_id"] = vector_id
+                        suites_to_process.append((suite_key, [vector]))
+                        found_vector = True
+                        break  # Found the vector, no need to check other suites
+                if not found_vector:
+                    logger.warning(f"Vector ID '{vector_id}' not found in module '{module_name}'. Skipping.")
+                    continue
+            else:
+                for suite_key, suite_content in data.items():
+                    if suite_name and suite_name != suite_key:
+                        continue  # user only wants to run a specific suite
+
+                    for input_hash in suite_content:
+                        suite_content[input_hash]["vector_id"] = input_hash
+                    vectors = list(suite_content.values())
+                    suites_to_process.append((suite_key, vectors))
+
+            for suite, vectors in suites_to_process:
+                if not should_continue:
+                    break
+
+                # Track totals for both dry run and actual run
+                total_vectors_run += len(vectors)
+                total_tests_run += 1
+                module_suite_breakdown[module_name] = module_suite_breakdown.get(module_name, {})
+                module_suite_breakdown[module_name][suite] = module_suite_breakdown[module_name].get(suite, 0) + len(
+                    vectors
+                )
+
+                if DRY_RUN:
+                    continue  # Skip actual execution in dry run
+
+                # Verify the module name matches
+                if vectors and vectors[0]["sweep_name"] != module_name:
+                    logger.warning(f"Module name mismatch: expected {module_name}, got {vectors[0]['sweep_name']}")
+                    continue
+                test_start_time = dt.datetime.now()
+                # Import and run the test module
+                try:
+                    test_module = importlib.import_module("sweeps." + module_name)
+                    header_info, test_vectors = sanitize_inputs(vectors)
+                    logger.info(f"Executing tests for module {module_name}, suite {suite}")
+                    results = execute_suite(test_module, test_vectors, pbar_manager, suite, module_name, header_info)
+                    test_end_time = dt.datetime.now()
+                    logger.info(f"Completed tests for module {module_name}, suite {suite}.")
+                    logger.info(f"Tests Executed - {len(results)}")
+
+                    try:
+                        test_status = push_test(run_id, header_info, results, test_start_time, test_end_time)
+                        if test_status == "failure":
+                            status = "failure"
+                    except Exception as e:
+                        logger.error("Stopping execution due to database error")
+                        should_continue = False
+                        break
+
+                except ImportError as e:
+                    logger.error(f"Failed to import module {module_name}: {e}")
+                    continue
+                except Exception as e:
+                    logger.error(f"Failed to execute module {module_name}: {e}")
+                    if not DRY_RUN:
+                        test_end_time = dt.datetime.now()
+                        push_failed_test(run_id, module_name, test_start_time, test_end_time, "failure")
+                    continue
+        except FileNotFoundError:
+            logger.error(f"Vector file not found: {vector_file}")
+            continue
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in file {vector_file}: {e}")
+            continue
+        except Exception as e:
+            logger.error(f"Error processing file {vector_file}: {e}")
+            continue
+
+    if not DRY_RUN:
+        run_end_time = dt.datetime.now()
+        update_run(run_id, run_end_time, status)
+        logger.info(f"Run status: {status}")
+
+        # Display execution summary
+        logger.info("=== EXECUTION SUMMARY ===")
+        logger.info(f"Total tests (module-suite combinations) executed: {total_tests_run}")
+        logger.info(f"Total test cases (vectors) executed: {total_vectors_run}")
+
+        # Show detailed breakdown by module and suite
+        if module_suite_breakdown:
+            logger.info("\n=== DETAILED BREAKDOWN BY MODULE AND SUITE ===")
+            for module_name in sorted(module_suite_breakdown.keys()):
+                module_total = 0
+                for count in module_suite_breakdown[module_name].values():
+                    module_total += count
+                logger.info(f"Module: {module_name} (Total: {module_total} test cases)")
+                for suite_name in sorted(module_suite_breakdown[module_name].keys()):
+                    test_count = module_suite_breakdown[module_name][suite_name]
+                    logger.info(f"  └─ Suite: {suite_name} ({test_count} test cases)")
+    else:
+        logger.info("--- DRY RUN SUMMARY ---")
+        logger.info(f"Total tests (modules) that would have been run: {len(module_files)}")
+        logger.info(f"Total test cases (vectors) that would have been run: {total_vectors_run}")
+
+        # Show detailed breakdown by module and suite
+        logger.info("\n=== DETAILED BREAKDOWN BY MODULE AND SUITE ===")
+        for module_name in sorted(module_suite_breakdown.keys()):
+            module_total = 0
+            for count in module_suite_breakdown[module_name].values():
+                module_total += count
+            logger.info(f"Module: {module_name} (Total: {module_total} test cases)")
+            for suite_name in sorted(module_suite_breakdown[module_name].keys()):
+                test_count = module_suite_breakdown[module_name][suite_name]
+                logger.info(f"  └─ Suite: {suite_name} ({test_count} test cases)")
+
+        # Find the module with the maximum number of test cases
+        max_test_cases_per_module = 0
+        max_test_cases_module = None
+
+        for module_name, vector_file in module_files.items():
+            try:
+                with open(vector_file, "r") as file:
+                    data = json.load(file)
+
+                module_test_cases = 0
+                for suite_key, suite_content in data.items():
+                    module_test_cases += len(suite_content)
+
+                if module_test_cases > max_test_cases_per_module:
+                    max_test_cases_per_module = module_test_cases
+                    max_test_cases_module = module_name
+
+            except Exception as e:
+                logger.warning(f"Could not analyze module {module_name} for max test cases: {e}")
+
+        if max_test_cases_module:
+            logger.info(f"\nMaximum test cases per module: {max_test_cases_per_module} (in {max_test_cases_module})")
 
 
-def run_sweeps(module_name, suite_name, vector_id):
+def run_sweeps_json(module_names, suite_name, run_contents=None, vector_id=None):
+    """Run sweeps from JSON files - supports single or multiple modules"""
+    if isinstance(module_names, str):
+        # this path is when we are exporting a single module
+        pbar_manager = enlighten.get_manager()
+        with open(READ_FILE, "r") as file:
+            print(READ_FILE)
+            data = json.load(file)
+
+            suites_to_process = []
+            if vector_id:
+                found_vector = False
+                for suite_key, suite_content in data.items():
+                    if vector_id in suite_content:
+                        vector = suite_content[vector_id]
+                        vector["vector_id"] = vector_id
+                        suites_to_process.append((suite_key, [vector]))
+                        found_vector = True
+                        break  # Found the vector, no need to check other suites
+                if not found_vector:
+                    logger.error(f"Vector ID '{vector_id}' not found in '{READ_FILE}'.")
+                    return
+            else:
+                for suite_key, suite_content in data.items():
+                    if suite_name and suite_name != suite_key:
+                        continue  # user only wants to run a specific suite
+
+                    for input_hash in suite_content:
+                        suite_content[input_hash]["vector_id"] = input_hash
+                    vectors = list(suite_content.values())
+                    suites_to_process.append((suite_key, vectors))
+
+            total_vectors_run = 0
+            total_tests_run = 0  # Track total tests (suites)
+            suite_breakdown = {}  # suite_name -> test_count
+            for suite, vectors in suites_to_process:
+                # Track totals for both dry run and actual run
+                total_vectors_run += len(vectors)
+                total_tests_run += 1
+                suite_breakdown[suite] = len(vectors)
+
+                if DRY_RUN:
+                    continue  # Skip actual execution in dry run
+
+                module_name = vectors[0]["sweep_name"]
+                test_module = importlib.import_module("sweeps." + module_name)
+                header_info, test_vectors = sanitize_inputs(vectors)
+                logger.info(f"Executing tests for module {module_name}, suite {suite}")
+                results = execute_suite(test_module, test_vectors, pbar_manager, suite, module_name, header_info)
+                logger.info(f"Completed tests for module {module_name}, suite {suite}.")
+                logger.info(f"Tests Executed - {len(results)}")
+                if DATABASE_BACKEND == "postgres":
+                    logger.info("Dumping results to PostgreSQL database.")
+                    export_test_results_postgres(
+                        header_info, results, dt.datetime.now(), dt.datetime.now(), run_contents
+                    )
+                else:
+                    logger.info("Dumping results to JSON file.")
+                    export_test_results_json(header_info, results)
+            # Display summary
+            if DRY_RUN:
+                logger.info("--- DRY RUN SUMMARY ---")
+                logger.info(f"Total tests (suites) that would have been run: {total_tests_run}")
+                logger.info(f"Total test cases (vectors) that would have been run: {total_vectors_run}")
+
+                # Show detailed breakdown by suite
+                logger.info(f"\n=== DETAILED BREAKDOWN BY MODULE AND SUITE ===")
+                logger.info(f"Module: {module_names} (Total: {total_vectors_run} test cases)")
+                for suite_name in sorted(suite_breakdown.keys()):
+                    test_count = suite_breakdown[suite_name]
+                    logger.info(f"  └─ Suite: {suite_name} ({test_count} test cases)")
+
+                logger.info(f"\nMaximum test cases per module: {total_vectors_run} (in {module_names})")
+            else:
+                logger.info("=== EXECUTION SUMMARY ===")
+                logger.info(f"Total tests (suites) executed: {total_tests_run}")
+                logger.info(f"Total test cases (vectors) executed: {total_vectors_run}")
+
+                # Show detailed breakdown by suite
+                if suite_breakdown:
+                    logger.info(f"\n=== DETAILED BREAKDOWN BY MODULE AND SUITE ===")
+                    logger.info(f"Module: {module_names} (Total: {total_vectors_run} test cases)")
+                    for suite_name in sorted(suite_breakdown.keys()):
+                        test_count = suite_breakdown[suite_name]
+                        logger.info(f"  └─ Suite: {suite_name} ({test_count} test cases)")
+    else:
+        # Multiple modules
+        run_multiple_modules_json(module_names, suite_name, run_contents, vector_id=vector_id)
+
+
+def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, run_contents=None):
     client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
     pbar_manager = enlighten.get_manager()
 
     sweeps_path = pathlib.Path(__file__).parent / "sweeps"
+    total_modules_run = 0
+    total_vectors_run = 0
+
+    # Track maximum test cases per module for dry run
+    max_test_cases_per_module = 0
+    max_test_cases_module = None
+
+    # Track detailed breakdown for dry run
+    module_suite_breakdown = {}  # module_name -> {suite_name: test_count}
 
     if not module_name:
-        for file in sorted(sweeps_path.glob("**/*.py")):
+        all_modules = sorted(sweeps_path.glob("**/*.py"))
+        if DRY_RUN:
+            logger.info(f"DRY RUN: Found {len(all_modules)} modules to process.")
+        for file in all_modules:
             sweep_name = str(pathlib.Path(file).relative_to(sweeps_path))[:-3].replace("/", ".")
+            if skip_modules and sweep_name in skip_modules:
+                logger.info(f"Skipping module {sweep_name} due to --skip-modules flag.")
+                continue
+            total_modules_run += 1
             test_module = importlib.import_module("sweeps." + sweep_name)
             vector_index = VECTOR_INDEX_PREFIX + sweep_name
             logger.info(f"Executing tests for module {sweep_name}...")
@@ -357,15 +1059,26 @@ def run_sweeps(module_name, suite_name, vector_id):
                     continue
 
                 module_pbar = pbar_manager.counter(total=len(suites), desc=f"Module: {sweep_name}", leave=False)
+                module_test_cases = 0  # Track test cases for this module
+                module_suite_breakdown[sweep_name] = {}  # Initialize suite breakdown for this module
                 for suite in suites:
                     logger.info(f"Executing tests for module {sweep_name}, suite {suite}.")
                     header_info, test_vectors = get_suite_vectors(client, vector_index, suite)
-                    results = execute_suite(test_module, test_vectors, pbar_manager, suite)
+                    total_vectors_run += len(test_vectors)
+                    module_test_cases += len(test_vectors)  # Add to module count
+                    module_suite_breakdown[sweep_name][suite] = len(test_vectors)  # Track suite breakdown
+                    results = execute_suite(test_module, test_vectors, pbar_manager, suite, sweep_name, header_info)
                     logger.info(f"Completed tests for module {sweep_name}, suite {suite}.")
-                    logger.info(f"Tests Executed - {len(results)}")
-                    export_test_results(header_info, results)
+                    if not DRY_RUN:
+                        logger.info(f"Tests Executed - {len(results)}")
+                        export_test_results(header_info, results)
                     module_pbar.update()
                 module_pbar.close()
+
+                # Update maximum test cases tracking
+                if module_test_cases > max_test_cases_per_module:
+                    max_test_cases_per_module = module_test_cases
+                    max_test_cases_module = sweep_name
             except NotFoundError as e:
                 logger.info(f"No test vectors found for module {sweep_name}. Skipping...")
                 continue
@@ -374,6 +1087,7 @@ def run_sweeps(module_name, suite_name, vector_id):
                 continue
 
     else:
+        total_modules_run = 1
         try:
             test_module = importlib.import_module("sweeps." + module_name)
         except ModuleNotFoundError as e:
@@ -385,8 +1099,16 @@ def run_sweeps(module_name, suite_name, vector_id):
             test_vector = client.get(index=vector_index, id=vector_id)["_source"]
             test_vector["vector_id"] = vector_id
             header_info, test_vectors = sanitize_inputs([test_vector])
-            results = execute_suite(test_module, test_vectors, pbar_manager, "Single Vector")
-            export_test_results(header_info, results)
+            total_vectors_run += len(test_vectors)
+            # Update maximum test cases tracking for single vector
+            if len(test_vectors) > max_test_cases_per_module:
+                max_test_cases_per_module = len(test_vectors)
+                max_test_cases_module = module_name
+            # Track suite breakdown for single vector
+            module_suite_breakdown[module_name] = {"Single Vector": len(test_vectors)}
+            results = execute_suite(test_module, test_vectors, pbar_manager, "Single Vector", module_name, header_info)
+            if not DRY_RUN:
+                export_test_results(header_info, results)
         else:
             try:
                 if not suite_name:
@@ -403,23 +1125,80 @@ def run_sweeps(module_name, suite_name, vector_id):
                         )
                         return
 
+                    module_test_cases = 0  # Track test cases for this module
+                    module_suite_breakdown[module_name] = {}  # Initialize suite breakdown for this module
                     for suite in suites:
                         logger.info(f"Executing tests for module {module_name}, suite {suite}.")
                         header_info, test_vectors = get_suite_vectors(client, vector_index, suite)
-                        results = execute_suite(test_module, test_vectors, pbar_manager, suite)
+                        total_vectors_run += len(test_vectors)
+                        module_test_cases += len(test_vectors)  # Add to module count
+                        module_suite_breakdown[module_name][suite] = len(test_vectors)  # Track suite breakdown
+                        results = execute_suite(
+                            test_module, test_vectors, pbar_manager, suite, module_name, header_info
+                        )
                         logger.info(f"Completed tests for module {module_name}, suite {suite}.")
-                        logger.info(f"Tests Executed - {len(results)}")
-                        export_test_results(header_info, results)
+                        if not DRY_RUN:
+                            logger.info(f"Tests Executed - {len(results)}")
+                            export_test_results(header_info, results)
+                    # Update maximum test cases tracking
+                    if module_test_cases > max_test_cases_per_module:
+                        max_test_cases_per_module = module_test_cases
+                        max_test_cases_module = module_name
                 else:
                     logger.info(f"Executing tests for module {module_name}, suite {suite_name}.")
                     header_info, test_vectors = get_suite_vectors(client, vector_index, suite_name)
-                    results = execute_suite(test_module, test_vectors, pbar_manager, suite_name)
+                    total_vectors_run += len(test_vectors)
+                    # Update maximum test cases tracking for single suite
+                    if len(test_vectors) > max_test_cases_per_module:
+                        max_test_cases_per_module = len(test_vectors)
+                        max_test_cases_module = module_name
+                    # Track suite breakdown for single suite
+                    module_suite_breakdown[module_name] = {suite_name: len(test_vectors)}
+                    results = execute_suite(
+                        test_module, test_vectors, pbar_manager, suite_name, module_name, header_info
+                    )
                     logger.info(f"Completed tests for module {module_name}, suite {suite_name}.")
-                    logger.info(f"Tests Executed - {len(results)}")
-                    export_test_results(header_info, results)
+                    if not DRY_RUN:
+                        logger.info(f"Tests Executed - {len(results)}")
+                        export_test_results(header_info, results)
             except Exception as e:
                 logger.info(e)
+    # Display summary
+    if DRY_RUN:
+        logger.info("--- DRY RUN SUMMARY ---")
+        logger.info(f"Total tests (modules) that would have been run: {total_modules_run}")
+        logger.info(f"Total test cases (vectors) that would have been run: {total_vectors_run}")
 
+        # Show detailed breakdown by module and suite
+        if module_suite_breakdown:
+            logger.info("\n=== DETAILED BREAKDOWN BY MODULE AND SUITE ===")
+            for module_name in sorted(module_suite_breakdown.keys()):
+                module_total = 0
+                for count in module_suite_breakdown[module_name].values():
+                    module_total += count
+                logger.info(f"Module: {module_name} (Total: {module_total} test cases)")
+                for suite_name in sorted(module_suite_breakdown[module_name].keys()):
+                    test_count = module_suite_breakdown[module_name][suite_name]
+                    logger.info(f"  └─ Suite: {suite_name} ({test_count} test cases)")
+
+        if max_test_cases_module:
+            logger.info(f"\nMaximum test cases per module: {max_test_cases_per_module} (in {max_test_cases_module})")
+    else:
+        logger.info("=== EXECUTION SUMMARY ===")
+        logger.info(f"Total tests (modules) executed: {total_modules_run}")
+        logger.info(f"Total test cases (vectors) executed: {total_vectors_run}")
+
+        # Show detailed breakdown by module and suite
+        if module_suite_breakdown:
+            logger.info("\n=== DETAILED BREAKDOWN BY MODULE AND SUITE ===")
+            for module_name in sorted(module_suite_breakdown.keys()):
+                module_total = 0
+                for count in module_suite_breakdown[module_name].values():
+                    module_total += count
+                logger.info(f"Module: {module_name} (Total: {module_total} test cases)")
+                for suite_name in sorted(module_suite_breakdown[module_name].keys()):
+                    test_count = module_suite_breakdown[module_name][suite_name]
+                    logger.info(f"  └─ Suite: {suite_name} ({test_count} test cases)")
     client.close()
 
 
@@ -441,10 +1220,238 @@ def export_test_results(header_info, results):
             if elem == "device_perf":
                 result[elem] = results[i][elem]
                 continue
+            # Skip problematic fields that were added for PostgreSQL functionality
+            if elem in ["start_time_ts", "end_time_ts", "original_vector_data"]:
+                continue
             result[elem] = serialize(results[i][elem])
         client.index(index=results_index, body=result)
-
+    logger.info(f"Successfully exported {len(results)} results to Elasticsearch")
     client.close()
+
+
+def get_git_author():
+    """Get the git author name"""
+    try:
+        return subprocess.check_output(["git", "config", "user.name"]).decode("ascii").strip()
+    except Exception as e:
+        return "Unknown"
+
+
+def get_git_branch():
+    """Get the current git branch name"""
+    try:
+        return subprocess.check_output(["git", "rev-parse", "--abbrev-ref", "HEAD"]).decode("ascii").strip()
+    except Exception as e:
+        return "Unknown"
+
+
+def get_initiated_by():
+    """Get the user who initiated the run - username for dev, CI pipeline name for CI/CD"""
+    # Check if we're in a CI environment
+    ci_pipeline = os.getenv("GITHUB_WORKFLOW") or os.getenv("CI_PIPELINE_NAME")
+    if ci_pipeline:
+        return ci_pipeline
+    else:
+        return get_username()
+
+
+def map_test_status_to_run_status(test_statuses):
+    """Reduce individual testcase DB statuses to an overall test (suite) status.
+
+    Input: list like ["pass", "fail_assert_exception", "skipped", ...]
+    Output must be one of the allowed values for the `tests` table:
+        "success" | "failure" | "error" | "cancelled" | "skipped"
+    """
+    if not test_statuses:
+        return "error"
+
+    # Any explicit failure or error ⇒ overall failure
+    if any(status.startswith("fail") or status == "error" for status in test_statuses):
+        return "failure"
+    # Any cancellation ⇒ overall cancelled
+    elif any(status == "cancelled" for status in test_statuses):
+        return "cancelled"
+    # All skipped ⇒ overall skipped
+    elif all(status == "skipped" for status in test_statuses):
+        return "skipped"
+    # Otherwise (all pass or mixture of pass & skipped) ⇒ success
+    else:
+        return "success"
+
+
+def map_test_status_to_db_status(test_status):
+    """Map TestStatus enum to database status string"""
+    status_mapping = {
+        TestStatus.PASS: "pass",
+        TestStatus.FAIL_ASSERT_EXCEPTION: "fail_assert_exception",
+        TestStatus.FAIL_L1_OUT_OF_MEM: "fail_l1_out_of_mem",
+        TestStatus.FAIL_WATCHER: "fail_watcher",
+        TestStatus.FAIL_CRASH_HANG: "fail_crash_hang",
+        TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF: "fail_unsupported_device_perf",
+        TestStatus.NOT_RUN: "skipped",
+    }
+    return status_mapping.get(test_status, "error")
+
+
+def export_test_results_postgres(header_info, results, run_start_time, run_end_time, run_contents=None):
+    """Export test results to PostgreSQL database"""
+    if len(results) == 0:
+        return
+
+    # Initialize database if needed
+    initialize_postgres_database()
+
+    # Get PostgreSQL connection
+    pg_config = get_postgres_config(POSTGRES_ENV)
+
+    try:
+        conn = psycopg2.connect(**pg_config)
+        cursor = conn.cursor()
+
+        # Get git information
+        curr_git_hash = git_hash()
+        git_author = get_git_author()
+        git_branch = get_git_branch()
+        initiated_by = get_initiated_by()
+        host = get_hostname()
+        device = ttnn.get_arch_name()
+
+        # Create a new run record
+        run_insert_query = """
+        INSERT INTO runs (
+            initiated_by, host, git_author, git_branch_name, git_commit_hash,
+            start_time_ts, end_time_ts, status, run_contents, device
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
+        """
+
+        run_values = (
+            initiated_by,
+            host,
+            git_author,
+            git_branch,
+            curr_git_hash,
+            run_start_time,
+            run_end_time,
+            "success",  # Will be updated after processing all results
+            run_contents,
+            device,
+        )
+
+        cursor.execute(run_insert_query, run_values)
+        run_id = cursor.fetchone()[0]
+
+        # Group results by test module (sweep_name)
+        test_groups = {}
+        for i, result in enumerate(results):
+            sweep_name = header_info[i]["sweep_name"]
+            if sweep_name not in test_groups:
+                test_groups[sweep_name] = []
+            test_groups[sweep_name].append((i, result))
+
+        all_test_statuses = []
+        test_index = 0  # Track which test we're processing
+
+        # Process each test module
+        for sweep_name, test_results_group in test_groups.items():
+            # Use the corresponding test start/end time from the lists
+            test_start_time = (
+                min(r.get("start_time_ts") for _, r in test_results_group) if test_results_group else dt.datetime.now()
+            )
+            test_end_time = (
+                max(r.get("end_time_ts") for _, r in test_results_group) if test_results_group else dt.datetime.now()
+            )
+
+            test_insert_query = """
+            INSERT INTO tests (
+                run_id, name, start_time_ts, end_time_ts, status
+            ) VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+            """
+
+            test_values = (
+                run_id,
+                sweep_name,
+                test_start_time,
+                test_end_time,
+                "success",  # Will be updated after processing all testcases
+            )
+
+            cursor.execute(test_insert_query, test_values)
+            test_id = cursor.fetchone()[0]
+
+            test_statuses = []
+
+            # Process each test case within this test module
+            for idx, result in test_results_group:
+                header = header_info[idx]
+
+                # Map test status to database status
+                db_status = map_test_status_to_db_status(result.get("status"))
+                test_statuses.append(db_status)
+
+                # Create testcase record
+                testcase_insert_query = """
+                INSERT INTO sweep_testcases (
+                    test_id, name, start_time_ts, end_time_ts,
+                    status, suite_name, test_vector, message, exception,
+                    e2e_perf, device_perf, error_signature
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                """
+
+                exception_text = result.get("exception", None)
+                error_sig = generate_error_signature(exception_text)
+
+                testcase_values = (
+                    test_id,
+                    f"{sweep_name}_{header.get('vector_id', 'unknown')}",
+                    result.get("start_time_ts"),
+                    result.get("end_time_ts"),
+                    db_status,
+                    header.get("suite_name"),
+                    json.dumps(result.get("original_vector_data")),
+                    result.get("message"),
+                    exception_text,
+                    result.get("e2e_perf"),
+                    json.dumps(result.get("device_perf")) if result.get("device_perf") else None,
+                    error_sig,
+                )
+
+                cursor.execute(testcase_insert_query, testcase_values)
+
+            # Update test status based on testcase results
+            test_status = map_test_status_to_run_status(test_statuses)
+
+            test_update_query = """
+            UPDATE tests SET status = %s WHERE id = %s
+            """
+            cursor.execute(test_update_query, (test_status, test_id))
+
+            all_test_statuses.append(test_status)
+            test_index += 1  # Move to next test
+
+        # Update run status based on all test results
+        run_status = map_test_status_to_run_status(all_test_statuses)
+
+        run_update_query = """
+        UPDATE runs SET status = %s WHERE id = %s
+        """
+        cursor.execute(run_update_query, (run_status, run_id))
+
+        conn.commit()
+        logger.info(f"Successfully exported {len(results)} results to PostgreSQL with run_id: {run_id}")
+
+    except Exception as e:
+        logger.error(f"Failed to export results to PostgreSQL: {e}")
+        if conn:
+            conn.rollback()
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 
 def enable_watcher():
@@ -471,6 +1478,26 @@ def disable_profiler():
     os.environ.pop("ENABLE_TRACY")
 
 
+def get_postgres_config(env="prod"):
+    config = {
+        "host": os.getenv("POSTGRES_HOST"),
+        "port": os.getenv("POSTGRES_PORT", "5432"),
+        "database": os.getenv("POSTGRES_DATABASE"),
+        "user": os.getenv("POSTGRES_USER"),
+        "password": os.getenv("POSTGRES_PASSWORD"),
+    }
+
+    required_vars = ["host", "database", "user", "password"]
+    missing_keys = [key for key in required_vars if config[key] is None]
+
+    if missing_keys:
+        env_vars_to_set = [f"POSTGRES_{key.upper()}" for key in missing_keys]
+        raise ValueError(f"Missing required PostgreSQL environment variables: {', '.join(env_vars_to_set)}")
+
+    config["port"] = int(config["port"])
+    return config
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         prog="Sweep Test Runner",
@@ -483,7 +1510,11 @@ if __name__ == "__main__":
         default="corp",
         help="Elastic Connection String for the vector and results database. Available presets are ['corp', 'cloud']",
     )
-    parser.add_argument("--module-name", required=False, help="Test Module Name, or all tests if omitted.")
+    parser.add_argument(
+        "--module-name",
+        required=False,
+        help="Test Module Name(s). For PostgreSQL with local files, can be comma-separated list (e.g., 'eltwise.unary.relu.relu,matmul.short.matmul'). For Elasticsearch, single module name only.",
+    )
     parser.add_argument("--suite-name", required=False, help="Suite of Test Vectors to run, or all tests if omitted.")
     parser.add_argument(
         "--vector-id", required=False, help="Specify vector id with a module name to run an individual test vector."
@@ -521,8 +1552,38 @@ if __name__ == "__main__":
     parser.add_argument(
         "--read-file", required=False, help="Read and execute test vectors from a specified file path instead of ES."
     )
+    parser.add_argument(
+        "--database",
+        required=False,
+        default="elastic",
+        choices=["elastic", "postgres"],
+        help="Database backend for storing results. Available options: ['elastic', 'postgres']",
+    )
+    parser.add_argument(
+        "--postgres-env",
+        required=False,
+        default="dev",
+        choices=["dev", "prod"],
+        help="PostgreSQL environment configuration. Available options: ['dev', 'prod']",
+    )
+
+    parser.add_argument(
+        "--skip-modules",
+        required=False,
+        help="Comma-separated list of modules to skip when running all modules.",
+    )
 
     args = parser.parse_args(sys.argv[1:])
+    if args.module_name or args.suite_name:
+        run_contents_details = []
+        if args.module_name:
+            run_contents_details.append(f"{args.module_name}")
+        if args.suite_name:
+            run_contents_details.append(f"{args.suite_name}")
+        run_contents = ", ".join(run_contents_details)
+    else:
+        run_contents = "all_sweeps"
+
     if not args.module_name and args.vector_id:
         parser.print_help()
         logger.error("Module name is required if vector id is specified.")
@@ -554,7 +1615,13 @@ if __name__ == "__main__":
     global SWEEPS_TAG
     SWEEPS_TAG = args.tag
 
-    logger.info(f"Running current sweeps with tag: {SWEEPS_TAG}.")
+    global DATABASE_BACKEND
+    DATABASE_BACKEND = args.database
+
+    global POSTGRES_ENV
+    POSTGRES_ENV = args.postgres_env
+
+    logger.info(f"Running current sweeps with tag: {SWEEPS_TAG} using {DATABASE_BACKEND} backend.")
 
     if args.watcher:
         enable_watcher()
@@ -567,10 +1634,47 @@ if __name__ == "__main__":
     from framework.device_fixtures import default_device
     from framework.sweeps_logger import sweeps_logger as logger
 
-    if READ_FILE:
-        run_sweeps_json(args.module_name, args.suite_name)
+    # Parse module names
+    if args.module_name:
+        if DATABASE_BACKEND == "postgres" and not args.read_file:
+            # For PostgreSQL without read-file, support comma-separated module names
+            module_names = [name.strip() for name in args.module_name.split(",")]
+            logger.info(f"Running multiple modules: {module_names}")
+        else:
+            # Use Elasticsearch or with read-file, use single module name
+            module_names = args.module_name
     else:
-        run_sweeps(args.module_name, args.suite_name, args.vector_id)
+        module_names = None
+
+    skip_modules_set = set()
+    if args.skip_modules:
+        if args.module_name:
+            logger.warning("--skip-modules is only supported when running all modules. Ignoring this flag.")
+        else:
+            skip_modules_set = {name.strip() for name in args.skip_modules.split(",")}
+            logger.info(f"Skipping modules: {', '.join(skip_modules_set)}")
+
+    # Determine which execution path to take
+    use_json_runner = READ_FILE or DATABASE_BACKEND == "postgres"
+
+    if use_json_runner:
+        effective_module_names = module_names
+        # For postgres, if no modules are specified, find all available modules
+        if DATABASE_BACKEND == "postgres" and not module_names:
+            all_module_names = list(get_all_modules())
+            if skip_modules_set:
+                effective_module_names = [name for name in all_module_names if name not in skip_modules_set]
+            else:
+                effective_module_names = all_module_names
+
+            logger.info("Running modules:")
+            for module_name in effective_module_names:
+                logger.info(f"  {module_name}")
+        run_sweeps_json(effective_module_names, args.suite_name, run_contents=run_contents, vector_id=args.vector_id)
+    else:
+        # Exporting results to Elasticsearch
+        logger.info(f"Exporting results to Elasticsearch")
+        run_sweeps(module_names, args.suite_name, args.vector_id, skip_modules_set, run_contents=run_contents)
 
     if args.watcher:
         disable_watcher()
