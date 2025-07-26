@@ -13,7 +13,7 @@ from models.demos.yolov7.reference.yolov7_utils import download_yolov7_weights
 from models.demos.yolov7.tt.ttnn_yolov7 import ttnn_yolov7
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.demos.yolov7.ttnn_yolov7_utils import (
-    create_custom_preprocessor,
+    custom_preprocessor,
     load_weights,
     create_yolov7_input_tensors,
 )
@@ -42,9 +42,7 @@ def test_yolov7(device, reset_seeds):
     torch_input, ttnn_input = create_yolov7_input_tensors(device, model=True)
     torch_output_tensor = torch_model(torch_input)
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(None), device=None
-    )
+    parameters = custom_preprocessor(model=torch_model, mesh_mapper=None)
 
     nx_ny = [80, 40, 20]
     grid_tensors = []

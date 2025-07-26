@@ -7,7 +7,6 @@ import time
 import pytest
 import torch
 from loguru import logger
-from ttnn.model_preprocessing import preprocess_model_parameters
 
 import models.demos.yolov7.reference.yolov7_model as yolov7_model
 import models.demos.yolov7.reference.yolov7_utils as yolov7_utils
@@ -15,7 +14,7 @@ import ttnn
 from models.demos.yolov7.reference.model import Yolov7_model
 from models.demos.yolov7.reference.yolov7_utils import download_yolov7_weights
 from models.demos.yolov7.tt.ttnn_yolov7 import ttnn_yolov7
-from models.demos.yolov7.ttnn_yolov7_utils import create_custom_preprocessor, create_yolov7_input_tensors, load_weights
+from models.demos.yolov7.ttnn_yolov7_utils import create_yolov7_input_tensors, custom_preprocessor, load_weights
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import (
@@ -56,9 +55,7 @@ def test_perf(device, reset_seeds):
     weights_path = download_yolov7_weights(weights_path)
     load_weights(torch_model, weights_path)
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(None), device=None
-    )
+    parameters = custom_preprocessor(model=torch_model, mesh_mapper=None)
 
     nx_ny = [80, 40, 20]
     grid_tensors = []
@@ -103,7 +100,7 @@ def test_perf(device, reset_seeds):
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 69.9],
+        [1, 73.7],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
