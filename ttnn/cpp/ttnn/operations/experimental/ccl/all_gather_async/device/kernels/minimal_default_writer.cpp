@@ -89,13 +89,13 @@ void kernel_main() {
 
 #ifdef OUTPUT_IS_SHARDED
     using tensor_shard_info = ShardedInfo<
-        get_compile_time_arg_val(28),   // Memory layout
-        get_compile_time_arg_val(29),   // The number of sharding cores
-        get_compile_time_arg_val(30),   // The page size we offset each write to
-        get_compile_time_arg_val(31),   // The number of pages in each sharding row not including padding pages
-        get_compile_time_arg_val(32),   // This defines times when contiguous pages can't be calculated
-        get_compile_time_arg_val(33),   // pages_per_shard_x
-        get_compile_time_arg_val(34)>;  // pages_per_shard_y
+        get_compile_time_arg_val(27),   // Memory layout
+        get_compile_time_arg_val(28),   // The number of sharding cores
+        get_compile_time_arg_val(29),   // The page size we offset each write to
+        get_compile_time_arg_val(30),   // The number of pages in each sharding row not including padding pages
+        get_compile_time_arg_val(31),   // This defines times when contiguous pages can't be calculated
+        get_compile_time_arg_val(32),   // pages_per_shard_x
+        get_compile_time_arg_val(33)>;  // pages_per_shard_y
 
     const auto [mapping_table, rt_increment] =
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(arg_idx));
