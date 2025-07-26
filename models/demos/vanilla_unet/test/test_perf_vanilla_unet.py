@@ -23,9 +23,8 @@ def get_expected_times(name):
     return base[name]
 
 
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"l1_small_size": (7 * 8192) + 1730}], indirect=True, ids=["0"])
-def test_vanilla_unet(device, reset_seeds):
+def test_vanilla_unet(device, reset_seeds, resolution=(480, 640), channels=3, batch_size=1, min_channels=16):
     torch.manual_seed(0)
 
     weights_path = "models/demos/vanilla_unet/unet.pt"
@@ -49,7 +48,7 @@ def test_vanilla_unet(device, reset_seeds):
     reference_model.load_state_dict(new_state_dict)
     reference_model.eval()
 
-    torch_input_tensor = torch.randn(1, 3, 480, 640)
+    torch_input_tensor = torch.randn(batch_size, channels, resolution[0], resolution[1])
     batch_size = torch_input_tensor.shape[0]
     torch_output_tensor = reference_model(torch_input_tensor)
 
@@ -60,10 +59,10 @@ def test_vanilla_unet(device, reset_seeds):
     ttnn_model = TtUnet(device=device, parameters=parameters, model=reference_model)
 
     n, c, h, w = torch_input_tensor.shape
-    if c == 3:
-        c = 16
+    if c == channels:
+        c = min_channels
     input_mem_config = ttnn.create_sharded_memory_config(
-        [n, c, 640, w],
+        [n, c, resolution[1], w],
         ttnn.CoreGrid(x=8, y=8),
         ttnn.ShardStrategy.HEIGHT,
     )
