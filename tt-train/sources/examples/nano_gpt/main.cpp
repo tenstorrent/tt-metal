@@ -485,8 +485,10 @@ int main(int argc, char **argv) {
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
 
-    std::string config_name =
-        "/home/ttuser/git/tt-metal/tt-train/configs/training_shakespeare_llama3_gpt2s_size_tracy.yaml";
+    std::string config_name = "/home/ttuser/git/tt-metal/tt-train/configs/training_shakespear_nanogpt.yaml";
+
+    // std::string config_name =
+    //     "/home/ttuser/git/tt-metal/tt-train/configs/training_shakespeare_llama3_gpt2s_size_tracy.yaml";
 
     // std::string config_name =
     //     "/home/ttuser/git/tt-metal/tt-train/configs/training_shakespear_gpt2s.yaml";  // std::string(CONFIGS_FOLDER)
@@ -496,7 +498,7 @@ int main(int argc, char **argv) {
     std::string run_name = "";
     bool is_eval = false;
     bool add_time_to_name = true;
-    bool enable_wandb = true;
+    bool enable_wandb = false;
     std::string save_and_exit_path = "";
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
@@ -913,7 +915,9 @@ int main(int argc, char **argv) {
             auto loss = ttml::ops::cross_entropy_loss(output, target);
             loss = gradient_accumulator_helper.scale(loss);
             float loss_float = get_loss_value(loss);
-            tt::tt_metal::detail::DumpDeviceProfileResults(device->get_devices()[0]);
+
+            ttml::autograd::ctx().get_profiler().dump_results(device, "model_forward_done");
+
             loss->backward();
             ttml::autograd::ctx().reset_graph();
 
@@ -1009,8 +1013,7 @@ int main(int argc, char **argv) {
         wandbcpp::finish();
     }
 
-    ttml::autograd::ctx().get_profiler().dump_results(
-        device, "close_device", /* number_of_noops */ 0, tt::tt_metal::ProfilerDumpState::CLOSE_DEVICE_SYNC);
-    ttml::autograd::ctx().close_device();
+    ttml::autograd::ctx().get_profiler().dump_results(device, "before close device", 0);
+    ttml::autograd::ctx().close_profiler();
     return 0;
 }

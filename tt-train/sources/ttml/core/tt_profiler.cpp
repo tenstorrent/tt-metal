@@ -4,6 +4,8 @@
 
 #include "tt_profiler.hpp"
 
+#include <tt-metalium/distributed.hpp>
+
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 
@@ -24,6 +26,7 @@ void TTProfiler::dump_results(
     if (!m_enabled) {
         return;
     }
+    call_device_noop(device, number_of_noops, noop_identifier);
     for (auto& dev : device->get_devices()) {
         tt::tt_metal::detail::DumpDeviceProfileResults(dev, dump_state);
     }
@@ -58,6 +61,14 @@ void TTProfiler::disable() {
 TTProfiler::TTProfiler() {
     if (is_tracy_enabled) {
         enable();
+
+        tt::tt_metal::detail::ProfilerSync(tt::tt_metal::ProfilerSyncState::INIT);
+    }
+}
+
+TTProfiler::~TTProfiler() {
+    if (is_tracy_enabled) {
+        tt::tt_metal::detail::ProfilerSync(tt::tt_metal::ProfilerSyncState::CLOSE_DEVICE);
     }
 }
 

@@ -52,7 +52,7 @@ autograd::TensorPtr GPTBlock::operator()(const autograd::TensorPtr& input, const
     x = (*ln2)(x);
     x = (*mlp)(x);
     x = ops::add(x, residual);
-    tt::tt_metal::detail::DumpDeviceProfileResults(ttml::autograd::ctx().get_device().get_devices()[0]);
+    ttml::autograd::ctx().get_profiler().dump_results(&ttml::autograd::ctx().get_device(), "GPTBlock");
 
     return x;
 }

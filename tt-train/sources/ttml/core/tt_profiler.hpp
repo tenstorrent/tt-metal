@@ -1,18 +1,22 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+
 #include <core/ttnn_all_includes.hpp>
+
 namespace ttml::core {
 class TTProfiler {
 public:
     TTProfiler();
-    ~TTProfiler() = default;
+    ~TTProfiler();
+
     TTProfiler(const TTProfiler&) = delete;
     TTProfiler& operator=(const TTProfiler&) = delete;
     TTProfiler(TTProfiler&&) = delete;
     TTProfiler& operator=(TTProfiler&&) = delete;
+
     void dump_results(
         ttnn::distributed::MeshDevice* device,
         const std::string& noop_identifier = "noop_identifier",
@@ -29,4 +33,5 @@ public:
 private:
     bool m_enabled = true;
 };
+
 }  // namespace ttml::core

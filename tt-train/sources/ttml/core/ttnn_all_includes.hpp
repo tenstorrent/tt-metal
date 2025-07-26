@@ -20,6 +20,7 @@
 #include <tt-metalium/host_api.hpp>                                                                // NOLINT
 #include <tt-metalium/math.hpp>                                                                    // NOLINT
 #include <tt-metalium/mesh_device_view.hpp>                                                        // NOLINT
+#include <tt-metalium/tt_metal_profiler.hpp>                                                       // NOLINT
 #include <tt_stl/indestructible.hpp>                                                               // NOLINT
 #include <ttnn/core.hpp>                                                                           // NOLINT
 #include <ttnn/device.hpp>                                                                         // NOLINT
