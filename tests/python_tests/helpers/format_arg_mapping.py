@@ -59,6 +59,9 @@ class MathOperation(Enum):
     # SFPU UNARY OPERATIONS
     # =============================================================================
     Abs = OpSpec("abs", MathOpType.SFPU_UNARY)
+    Atanh = OpSpec("atanh", MathOpType.SFPU_UNARY)
+    Asinh = OpSpec("asinh", MathOpType.SFPU_UNARY)
+    Acosh = OpSpec("acosh", MathOpType.SFPU_UNARY)
     Celu = OpSpec("celu", MathOpType.SFPU_UNARY)
     Cos = OpSpec("cosine", MathOpType.SFPU_UNARY)
     Elu = OpSpec("elu", MathOpType.SFPU_UNARY)

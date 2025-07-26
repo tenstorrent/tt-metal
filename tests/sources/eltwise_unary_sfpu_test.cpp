@@ -58,6 +58,18 @@ void call_sfpu_operation(SfpuType operation, uint32_t math_format)
         case SfpuType::abs:
             ckernel::sfpu::_calculate_abs_<APPROX_MODE, iterations>(iterations);
             break;
+        case SfpuType::atanh:
+            ckernel::sfpu::_init_atanh_<APPROX_MODE>();
+            ckernel::sfpu::_calculate_atanh_<APPROX_MODE, is_fp32_dest_acc_en, iterations>();
+            break;
+        case SfpuType::asinh:
+            ckernel::sfpu::_init_inverse_hyperbolic_<APPROX_MODE>();
+            ckernel::sfpu::_calculate_asinh_<APPROX_MODE, iterations>();
+            break;
+        case SfpuType::acosh:
+            ckernel::sfpu::_init_inverse_hyperbolic_<APPROX_MODE>();
+            ckernel::sfpu::_calculate_acosh_<APPROX_MODE, iterations>();
+            break;
         case SfpuType::cosine:
             ckernel::sfpu::_calculate_cosine_<APPROX_MODE, iterations>(iterations);
             break;

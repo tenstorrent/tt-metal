@@ -98,4 +98,7 @@ enum class SfpuType
     reshuffle_rows,
     hardsigmoid,
     where,
+    atanh,
+    asinh,
+    acosh,
 };
