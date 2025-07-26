@@ -1,6 +1,7 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+
 
 import time
 
@@ -14,7 +15,6 @@ from models.utility_functions import run_for_wormhole_b0
 
 @run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
@@ -27,7 +27,7 @@ def test_run_yolov8x_trace_2cqs_inference(
     batch_size,
     model_location_generator,
 ):
-    performant_runner = YOLOv8xPerformantRunner(device, batch_size)
+    performant_runner = YOLOv8xPerformantRunner(device, batch_size, model_location_generator=model_location_generator)
 
     input_shape = (batch_size, 3, 640, 640)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)

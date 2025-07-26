@@ -1,5 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
+
 
 import ttnn
 from models.demos.yolov8x.runner.performant_runner_infra import YOLOv8xPerformanceRunnerInfra
@@ -10,10 +12,12 @@ class YOLOv8xPerformantRunner:
         self,
         device,
         device_batch_size,
+        model_location_generator=None,
     ):
         self.runner_infra = YOLOv8xPerformanceRunnerInfra(
             device,
             device_batch_size,
+            model_location_generator=model_location_generator,
         )
         self.device = device
         (

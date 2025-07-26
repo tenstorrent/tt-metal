@@ -49,7 +49,7 @@ def test_perf_yolov8s_world(
         act_dtype,
         weight_dtype,
         resolution=resolution,
-        model_location_generator=None,
+        model_location_generator=model_location_generator,
     )
     performant_runner._capture_yolov8s_world_trace_2cqs()
     input_shape = (1, 3, *resolution)
@@ -98,7 +98,7 @@ def test_perf_device_yolov8s_world(batch_size, expected_perf):
     margin = 0.03
     expected_perf = expected_perf if is_wormhole_b0() else 0
 
-    command = f"pytest tests/ttnn/integration_tests/yolov8s_world/test_ttnn_yolov8s_world.py::test_YoloModel"
+    command = f"pytest models/demos/yolov8s_world/tests/pcc/test_ttnn_yolov8s_world.py::test_YoloModel"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"

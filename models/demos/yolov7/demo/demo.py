@@ -8,12 +8,10 @@ import pytest
 from loguru import logger
 
 import ttnn
+from models.demos.yolov7.common import load_torch_model
 from models.demos.yolov7.demo.demo_utils import LoadImages, load_coco_class_names, postprocess, preprocess
 from models.demos.yolov7.reference import yolov7_model, yolov7_utils
-from models.demos.yolov7.reference.model import Yolov7_model
-from models.demos.yolov7.reference.yolov7_utils import download_yolov7_weights
 from models.demos.yolov7.runner.performant_runner import YOLOv7PerformantRunner
-from models.demos.yolov7.ttnn_yolov7_utils import load_weights
 from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 
 sys.modules["models.common"] = yolov7_utils
@@ -31,7 +29,7 @@ sys.modules["models.yolo"] = yolov7_model
     ],
 )
 @pytest.mark.parametrize("model_type", ["torch_model", "tt_model"])
-def test_demo(device, reset_seeds, model_type, source):
+def test_demo(device, reset_seeds, model_type, source, model_location_generator):
     disable_persistent_kernel_cache()
 
     names = load_coco_class_names()
@@ -39,20 +37,7 @@ def test_demo(device, reset_seeds, model_type, source):
     save_dir = "models/demos/yolov7/demo/runs/detect"
 
     if model_type == "torch_model":
-        torch_model = Yolov7_model()
-
-        new_state_dict = {}
-        keys = [name for name, parameter in torch_model.state_dict().items()]
-        ds_state_dict = {k: v for k, v in torch_model.state_dict().items()}
-        values = [parameter for name, parameter in ds_state_dict.items()]
-        for i in range(len(keys)):
-            new_state_dict[keys[i]] = values[i]
-        torch_model.load_state_dict(new_state_dict)
-        torch_model.eval()
-
-        weights_path = "tests/ttnn/integration_tests/yolov7/yolov7.pt"
-        weights_path = download_yolov7_weights(weights_path)
-        load_weights(torch_model, weights_path)
+        torch_model = load_torch_model(model_location_generator)
 
         logger.info("Inferencing [Torch] Model")
         for batch in dataset:

@@ -5,10 +5,9 @@
 
 import pytest
 import torch
-import transformers
 from loguru import logger
 from tqdm import tqdm
-from transformers import AutoImageProcessor
+from transformers import AutoImageProcessor, ViTConfig
 
 import ttnn
 from models.demos.vit.tests.vit_performant_imagenet import VitTrace2CQ
@@ -54,7 +53,7 @@ def test_run_vit_trace_2cqs_inference(
 
         model_version = "google/vit-base-patch16-224"
         image_processor = AutoImageProcessor.from_pretrained(model_version)
-        config = transformers.ViTConfig.from_pretrained(model_version)
+        config = ViTConfig.from_pretrained(model_version)
 
         logger.info("ImageNet-1k validation Dataset")
         input_loc = str(model_location_generator("ImageNet_data"))

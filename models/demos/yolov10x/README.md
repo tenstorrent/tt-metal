@@ -26,7 +26,7 @@ To obtain the perf reports through profiler, please build with following command
 Use the following command to run the Yolov10x model :
 
 ```
-pytest --disable-warnings tests/ttnn/integration_tests/yolov10x/test_ttnn_yolov10x.py::test_yolov10x
+pytest --disable-warnings models/demos/yolov10x/tests/pcc/test_ttnn_yolov10x.py::test_yolov10x
 ```
 
 ## Model performant running with Trace+2CQ
@@ -35,7 +35,7 @@ pytest --disable-warnings tests/ttnn/integration_tests/yolov10x/test_ttnn_yolov1
 Use the following command to run Model performant running with Trace+2CQ
 
 ```
-pytest models/demos/yolov10x/tests/test_e2e_performant.py::test_e2e_performant
+pytest models/demos/yolov10x/tests/perf/test_e2e_performant.py::test_e2e_performant
 ```
 
 ## Model demo running with Trace+2CQ

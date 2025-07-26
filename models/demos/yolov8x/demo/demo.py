@@ -1,5 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
+
 
 import os
 from datetime import datetime
@@ -8,9 +10,9 @@ import cv2
 import pytest
 import torch
 from loguru import logger
-from ultralytics import YOLO
 
 import ttnn
+from models.demos.yolov8x.common import load_torch_model
 from models.demos.yolov8x.demo.demo_utils import LoadImages, load_coco_class_names, postprocess, preprocess
 from models.demos.yolov8x.runner.performant_runner import YOLOv8xPerformantRunner
 from models.utility_functions import disable_persistent_kernel_cache
@@ -51,13 +53,13 @@ def save_yolo_predictions(result, save_dir, image_path, model_name):
     ],
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_demo(device, source, model_type, res):
+def test_demo(device, source, model_type, res, model_location_generator):
     disable_persistent_kernel_cache()
 
     if model_type == "torch_model":
-        model = YOLO("yolov8x.pt").model.eval()
+        model = load_torch_model(model_location_generator)
     else:
-        runner = YOLOv8xPerformantRunner(device, device_batch_size=1)
+        runner = YOLOv8xPerformantRunner(device, device_batch_size=1, model_location_generator=model_location_generator)
 
     dataset = LoadImages(path=source)
     class_names = load_coco_class_names()
