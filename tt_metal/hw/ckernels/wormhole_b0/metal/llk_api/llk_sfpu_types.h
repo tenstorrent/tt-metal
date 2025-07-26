@@ -115,4 +115,5 @@ enum SfpuType {
     gcd,
     lcm,
     hardsigmoid,
+    where,
 };

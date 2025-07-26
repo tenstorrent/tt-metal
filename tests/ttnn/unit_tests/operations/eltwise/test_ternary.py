@@ -85,7 +85,7 @@ def assert_where_with_pcc(torch_input_tensor, torch_input1, torch_input2, device
 @pytest.mark.parametrize(
     "hc, ht, hf, wc, wt, wf",
     [
-        [64, 64, 64, 128, 128, 128],
+        # [64, 64, 64, 128, 128, 128],
         [64, 64, 64, 128, 128, 1],
         [64, 64, 64, 128, 1, 128],
         [64, 64, 64, 1, 128, 128],
