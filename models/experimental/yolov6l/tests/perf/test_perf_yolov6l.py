@@ -92,7 +92,7 @@ def test_perf_yolov6l(
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 66],
+        [1, 77.7],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
