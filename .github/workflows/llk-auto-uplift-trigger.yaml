@@ -390,8 +390,8 @@ jobs:
           DECISIONS=$(echo "$PR_BODY" | grep -o "WORKFLOW_DECISIONS:[^>]*" | head -1)
 
           # Parse decisions
-          SHOULD_RUN_WH=$(echo "$DECISIONS" | grep -o "should-run-wormhole=[^,]*" | cut -d= -f2)
-          SHOULD_RUN_BH=$(echo "$DECISIONS" | grep -o "should-run-blackhole=[^,]*" | cut -d= -f2)
+          SHOULD_RUN_WH=$(echo "$DECISIONS" | grep -o "should-run-wormhole=[^, ]*" | cut -d= -f2)
+          SHOULD_RUN_BH=$(echo "$DECISIONS" | grep -o "should-run-blackhole=[^, ]*" | cut -d= -f2)
 
           # Check workflow results
           check_workflow() {
@@ -451,7 +451,7 @@ jobs:
     if: |
       always() && (
         (inputs.recheck_tests != true && needs.update-submodule.outputs.has-changes == 'true' && needs.update-submodule.result == 'success' && (needs.run-tests.result == 'success' || needs.run-tests.result == 'skipped')) ||
-        (inputs.recheck_tests == true && needs.recheck-tests.outputs.tests-passed == 'true')
+        (inputs.recheck_tests == true && needs.recheck-tests.result == 'success')
       )
     runs-on: ubuntu-latest
     steps:
