@@ -88,7 +88,6 @@ void kernel_main() {
     uint32_t termination_master_noc_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_mux_clients = get_arg_val<uint32_t>(arg_idx++);
-    
     constexpr uint32_t ct_idx = 31;
 
 #ifdef INTERMEDIATE_IS_SHARDED
