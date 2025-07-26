@@ -450,6 +450,11 @@ void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_devi
     for (auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         sub_device_cq_owner[*sub_device_id].finished(this->id_);
     }
+#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
+    if (thread_exception_ptr_) {
+        std::rethrow_exception(thread_exception_ptr_);
+    }
+#endif
 }
 
 void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
@@ -647,13 +652,17 @@ void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
 
 void FDMeshCommandQueue::read_completion_queue() {
     while (true) {
-        {
-            std::unique_lock<std::mutex> lock(reader_thread_cv_mutex_);
-            reader_thread_cv_.wait(lock, [this] { return num_outstanding_reads_ or exit_condition_; });
-        }
-        if (exit_condition_) {
-            return;
-        } else {
+#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
+        try {
+#endif
+            {
+                std::unique_lock<std::mutex> lock(reader_thread_cv_mutex_);
+                reader_thread_cv_.wait(lock, [this] { return num_outstanding_reads_ or exit_condition_; });
+            }
+            if (exit_condition_) {
+                return;
+            }
+
             uint32_t num_reads = num_outstanding_reads_.load();
             for (uint32_t i = 0; i < num_reads; i++) {
                 auto mesh_read_descriptor = *(completion_queue_reads_.pop());
@@ -675,7 +684,18 @@ void FDMeshCommandQueue::read_completion_queue() {
             if (num_outstanding_reads_ == 0) {
                 reads_processed_cv_.notify_one();
             }
+#if TTNN_OPERATION_TIMEOUT_SECONDS > 0
+        } catch (std::runtime_error e) {
+            // Let's clean up the state so the main thread can handle it.
+            thread_exception_ptr_ = std::current_exception();
+            exit_condition_.store(true);
+            exit_condition_.notify_all();
+            num_outstanding_reads_.store(0);
+            num_outstanding_reads_.notify_all();
+            reads_processed_cv_.notify_all();
+            return;
         }
+#endif
     }
 }
 
