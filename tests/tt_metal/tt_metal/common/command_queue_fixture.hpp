@@ -272,6 +272,7 @@ protected:
         this->create_devices(90000000);
     }
 };
+class UnitMeshCQSingleCardBufferFixture : virtual public UnitMeshCQSingleCardFixture {};
 
 class CommandQueueSingleCardBufferFixture : public CommandQueueSingleCardFixture {};
 
@@ -375,6 +376,8 @@ protected:
 class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixture {};
 
 class CommandQueueMultiDeviceBufferFixture : public CommandQueueMultiDeviceFixture {};
+
+class UnitMeshCQMultiDeviceBufferFixture : public UnitMeshCQMultiDeviceFixture {};
 
 class DISABLED_CQMultiDeviceOnFabricFixture
     : public UnitMeshCQMultiDeviceFixture,
