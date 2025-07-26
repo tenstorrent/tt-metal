@@ -8,8 +8,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
 
-#include "../common.hpp"
-
 using tt::tt_fabric::NocUnicastAtomicIncCommandHeader;
 using tt::tt_fabric::NocUnicastCommandHeader;
 using tt::tt_fabric::WorkerToFabricEdmSender;
@@ -118,7 +116,7 @@ void kernel_main() {
 
         for (uint32_t e = 0; e < num_local_experts; ++e) {
             const auto & expert_idx = local_experts_ptr[e];
-            const auto [found, k] = detail::find_if<uint16_t, selected_experts_k, true>(metadata_ptr, expert_idx);
+            const auto [found, k] = find_if<uint16_t, selected_experts_k, true>(metadata_ptr, expert_idx);
 
             if (found) {
                 cb_wait_front(data_cb_id,1);
