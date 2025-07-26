@@ -295,21 +295,21 @@ TEST_F(MeshTraceTestSuite, SyncWorkloadsOnSubDeviceTrace) {
 
     // Compile all MeshWorkloads
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_0, false);
-    mesh_device_->set_sub_device_stall_group({SubDeviceId{0}});
+    mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_0, true);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_0, false);
     mesh_device_->reset_sub_device_stall_group();
     Finish(mesh_device_->mesh_command_queue());
 
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_1, false);
-    mesh_device_->set_sub_device_stall_group({SubDeviceId{0}});
+    mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_1, true);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_1, false);
     mesh_device_->reset_sub_device_stall_group();
     Finish(mesh_device_->mesh_command_queue());
 
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_2, false);
-    mesh_device_->set_sub_device_stall_group({SubDeviceId{0}});
+    mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_2, true);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_2, false);
     mesh_device_->reset_sub_device_stall_group();
@@ -455,7 +455,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     AddProgramToMeshWorkload(add_mesh_workload, std::move(add_program_2), right_col);
 
     // Compile and load workloads
-    mesh_device_->set_sub_device_stall_group({SubDeviceId{2}});
+    mesh_device_->set_sub_device_stall_group({{SubDeviceId{2}}});
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), datacopy_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, false);
@@ -479,7 +479,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
         // Block after this write on host, since the global semaphore update starting the
         // program goes through an independent path (UMD) and can go out of order wrt the
         // buffer data
-        mesh_device_->set_sub_device_stall_group({SubDeviceId{2}});
+        mesh_device_->set_sub_device_stall_group({{SubDeviceId{2}}});
         EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
 
         for (auto device : mesh_device_->get_devices()) {
