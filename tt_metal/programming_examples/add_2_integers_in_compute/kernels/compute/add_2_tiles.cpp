@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,26 +12,41 @@ void MAIN {
     constexpr auto cb_in1 = tt::CBIndex::c_1;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
 
-    binary_op_init_common(cb_in0, cb_in1, cb_out0);
-    add_tiles_init(cb_in0, cb_in1);
+    // The following sequence of operations are compiled onto the 3 compute cores (Unpack, Math, Pack) in the Tensix
+    // core. The work together to perform the addition of two input tiles and store the result in the output tile to the
+    // output circular buffer. Which is then picked up by the writer kernel and written back to DRAM.
 
-    // wait for a block of tiles in each of input CBs
-    cb_wait_front(cb_in0, 1);
-    cb_wait_front(cb_in1, 1);
+    // Metalium API Calls                              Involved Cores
+    binary_op_init_common(cb_in0, cb_in1, cb_out0);  // Unpack, Math, Pack
+    add_tiles_init(cb_in0, cb_in1);                  // Unpack, Math
 
-    tile_regs_acquire();  // acquire 8 tile registers
+    // wait for a tile to be ready in the input CBs
+    cb_wait_front(cb_in0, 1);  // Unpack
+    cb_wait_front(cb_in1, 1);  // Unpack
 
-    add_tiles(cb_in0, cb_in1, 0, 0, 0);
+    // acquire 8 tile registers to perform the addition
+    tile_regs_acquire();  // Math
 
-    tile_regs_commit();  // signal the packer
+    // Take data from cb_in0 offset 0th page and
+    // cb_in1 offset 0th page. Add them together
+    // and store the result in cb_out0 (as
+    // configured) offset 0th page.
+    add_tiles(cb_in0, cb_in1, 0, 0, 0);  // Unpack, Math
 
-    tile_regs_wait();  // packer waits here
-    pack_tile(0, cb_out0);
-    tile_regs_release();  // packer releases
+    // signal the packer
+    tile_regs_commit();  // Math
 
-    cb_pop_front(cb_in0, 1);
-    cb_pop_front(cb_in1, 1);
+    // packer waits here
+    tile_regs_wait();  // Pack
+    // Copy the result from tile registers to the
+    // output circular buffer (also called packing)
+    pack_tile(0, cb_out0);  // Pack
+    // packer releases
+    tile_regs_release();  // Pack
 
-    cb_push_back(cb_out0, 1);
+    cb_pop_front(cb_in0, 1);  // Unpack
+    cb_pop_front(cb_in1, 1);  // Unpack
+
+    cb_push_back(cb_out0, 1);  // Pack
 }
 }  // namespace NAMESPACE
