@@ -443,11 +443,6 @@ jobs:
             COMMENT="❌ **Test Re-check Failed**: Some workflows are still failing."$'\n\n'"$RESULTS"
           fi
 
-          echo "Debug: ALL_PASSED=$ALL_PASSED"
-          echo "Debug: RESULTS=$RESULTS"
-          echo "Debug: SHOULD_RUN_WH=$SHOULD_RUN_WH"
-          echo "Debug: SHOULD_RUN_BH=$SHOULD_RUN_BH"
-
           gh pr comment "$PR_NUMBER" --body "$COMMENT" --repo "${{ github.repository }}"
           if [ "$ALL_PASSED" != "true" ]; then
             exit 1
