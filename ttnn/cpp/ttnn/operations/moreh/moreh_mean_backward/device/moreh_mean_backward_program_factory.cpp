@@ -68,7 +68,6 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
-    const auto single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
     const auto& input_grad_shape = input_grad.logical_shape();
     const uint32_t input_grad_rank = input_grad_shape.rank();

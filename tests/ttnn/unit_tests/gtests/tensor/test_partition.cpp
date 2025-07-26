@@ -254,7 +254,7 @@ TEST(PartitionTest, ChunkDoesNotAccessData) {
     bool segfault_occurred = false;
     if (sigsetjmp(jmp_env, /*savemask=*/1) == 0) {
         // `volatile` ensures the read is not optimized away.
-        volatile uint8_t x = protected_span[0];
+        [[maybe_unused]] volatile uint8_t x = protected_span[0];
     } else {
         segfault_occurred = true;
     }

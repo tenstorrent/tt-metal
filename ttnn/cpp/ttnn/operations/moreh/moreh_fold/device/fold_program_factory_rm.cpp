@@ -76,12 +76,12 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     CircularBufferConfig input_cb_config =
         CircularBufferConfig(aligned_input_cb_page_size * 2, {{input_cb_index, data_format}})
             .set_page_size(input_cb_index, aligned_input_cb_page_size);
-    auto input_cb = CreateCircularBuffer(program, all_cores, input_cb_config);
+    CreateCircularBuffer(program, all_cores, input_cb_config);
 
     CircularBufferConfig output_cb_config =
         CircularBufferConfig(aligned_output_cb_page_size * 2, {{output_cb_index, data_format}})
             .set_page_size(output_cb_index, aligned_output_cb_page_size);
-    auto output_cb = CreateCircularBuffer(program, all_cores, output_cb_config);
+    CreateCircularBuffer(program, all_cores, output_cb_config);
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Kernels defines
@@ -123,9 +123,6 @@ MorehFoldOperation::ProgramFactory::cached_program_t MorehFoldOperation::Program
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto input_addr = input.buffer()->address();
-    const auto output_addr = output.buffer()->address();
-
     uint32_t start_id = 0;
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
     uint32_t g1_numcores = core_group_1.num_cores();

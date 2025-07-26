@@ -24,7 +24,6 @@ MorehNormOperation::ProgramFactoryHOther::cached_program_t MorehNormOperation::P
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto input_shape = input.padded_shape();
-    const auto input_rank = input_shape.rank();
 
     const auto H = input_shape[-2];
     const auto W = input_shape[-1];

@@ -115,7 +115,6 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
 
     ttnn::generic_op(std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor);
     Tensor output_tensor = device_output_tensor.cpu();
-    auto dtype = golden.dtype();
     auto allclose = ttnn::allclose<uint32_t>(golden, output_tensor);
     ASSERT_TRUE(allclose);
 }
@@ -323,14 +322,12 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpBinaryEltwiseAdd) {
 
     uint32_t block_size_per_core_group_1 = 1;
     uint32_t block_size_per_core_group_2 = 1;
-    uint32_t max_block_size = 1;
     uint32_t block_cnt_per_core_group_1 = num_tiles_per_core_group_1;
     uint32_t block_cnt_per_core_group_2 = num_tiles_per_core_group_2;
     auto cores =
         grid_to_cores(num_cores_total, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, row_major);
 
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
     KernelDescriptor::RuntimeArgs reader_rt_args_per_core(
         num_cores_x, std::vector<KernelDescriptor::CoreRuntimeArgs>(num_cores_y));
     KernelDescriptor::RuntimeArgs writer_rt_args_per_core(

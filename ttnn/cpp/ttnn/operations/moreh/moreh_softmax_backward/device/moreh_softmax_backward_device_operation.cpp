@@ -145,7 +145,6 @@ MorehSoftmaxBackwardOpParallelizationStrategy MorehSoftmaxBackwardOperation::get
     const auto& output = tensor_args.output_tensor;
     const auto strategy = operation_attributes.strategy;
     const auto dim = operation_attributes.dim;
-    const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     auto rank = output.logical_shape().rank();
     if (strategy == MorehSoftmaxBackwardOpParallelizationStrategy::NONE) {
