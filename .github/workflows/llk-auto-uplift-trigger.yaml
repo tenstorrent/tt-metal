@@ -12,12 +12,12 @@ on:
         description: 'Create PR as draft'
         required: false
         type: boolean
-        default: true
+        default: 'true'
       recheck_tests:
         description: 'Re-check latest test runs'
         required: false
         type: boolean
-        default: false
+        default: 'false'
   workflow_call:
     inputs:
       workflow_timeout:
@@ -29,12 +29,12 @@ on:
         description: 'Create PR as draft'
         required: false
         type: boolean
-        default: true
+        default: 'true'
       recheck_tests:
         description: 'Re-check latest test runs'
         required: false
         type: boolean
-        default: false
+        default: 'false'
   repository_dispatch:
     types: [trigger-llk-update]
   schedule:
