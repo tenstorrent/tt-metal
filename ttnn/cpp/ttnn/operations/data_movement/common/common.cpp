@@ -313,7 +313,7 @@ int common_tm_bw_model(
     output_transaction_size = process_per_faceline ? tile_width / 2 * element_size_bytes : output_transaction_size;
 
     if (process_per_faceline) {
-        auto output_logical_shape = output_tensor.logical_shape();
+        const auto& output_logical_shape = output_tensor.logical_shape();
         auto output_volume = output_logical_shape.volume();
         output_size_bytes = output_volume * element_size_bytes;
     }
