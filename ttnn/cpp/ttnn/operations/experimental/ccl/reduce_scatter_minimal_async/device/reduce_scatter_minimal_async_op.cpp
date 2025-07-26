@@ -119,8 +119,13 @@ std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsync::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     // TODO: FIXME!
     const auto& input_tensor = input_tensors[0];
-    const auto& inter_shape = input_tensor.padded_shape();
-    auto output_shape = inter_shape;
+    auto inter_shape = input_tensor.padded_shape();
+
+    if (this->topology == ccl::Topology::Linear) {
+        inter_shape[0] *= 2;
+    }
+
+    auto output_shape = input_tensor.padded_shape();
     output_shape[this->dim] /= this->ring_size;
     return {
         TensorSpec(

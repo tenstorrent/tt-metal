@@ -97,7 +97,7 @@ void kernel_main() {
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_mux_clients = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 37;
+    constexpr uint32_t ct_idx = 35;
 
 #ifdef INTERMEDIATE_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -197,13 +197,6 @@ void kernel_main() {
 
     volatile PACKET_HEADER_TYPE* pkt_hdr_seminc =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
-    uint64_t out_ready_sem_noc_addr_in_pkt =
-        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-    pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        out_ready_sem_noc_addr_in_pkt,
-        static_cast<uint16_t>(1),  // increment 1
-        static_cast<uint16_t>(0xFFFF)});
-    pkt_hdr_seminc->to_chip_unicast(1);
 
     uint32_t slice_Wt = input_tensor_Wt / ring_size;
 
@@ -214,19 +207,26 @@ void kernel_main() {
     // Due to the existing direction of fabric connections, forward writers will signal to backward writers
     // and backward writers will signal to forward writers
     if (signal_on_barrier_sem) {
-        uint64_t sync_sem_noc_addr_in_pkt =
+        uint64_t barrier_sem_noc_addr_in_pkt =
             safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, barrier_sem, 0);
-        auto* pkt_hdr_sem_sync = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
-        pkt_hdr_sem_sync->to_noc_unicast_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sync_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
-        pkt_hdr_sem_sync->to_chip_unicast(1);
-        tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_sem_sync);
+        pkt_hdr_seminc->to_noc_unicast_atomic_inc(
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
+        pkt_hdr_seminc->to_chip_unicast(1);
+        tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_seminc);
         noc_async_writes_flushed();
     }
     if (wait_on_barrier_sem) {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
+
+    uint64_t out_ready_sem_noc_addr_in_pkt =
+        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
+    pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+        out_ready_sem_noc_addr_in_pkt,
+        static_cast<uint16_t>(1),  // increment 1
+        static_cast<uint16_t>(0xFFFF)});
+    pkt_hdr_seminc->to_chip_unicast(1);
 
     uint32_t chunk_count = 0;
 
