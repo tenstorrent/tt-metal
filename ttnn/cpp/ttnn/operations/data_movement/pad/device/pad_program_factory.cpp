@@ -36,7 +36,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
         unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
 
     // construct const buffer with the pad_value
-    IDevice* device = a.device();
+    MeshDevice* device = a.device();
     uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
     uint32_t pad_value_const_buffer_nbytes = pad_value_const_buffer_size * a.element_size();
     auto pad_value_const_buffer =
@@ -461,7 +461,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
     TT_ASSERT(
         unpadded_row_size_nbytes <= padded_row_size_nbytes, "Padded output tensor size should be >= input tensor size");
 
-    IDevice* device = a.device();
+    distributed::MeshDevice* device = a.device();
 
     // construct const buffer with the pad_value
     uint32_t pad_value_const_buffer_size = 32;  // noc transfers in chunks of 32
@@ -1377,7 +1377,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     auto unpadded_stick_bytes = W * input_tensor.element_size();
     auto padded_stick_bytes = W_padded * input_tensor.element_size();
 
-    IDevice*device = input_tensor.device();
+    IDevice* device = input_tensor.device();
 
     // input shard spec
     auto input_shard_spec = input_tensor.shard_spec().value();
@@ -1474,23 +1474,18 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores_padded, {});
     tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, all_cores_padded, {});
 
-    auto override_runtime_args_callback = [
-            input_shard_cb,
-            output_shard_cb
-        ]
-    (
-        const void* operation,
-        Program& program,
-        const std::vector<Tensor>& input_tensors,
-        const std::vector<std::optional<const Tensor>>&,
-        const std::vector<Tensor>& output_tensors
-    ) {
+    auto override_runtime_args_callback = [input_shard_cb, output_shard_cb](
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
         auto input_buffer = input_tensors.at(0).buffer();
         auto output_buffer = output_tensors.at(0).buffer();
 
         UpdateDynamicCircularBufferAddress(program, input_shard_cb, *input_buffer);
         UpdateDynamicCircularBufferAddress(program, output_shard_cb, *output_buffer);
     };
-    return {.program=std::move(program), .override_runtime_arguments_callback=override_runtime_args_callback};
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 }  // namespace ttnn::operations::data_movement::detail

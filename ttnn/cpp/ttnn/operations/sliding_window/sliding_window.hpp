@@ -169,7 +169,10 @@ Tensor construct_on_host_config_tensor(
     const std::vector<std::vector<uint16_t>>& config, const ParallelConfig& p_config);
 
 Tensor move_config_tensor_to_device(
-    const Tensor& config_tensor, const ParallelConfig& p_config, bool is_block_sharded, tt::tt_metal::IDevice* device);
+    const Tensor& config_tensor,
+    const ParallelConfig& p_config,
+    bool is_block_sharded,
+    tt::tt_metal::distributed::MeshDevice* device);
 
 }  // namespace ttnn::operations::sliding_window
 

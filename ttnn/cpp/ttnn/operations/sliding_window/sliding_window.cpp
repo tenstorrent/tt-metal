@@ -1272,7 +1272,10 @@ Tensor construct_on_host_config_tensor(
 }
 
 Tensor move_config_tensor_to_device(
-    const Tensor& config_tensor, const ParallelConfig& p_config, bool is_block_sharded, IDevice* device) {
+    const Tensor& config_tensor,
+    const ParallelConfig& p_config,
+    bool is_block_sharded,
+    distributed::MeshDevice* device) {
     auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.logical_shape()[-1]});
     log_debug(tt::LogOp, "shard_shape: ({}, {})", shard_shape[0], shard_shape[1]);
     auto config_shard_orientation =

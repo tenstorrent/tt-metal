@@ -72,7 +72,7 @@ struct ConstraintQueryResponse {
  *         - On failure: ExecutionStatus::Error, zeroed resource usage, and an error message.
  */
 template <typename Op, typename... Args>
-auto query_op_constraints(Op op, tt::tt_metal::IDevice* device, Args&&... args) {
+auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, Args&&... args) {
     nlohmann::json op_trace;
     Tensor output;
     // outer graph capture is to avoid dispatching/allocating dummy input tensors
