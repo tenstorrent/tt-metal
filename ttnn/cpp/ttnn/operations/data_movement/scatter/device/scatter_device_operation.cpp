@@ -5,6 +5,8 @@
 #include "scatter_device_operation.hpp"
 #include "scatter_program_factory.hpp"
 
+#include "ttnn/operations/data_movement/common/common.hpp"
+
 #include <magic_enum/magic_enum.hpp>
 
 namespace ttnn::operations::data_movement::scatter {
@@ -81,6 +83,16 @@ ScatterDeviceOperation::spec_return_value_t ScatterDeviceOperation::compute_outp
 ScatterDeviceOperation::tensor_return_value_t ScatterDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<ScatterDeviceOperation::tensor_return_value_t>
+ScatterDeviceOperation::create_op_performance_model(
+    const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
+    const auto& input_tensor = inputs.input_tensor;
+    int ideal_dev_clock_cycles = data_movement::common_tm_bw_model(input_tensor, output);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+        {input_tensor}, {output}, ideal_dev_clock_cycles);
+    return result;
 }
 
 ScatterDeviceOperation::invocation_result_t ScatterDeviceOperation::invoke(
