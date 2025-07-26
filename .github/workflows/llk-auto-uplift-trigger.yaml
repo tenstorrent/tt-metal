@@ -192,7 +192,7 @@ jobs:
           <!-- WORKFLOW_DECISIONS:should-run-wormhole=$SHOULD_RUN_WH,should-run-blackhole=$SHOULD_RUN_BH -->
 
           ### 🤖 Automation Status
-          - **Created by:** LLK Auto-Uplift Workflow (Simplified)
+          - **Created by:** LLK Auto-Uplift Workflow
           - **Trigger:** $(if [ "${{ github.event_name }}" = "schedule" ]; then echo "Scheduled ($(date))"; elif [ "${{ github.event_name }}" = "repository_dispatch" ]; then echo "Repository Dispatch"; else echo "Manual/Workflow Call"; fi)
 
           ### 🧪 Test Status
@@ -398,17 +398,18 @@ jobs:
             local workflow=$1
             local name=$2
 
-            local runs=$(gh run list --workflow "$workflow" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty')
+            local runs=$(gh run list --workflow "$workflow" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,attempt --jq 'map(select(.status == "completed")) | .[0] // empty')
             [ "$runs" = "empty" ] && return 1
 
             local conclusion=$(echo "$runs" | jq -r '.conclusion // "unknown"')
             local url=$(echo "$runs" | jq -r '.url // ""')
+            local attempt=$(echo "$runs" | jq -r '.attempt // 1')
 
             if [ "$conclusion" = "success" ]; then
               echo "✅ $name passed: [View run]($url)"
               return 0
             else
-              echo "❌ $name failed (conclusion: $conclusion): [View run]($url)"
+              echo "❌ $name failed (conclusion: $conclusion): [View run]($url/attempts/$attempt)"
               return 1
             fi
           }
