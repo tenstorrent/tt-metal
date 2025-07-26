@@ -200,6 +200,9 @@ class RunTimeOptions {
     // feature flag to enable 2-erisc mode with fabric on Blackhole, until it is enabled by default
     bool enable_2_erisc_mode_with_fabric = false;
 
+    // Enable fabric performance telemetry
+    bool enable_fabric_telemetry = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -466,6 +469,14 @@ public:
         return is_custom_fabric_mesh_graph_desc_path_set;
     }
     inline std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
+
+    // If true, the fabric (routers) will collect coarse grain telemetry data in software. This flag's state does not
+    // affect the ability to capture Ethernet Subsystem register-read-based telemetry data.
+    // This BW telemetry is coarse grain and records the total time that the reouter has unsent and inflight packets.
+    //
+    // NOTE: Enabling this option will lead to a 0-2% performance degradation for fabric traffic.
+    inline bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
+    inline void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.
