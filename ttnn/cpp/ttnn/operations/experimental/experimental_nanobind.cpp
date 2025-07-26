@@ -34,9 +34,9 @@
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotate_half/rotate_half_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.hpp"
-#include "cpp/ttnn/operations/experimental/copy/typecast/typecast_nanobind.hpp"
-#include "cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_nanobind.hpp"
-#include "cpp/ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_nanobind.hpp"
+#include "ttnn/operations/experimental/copy/typecast/typecast_nanobind.hpp"
+#include "ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_nanobind.hpp"
+#include "ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/ccl_experimental_nanobind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_nanobind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_nanobind.hpp"
@@ -45,6 +45,7 @@
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_nanobind.hpp"
 #include "ttnn/operations/experimental/scatter/scatter_nanobind.hpp"
+#include "ttnn/operations/experimental/scatter/tosa/tosa_scatter_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/sort/sort_nanobind.hpp"
 #include "ttnn/operations/experimental/gather/gather_nanobind.hpp"
 #include "ttnn/operations/experimental/gather/tosa/gather_tosa_nanobind.hpp"
@@ -103,6 +104,7 @@ void py_module(nb::module_& mod) {
     gelu_backward::detail::bind_experimental_gelu_backward_operation(mod);
 
     scatter::detail::bind_scatter_operation(mod);
+    tosa_scatter::detail::bind_tosa_scatter_operation(mod);
 
     reduction::sort::detail::bind_reduction_sort_operation(mod);
 

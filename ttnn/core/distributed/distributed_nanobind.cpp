@@ -46,6 +46,8 @@ void py_module_types(nb::module_& mod) {
 
     nb::class_<MeshMapperConfig>(mod, "MeshMapperConfig");
     nb::class_<MeshComposerConfig>(mod, "MeshComposerConfig");
+    nb::class_<MeshMapperConfig::Replicate>(mod, "PlacementReplicate");
+    nb::class_<MeshMapperConfig::Shard>(mod, "PlacementShard");
 
     nb::class_<MeshDevice>(mod, "MeshDevice");
     nb::class_<MeshShape>(mod, "MeshShape", "Shape of a mesh device.");
@@ -55,23 +57,25 @@ void py_module_types(nb::module_& mod) {
 }
 
 void py_module(nb::module_& mod) {
-    // TODO: #17477 - Remove overloads that accept 'row' and 'col'. Instead, use generic ND terms.
-    // Addendum: check out nanobind::ndarray
-
     static_cast<nb::class_<MeshShape>>(mod.attr("MeshShape"))
         .def(
-            nb::init<uint32_t, uint32_t>(),
-            "Constructor with the specified number of rows and columns.",
-            nb::arg("num_rows"),
-            nb::arg("num_cols"))
+            nb::init<uint32_t, uint32_t>(),  // pybind forwards size_t. Validate this.
+            "Constructor with the specified 2D shape. The value s0 is assumed to be the outer dimension.",
+            nb::arg("s0"),
+            nb::arg("s1"))
         .def(
             nb::init<uint32_t, uint32_t, uint32_t>(),
-            "Constructor with the specified 3D shape.",
-            nb::arg("x"),
-            nb::arg("y"),
-            nb::arg("z"))
+            "Constructor with the specified 3D shape. The values s0...s2 are assumed to be supplied in row-major order "
+            "(from outer dim to inner dim).",
+            nb::arg("s0"),
+            nb::arg("s1"),
+            nb::arg("s2"))
         // TODO: might have to replace with placement new
-        .def(nb::init<const std::vector<uint32_t>&>(), "Constructor with the specified ND shape.", nb::arg("shape"))
+        .def(
+            nb::init<const std::vector<uint32_t>&>(),
+            "Constructor with the specified ND shape. The values s0...sn are assumed to be supplied in row-major order "
+            "(from outer dim to inner dim).",
+            nb::arg("shape"))
         .def(
             "__repr__",
             [](const MeshShape& ms) {
@@ -89,19 +93,20 @@ void py_module(nb::module_& mod) {
     static_cast<nb::class_<MeshCoordinate>>(mod.attr("MeshCoordinate"))
         .def(
             nb::init<uint32_t, uint32_t>(),
-            "Constructor with specified row and column offsets.",
-            nb::arg("row"),
-            nb::arg("col"))
+            "Constructor with the specified 2D coordinate. The value c0 is assumed to be the outer dimension.",
+            nb::arg("c0"),
+            nb::arg("c1"))
         .def(
             nb::init<uint32_t, uint32_t, uint32_t>(),
-            "Constructor with the specified 3D coordinate.",
-            nb::arg("x"),
-            nb::arg("y"),
-            nb::arg("z"))
-        // TODO: might have to replace with placement new
+            "Constructor with the specified 3D coordinate. The values c0...c2 are assumed to be supplied in row-major "
+            "order (from outer dim to inner dim).",
+            nb::arg("c0"),
+            nb::arg("c1"),
+            nb::arg("c2"))
         .def(
             nb::init<const std::vector<uint32_t>&>(),
-            "Constructor with the specified ND coordinate.",
+            "Constructor with the specified ND coordinate. The values c0...cn are assumed to be supplied in row-major "
+            "order (from outer dim to inner dim).",
             nb::arg("coords"))
         .def(
             "__repr__",
@@ -423,27 +428,108 @@ void py_module(nb::module_& mod) {
         nb::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     mod.def("close_mesh_device", &close_mesh_device, nb::kw_only(), nb::arg("mesh_device"));
 
-    // TODO: #22258 - make this more flexible and useful.
+    auto py_placement_shard = static_cast<nb::class_<MeshMapperConfig::Shard>>(mod.attr("PlacementShard"));
+    py_placement_shard.def(nb::init<int>());
+
+    auto py_placement_replicate = static_cast<nb::class_<MeshMapperConfig::Replicate>>(mod.attr("PlacementReplicate"));
+    py_placement_replicate.def(nb::init<>());
+
     auto py_mesh_mapper_config = static_cast<nb::class_<MeshMapperConfig>>(mod.attr("MeshMapperConfig"));
-    py_mesh_mapper_config.def(
-        "__init__",
-        [](MeshMapperConfig* t, size_t row_dim, size_t col_dim) {
-            new (t) MeshMapperConfig;
-            t->placements.push_back(MeshMapperConfig::Shard{row_dim});
-            t->placements.push_back(MeshMapperConfig::Shard{col_dim});
-        },
-        nb::arg("row_dim"),
-        nb::arg("col_dim"));
+
+    py_mesh_mapper_config
+        .def(
+            "__init__",
+            [](MeshMapperConfig* t,
+               tt::stl::SmallVector<MeshMapperConfig::Placement> placements,
+               const std::optional<MeshShape>& mesh_shape_override) {
+                new (t)
+                    MeshMapperConfig{.placements = std::move(placements), .mesh_shape_override = mesh_shape_override};
+            },
+            nb::arg("placements"),
+            nb::arg("mesh_shape_override") = std::nullopt,
+            R"doc(
+           Creates a MeshMapperConfig object with the given placements and mesh shape override.
+
+           Args:
+               placements (List[Placement]): A set of placements to use for the mapper.
+               mesh_shape_override (MeshShape): If provided, overrides distribution shape of the mesh device.
+               Used for distributing a tensor over ND shape that doesn't match the shape of the mesh device:
+               when the shape fits within a mesh device, the tensor shards are distributed within the submesh
+               region. Otherwise, the tensor shards are distributed across mesh in row-major order.
+           )doc")
+        .def(
+            "__init__",
+            [](MeshMapperConfig* t,
+               std::optional<size_t> row_dim,
+               std::optional<size_t> col_dim,
+               const std::optional<MeshShape>& mesh_shape_override) {
+                new (t) MeshMapperConfig;
+                t->placements.push_back(
+                    row_dim ? MeshMapperConfig::Placement{MeshMapperConfig::Shard{*row_dim}}
+                            : MeshMapperConfig::Placement{MeshMapperConfig::Replicate{}});
+                t->placements.push_back(
+                    col_dim ? MeshMapperConfig::Placement{MeshMapperConfig::Shard{*col_dim}}
+                            : MeshMapperConfig::Placement{MeshMapperConfig::Replicate{}});
+            },
+            nb::arg("row_dim"),
+            nb::arg("col_dim"),
+            nb::arg("mesh_shape_override") = std::nullopt,
+            R"doc(
+           Creates a 2D MeshMapperConfig with the given placements and mesh shape override.
+
+           Placements are supplied as optional integers: when set to None, the mapper will replicate over the dimension.
+           Otherwise, the mapper will shard over the dimension.
+
+           Args:
+               row_dim Optional[int]: The row dimension to shard / replicate over.
+               col_dim Optional[int]: The column dimension to shard / replicate over.
+               mesh_shape_override Optional[MeshShape]: If provided, overrides distribution shape of the mesh device.
+               )doc")
+        .def("__repr__", [](const MeshMapperConfig& config) {
+            std::ostringstream str;
+            str << config;
+            return str.str();
+        });
     auto py_mesh_composer_config = static_cast<nb::class_<MeshComposerConfig>>(mod.attr("MeshComposerConfig"));
-    py_mesh_composer_config.def(
-        "__init__",
-        [](MeshComposerConfig* t, size_t row_dim, size_t col_dim) {
-            new (t) MeshComposerConfig;
-            t->dims.push_back(row_dim);
-            t->dims.push_back(col_dim);
-        },
-        nb::arg("row_dim"),
-        nb::arg("col_dim"));
+    py_mesh_composer_config
+        .def(
+            nb::init<tt::stl::SmallVector<int>, const std::optional<MeshShape>&>(),
+            nb::arg("dims"),
+            nb::arg("mesh_shape_override") = std::nullopt,
+            R"doc(
+           Creates a MeshComposerConfig object with the given dimensions.
+
+           Args:
+               dims (List[int]): The dimensions to concat over.
+               mesh_shape_override Optional[MeshShape]: If provided, overrides distribution shape of the mesh device.
+           )doc")
+        .def(
+            "__init__",
+            [](MeshComposerConfig* t,
+               size_t row_dim,
+               size_t col_dim,
+               const std::optional<MeshShape>& mesh_shape_override) {
+                new (t) MeshComposerConfig;
+                t->dims.push_back(row_dim);
+                t->dims.push_back(col_dim);
+                t->mesh_shape_override = mesh_shape_override;
+            },
+            nb::arg("row_dim"),
+            nb::arg("col_dim"),
+            nb::arg("mesh_shape_override") = std::nullopt,
+            R"doc(
+           Creates a 2D MeshComposerConfig object with the given dimensions.
+
+           Args:
+               row_dim (int): The dimension to concat over.
+               col_dim (int): The dimension to concat over.
+               mesh_shape_override Optional[MeshShape]: If provided, overrides distribution shape of the mesh device.
+           )doc")
+        .def("__repr__", [](const MeshComposerConfig& config) {
+            std::ostringstream str;
+            str << config;
+            return str.str();
+        });
 
     mod.def(
         "get_device_tensors",
@@ -494,23 +580,17 @@ void py_module(nb::module_& mod) {
    )doc");
     mod.def(
         "create_mesh_mapper",
-        [](MeshDevice& mesh_device,
-           const MeshMapperConfig& config,
-           const std::optional<MeshShape>& mesh_shape = std::nullopt) -> nbh::unique_ptr<TensorToMesh> {
-            return nbh::unique_ptr<TensorToMesh>(create_mesh_mapper(mesh_device, config, mesh_shape).release());
+        [](MeshDevice& mesh_device, const MeshMapperConfig& config) -> nbh::unique_ptr<TensorToMesh> {
+            return nbh::unique_ptr<TensorToMesh>(create_mesh_mapper(mesh_device, config).release());
         },
         nb::arg("mesh_device"),
         nb::arg("config"),
-        nb::arg("mesh_shape") = std::nullopt,
         R"doc(
        Returns an ND mapper for sharding and replicating a tensor over the given dimensions for the given mesh.
 
        Args:
            mesh_device (MeshDevice): The mesh to create the mapper for.
            config (MeshMapperConfig): A config object representing a set of placements.
-           mesh_shape (MeshShape): If provided, provides overrides the logical shape for the mapper.
-            Useful for distributing a tensor over ND shape that exceeds the number of physical dimensions
-            in the mesh device.
 
        Returns:
            TensorToMesh: A mapper providing the desired sharding.
@@ -522,17 +602,13 @@ void py_module(nb::module_& mod) {
         },
         nb::arg("mesh_device"),
         nb::arg("dim"));
-
     mod.def(
         "create_mesh_composer",
-        [](MeshDevice& mesh_device,
-           const MeshComposerConfig& config,
-           const std::optional<MeshShape>& shape) -> nbh::unique_ptr<MeshToTensor> {
-            return nbh::unique_ptr<MeshToTensor>(create_mesh_composer(mesh_device, config, shape).release());
+        [](MeshDevice& mesh_device, const MeshComposerConfig& config) -> nbh::unique_ptr<MeshToTensor> {
+            return nbh::unique_ptr<MeshToTensor>(create_mesh_composer(mesh_device, config).release());
         },
         nb::arg("mesh_device"),
         nb::arg("config"),
-        nb::arg("shape") = std::nullopt,
         R"doc(
             Returns an ND composer that concatenates a tensor across the given dimensions.
 

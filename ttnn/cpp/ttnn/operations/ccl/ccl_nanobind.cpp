@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/operations/ccl/ccl_nanobind.hpp"
+#include "ttnn/operations/ccl/ccl_nanobind.hpp"
 
 #include <optional>
 
@@ -14,9 +14,7 @@
 #include "ttnn/operations/ccl/barrier/barrier_nanobind.hpp"
 
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "cpp/ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
-
-namespace nb = nanobind;
+#include "ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
 
 namespace ttnn::operations::ccl {
 

@@ -6,7 +6,6 @@
 
 #include <optional>
 
-#include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
@@ -41,7 +40,6 @@ void bind_full_operation(nb::module_& mod) {
         )doc",
         ttnn::moreh_full.base_name());
 
-    using FullType = decltype(ttnn::moreh_full);
     bind_registered_operation(
         mod,
         ttnn::moreh_full,

@@ -39,7 +39,6 @@ void bind_upsample(nb::module_& mod) {
 
         )doc";
 
-    using OperationType = decltype(ttnn::upsample);
     ttnn::bind_registered_operation(
         mod,
         ttnn::upsample,

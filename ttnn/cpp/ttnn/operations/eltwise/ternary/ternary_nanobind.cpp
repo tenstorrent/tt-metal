@@ -6,10 +6,12 @@
 
 #include <string>
 #include <optional>
+#include <variant>
 
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
@@ -141,59 +143,8 @@ void bind_ternary_where(nb::module_& mod, const ternary_operation_t& operation, 
         ttnn::nanobind_overload_t{
             [](const ternary_operation_t& self,
                const Tensor& predicate,
-               const Tensor& true_value,
-               const Tensor& false_value,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor,
-               QueueId queue_id) {
-                return self(queue_id, predicate, true_value, false_value, memory_config, output_tensor);
-            },
-            nb::arg("predicate"),
-            nb::arg("true_value"),
-            nb::arg("false_value"),
-            nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
-            nb::arg("queue_id") = DefaultQueueId},
-        ttnn::nanobind_overload_t{
-            [](const ternary_operation_t& self,
-               const Tensor& predicate,
-               const float true_value,
-               const Tensor& false_value,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor,
-               QueueId queue_id) {
-                return self(queue_id, predicate, true_value, false_value, memory_config, output_tensor);
-            },
-            nb::arg("predicate"),
-            nb::arg("true_value"),
-            nb::arg("false_value"),
-            nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
-            nb::arg("queue_id") = DefaultQueueId},
-        ttnn::nanobind_overload_t{
-            [](const ternary_operation_t& self,
-               const Tensor& predicate,
-               const Tensor& true_value,
-               const float false_value,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> output_tensor,
-               QueueId queue_id) {
-                return self(queue_id, predicate, true_value, false_value, memory_config, output_tensor);
-            },
-            nb::arg("predicate"),
-            nb::arg("true_value"),
-            nb::arg("false_value"),
-            nb::kw_only(),
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("output_tensor") = std::nullopt,
-            nb::arg("queue_id") = DefaultQueueId},
-        ttnn::nanobind_overload_t{
-            [](const ternary_operation_t& self,
-               const Tensor& predicate,
-               const float true_value,
-               const float false_value,
+               const std::variant<float, Tensor>& true_value,
+               const std::variant<float, Tensor>& false_value,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor,
                QueueId queue_id) {

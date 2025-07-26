@@ -57,7 +57,6 @@
 #include "ttnn/operations/matmul/matmul_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_nanobind.hpp"
 #include "ttnn/operations/normalization/normalization_nanobind.hpp"
-#include "ttnn/operations/pool/downsample/downsample_nanobind.hpp"
 #include "ttnn/operations/pool/generic/generic_pools_nanobind.hpp"
 #include "ttnn/operations/pool/global_avg_pool/global_avg_pool_nanobind.hpp"
 #include "ttnn/operations/pool/upsample/upsample_nanobind.hpp"
@@ -148,7 +147,6 @@ void py_module(nb::module_& mod) {
     pool::py_module(m_pool);
     avgpool::py_module(m_pool);
     upsample::py_module(m_pool);
-    downsample::bind_downsample(m_pool);
 
     auto m_normalization = mod.def_submodule("normalization", "normalization operations");
     normalization::py_module(m_normalization);

@@ -343,8 +343,8 @@ void bind_binary_unary_max_operation(
     nb::module_& mod,
     const binary_operation_t& operation,
     const std::string& description,
-    const std::string& supported_dtype = "BFLOAT16, FLOAT32, INT32",
-    const std::string& note = " ") {
+    const std::string& note = " ",
+    const std::string& supported_dtype = "BFLOAT16, FLOAT32, INT32") {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -398,7 +398,7 @@ void bind_binary_unary_max_operation(
         ttnn::nanobind_overload_t{
             [](const binary_operation_t& self,
                const ttnn::Tensor& input_tensor_a,
-               const float scalar,
+               const std::variant<int32_t, float> scalar,
                const std::optional<const DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
@@ -2053,7 +2053,7 @@ void py_module(nb::module_& mod) {
         R"doc(Perform bitwise_or operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_or|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
         ". ",
-        R"doc(INT32)doc");
+        R"doc(INT32, UINT16 (range: 0 - 65535))doc");
 
     detail::bind_bitwise_binary_ops_operation(
         mod,
@@ -2221,7 +2221,8 @@ void py_module(nb::module_& mod) {
     detail::bind_binary_unary_max_operation(
         mod,
         ttnn::maximum,
-        R"doc(Computes maximum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
+        R"doc(Computes maximum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(Supported range for :attr:`input_tensor_b` when its of scalar type is [-16777216, 16777216])doc");
 
     detail::bind_prelu(
         mod,
