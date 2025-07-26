@@ -19,8 +19,9 @@ def load_torch_model(model_location_generator=None):
         weights_path = (
             model_location_generator("vision-models/yolov11n", model_subdir="", download_if_ci_v2=True) / "yolov11n.pt"
         )
-        state_dict = torch.load(weights_path)
-        state_dict = {k.replace("model.", "", 1): v for k, v in state_dict.items()}
+        yolov11_ckpt = torch.load(weights_path)
+        state_dict = yolov11_ckpt["model"].float().state_dict()
+        # state_dict = {k.replace("model.", "", 1): v for k, v in state_dict.items()}
 
     torch_model.load_state_dict(state_dict)
     torch_model.eval()
