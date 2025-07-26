@@ -134,8 +134,89 @@ def visualize_system_mesh():
         return
 
     console = Console()
-    console.print(f"\n[bold blue]SystemMesh Global Shape: {global_shape}[/bold blue]")
-    console.print(f"\n[bold green]SystemMesh Local Shape: {local_shape}[/bold green]")
+    console.print(f"\n[bold green]SystemMesh Global Shape: {global_shape}[/bold green]")
+    console.print(f"\n[bold blue]SystemMesh Local Shape: {local_shape}[/bold blue]\n")
+    console.print(create_system_mesh_table())
+
+
+def create_system_mesh_table():
+    """
+    Create a visual table representation of the system mesh layout.
+    """
+    from rich import box
+    from rich.align import Align
+    from rich.table import Table
+    from rich.text import Text
+    from rich.style import Style
+    from loguru import logger
+
+    CELL_SIZE = 30
+
+    try:
+        system_mesh_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()
+
+        # TODO: Remove shape indexing workaround after exposing subscripts in pybind11
+        global_shape = tuple(system_mesh_desc.shape())
+        local_shape = tuple(system_mesh_desc.local_shape())
+        rows, cols = global_shape[0], global_shape[1]
+        local_rows, local_cols = local_shape[0], local_shape[1]
+    except Exception as e:
+        logger.error("Error getting system mesh shapes: {}.", e)
+        return None
+
+    physical_device_ids = system_mesh_desc.physical_device_ids()
+    all_local = True
+    for row_idx in range(rows):
+        for col_idx in range(cols):
+            if not physical_device_ids.is_local_at(ttnn.MeshCoordinate(row_idx, col_idx)):
+                all_local = False
+                break
+
+    mesh_table = Table(
+        title=f"SystemMesh Global Shape: ({rows}, {cols}) | Local Shape: ({local_rows}, {local_cols})",
+        show_header=False,
+        show_footer=False,
+        box=box.SQUARE,
+        expand=False,
+        show_lines=True,
+        padding=(0, 0),
+    )
+
+    for _ in range(cols):
+        mesh_table.add_column(justify="center", vertical="middle", width=CELL_SIZE)
+
+    # Populate table
+    for row_idx in range(rows):
+        row_cells = []
+        for col_idx in range(cols):
+            try:
+                coords = f"({row_idx}, {col_idx})"
+
+                # Create cell content
+                if all_local:
+                    device_id = f"Dev. ID: {physical_device_ids.at(ttnn.MeshCoordinate(row_idx, col_idx))}"
+                    cell_content = Text(f"{device_id}\n{coords}", justify="center")
+                    cell_style = Style(bgcolor="dark_green")
+                else:
+                    is_local = physical_device_ids.is_local_at(ttnn.MeshCoordinate(row_idx, col_idx))
+                    locality = "Local\n" if is_local else "Remote\n"
+                    device_id = f"Dev. ID: {device_id}\n" if is_local else "Unknown\n"
+                    cell_content = Text(f"{locality}{device_id}{coords}", justify="center")
+                    cell_style = None
+
+                cell_content.truncate(CELL_SIZE * 3, overflow="ellipsis")
+            except Exception as e:
+                logger.error("Error formatting cell content at row {}, col {}: {}.", row_idx, col_idx, e)
+                cell_content = Text("Error", justify="center")
+                cell_style = None
+
+            cell = Align(cell_content, "center", vertical="middle")
+            if cell_style:
+                cell.style = cell_style
+            row_cells.append(cell)
+        mesh_table.add_row(*row_cells)
+
+    return mesh_table
 
 
 def get_num_devices() -> List[int]:
