@@ -3,8 +3,7 @@
 
 import math
 from itertools import takewhile
-from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 import torch
 from loguru import logger
@@ -495,12 +494,45 @@ def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Seque
     return tensor
 
 
-def sub_state_dict(state_dict, prefix):
+def get_state_dicts(
+    key: Any, dicts: Sequence[dict[str, torch.Tensor]], dim: int = 0, concat: bool = False
+) -> torch.Tensor:
+    """Get a weight from a list of state dictionaries and combine them into a single tensor.
+
+    Args:
+        key (str): The key to look for in the dictionaries.
+        dicts (Sequence[dict[str, torch.Tensor]]): A sequence of state dicts
+        dim (int, optional): The dimension along which to combine the tensors. Defaults to 0.
+        concat (bool, optional): Whether to concatenate the tensors or stack them. Defaults to False.
+    Returns:
+        torch.Tensor: The combined tensor.
+    """
+
+    assert all(key in d for d in dicts), f"Key {key} not found in all dictionaries"
+    tensors = [d[key] for d in dicts]
+
+    if not tensors:
+        return torch.empty()
+
+    expected_shape = tensors[0].shape
+    assert all(d[key].shape == expected_shape for d in dicts), f"Key {key} must have the same shape in all dictionaries"
+
+    if concat:
+        return torch.concat(tensors, dim=dim)
+    return torch.stack(tensors, dim=dim)
+
+
+def sub_state_dict(state_dict: dict[str, torch.Tensor], prefix: str):
     """Get a subset of the state dict with a given prefix."""
     return {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
 
 
-def save_and_get_path(path: Path, tensor: ttnn.Tensor) -> str:
+def sub_state_dicts(state_dicts: Sequence[dict[str, torch.Tensor]], prefix: str) -> tuple[dict[str, torch.Tensor], ...]:
+    """Get a subset of the state dict with a given prefix."""
+    return tuple(sub_state_dict(d, prefix) for d in state_dicts)
+
+
+def save_and_get_path(path, tensor):
     """Save a tensor to a file and return the path."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
