@@ -37,3 +37,9 @@ Use the following command to run the e2e perf:
 pytest --disable-warnings models/experimental/efficientnetb0/tests/perf/test_e2e_performant.py
 ```
 - end-2-end perf varies between 2300 to 2500 FPS.
+
+## Model demo with trace
+- Use the following command to run the demo:
+```python
+pytest --disable-warnings models/experimental/efficientnetb0/demo/demo.py
+```
