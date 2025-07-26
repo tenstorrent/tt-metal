@@ -201,7 +201,7 @@ def passed_test(
         print(f"Found {len(diff_indices)} differences:")
         for idx in diff_indices:
             print(
-                f"Failed at index {idx} with values {res_tensor[idx]} and {golden_tensor[idx]}"
+                f"Failed at index {idx} with result={res_tensor[idx]}, golden={golden_tensor[idx]}"
             )
 
     pcc = calculate_pcc(res_tensor, golden_tensor)
