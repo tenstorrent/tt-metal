@@ -59,6 +59,8 @@ jobs:
             cmd: |
               ./build/test/ttnn/unit_tests_ttnn_ccl
               ./build/test/ttnn/unit_tests_ttnn_ccl_ops
+          - name: ttnn tensor accessor
+            cmd: "./build/test/ttnn/unit_tests_ttnn_accessor"
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
       image: ${{ inputs.docker-image }}
