@@ -313,6 +313,9 @@ void send_msg_to_eth_mailbox(
         TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
     }
 
+    std::cerr << "send_msg_to_eth_mailbox " << virtual_core.str() << " " << (uint32_t)msg_type << " " << args.size()
+              << " " << wait_for_ack << " " << timeout_ms << std::endl;
+
     bool is_eth_core = internal_::is_active_eth_core(device_id, virtual_core);
     TT_ASSERT(
         is_eth_core,
@@ -479,23 +482,12 @@ void set_metal_eth_fw_run_flag(chip_id_t device_id, const CoreCoord& virtual_cor
         TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
     }
 
+    std::cerr << "set_metal_eth_fw_run_flag " << virtual_core.str() << " " << enable << std::endl;
+
     const auto run_flag_addr = hal.get_dev_addr(k_CoreType, tt_metal::HalL1MemAddrType::ETH_METAL_RUN_FLAG);
     std::vector<uint32_t> en = {enable};
     write_hex_vec_to_core(device_id, virtual_core, en, run_flag_addr);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_id);
-
-    // The l1_barrier is not sufficient to guarantee a PCIe write has landed, especially
-    // if the TLB mapping might be torn down during shutdown. A blocking read from the same address
-    // will act as a flush and also verify the write was successful.
-    auto result = read_hex_vec_from_core(device_id, virtual_core, run_flag_addr, sizeof(uint32_t));
-    if (result.at(0) != enable) {
-        TT_THROW(
-            "Failed to write ETH FW run flag to device {}, core {}. Expected {}, got {}",
-            device_id,
-            virtual_core.str(),
-            enable,
-            result.at(0));
-    }
 }
 
 }  // namespace internal_
