@@ -15,14 +15,13 @@ void MAIN {
     constexpr uint32_t tile_granularity = get_compile_time_arg_val(4);
     constexpr uint32_t ring_size = get_compile_time_arg_val(5);
     constexpr uint32_t num_batches = get_compile_time_arg_val(6);
-    constexpr uint32_t num_links = get_compile_time_arg_val(7);
-    constexpr bool direction = get_compile_time_arg_val(8);
+    constexpr bool direction = get_compile_time_arg_val(7);
 
     uint32_t arg_idx = 0;
-    uint32_t link = get_arg_val<uint32_t>(arg_idx++);
 
-    uint32_t tiles_read = (link * batch_slice_num_pages / num_links);
-    uint32_t tiles_to_read = (link + 1) * batch_slice_num_pages / num_links;
+    uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
+    uint32_t tiles_read = start_tiles_read;
+    uint32_t tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 
     // Initialize binary operations - use the same constants consistently
     binary_op_init_common(input_cb_id, intermediate_cb, output_cb);
@@ -70,7 +69,7 @@ void MAIN {
                 }
             }
 
-            tiles_read = (link * batch_slice_num_pages / num_links);
+            tiles_read = start_tiles_read;
         }
     }
 }
