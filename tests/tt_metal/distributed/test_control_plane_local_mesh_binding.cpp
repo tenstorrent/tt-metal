@@ -97,8 +97,10 @@ std::map<FabricNodeId, chip_id_t> get_dual_host_chip_mapping() {
 class ControlPlaneLocalMeshBinding : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (::tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != ::tt::ClusterType::T3K and
-            ::tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != ::tt::ClusterType::N300_2x2) {
+        if (::tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+                ::tt::tt_metal::ClusterType::T3K and
+            ::tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
+                ::tt::tt_metal::ClusterType::N300_2x2) {
             GTEST_SKIP() << "Skipping test for non-T3K or N300_2x2 cluster";
         }
     }

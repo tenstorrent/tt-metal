@@ -6,10 +6,10 @@
 
 #include "ttnn-pybind/pybind_fwd.hpp"
 
+namespace ttnn::cluster {
 namespace py = pybind11;
 
-namespace ttnn::cluster {
-
+void py_cluster_module_types(py::module& module);
 void py_cluster_module(py::module& module);
 
 }  // namespace ttnn::cluster

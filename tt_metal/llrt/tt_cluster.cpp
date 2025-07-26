@@ -83,26 +83,26 @@ inline std::string get_soc_description_file(
 }  // namespace
 namespace tt {
 
-ClusterType Cluster::get_cluster_type_from_cluster_desc(
+tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc) {
     if (rtoptions.get_simulator_enabled()) {
         tt_SimulationDeviceInit init(rtoptions.get_simulator_path());
         auto arch = init.get_arch_name();
         if (arch == tt::ARCH::WORMHOLE_B0) {
-            return ClusterType::SIMULATOR_WORMHOLE_B0;
+            return tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0;
         } else if (arch == tt::ARCH::BLACKHOLE) {
-            return ClusterType::SIMULATOR_BLACKHOLE;
+            return tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE;
         }
-        return ClusterType::INVALID;
+        return tt::tt_metal::ClusterType::INVALID;
     }
     if (cluster_desc == nullptr) {
         return Cluster::get_cluster_type_from_cluster_desc(
             rtoptions, tt::umd::Cluster::create_cluster_descriptor().get());
     }
-    ClusterType cluster_type = ClusterType::INVALID;
+    tt::tt_metal::ClusterType cluster_type = tt::tt_metal::ClusterType::INVALID;
     for (const auto& chip_id : cluster_desc->get_all_chips()) {
         if (cluster_desc->get_board_type(chip_id) == BoardType::GALAXY) {
-            cluster_type = ClusterType::TG;
+            cluster_type = tt::tt_metal::ClusterType::TG;
             break;
         }
     }
@@ -120,7 +120,7 @@ ClusterType Cluster::get_cluster_type_from_cluster_desc(
         if (board_type == BoardType::N300) {
             const auto num_chips = cluster_desc->get_all_chips().size();
             if (num_chips == 8) {
-                cluster_type = ClusterType::T3K;
+                cluster_type = tt::tt_metal::ClusterType::T3K;
                 // Basic check to determine if the cluster is a T3K cluster
                 // MMIO chips should have 3 connections to other chips, remote chips should have 2 connections to other
                 // chips
@@ -131,18 +131,18 @@ ClusterType Cluster::get_cluster_type_from_cluster_desc(
                     }
                     if (cluster_desc->is_chip_mmio_capable(chip_id)) {
                         if (remote_chips.size() != 3) {
-                            cluster_type = ClusterType::N300;
+                            cluster_type = tt::tt_metal::ClusterType::N300;
                             break;
                         }
                     } else {
                         if (remote_chips.size() != 2) {
-                            cluster_type = ClusterType::N300;
+                            cluster_type = tt::tt_metal::ClusterType::N300;
                             break;
                         }
                     }
                 }
             } else if (num_chips == 4) {
-                cluster_type = ClusterType::N300_2x2;
+                cluster_type = tt::tt_metal::ClusterType::N300_2x2;
 
                 // Expect every chip to have exactly two remote connections
                 for (const auto& [chip_id, connections] : cluster_desc->get_ethernet_connections()) {
@@ -151,39 +151,40 @@ ClusterType Cluster::get_cluster_type_from_cluster_desc(
                         remote_chips.insert(std::get<0>(remote_chip_and_channel));
                     }
                     if (remote_chips.size() != 2) {
-                        cluster_type = ClusterType::N300;
+                        cluster_type = tt::tt_metal::ClusterType::N300;
                         break;
                     }
                 }
             } else {
-                cluster_type = ClusterType::N300;
+                cluster_type = tt::tt_metal::ClusterType::N300;
             }
         } else if (board_type == BoardType::N150) {
-            cluster_type = ClusterType::N150;
+            cluster_type = tt::tt_metal::ClusterType::N150;
         } else if (board_type == BoardType::P100) {
             if (cluster_desc->get_all_chips().size() == 1) {
-                cluster_type = ClusterType::P100;
+                cluster_type = tt::tt_metal::ClusterType::P100;
             }
         } else if (board_type == BoardType::P150) {
             if (cluster_desc->get_all_chips().size() == 1) {
-                cluster_type = ClusterType::P150;
+                cluster_type = tt::tt_metal::ClusterType::P150;
             } else if (cluster_desc->get_all_chips().size() == 2) {
-                cluster_type = ClusterType::P150_X2;
+                cluster_type = tt::tt_metal::ClusterType::P150_X2;
             } else if (cluster_desc->get_all_chips().size() == 4) {
-                cluster_type = ClusterType::P150_X4;
+                cluster_type = tt::tt_metal::ClusterType::P150_X4;
             }
         } else if (board_type == BoardType::UBB) {
-            cluster_type = ClusterType::GALAXY;
+            cluster_type = tt::tt_metal::ClusterType::GALAXY;
         }
     }
     return cluster_type;
 }
 
-bool Cluster::is_base_routing_fw_enabled(ClusterType cluster_type) {
+bool Cluster::is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type) {
     // Ideally we should get the routing enabled/disabled from a config in L1
     return (
-        cluster_type == ClusterType::INVALID || cluster_type == ClusterType::N150 ||
-        cluster_type == ClusterType::N300 || cluster_type == ClusterType::T3K || cluster_type == ClusterType::TG);
+        cluster_type == tt::tt_metal::ClusterType::INVALID || cluster_type == tt::tt_metal::ClusterType::N150 ||
+        cluster_type == tt::tt_metal::ClusterType::N300 || cluster_type == tt::tt_metal::ClusterType::T3K ||
+        cluster_type == tt::tt_metal::ClusterType::TG);
 }
 
 Cluster::Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rtoptions_(rtoptions), hal_(hal) {
@@ -220,10 +221,9 @@ void Cluster::detect_arch_and_target() {
 }
 
 // TODO: remove this when we deprecate TG
-bool Cluster::is_galaxy_cluster() const { return this->cluster_type_ == ClusterType::TG; }
+bool Cluster::is_galaxy_cluster() const { return this->cluster_type_ == tt::tt_metal::ClusterType::TG; }
 
-ClusterType Cluster::get_cluster_type() const { return this->cluster_type_; }
-
+tt::tt_metal::ClusterType Cluster::get_cluster_type() const { return this->cluster_type_; }
 
 BoardType Cluster::get_board_type(chip_id_t chip_id) const {
   return this->cluster_desc_->get_board_type(chip_id);
@@ -245,7 +245,7 @@ void Cluster::generate_cluster_descriptor() {
     }
 
     uint32_t total_num_hugepages = tt::umd::get_num_hugepages();
-    if (this->cluster_type_ == ClusterType::TG) {
+    if (this->cluster_type_ == tt::tt_metal::ClusterType::TG) {
         // TODO: don't think this check is correct, we want to have total num hugepages == num chips even for Galaxy
         TT_FATAL(
             this->arch_ == tt::ARCH::BLACKHOLE or
@@ -438,7 +438,7 @@ chip_id_t Cluster::get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_co
 }
 
 size_t Cluster::number_of_user_devices() const {
-    if (this->cluster_type_ == ClusterType::TG) {
+    if (this->cluster_type_ == tt::tt_metal::ClusterType::TG) {
         const auto& chips = this->driver_->get_target_device_ids();
         return std::count_if(chips.begin(), chips.end(), [&](const auto& id) {
             return this->cluster_desc_->get_board_type(id) == BoardType::GALAXY;
@@ -449,7 +449,7 @@ size_t Cluster::number_of_user_devices() const {
 }
 
 std::set<chip_id_t> Cluster::user_exposed_chip_ids() const {
-    if (this->cluster_type_ == ClusterType::TG) {
+    if (this->cluster_type_ == tt::tt_metal::ClusterType::TG) {
         std::set<chip_id_t> galaxy_boards;
         const auto& chips = this->driver_->get_target_device_ids();
         for (const auto& id : chips) {
