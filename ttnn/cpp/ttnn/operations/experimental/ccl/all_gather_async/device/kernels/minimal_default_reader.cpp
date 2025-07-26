@@ -244,6 +244,5 @@ void kernel_main() {
         }
     }
 
-    const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem);
-    noc_inline_dw_write(dest_noc_addr, 0);
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
 }
