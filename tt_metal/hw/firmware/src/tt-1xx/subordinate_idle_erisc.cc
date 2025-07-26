@@ -19,8 +19,8 @@
 #include "debug/stack_usage.h"
 // clang-format on
 
-tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_IERISC_MAILBOX_BASE);
-volatile tt_l1_ptr uint8_t *const subordinate_idle_erisc_run = &mailboxes->subordinate_sync.dm1;
+tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_IERISC_MAILBOX_BASE);
+volatile tt_l1_ptr uint8_t* const subordinate_idle_erisc_run = &mailboxes->subordinate_sync.dm1;
 
 uint8_t noc_index = 0;  // TODO: hardcoding needed for profiler
 
@@ -46,27 +46,27 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
-uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
-uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
-uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
-    uint32_t wIndex __attribute__((used));
-    uint32_t stackSize __attribute__((used));
-    uint32_t sums[SUM_COUNT] __attribute__((used));
-    uint32_t sumIDs[SUM_COUNT] __attribute__((used));
-}
+uint32_t wIndex __attribute__((used));
+uint32_t stackSize __attribute__((used));
+uint32_t sums[SUM_COUNT] __attribute__((used));
+uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+}  // namespace kernel_profiler
 #endif
 
 inline __attribute__((always_inline)) void signal_subordinate_idle_erisc_completion() {
     *subordinate_idle_erisc_run = RUN_SYNC_MSG_DONE;
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
     configure_csr();
     WAYPOINT("I");
-    do_crt1((uint32_t *)MEM_SUBORDINATE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH);
+    do_crt1((uint32_t*)MEM_SUBORDINATE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
     noc_bank_table_init(MEM_IERISC_BANK_TO_NOC_SCRATCH);
 
@@ -94,8 +94,8 @@ int main(int argc, char *argv[]) {
 
         WAYPOINT("R");
         int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM1);
-        uint32_t kernel_lma =
-            kernel_config_base + mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
+        uint32_t kernel_lma = kernel_config_base +
+                              mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.kernel_text_offset[index];
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         record_stack_usage(stack_free);
         WAYPOINT("D");

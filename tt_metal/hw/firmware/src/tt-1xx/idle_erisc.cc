@@ -34,9 +34,9 @@ uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 
-uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
-uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
-uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));
@@ -52,25 +52,25 @@ uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
-//c_tensix_core core;
+// c_tensix_core core;
 
-tt_l1_ptr mailboxes_t * const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_IERISC_MAILBOX_BASE);
+tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_IERISC_MAILBOX_BASE);
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
-    uint32_t wIndex __attribute__((used));
-    uint32_t stackSize __attribute__((used));
-    uint32_t sums[SUM_COUNT] __attribute__((used));
-    uint32_t sumIDs[SUM_COUNT] __attribute__((used));
-}
+uint32_t wIndex __attribute__((used));
+uint32_t stackSize __attribute__((used));
+uint32_t sums[SUM_COUNT] __attribute__((used));
+uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+}  // namespace kernel_profiler
 #endif
 
-//inline void RISC_POST_STATUS(uint32_t status) {
-//  volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
-//  ptr[0] = status;
-//}
+// inline void RISC_POST_STATUS(uint32_t status) {
+//   volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
+//   ptr[0] = status;
+// }
 
 void set_deassert_addresses() {
 #ifdef ARCH_BLACKHOLE
@@ -82,10 +82,10 @@ void init_sync_registers() {
     volatile tt_reg_ptr uint* tiles_received_ptr;
     volatile tt_reg_ptr uint* tiles_acked_ptr;
     for (uint32_t operand = 0; operand < NUM_CIRCULAR_BUFFERS; operand++) {
-      tiles_received_ptr = get_cb_tiles_received_ptr(operand);
-      tiles_received_ptr[0] = 0;
-      tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
-      tiles_acked_ptr[0] = 0;
+        tiles_received_ptr = get_cb_tiles_received_ptr(operand);
+        tiles_received_ptr[0] = 0;
+        tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
+        tiles_acked_ptr[0] = 0;
     }
 }
 
@@ -95,7 +95,7 @@ inline void run_subordinate_eriscs(dispatch_core_processor_masks enables) {
     }
 }
 
-inline void wait_subordinate_eriscs(uint32_t &heartbeat) {
+inline void wait_subordinate_eriscs(uint32_t& heartbeat) {
     WAYPOINT("SEW");
     while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE) {
         invalidate_l1_cache();
@@ -107,7 +107,7 @@ inline void wait_subordinate_eriscs(uint32_t &heartbeat) {
 int main() {
     configure_csr();
     WAYPOINT("I");
-    do_crt1((uint32_t *)MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH);
+    do_crt1((uint32_t*)MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH);
     uint32_t heartbeat = 0;
 
     noc_bank_table_init(MEM_IERISC_BANK_TO_NOC_SCRATCH);
@@ -122,23 +122,21 @@ int main() {
     mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
 #endif
     set_deassert_addresses();
-    //device_setup();
+    // device_setup();
 
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
 
-    deassert_all_reset(); // Bring all riscs on eth cores out of reset
+    deassert_all_reset();  // Bring all riscs on eth cores out of reset
     // Wait for all subordinate ERISCs to be ready before reporting the core is done initializing.
     wait_subordinate_eriscs(heartbeat);
     mailboxes->go_message.signal = RUN_MSG_DONE;
-    mailboxes->launch_msg_rd_ptr = 0; // Initialize the rdptr to 0
+    mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
     // Cleanup profiler buffer incase we never get the go message
 
-
     while (1) {
-
         init_sync_registers();
         // Wait...
         WAYPOINT("GW");
@@ -149,7 +147,8 @@ int main() {
         WAYPOINT("GD");
 
         {
-            // Idle ERISC Kernels aren't given go-signals corresponding to empty launch messages. Always profile this iteration, since it's guaranteed to be valid.
+            // Idle ERISC Kernels aren't given go-signals corresponding to empty launch messages. Always profile this
+            // iteration, since it's guaranteed to be valid.
             DeviceZoneScopedMainN("ERISC-IDLE-FW");
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
@@ -161,7 +160,8 @@ int main() {
 
             flush_erisc_icache();
 
-            enum dispatch_core_processor_masks enables = (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
+            enum dispatch_core_processor_masks enables =
+                (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
             run_subordinate_eriscs(enables);
 
             uint32_t kernel_config_base =
@@ -171,8 +171,8 @@ int main() {
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
                 WAYPOINT("R");
                 int index = static_cast<std::underlying_type<EthProcessorTypes>::type>(EthProcessorTypes::DM0);
-                uint32_t kernel_lma = (kernel_config_base +
-                                       launch_msg_address->kernel_config.kernel_text_offset[index]);
+                uint32_t kernel_lma =
+                    (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                 auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
                 record_stack_usage(stack_free);
                 WAYPOINT("D");

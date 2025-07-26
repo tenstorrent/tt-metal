@@ -6,7 +6,7 @@
 
 void Application();
 
-static void *stack;  // saved stack pointer
+static void* stack;  // saved stack pointer
 
 static void do_erisc_exit();
 
@@ -16,7 +16,7 @@ static void do_erisc_exit();
 // removable.)
 [[gnu::noreturn, gnu::used]] void (*erisc_exit)() = do_erisc_exit;
 
-extern "C" void wzerorange(uint32_t *start, uint32_t *end);
+extern "C" void wzerorange(uint32_t* start, uint32_t* end);
 
 // This is a bespoke setjmp/longjmp implementation. We do not use
 // regular setjmp/longjmp as that uses a 304 byte buffer. We only need
