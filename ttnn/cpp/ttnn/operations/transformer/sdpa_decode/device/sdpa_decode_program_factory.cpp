@@ -386,6 +386,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     const bool use_half_tile =
         (is_causal and num_q_heads <= 16 and q_df == tt::DataFormat::Float16_b and
          device->arch() == tt::ARCH::WORMHOLE_B0);
+
     if (use_half_tile) {
         q_tile = half_tile;
         mask_tile = half_tile;

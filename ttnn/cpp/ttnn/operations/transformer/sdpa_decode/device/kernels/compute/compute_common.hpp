@@ -135,7 +135,7 @@ void sub_exp_block_bcast_cols_inplace_reduce(uint32_t in1_cb, uint32_t reduce_cb
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
-                sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
+                sub_tiles_bcast_cols(in0_cb, in1_cb, in0_index, i, j);
                 exp_tile<true, true>(j, vector_mode);
                 in0_index++;
             }
@@ -289,6 +289,31 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
         cb_push_back(out_cb, 1);
         release_dst();
     }
+}
+
+template <bool pop_in_cb>
+void fake_move_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
+    // Precondition: in_cb has num_tiles produced
+    // Precondition: out_cb has num_tiles free
+    // Postcondition: in_cb has num_tiles consumed
+    // Postcondition: out_cb has num_tiles produced
+
+    copy_tile_to_dst_init_short(in_cb);
+
+    cb_wait_front(in_cb, num_tiles);
+    cb_reserve_back(out_cb, num_tiles);
+
+    // #pragma GCC unroll 0
+    //     for (uint32_t i = 0; i < num_tiles; i++) {
+    //         acquire_dst();
+    //         copy_tile(in_cb, i, 0 /*dst*/);
+    //         pack_tile(0, out_cb);
+    //         cb_push_back(out_cb, 1);
+    //         release_dst();
+    //     }
+    // if (pop_in_cb) {
+    //     cb_pop_front(in_cb, num_tiles);
+    // }
 }
 
 template <bool pop_in_cb>
