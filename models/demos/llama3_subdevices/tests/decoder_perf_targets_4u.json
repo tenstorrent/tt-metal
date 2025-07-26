@@ -167,7 +167,7 @@
         },
         "ScaledDotProductAttentionDecode_0": {
             "op_name": "SDPA",
-            "kernel_duration": 11472.763888888889,
+            "kernel_duration": 10201.086805555555,
             "op_to_op": 679.3686868686868,
             "first_to_last_start": 2828.5808080808083,
             "non-overlapped-dispatch-time": 9201.7,
