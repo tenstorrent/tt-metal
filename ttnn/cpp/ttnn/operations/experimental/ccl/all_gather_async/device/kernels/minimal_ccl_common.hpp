@@ -20,7 +20,6 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     uint32_t payload_size_bytes) {
     const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
     const size_t payload_l1_address = l1_read_addr;
-
     pkt_hdr_forward->to_noc_unicast_write(
         tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
     pkt_hdr_backward->to_noc_unicast_write(

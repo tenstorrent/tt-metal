@@ -23,7 +23,7 @@ using namespace tt::constants;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
-namespace reuse_mcast_1d_optimized_helpers {
+namespace llama_reuse_mcast_1d_optimized_helpers {
 
 uint32_t get_preferred_noc(
     const ttnn::CoreCoord src,
@@ -2456,13 +2456,13 @@ void override_program_parameters(
     }
 }
 
-}  // namespace reuse_mcast_1d_optimized_helpers
+}  // namespace llama_reuse_mcast_1d_optimized_helpers
 
 namespace ttnn {
 
 namespace operations {
 
-namespace matmul {
+namespace llama_matmul {
 
 ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_multi_core_reuse_mcast_1d_optimized_(
     tt_metal::Program& program,
@@ -2599,7 +2599,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
         for (const auto& output_tensor : output_tensors) {
             out_buffers.push_back(output_tensor.buffer());
         }
-        return reuse_mcast_1d_optimized_helpers::process_gather_in0_program_and_create_override_variables(
+        return llama_reuse_mcast_1d_optimized_helpers::process_gather_in0_program_and_create_override_variables(
             program,
             a,
             b_tensors,
@@ -2642,7 +2642,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     }
     TT_FATAL(start_cb_index == tt::CBIndex::c_0, "mcast does not support a non-zero start cb index");
     if (mcast_in0) {
-        return reuse_mcast_1d_optimized_helpers::process_mcast_in0_program_and_create_override_variables(
+        return llama_reuse_mcast_1d_optimized_helpers::process_mcast_in0_program_and_create_override_variables(
             program,
             a,
             device,
@@ -2684,7 +2684,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
             untilize_out,
             fused_op_signaler);
     } else {
-        return reuse_mcast_1d_optimized_helpers::process_mcast_in1_program_and_create_override_variables(
+        return llama_reuse_mcast_1d_optimized_helpers::process_mcast_in1_program_and_create_override_variables(
             program,
             a,
             device,
@@ -2804,15 +2804,15 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     const std::vector<Tensor>& output_tensors,
     bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
-    const MatmulProgramConfig& program_config,
+    const matmul::MatmulProgramConfig& program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     uint32_t start_cb_index,
     std::optional<CoreRangeSet> restricted_cores) {
-    MatmulMultiCoreReuseMultiCast1DProgramConfig config =
-        std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
+    matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig config =
+        std::get<matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config);
 
     return matmul_multi_core_reuse_mcast_1d_optimized_(
         program,
@@ -2853,13 +2853,13 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     const std::vector<Tensor>& output_tensors,
     bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
-    const MatmulProgramConfig& program_config,
+    const matmul::MatmulProgramConfig& program_config,
     bool untilize_out,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t shared_vars =
-        matmul_multi_core_reuse_mcast_1d_optimized_helper(
+        llama_matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
             program,
             a,
             b_tensors,
@@ -2881,14 +2881,14 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
             const std::vector<tt::tt_metal::Tensor>& input_tensors,
             const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
             const std::vector<tt::tt_metal::Tensor>& output_tensors) {
-            reuse_mcast_1d_optimized_helpers::override_program_parameters(
+            llama_reuse_mcast_1d_optimized_helpers::override_program_parameters(
                 shared_vars, operation, program, input_tensors, optional_input_tensors, output_tensors);
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-}  // namespace matmul
+}  // namespace llama_matmul
 
 }  // namespace operations
 
