@@ -72,8 +72,12 @@ cmake.args = [
 # if.env.TT_FROM_PRECOMPILED_DIR = true
 # cmake.source-dir = "{env.TT_FROM_PRECOMPILED_DIR}"
 
-# Package discovery - simplified since CMake handles installation
-wheel.packages = ["ttnn/ttnn"]
+# Package discovery - include all packages that were found by setup.py find_packages
+wheel.packages = [
+    "ttnn/tracy",
+    "ttnn/tt_lib",
+    "ttnn/ttnn"
+]
 
 # Exclude examples from wheel
 wheel.exclude = ["ttnn/examples", "ttnn/examples/**"]
