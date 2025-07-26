@@ -52,7 +52,6 @@ jobs:
               - models/demos/sentence_bert/tests/perf/
               # This is bad. This should be referencing .../tests directory
               - models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py
-              # This is bad. This should be referencing .../tests directory
               - models/demos/yolov11/tests/perf/
               # This is bad. This should be referencing .../tests directory
               - models/demos/wormhole/bert_tiny/tests/test_performance.py
@@ -71,6 +70,8 @@ jobs:
               - models/demos/yolov9c/tests/perf/
               - models/experimental/vanilla_unet/tests/perf/
               - models/demos/yolov8x/tests/perf/
+              # e2e performant test is present in .../vit/demo folder only
+              - models/demos/wormhole/vit/demo/
 
           - name: tt_transformers
             model-list:

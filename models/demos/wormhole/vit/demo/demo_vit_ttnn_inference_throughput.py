@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,9 +6,8 @@ import time
 
 import pytest
 import torch
-import transformers
 from loguru import logger
-from transformers import AutoImageProcessor
+from transformers import AutoImageProcessor, ViTConfig, ViTForImageClassification
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
@@ -35,8 +34,6 @@ os.environ["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": true}'
 
 
 @pytest.mark.skipif(is_blackhole(), reason="Unsupported on BH")
-@pytest.mark.models_performance_bare_metal
-@pytest.mark.models_performance_virtual_machine
 def test_vit(device):
     torch.manual_seed(0)
 
@@ -46,8 +43,8 @@ def test_vit(device):
     batch_size = 8
     sequence_size = 224
 
-    config = transformers.ViTConfig.from_pretrained(model_name)
-    model = transformers.ViTForImageClassification.from_pretrained(model_name, config=config)
+    config = ViTConfig.from_pretrained(model_name)
+    model = ViTForImageClassification.from_pretrained(model_name, config=config)
     config = ttnn_optimized_sharded_vit_wh.update_model_config(config, batch_size)
     image_processor = AutoImageProcessor.from_pretrained(model_name)
 
