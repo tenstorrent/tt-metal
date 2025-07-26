@@ -281,15 +281,15 @@ class C3k2(nn.Module):
         if self.is_bk_enabled:
             x = self.cv1(x)
             y = list(x.chunk(2, 1))
-            y.extend(self.m[0](y[-1]))
-            y[-1] = y[-1].unsqueeze(0)
+            m_out = self.m[0](y[-1])
+            y.append(m_out)
             x = torch.cat(y, 1)
             x = self.cv2(x)
         else:
             x = self.cv1(x)
             y = list(x.chunk(2, 1))
-            y.extend(self.m[0](y[-1]))
-            y[-1] = y[-1].unsqueeze(0)
+            m_out = self.m[0](y[-1])
+            y.append(m_out)
             x = torch.cat(y, 1)
             x = self.cv2(x)
         return x
