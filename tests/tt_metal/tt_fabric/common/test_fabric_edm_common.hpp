@@ -1902,19 +1902,6 @@ void Run1DFabricPacketSendTest(
         log_trace(tt::LogTest, "Main op done");
     }
 
-    // if (!use_device_init_fabric) {
-    //     auto& devices = fabrics_under_test_devices[0];
-    //     TT_FATAL(fabric_programs->size() == devices.size(), "Expected fabric programs size to be same as devices
-    //     size"); log_trace(tt::LogTest, "Fabric teardown"); persistent_fabric_teardown_sequence(
-    //         devices,
-    //         subdevice_managers,
-    //         fabric_handle.value(),
-    //         tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
-    //     for (auto& device : devices) {
-    //         device->clear_loaded_sub_device_manager();
-    //     }
-    // }
-
     log_trace(tt::LogTest, "Waiting for teardown completion");
     for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices.size(); fabric_index++) {
         auto& devices = fabrics_under_test_devices[fabric_index];
