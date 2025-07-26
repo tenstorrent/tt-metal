@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <umd/device/tt_core_coordinates.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -20,6 +21,7 @@
 #include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
+#include "get_platform_architecture.hpp"
 #include "impl/dispatch/command_queue_common.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -31,6 +33,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
 #include "impl/context/metal_context.hpp"
+#include "llrt.hpp"
+#include "rtoptions.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/utils.hpp>
 
@@ -351,6 +355,67 @@ TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
 
     tt_metal::detail::ReadFromDeviceL1(device_, core, l1_unreserved_base, sizeof(uint32_t), random_vec);
     EXPECT_EQ(random_vec[0], value_to_write);
+}
+
+// TEST(Debugging, OpenAndClose) {
+//     for (int i = 0; i < 100000; ++i) {
+//         [[maybe_unused]] auto device = CreateDevice(0);
+//         device->close();
+//     }
+// }
+
+TEST(Debugging, HostWritesToEthernetCore) {
+    if (!std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+        GTEST_SKIP();
+    }
+    auto device = CreateDevice(0);
+    constexpr uint32_t num_writes = 10000;
+    constexpr uint32_t total_size = num_writes * sizeof(uint32_t);
+    uint32_t l1_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t success_base = l1_base;
+    uint32_t buffer_base = l1_base + total_size;
+
+    std::vector<uint32_t> ct_args = {num_writes, success_base, buffer_base};
+    std::vector<uint32_t> zero_buffer(num_writes, 0);
+
+    const auto& active_eth_cores = device->get_active_ethernet_cores();
+    for (int i = 0; i < 5; ++i) {
+        for (const auto& core : active_eth_cores) {
+            log_info(tt::LogTest, "Core {} starting", core.str());
+            // Zero buffer
+            const auto& virtual_core = device->virtual_core_from_logical_core(core, CoreType::ETH);
+            llrt::write_hex_vec_to_core(device->id(), virtual_core, zero_buffer, buffer_base);
+            tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+
+            tt_metal::Program program = tt_metal::CreateProgram();
+            tt_metal::KernelHandle kernel = tt_metal::CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/device/test_kernel.cpp",
+                core,
+                tt_metal::EthernetConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .compile_args = ct_args});
+
+            tt_metal::detail::LaunchProgram(device, program, false);
+
+            // Write the test values to the buffer
+            for (uint32_t v = 0; v < num_writes; v++) {
+                llrt::write_hex_vec_to_core(
+                    device->id(), virtual_core, std::vector<uint32_t>{v}, buffer_base + (v * sizeof(uint32_t)));
+                tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+            }
+
+            detail::WaitProgramDone(device, program, false);
+            log_info(tt::LogTest, "Core {} done", core.str());
+
+            log_info(tt::LogTest, "Check core {}", core.str());
+            for (uint32_t v = 0; v < num_writes; v++) {
+                uint32_t expected = (v) * 2;
+                uint32_t actual = llrt::read_hex_vec_from_core(
+                    device->id(), virtual_core, buffer_base + (v * sizeof(uint32_t)), sizeof(uint32_t))[0];
+                ASSERT_EQ(expected, actual);
+            }
+        }
+    }
 }
 
 }  // namespace tt::tt_metal
