@@ -40,6 +40,7 @@ using ReplicatedBufferConfig = tt::tt_metal::distributed::ReplicatedBufferConfig
 using MeshBuffer = tt::tt_metal::distributed::MeshBuffer;
 using BufferDistributionSpec = tt::tt_metal::BufferDistributionSpec;
 using Shape = tt::tt_metal::Shape;
+using HostRankId = tt::tt_fabric::HostRankId;
 using SystemMesh = tt::tt_metal::distributed::SystemMesh;
 using MeshDeviceConfig = tt::tt_metal::distributed::MeshDeviceConfig;
 
@@ -58,7 +59,7 @@ struct pair_hash {
     }
 };
 
-class TestFixture : public IDeviceInfoProvider, public IRouteManager {
+class TestFixture : public IDeviceInfoProvider, public IRouteManager, public IDistributedContextManager {
     static constexpr uint32_t ROW_DIM = 0;
     static constexpr uint32_t COL_DIM = 1;
 
@@ -70,13 +71,18 @@ class TestFixture : public IDeviceInfoProvider, public IRouteManager {
         topology_to_fabric_config_map;
 
 public:
-    void init() {
-        // NOTE: We defer all control plane access until open_devices_internal
+    void init(std::optional<PhysicalMeshConfig> physical_mesh_config = std::nullopt) {
+        if (physical_mesh_config.has_value()) {
+            initialize_and_validate_custom_physical_config(physical_mesh_config.value());
+        }
+
         // to ensure fabric config is set first, which affects mesh graph descriptor selection
         current_fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
     }
 
-    std::vector<MeshCoordinate> get_available_device_coordinates() const { return this->available_device_coordinates_; }
+    MeshCoordinateRange get_host_local_device_coordinates() const {
+        return control_plane_ptr_->get_coord_range(local_mesh_id_, MeshScope::LOCAL);
+    }
 
     void open_devices(Topology topology, RoutingType routing_type) {
         auto it = topology_to_fabric_config_map.find({topology, routing_type});
@@ -122,10 +128,8 @@ public:
 
         // Clear all class members
         control_plane_ptr_ = nullptr;
-        mesh_coordinate_to_node_id_.clear();
-        node_id_to_mesh_coordinate_.clear();
-        available_device_coordinates_.clear();
-        available_node_ids_.clear();
+        local_available_node_ids_.clear();
+        global_available_node_ids_.clear();
         available_mesh_ids_.clear();
         mesh_device_.reset();
         mesh_workload_.reset();
@@ -141,37 +145,23 @@ public:
     }
 
     FabricNodeId get_fabric_node_id(const MeshCoordinate& device_coord) const override {
-        return mesh_coordinate_to_node_id_.at(device_coord);
+        const auto& mesh_graph = control_plane_ptr_->get_mesh_graph();
+        return FabricNodeId(local_mesh_id_, mesh_graph.coordinate_to_chip(local_mesh_id_, device_coord));
     }
 
     FabricNodeId get_fabric_node_id(MeshId mesh_id, const MeshCoordinate& device_coord) const override {
-        TT_FATAL(
-            available_mesh_ids_.count(mesh_id) > 0,
-            "Mesh id: {} is not available for querying fabric node id",
-            mesh_id);
-        TT_FATAL(
-            mesh_coordinate_to_node_id_.count(device_coord) > 0,
-            "Mesh coordinate: {} is not available for querying fabric node id",
-            device_coord);
-        return mesh_coordinate_to_node_id_.at(device_coord);
+        const auto& mesh_graph = control_plane_ptr_->get_mesh_graph();
+        return FabricNodeId(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, device_coord));
     }
 
     MeshCoordinate get_device_coord(const FabricNodeId& node_id) const override {
-        auto it = node_id_to_mesh_coordinate_.find(node_id);
-        TT_FATAL(it != node_id_to_mesh_coordinate_.end(), "Unknown node id: {} for querying mesh coord", node_id);
-
-        return it->second;
+        const auto& mesh_graph = control_plane_ptr_->get_mesh_graph();
+        return mesh_graph.chip_to_coordinate(node_id.mesh_id, node_id.chip_id);
     }
 
-    uint32_t get_worker_noc_encoding(const MeshCoordinate& device_coord, const CoreCoord logical_core) const override {
-        auto* device = mesh_device_->get_device(device_coord);
-        const auto virtual_core = device->worker_core_from_logical_core(logical_core);
+    uint32_t get_worker_noc_encoding(const CoreCoord logical_core) const override {
+        const auto virtual_core = mesh_device_->worker_core_from_logical_core(logical_core);
         return tt_metal::MetalContext::instance().hal().noc_xy_encoding(virtual_core.x, virtual_core.y);
-    }
-
-    uint32_t get_worker_noc_encoding(const FabricNodeId& node_id, const CoreCoord logical_core) const override {
-        const auto& device_coord = get_device_coord(node_id);
-        return get_worker_noc_encoding(device_coord, logical_core);
     }
 
     CoreCoord get_worker_grid_size() const override { return mesh_device_->compute_with_storage_grid_size(); }
@@ -180,7 +170,14 @@ public:
         return (*node_id.mesh_id << 12) | (node_id.chip_id << 8) | (logical_core.x << 4) | (logical_core.y);
     }
 
-    std::vector<FabricNodeId> get_all_node_ids() const override { return available_node_ids_; }
+    std::vector<FabricNodeId> get_local_node_ids() const override { return local_available_node_ids_; }
+
+    std::vector<FabricNodeId> get_global_node_ids() const override { return global_available_node_ids_; }
+
+    bool is_local_fabric_node_id(const FabricNodeId& id) const override {
+        return std::find(local_available_node_ids_.begin(), local_available_node_ids_.end(), id) !=
+               local_available_node_ids_.end();
+    };
 
     uint32_t get_l1_unreserved_base() const override {
         return tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
@@ -411,12 +408,12 @@ public:
             return true;
         }
 
-        auto first_coord = node_id_to_mesh_coordinate_.at(node_ids[0]);
+        auto first_coord = get_device_coord(node_ids[0]);
         bool all_same_row = true;
         bool all_same_col = true;
 
         for (size_t i = 1; i < node_ids.size(); ++i) {
-            auto next_coord = node_id_to_mesh_coordinate_.at(node_ids[i]);
+            auto next_coord = get_device_coord(node_ids[i]);
             if (next_coord[COL_DIM] != first_coord[COL_DIM]) {
                 all_same_col = false;
             }
@@ -437,7 +434,7 @@ public:
     }
 
     std::vector<std::pair<FabricNodeId, FabricNodeId>> get_full_device_random_pairs(std::mt19937& gen) const override {
-        auto unpaired = get_all_node_ids();
+        auto unpaired = get_global_node_ids();
 
         if (unpaired.size() % 2 != 0) {
             log_warning(
@@ -487,7 +484,7 @@ public:
     }
 
     std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_to_all_unicast_pairs() const override {
-        const auto device_ids = get_all_node_ids();
+        const auto device_ids = get_global_node_ids();
         std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
         pairs.reserve(device_ids.size() * (device_ids.size() - 1));
         for (const auto& src_node : device_ids) {
@@ -809,7 +806,7 @@ public:
     }
 
     FabricNodeId get_random_unicast_destination(FabricNodeId src_node_id, std::mt19937& gen) const override {
-        auto all_devices = this->get_all_node_ids();
+        auto all_devices = this->get_global_node_ids();
         std::vector<FabricNodeId> possible_dsts;
         possible_dsts.reserve(all_devices.size());
         for (const auto& dev : all_devices) {
@@ -1266,7 +1263,7 @@ public:
         const auto num_pci_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
         const auto num_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
 
-        std::vector<FabricNodeId> devices = get_all_node_ids();
+        std::vector<FabricNodeId> devices = get_local_node_ids();
         for (const auto& device : devices) {
             uint32_t max_routing_planes = get_max_routing_planes_for_device(device);
             // TODO: remove this once we have correct
@@ -1306,6 +1303,43 @@ public:
         return (min_routing_planes == std::numeric_limits<uint32_t>::max()) ? 0 : min_routing_planes;
     }
 
+    // ======================================================================================
+    // IDistributedContextManager methods
+    // ======================================================================================
+    uint32_t get_randomized_master_seed() const override {
+        uint32_t master_seed = std::random_device()();
+        log_info(tt::LogTest, "No master seed provided. Using randomly generated seed: {}", master_seed);
+
+        const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+        // only need to handshake if we need to generate seed, since each host will have the same commandline arguments.
+        if (*(distributed_context->size()) > 1) {
+            if (*(distributed_context->rank()) == 0) {
+                master_seed = std::random_device()();
+                for (int recv_host_rank = 1; recv_host_rank < *(distributed_context->size()); ++recv_host_rank) {
+                    distributed_context->send(
+                        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
+                        tt::tt_metal::distributed::multihost::Rank{recv_host_rank},  // send to receiver host
+                        tt::tt_metal::distributed::multihost::Tag{0}                 // exchange seed over tag 0
+                    );
+                }
+                log_info(tt::LogTest, "Master seed sent: {}", master_seed);
+            } else {
+                distributed_context->recv(
+                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
+                    tt::tt_metal::distributed::multihost::Rank{0},  // receive from sender host
+                    tt::tt_metal::distributed::multihost::Tag{0}    // exchange seed over tag 0
+                );
+                log_info(tt::LogTest, "Master seed received : {}", master_seed);
+            }
+        }
+        return master_seed;
+    }
+
+    void barrier() const override {
+        const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+        distributed_context->barrier();
+    }
+
 private:
     ControlPlane* control_plane_ptr_;
     Topology topology_;
@@ -1313,14 +1347,50 @@ private:
     MeshShape mesh_shape_;
     std::set<MeshId> available_mesh_ids_;
     tt::tt_fabric::FabricConfig current_fabric_config_;
-    std::vector<MeshCoordinate> available_device_coordinates_;
-    std::vector<FabricNodeId> available_node_ids_;
+    std::vector<FabricNodeId> local_available_node_ids_;
+    std::vector<FabricNodeId> global_available_node_ids_;
     std::shared_ptr<MeshDevice> mesh_device_;
-    std::unordered_map<MeshCoordinate, FabricNodeId> mesh_coordinate_to_node_id_;
-    std::unordered_map<FabricNodeId, MeshCoordinate> node_id_to_mesh_coordinate_;
     std::shared_ptr<MeshWorkload> mesh_workload_;
+    MeshId local_mesh_id_;
+    std::optional<HostRankId> local_host_rank_;
+
     bool are_devices_open_ = false;
     bool wrap_around_mesh_ = false;
+
+    void initialize_and_validate_custom_physical_config(const PhysicalMeshConfig& physical_mesh_config) {
+        const auto mesh_id_str = std::string(std::getenv("TT_MESH_ID"));
+        const auto host_rank_str = std::string(std::getenv("TT_HOST_RANK"));
+
+        const auto local_mesh_id = MeshId{std::stoi(mesh_id_str)};
+        local_host_rank_ = HostRankId{std::stoi(host_rank_str)};
+
+        const auto& eth_coord_mapping = physical_mesh_config.eth_coord_mapping;
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+        // ethernet coordinate chip mapping, which should be migrated away from
+        std::map<FabricNodeId, chip_id_t> chip_to_eth_coord_mapping;
+        for (std::uint32_t mesh_id = 0; mesh_id < eth_coord_mapping.size(); mesh_id++) {
+            if (mesh_id == *local_mesh_id) {
+                for (std::uint32_t chip_id = 0; chip_id < eth_coord_mapping[mesh_id].size(); chip_id++) {
+                    const auto& eth_coord = eth_coord_mapping[mesh_id][chip_id];
+                    chip_to_eth_coord_mapping.insert(
+                        {FabricNodeId(MeshId{mesh_id}, chip_id),
+                         cluster.get_physical_chip_id_from_eth_coord(eth_coord)});
+                }
+            }
+        }
+        tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
+            physical_mesh_config.mesh_descriptor_path, chip_to_eth_coord_mapping);
+
+        const auto user_mesh_id =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_user_physical_mesh_ids()[0];
+        // ensure user specified matches what control plane sees
+        TT_FATAL(
+            *user_mesh_id == *local_mesh_id,
+            "Local mesh id {} does not not match user mesh id {}",
+            *user_mesh_id,
+            *local_mesh_id);
+    }
 
     void open_devices_internal(tt::tt_fabric::FabricConfig fabric_config) {
         // Set fabric config FIRST, before any control plane access, this will reset control plane in metal context
@@ -1336,18 +1406,23 @@ private:
             "Only expected a single user mesh for a single host, but got: {}",
             user_meshes.size());
 
-        // TODO: for now we are just dealing with user mesh 0 here
-        available_mesh_ids_.insert(user_meshes[0]);
-        mesh_shape_ = control_plane_ptr_->get_physical_mesh_shape(user_meshes[0]);
-        const auto coordinates = MeshCoordinateRange(mesh_shape_);
-        for (const auto& coord : coordinates) {
-            available_device_coordinates_.push_back(coord);
-        }
+        local_mesh_id_ = user_meshes[0];
 
-        // TODO: available node ids should be able to capture the node ids for other meshes as well
-        const auto mesh_id = user_meshes[0];
-        for (auto i = 0; i < available_device_coordinates_.size(); i++) {
-            available_node_ids_.emplace_back(FabricNodeId(mesh_id, i));
+        available_mesh_ids_.insert(local_mesh_id_);
+        mesh_shape_ = control_plane_ptr_->get_physical_mesh_shape(local_mesh_id_, MeshScope::GLOBAL);
+
+        const auto& mesh_graph = control_plane_ptr_->get_mesh_graph();
+
+        for (auto mesh_id : mesh_graph.get_mesh_ids()) {
+            if (mesh_id == local_mesh_id_) {  // Populate all nodes available locally. Note the use of host rank to
+                                              // ensure compatibility with big mesh
+                for (auto chip : mesh_graph.get_chip_ids(mesh_id, local_host_rank_)) {
+                    local_available_node_ids_.emplace_back(FabricNodeId(MeshId{mesh_id}, chip.value()));
+                }
+            }  // Populate Ids across all hosts and meshes
+            for (auto chip : mesh_graph.get_chip_ids(mesh_id)) {
+                global_available_node_ids_.emplace_back(FabricNodeId(MeshId{mesh_id}, chip.value()));
+            }
         }
 
         mesh_device_ = MeshDevice::create(MeshDeviceConfig(mesh_shape_));
@@ -1356,32 +1431,6 @@ private:
         wrap_around_mesh_ = control_plane_ptr_->get_fabric_context().is_wrap_around_mesh(user_meshes[0]);
 
         TT_FATAL(mesh_device_ != nullptr, "Failed to create MeshDevice with shape {}", mesh_shape_);
-
-        for (const auto& coord : available_device_coordinates_) {
-            TT_FATAL(
-                coord.dims() == mesh_shape_.dims(),
-                "Device coordinate {} has different dimensions than mesh shape {}",
-                coord,
-                mesh_shape_);
-
-            // Validate coordinate bounds
-            for (size_t i = 0; i < coord.dims(); ++i) {
-                TT_FATAL(
-                    coord[i] < mesh_shape_[i],
-                    "Device coordinate {} is out of bounds for mesh shape {} (dimension {} >= {})",
-                    coord,
-                    mesh_shape_,
-                    i,
-                    mesh_shape_[i]);
-            }
-
-            auto* device = mesh_device_->get_device(coord);
-            TT_FATAL(device != nullptr, "Failed to get device at coordinate {}", coord);
-
-            const auto fabric_node_id = control_plane_ptr_->get_fabric_node_id_from_physical_chip_id(device->id());
-            mesh_coordinate_to_node_id_.emplace(coord, fabric_node_id);
-            node_id_to_mesh_coordinate_.emplace(fabric_node_id, coord);
-        }
 
         current_fabric_config_ = fabric_config;
         are_devices_open_ = true;
