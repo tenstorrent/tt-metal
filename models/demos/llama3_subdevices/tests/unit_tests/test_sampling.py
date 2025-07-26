@@ -225,6 +225,10 @@ def test_llama_sampling_inference(
     if isinstance(top_p, float):
         top_p = [top_p] * batch_size
     temperature = sampling_params["temperature"]
+    if temperature == 0.0:  # argmax
+        temperature = 1.0
+        top_k = [1] * batch_size
+        top_p = [0.0] * batch_size
     if isinstance(temperature, float):
         temperature = [temperature] * batch_size
     seed = sampling_params["seed"]
@@ -284,19 +288,19 @@ def test_llama_sampling_inference(
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
-        temperature=temperature,
         tt_ccl=tt_ccl,
+        k=torch.tensor(top_k),
+        p=torch.tensor(top_p),
+        temp=torch.tensor(temperature),
     )
 
     if use_tracing:
         try:
             logger.info("Compile Llama Sampling")
 
-            tt_outputs = tt_sampling(tt_input, k=top_k, p=top_p, seed=seed)  # Setting random seed
+            tt_outputs = tt_sampling(tt_input, seed=seed)  # Setting random seed
 
-            tt_outputs = tt_sampling(
-                tt_input, k=top_k, p=top_p
-            )  # Compiling without seed; will generate new pseudo-random numbers
+            tt_outputs = tt_sampling(tt_input)  # Compiling without seed; will generate new pseudo-random numbers
 
             logger.info("Done comiling Llama Sampling Trace")
 
@@ -304,7 +308,7 @@ def test_llama_sampling_inference(
 
             trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
 
-            tt_outputs = tt_sampling(tt_input, k=top_k, p=top_p)
+            tt_outputs = tt_sampling(tt_input)
 
             ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
 
@@ -347,10 +351,10 @@ def test_llama_sampling_inference(
         tt_outputs_torch = []
         for i in range(num_samples):
             if i == 0:
-                tt_outputs = tt_sampling(tt_input, k=top_k, p=top_p, seed=seed)
+                tt_outputs = tt_sampling(tt_input, seed=seed)
             else:
                 tt_outputs = tt_sampling(
-                    tt_input, k=top_k, p=top_p
+                    tt_input,
                 )  # Will generate new pseudo-random numbers based on previously set seed
             tt_output = ttnn.get_device_tensors(tt_outputs)[0]
             tt_output_torch = ttnn.to_torch(

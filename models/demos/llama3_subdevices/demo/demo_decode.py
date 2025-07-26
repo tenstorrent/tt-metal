@@ -247,7 +247,6 @@ def run_llama3_demo(
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
-        temperature=temperature,
         tt_ccl=tt_model.tt_ccl,
     )
     profiler.end("loading_weights_to_device")
@@ -331,7 +330,7 @@ def run_llama3_demo(
         )
 
         # Sampling
-        _ = tt_sampling(tt_out[0], top_k, top_p, seed, tt_out_tok=tt_out_tok)  # Compile once with setting the seed
+        _ = tt_sampling(tt_out[0], seed, tt_out_tok=tt_out_tok)  # Compile once with setting the seed
         logger.info(f"Sampling done")
 
     if not stress_test:
@@ -345,7 +344,7 @@ def run_llama3_demo(
         )
 
     _ = tt_sampling(
-        tt_out[0], top_k, top_p, tt_out_tok=tt_out_tok
+        tt_out[0], tt_out_tok=tt_out_tok
     )  # Compile again without seed to obtain random sampling; at this position to simplify test_decoder_device_perf.py
 
     # Capture Trace
@@ -368,7 +367,7 @@ def run_llama3_demo(
     )
 
     # Sampling
-    _ = tt_sampling(tt_out[0], top_k, top_p, tt_out_tok=tt_out_tok)
+    _ = tt_sampling(tt_out[0], tt_out_tok=tt_out_tok)
 
     if not stress_test:
         ttnn.plus_one(
