@@ -6,6 +6,7 @@ import pytest
 import torch
 from diffusers import DiffusionPipeline
 from loguru import logger
+from conftest import is_galaxy
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
@@ -45,6 +46,11 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
         torch_dtype=torch.float32,
         use_safetensors=True,
     )
+
+    # Have to throttle matmuls due to di/dt
+    if is_galaxy():
+        logger.info("Setting TT_MM_THROTTLE_PERF for Galaxy")
+        os.environ["TT_MM_THROTTLE_PERF"] = "5"
 
     with ttnn.distribute(ttnn.ReplicateTensorToMesh(ttnn_device)):
         # 2. Load tt_unet, tt_vae and tt_scheduler
