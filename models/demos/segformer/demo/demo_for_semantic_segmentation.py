@@ -9,7 +9,6 @@ import evaluate
 import numpy as np
 import pytest
 import torch
-import torch.nn.functional as F
 from loguru import logger
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
@@ -20,6 +19,7 @@ from models.demos.segformer.reference.segformer_for_semantic_segmentation import
     SegformerForSemanticSegmentationReference,
 )
 from models.demos.segformer.runner.performant_runner import SegformerTrace2CQ
+from models.demos.segformer.tt.common import get_mesh_mappers
 
 
 class SemanticSegmentationDataset(Dataset):
@@ -47,10 +47,14 @@ def shift_gt_indices(gt_mask):
     return gt_mask - 1
 
 
-@pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 79104, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
-)
-def test_demo_semantic_segmentation(device, model_location_generator):
+def custom_collate_fn(batch):
+    inputs = [item["input"] for item in batch]
+    gt_masks = [item["gt_mask"] for item in batch]
+    input_pixel_values = torch.cat([inp["pixel_values"] for inp in inputs], dim=0)
+    return {"pixel_values": input_pixel_values, "gt_mask": gt_masks}
+
+
+def run_demo_semantic_segmentation(device, model_location_generator, batch_size):
     torch_model = SegformerForSemanticSegmentation.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
     reference_model = SegformerForSemanticSegmentationReference(config=torch_model.config)
     reference_model.load_state_dict(torch_model.state_dict())
@@ -63,42 +67,43 @@ def test_demo_semantic_segmentation(device, model_location_generator):
 
     image_folder = "models/demos/segformer/demo/validation_data_ade20k/images"
     mask_folder = "models/demos/segformer/demo/validation_data_ade20k/annotations"
-
     dataset = SemanticSegmentationDataset(image_folder, mask_folder, image_processor)
-    data_loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0)
+    data_loader = DataLoader(dataset, batch_size=batch_size, shuffle=False, num_workers=0, collate_fn=custom_collate_fn)
     ref_metric = evaluate.load("mean_iou")
     ttnn_metric = evaluate.load("mean_iou")
-
     segformer_trace_2cq = SegformerTrace2CQ()
-
-    segformer_trace_2cq.initialize_segformer_trace_2cqs_inference(device, model_location_generator)
+    inputs_mapper, _, output_composer = get_mesh_mappers(device)
+    segformer_trace_2cq.initialize_segformer_trace_2cqs_inference(
+        device,
+        model_location_generator,
+        batch_size=batch_size,
+        mesh_mapper=inputs_mapper,
+        mesh_composer=output_composer,
+    )
 
     for batch in data_loader:
-        image = batch["input"]
-        mask = batch["gt_mask"].squeeze()
-        input = image["pixel_values"].squeeze(dim=0)
-        n, c, h, w = input.shape
-        torch_input_tensor = input.permute(0, 2, 3, 1)
-        torch_input_tensor = F.pad(torch_input_tensor, (0, 13))
-        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        ttnn_output = segformer_trace_2cq.execute_segformer_trace_2cqs_inference(tt_inputs_host)
-        ttnn_output = ttnn.to_torch(ttnn_output)
+        masks = batch["gt_mask"]
+        input = batch["pixel_values"]
+        ttnn_output = segformer_trace_2cq.run(input)
+        ttnn_output = ttnn.to_torch(ttnn_output, mesh_composer=output_composer)
         ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))
         h = w = int(math.sqrt(ttnn_output.shape[-1]))
         ttnn_final_output = torch.reshape(ttnn_output, (ttnn_output.shape[0], ttnn_output.shape[1], h, w))
-        ref_logits = reference_model(image["pixel_values"].squeeze(dim=0)).logits
-        ref_upsampled_logits = torch.nn.functional.interpolate(
-            ref_logits, size=mask.shape[-2:], mode="bilinear", align_corners=False
-        )
-        ttnn_upsampled_logits2 = torch.nn.functional.interpolate(
-            ttnn_final_output, size=mask.shape[-2:], mode="bilinear", align_corners=False
-        )
-        ref_pred_mask = ref_upsampled_logits.argmax(dim=1).squeeze().numpy()
-        ttnn_pred_mask = ttnn_upsampled_logits2.argmax(dim=1).squeeze().numpy()
-        mask = shift_gt_indices(mask)
-        mask = np.array(mask)
-        ref_metric.add(predictions=ref_pred_mask, references=mask)
-        ttnn_metric.add(predictions=ttnn_pred_mask, references=mask)
+        ref_logits = reference_model(input).logits
+        for i in range(len(masks)):
+            mask = masks[i]
+            ref_up = torch.nn.functional.interpolate(
+                ref_logits[i : i + 1], size=mask.shape, mode="bilinear", align_corners=False
+            )
+            ttnn_up = torch.nn.functional.interpolate(
+                ttnn_final_output[i : i + 1], size=mask.shape, mode="bilinear", align_corners=False
+            )
+            ref_pred_mask = ref_up.argmax(dim=1).squeeze().cpu().numpy()
+            ttnn_pred_mask = ttnn_up.argmax(dim=1).squeeze().cpu().numpy()
+            mask = shift_gt_indices(mask)
+            mask = np.array(mask)
+            ref_metric.add(predictions=ref_pred_mask, references=mask)
+            ttnn_metric.add(predictions=ttnn_pred_mask, references=mask)
 
     ref_results = ref_metric.compute(
         num_labels=reference_model.config.num_labels, ignore_index=255, reduce_labels=False
@@ -110,3 +115,25 @@ def test_demo_semantic_segmentation(device, model_location_generator):
     logger.info(
         f"mean IoU values for Reference and ttnn model are {ref_results['mean_iou']}, {ttnn_results['mean_iou']} respectively"
     )
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 79104, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    ((1),),
+)
+def test_demo_semantic_segmentation(device, model_location_generator, batch_size):
+    return run_demo_semantic_segmentation(device, model_location_generator, batch_size)
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 79104, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    ((2),),
+)
+def test_demo_semantic_segmentation_dp(mesh_device, model_location_generator, batch_size):
+    return run_demo_semantic_segmentation(mesh_device, model_location_generator, batch_size)

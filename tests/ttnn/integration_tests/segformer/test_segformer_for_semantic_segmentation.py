@@ -20,28 +20,32 @@ from models.demos.segformer.reference.segformer_for_semantic_segmentation import
     SegformerForSemanticSegmentationReference,
 )
 from tests.ttnn.integration_tests.segformer.test_segformer_model import (
-    create_custom_preprocessor as create_custom_preprocessor_model,
+    create_custom_mesh_preprocessor as create_custom_preprocessor_model,
 )
 from tests.ttnn.integration_tests.segformer.test_segformer_decode_head import (
-    create_custom_preprocessor as create_custom_preprocessor_deocde_head,
+    create_custom_mesh_preprocessor as create_custom_preprocessor_deocde_head,
 )
 from models.utility_functions import skip_for_grayskull
+from models.demos.segformer.tt.common import get_mesh_mappers
 
 
-def create_custom_preprocessor(device):
-    def custom_preprocessor(model, name, ttnn_module_args):
+def create_custom_mesh_preprocessor(mesh_mapper=None):
+    def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
+        return custom_preprocessor(model, name, mesh_mapper)
+
+    def custom_preprocessor(model, name, mesh_mapper=None):
         parameters = {}
         if isinstance(model, SegformerForSemanticSegmentationReference):
             parameters["segformer"] = {}
-            segformer_preprocess = create_custom_preprocessor_model(device)
-            parameters["segformer"] = segformer_preprocess(model.segformer, None, None)
+            segformer_preprocess = create_custom_preprocessor_model(mesh_mapper)
+            parameters["segformer"] = segformer_preprocess(model.segformer, None, None, None)
             parameters["decode_head"] = {}
-            deocde_preprocess = create_custom_preprocessor_deocde_head(device)
-            parameters["decode_head"] = deocde_preprocess(model.decode_head, None, None)
+            deocde_preprocess = create_custom_preprocessor_deocde_head(mesh_mapper)
+            parameters["decode_head"] = deocde_preprocess(model.decode_head, None, None, None)
 
         return parameters
 
-    return custom_preprocessor
+    return custom_mesh_preprocessor
 
 
 def move_to_device(object, device):
@@ -87,9 +91,11 @@ def test_segformer_for_semantic_segmentation(device, is_ci_env):
     reference_model.eval()
 
     torch_output = reference_model(inputs.pixel_values)
-
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device), device=None
+        initialize_model=lambda: reference_model,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=None,
     )
     parameters = move_to_device(parameters, device)
 

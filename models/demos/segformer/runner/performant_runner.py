@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 import ttnn
 from models.demos.segformer.runner.performant_runner_infra import create_test_infra
 
@@ -18,22 +20,20 @@ class SegformerTrace2CQ:
         ...
 
     def initialize_segformer_trace_2cqs_inference(
-        self,
-        device,
-        model_location_generator,
+        self, device, model_location_generator, batch_size=1, mesh_mapper=None, mesh_composer=None
     ):
-        self.test_infra = create_test_infra(
-            device,
-            model_location_generator,
-        )
+        init_time = time.time()
+        self.test_infra = create_test_infra(device, model_location_generator, batch_size, mesh_mapper, mesh_composer)
         self.device = device
         self.tt_inputs_host, sharded_mem_config_DRAM, self.input_mem_config = self.test_infra.setup_dram_sharded_input(
             device
         )
         self.tt_image_res = self.tt_inputs_host.to(device, sharded_mem_config_DRAM)
+        print(f"Time for init trace: {time.time() - init_time:.6f} sec")
         self.op_event = ttnn.record_event(device, 0)
 
         # First run configures convs JIT
+        capt_time = time.time()
         ttnn.wait_for_event(1, self.op_event)
         ttnn.copy_host_to_device_tensor(self.tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(device, 1)
@@ -69,20 +69,29 @@ class SegformerTrace2CQ:
         self.input_tensor = ttnn.allocate_tensor_on_device(spec, device)
         ttnn.end_trace_capture(device, self.tid, cq_id=0)
         assert trace_input_addr == self.input_tensor.buffer_address()
+        print(f"Time for capt trace: {time.time() - capt_time:.6f} sec")
 
     def execute_segformer_trace_2cqs_inference(self, tt_inputs_host=None):
+        exec_time = time.time()
         ttnn.wait_for_event(1, self.op_event)
 
         ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
-        # TODO: Add in place support to ttnn to_memory_config
         self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
+        ttnn.synchronize_device(self.device)
         outputs = ttnn.from_device(self.test_infra.output_tensor.logits, blocking=True)
-
+        print(f"Time for exec trace: {time.time() - exec_time:.6f} sec")
         return outputs
 
     def release_segformer_trace_2cqs_inference(self):
         ttnn.release_trace(self.device, self.tid)
+
+    def run(self, torch_input_tensor=None):
+        run_alone = time.time()
+        tt_inputs_host, _ = self.test_infra.setup_l1_sharded_input(self.device, torch_input_tensor)
+        output = self.execute_segformer_trace_2cqs_inference(tt_inputs_host)
+        print(f"Time for run alone: {time.time() - run_alone:.6f} sec")
+        return output

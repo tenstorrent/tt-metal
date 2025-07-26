@@ -5,17 +5,16 @@
 import torch
 import ttnn
 from ttnn.model_preprocessing import (
-    preprocess_layernorm_parameter,
     preprocess_model_parameters,
     ParameterDict,
     ParameterList,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.integration_tests.segformer.test_segformer_overlap_path_embeddings import (
-    create_custom_preprocessor as create_customer_preprocessor_overlap_path,
+    create_custom_mesh_preprocessor as create_customer_preprocessor_overlap_path,
 )
 from tests.ttnn.integration_tests.segformer.test_segformer_layer import (
-    create_custom_preprocessor as create_customer_preprocessor_layer,
+    create_custom_mesh_preprocessor as create_customer_preprocessor_layer,
 )
 from models.utility_functions import skip_for_grayskull
 
@@ -25,18 +24,22 @@ from models.demos.segformer.tt.ttnn_segformer_encoder import (
     TtSegformerEncoder,
 )
 from models.demos.segformer.reference.segformer_encoder import SegformerEncoder
+from models.demos.segformer.tt.common import get_mesh_mappers, preprocess_layernorm_parameter
 
 
-def create_custom_preprocessor(device):
-    def custom_preprocessor(model, name, ttnn_module_args):
+def create_custom_mesh_preprocessor(mesh_mapper=None):
+    def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
+        return custom_preprocessor(model, name, mesh_mapper)
+
+    def custom_preprocessor(model, name, mesh_mapper=None):
         parameters = {}
         if isinstance(model, SegformerEncoder):
             parameters["patch_embeddings"] = {}
             for i in range(4):
                 parameters["patch_embeddings"][i] = {}
-                overlap_path_embedding_preprocess = create_customer_preprocessor_overlap_path(device)
+                overlap_path_embedding_preprocess = create_customer_preprocessor_overlap_path(mesh_mapper)
                 parameters["patch_embeddings"][i] = overlap_path_embedding_preprocess(
-                    model.patch_embeddings[i], None, None
+                    model.patch_embeddings[i], None, None, None
                 )
 
             # block starts
@@ -45,22 +48,22 @@ def create_custom_preprocessor(device):
                 parameters["block"][i] = {}
                 for j in range(2):
                     parameters["block"][i][j] = {}
-                    layer_preprocess = create_customer_preprocessor_layer(device)
-                    parameters["block"][i][j] = layer_preprocess(model.block[i][j], None, None)
+                    layer_preprocess = create_customer_preprocessor_layer(mesh_mapper)
+                    parameters["block"][i][j] = layer_preprocess(model.block[i][j], None, None, None)
 
             parameters["layer_norm"] = {}
             for i in range(4):
                 parameters["layer_norm"][i] = {}
                 parameters["layer_norm"][i]["weight"] = preprocess_layernorm_parameter(
-                    model.layer_norm[i].weight, dtype=ttnn.bfloat8_b
+                    model.layer_norm[i].weight, dtype=ttnn.bfloat8_b, mesh_mapper=mesh_mapper
                 )
                 parameters["layer_norm"][i]["bias"] = preprocess_layernorm_parameter(
-                    model.layer_norm[i].bias, dtype=ttnn.bfloat8_b
+                    model.layer_norm[i].bias, dtype=ttnn.bfloat8_b, mesh_mapper=mesh_mapper
                 )
 
         return parameters
 
-    return custom_preprocessor
+    return custom_mesh_preprocessor
 
 
 def move_to_device(object, device):
@@ -109,9 +112,11 @@ def test_segformer_encoder(batch_size, num_channels, height, width, device, rese
     reference_model.eval()
 
     torch_output = reference_model(torch_input_tensor)
-
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device), device=None
+        initialize_model=lambda: reference_model,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=None,
     )
     parameters = move_to_device(parameters, device)
 
