@@ -321,7 +321,6 @@ void kernel_main() {
                         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fwd_bwd_sem_addr), ++fwd_sync_cnt);
                 }
 
-		
                 uint32_t l1_write_addr = get_write_ptr(cb_in0);
                 for (uint32_t j = 0; j < num_pages_to_read; j++) {
                     uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;
