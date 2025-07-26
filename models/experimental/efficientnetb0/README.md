@@ -25,7 +25,7 @@ The entry point to efficientnetb0 is in `models/experimental/efficientnetb0/tt/t
 
 ## How to run
 Use the following command to run the EfficientNetb0 model :
-```python
+```sh
 pytest --disable-warnings tests/ttnn/integration_tests/efficientnetb0/test_ttnn_efficientnetb0.py
 ```
 
@@ -33,7 +33,13 @@ pytest --disable-warnings tests/ttnn/integration_tests/efficientnetb0/test_ttnn_
 Use the following command to run the e2e perf:
 
 -  For overall rutime inference (end-2-end), use the following command to run:
-```python
+```sh
 pytest --disable-warnings models/experimental/efficientnetb0/tests/perf/test_e2e_performant.py
 ```
 - end-2-end perf varies between 2300 to 2500 FPS.
+
+## Model demo with trace
+- Use the following command to run the demo:
+```sh
+pytest --disable-warnings models/experimental/efficientnetb0/demo/demo.py
+```
