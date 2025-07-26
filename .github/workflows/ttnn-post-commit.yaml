@@ -133,11 +133,7 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          set -x
-          ${{ matrix.test-group.cmd }} || ls -al /work/
-          ls -al /work/.ttnn_runtime_artifacts/
-          ls -al /work/.ttnn_runtime_artifacts/ttnn
-          ls -al /work/.ttnn_runtime_artifacts/ttnn/cpp
+          ${{ matrix.test-group.cmd }}
 
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
