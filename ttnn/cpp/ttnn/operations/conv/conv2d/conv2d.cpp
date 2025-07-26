@@ -740,13 +740,13 @@ Result conv2d_L1(
                 input_4D_alignment =
                     tt::tt_metal::Alignment({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
             }
-            log_info(
-                tt::LogOp,
-                "Input Tensor Post TM Shape : {}, Padded Shape : {}, 4D Alignment : {}",
-                input_tensor_post_tm.logical_shape(),
-                input_tensor_post_tm.padded_shape(),
-                input_4D_alignment);
         }
+        log_info(
+            tt::LogOp,
+            "Input Tensor Post TM Shape : {}, Padded Shape : {}, 4D Alignment : {}",
+            input_tensor_post_tm.logical_shape(),
+            input_tensor_post_tm.padded_shape(),
+            input_4D_alignment);
         // call halo op
         SlidingWindowConfig sliding_window_config = SlidingWindowConfig{
             .batch_size = batch_size,

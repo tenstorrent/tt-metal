@@ -199,14 +199,15 @@ uint32_t SlidingWindowConfig::get_output_shard_y(bool snap_to_tile) const {
     return (output_nhw_padded / num_cores_nhw);
 }
 
-std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
+std::vector<PaddingType> generate_pad_metadata(const SlidingWindowConfig& config) {
     if (config.is_transpose) {
         auto full_input_shape = config.get_transposed_full_input_shape();
         auto full_input_height = full_input_shape[1];
         auto full_input_width = full_input_shape[2];
 
         auto real_padding = config.get_transposed_real_padding();
-        std::vector<bool> pad_metadata(config.batch_size * full_input_height * full_input_width, false);
+        std::vector<PaddingType> pad_metadata(
+            config.batch_size * full_input_height * full_input_width, PaddingType::DATA);
 
         // Size of input after adding interleaved 0s.
         uint32_t strided_input_height = (config.input_hw.first - 1) * config.stride_hw.first + 1;
@@ -220,11 +221,13 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
                 for (uint32_t w = 0; w < full_input_width; ++w) {
                     if (h < input_pad_top || h >= strided_input_height + input_pad_top || w < input_pad_left ||
                         w >= strided_input_width + input_pad_left) {
-                        pad_metadata[b * full_input_height * full_input_width + h * full_input_width + w] = true;
+                        pad_metadata[b * full_input_height * full_input_width + h * full_input_width + w] =
+                            PaddingType::PAD;
                     } else {
                         if (((h - input_pad_top) % config.stride_hw.first != 0 ||
                              ((w - input_pad_left) % config.stride_hw.second != 0))) {
-                            pad_metadata[b * full_input_height * full_input_width + h * full_input_width + w] = true;
+                            pad_metadata[b * full_input_height * full_input_width + h * full_input_width + w] =
+                                PaddingType::PAD;
                         }
                     }
                 }
@@ -246,25 +249,54 @@ std::vector<bool> generate_pad_metadata(const SlidingWindowConfig& config) {
             aligned_input_w,
             padded_input_h,
             padded_input_w);
-        TT_FATAL(
-            padded_input_w > aligned_input_w,
-            "The padded input width {} is less than the aligned input width {}, and Halo doesn't support unpadding the "
-            "width.",
-            padded_input_w,
-            aligned_input_w);
-        std::vector<bool> pad_metadata(config.batch_size * padded_input_h * padded_input_w, false);
 
-        for (uint32_t b = 0; b < config.batch_size; ++b) {
-            for (uint32_t h = 0; h < padded_input_h; ++h) {
-                for (uint32_t w = 0; w < padded_input_w; ++w) {
-                    if (h < config.padding[0] || h >= (config.padding[0] + aligned_input_h) || w < config.padding[2] ||
-                        w >= (config.padding[2] + aligned_input_w)) {
-                        pad_metadata[b * padded_input_h * padded_input_w + h * padded_input_w + w] = true;
+        if (aligned_input_w > padded_input_w) {
+            uint32_t pad_metadata_width = aligned_input_w + config.padding[2];
+            std::vector<PaddingType> pad_metadata(
+                config.batch_size * padded_input_h * pad_metadata_width, PaddingType::DATA);
+            for (uint32_t b = 0; b < config.batch_size; ++b) {
+                for (uint32_t h = 0; h < padded_input_h; ++h) {
+                    for (uint32_t w = 0; w < pad_metadata_width; ++w) {
+                        if (w >= padded_input_w) {
+                            if (h < config.padding[0] || h >= (config.padding[0] + aligned_input_h)) {
+                                pad_metadata[b * padded_input_h * pad_metadata_width + h * pad_metadata_width + w] =
+                                    PaddingType::IGNORE;
+                            } else {
+                                pad_metadata[b * padded_input_h * pad_metadata_width + h * pad_metadata_width + w] =
+                                    PaddingType::SKIP_INPUT;
+                            }
+                        } else if (
+                            h < config.padding[0] || h >= (config.padding[0] + aligned_input_h) ||
+                            w < config.padding[2]) {
+                            pad_metadata[b * padded_input_h * pad_metadata_width + h * pad_metadata_width + w] =
+                                PaddingType::PAD;
+                        } else {
+                            pad_metadata[b * padded_input_h * pad_metadata_width + h * pad_metadata_width + w] =
+                                PaddingType::DATA;
+                        }
+                        // log_info(tt::LogOp,"Padding At {} {} {} : {}", b, h, w, pad_metadata[b * padded_input_h *
+                        // pad_metadata_width + h * pad_metadata_width + w]);
                     }
                 }
             }
+            return pad_metadata;
+
+        } else {
+            std::vector<PaddingType> pad_metadata(
+                config.batch_size * padded_input_h * padded_input_w, PaddingType::DATA);
+            for (uint32_t b = 0; b < config.batch_size; ++b) {
+                for (uint32_t h = 0; h < padded_input_h; ++h) {
+                    for (uint32_t w = 0; w < padded_input_w; ++w) {
+                        if (h < config.padding[0] || h >= (config.padding[0] + aligned_input_h) ||
+                            w < config.padding[2] || w >= (config.padding[2] + aligned_input_w)) {
+                            pad_metadata[b * padded_input_h * padded_input_w + h * padded_input_w + w] =
+                                PaddingType::PAD;
+                        }
+                    }
+                }
+            }
+            return pad_metadata;
         }
-        return pad_metadata;
     }
 }
 
@@ -366,25 +398,36 @@ std::vector<ShardBoundary> generate_shard_boundaries(
 }
 
 std::vector<PixelMetadata> generate_tensor_metadata(
-    const std::vector<bool>& pad_metadata, const SlidingWindowConfig& config, uint32_t shard_height) {
+    const std::vector<PaddingType>& pad_metadata, const SlidingWindowConfig& config, uint32_t shard_height) {
     std::vector<PixelMetadata> tensor_metadata;
     tensor_metadata.reserve(pad_metadata.size());
 
     uint32_t core_id = 0;
     uint32_t input_reshard_local_idx = 0;
 
-    for (bool is_pad_flag : pad_metadata) {
-        if (is_pad_flag) {
+    for (PaddingType is_pad_flag : pad_metadata) {
+        if (is_pad_flag == PaddingType::PAD) {
             tensor_metadata.push_back(PixelMetadata{true, 0, 0});
-        } else {
+        } else if (is_pad_flag == PaddingType::DATA) {
             tensor_metadata.push_back(PixelMetadata{false, core_id, input_reshard_local_idx});
-
             input_reshard_local_idx++;
             if (input_reshard_local_idx == shard_height) {
                 core_id++;
                 input_reshard_local_idx = 0;
             }
+        } else if (is_pad_flag == PaddingType::SKIP_INPUT) {
+            input_reshard_local_idx++;
+            if (input_reshard_local_idx == shard_height) {
+                core_id++;
+                input_reshard_local_idx = 0;
+            }
+        } else if (is_pad_flag == PaddingType::IGNORE) {
+            // Do Nothing.
+        } else {
+            TT_THROW("Unknown PaddingType encountered in pad_metadata: {}", static_cast<int>(is_pad_flag));
         }
+        // log_info(tt::LogOp,"{}, Core {},  Input IDX = {}, Output IDX = {}",is_pad_flag, core_id,
+        // input_reshard_local_idx, tensor_metadata.size() - 1);
     }
 
     return tensor_metadata;

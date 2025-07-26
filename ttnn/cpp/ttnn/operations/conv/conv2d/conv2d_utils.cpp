@@ -680,7 +680,18 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
     ParallelConfig output_parallel_config =
         determine_output_parallel_config(parallel_config, compute_grid_size, out_channels, is_mm_conv);
 
-    const ttnn::Shape& input_shape = input_tensor.logical_shape();
+    ttnn::Shape input_shape = input_tensor.logical_shape();
+
+    // TODO: Figure out why Row Major fails without this reshape.
+    if (input_tensor.layout() == Layout::ROW_MAJOR) {
+        // We can have flat and unflattened (n, h, w, c) tensors here
+        const auto flattened_input_shape = flatten_4d_shape(input_tensor.logical_shape());
+        const auto flattened_padded_input_shape = flatten_4d_shape(input_tensor.padded_shape());
+
+        input_tensor = ttnn::reshape(input_tensor, flattened_input_shape, flattened_padded_input_shape);
+        input_shape = flattened_input_shape;
+    }
+
     log_info(tt::LogOp, "Conv Reshard Input Shape : {}, Padded Input Shape : {}", input_shape, input_padded_shape);
     if (needs_shard_or_reshard) {
         uint32_t tensor_height = input_shape[2];
