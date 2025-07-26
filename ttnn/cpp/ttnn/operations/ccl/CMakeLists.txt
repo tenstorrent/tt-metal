@@ -8,7 +8,6 @@ target_sources(
     ttnn_op_ccl
     PRIVATE
         # Common
-        erisc_datamover_builder_helper.cpp
         ccl_op_fusion.cpp
         ccl_common.cpp
         ccl_host_datastructures.cpp

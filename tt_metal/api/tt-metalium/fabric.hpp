@@ -13,6 +13,7 @@
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <vector>
 #include <umd/device/tt_core_coordinates.h>
+#include <optional>
 
 namespace tt {
 namespace tt_metal {
@@ -210,5 +211,16 @@ private:
 
     size_t memory_map_end_address_;
 };
+
+void initialize_edm_fabric(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    bool wrap_fabric_around_mesh = false,
+    std::optional<size_t> context_switch_interval_override = std::nullopt,
+    Topology topology = Topology::Linear);
+
+void teardown_edm_fabric(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    bool wrap_fabric_around_mesh = false,
+    Topology topology = Topology::Linear);
 
 }  // namespace tt::tt_fabric

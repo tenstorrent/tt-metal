@@ -22,7 +22,6 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttnn {
@@ -105,7 +104,7 @@ void setup_test_with_persistent_fabric(
     std::optional<SubdeviceInfo>& subdevice_managers,
     std::optional<std::vector<Program>>& fabric_programs,
     std::vector<Program*>& fabric_program_ptrs,
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& line_fabric,
+    std::optional<tt::tt_fabric::EdmLineFabricOpInterface>& line_fabric,
     std::optional<size_t> num_links) {
     log_info(tt::LogTest, "Enabling persistent fabric");
     fabric_programs = std::vector<Program>(devices.size());
@@ -115,7 +114,7 @@ void setup_test_with_persistent_fabric(
             return &p;
         });
 
-    line_fabric = ttnn::ccl::EdmLineFabricOpInterface(devices, fabric_program_ptrs, num_links.value_or(1));
+    line_fabric = tt::tt_fabric::EdmLineFabricOpInterface(devices, fabric_program_ptrs, num_links.value_or(1));
     line_fabric->set_firmware_context_switch_interval(0);
 
     TT_FATAL(fabric_programs.has_value(), "Fabric programs must be set if fabric is enabled");
@@ -129,7 +128,7 @@ void setup_test_with_persistent_fabric(
 void persistent_fabric_teardown_sequence(
     const std::vector<IDevice*>& devices,
     std::optional<SubdeviceInfo>& subdevice_managers,
-    ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
+    tt::tt_fabric::EdmLineFabricOpInterface& line_fabric,
     tt::tt_fabric::TerminationSignal termination_mode) {
     log_info(tt::LogTest, "Tearing down fabric");
 

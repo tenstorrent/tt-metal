@@ -9,7 +9,6 @@
 #include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/operations/ccl/common/uops/ccl_host_commands.hpp"
 #include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
-#include "ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -108,32 +107,6 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
     size_t num_command_streams = 2,
     std::optional<chip_id_t> my_chip_id = std::nullopt);
 
-// Maybe not the right place for this - re-evaluate
-// Generates the kernel that allows async-tensor-mode CCLs to run in synchronous mode such that
-// they will wait for all outstanding writes to complete before completing the CCL on any given chip
-// to avoid races because, generally speaking, async mode for CCLs requires the consumer ops to support
-// async tensors.
-//
-
-// Async tensor mode doesn't require that the producer of a tensor wait for the tensor to be fully populated
-// before terminating; instead that responsibility is left to the consumer. This can be advantageous because it
-// a) Allows dispatch overheads to be partly or fully hidden
-// b) Allows producer and consumer ops to more natively overlap execution
-void build_sync_kernels(
-    IDevice* device,
-    tt::tt_metal::Program& program,
-    ccl::SyncModeSpec const& sync_details,
-    bool terminate_fabric,
-    ccl::EdmLineFabricOpInterface& fabric_interface);
-ttnn::ccl::cmd::CclHostLowLevelCommandSequence build_ccl_cmd_proc_teardown_commands(
-    tt::tt_metal::Program& program,
-    IDevice* device,
-    IDevice* forward_device,
-    size_t line_size,
-    size_t line_index,
-    std::vector<tt::tt_fabric::edm_termination_info_t> const& edm_termination_infos,
-    ccl::SyncModeSpec const& sync_details,
-    ccl::EdmLineFabricOpInterface& fabric_interface);
 
 struct CCLWorkerArgBuilder {
     CCLWorkerArgBuilder(
