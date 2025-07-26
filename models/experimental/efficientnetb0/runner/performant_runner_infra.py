@@ -15,11 +15,7 @@ from models.utility_functions import (
     divup,
     is_wormhole_b0,
 )
-<<<<<<< HEAD
 from models.experimental.efficientnetb0.common import load_torch_model
-=======
-from efficientnet_pytorch import EfficientNet
->>>>>>> 6e8650abc0 (#13047: Add trace perf pipeline)
 
 
 class EfficientNetb0PerformanceRunnerInfra:
@@ -44,23 +40,7 @@ class EfficientNetb0PerformanceRunnerInfra:
         self.model_location_generator = model_location_generator
         self.torch_input_tensor = torch_input_tensor
 
-<<<<<<< HEAD
         self.torch_model = load_torch_model(model_location_generator)
-=======
-        model = EfficientNet.from_pretrained("efficientnet-b0").eval()
-        state_dict = model.state_dict()
-        ds_state_dict = {k: v for k, v in state_dict.items()}
-
-        self.torch_model = efficientnetb0.Efficientnetb0()
-        new_state_dict = {}
-        for (name1, parameter1), (name2, parameter2) in zip(
-            self.torch_model.state_dict().items(), ds_state_dict.items()
-        ):
-            if isinstance(parameter2, torch.FloatTensor):
-                new_state_dict[name1] = parameter2
-        self.torch_model.load_state_dict(new_state_dict)
-        self.torch_model.eval()
->>>>>>> 6e8650abc0 (#13047: Add trace perf pipeline)
 
         self.torch_input_tensor = (
             torch.randn((1, 3, 224, 224), dtype=torch.float32)
