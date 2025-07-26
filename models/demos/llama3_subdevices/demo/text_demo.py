@@ -530,7 +530,7 @@ def test_demo_text(
     os.chmod(output_directory, 0o755)
     output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
 
-    stop_at_eos = False
+    stop_at_eos = False  # Default to False
     if not stop_at_eos:
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
 
@@ -958,8 +958,9 @@ def test_demo_text(
             current_pos += 1
             iteration += 1
 
-            # Upper limit of generated tokens for each user
-            users_decoding = iteration < max_generated_tokens
+            # Upper limit of generated tokens for each user; if users_decoding is already False (say by hitting eos), then we don't need to check the max_generated_tokens.
+            if users_decoding:
+                users_decoding = iteration < max_generated_tokens
 
             # Final print
             if not users_decoding and not pcc_check:
