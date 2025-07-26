@@ -58,7 +58,9 @@ def f1_score(y_true, y_pred):
     return (2 * p * r) / (p + r) if (p + r) != 0 else 0
 
 
-def evaluation(device, res, model_type, model, input_dtype, input_memory_config=None, model_name=None, config=None):
+def evaluation(
+    device, res, model_type, model, input_dtype, input_memory_config=None, model_name=None, config=None, batch_size=1
+):
     if model_name == "vanilla_unet":
         from models.demos.vanilla_unet.demo import demo_utils
         from collections import defaultdict
@@ -77,7 +79,7 @@ def evaluation(device, res, model_type, model, input_dtype, input_memory_config=
             patient_output_path = os.path.join("models/experimental/segmentation_evaluation/pred_image_set", patient_id)
             args = argparse.Namespace(
                 device="cpu",
-                batch_size=1,
+                batch_size=batch_size,
                 weights="models/demos/vanilla_unet/unet.pt",
                 images=patient_path,
                 image_size=(480, 640),
@@ -97,7 +99,7 @@ def evaluation(device, res, model_type, model, input_dtype, input_memory_config=
                     y_pred = model(x)
                 else:
                     y_pred = model.run(x)
-                    y_pred = ttnn.to_torch(y_pred)
+                    y_pred = ttnn.to_torch(y_pred, mesh_composer=model.runner_infra.output_mesh_composer)
                     y_pred = y_pred.permute(0, 3, 1, 2).to(torch.float32)
 
                 y_pred_np = y_pred.detach().cpu().numpy()
@@ -541,23 +543,11 @@ def evaluation(device, res, model_type, model, input_dtype, input_memory_config=
         logger.info(f"F1 Score: {np.mean(f1_list):.2f}%")
 
 
-@pytest.mark.parametrize(
-    "model_type",
-    [
-        ("tt_model"),
-        ("torch_model"),
-    ],
-)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"l1_small_size": (7 * 8192) + 1730, "trace_region_size": 1605632, "num_command_queues": 2}],
-    indirect=True,
-)
-@pytest.mark.parametrize("res", [(480, 640)])
-def test_vanilla_unet(device, model_type, res, model_location_generator, reset_seeds, batch_size=1):
+def run_vanilla_unet(device, model_type, res, model_location_generator, reset_seeds, batch_size):
     from models.demos.vanilla_unet.reference.unet import UNet
     from models.demos.vanilla_unet.runner.performant_runner import VanillaUNetPerformantRunner
 
+    total_batch_size = batch_size * device.get_num_devices()
     weights_path = "models/demos/vanilla_unet/unet.pt"
     if not os.path.exists(weights_path):
         os.system("bash models/demos/vanilla_unet/weights_download.sh")
@@ -575,11 +565,6 @@ def test_vanilla_unet(device, model_type, res, model_location_generator, reset_s
 
     reference_model.load_state_dict(new_state_dict)
     reference_model.eval()
-
-    # parameters = preprocess_model_parameters(
-    #     initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(None), device=None
-    # )
-    # ttnn_model = TtUnet(device=device, parameters=parameters, model=reference_model)
 
     ttnn_model = VanillaUNetPerformantRunner(
         device,
@@ -604,7 +589,50 @@ def test_vanilla_unet(device, model_type, res, model_location_generator, reset_s
         input_dtype=input_dtype,
         input_memory_config=input_memory_config,
         model_name=model_name,
+        batch_size=total_batch_size,
     )
+
+
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        ("tt_model"),
+        ("torch_model"),
+    ],
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    ((1),),
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": (7 * 8192) + 1730, "trace_region_size": 1605632, "num_command_queues": 2}],
+    indirect=True,
+)
+@pytest.mark.parametrize("res", [(480, 640)])
+def test_vanilla_unet(device, model_type, res, model_location_generator, reset_seeds, batch_size):
+    return run_vanilla_unet(device, model_type, res, model_location_generator, reset_seeds, batch_size)
+
+
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        ("tt_model"),
+        ("torch_model"),
+    ],
+)
+@pytest.mark.parametrize(
+    "device_batch_size",
+    ((1),),
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": (7 * 8192) + 1730, "trace_region_size": 1605632, "num_command_queues": 2}],
+    indirect=True,
+)
+@pytest.mark.parametrize("res", [(480, 640)])
+def test_vanilla_unet_dp(mesh_device, model_type, res, model_location_generator, reset_seeds, device_batch_size):
+    return run_vanilla_unet(mesh_device, model_type, res, model_location_generator, reset_seeds, device_batch_size)
 
 
 @pytest.mark.parametrize(

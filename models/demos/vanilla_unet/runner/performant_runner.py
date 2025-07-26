@@ -94,7 +94,7 @@ class VanillaUNetPerformantRunner:
         ttnn.synchronize_device(self.device)
 
         ttnn_output_tensor = self.runner_infra.output_tensor
-        return ttnn_output_tensor  # get_model_result(ttnn_output_tensor, self.resolution)
+        return ttnn_output_tensor
 
     def _validate(self, input_tensor, result_output_tensor):
         torch_output_tensor = self.runner_infra.torch_output_tensor

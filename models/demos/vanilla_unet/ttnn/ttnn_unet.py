@@ -152,6 +152,7 @@ class TtUnet:
         )
 
     def __call__(self, device, input_tensor):
+        print("input is ", input_tensor.shape)
         N, C, H, W = input_tensor.shape
         min_channels = 16  # Padding from image channels (3) to min channels (16)
         if C < min_channels:
