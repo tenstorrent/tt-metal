@@ -174,6 +174,20 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
     DeviceComputeKernelConfig compute_kernel_config,
     const operations::matmul::MatmulProgramConfig& program_config);
 
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& input_tensor_a,
+    const std::vector<Tensor>& input_tensors_b,
+    const std::optional<const Tensor>& bias,
+    const std::vector<Tensor>& output_tensors,
+    bool bcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const operations::matmul::MatmulProgramConfig& program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
+
 namespace operations {
 namespace experimental {
 namespace ccl {
@@ -203,6 +217,36 @@ LlamaAllGatherMatmulAsync create_llama_all_gather_matmul_async_struct(
 
 }  // namespace ccl
 }  // namespace experimental
+
+namespace llama_matmul {
+
+tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_helper(
+    tt::tt_metal::Program& program,
+    const Tensor& a,
+    const std::vector<Tensor>& b_tensors,
+    const std::optional<const Tensor>& bias,
+    const std::vector<Tensor>& output_tensors,
+    bool broadcast_batch,
+    DeviceComputeKernelConfig compute_kernel_config,
+    const matmul::MatmulProgramConfig& program_config,
+    bool untilize_out,
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
+    const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
+
+}  // namespace llama_matmul
+
 }  // namespace operations
 
 }  // namespace ttnn
+
+namespace llama_reuse_mcast_1d_optimized_helpers {
+void override_program_parameters(
+    const ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t& override_variables,
+    const void* operation,
+    tt::tt_metal::Program& program,
+    const std::vector<tt::tt_metal::Tensor>& input_tensors,
+    const std::vector<std::optional<const tt::tt_metal::Tensor>>& optional_input_tensors,
+    const std::vector<tt::tt_metal::Tensor>& output_tensors);
+
+}  // namespace llama_reuse_mcast_1d_optimized_helpers
