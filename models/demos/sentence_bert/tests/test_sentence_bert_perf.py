@@ -25,7 +25,6 @@ def get_expected_times(name):
 
 
 @run_for_wormhole_b0()
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "inputs",
     [["emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", [8, 384]]],

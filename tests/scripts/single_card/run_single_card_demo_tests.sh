@@ -31,7 +31,7 @@ run_segformer_func() {
 
 }
 
-run_sentencebert_func() {
+run_sentencebert_n150_func() {
 
   #SentenceBERT Demo
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference --timeout 600; fail+=$?
@@ -40,6 +40,17 @@ run_sentencebert_func() {
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/sentence_bert/demo/dataset_evaluation.py::test_sentence_bert_eval --timeout 600; fail+=$?
 
 }
+
+run_sentencebert_n300_func() {
+
+  #SentenceBERT DP Demo
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference_dp --timeout 600; fail+=$?
+
+  #SentenceBERT DP eval
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/sentence_bert/demo/dataset_evaluation.py::test_sentence_bert_eval_dp --timeout 600; fail+=$?
+
+}
+
 
 #run_yolov11_func() {
 #
