@@ -15,6 +15,7 @@ class TransformerBlock(LightweightModule):
         self,
         args,
         mesh_device,
+        tt_ccl,
         dtype,
         state_dict,
         layer_num,
@@ -27,6 +28,7 @@ class TransformerBlock(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
 
         self.args = args
         self.hidden_size = args.dim
@@ -43,6 +45,7 @@ class TransformerBlock(LightweightModule):
 
         self.attention = Attention(
             mesh_device=mesh_device,
+            tt_ccl=self.tt_ccl,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
@@ -54,6 +57,7 @@ class TransformerBlock(LightweightModule):
         )
         self.feed_forward = MLP(
             mesh_device=mesh_device,
+            tt_ccl=self.tt_ccl,
             args=args,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
@@ -76,8 +80,10 @@ class TransformerBlock(LightweightModule):
                 sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
+                tt_ccl=self.tt_ccl,
             ),
             args,
+            tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
         )
         self.ff_norm = DistributedNorm(
@@ -95,6 +101,7 @@ class TransformerBlock(LightweightModule):
                 sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
+                tt_ccl=self.tt_ccl,
             ),
             args,
             TG=args.is_galaxy,
