@@ -131,6 +131,12 @@ foreach(ARCH IN LISTS ARCHS)
         endforeach()
     endforeach()
 endforeach()
+install(
+    FILES
+        ${LD_FILES}
+    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/hw/toolchain
+    COMPONENT metalium-runtime
+)
 
 if(TT_USE_SYSTEM_SFPI)
     set(GPP_CMD "/opt/tenstorrent/sfpi/compiler/bin/riscv32-tt-elf-g++")
