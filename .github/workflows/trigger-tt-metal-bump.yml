@@ -3,6 +3,9 @@ name: Trigger tt-metal CI
 on:
   push:
     branches: [main]
+    paths:
+      - 'tt_llk_blackhole/**'
+      - 'tt_llk_wormhole_b0/**'
 
 permissions:
   contents: read
