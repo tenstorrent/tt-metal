@@ -7,9 +7,9 @@ import torch
 from models.experimental.vadv2.tt.tt_lanenet import TtLaneNet
 from models.experimental.vadv2.tt.tt_decoder import TtCustomTransformerDecoder
 from models.experimental.vadv2.tt.tt_transformer import TtVADPerceptionTransformer
+from models.experimental.vadv2.reference.base_box3d import LiDARInstance3DBoxes
 from models.experimental.vadv2.tt.tt_utils import inverse_sigmoid, bbox_xyxy_to_cxcywh
-
-# from mmdet3d.core.bbox.structures.lidar_box3d import LiDARInstance3DBoxes
+from models.experimental.vadv2.reference.nms_free_coder import MapNMSFreeCoder, CustomNMSFreeCoder
 
 
 class TtLearnedPositionalEncoding:
@@ -64,28 +64,16 @@ class TtVADHead:
         device,
         with_box_refine=False,
         as_two_stage=False,
-        transformer=None,
         bbox_coder=None,
-        num_cls_fcs=2,
-        code_weights=None,
         bev_h=30,
         bev_w=30,
         fut_ts=6,
         fut_mode=6,
-        # loss_traj=dict(type="L1Loss", loss_weight=0.25),
-        # loss_traj_cls=dict(type="FocalLoss", use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=0.8),
         map_bbox_coder=None,
-        map_num_query=900,
-        map_num_classes=3,
         map_num_vec=20,
         map_num_pts_per_vec=2,
-        map_num_pts_per_gt_vec=2,
         map_query_embed_type="all_pts",
         map_transform_method="minmax",
-        map_gt_shift_pts_pattern="v0",
-        map_dir_interval=1,
-        map_code_size=None,
-        map_code_weights=None,
         tot_epoch=None,
         use_traj_lr_warmup=False,
         motion_decoder=None,
@@ -225,20 +213,20 @@ class TtVADHead:
         bs, num_cam, _, _, _ = mlvl_feats[0].shape
         if not self.as_two_stage:
             object_query_embeds = self.query_embedding.weight
-        # self.bbox_coder = CustomNMSFreeCoder(
-        #     self.bbox_coder["pc_range"],
-        #     voxel_size=self.bbox_coder["voxel_size"],
-        #     post_center_range=self.bbox_coder["post_center_range"],
-        #     max_num=self.bbox_coder["max_num"],
-        #     num_classes=self.bbox_coder["num_classes"],
-        # )
-        # self.map_bbox_coder = MapNMSFreeCoder(
-        #     self.map_bbox_coder["pc_range"],
-        #     voxel_size=self.map_bbox_coder["voxel_size"],
-        #     post_center_range=self.map_bbox_coder["post_center_range"],
-        #     max_num=self.map_bbox_coder["max_num"],
-        #     num_classes=self.map_bbox_coder["num_classes"],
-        # )
+        self.bbox_coder = CustomNMSFreeCoder(
+            self.bbox_coder["pc_range"],
+            voxel_size=self.bbox_coder["voxel_size"],
+            post_center_range=self.bbox_coder["post_center_range"],
+            max_num=self.bbox_coder["max_num"],
+            num_classes=self.bbox_coder["num_classes"],
+        )
+        self.map_bbox_coder = MapNMSFreeCoder(
+            self.map_bbox_coder["pc_range"],
+            voxel_size=self.map_bbox_coder["voxel_size"],
+            post_center_range=self.map_bbox_coder["post_center_range"],
+            max_num=self.map_bbox_coder["max_num"],
+            num_classes=self.map_bbox_coder["num_classes"],
+        )
 
         if self.map_query_embed_type == "all_pts":
             map_query_embeds = self.map_query_embedding.weight
@@ -285,7 +273,16 @@ class TtVADHead:
                 prev_bev=prev_bev,
             )
 
-        bev_embed, hs, init_reference, inter_references, map_hs, map_init_reference, map_inter_references = outputs
+        (
+            bev_embed,
+            hs,
+            init_reference,
+            inter_references,
+            map_hs,
+            map_init_reference,
+            map_inter_references,
+        ) = outputs  # 0.98, 0.9809251410225338,  0.99977, 0.9971477, 0.9833319, 0.999812,  0.997648
+
         hs = ttnn.permute(hs, (0, 2, 1, 3))
         outputs_classes = []
         outputs_coords = []
@@ -324,6 +321,8 @@ class TtVADHead:
 
             outputs_class = cls_tmp  # pcc =  0.995
 
+            torch.save(ttnn.to_torch(outputs_class), "models/experimental/vadv2/dumps/outputs_class")
+
             reg_layers = self.params.head.branches.reg_branches[str(lvl)]
             tmp = hs[lvl]
 
@@ -333,6 +332,7 @@ class TtVADHead:
                 )
                 if i < 2:
                     tmp = ttnn.relu(tmp)
+                torch.save(ttnn.to_torch(tmp), "models/experimental/vadv2/dumps/tmp")
 
             updated_xy = tmp[..., 0:2] + reference[..., 0:2]
             updated_xy = ttnn.sigmoid(updated_xy)
@@ -649,17 +649,17 @@ class TtVADHead:
         y_sq = ttnn.pow(y, 2)
         result = ttnn.add(x_sq, y_sq)
         map_dis = ttnn.sqrt(result)
-        map_dis = ttnn.to_torch(map_dis)
-        min_map_pos_idx = map_dis.argmin(dim=-1).flatten()  # [B*P]
-
-        map_pos = ttnn.to_torch(map_pos)
-        min_map_pos = map_pos.flatten(0, 1)  # [B*P, pts, 2]
-
+        map_dis = ttnn.to_layout(map_dis, ttnn.ROW_MAJOR_LAYOUT)
+        min_map_pos_idx = ttnn.argmax((map_dis * -1), dim=-1)  # [B, P]
+        min_map_pos_idx = ttnn.reshape(min_map_pos_idx, [-1])
+        min_map_pos = ttnn.reshape(map_pos, [map_pos.shape[0] * map_pos.shape[1], map_pos.shape[2], map_pos.shape[3]])
+        min_map_pos = ttnn.to_torch(min_map_pos)
+        min_map_pos_idx = ttnn.to_torch(min_map_pos_idx)
         min_map_pos = min_map_pos[range(min_map_pos.shape[0]), min_map_pos_idx]  # [B*P, 2]
 
         min_map_pos = ttnn.from_torch(min_map_pos, dtype=ttnn.bfloat16, device=self.device)
 
-        map_pos = ttnn.from_torch(map_pos, dtype=ttnn.bfloat16, device=self.device)
+        # map_pos = ttnn.from_torch(map_pos, dtype=ttnn.bfloat16, device=self.device)
 
         min_map_pos = ttnn.reshape(min_map_pos, (batch, num_map, 2))  # [B, P, 2] #0.999
         map_query, map_pos, map_mask = self.select_and_pad_query(
@@ -750,11 +750,8 @@ class TtVADHead:
 
     def map_transform_box(self, pts, y_first=False):
         pts_reshape = ttnn.reshape(pts, (pts.shape[0], self.map_num_vec, self.map_num_pts_per_vec, 2))
-        print("pts_reshape", pts_reshape.shape)
         pts_y = pts_reshape[:, :, :, 0] if y_first else pts_reshape[:, :, :, 1]
-        print("pts_y", pts_y.shape)
         pts_x = pts_reshape[:, :, :, 1] if y_first else pts_reshape[:, :, :, 0]
-        print("pts_x", pts_x.shape)
         if self.map_transform_method == "minmax":
             # import pdb;pdb.set_trace()
 
@@ -762,15 +759,40 @@ class TtVADHead:
             xmax = ttnn.max(pts_x, dim=2, keepdim=True)[0]
             ymin = ttnn.min(pts_y, dim=2, keepdim=True)[0]
             ymax = ttnn.max(pts_y, dim=2, keepdim=True)[0]
-            print(xmin, xmin.shape)
-            print(ymin, ymin.shape)
-            print(xmax, xmax.shape)
-            print(ymax, ymax.shape)
             bbox = ttnn.concat([xmin, ymin, xmax, ymax], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
             bbox = bbox_xyxy_to_cxcywh(bbox)
         else:
             raise NotImplementedError
         return bbox, pts_reshape
+
+    def get_bboxes(self, preds_dicts, img_metas, rescale=False):
+        det_preds_dicts = self.bbox_coder.decode(preds_dicts)
+        # map_bboxes: xmin, ymin, xmax, ymax
+        map_preds_dicts = self.map_bbox_coder.decode(preds_dicts)
+
+        num_samples = len(det_preds_dicts)
+        assert len(det_preds_dicts) == len(map_preds_dicts), "len(preds_dict) should be equal to len(map_preds_dicts)"
+        ret_list = []
+        box_type_3d = LiDARInstance3DBoxes
+        for i in range(num_samples):
+            preds = det_preds_dicts[i]
+            bboxes = preds["bboxes"]
+            bboxes[:, 2] = bboxes[:, 2] - bboxes[:, 5] * 0.5
+            code_size = bboxes.shape[-1]
+            bboxes = box_type_3d(bboxes, code_size)
+            scores = preds["scores"]
+            labels = preds["labels"]
+            trajs = preds["trajs"]
+
+            map_preds = map_preds_dicts[i]
+            map_bboxes = map_preds["map_bboxes"]
+            map_scores = map_preds["map_scores"]
+            map_labels = map_preds["map_labels"]
+            map_pts = map_preds["map_pts"]
+
+            ret_list.append([bboxes, scores, labels, trajs, map_bboxes, map_scores, map_labels, map_pts])
+
+        return ret_list
 
     def select_and_pad_pred_map(
         self,
@@ -793,18 +815,18 @@ class TtVADHead:
         y_sq = ttnn.pow(y, 2)
         result = ttnn.add(x_sq, y_sq)
         map_dis = ttnn.sqrt(result)
-        map_dis = ttnn.to_torch(map_dis)
-        min_map_pos_idx = map_dis.argmin(dim=-1).flatten()  # [B*P]
-
-        map_pos = ttnn.to_torch(map_pos)
-        min_map_pos = map_pos.flatten(0, 1)  # [B*P, pts, 2]
+        map_dis = ttnn.to_layout(map_dis, ttnn.ROW_MAJOR_LAYOUT)
+        min_map_pos_idx = ttnn.argmax((map_dis * -1), dim=-1)  # [B, P]
+        min_map_pos_idx = ttnn.reshape(min_map_pos_idx, [-1])
+        min_map_pos = ttnn.reshape(map_pos, [map_pos.shape[0] * map_pos.shape[1], map_pos.shape[2], map_pos.shape[3]])
+        min_map_pos = ttnn.to_torch(min_map_pos)
+        min_map_pos_idx = ttnn.to_torch(min_map_pos_idx)
 
         min_map_pos = min_map_pos[range(min_map_pos.shape[0]), min_map_pos_idx]  # [B*P, 2]
 
         min_map_pos = ttnn.from_torch(min_map_pos, dtype=ttnn.bfloat16, device=self.device)  # [B*P, 2]
         min_map_pos = ttnn.reshape(min_map_pos, (batch, num_map, 2))  # [B, P, 2]
         min_map_pos = ttnn.to_layout(min_map_pos, layout=ttnn.TILE_LAYOUT)
-        # select & pad map vectors for different batch using map_thresh
 
         map_score = ttnn.sigmoid_accurate(map_score)
         map_max_score = ttnn.max(map_score, dim=-1)[0]

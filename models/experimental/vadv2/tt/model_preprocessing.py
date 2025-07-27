@@ -6,6 +6,7 @@ import ttnn
 import torch
 import torch.nn as nn
 from models.experimental.vadv2.reference.resnet import ResNet
+from models.experimental.vadv2.reference.vad import VAD
 from models.experimental.vadv2.reference.fpn import FPN
 from models.experimental.vadv2.reference.encoder import BEVFormerEncoder
 from models.experimental.vadv2.reference.transformer import VADPerceptionTransformer
@@ -32,62 +33,6 @@ from ttnn.model_preprocessing import (
 
 def custom_preprocessor(model, name):
     parameters = {}
-    if isinstance(model, FPN):
-        parameters["fpn"] = {}
-        parameters["fpn"]["lateral_convs"] = {}
-        parameters["fpn"]["lateral_convs"]["conv"] = {}
-        parameters["fpn"]["lateral_convs"]["conv"]["weight"] = ttnn.from_torch(
-            model.lateral_convs.conv.weight, dtype=ttnn.float32
-        )
-        bias = model.lateral_convs.conv.bias.reshape((1, 1, 1, -1))
-        parameters["fpn"]["lateral_convs"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
-
-        parameters["fpn"]["fpn_convs"] = {}
-        parameters["fpn"]["fpn_convs"]["conv"] = {}
-        parameters["fpn"]["fpn_convs"]["conv"]["weight"] = ttnn.from_torch(
-            model.fpn_convs.conv.weight, dtype=ttnn.float32
-        )
-        bias = model.fpn_convs.conv.bias.reshape((1, 1, 1, -1))
-        parameters["fpn"]["fpn_convs"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
-    if isinstance(model, ResNet):
-        if isinstance(model, ResNet):
-            parameters["res_model"] = {}
-
-        # Initial conv + bn
-        weight, bias = fold_batch_norm2d_into_conv2d(model.conv1, model.bn1)
-        parameters["res_model"]["conv1"] = {
-            "weight": ttnn.from_torch(weight, dtype=ttnn.float32),
-            "bias": ttnn.from_torch(bias.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
-        }
-
-        # Loop over all layers (layer1 to layer4)
-        for layer_idx in range(1, 5):
-            layer = getattr(model, f"layer{layer_idx}")
-            for block_idx, block in enumerate(layer):
-                prefix = f"layer{layer_idx}_{block_idx}"
-                parameters["res_model"][prefix] = {}
-
-                # conv1, conv2, conv3
-                for conv_name in ["conv1", "conv2", "conv3"]:
-                    conv = getattr(block, conv_name)
-                    bn = getattr(block, f"bn{conv_name[-1]}")
-                    w, b = fold_batch_norm2d_into_conv2d(conv, bn)
-                    parameters["res_model"][prefix][conv_name] = {
-                        "weight": ttnn.from_torch(w, dtype=ttnn.float32),
-                        "bias": ttnn.from_torch(b.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
-                    }
-
-                # downsample (if present)
-                if hasattr(block, "downsample") and block.downsample is not None:
-                    ds = block.downsample
-                    if isinstance(ds, torch.nn.Sequential):
-                        conv = ds[0]
-                        bn = ds[1]
-                        w, b = fold_batch_norm2d_into_conv2d(conv, bn)
-                        parameters["res_model"][prefix]["downsample"] = {
-                            "weight": ttnn.from_torch(w, dtype=ttnn.float32),
-                            "bias": ttnn.from_torch(b.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
-                        }
 
     def extract_transformer_parameters(transformer_module):
         parameters = {"layers": {}}
@@ -283,226 +228,230 @@ def custom_preprocessor(model, name):
 
         return lanenet_params
 
-    if isinstance(model, (VADHead, CustomTransformerDecoder, VADPerceptionTransformer)):
-        parameters = {}
-        parameters["head"] = {}
+    if isinstance(model, (VAD, VADHead, CustomTransformerDecoder, VADPerceptionTransformer)):
+        # parameters = {}
+        if isinstance(model.pts_bbox_head, VADHead):
+            head = model.pts_bbox_head
+            parameters["head"] = {}
 
-        parameters["head"]["positional_encoding"] = {}
-        pos_encoding = model.positional_encoding
-        parameters["head"]["positional_encoding"]["row_embed"] = {
-            "weight": ttnn.from_torch(pos_encoding.row_embed.weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        }
-        parameters["head"]["positional_encoding"]["col_embed"] = {
-            "weight": ttnn.from_torch(pos_encoding.col_embed.weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        }
+            parameters["head"]["positional_encoding"] = {}
+            pos_encoding = head.positional_encoding
+            parameters["head"]["positional_encoding"]["row_embed"] = {
+                "weight": ttnn.from_torch(pos_encoding.row_embed.weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            }
+            parameters["head"]["positional_encoding"]["col_embed"] = {
+                "weight": ttnn.from_torch(pos_encoding.col_embed.weight, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            }
 
-        if isinstance(model.motion_decoder, CustomTransformerDecoder):
-            parameters["head"]["motion_decoder"] = extract_transformer_parameters(model.motion_decoder)
-        if isinstance(model.motion_map_decoder, CustomTransformerDecoder):
-            parameters["head"]["motion_map_decoder"] = extract_transformer_parameters(model.motion_map_decoder)
-        if isinstance(model.ego_map_decoder, CustomTransformerDecoder):
-            parameters["head"]["ego_map_decoder"] = extract_transformer_parameters(model.ego_map_decoder)
-        if isinstance(model.ego_agent_decoder, CustomTransformerDecoder):
-            parameters["head"]["ego_agent_decoder"] = extract_transformer_parameters(model.ego_agent_decoder)
+            if isinstance(head.motion_decoder, CustomTransformerDecoder):
+                parameters["head"]["motion_decoder"] = extract_transformer_parameters(head.motion_decoder)
+            if isinstance(head.motion_map_decoder, CustomTransformerDecoder):
+                parameters["head"]["motion_map_decoder"] = extract_transformer_parameters(head.motion_map_decoder)
+            if isinstance(head.ego_map_decoder, CustomTransformerDecoder):
+                parameters["head"]["ego_map_decoder"] = extract_transformer_parameters(head.ego_map_decoder)
+            if isinstance(head.ego_agent_decoder, CustomTransformerDecoder):
+                parameters["head"]["ego_agent_decoder"] = extract_transformer_parameters(head.ego_agent_decoder)
 
-        if hasattr(model, "lane_encoder") and isinstance(model.lane_encoder, LaneNet):
-            parameters["head"]["lane_encoder"] = extract_lanenet_parameters(model.lane_encoder)
+            if hasattr(head, "lane_encoder") and isinstance(head.lane_encoder, LaneNet):
+                parameters["head"]["lane_encoder"] = extract_lanenet_parameters(head.lane_encoder)
 
-        if isinstance(model.transformer, VADPerceptionTransformer):
-            parameters["head"]["transformer"] = {}
-            if isinstance(model.transformer.encoder, BEVFormerEncoder):
-                parameters["head"]["transformer"]["encoder"] = extract_transformer_parameters(model.transformer.encoder)
+            if isinstance(head.transformer, VADPerceptionTransformer):
+                parameters["head"]["transformer"] = {}
+                if isinstance(head.transformer.encoder, BEVFormerEncoder):
+                    parameters["head"]["transformer"]["encoder"] = extract_transformer_parameters(
+                        head.transformer.encoder
+                    )
 
-            if isinstance(model.transformer.decoder, DetectionTransformerDecoder):
-                print("Executedddddddddddd")
-                parameters["head"]["transformer"]["decoder"] = extract_transformer_parameters(model.transformer.decoder)
+                if isinstance(head.transformer.decoder, DetectionTransformerDecoder):
+                    parameters["head"]["transformer"]["decoder"] = extract_transformer_parameters(
+                        head.transformer.decoder
+                    )
 
-            # Handle map_decoder if present
-            if isinstance(model.transformer.map_decoder, MapDetectionTransformerDecoder):
-                print("yes here")
-                parameters["head"]["transformer"]["map_decoder"] = extract_transformer_parameters(
-                    model.transformer.map_decoder
+                # Handle map_decoder if present
+                if isinstance(head.transformer.map_decoder, MapDetectionTransformerDecoder):
+                    parameters["head"]["transformer"]["map_decoder"] = extract_transformer_parameters(
+                        head.transformer.map_decoder
+                    )
+                single_linear_layers = ["pos_mlp_sa", "pos_mlp", "ego_agent_pos_mlp", "ego_map_pos_mlp"]
+                parameters["head"].update(extract_single_linears(head, single_linear_layers, ttnn.bfloat16))
+
+                parameters["head"]["transformer"]["reference_points"] = {
+                    "weight": preprocess_linear_weight(head.transformer.reference_points.weight, dtype=ttnn.bfloat16),
+                    "bias": preprocess_linear_bias(head.transformer.reference_points.bias, dtype=ttnn.bfloat16),
+                }
+
+                parameters["head"]["transformer"]["map_reference_points"] = {
+                    "weight": preprocess_linear_weight(
+                        head.transformer.map_reference_points.weight, dtype=ttnn.bfloat16
+                    ),
+                    "bias": preprocess_linear_bias(head.transformer.map_reference_points.bias, dtype=ttnn.bfloat16),
+                }
+
+                # CAN Bus MLP
+                parameters["head"]["transformer"]["can_bus_mlp"] = {
+                    "0": {
+                        "weight": preprocess_linear_weight(head.transformer.can_bus_mlp[0].weight, dtype=ttnn.bfloat16),
+                        "bias": preprocess_linear_bias(head.transformer.can_bus_mlp[0].bias, dtype=ttnn.bfloat16),
+                    },
+                    "1": {
+                        "weight": preprocess_linear_weight(head.transformer.can_bus_mlp[2].weight, dtype=ttnn.bfloat16),
+                        "bias": preprocess_linear_bias(head.transformer.can_bus_mlp[2].bias, dtype=ttnn.bfloat16),
+                    },
+                    "norm": {
+                        "weight": preprocess_layernorm_parameter(
+                            head.transformer.can_bus_mlp.norm.weight, dtype=ttnn.bfloat16
+                        ),
+                        "bias": preprocess_layernorm_parameter(
+                            head.transformer.can_bus_mlp.norm.bias, dtype=ttnn.bfloat16
+                        ),
+                    },
+                }
+
+                parameters["head"]["transformer"]["level_embeds"] = ttnn.from_torch(
+                    head.transformer.level_embeds, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
                 )
-            single_linear_layers = ["pos_mlp_sa", "pos_mlp", "ego_agent_pos_mlp", "ego_map_pos_mlp"]
-            parameters["head"].update(extract_single_linears(model, single_linear_layers, ttnn.bfloat16))
+                parameters["head"]["transformer"]["cams_embeds"] = ttnn.from_torch(
+                    head.transformer.cams_embeds, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+                )
+            embedding_layers = [
+                "bev_embedding",
+                "query_embedding",
+                "map_instance_embedding",
+                "map_pts_embedding",
+                "motion_mode_query",
+                "ego_query",
+            ]
+            parameters["head"].update(extract_embeddings_to_ttnn(head, embedding_layers, dtype=ttnn.bfloat16))
+            parameters["head"]["branches"] = {}
 
-            parameters["head"]["transformer"]["reference_points"] = {
-                "weight": preprocess_linear_weight(model.transformer.reference_points.weight, dtype=ttnn.bfloat16),
-                "bias": preprocess_linear_bias(model.transformer.reference_points.bias, dtype=ttnn.bfloat16),
-            }
-
-            parameters["head"]["transformer"]["map_reference_points"] = {
-                "weight": preprocess_linear_weight(model.transformer.map_reference_points.weight, dtype=ttnn.bfloat16),
-                "bias": preprocess_linear_bias(model.transformer.map_reference_points.bias, dtype=ttnn.bfloat16),
-            }
-
-            # CAN Bus MLP
-            parameters["head"]["transformer"]["can_bus_mlp"] = {
-                "0": {
-                    "weight": preprocess_linear_weight(model.transformer.can_bus_mlp[0].weight, dtype=ttnn.bfloat16),
-                    "bias": preprocess_linear_bias(model.transformer.can_bus_mlp[0].bias, dtype=ttnn.bfloat16),
-                },
-                "1": {
-                    "weight": preprocess_linear_weight(model.transformer.can_bus_mlp[2].weight, dtype=ttnn.bfloat16),
-                    "bias": preprocess_linear_bias(model.transformer.can_bus_mlp[2].bias, dtype=ttnn.bfloat16),
-                },
-                "norm": {
-                    "weight": preprocess_layernorm_parameter(
-                        model.transformer.can_bus_mlp.norm.weight, dtype=ttnn.bfloat16
-                    ),
-                    "bias": preprocess_layernorm_parameter(
-                        model.transformer.can_bus_mlp.norm.bias, dtype=ttnn.bfloat16
-                    ),
-                },
-            }
-
-            parameters["head"]["transformer"]["level_embeds"] = ttnn.from_torch(
-                model.transformer.level_embeds, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            parameters["head"]["branches"]["cls_branches"] = extract_sequential_branch(
+                head.cls_branches, dtype=ttnn.bfloat16
             )
-            parameters["head"]["transformer"]["cams_embeds"] = ttnn.from_torch(
-                model.transformer.cams_embeds, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            parameters["head"]["branches"]["reg_branches"] = extract_sequential_branch(
+                head.reg_branches, dtype=ttnn.bfloat16
             )
-        embedding_layers = [
-            "bev_embedding",
-            "query_embedding",
-            "map_instance_embedding",
-            "map_pts_embedding",
-            "motion_mode_query",
-            "ego_query",
-        ]
-        parameters["head"].update(extract_embeddings_to_ttnn(model, embedding_layers, dtype=ttnn.bfloat16))
-        parameters["head"]["branches"] = {}
+            parameters["head"]["branches"]["traj_branches"] = extract_sequential_branch(
+                head.traj_branches, dtype=ttnn.bfloat16
+            )
+            parameters["head"]["traj_cls_branches"] = extract_sequential_branch(
+                head.traj_cls_branches, dtype=ttnn.bfloat16
+            )
+            parameters["head"]["branches"]["map_cls_branches"] = extract_sequential_branch(
+                head.map_cls_branches, dtype=ttnn.bfloat16
+            )
+            parameters["head"]["branches"]["map_reg_branches"] = extract_sequential_branch(
+                head.map_reg_branches, dtype=ttnn.bfloat16
+            )
+            parameters["head"]["branches"]["ego_fut_decoder"] = extract_sequential_branch(
+                head.ego_fut_decoder, dtype=ttnn.bfloat16
+            )
+            parameters["head"]["branches"]["agent_fus_mlp"] = extract_sequential_branch(
+                head.agent_fus_mlp, dtype=ttnn.bfloat16
+            )
+        if isinstance(model.img_neck, FPN):
+            neck = model.img_neck
+            parameters["img_neck"] = {}
+            parameters["img_neck"]["lateral_convs"] = {}
+            parameters["img_neck"]["lateral_convs"]["conv"] = {}
+            parameters["img_neck"]["lateral_convs"]["conv"]["weight"] = ttnn.from_torch(
+                neck.lateral_convs.conv.weight, dtype=ttnn.float32
+            )
+            bias = neck.lateral_convs.conv.bias.reshape((1, 1, 1, -1))
+            parameters["img_neck"]["lateral_convs"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
 
-        parameters["head"]["branches"]["cls_branches"] = extract_sequential_branch(
-            model.cls_branches, dtype=ttnn.bfloat16
-        )
-        parameters["head"]["branches"]["reg_branches"] = extract_sequential_branch(
-            model.reg_branches, dtype=ttnn.bfloat16
-        )
-        parameters["head"]["branches"]["traj_branches"] = extract_sequential_branch(
-            model.traj_branches, dtype=ttnn.bfloat16
-        )
-        parameters["head"]["traj_cls_branches"] = extract_sequential_branch(
-            model.traj_cls_branches, dtype=ttnn.bfloat16
-        )
-        parameters["head"]["branches"]["map_cls_branches"] = extract_sequential_branch(
-            model.map_cls_branches, dtype=ttnn.bfloat16
-        )
-        parameters["head"]["branches"]["map_reg_branches"] = extract_sequential_branch(
-            model.map_reg_branches, dtype=ttnn.bfloat16
-        )
-        parameters["head"]["branches"]["ego_fut_decoder"] = extract_sequential_branch(
-            model.ego_fut_decoder, dtype=ttnn.bfloat16
-        )
-        parameters["head"]["branches"]["agent_fus_mlp"] = extract_sequential_branch(
-            model.agent_fus_mlp, dtype=ttnn.bfloat16
-        )
+            parameters["img_neck"]["fpn_convs"] = {}
+            parameters["img_neck"]["fpn_convs"]["conv"] = {}
+            parameters["img_neck"]["fpn_convs"]["conv"]["weight"] = ttnn.from_torch(
+                neck.fpn_convs.conv.weight, dtype=ttnn.float32
+            )
+            bias = neck.fpn_convs.conv.bias.reshape((1, 1, 1, -1))
+            parameters["img_neck"]["fpn_convs"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+
+        if isinstance(model.img_backbone, ResNet):
+            # if isinstance(model, ResNet):
+            backbone = model.img_backbone
+            parameters["img_backbone"] = {}
+
+            # Initial conv + bn
+            weight, bias = fold_batch_norm2d_into_conv2d(backbone.conv1, backbone.bn1)
+            parameters["img_backbone"]["conv1"] = {
+                "weight": ttnn.from_torch(weight, dtype=ttnn.float32),
+                "bias": ttnn.from_torch(bias.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
+            }
+
+            # Loop over all layers (layer1 to layer4)
+            for layer_idx in range(1, 5):
+                layer = getattr(backbone, f"layer{layer_idx}")
+                for block_idx, block in enumerate(layer):
+                    prefix = f"layer{layer_idx}_{block_idx}"
+                    parameters["img_backbone"][prefix] = {}
+
+                    # conv1, conv2, conv3
+                    for conv_name in ["conv1", "conv2", "conv3"]:
+                        conv = getattr(block, conv_name)
+                        bn = getattr(block, f"bn{conv_name[-1]}")
+                        w, b = fold_batch_norm2d_into_conv2d(conv, bn)
+                        parameters["img_backbone"][prefix][conv_name] = {
+                            "weight": ttnn.from_torch(w, dtype=ttnn.float32),
+                            "bias": ttnn.from_torch(b.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
+                        }
+
+                    # downsample (if present)
+                    if hasattr(block, "downsample") and block.downsample is not None:
+                        ds = block.downsample
+                        if isinstance(ds, torch.nn.Sequential):
+                            conv = ds[0]
+                            bn = ds[1]
+                            w, b = fold_batch_norm2d_into_conv2d(conv, bn)
+                            parameters["img_backbone"][prefix]["downsample"] = {
+                                "weight": ttnn.from_torch(w, dtype=ttnn.float32),
+                                "bias": ttnn.from_torch(b.reshape((1, 1, 1, -1)), dtype=ttnn.float32),
+                            }
 
     return parameters
 
 
-def create_vadv2_model_parameters(model: ResNet, device=None):
+def create_vadv2_model_parameters_vad(model: ResNet, input_tensor: input, device=None):
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         custom_preprocessor=custom_preprocessor,
         device=device,
     )
-    parameters.conv_args = {}
-    parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
-    assert parameters is not None
-    for key in parameters.conv_args.keys():
-        parameters.conv_args[key].module = getattr(model, key)
-    return parameters
 
+    parameters.conv_args = {"img_backbone": {}, "img_neck": {}}
 
-def create_vadv2_model_parameters_sca(model: ResNet, input_tensor, device=None):
-    print("Pre process modle parameters")
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        custom_preprocessor=custom_preprocessor,
-        device=device,
-    )
-    parameters.conv_args = {}
-    parameters.conv_args = infer_ttnn_module_args(
-        model=model,
-        run_model=lambda model: model(
-            input_tensor[0],
-            key=input_tensor[1],
-            value=input_tensor[2],
-            reference_points=input_tensor[3],
-            spatial_shapes=input_tensor[4],
-            reference_points_cam=input_tensor[5],
-            bev_mask=input_tensor[6],
-            level_start_index=input_tensor[7],
-        ),
+    img = input_tensor[1]
+
+    if isinstance(img, list):
+        img = torch.tensor(img[0])
+        if img.dim() == 5 and img.size(0) == 1:
+            img.squeeze_()
+        elif img.dim() == 5 and img.size(0) > 1:
+            B, N, C, H, W = img.size()
+            img = img.reshape(B * N, C, H, W)
+
+    parameters.conv_args["img_backbone"] = infer_ttnn_module_args(
+        model=model.img_backbone,
+        run_model=lambda model: model(img),
         device=None,
     )
-    assert parameters is not None
-    for key in parameters.conv_args.keys():
-        parameters.conv_args[key].module = getattr(model, key)
-    return parameters
 
+    img_feats = model.img_backbone(img)
 
-def create_vadv2_model_parameters_tsa(model: ResNet, input_tensor, device=None):
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        custom_preprocessor=custom_preprocessor,
-        device=device,
-    )
-    parameters.conv_args = {}
-    parameters.conv_args = infer_ttnn_module_args(
-        model=model,
-        run_model=lambda model: model(
-            input_tensor[0],
-            query_pos=input_tensor[1],
-            reference_points=input_tensor[2],
-            spatial_shapes=input_tensor[3],
-            level_start_index=input_tensor[4],
-        ),
+    parameters.conv_args["img_neck"] = infer_ttnn_module_args(
+        model=model.img_neck,
+        run_model=lambda model: model(img_feats),
         device=None,
     )
+
     assert parameters is not None
+
     for key in parameters.conv_args.keys():
-        parameters.conv_args[key].module = getattr(model, key)
-    return parameters
+        if key == "img_backbone":
+            for conv_key in parameters.conv_args[key].keys():
+                parameters.conv_args[key][conv_key].module = getattr(model.img_backbone, conv_key)
+        elif key == "img_neck":
+            for conv_key in parameters.conv_args[key].keys():
+                parameters.conv_args[key][conv_key].module = getattr(model.img_neck, conv_key)
 
-
-def create_vadv2_model_parameters_decoder(model: ResNet, input_tensor, device=None):
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        custom_preprocessor=custom_preprocessor,
-        device=device,
-    )
-    return parameters
-
-
-def create_vadv2_model_parameters_head(model: ResNet, device=None):
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        custom_preprocessor=custom_preprocessor,
-        device=device,
-    )
-    return parameters
-
-
-def create_vadv2_model_parameters_encoder(model: ResNet, device=None):
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        custom_preprocessor=custom_preprocessor,
-        device=device,
-    )
-    return parameters
-
-
-def create_vadv2_model_parameters(model: ResNet, input_tensor, device=None):
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        custom_preprocessor=custom_preprocessor,
-        device=device,
-    )
-    parameters.conv_args = {}
-    parameters.conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
-    assert parameters is not None
-    for key in parameters.conv_args.keys():
-        parameters.conv_args[key].module = getattr(model, key)
     return parameters

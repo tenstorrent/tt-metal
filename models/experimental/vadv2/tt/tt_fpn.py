@@ -2,13 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.experimental.vadv2.tt.common import TtnnConv2D
+import ttnn
+from models.experimental.vadv2.tt.common import TtConv2D
 
 
 class TtConvModule:
     def __init__(self, conv_args, conv_pth, device=None):
         self.device = device
-        self.conv = TtnnConv2D(conv_args.conv, conv_pth.conv, device=self.device, dealloc_act=True)
+        self.conv = TtConv2D(conv_args.conv, conv_pth.conv, device=self.device, dealloc_act=True)
 
     def __call__(self, x):
         x = self.conv(x)
@@ -26,5 +27,6 @@ class TtFPN:
         laterals = self.lateral_convs(inputs[0])
         # Apply FPN convs
         outs = self.fpn_convs(laterals)
+        ttnn.deallocate(laterals)
 
         return tuple(outs)

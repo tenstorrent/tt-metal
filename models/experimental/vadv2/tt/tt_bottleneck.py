@@ -1,11 +1,12 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.vadv2.tt.common import TtnnConv2D
+from models.experimental.vadv2.tt.common import TtConv2D
 
 
-class TtnnBottleneck:
+class TtBottleneck:
     def __init__(
         self,
         conv_args,
@@ -19,12 +20,12 @@ class TtnnBottleneck:
         self.is_downsample = is_downsample
         self.activation_dtype = activation_dtype
 
-        self.conv1 = TtnnConv2D(conv_args.conv1, conv_pth.conv1, device=device, activation="relu")
-        self.conv2 = TtnnConv2D(conv_args.conv2, conv_pth.conv2, device=device, activation="relu", act_block_h=32)
-        self.conv3 = TtnnConv2D(conv_args.conv3, conv_pth.conv3, device=device, activation="", is_blk=conv3_blk_sharded)
+        self.conv1 = TtConv2D(conv_args.conv1, conv_pth.conv1, device=device, activation="relu")
+        self.conv2 = TtConv2D(conv_args.conv2, conv_pth.conv2, device=device, activation="relu", act_block_h=32)
+        self.conv3 = TtConv2D(conv_args.conv3, conv_pth.conv3, device=device, activation="", is_blk=conv3_blk_sharded)
 
         if is_downsample:
-            self.downsample = TtnnConv2D(
+            self.downsample = TtConv2D(
                 conv_args.downsample[0],
                 conv_pth.downsample,
                 device=device,

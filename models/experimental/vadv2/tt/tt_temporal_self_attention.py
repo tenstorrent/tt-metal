@@ -77,8 +77,6 @@ class TtTemporalSelfAttention:
             identity = query
         if query_pos is not None:
             query = ttnn.add(query, query_pos)
-        # ttnn.deallocate(query_pos)
-
         if not self.batch_first:
             query = ttnn.permute(query, (1, 0, 2))
             value = ttnn.permute(value, (1, 0, 2))
@@ -133,6 +131,7 @@ class TtTemporalSelfAttention:
             offset_normalizer_xy = ttnn.reshape(
                 offset_normalizer, (1, 1, 1, offset_normalizer.shape[0], 1, offset_normalizer.shape[1])
             )
+            ttnn.deallocate(offset_normalizer)
             sampling_offsets = ttnn.to_layout(sampling_offsets, ttnn.TILE_LAYOUT)
             offset_normalizer_xy = ttnn.to_layout(offset_normalizer_xy, ttnn.TILE_LAYOUT)
 
@@ -179,8 +178,11 @@ class TtTemporalSelfAttention:
         ttnn.deallocate(value)
         output = ttnn.permute(output, (1, 2, 0))
         output = ttnn.reshape(output, (num_query, embed_dims, bs, self.num_bev_queue))
-        output = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
+        output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
         output = ttnn.mean(output, dim=-1)
+        # output_width  = output.shape[-1]
+        # output = ttnn.sum(output, dim=-1)
+        # output = ttnn.div(output, output_width)
         output = ttnn.permute(output, (2, 0, 1))
         output = ttnn.linear(output, params.output_proj.weight, bias=params.output_proj.bias)
         ttnn.deallocate(params.output_proj.weight)

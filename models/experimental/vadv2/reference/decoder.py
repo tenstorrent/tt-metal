@@ -1,58 +1,15 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+
 import torch
-import torch.nn as nn
-from torch.nn import LayerNorm
-from torch.nn.modules import ModuleList
-import warnings
-import torch.nn.functional as F
 import copy
 import math
-
-
-def multi_scale_deformable_attn_pytorch(value, value_spatial_shapes, sampling_locations, attention_weights):
-    bs, _, num_heads, embed_dims = value.shape
-    _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
-    value_list = value.split([H_ * W_ for H_, W_ in value_spatial_shapes], dim=1)
-    sampling_grids = 2 * sampling_locations - 1
-    sampling_value_list = []
-    for level, (H_, W_) in enumerate(value_spatial_shapes):
-        # bs, H_*W_, num_heads, embed_dims ->
-        # bs, H_*W_, num_heads*embed_dims ->
-        # bs, num_heads*embed_dims, H_*W_ ->
-        # bs*num_heads, embed_dims, H_, W_
-        value_l_ = value_list[level].flatten(2).transpose(1, 2).reshape(bs * num_heads, embed_dims, H_, W_)
-        # bs, num_queries, num_heads, num_points, 2 ->
-        # bs, num_heads, num_queries, num_points, 2 ->
-        # bs*num_heads, num_queries, num_points, 2
-        sampling_grid_l_ = sampling_grids[:, :, :, level].transpose(1, 2).flatten(0, 1)
-        # bs*num_heads, embed_dims, num_queries, num_points
-        sampling_value_l_ = F.grid_sample(
-            value_l_, sampling_grid_l_, mode="bilinear", padding_mode="zeros", align_corners=False
-        )
-        sampling_value_list.append(sampling_value_l_)
-    # (bs, num_queries, num_heads, num_levels, num_points) ->
-    # (bs, num_heads, num_queries, num_levels, num_points) ->
-    # (bs, num_heads, 1, num_queries, num_levels*num_points)
-    attention_weights = attention_weights.transpose(1, 2).reshape(
-        bs * num_heads, 1, num_queries, num_levels * num_points
-    )
-    output = (
-        (torch.stack(sampling_value_list, dim=-2).flatten(-2) * attention_weights)
-        .sum(-1)
-        .view(bs, num_heads * embed_dims, num_queries)
-    )
-    return output.transpose(1, 2).contiguous()
-
-
-def inverse_sigmoid(x, eps=1e-5):
-    x = x.clamp(min=0, max=1)
-
-    x1 = x.clamp(min=eps)
-
-    x2 = (1 - x).clamp(min=eps)
-    return torch.log(x1 / x2)
+import warnings
+import torch.nn as nn
+from torch.nn.modules import ModuleList
+from models.experimental.vadv2.reference.ffn import FFN
+from models.experimental.vadv2.reference.utils import multi_scale_deformable_attn_pytorch, inverse_sigmoid
 
 
 class MultiheadAttention(nn.Module):
@@ -171,7 +128,6 @@ class MultiheadAttention(nn.Module):
         attn_output = torch.nn.functional.linear(attn_output, self.attn.out_proj.weight, self.attn.out_proj.bias)
         attn_output = attn_output.view(tgt_len, bsz, attn_output.size(1))
 
-        # optionally average attention weights over heads
         attn_output_weights = torch.reshape(attn_output_weights, (bsz, self.num_heads, tgt_len, src_len))
         attn_output_weights = attn_output_weights.mean(dim=1)
 
@@ -296,86 +252,6 @@ class CustomMSDeformableAttention(nn.Module):
         return output + identity
 
 
-class FFN(nn.Module):
-    def __init__(self, embed_dim):
-        super(FFN, self).__init__()
-        self.activate = nn.ReLU(inplace=True)
-        self.layers = nn.Sequential(
-            nn.Sequential(nn.Linear(embed_dim, 512), nn.ReLU(inplace=True), nn.Dropout(p=0.1)),
-            nn.Linear(512, embed_dim),
-            nn.Dropout(p=0.1),
-        )
-
-    def forward(self, x, identity=None):
-        if identity is None:
-            identity = x
-        return identity + self.layers(x)
-
-
-class DetrTransformerDecoderLayer(nn.Module):
-    def __init__(self, embed_dim, num_heads):
-        super(DetrTransformerDecoderLayer, self).__init__()
-        self.attentions = ModuleList([MultiheadAttention(embed_dim, num_heads), CustomMSDeformableAttention()])
-        self.ffns = ModuleList([FFN(embed_dim)])
-        self.norms = ModuleList([LayerNorm(embed_dim) for _ in range(3)])
-
-    def forward(
-        self,
-        query,
-        key=None,
-        value=None,
-        query_pos=None,
-        reference_points=None,
-        spatial_shapes=None,
-        reg_branches=None,
-        key_padding_mask=None,
-    ):
-        identity = query
-
-        query = self.attentions[0](
-            query, key=query, value=query, query_pos=query_pos, key_pos=query_pos, key_padding_mask=key_padding_mask
-        )
-        query = self.norms[0](query)
-
-        query = self.attentions[1](
-            query,
-            key=key,
-            value=value,
-            query_pos=query_pos,
-            key_pos=query_pos,
-            key_padding_mask=key_padding_mask,
-            spatial_shapes=spatial_shapes,
-            reference_points=reference_points,
-        )
-        query = self.norms[1](query)
-
-        query = self.ffns[0](query)
-        query = self.norms[2](query)
-
-        return query  # residual connection added back
-
-
-# class BaseTransformerLayer(nn.Module):
-# def __init__(self, embed_dim, num_heads=8):
-#     super(BaseTransformerLayer, self).__init__()
-#     self.attentions = ModuleList([
-#         MultiheadAttention(embed_dim, num_heads)
-#     ])
-#     self.ffns = ModuleList([FFN(embed_dim)])
-#     self.norms = ModuleList([LayerNorm(embed_dim) for _ in range(2)])
-
-# def forward(self, query, key=None, value=None, query_pos=None,key_pos=None,  key_padding_mask = None, attn_masks = None):
-#     identity = query
-
-#     query = self.attentions[0](query, key=query, value=value, query_pos=query_pos, key_pos=key_pos,attn_mask = attn_masks , key_padding_mask=key_padding_mask)
-#     query = self.norms[0](query)
-
-#     query = self.ffns[0](query)
-#     query = self.norms[1](query)
-
-#     return query
-
-
 class MapDetectionTransformerDecoder(nn.Module):
     def __init__(self, num_layers, embed_dim, num_heads):
         super(MapDetectionTransformerDecoder, self).__init__()
@@ -437,6 +313,8 @@ class MapDetectionTransformerDecoder(nn.Module):
             )
             output = output.permute(1, 0, 2)
 
+            # In forward of MapDetectionTransformerDecoder
+
             if reg_branches is not None:
                 tmp = reg_branches[lid](output)
                 assert reference_points.shape[-1] == 2
@@ -448,7 +326,6 @@ class MapDetectionTransformerDecoder(nn.Module):
                 #     ..., 4:5] + inverse_sigmoid(reference_points[..., 2:3])
 
                 new_reference_points = new_reference_points.sigmoid()
-
                 reference_points = new_reference_points.detach()
 
             output = output.permute(1, 0, 2)
@@ -461,6 +338,7 @@ class MapDetectionTransformerDecoder(nn.Module):
 
             b = torch.stack(intermediate_reference_points)
             return a, b
+
         return output, reference_points
 
 
@@ -527,18 +405,11 @@ class DetectionTransformerDecoder(nn.Module):
 
             if reg_branches is not None:
                 tmp = reg_branches[lid](output)
-
                 assert reference_points.shape[-1] == 3
-
-                new_reference_points = torch.zeros_like(reference_points)
-                print(new_reference_points.shape)
-                new_reference_points[..., :2] = tmp[..., :2] + inverse_sigmoid(reference_points[..., :2])
-                new_reference_points[..., 2:3] = tmp[..., 4:5] + inverse_sigmoid(reference_points[..., 2:3])
-
-                new_reference_points = new_reference_points.sigmoid()
-                # torch.save(new_reference_points, "models/experimental/vadv2/dumps/dump1")
-                # ss
-
+                xy = tmp[..., :2] + inverse_sigmoid(reference_points[..., :2])
+                z = tmp[..., 4:5] + inverse_sigmoid(reference_points[..., 2:3])
+                new_reference_points = torch.cat([xy, z], dim=-1)
+                new_reference_points = torch.sigmoid(new_reference_points)
                 reference_points = new_reference_points.detach()
 
             output = output.permute(1, 0, 2)

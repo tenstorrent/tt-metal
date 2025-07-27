@@ -50,18 +50,18 @@ class MapNMSFreeCoder(nn.Module):
         max_num = self.max_num
 
         cls_scores = cls_scores.sigmoid()
+
         scores, indexs = cls_scores.view(-1).topk(max_num)
         labels = indexs % self.num_classes
         bbox_index = indexs // self.num_classes
         bbox_preds = bbox_preds[bbox_index]
+
         pts_preds = pts_preds[bbox_index]
 
         final_box_preds = denormalize_2d_bbox(bbox_preds, self.pc_range)
         final_pts_preds = denormalize_2d_pts(pts_preds, self.pc_range)  # num_q,num_p,2
-        # final_box_preds = bbox_preds
         final_scores = scores
         final_preds = labels
-
         # use score threshold
         if self.score_threshold is not None:
             thresh_mask = final_scores > self.score_threshold
@@ -80,7 +80,6 @@ class MapNMSFreeCoder(nn.Module):
 
             if self.score_threshold:
                 mask &= thresh_mask
-
             boxes3d = final_box_preds[mask]
             scores = final_scores[mask]
             pts = final_pts_preds[mask]

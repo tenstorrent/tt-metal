@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
+
 import torch
 import numpy as np
 import torch.nn as nn
@@ -8,9 +9,7 @@ import copy
 import warnings
 
 from models.experimental.vadv2.reference.ffn import FFN
-
 from models.experimental.vadv2.reference.temporal_self_attention import TemporalSelfAttention
-
 from models.experimental.vadv2.reference.spatial_cross_attention import SpatialCrossAttention
 
 
@@ -119,11 +118,8 @@ class BEVFormerEncoder(nn.Module):
         reference_points = reference_points.permute(1, 0, 2, 3)
         D, B, num_query = reference_points.size()[:3]
         num_cam = lidar2img.size(1)
-
         reference_points = reference_points.view(D, B, 1, num_query, 4).repeat(1, 1, num_cam, 1, 1).unsqueeze(-1)
-
         lidar2img = lidar2img.view(1, B, num_cam, 1, 4, 4).repeat(D, 1, 1, num_query, 1, 1)
-
         reference_points_cam = torch.matmul(lidar2img.to(torch.float32), reference_points.to(torch.float32)).squeeze(-1)
         eps = 1e-5
 
@@ -179,10 +175,12 @@ class BEVFormerEncoder(nn.Module):
             device=bev_query.device,
             dtype=bev_query.dtype,
         )
+        torch.save(ref_3d, "models/experimental/vadv2/tt/dumps/ref_3d_torch")
 
         ref_2d = self.get_reference_points(
             bev_h, bev_w, dim="2d", bs=bev_query.size(1), device=bev_query.device, dtype=bev_query.dtype
         )
+        torch.save(ref_2d, "models/experimental/vadv2/tt/dumps/ref_2d_torch")
 
         reference_points_cam, bev_mask = self.point_sampling(ref_3d, self.pc_range, kwargs["img_metas"])
 
@@ -354,7 +352,6 @@ class BEVFormerLayer(nn.Module):
                 query = self.norms[norm_index](query)
                 norm_index += 1
 
-            # spaital cross attention
             elif layer == "cross_attn":
                 query = self.attentions[attn_index](
                     query,
@@ -377,7 +374,6 @@ class BEVFormerLayer(nn.Module):
 
             elif layer == "ffn":
                 query = self.ffns[ffn_index](query, identity if self.pre_norm else None)
-
                 ffn_index += 1
 
         return query
