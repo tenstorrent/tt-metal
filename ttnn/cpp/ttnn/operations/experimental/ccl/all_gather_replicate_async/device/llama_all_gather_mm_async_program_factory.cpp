@@ -415,7 +415,11 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
         tensor_slicer.num_cols *
             weight_tensor_width /* weight_output_page_offset: stride across a tensor slice in the weight_tensor */
     );
-    matmul_fused_op_signaler->initialized_llama_all_gather = false;
+    matmul_fused_op_signaler->init_fused_op(
+        program,
+        sender_device,
+        output_tensor.memory_config().shard_spec()->grid,
+        ttnn::experimental::ccl::FusedOpSignalerMode::SINGLE);
 
     std::optional<tt::tt_metal::operation::ProgramWithCallbacks> matmul_program_with_callbacks =
         ttnn::operations::llama_matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
