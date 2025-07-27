@@ -627,6 +627,7 @@ tt::tt_metal::operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
         fuse_batch,
         untilize_out);
 }
+
 }  // namespace matmul
 
 }  // namespace operations

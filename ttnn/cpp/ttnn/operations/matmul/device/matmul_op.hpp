@@ -153,20 +153,6 @@ tt::tt_metal::operation::ProgramWithCallbacks bmm_multi_core_reuse_optimized(
 /*
  * SPARSE MATMUL
  */
-tt::tt_metal::operation::ProgramWithCallbacks sparse_bmm_multi_core_reuse(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    const Tensor& sparsity,
-    uint32_t num_batches,
-    Tensor& output_tensor,
-    CoreCoord compute_with_storage_grid_size,
-    tt::tt_metal::DataType output_dtype,
-    DeviceComputeKernelConfig compute_kernel_config,
-    uint32_t in0_block_w,
-    uint32_t out_subblock_h,
-    uint32_t out_subblock_w,
-    uint32_t per_core_M,
-    uint32_t per_core_N);
 tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mcast_1d_optimized(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
