@@ -135,6 +135,61 @@ ResultWithOptions conv2d(
     }
 }
 
+template <typename T>
+ResultWithOptions conv2d(
+    QueueId queue_id,
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    T* device,
+    uint32_t out_channels,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    const std::optional<const DataType>& dtype,
+    const std::optional<const ttnn::Tensor>& bias_tensor,
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const MemoryConfig>& memory_config_,
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
+    bool return_output_dim,
+    bool return_weights_and_bias) {
+    auto input_shape = input_tensor.logical_shape();
+    if (input_shape[0] == 1 && input_shape[2] == 1) {
+        log_error(
+            tt::LogOp,
+            "Conv2D got a folded 2D Tensor, but explicit input shape was not passed. Either pass a correctly shaped 4D "
+            "Tensor or pass batch_size, input_height and input_width as arguments to conv2d.");
+    }
+    uint32_t batch_size = input_shape[0];
+    uint32_t input_height = input_shape[1];
+    uint32_t input_width = input_shape[2];
+    uint32_t input_channels = input_shape[3];
+    return conv2d(
+        queue_id,
+        input_tensor,
+        weight_tensor,
+        device,
+        input_channels,
+        out_channels,
+        batch_size,
+        input_height,
+        input_width,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        groups,
+        dtype,
+        bias_tensor,
+        conv_config_,
+        compute_config_,
+        memory_config_,
+        dram_slice_config_,
+        return_output_dim,
+        return_weights_and_bias);
+}
 // This function is used for DRAM Slicing
 // It divides the output tensor into slices, and calculates the corresponding input slices.
 // Uses ttnn::slice to slice the input tensor and bring it to L1.
@@ -397,9 +452,6 @@ Result conv2d_DRAM(
         conv_config_l1.deallocate_activation = true;
         conv_config_l1.reallocate_halo_output = true;
 
-        // Force Conv2d_L1 to always output tiled layout to reduce CB Memory usage.
-        conv_config_l1.output_layout = Layout::TILE;
-
         ttnn::Tensor sliced_output_tensor;
         std::tie(sliced_output_tensor, std::ignore, std::ignore, weight_tensor_on_device, bias_tensor_on_device) =
             conv2d_L1(
@@ -460,11 +512,6 @@ Result conv2d_DRAM(
     if (conv_config.deallocate_activation) {
         input_tensor_on_device.deallocate(true);
     }
-    const auto flattened_output_shape = flatten_4d_shape(dram_output_tensor.logical_shape());
-    const auto flattened_padded_output_shape = flatten_4d_shape(dram_output_tensor.padded_shape());
-
-    dram_output_tensor = ttnn::reshape(dram_output_tensor, flattened_output_shape, flattened_padded_output_shape);
-
     return {dram_output_tensor, output_height, output_width, weight_tensor_on_device, bias_tensor_on_device};
 }
 
@@ -575,6 +622,17 @@ Result conv2d_L1(
     const uint32_t in_channels_padded = tt::round_up(
         in_channels, get_num_cores_channels_from_parallel_config(parallel_config) * input_channels_alignment);
 
+    uint32_t width_alignment = conv_config.output_layout == Layout::ROW_MAJOR ? 1 : tt::constants::TILE_HEIGHT;
+    uint32_t output_width_padding = 0;
+    if (output_width % width_alignment) {
+        output_width_padding = width_alignment - (output_width % width_alignment);
+        padding_n4[3] += output_width_padding * stride[1];
+        log_info(
+            tt::LogOp,
+            "Conv2D: Setting padding to {} for aligning output width to {}. ",
+            output_width_padding,
+            width_alignment);
+    }
     auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
         conv_config,
         compute_config,
@@ -584,10 +642,16 @@ Result conv2d_L1(
         out_channels,
         batch_size,
         output_height,
-        output_width,
+        output_width + output_width_padding,
         kernel_size,
         compute_grid_size);
 
+    log_info(
+        tt::LogOp,
+        "conv2d: Using Conv2D Op with parallel config: {}, block config: {}, output memory config: {}",
+        opt_conv_op_parallel_config,
+        opt_conv_op_block_config,
+        conv_out_memory_config);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
 
@@ -656,9 +720,33 @@ Result conv2d_L1(
 
     // call optimized conv op or matmul micro op
     bool input_is_on_device = tt::tt_metal::is_device_tensor(input_tensor_post_tm);
-    TT_ASSERT(input_is_on_device);
+    TT_FATAL(input_is_on_device, "Input tensor must be on device for conv2d_L1.");
 
     if (!mm_conv) {
+        // This represents the alignment of the Input Tensor's 4D shapes.
+        tt::tt_metal::Alignment input_4D_alignment = tt::tt_metal::Alignment({1, 1, 1, 1});
+        if (input_tensor_post_tm.layout() == Layout::TILE) {
+            auto logical_input_shape = input_tensor_post_tm.logical_shape();
+            TT_FATAL(
+                logical_input_shape.rank() == 4,
+                "Input tensor logical shape must be 4D for conv2d_L1, got: {}",
+                logical_input_shape);
+
+            if (logical_input_shape[1] == 1 && input_height != 1) {
+                // Height has been folded into the width dim. So neither height nor width of the input are independently
+                // aligned.
+                input_4D_alignment = tt::tt_metal::Alignment({1, 1, 1, 32});
+            } else {
+                input_4D_alignment =
+                    tt::tt_metal::Alignment({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
+            }
+        }
+        log_info(
+            tt::LogOp,
+            "Input Tensor Post TM Shape : {}, Padded Shape : {}, 4D Alignment : {}",
+            input_tensor_post_tm.logical_shape(),
+            input_tensor_post_tm.padded_shape(),
+            input_4D_alignment);
         // call halo op
         SlidingWindowConfig sliding_window_config = SlidingWindowConfig{
             .batch_size = batch_size,
@@ -670,7 +758,7 @@ Result conv2d_L1(
             .num_cores_nhw = opt_conv_op_parallel_config.num_cores_nhw,
             .core_range_set = input_tensor_post_tm.memory_config().shard_spec().value().grid,
             .snap_to_tile = true,
-        };
+            .alignment = input_4D_alignment};
 
         bool bypass_halo =
             (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED &&
@@ -715,6 +803,7 @@ Result conv2d_L1(
                 "Conv2D: Split reader was requested by the user, but it can't be support with just one tile per core "
                 "in activation matrix height.");
         }
+
         // call conv micro op
         auto conv_output = optimized_conv_new(
             input_tensor_post_tm,
@@ -722,6 +811,7 @@ Result conv2d_L1(
             bias_tensor_on_device,
             sliding_window_config,
             out_channels,
+            output_width,
             groups,
             conv_config.output_layout == Layout::ROW_MAJOR,
             conv_config.activation,
@@ -922,6 +1012,86 @@ ResultWithOptions Conv2dOperation::invoke(
         batch_size,
         input_height,
         input_width,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        groups,
+        std::move(dtype),
+        std::move(bias_tensor),
+        std::move(conv_config_),
+        std::move(compute_config_),
+        std::move(memory_config),
+        std::move(slice_config_),
+        return_output_dim,
+        return_weights_and_bias);
+}
+
+ResultWithOptions Conv2dOperation::invoke(
+    QueueId queue_id,
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    IDevice* device,
+    uint32_t out_channels,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    const std::optional<const DataType>& dtype,
+    const std::optional<const ttnn::Tensor>& bias_tensor,
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<const Conv2dSliceConfig>& slice_config_,
+    bool return_output_dim,
+    bool return_weights_and_bias) {
+    return conv2d(
+        queue_id,
+        input_tensor,
+        weight_tensor,
+        device,
+        out_channels,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        groups,
+        std::move(dtype),
+        std::move(bias_tensor),
+        std::move(conv_config_),
+        std::move(compute_config_),
+        std::move(memory_config),
+        std::move(slice_config_),
+        return_output_dim,
+        return_weights_and_bias);
+}
+
+ResultWithOptions Conv2dOperation::invoke(
+    QueueId queue_id,
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    MeshDevice* device,
+    uint32_t out_channels,
+    std::array<uint32_t, 2> kernel_size,
+    std::array<uint32_t, 2> stride,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+    std::array<uint32_t, 2> dilation,
+    uint32_t groups,
+    const std::optional<const DataType>& dtype,
+    const std::optional<const ttnn::Tensor>& bias_tensor,
+    const std::optional<const Conv2dConfig>& conv_config_,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
+    const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<const Conv2dSliceConfig>& slice_config_,
+    bool return_output_dim,
+    bool return_weights_and_bias) {
+    return conv2d(
+        queue_id,
+        input_tensor,
+        weight_tensor,
+        device,
+        out_channels,
         kernel_size,
         stride,
         padding,

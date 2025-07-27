@@ -43,10 +43,11 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
     uint32_t nbatch = input_shape[0];
     uint32_t total_nsticks = config_.num_cores_nhw * max_out_nsticks_per_core_;
 
-    // output_shape[0] remains same
-    // output_shape[1] remains same
+    // Halo has a folded 2D output, so the first 2 dims must be one.
     // output_shape[2] changes
     // output_shape[3] remains same
+    output_shape[0] = nbatch;
+    output_shape[1] = 1;
     output_shape[2] = (uint32_t)std::ceil((float)total_nsticks / nbatch);
 
     log_debug(

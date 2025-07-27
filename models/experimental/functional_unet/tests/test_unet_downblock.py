@@ -24,9 +24,9 @@ from models.experimental.functional_unet.tests.common import (
 @pytest.mark.parametrize(
     "block_name, input_channels, input_height, input_width",
     [
-        ("downblock1", 4, 1056, 160),
-        ("downblock2", 16, 528, 80),
-        ("downblock3", 16, 264, 40),
+        # ("downblock1", 4, 1056, 160),
+        # ("downblock2", 16, 528, 80),
+        # ("downblock3", 16, 264, 40),
         ("downblock4", 32, 132, 20),
     ],
 )

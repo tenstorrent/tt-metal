@@ -202,6 +202,7 @@ struct OptimizedConvNew {
     OptimizedConvBlockConfig block_config;
     const sliding_window::SlidingWindowConfig& sliding_window_config;
     const uint32_t output_channels;
+    const uint32_t logical_output_width;
     const uint32_t groups;
     bool untilize_out, has_bias;
     std::string activation = "";
@@ -217,6 +218,7 @@ struct OptimizedConvNew {
     OptimizedConvNew(
         const sliding_window::SlidingWindowConfig& sliding_window_config,
         uint32_t output_channels,
+        uint32_t logical_output_width,
         uint32_t groups,
         bool untile_out,
         bool has_bias,
@@ -232,6 +234,7 @@ struct OptimizedConvNew {
         bool enable_split_reader,
         bool enable_subblock_padding) :
         output_channels(output_channels),
+        logical_output_width(logical_output_width),
         groups(groups),
         sliding_window_config(sliding_window_config),
         untilize_out(untile_out),
@@ -304,6 +307,7 @@ Tensor optimized_conv_new(
     std::optional<const Tensor> bias,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t output_channels,
+    uint32_t logical_output_width,
     uint32_t groups,
     bool untilize_out,
     const std::string& activation,
