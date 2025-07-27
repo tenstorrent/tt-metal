@@ -534,15 +534,15 @@ void py_bind_conv2d(py::module& module) {
             This improves performance, but increases the memory usage of the weights tensor.
         )doc");
     py_conv_config.def_readwrite("full_inner_dim", &Conv2dConfig::full_inner_dim, R"doc(
-            This uses both the reader & writer cores to carry out the activation reader operation.
-            This is useful when the input tensor is large, and the activation reader is a bottleneck.
-            This is only supported for Height Sharded Conv2D.
-        )doc");
-    py_conv_config.def_readwrite("enable_split_reader", &Conv2dConfig::enable_split_reader, R"doc(
-            Applies only to block sharded layout..
+            Applies only to block sharded layout.
             By default inner dim of activation matrix will be sliced by kernel_h.
             If L1 constraints allowed it we can use full inner dim.
             This will increase perf, but it will take more L1 space.
+        )doc");
+    py_conv_config.def_readwrite("enable_split_reader", &Conv2dConfig::enable_split_reader, R"doc(
+            This uses both the reader & writer cores to carry out the activation reader operation.
+            This is useful when the input tensor is large, and the activation reader is a bottleneck.
+            This is only supported for Height Sharded Conv2D.
         )doc");
     py_conv_config.def_readwrite("enable_subblock_padding", &Conv2dConfig::enable_subblock_padding);
     py_conv_config.def_readwrite("in_place", &Conv2dConfig::in_place, R"doc(
