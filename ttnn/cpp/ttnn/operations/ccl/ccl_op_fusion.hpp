@@ -82,7 +82,7 @@ struct ReduceScatterFusedOpSignaler {
     void push_reduce_scatter_fused_op_rt_args(std::vector<uint32_t>& out_rt_args);
 };
 
-enum class MatmulFusedOpSignalerType { ALL_GATHER, REDUCE_SCATTER, EMPTY, LLAMA_REDUCE_SCATTER };
+enum class MatmulFusedOpSignalerType { ALL_GATHER, REDUCE_SCATTER, EMPTY, LLAMA_REDUCE_SCATTER, LLAMA_ALL_GATHER };
 
 // Used to propagate semaphore information from matmul to all_gather or reduce_scatter
 struct MatmulFusedOpSignaler {
@@ -135,6 +135,14 @@ struct MatmulFusedOpSignaler {
 
         uint32_t weight_tensor_width);
 
+    void init_llama_all_gather(
+        uint32_t num_transfers,
+        uint32_t ring_size,
+        uint32_t start_ring_index,
+        uint32_t tensor_slice_shape_width,
+        uint32_t output_page_offset,
+        bool is_clockwise_direction);
+
     void init_reduce_scatter(
         const std::vector<CoreCoord>& fused_op_receiver_cores_noc,
         const std::vector<uint32_t>& fused_op_receiver_signal_semaphores,
@@ -172,6 +180,7 @@ struct MatmulFusedOpSignaler {
     bool is_all_gather();
     bool is_reduce_scatter();
     bool is_llama_reduce_scatter();
+    bool is_llama_all_gather();
 
     void push_matmul_fused_op_rt_args(
         std::vector<uint32_t>& out_rt_args, uint32_t curr_worker_in0_idx, uint32_t curr_worker_in1_idx);
