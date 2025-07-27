@@ -2858,6 +2858,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    log_info(tt::LogOp, "LLONG FUSION: matmul_multi_core_reuse_mcast_1d_optimized_helper");
+    return {.program = std::move(program), .override_runtime_arguments_callback = std::nullopt};
+    /*
     ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t shared_vars =
         llama_matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
             program,
@@ -2886,6 +2889,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    */
 }
 
 }  // namespace llama_matmul

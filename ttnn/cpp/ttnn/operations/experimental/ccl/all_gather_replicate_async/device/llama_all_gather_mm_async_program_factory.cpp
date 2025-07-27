@@ -397,6 +397,12 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
         ttnn::ccl::InterleavedRingAllGatherTensorSlicer(input_tensor, intermediate_tensor, dim, ring_index);
     const uint32_t num_transfers = ring_size;
     const uint32_t weight_tensor_width = input_tensor_b.padded_shape()[3] / 32;
+    log_info(tt::LogOp, "LLONG FUSION: dim: {}", dim);
+    log_info(tt::LogOp, "LLONG FUSION: weight_tensor_width: {}", weight_tensor_width);
+    log_info(tt::LogOp, "LLONG FUSION: tensor_slicer.num_rows: {}", tensor_slicer.num_rows);
+    log_info(tt::LogOp, "LLONG FUSION: tensor_slicer.num_cols: {}", tensor_slicer.num_cols);
+    log_info(tt::LogOp, "LLONG FUSION: tensor_slicer.output_page_offset: {}", tensor_slicer.output_page_offset);
+    log_info(tt::LogOp, "LLONG FUSION: num_transfers: {}", num_transfers);
 
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =
         ttnn::experimental::ccl::MatmulFusedOpSignaler(ttnn::experimental::ccl::MatmulFusedOpSignalerType::ALL_GATHER);
@@ -409,6 +415,22 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
         tensor_slicer.num_cols *
             weight_tensor_width /* weight_output_page_offset: stride across a tensor slice in the weight_tensor */
     );
+    matmul_fused_op_signaler->initialized_llama_all_gather = false;
+
+    std::optional<tt::tt_metal::operation::ProgramWithCallbacks> matmul_program_with_callbacks =
+        ttnn::operations::llama_matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
+            program,
+            intermediate_tensor,       // in0
+            {input_tensor_b},          // in1
+            std::nullopt,              // bias
+            {output_tensor},           // out0
+            false,                     // broadcast_batch
+            compute_kernel_config,     // compute_kernel_config
+            program_config,            // program_config
+            false,                     // untilize_out
+            matmul_fused_op_signaler,  // fused_op_signaler
+            std::nullopt,              // global_cb
+            sub_device_id);            // sub_device_id
 
     auto override_runtime_arguments_callback =
         [worker_sender_reader_kernel_id,
@@ -454,7 +476,9 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
             }
         };
 
-    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
+    return {
+        .program = std::move(matmul_program_with_callbacks->program),
+        .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
 }  // namespace ttnn
