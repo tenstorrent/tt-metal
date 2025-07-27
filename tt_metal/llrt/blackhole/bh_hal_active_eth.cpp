@@ -64,6 +64,7 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_FW_LIVE_LINK_STATUS)] =
         MEM_AERISC_LIVE_LINK_STATUS_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_METAL_RUN_FLAG)] = MEM_AERISC_RUN_FW_FLAG;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEBUG_RUN_COUNT)] = MEM_AERISC_VOID_LAUNCH_FLAG;
 
     std::vector<std::uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);

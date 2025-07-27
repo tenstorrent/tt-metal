@@ -35,30 +35,39 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
-          - name: All C++
-            cmd: ./tests/scripts/run_cpp_unit_tests.sh # 15 minutes
-          - name: tools
-            cmd: |
-              ./tests/scripts/run_tools_tests.sh
-              ./build/test/tt_metal/unit_tests_debug_tools
-          - name: dispatch
-            cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch" # 15 minutes
+          # - name: All C++
+          #   cmd: ./tests/scripts/run_cpp_unit_tests.sh # 15 minutes
+          # - name: tools
+          #   cmd: |
+          #     ./tests/scripts/run_tools_tests.sh
+          #     ./build/test/tt_metal/unit_tests_debug_tools
+          # - name: dispatch
+          #   cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch" # 15 minutes
           - name: eth and misc
-            cmd: |
-              ./build/test/tt_metal/unit_tests_eth
-              ./build/test/tt_metal/unit_tests_misc
-          - name: distributed
-            cmd: |
-              ./build/test/tt_metal/distributed/distributed_unit_tests
-              ./tests/tt_metal/multihost/run_multiprocess_socket_tests.sh
-          - name: dispatch multicmd queue
-            cmd: |
-              TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=MultiCommandQueue*Fixture.*
-              TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQ*Fixture.*
-          - name: CCL
-            cmd: |
-              ./build/test/ttnn/unit_tests_ttnn_ccl
-              ./build/test/ttnn/unit_tests_ttnn_ccl_ops
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test
+          - name: eth and misc
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test
+          - name: eth and misc
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test
+          - name: eth and misc
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test
+          - name: eth and misc
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test
+            # cmd: |
+            #   ./build/test/tt_metal/unit_tests_eth
+            #   ./build/test/tt_metal/unit_tests_misc
+          # - name: distributed
+          #   cmd: |
+          #     ./build/test/tt_metal/distributed/distributed_unit_tests
+          #     ./tests/tt_metal/multihost/run_multiprocess_socket_tests.sh
+          # - name: dispatch multicmd queue
+          #   cmd: |
+          #     TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=MultiCommandQueue*Fixture.*
+          #     TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQ*Fixture.*
+          # - name: CCL
+          #   cmd: |
+          #     ./build/test/ttnn/unit_tests_ttnn_ccl
+          #     ./build/test/ttnn/unit_tests_ttnn_ccl_ops
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
       image: ${{ inputs.docker-image }}

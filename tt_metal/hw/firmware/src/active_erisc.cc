@@ -93,6 +93,7 @@ inline void wait_subordinate_eriscs() {
     do {
         invalidate_l1_cache();
         service_base_fw();
+        __asm__ volatile("fence");
     } while (mailboxes->subordinate_sync.all != RUN_SYNC_MSG_ALL_SUBORDINATES_DONE);
     WAYPOINT("SED");
 }
@@ -125,10 +126,13 @@ void __attribute__((noinline)) Application() {
     // Stall for the host to set this flag to 1 otherwise we could exit
     // the base firmware while the host is still initializing
     volatile uint32_t* const debug_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
+    volatile uint32_t* const debug_run_count = reinterpret_cast<volatile uint32_t*>(0x3680);
+    debug_run_count[0]++;
 
     debug_dump_addr[0] = 0x11111111;
     do {
         invalidate_l1_cache();
+        __asm__ volatile("fence");
     } while (gEnableFwFlag[0] != 1);
     debug_dump_addr[0] = 0x22222222;
 
@@ -164,8 +168,15 @@ void __attribute__((noinline)) Application() {
             invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
-            if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
+            if (gEnableFwFlag[0] != 1) {
+                mailboxes->go_message.signal = RUN_MSG_DONE;
+                // Track if we could not return back to _start
+                debug_dump_addr[0] = 0xefefefef;
+                return;
+            } else if (
+                go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
                 // Set the rd_ptr on workers to specified value
+                debug_dump_addr[0] = 0xbe12be12;
                 mailboxes->launch_msg_rd_ptr = 0;
                 if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
                     uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);
@@ -173,16 +184,12 @@ void __attribute__((noinline)) Application() {
                     // Notify dispatcher that this has been done
                     internal_::notify_dispatch_core_done(dispatch_addr);
                 }
-            } else if (gEnableFwFlag[0] != 1) {
-                mailboxes->go_message.signal = RUN_MSG_DONE;
-                // Track if we could not return back to _start
-                debug_dump_addr[0] = 0xefefefef;
-                return;
             } else {
                 service_base_fw();
             }
         }
         WAYPOINT("GD");
+        debug_dump_addr[0] = 0xcccccccc;
 
         {
             // Only include this iteration in the device profile if the launch message is valid. This is because all
