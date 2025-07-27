@@ -23,12 +23,12 @@ import models.perf.device_perf_utils as perf_utils
         ["segformer_selfoutput", "", 1, 15000.0],
     ],
 )
-def test_perf_device_bare_metal(module, filter, num_iterations, expected_perf):
+def test_modules_segformer(module, filter, num_iterations, expected_perf):
     batch_size = 1
     subdir = "segformer"
     margin = 0.05
 
-    command = f"pytest tests/ttnn/integration_tests/segformer/test_{module}.py"
+    command = f"pytest models/demos/segformer/tests/pcc/test_{module}.py"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"

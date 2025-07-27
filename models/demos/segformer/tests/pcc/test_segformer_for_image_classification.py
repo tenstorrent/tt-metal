@@ -3,23 +3,20 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import ttnn
 import torch
-
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from ttnn.model_preprocessing import preprocess_model_parameters
-from models.demos.segformer.tt.ttnn_segformer_for_image_classification import (
-    TtSegformerForImageClassification,
-)
 from datasets import load_dataset
-from transformers import SegformerForImageClassification, AutoImageProcessor
-from models.demos.segformer.reference.segformer_for_image_classification import (
-    SegformerForImageClassificationReference,
-)
-from tests.ttnn.integration_tests.segformer.test_segformer_model import (
+from transformers import AutoImageProcessor
+from ttnn.model_preprocessing import preprocess_model_parameters
+
+import ttnn
+from models.demos.segformer.common import load_config, load_torch_model
+from models.demos.segformer.reference.segformer_for_image_classification import SegformerForImageClassificationReference
+from models.demos.segformer.tests.pcc.test_segformer_model import (
     create_custom_preprocessor as custom_preprocessor_main_model,
-    move_to_device,
 )
+from models.demos.segformer.tests.pcc.test_segformer_model import move_to_device
+from models.demos.segformer.tt.ttnn_segformer_for_image_classification import TtSegformerForImageClassification
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def create_custom_preprocessor(device):
@@ -50,13 +47,10 @@ def create_custom_preprocessor(device):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_segformer_image_classificaton(device, reset_seeds):
+def test_segformer_image_classificaton(device, model_location_generator):
     dataset = load_dataset("huggingface/cats-image")
     image = dataset["train"]["image"][0]
-    torch_model = SegformerForImageClassification.from_pretrained("nvidia/mit-b0")
-    config = torch_model.config
-    reference_model = SegformerForImageClassificationReference(config=config)
-    state_dict = torch_model.state_dict()
+
     image_processor = AutoImageProcessor.from_pretrained("nvidia/mit-b0")
     inputs = image_processor(image, return_tensors="pt")
     torch_input_tensor = inputs.pixel_values
@@ -85,13 +79,14 @@ def test_segformer_image_classificaton(device, reset_seeds):
         ]
         ttnn_input_tensor = ttnn.pad(ttnn_input_tensor, padded_shape, [0, 0, 0, 0], 0)
     ttnn_input_tensor = ttnn.to_device(ttnn_input_tensor, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
-    new_state_dict = {}
-    keys = [name for name, parameter in reference_model.state_dict().items()]
-    values = [parameter for name, parameter in state_dict.items()]
-    for i in range(len(keys)):
-        new_state_dict[keys[i]] = values[i]
-    reference_model.load_state_dict(new_state_dict)
-    reference_model.eval()
+
+    config = load_config("configs/segformer_img_classification_config.json")
+    reference_model = SegformerForImageClassificationReference(config)
+    target_prefix = f""
+    reference_model = load_torch_model(
+        reference_model, f"", module="image_classification", model_location_generator=model_location_generator
+    )
+
     parameters = preprocess_model_parameters(
         initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device), device=None
     )

@@ -2,29 +2,27 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
-import ttnn
 from ttnn.model_preprocessing import (
-    preprocess_layernorm_parameter,
-    preprocess_model_parameters,
     ParameterDict,
     ParameterList,
+    preprocess_layernorm_parameter,
+    preprocess_model_parameters,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from tests.ttnn.integration_tests.segformer.test_segformer_overlap_path_embeddings import (
-    create_custom_preprocessor as create_customer_preprocessor_overlap_path,
-)
-from tests.ttnn.integration_tests.segformer.test_segformer_layer import (
+
+import ttnn
+from models.demos.segformer.common import load_config, load_torch_model
+from models.demos.segformer.reference.segformer_encoder import SegformerEncoder
+from models.demos.segformer.tests.pcc.test_segformer_layer import (
     create_custom_preprocessor as create_customer_preprocessor_layer,
 )
-from models.utility_functions import skip_for_grayskull
-
-from transformers import SegformerModel, SegformerConfig
-import pytest
-from models.demos.segformer.tt.ttnn_segformer_encoder import (
-    TtSegformerEncoder,
+from models.demos.segformer.tests.pcc.test_segformer_overlap_path_embeddings import (
+    create_custom_preprocessor as create_customer_preprocessor_overlap_path,
 )
-from models.demos.segformer.reference.segformer_encoder import SegformerEncoder
+from models.demos.segformer.tt.ttnn_segformer_encoder import TtSegformerEncoder
+from models.utility_functions import skip_for_grayskull
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def create_custom_preprocessor(device):
@@ -88,25 +86,15 @@ def move_to_device(object, device):
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_segformer_encoder(batch_size, num_channels, height, width, device, reset_seeds, is_ci_env):
+def test_segformer_encoder(batch_size, num_channels, height, width, device, model_location_generator):
     torch_input_tensor = torch.randn(batch_size, num_channels, height, width)
-    torch_model = SegformerModel.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
-    config = torch_model.config
 
-    torch_model = torch_model.encoder
-    config = SegformerConfig()
-    state_dict = torch_model.state_dict()
-
+    config = load_config("configs/segformer_encoder_config.json")
     reference_model = SegformerEncoder(config)
-
-    new_state_dict = {}
-    keys = [name for name, parameter in reference_model.state_dict().items()]
-    values = [parameter for name, parameter in state_dict.items()]
-    for i in range(len(keys)):
-        new_state_dict[keys[i]] = values[i]
-
-    reference_model.load_state_dict(new_state_dict)
-    reference_model.eval()
+    target_prefix = f"encoder."
+    reference_model = load_torch_model(
+        reference_model, target_prefix, module="semantic_sub", model_location_generator=model_location_generator
+    )
 
     torch_output = reference_model(torch_input_tensor)
 

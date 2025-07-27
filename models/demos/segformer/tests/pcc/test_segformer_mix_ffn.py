@@ -2,23 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-    preprocess_linear_bias,
-    preprocess_linear_weight,
-)
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from transformers import SegformerModel
-
 import pytest
-from models.demos.segformer.tt.ttnn_segformer_mix_ffn import TtSegformerMixFFN
+import torch
+from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight, preprocess_model_parameters
+
+import ttnn
+from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_mixffn import SegformerMixFFN
-from tests.ttnn.integration_tests.segformer.test_segformer_dwconv import (
+from models.demos.segformer.tests.pcc.test_segformer_dwconv import (
     create_custom_preprocessor as create_custom_preprocessor_dwconv,
 )
+from models.demos.segformer.tt.ttnn_segformer_mix_ffn import TtSegformerMixFFN
 from models.utility_functions import skip_for_grayskull
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def create_custom_preprocessor(device):
@@ -68,8 +64,7 @@ def test_segformer_mix_ffn(
     width,
     block_i,
     mixffn_i,
-    reset_seeds,
-    is_ci_env,
+    model_location_generator,
 ):
     torch_input_tensor = torch.randn(batch_size, seq_len, in_features)
     ttnn_input_tensor = ttnn.from_torch(
@@ -79,18 +74,15 @@ def test_segformer_mix_ffn(
         device=device,
         layout=ttnn.TILE_LAYOUT,
     )
-    torch_model = SegformerModel.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
-    config = torch_model.config
-    torch_model = torch_model.encoder.block[block_i][mixffn_i].mlp
 
+    config = load_config("configs/segformer_semantic_config.json")
     reference_model = SegformerMixFFN(
         config=config, in_features=in_features, hidden_features=hidden_features, out_features=out_features
     )
-
-    sd = torch_model.state_dict()
-    reference_model.load_state_dict(sd)
-
-    reference_model.eval()
+    target_prefix = f"encoder.block.{block_i}.{mixffn_i}.mlp"
+    reference_model = load_torch_model(
+        reference_model, target_prefix, module="semantic_sub", model_location_generator=model_location_generator
+    )
 
     torch_output = reference_model(torch_input_tensor, height, width)
 

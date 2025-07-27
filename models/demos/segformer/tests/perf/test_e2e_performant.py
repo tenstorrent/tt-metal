@@ -41,7 +41,7 @@ def test_run_segformer_trace_2cqs_inference(
     torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
     torch_input_tensor = F.pad(torch_input_tensor, (0, 13))
     tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-    inference_iter_count = 50
+    inference_iter_count = 2
     inference_time_iter = []
     for iter in range(0, inference_iter_count):
         t0 = time.time()

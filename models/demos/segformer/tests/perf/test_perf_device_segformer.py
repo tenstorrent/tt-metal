@@ -14,12 +14,12 @@ import models.perf.device_perf_utils as perf_utils
         [1, 102.0],
     ],
 )
-def test_perf_device_bare_metal(batch_size, expected_perf):
+def test_perf_device_segformer_segmentation(batch_size, expected_perf, model_location_generator):
     subdir = "segformer"
     num_iterations = 1
     margin = 0.05
 
-    command = f"pytest tests/ttnn/integration_tests/segformer/test_segformer_for_semantic_segmentation.py"
+    command = f"pytest models/demos/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py::test_segformer_for_semantic_segmentation"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"

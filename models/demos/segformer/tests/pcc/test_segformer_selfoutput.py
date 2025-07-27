@@ -2,19 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-    preprocess_linear_bias,
-    preprocess_linear_weight,
-)
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from transformers import SegformerModel
 import pytest
-from models.demos.segformer.tt.ttnn_segformer_selfoutput import TtSegformerSelfOutput
+import torch
+from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight, preprocess_model_parameters
+
+import ttnn
+from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_selfoutput import SegformerSelfOutput
+from models.demos.segformer.tt.ttnn_segformer_selfoutput import TtSegformerSelfOutput
 from models.utility_functions import skip_for_grayskull
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def create_custom_preprocessor(device):
@@ -45,7 +42,9 @@ def create_custom_preprocessor(device):
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_segformer_selfoutput(device, block_i, self_output_i, batch_size, seq_len, hidden_size, reset_seeds, is_ci_env):
+def test_segformer_selfoutput(
+    device, block_i, self_output_i, batch_size, seq_len, hidden_size, model_location_generator
+):
     torch_input_tensor = torch.randn(batch_size, seq_len, hidden_size)
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -54,14 +53,13 @@ def test_segformer_selfoutput(device, block_i, self_output_i, batch_size, seq_le
         device=device,
         layout=ttnn.TILE_LAYOUT,
     )
-    torch_model = SegformerModel.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
-    config = torch_model.config
-    torch_model = torch_model.encoder.block[block_i][self_output_i].attention.output
 
+    config = load_config("configs/segformer_semantic_config.json")
     reference_model = SegformerSelfOutput(config=config, hidden_size=hidden_size)
-    sd = torch_model.state_dict()
-    reference_model.load_state_dict(sd)
-    reference_model.eval()
+    target_prefix = f"encoder.block.{block_i}.{self_output_i}.attention.output"
+    reference_model = load_torch_model(
+        reference_model, target_prefix, module="semantic_sub", model_location_generator=model_location_generator
+    )
 
     torch_output = reference_model(torch_input_tensor, None)
 

@@ -2,20 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
 import pytest
 import torch
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_linear_weight, preprocess_linear_bias
-from models.demos.segformer.tt.ttnn_segformer_mlp import (
-    TtSegformerMLP,
-)
+from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight, preprocess_model_parameters
 
-from models.demos.segformer.reference.segformer_mlp import (
-    SegformerMLP,
-)
-from transformers import SegformerForSemanticSegmentation
+import ttnn
+from models.demos.segformer.common import load_config, load_torch_model
+from models.demos.segformer.reference.segformer_mlp import SegformerMLP
+from models.demos.segformer.tt.ttnn_segformer_mlp import TtSegformerMLP
 from models.utility_functions import skip_for_grayskull
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def create_custom_preprocessor(device):
@@ -49,11 +45,9 @@ def test_segformer_mlp(
     height,
     width,
     mlp_id,
-    is_ci_env,
+    model_location_generator,
 ):
     torch_input_tensor = torch.randn(batch_size, input_dim, height, width)
-    torch_model = SegformerForSemanticSegmentation.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
-    config = torch_model.config
 
     torch_input_tensor_folded = torch.reshape(torch_input_tensor, (batch_size, input_dim, height * width))
     torch_input_tensor_folded = torch.permute(torch_input_tensor_folded, (0, 2, 1))
@@ -66,13 +60,13 @@ def test_segformer_mlp(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    torch_model = torch_model.decode_head.linear_c[mlp_id]
+    config = load_config("configs/segformer_semantic_config.json")
     reference_model = SegformerMLP(config, input_dim)
+    target_prefix = f"decode_head.linear_c.{mlp_id}"
+    reference_model = load_torch_model(
+        reference_model, target_prefix, module="semantic_sub", model_location_generator=model_location_generator
+    )
 
-    sd = torch_model.state_dict()
-    reference_model.load_state_dict(sd)
-
-    reference_model.eval()
     torch_output = reference_model(torch_input_tensor)
 
     parameters = preprocess_model_parameters(

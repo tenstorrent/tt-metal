@@ -26,8 +26,9 @@ run_segformer_func() {
   #Segformer Segmentation Demo
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py --timeout 600; fail+=$?
 
+  ## Commenting out Segformer Classification Demo, since weights are not available in CIv2
   #Segformer Classification Demo
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py --timeout 600; fail+=$?
+  # WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py --timeout 600; fail+=$?
 
 }
 

@@ -3,29 +3,32 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import ttnn
-from PIL import Image
-import torch
-import math
-
 import requests
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from ttnn.model_preprocessing import preprocess_model_parameters, ParameterDict, ParameterList
-from models.demos.segformer.tt.ttnn_segformer_for_semantic_segmentation import (
-    TtSegformerForSemanticSegmentation,
-)
-from datasets import load_dataset
-from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
+import torch
+from loguru import logger
+from PIL import Image
+from transformers import SegformerImageProcessor
+from ttnn.model_preprocessing import ParameterDict, ParameterList, preprocess_model_parameters
+
+import ttnn
+from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_for_semantic_segmentation import (
     SegformerForSemanticSegmentationReference,
 )
-from tests.ttnn.integration_tests.segformer.test_segformer_model import (
+from models.demos.segformer.tests.pcc.test_segformer_decode_head import (
+    create_custom_preprocessor as create_custom_preprocessor_decode_head,
+)
+from models.demos.segformer.tests.pcc.test_segformer_model import (
     create_custom_preprocessor as create_custom_preprocessor_model,
 )
-from tests.ttnn.integration_tests.segformer.test_segformer_decode_head import (
-    create_custom_preprocessor as create_custom_preprocessor_deocde_head,
-)
-from models.utility_functions import skip_for_grayskull
+from models.demos.segformer.tt.ttnn_segformer_for_semantic_segmentation import TtSegformerForSemanticSegmentation
+from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import profiler, skip_for_grayskull
+
+
+def get_expected_times(name):
+    base = {"segformer": (65, 0.0287)}
+    return base[name]
 
 
 def create_custom_preprocessor(device):
@@ -36,7 +39,7 @@ def create_custom_preprocessor(device):
             segformer_preprocess = create_custom_preprocessor_model(device)
             parameters["segformer"] = segformer_preprocess(model.segformer, None, None)
             parameters["decode_head"] = {}
-            deocde_preprocess = create_custom_preprocessor_deocde_head(device)
+            deocde_preprocess = create_custom_preprocessor_decode_head(device)
             parameters["decode_head"] = deocde_preprocess(model.decode_head, None, None)
 
         return parameters
@@ -63,30 +66,17 @@ def move_to_device(object, device):
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_segformer_for_semantic_segmentation(device, is_ci_env):
+def test_segformer_for_semantic_segmentation(device, model_location_generator):
     processor = SegformerImageProcessor.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
-    torch_model = SegformerForSemanticSegmentation.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
-
     url = "http://images.cocodataset.org/val2017/000000039769.jpg"
     image = Image.open(requests.get(url, stream=True).raw)
-
-    inputs = processor(images=image, return_tensors="pt")
-    config = torch_model.config
-
-    reference_model = SegformerForSemanticSegmentationReference(config=config)
-    state_dict = torch_model.state_dict()
     inputs = processor(images=image, return_tensors="pt")
 
-    new_state_dict = {}
-    keys = [name for name, parameter in reference_model.state_dict().items()]
-    values = [parameter for name, parameter in state_dict.items()]
-    for i in range(len(keys)):
-        new_state_dict[keys[i]] = values[i]
+    config = load_config("configs/segformer_semantic_config.json")
+    reference_model = SegformerForSemanticSegmentationReference(config)
+    reference_model = load_torch_model(reference_model, f"", model_location_generator, module="semantic_sub")
 
-    reference_model.load_state_dict(new_state_dict)
-    reference_model.eval()
-
-    torch_output = reference_model(inputs.pixel_values)
+    batch_size = inputs.pixel_values.shape[0]
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device), device=None
@@ -141,6 +131,8 @@ def test_segformer_for_semantic_segmentation(device, is_ci_env):
         )
         ttnn_input_tensor = ttnn.pad(ttnn_input_tensor_unpadded, [N, H, W, 8], [0, 0, 0, 0], 0)
 
+    logger.info(f"Compiling model with warmup run")
+    profiler.start(f"inference_and_compile_time")
     ttnn_output = ttnn_model(
         device,
         ttnn_input_tensor,
@@ -149,10 +141,64 @@ def test_segformer_for_semantic_segmentation(device, is_ci_env):
         return_dict=None,
         parameters=parameters,
     )
+    profiler.end(f"inference_and_compile_time")
+    ttnn.deallocate(ttnn_output.logits)
 
-    ttnn_output = ttnn.to_torch(ttnn_output.logits)
-    ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))
-    h = w = int(math.sqrt(ttnn_output.shape[-1]))
-    ttnn_final_output = torch.reshape(ttnn_output, (ttnn_output.shape[0], ttnn_output.shape[1], h, w))
+    inference_and_compile_time = profiler.get("inference_and_compile_time")
+    logger.info(f"Model compiled with warmup run in {(inference_and_compile_time):.2f} s")
 
-    assert_with_pcc(torch_output.logits, ttnn_final_output, pcc=0.984)
+    iterations = 16
+    logger.info(f"Running inference for {iterations} iterations")
+    for idx in range(iterations):
+        ttnn_input_tensor_unpadded = ttnn.from_torch(
+            torch_input_tensor_permuted,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=input_mem_config,
+        )
+        ttnn_input_tensor = ttnn.pad(ttnn_input_tensor_unpadded, [N, H, W, 8], [0, 0, 0, 0], 0)
+        profiler.start("inference_time")
+        profiler.start(f"inference_time_{idx}")
+        ttnn_output = ttnn_model(
+            device,
+            ttnn_input_tensor,
+            output_attentions=None,
+            output_hidden_states=None,
+            return_dict=None,
+            parameters=parameters,
+        )
+        ttnn.deallocate(ttnn_output.logits)
+        profiler.end(f"inference_time_{idx}")
+        profiler.end("inference_time")
+
+    mean_inference_time = profiler.get("inference_time")
+    inference_time = profiler.get(f"inference_time_{iterations - 1}")
+    compile_time = inference_and_compile_time - inference_time
+    logger.info(f"Inference time on last iterations was completed in {(inference_time * 1000.0):.2f} ms")
+    logger.info(f"Mean inference time was {(mean_inference_time * 1000.0):.2f} ms")
+    logger.info(f"Model compilation took {compile_time:.2f} s")
+    logger.info(
+        f"Mean inference time for {batch_size} (batch) images was {(mean_inference_time * 1000.0):.2f} ms ({batch_size / mean_inference_time:.2f} fps)"
+    )
+
+    expected_compile_time, expected_inference_time = get_expected_times("segformer")
+
+    prep_perf_report(
+        model_name="models/demos/segformer",
+        batch_size=batch_size,
+        inference_and_compile_time=inference_and_compile_time,
+        inference_time=inference_time,
+        expected_compile_time=expected_compile_time,
+        expected_inference_time=expected_inference_time,
+        comments="",
+        inference_time_cpu=0.0,
+    )
+
+    logger.info(f"Compile time: {inference_and_compile_time - inference_time}")
+    logger.info(f"Inference time: {inference_time}")
+    logger.info(f"Samples per second: {1 / inference_time * batch_size}")
+    assert (
+        mean_inference_time < expected_inference_time
+    ), f"Expected inference time: {expected_inference_time} Actual inference time: {mean_inference_time}"
+    logger.info("Exit segformer perf test")

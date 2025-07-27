@@ -2,30 +2,27 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import pytest
 import torch
-import ttnn
 from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-    preprocess_layernorm_parameter,
     ParameterDict,
     ParameterList,
-)
-from tests.ttnn.utils_for_testing import assert_with_pcc
-
-from transformers import SegformerModel
-import pytest
-from models.demos.segformer.tt.ttnn_segformer_layer import (
-    TtSegformerLayer,
+    preprocess_layernorm_parameter,
+    preprocess_model_parameters,
 )
 
+import ttnn
+from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_layer import SegformerLayer
-from tests.ttnn.integration_tests.segformer.test_segformer_mix_ffn import (
-    create_custom_preprocessor as create_custom_preprocessor_mix_ffn,
-)
-from tests.ttnn.integration_tests.segformer.test_segformer_attention import (
+from models.demos.segformer.tests.pcc.test_segformer_attention import (
     create_custom_preprocessor as create_custom_preprocessor_attention,
 )
+from models.demos.segformer.tests.pcc.test_segformer_mix_ffn import (
+    create_custom_preprocessor as create_custom_preprocessor_mix_ffn,
+)
+from models.demos.segformer.tt.ttnn_segformer_layer import TtSegformerLayer
 from models.utility_functions import skip_for_grayskull
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def create_custom_preprocessor(device):
@@ -105,8 +102,7 @@ def test_segformer_layer(
     block_i,
     segformer_i,
     device,
-    reset_seeds,
-    is_ci_env,
+    model_location_generator,
 ):
     torch_input_tensor = torch.randn(batch_size, 1, seq_len, hidden_size)
     ttnn_input_tensor = ttnn.from_torch(
@@ -116,11 +112,8 @@ def test_segformer_layer(
         memory_config=ttnn.L1_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
-    torch_model = SegformerModel.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
-    config = torch_model.config
 
-    torch_model = torch_model.encoder.block[block_i][segformer_i]
-
+    config = load_config("configs/segformer_semantic_config.json")
     reference_model = SegformerLayer(
         config=config,
         hidden_size=hidden_size,
@@ -128,10 +121,10 @@ def test_segformer_layer(
         sequence_reduction_ratio=sequence_reduction_ratio,
         mlp_ratio=mlp_ratio,
     )
-
-    sd = torch_model.state_dict()
-    reference_model.load_state_dict(sd)
-    reference_model.eval()
+    target_prefix = f"encoder.block.{block_i}.{segformer_i}."
+    reference_model = load_torch_model(
+        reference_model, target_prefix, module="semantic_sub", model_location_generator=model_location_generator
+    )
 
     torch_input_tensor = torch.reshape(torch_input_tensor, (batch_size, seq_len, hidden_size))
     torch_output = reference_model(torch_input_tensor, height=height, width=width)

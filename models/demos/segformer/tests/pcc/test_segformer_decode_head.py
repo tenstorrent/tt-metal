@@ -2,19 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import math
+
 import pytest
-import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from transformers import SegformerForSemanticSegmentation
+import torch
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, preprocess_model_parameters
+
+import ttnn
+from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_decode_head import SegformerDecodeHead
-from models.demos.segformer.tt.ttnn_segformer_decode_head import TtSegformerDecodeHead
-from tests.ttnn.integration_tests.segformer.test_segformer_mlp import (
+from models.demos.segformer.tests.pcc.test_segformer_mlp import (
     create_custom_preprocessor as create_custom_preprocessor_mlp,
 )
+from models.demos.segformer.tt.ttnn_segformer_decode_head import TtSegformerDecodeHead
 from models.utility_functions import skip_for_grayskull
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def create_custom_preprocessor(device):
@@ -48,7 +50,7 @@ def create_custom_preprocessor(device):
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-def test_segformer_decode_head(device, is_ci_env):
+def test_segformer_decode_head(device, model_location_generator):
     batch_size = 1
 
     torch_input_tensor_0 = torch.randn(1, 32, 128, 128)
@@ -97,22 +99,12 @@ def test_segformer_decode_head(device, is_ci_env):
     torch_input_tensor = (torch_input_tensor_0, torch_input_tensor_1, torch_input_tensor_2, torch_input_tensor_3)
     ttnn_input_tensor = (ttnn_input_tensor_0, ttnn_input_tensor_1, ttnn_input_tensor_2, ttnn_input_tensor_3)
 
-    torch_model = SegformerForSemanticSegmentation.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
-    torch_model = torch_model.decode_head
-    config = torch_model.config
-
-    state_dict = torch_model.state_dict()
-
+    config = load_config("configs/segformer_semantic_config.json")
     reference_model = SegformerDecodeHead(config)
-
-    new_state_dict = {}
-    keys = [name for name, parameter in reference_model.state_dict().items()]
-    values = [parameter for name, parameter in state_dict.items()]
-    for i in range(len(keys)):
-        new_state_dict[keys[i]] = values[i]
-
-    reference_model.load_state_dict(new_state_dict)
-    reference_model.eval()
+    target_prefix = f"decode_head."
+    reference_model = load_torch_model(
+        reference_model, target_prefix, module="semantic_sub", model_location_generator=model_location_generator
+    )
 
     torch_output = reference_model(torch_input_tensor)
 
