@@ -992,13 +992,14 @@ void MetalContext::initialize_firmware(
                         close(fd);
                     }
                 }
-                tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, true);
+                tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, false);
                 tt::llrt::internal_::send_msg_to_eth_mailbox(
                     device_id,
                     virtual_core,
                     tt_metal::FWMailboxMsg::ETH_MSG_RELEASE_CORE,
                     {/*l1 addr to exec*/ jit_build_config.fw_launch_addr_value},
-                    false);
+                    true);
+                tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, true);
             }
 
             break;

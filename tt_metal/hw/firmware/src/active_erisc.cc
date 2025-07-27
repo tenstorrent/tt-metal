@@ -120,21 +120,20 @@ void __attribute__((noinline)) Application() {
 
     risc_init();
 
-    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
-    mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
-
     // Stall for the host to set this flag to 1 otherwise we could exit
-    // the base firmware while the host is still initializing
+    // to base firmware while the host is still initializing
     volatile uint32_t* const debug_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
     volatile uint32_t* const debug_run_count = reinterpret_cast<volatile uint32_t*>(0x3680);
     debug_run_count[0]++;
 
     debug_dump_addr[0] = 0x11111111;
     do {
-        invalidate_l1_cache();
         __asm__ volatile("fence");
     } while (gEnableFwFlag[0] != 1);
     debug_dump_addr[0] = 0x22222222;
+
+    mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
+    mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
 
     set_deassert_addresses();
 
@@ -246,5 +245,6 @@ void __attribute__((noinline)) Application() {
         }
     }
 
+    // Getting here is an invalid state
     internal_::disable_erisc_app();
 }
