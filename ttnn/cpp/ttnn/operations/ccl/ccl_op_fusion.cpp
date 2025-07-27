@@ -152,14 +152,14 @@ void MatmulFusedOpSignaler::init_llama_all_gather(
     uint32_t start_ring_index,
     uint32_t tensor_slice_shape_width,
     uint32_t output_page_offset,
-    bool is_clockwise_direction) {
+    uint32_t weight_output_page_offset) {
     this->num_transfers = num_transfers;
     this->ring_size = ring_size;
     this->start_ring_index = start_ring_index;
     this->tensor_slice_shape_width = tensor_slice_shape_width;
     this->output_page_offset = output_page_offset;
-    this->is_clockwise_dir = is_clockwise_direction;
-    initialized_all_gather = true;
+    this->weight_output_page_offset = weight_output_page_offset;
+    initialized_llama_all_gather = true;
 }
 
 // Used to propagate semaphore information from matmul to reduce_scatter in matmul_reduce_scatter op

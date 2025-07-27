@@ -122,6 +122,7 @@ struct MatmulFusedOpSignaler {
     bool initialized_llama_reduce_scatter_part1 = false;
     bool initialized_llama_reduce_scatter = false;
     bool initialized_fused_op = false;
+    bool initialized_llama_all_gather = false;
 
     MatmulFusedOpSignaler(MatmulFusedOpSignalerType signaler_type) { fused_op_type = signaler_type; }
 
@@ -141,7 +142,7 @@ struct MatmulFusedOpSignaler {
         uint32_t start_ring_index,
         uint32_t tensor_slice_shape_width,
         uint32_t output_page_offset,
-        bool is_clockwise_direction);
+        uint32_t weight_tensor_width);
 
     void init_reduce_scatter(
         const std::vector<CoreCoord>& fused_op_receiver_cores_noc,

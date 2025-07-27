@@ -393,6 +393,23 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
 
+    auto tensor_slicer =
+        ttnn::ccl::InterleavedRingAllGatherTensorSlicer(input_tensor, intermediate_tensor, dim, ring_index);
+    const uint32_t num_transfers = ring_size;
+    const uint32_t weight_tensor_width = input_tensor_b.padded_shape()[3] / 32;
+
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =
+        ttnn::experimental::ccl::MatmulFusedOpSignaler(ttnn::experimental::ccl::MatmulFusedOpSignalerType::ALL_GATHER);
+    matmul_fused_op_signaler->init_llama_all_gather(
+        num_transfers,
+        ring_size,
+        ring_index,
+        tensor_slicer.num_cols,
+        tensor_slicer.output_page_offset,
+        tensor_slicer.num_cols *
+            weight_tensor_width /* weight_output_page_offset: stride across a tensor slice in the weight_tensor */
+    );
+
     auto override_runtime_arguments_callback =
         [worker_sender_reader_kernel_id,
          worker_sender_writer_kernel_id,
