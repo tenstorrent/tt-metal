@@ -365,7 +365,6 @@ class Transformer(LightweightModule):
                         num_links=2,
                         memory_config=tt_logits.memory_config(),
                         cluster_axis=0,
-                        mesh_device=self.mesh_device,
                         topology=self.args.ccl_topology(),
                         barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                         chunks_per_sync=10,

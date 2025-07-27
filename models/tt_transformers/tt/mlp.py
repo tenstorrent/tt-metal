@@ -256,7 +256,6 @@ class MLP(LightweightModule):
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                     num_links=2,
                     cluster_axis=1,
-                    mesh_device=self.mesh_device,
                     topology=ttnn.Topology.Linear,
                     memory_config=input_mem_cfg,
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),

@@ -107,6 +107,7 @@ class TransformerBlock(LightweightModule):
                 tt_ccl=self.tt_ccl,
             ),
             args,
+            tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
         )
 
