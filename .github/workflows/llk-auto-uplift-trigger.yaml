@@ -402,7 +402,7 @@ jobs:
                 --branch "${{ env.BRANCH_NAME }}" \
                 --limit 5 \
                 --json conclusion,url,status,attempt \
-                --jq 'map(select(.status == "completed")) | .[0]'
+                --jq 'map(select(.status == "completed")) | if length == 0 then empty else .[0] end'
               )
 
             # If no completed runs are found, exit early
