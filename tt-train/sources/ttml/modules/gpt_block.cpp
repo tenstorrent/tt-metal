@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -52,7 +52,7 @@ autograd::TensorPtr GPTBlock::operator()(const autograd::TensorPtr& input, const
     x = (*ln2)(x);
     x = (*mlp)(x);
     x = ops::add(x, residual);
-    ttml::autograd::ctx().get_profiler().dump_results(&ttml::autograd::ctx().get_device(), "GPTBlock");
+    ttml::autograd::ctx().get_profiler().dump_results(&ttml::autograd::ctx().get_device(), "gpt_block");
 
     return x;
 }

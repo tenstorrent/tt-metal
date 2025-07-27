@@ -1,10 +1,8 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_profiler.hpp"
-
-#include <tt-metalium/distributed.hpp>
 
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
