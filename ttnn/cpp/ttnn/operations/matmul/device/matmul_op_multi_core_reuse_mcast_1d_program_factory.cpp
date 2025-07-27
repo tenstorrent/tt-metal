@@ -2304,7 +2304,7 @@ inline void override_mcast_in1_program_parameters(
         auto& sender_writer_runtime_args =
             GetRuntimeArgs(program, override_variables.kernels.at(1), override_variables.start_core);
         sender_writer_runtime_args[0] = src_buffer_b->address();
-        sender_writer_runtime_args[6] = dst_buffer->address();
+        sender_writer_runtime_args[7] = dst_buffer->address();
         if (bias_tensor.has_value()) {
             sender_writer_runtime_args[17] = (*bias_buffer)->address();
         }
@@ -2396,7 +2396,7 @@ inline void override_mcast_in0_program_parameters(
 
         // in1 sender
         writer_runtime_args[0] = src_buffer_b->address();
-        writer_runtime_args[6] = dst_buffer->address();
+        writer_runtime_args[7] = dst_buffer->address();
         if (bias_tensor.has_value()) {
             writer_runtime_args[17] = (*bias_buffer)->address();
         }
@@ -3570,8 +3570,8 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 
                 // in1 sender
                 writer_runtime_args[0] = src_buffer_b->address();
-                writer_runtime_args[6] = dst_buffer->address();
                 writer_runtime_args[6] = sparsity_buffer->address();
+                writer_runtime_args[7] = dst_buffer->address();
             }
         };
 
