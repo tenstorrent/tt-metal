@@ -5,7 +5,7 @@
 import ttnn
 
 
-class TtnnConv2D:
+class TtConv2D:
     def __init__(
         self,
         conv,

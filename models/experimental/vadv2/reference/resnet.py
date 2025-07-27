@@ -2,10 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Callable, List, Optional, Type, Union, Tuple
-
 import torch.nn as nn
 from torch import Tensor
+from typing import Callable, List, Optional, Type, Union, Tuple
 
 
 def conv3x3(in_planes: int, out_planes: int, stride: int = 1, groups: int = 1, dilation: int = 1) -> nn.Conv2d:
@@ -143,8 +142,6 @@ class ResNet(nn.Module):
             for m in self.modules():
                 if isinstance(m, Bottleneck) and m.bn3.weight is not None:
                     nn.init.constant_(m.bn3.weight, 0)  # type: ignore[arg-type]
-                elif isinstance(m, BasicBlock) and m.bn2.weight is not None:
-                    nn.init.constant_(m.bn2.weight, 0)  # type: ignore[arg-type]
 
     def _make_layer(
         self,

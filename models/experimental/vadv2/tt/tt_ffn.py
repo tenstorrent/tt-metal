@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -26,5 +26,5 @@ class TtFFN:
 
         # Residual connection
         x = ttnn.add(x, identity)
-
+        ttnn.deallocate(identity)
         return x

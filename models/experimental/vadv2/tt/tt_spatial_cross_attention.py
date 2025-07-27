@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -56,7 +56,7 @@ class TtSpatialCrossAttention:
             value = key
 
         if residual is None:
-            inp_residual = query  # ttnn.from_torch(query, dtype = ttnn.bfloat16, layout = ttnn.ROW_MAJOR_LAYOUT, device = self.device)
+            inp_residual = query
             slots = ttnn.zeros_like(query)
             slots = ttnn.to_torch(slots)
         if query_pos is not None:
@@ -67,8 +67,7 @@ class TtSpatialCrossAttention:
         D = reference_points_cam.size(3)
         indexes = []
         indexes = []
-        # bev_mask = ttnn.to_torch(bev_mask)
-        # reference_points_cam = ttnn.to_torch(reference_points_cam)
+
         for i, mask_per_img in enumerate(bev_mask):
             index_query_per_img = ttnn.sum(mask_per_img[0], -1)
             index_query_per_img = ttnn.to_torch(index_query_per_img)
@@ -180,9 +179,6 @@ class TtMSDeformableAttention3D:
         self.num_levels = num_levels
         self.num_heads = num_heads
         self.num_points = num_points
-        # self.sampling_offsets = nn.Linear(embed_dims, num_heads * num_levels * num_points * 2)
-        # self.attention_weights = nn.Linear(embed_dims, num_heads * num_levels * num_points)
-        # self.value_proj = nn.Linear(embed_dims, embed_dims)
 
     def __call__(
         self,
@@ -231,17 +227,15 @@ class TtMSDeformableAttention3D:
         attention_weights = ttnn.linear(query, params.attention_weights.weight, bias=params.attention_weights.bias)
         ttnn.deallocate(params.attention_weights.weight)
         ttnn.deallocate(params.attention_weights.bias)
-        # ttnn.deallocate(query)
-        # ttnn.deallocate(identity)
+
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_levels * self.num_points)
         )
-        # attention_weights = ttnn.to_torch(attention_weights)
-        attention_weights = ttnn.softmax(attention_weights, dim=-1)
-        attention_weights = ttnn.to_memory_config(attention_weights, ttnn.DRAM_MEMORY_CONFIG)
-        # attention_weights = ttnn.from_torch(
-        #     attention_weights, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
-        # )
+        attention_weights = ttnn.to_torch(attention_weights)  # OOM ISSUE
+        attention_weights = attention_weights.softmax(dim=-1)
+        attention_weights = ttnn.from_torch(
+            attention_weights, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
+        )
 
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_levels, self.num_points)

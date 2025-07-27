@@ -1,14 +1,13 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
 import torch
-from loguru import logger
-import torch.nn as nn
 import copy
-import numpy as np
 import ttnn
+import numpy as np
+import torch.nn as nn
 from models.experimental.vadv2.reference import transformer
 from models.experimental.vadv2.tt.tt_transformer import TtVADPerceptionTransformer
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -24,10 +23,7 @@ from models.experimental.vadv2.reference.decoder import (
 )
 from models.experimental.vadv2.reference.temporal_self_attention import TemporalSelfAttention
 from models.experimental.vadv2.reference.spatial_cross_attention import SpatialCrossAttention
-
-
 from ttnn.model_preprocessing import (
-    infer_ttnn_module_args,
     preprocess_model_parameters,
     preprocess_linear_weight,
     preprocess_linear_bias,

@@ -1,10 +1,11 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
 import ttnn
 import numpy as np
+from torchvision.transforms.functional import rotate
 from models.experimental.vadv2.tt.tt_encoder import TtBEVFormerEncoder
 from models.experimental.vadv2.tt.tt_decoder import TtDetectionTransformerDecoder, TtMapDetectionTransformerDecoder
 
@@ -193,11 +194,8 @@ class TtVADPerceptionTransformer:
         spatial_shapes = ttnn.from_torch(
             spatial_shapes, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
         )
-        # spatial_shapes = ttnn.prod(spatial_shapes, 1)
-        # spatial_shapes = ttnn.cumsum(spatial_shapes,0)[:-1]
-        level_start_index = ttnn.zeros(
-            (1,), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=self.device
-        )  ##---will take alook later
+
+        level_start_index = ttnn.zeros((1,), dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=self.device)
         feat_flatten = ttnn.permute(feat_flatten, (0, 2, 1, 3))  # (num_cam, H*W, bs, embed_dims)
         bev_embed = self.encoder(
             bev_queries,
@@ -212,16 +210,6 @@ class TtVADPerceptionTransformer:
             shift=shift,
             **kwargs,
         )
-        return bev_embed
-
-    def lss_bev_encode(self, mlvl_feats, prev_bev=None, **kwargs):
-        assert len(mlvl_feats) == 1, "Currently we only support single level feat in LSS"
-        images = mlvl_feats[0]
-        img_metas = kwargs["img_metas"]
-        bev_embed = self.encoder(images, img_metas)
-        bs, c, _, _ = bev_embed.shape
-        bev_embed = bev_embed.view(bs, c, -1).permute(0, 2, 1).contiguous()
-
         return bev_embed
 
     def get_bev_features(

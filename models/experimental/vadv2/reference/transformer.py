@@ -4,9 +4,10 @@
 
 import torch
 import torch.nn as nn
+from torchvision.transforms.functional import rotate
+import numpy as np
 from models.experimental.vadv2.reference.encoder import BEVFormerEncoder
 from models.experimental.vadv2.reference.decoder import DetectionTransformerDecoder, MapDetectionTransformerDecoder
-import numpy as np
 
 
 class VADPerceptionTransformer(nn.Module):

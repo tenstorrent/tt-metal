@@ -3,16 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import copy
-
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from models.experimental.vadv2.reference.nms_free_coder import MapNMSFreeCoder, CustomNMSFreeCoder
 from models.experimental.vadv2.reference.decoder import CustomTransformerDecoder
 from models.experimental.vadv2.reference.transformer import VADPerceptionTransformer
 from models.experimental.vadv2.reference.utils import inverse_sigmoid, bbox_xyxy_to_cxcywh
-
-# from mmdet3d.core.bbox.structures.lidar_box3d import LiDARInstance3DBoxes
+from models.experimental.vadv2.reference.base_box3d import LiDARInstance3DBoxes
 
 
 class LearnedPositionalEncoding(nn.Module):
@@ -84,7 +81,6 @@ class VADHead(nn.Module):
         bev_w=30,
         fut_ts=6,
         fut_mode=6,
-        loss_traj=dict(type="L1Loss", loss_weight=0.25),
         loss_traj_cls=dict(type="FocalLoss", use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=0.8),
         map_bbox_coder=None,
         map_num_query=900,
@@ -101,10 +97,6 @@ class VADHead(nn.Module):
         loss_map_cls=dict(
             type="CrossEntropyLoss", bg_cls_weight=0.1, use_sigmoid=False, loss_weight=1.0, class_weight=1.0
         ),
-        loss_map_bbox=dict(type="L1Loss", loss_weight=5.0),
-        loss_map_iou=dict(type="GIoULoss", loss_weight=2.0),
-        loss_map_pts=dict(type="ChamferDistance", loss_src_weight=1.0, loss_dst_weight=1.0),
-        loss_map_dir=dict(type="PtsDirCosLoss", loss_weight=2.0),
         tot_epoch=None,
         use_traj_lr_warmup=False,
         motion_decoder=None,
@@ -116,10 +108,6 @@ class VADHead(nn.Module):
         pe_normalization=True,
         ego_his_encoder=None,
         ego_fut_mode=3,
-        loss_plan_reg=dict(type="L1Loss", loss_weight=0.25),
-        loss_plan_bound=dict(type="PlanMapBoundLoss", loss_weight=0.1),
-        loss_plan_col=dict(type="PlanAgentDisLoss", loss_weight=0.1),
-        loss_plan_dir=dict(type="PlanMapThetaLoss", loss_weight=0.1),
         ego_agent_decoder=None,
         ego_map_decoder=None,
         query_thresh=None,
@@ -437,15 +425,21 @@ class VADHead(nn.Module):
                 self.bev_w,
                 grid_length=(self.real_h / self.bev_h, self.real_w / self.bev_w),
                 bev_pos=bev_pos,
-                reg_branches=self.reg_branches if self.with_box_refine else None,  # noqa:E501
+                reg_branches=self.reg_branches if self.with_box_refine else None,
                 cls_branches=self.cls_branches if self.as_two_stage else None,
-                map_reg_branches=self.map_reg_branches if self.with_box_refine else None,  # noqa:E501
+                map_reg_branches=self.map_reg_branches if self.with_box_refine else None,
                 map_cls_branches=self.map_cls_branches if self.as_two_stage else None,
                 img_metas=img_metas,
                 prev_bev=prev_bev,
             )
 
         bev_embed, hs, init_reference, inter_references, map_hs, map_init_reference, map_inter_references = outputs
+        torch.save(hs, "models/experimental/vadv2/dumps/hs_torch")
+        torch.save(init_reference, "models/experimental/vadv2/dumps/init_reference_torch")
+        torch.save(inter_references, "models/experimental/vadv2/dumps/inter_references_torch")
+        torch.save(map_init_reference, "models/experimental/vadv2/dumps/map_init_reference_torch")
+        torch.save(map_inter_references, "models/experimental/vadv2/dumps/map_inter_references_torch")
+        torch.save(map_hs, "models/experimental/vadv2/dumps/map_hs_torch")
 
         hs = hs.permute(0, 2, 1, 3)
         outputs_classes = []
@@ -459,7 +453,6 @@ class VADHead(nn.Module):
         map_outputs_coords = []
         map_outputs_pts_coords = []
         map_outputs_coords_bev = []
-
         for lvl in range(hs.shape[0]):
             if lvl == 0:
                 reference = init_reference
@@ -467,8 +460,10 @@ class VADHead(nn.Module):
                 reference = inter_references[lvl - 1]
             reference = inverse_sigmoid(reference)
             outputs_class = self.cls_branches[lvl](hs[lvl])
-            tmp = self.reg_branches[lvl](hs[lvl])
 
+            tmp = self.reg_branches[lvl](hs[lvl])
+            torch.save(outputs_class, "models/experimental/vadv2/dumps/outputs_class_torch")
+            torch.save(tmp, "models/experimental/vadv2/dumps/tmp_torch")
             # TODO: check the shape of reference
             assert reference.shape[-1] == 3
             tmp[..., 0:2] = tmp[..., 0:2] + reference[..., 0:2]
@@ -484,7 +479,6 @@ class VADHead(nn.Module):
             outputs_coord = tmp
             outputs_classes.append(outputs_class)
             outputs_coords.append(outputs_coord)
-
         for lvl in range(map_hs.shape[0]):
             if lvl == 0:
                 reference = map_init_reference
@@ -722,693 +716,6 @@ class VADHead(nn.Module):
         else:
             raise NotImplementedError
         return bbox, pts_reshape
-
-    def _get_target_single(self, cls_score, bbox_pred, gt_labels, gt_bboxes, gt_attr_labels, gt_bboxes_ignore=None):
-        num_bboxes = bbox_pred.size(0)
-        # assigner and sampler
-        gt_fut_trajs = gt_attr_labels[:, : self.fut_ts * 2]
-        gt_fut_masks = gt_attr_labels[:, self.fut_ts * 2 : self.fut_ts * 3]
-        gt_bbox_c = gt_bboxes.shape[-1]
-        num_gt_bbox, gt_traj_c = gt_fut_trajs.shape
-
-        assign_result = self.assigner.assign(bbox_pred, cls_score, gt_bboxes, gt_labels, gt_bboxes_ignore)
-
-        sampling_result = self.sampler.sample(assign_result, bbox_pred, gt_bboxes)
-        pos_inds = sampling_result.pos_inds
-        neg_inds = sampling_result.neg_inds
-
-        # label targets
-        labels = gt_bboxes.new_full((num_bboxes,), self.num_classes, dtype=torch.long)
-        labels[pos_inds] = gt_labels[sampling_result.pos_assigned_gt_inds]
-        label_weights = gt_bboxes.new_ones(num_bboxes)
-
-        # bbox targets
-        bbox_targets = torch.zeros_like(bbox_pred)[..., :gt_bbox_c]
-        bbox_weights = torch.zeros_like(bbox_pred)
-        bbox_weights[pos_inds] = 1.0
-
-        # trajs targets
-        traj_targets = torch.zeros((num_bboxes, gt_traj_c), dtype=torch.float32, device=bbox_pred.device)
-        traj_weights = torch.zeros_like(traj_targets)
-        traj_targets[pos_inds] = gt_fut_trajs[sampling_result.pos_assigned_gt_inds]
-        traj_weights[pos_inds] = 1.0
-
-        # Filter out invalid fut trajs
-        traj_masks = torch.zeros_like(traj_targets)  # [num_bboxes, fut_ts*2]
-        gt_fut_masks = gt_fut_masks.unsqueeze(-1).repeat(1, 1, 2).view(num_gt_bbox, -1)  # [num_gt_bbox, fut_ts*2]
-        traj_masks[pos_inds] = gt_fut_masks[sampling_result.pos_assigned_gt_inds]
-        traj_weights = traj_weights * traj_masks
-
-        # Extra future timestamp mask for controlling pred horizon
-        fut_ts_mask = torch.zeros((num_bboxes, self.fut_ts, 2), dtype=torch.float32, device=bbox_pred.device)
-        fut_ts_mask[:, : self.valid_fut_ts, :] = 1.0
-        fut_ts_mask = fut_ts_mask.view(num_bboxes, -1)
-        traj_weights = traj_weights * fut_ts_mask
-
-        # DETR
-        bbox_targets[pos_inds] = sampling_result.pos_gt_bboxes
-
-        return (
-            labels,
-            label_weights,
-            bbox_targets,
-            bbox_weights,
-            traj_targets,
-            traj_weights,
-            traj_masks.view(-1, self.fut_ts, 2)[..., 0],
-            pos_inds,
-            neg_inds,
-        )
-
-    def _map_get_target_single(
-        self, cls_score, bbox_pred, pts_pred, gt_labels, gt_bboxes, gt_shifts_pts, gt_bboxes_ignore=None
-    ):
-        num_bboxes = bbox_pred.size(0)
-        # assigner and sampler
-        gt_c = gt_bboxes.shape[-1]
-        assign_result, order_index = self.map_assigner.assign(
-            bbox_pred, cls_score, pts_pred, gt_bboxes, gt_labels, gt_shifts_pts, gt_bboxes_ignore
-        )
-
-        sampling_result = self.map_sampler.sample(assign_result, bbox_pred, gt_bboxes)
-        pos_inds = sampling_result.pos_inds
-        neg_inds = sampling_result.neg_inds
-        # label targets
-        labels = gt_bboxes.new_full((num_bboxes,), self.map_num_classes, dtype=torch.long)
-        labels[pos_inds] = gt_labels[sampling_result.pos_assigned_gt_inds]
-        label_weights = gt_bboxes.new_ones(num_bboxes)
-        # bbox targets
-        bbox_targets = torch.zeros_like(bbox_pred)[..., :gt_c]
-        bbox_weights = torch.zeros_like(bbox_pred)
-        bbox_weights[pos_inds] = 1.0
-        # pts targets
-        if order_index is None:
-            assigned_shift = gt_labels[sampling_result.pos_assigned_gt_inds]
-        else:
-            assigned_shift = order_index[sampling_result.pos_inds, sampling_result.pos_assigned_gt_inds]
-        pts_targets = pts_pred.new_zeros((pts_pred.size(0), pts_pred.size(1), pts_pred.size(2)))
-        pts_weights = torch.zeros_like(pts_targets)
-        pts_weights[pos_inds] = 1.0
-        # DETR
-        bbox_targets[pos_inds] = sampling_result.pos_gt_bboxes
-        pts_targets[pos_inds] = gt_shifts_pts[sampling_result.pos_assigned_gt_inds, assigned_shift, :, :]
-        return (labels, label_weights, bbox_targets, bbox_weights, pts_targets, pts_weights, pos_inds, neg_inds)
-
-    def get_targets(
-        self,
-        cls_scores_list,
-        bbox_preds_list,
-        gt_bboxes_list,
-        gt_labels_list,
-        gt_attr_labels_list,
-        gt_bboxes_ignore_list=None,
-    ):
-        assert gt_bboxes_ignore_list is None, "Only supports for gt_bboxes_ignore setting to None."
-        num_imgs = len(cls_scores_list)
-        gt_bboxes_ignore_list = [gt_bboxes_ignore_list for _ in range(num_imgs)]
-
-        (
-            labels_list,
-            label_weights_list,
-            bbox_targets_list,
-            bbox_weights_list,
-            traj_targets_list,
-            traj_weights_list,
-            gt_fut_masks_list,
-            pos_inds_list,
-            neg_inds_list,
-        ) = multi_apply(
-            self._get_target_single,
-            cls_scores_list,
-            bbox_preds_list,
-            gt_labels_list,
-            gt_bboxes_list,
-            gt_attr_labels_list,
-            gt_bboxes_ignore_list,
-        )
-        num_total_pos = sum((inds.numel() for inds in pos_inds_list))
-        num_total_neg = sum((inds.numel() for inds in neg_inds_list))
-        return (
-            labels_list,
-            label_weights_list,
-            bbox_targets_list,
-            bbox_weights_list,
-            traj_targets_list,
-            traj_weights_list,
-            gt_fut_masks_list,
-            num_total_pos,
-            num_total_neg,
-        )
-
-    def map_get_targets(
-        self,
-        cls_scores_list,
-        bbox_preds_list,
-        pts_preds_list,
-        gt_bboxes_list,
-        gt_labels_list,
-        gt_shifts_pts_list,
-        gt_bboxes_ignore_list=None,
-    ):
-        assert gt_bboxes_ignore_list is None, "Only supports for gt_bboxes_ignore setting to None."
-        num_imgs = len(cls_scores_list)
-        gt_bboxes_ignore_list = [gt_bboxes_ignore_list for _ in range(num_imgs)]
-
-        (
-            labels_list,
-            label_weights_list,
-            bbox_targets_list,
-            bbox_weights_list,
-            pts_targets_list,
-            pts_weights_list,
-            pos_inds_list,
-            neg_inds_list,
-        ) = multi_apply(
-            self._map_get_target_single,
-            cls_scores_list,
-            bbox_preds_list,
-            pts_preds_list,
-            gt_labels_list,
-            gt_bboxes_list,
-            gt_shifts_pts_list,
-            gt_bboxes_ignore_list,
-        )
-        num_total_pos = sum((inds.numel() for inds in pos_inds_list))
-        num_total_neg = sum((inds.numel() for inds in neg_inds_list))
-        return (
-            labels_list,
-            label_weights_list,
-            bbox_targets_list,
-            bbox_weights_list,
-            pts_targets_list,
-            pts_weights_list,
-            num_total_pos,
-            num_total_neg,
-        )
-
-    def loss_planning(
-        self,
-        ego_fut_preds,
-        ego_fut_gt,
-        ego_fut_masks,
-        ego_fut_cmd,
-        lane_preds,
-        lane_score_preds,
-        agent_preds,
-        agent_fut_preds,
-        agent_score_preds,
-        agent_fut_cls_preds,
-    ):
-        ego_fut_gt = ego_fut_gt.unsqueeze(1).repeat(1, self.ego_fut_mode, 1, 1)
-        loss_plan_l1_weight = ego_fut_cmd[..., None, None] * ego_fut_masks[:, None, :, None]
-        loss_plan_l1_weight = loss_plan_l1_weight.repeat(1, 1, 1, 2)
-
-        loss_plan_l1 = self.loss_plan_reg(ego_fut_preds, ego_fut_gt, loss_plan_l1_weight)
-
-        loss_plan_bound = self.loss_plan_bound(
-            ego_fut_preds[ego_fut_cmd == 1], lane_preds, lane_score_preds, weight=ego_fut_masks
-        )
-
-        loss_plan_col = self.loss_plan_col(
-            ego_fut_preds[ego_fut_cmd == 1],
-            agent_preds,
-            agent_fut_preds,
-            agent_score_preds,
-            agent_fut_cls_preds,
-            weight=ego_fut_masks[:, :, None].repeat(1, 1, 2),
-        )
-
-        loss_plan_dir = self.loss_plan_dir(
-            ego_fut_preds[ego_fut_cmd == 1], lane_preds, lane_score_preds, weight=ego_fut_masks
-        )
-
-        if digit_version(TORCH_VERSION) >= digit_version("1.8"):
-            loss_plan_l1 = torch.nan_to_num(loss_plan_l1)
-            loss_plan_bound = torch.nan_to_num(loss_plan_bound)
-            loss_plan_col = torch.nan_to_num(loss_plan_col)
-            loss_plan_dir = torch.nan_to_num(loss_plan_dir)
-
-        loss_plan_dict = dict()
-        loss_plan_dict["loss_plan_reg"] = loss_plan_l1
-        loss_plan_dict["loss_plan_bound"] = loss_plan_bound
-        loss_plan_dict["loss_plan_col"] = loss_plan_col
-        loss_plan_dict["loss_plan_dir"] = loss_plan_dir
-
-        return loss_plan_dict
-
-    def loss_single(
-        self,
-        cls_scores,
-        bbox_preds,
-        traj_preds,
-        traj_cls_preds,
-        gt_bboxes_list,
-        gt_labels_list,
-        gt_attr_labels_list,
-        gt_bboxes_ignore_list=None,
-    ):
-        num_imgs = cls_scores.size(0)
-        cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
-        bbox_preds_list = [bbox_preds[i] for i in range(num_imgs)]
-        cls_reg_targets = self.get_targets(
-            cls_scores_list, bbox_preds_list, gt_bboxes_list, gt_labels_list, gt_attr_labels_list, gt_bboxes_ignore_list
-        )
-
-        (
-            labels_list,
-            label_weights_list,
-            bbox_targets_list,
-            bbox_weights_list,
-            traj_targets_list,
-            traj_weights_list,
-            gt_fut_masks_list,
-            num_total_pos,
-            num_total_neg,
-        ) = cls_reg_targets
-
-        labels = torch.cat(labels_list, 0)
-        label_weights = torch.cat(label_weights_list, 0)
-        bbox_targets = torch.cat(bbox_targets_list, 0)
-        bbox_weights = torch.cat(bbox_weights_list, 0)
-        traj_targets = torch.cat(traj_targets_list, 0)
-        traj_weights = torch.cat(traj_weights_list, 0)
-        gt_fut_masks = torch.cat(gt_fut_masks_list, 0)
-
-        # classification loss
-        cls_scores = cls_scores.reshape(-1, self.cls_out_channels)
-        # construct weighted avg_factor to match with the official DETR repo
-        cls_avg_factor = num_total_pos * 1.0 + num_total_neg * self.bg_cls_weight
-        if self.sync_cls_avg_factor:
-            cls_avg_factor = reduce_mean(cls_scores.new_tensor([cls_avg_factor]))
-
-        cls_avg_factor = max(cls_avg_factor, 1)
-        loss_cls = self.loss_cls(cls_scores, labels, label_weights, avg_factor=cls_avg_factor)
-
-        # Compute the average number of gt boxes accross all gpus, for
-        # normalization purposes
-        num_total_pos = loss_cls.new_tensor([num_total_pos])
-        num_total_pos = torch.clamp(reduce_mean(num_total_pos), min=1).item()
-
-        # regression L1 loss
-        bbox_preds = bbox_preds.reshape(-1, bbox_preds.size(-1))
-        normalized_bbox_targets = normalize_bbox(bbox_targets, self.pc_range)
-        isnotnan = torch.isfinite(normalized_bbox_targets).all(dim=-1)
-        bbox_weights = bbox_weights * self.code_weights
-        loss_bbox = self.loss_bbox(
-            bbox_preds[isnotnan, :10],
-            normalized_bbox_targets[isnotnan, :10],
-            bbox_weights[isnotnan, :10],
-            avg_factor=num_total_pos,
-        )
-
-        # traj regression loss
-        best_traj_preds = self.get_best_fut_preds(
-            traj_preds.reshape(-1, self.fut_mode, self.fut_ts, 2),
-            traj_targets.reshape(-1, self.fut_ts, 2),
-            gt_fut_masks,
-        )
-
-        neg_inds = bbox_weights[:, 0] == 0
-        traj_labels = self.get_traj_cls_target(
-            traj_preds.reshape(-1, self.fut_mode, self.fut_ts, 2),
-            traj_targets.reshape(-1, self.fut_ts, 2),
-            gt_fut_masks,
-            neg_inds,
-        )
-
-        loss_traj = self.loss_traj(
-            best_traj_preds[isnotnan], traj_targets[isnotnan], traj_weights[isnotnan], avg_factor=num_total_pos
-        )
-
-        if self.use_traj_lr_warmup:
-            loss_scale_factor = get_traj_warmup_loss_weight(self.epoch, self.tot_epoch)
-            loss_traj = loss_scale_factor * loss_traj
-
-        # traj classification loss
-        traj_cls_scores = traj_cls_preds.reshape(-1, self.fut_mode)
-        # construct weighted avg_factor to match with the official DETR repo
-        traj_cls_avg_factor = num_total_pos * 1.0 + num_total_neg * self.traj_bg_cls_weight
-        if self.sync_cls_avg_factor:
-            traj_cls_avg_factor = reduce_mean(traj_cls_scores.new_tensor([traj_cls_avg_factor]))
-
-        traj_cls_avg_factor = max(traj_cls_avg_factor, 1)
-        loss_traj_cls = self.loss_traj_cls(traj_cls_scores, traj_labels, label_weights, avg_factor=traj_cls_avg_factor)
-
-        if digit_version(TORCH_VERSION) >= digit_version("1.8"):
-            loss_cls = torch.nan_to_num(loss_cls)
-            loss_bbox = torch.nan_to_num(loss_bbox)
-            loss_traj = torch.nan_to_num(loss_traj)
-            loss_traj_cls = torch.nan_to_num(loss_traj_cls)
-
-        return loss_cls, loss_bbox, loss_traj, loss_traj_cls
-
-    def get_best_fut_preds(self, traj_preds, traj_targets, gt_fut_masks):
-        cum_traj_preds = traj_preds.cumsum(dim=-2)
-        cum_traj_targets = traj_targets.cumsum(dim=-2)
-
-        # Get min pred mode indices.
-        # (num_box_preds, fut_mode, fut_ts)
-        dist = torch.linalg.norm(cum_traj_targets[:, None, :, :] - cum_traj_preds, dim=-1)
-        dist = dist * gt_fut_masks[:, None, :]
-        dist = dist[..., -1]
-        dist[torch.isnan(dist)] = dist[torch.isnan(dist)] * 0
-        min_mode_idxs = torch.argmin(dist, dim=-1).tolist()
-        box_idxs = torch.arange(traj_preds.shape[0]).tolist()
-        best_traj_preds = traj_preds[box_idxs, min_mode_idxs, :, :].reshape(-1, self.fut_ts * 2)
-
-        return best_traj_preds
-
-    def get_traj_cls_target(self, traj_preds, traj_targets, gt_fut_masks, neg_inds):
-        cum_traj_preds = traj_preds.cumsum(dim=-2)
-        cum_traj_targets = traj_targets.cumsum(dim=-2)
-
-        # Get min pred mode indices.
-        # (num_box_preds, fut_mode, fut_ts)
-        dist = torch.linalg.norm(cum_traj_targets[:, None, :, :] - cum_traj_preds, dim=-1)
-        dist = dist * gt_fut_masks[:, None, :]
-        dist = dist[..., -1]
-        dist[torch.isnan(dist)] = dist[torch.isnan(dist)] * 0
-        traj_labels = torch.argmin(dist, dim=-1)
-        traj_labels[neg_inds] = self.fut_mode
-
-        return traj_labels
-
-    def map_loss_single(
-        self,
-        cls_scores,
-        bbox_preds,
-        pts_preds,
-        gt_bboxes_list,
-        gt_labels_list,
-        gt_shifts_pts_list,
-        gt_bboxes_ignore_list=None,
-    ):
-        num_imgs = cls_scores.size(0)
-        cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
-        bbox_preds_list = [bbox_preds[i] for i in range(num_imgs)]
-        pts_preds_list = [pts_preds[i] for i in range(num_imgs)]
-
-        cls_reg_targets = self.map_get_targets(
-            cls_scores_list,
-            bbox_preds_list,
-            pts_preds_list,
-            gt_bboxes_list,
-            gt_labels_list,
-            gt_shifts_pts_list,
-            gt_bboxes_ignore_list,
-        )
-        (
-            labels_list,
-            label_weights_list,
-            bbox_targets_list,
-            bbox_weights_list,
-            pts_targets_list,
-            pts_weights_list,
-            num_total_pos,
-            num_total_neg,
-        ) = cls_reg_targets
-
-        labels = torch.cat(labels_list, 0)
-        label_weights = torch.cat(label_weights_list, 0)
-        bbox_targets = torch.cat(bbox_targets_list, 0)
-        bbox_weights = torch.cat(bbox_weights_list, 0)
-        pts_targets = torch.cat(pts_targets_list, 0)
-        pts_weights = torch.cat(pts_weights_list, 0)
-
-        # classification loss
-        cls_scores = cls_scores.reshape(-1, self.map_cls_out_channels)
-        # construct weighted avg_factor to match with the official DETR repo
-        cls_avg_factor = num_total_pos * 1.0 + num_total_neg * self.map_bg_cls_weight
-        if self.sync_cls_avg_factor:
-            cls_avg_factor = reduce_mean(cls_scores.new_tensor([cls_avg_factor]))
-
-        cls_avg_factor = max(cls_avg_factor, 1)
-        loss_cls = self.loss_map_cls(cls_scores, labels, label_weights, avg_factor=cls_avg_factor)
-
-        # Compute the average number of gt boxes accross all gpus, for
-        # normalization purposes
-        num_total_pos = loss_cls.new_tensor([num_total_pos])
-        num_total_pos = torch.clamp(reduce_mean(num_total_pos), min=1).item()
-
-        # regression L1 loss
-        bbox_preds = bbox_preds.reshape(-1, bbox_preds.size(-1))
-        normalized_bbox_targets = normalize_2d_bbox(bbox_targets, self.pc_range)
-        # normalized_bbox_targets = bbox_targets
-        isnotnan = torch.isfinite(normalized_bbox_targets).all(dim=-1)
-        bbox_weights = bbox_weights * self.map_code_weights
-
-        loss_bbox = self.loss_map_bbox(
-            bbox_preds[isnotnan, :4],
-            normalized_bbox_targets[isnotnan, :4],
-            bbox_weights[isnotnan, :4],
-            avg_factor=num_total_pos,
-        )
-
-        # regression pts CD loss
-        # num_samples, num_order, num_pts, num_coords
-        normalized_pts_targets = normalize_2d_pts(pts_targets, self.pc_range)
-
-        # num_samples, num_pts, num_coords
-        pts_preds = pts_preds.reshape(-1, pts_preds.size(-2), pts_preds.size(-1))
-        if self.map_num_pts_per_vec != self.map_num_pts_per_gt_vec:
-            pts_preds = pts_preds.permute(0, 2, 1)
-            pts_preds = F.interpolate(pts_preds, size=(self.map_num_pts_per_gt_vec), mode="linear", align_corners=True)
-            pts_preds = pts_preds.permute(0, 2, 1).contiguous()
-
-        loss_pts = self.loss_map_pts(
-            pts_preds[isnotnan, :, :],
-            normalized_pts_targets[isnotnan, :, :],
-            pts_weights[isnotnan, :, :],
-            avg_factor=num_total_pos,
-        )
-
-        dir_weights = pts_weights[:, : -self.map_dir_interval, 0]
-        denormed_pts_preds = denormalize_2d_pts(pts_preds, self.pc_range)
-        denormed_pts_preds_dir = (
-            denormed_pts_preds[:, self.map_dir_interval :, :] - denormed_pts_preds[:, : -self.map_dir_interval, :]
-        )
-        pts_targets_dir = pts_targets[:, self.map_dir_interval :, :] - pts_targets[:, : -self.map_dir_interval, :]
-
-        loss_dir = self.loss_map_dir(
-            denormed_pts_preds_dir[isnotnan, :, :],
-            pts_targets_dir[isnotnan, :, :],
-            dir_weights[isnotnan, :],
-            avg_factor=num_total_pos,
-        )
-
-        bboxes = denormalize_2d_bbox(bbox_preds, self.pc_range)
-        # regression IoU loss, defaultly GIoU loss
-        loss_iou = self.loss_map_iou(
-            bboxes[isnotnan, :4], bbox_targets[isnotnan, :4], bbox_weights[isnotnan, :4], avg_factor=num_total_pos
-        )
-
-        if digit_version(TORCH_VERSION) >= digit_version("1.8"):
-            loss_cls = torch.nan_to_num(loss_cls)
-            loss_bbox = torch.nan_to_num(loss_bbox)
-            loss_iou = torch.nan_to_num(loss_iou)
-            loss_pts = torch.nan_to_num(loss_pts)
-            loss_dir = torch.nan_to_num(loss_dir)
-
-        return loss_cls, loss_bbox, loss_iou, loss_pts, loss_dir
-
-    def loss(
-        self,
-        gt_bboxes_list,
-        gt_labels_list,
-        map_gt_bboxes_list,
-        map_gt_labels_list,
-        preds_dicts,
-        ego_fut_gt,
-        ego_fut_masks,
-        ego_fut_cmd,
-        gt_attr_labels,
-        gt_bboxes_ignore=None,
-        map_gt_bboxes_ignore=None,
-        img_metas=None,
-    ):
-        assert gt_bboxes_ignore is None, (
-            f"{self.__class__.__name__} only supports " f"for gt_bboxes_ignore setting to None."
-        )
-
-        map_gt_vecs_list = copy.deepcopy(map_gt_bboxes_list)
-
-        all_cls_scores = preds_dicts["all_cls_scores"]
-        all_bbox_preds = preds_dicts["all_bbox_preds"]
-        all_traj_preds = preds_dicts["all_traj_preds"]
-        all_traj_cls_scores = preds_dicts["all_traj_cls_scores"]
-        enc_cls_scores = preds_dicts["enc_cls_scores"]
-        enc_bbox_preds = preds_dicts["enc_bbox_preds"]
-        map_all_cls_scores = preds_dicts["map_all_cls_scores"]
-        map_all_bbox_preds = preds_dicts["map_all_bbox_preds"]
-        map_all_pts_preds = preds_dicts["map_all_pts_preds"]
-        map_enc_cls_scores = preds_dicts["map_enc_cls_scores"]
-        map_enc_bbox_preds = preds_dicts["map_enc_bbox_preds"]
-        map_enc_pts_preds = preds_dicts["map_enc_pts_preds"]
-        ego_fut_preds = preds_dicts["ego_fut_preds"]
-
-        num_dec_layers = len(all_cls_scores)
-        device = gt_labels_list[0].device
-
-        gt_bboxes_list = [
-            torch.cat((gt_bboxes.gravity_center, gt_bboxes.tensor[:, 3:]), dim=1).to(device)
-            for gt_bboxes in gt_bboxes_list
-        ]
-
-        all_gt_bboxes_list = [gt_bboxes_list for _ in range(num_dec_layers)]
-        all_gt_labels_list = [gt_labels_list for _ in range(num_dec_layers)]
-        all_gt_attr_labels_list = [gt_attr_labels for _ in range(num_dec_layers)]
-        all_gt_bboxes_ignore_list = [gt_bboxes_ignore for _ in range(num_dec_layers)]
-
-        losses_cls, losses_bbox, loss_traj, loss_traj_cls = multi_apply(
-            self.loss_single,
-            all_cls_scores,
-            all_bbox_preds,
-            all_traj_preds,
-            all_traj_cls_scores,
-            all_gt_bboxes_list,
-            all_gt_labels_list,
-            all_gt_attr_labels_list,
-            all_gt_bboxes_ignore_list,
-        )
-
-        num_dec_layers = len(map_all_cls_scores)
-        device = map_gt_labels_list[0].device
-
-        map_gt_bboxes_list = [map_gt_bboxes.bbox.to(device) for map_gt_bboxes in map_gt_vecs_list]
-        map_gt_pts_list = [map_gt_bboxes.fixed_num_sampled_points.to(device) for map_gt_bboxes in map_gt_vecs_list]
-        if self.map_gt_shift_pts_pattern == "v0":
-            map_gt_shifts_pts_list = [
-                gt_bboxes.shift_fixed_num_sampled_points.to(device) for gt_bboxes in map_gt_vecs_list
-            ]
-        elif self.map_gt_shift_pts_pattern == "v1":
-            map_gt_shifts_pts_list = [
-                gt_bboxes.shift_fixed_num_sampled_points_v1.to(device) for gt_bboxes in map_gt_vecs_list
-            ]
-        elif self.map_gt_shift_pts_pattern == "v2":
-            map_gt_shifts_pts_list = [
-                gt_bboxes.shift_fixed_num_sampled_points_v2.to(device) for gt_bboxes in map_gt_vecs_list
-            ]
-        elif self.map_gt_shift_pts_pattern == "v3":
-            map_gt_shifts_pts_list = [
-                gt_bboxes.shift_fixed_num_sampled_points_v3.to(device) for gt_bboxes in map_gt_vecs_list
-            ]
-        elif self.map_gt_shift_pts_pattern == "v4":
-            map_gt_shifts_pts_list = [
-                gt_bboxes.shift_fixed_num_sampled_points_v4.to(device) for gt_bboxes in map_gt_vecs_list
-            ]
-        else:
-            raise NotImplementedError
-        map_all_gt_bboxes_list = [map_gt_bboxes_list for _ in range(num_dec_layers)]
-        map_all_gt_labels_list = [map_gt_labels_list for _ in range(num_dec_layers)]
-        map_all_gt_pts_list = [map_gt_pts_list for _ in range(num_dec_layers)]
-        map_all_gt_shifts_pts_list = [map_gt_shifts_pts_list for _ in range(num_dec_layers)]
-        map_all_gt_bboxes_ignore_list = [map_gt_bboxes_ignore for _ in range(num_dec_layers)]
-
-        map_losses_cls, map_losses_bbox, map_losses_iou, map_losses_pts, map_losses_dir = multi_apply(
-            self.map_loss_single,
-            map_all_cls_scores,
-            map_all_bbox_preds,
-            map_all_pts_preds,
-            map_all_gt_bboxes_list,
-            map_all_gt_labels_list,
-            map_all_gt_shifts_pts_list,
-            map_all_gt_bboxes_ignore_list,
-        )
-
-        loss_dict = dict()
-        # loss from the last decoder layer
-        loss_dict["loss_cls"] = losses_cls[-1]
-        loss_dict["loss_bbox"] = losses_bbox[-1]
-        loss_dict["loss_traj"] = loss_traj[-1]
-        loss_dict["loss_traj_cls"] = loss_traj_cls[-1]
-        # loss from the last decoder layer
-        loss_dict["loss_map_cls"] = map_losses_cls[-1]
-        loss_dict["loss_map_bbox"] = map_losses_bbox[-1]
-        loss_dict["loss_map_iou"] = map_losses_iou[-1]
-        loss_dict["loss_map_pts"] = map_losses_pts[-1]
-        loss_dict["loss_map_dir"] = map_losses_dir[-1]
-
-        # Planning Loss
-        ego_fut_gt = ego_fut_gt.squeeze(1)
-        ego_fut_masks = ego_fut_masks.squeeze(1).squeeze(1)
-        ego_fut_cmd = ego_fut_cmd.squeeze(1).squeeze(1)
-
-        batch, num_agent = all_traj_preds[-1].shape[:2]
-        agent_fut_preds = all_traj_preds[-1].view(batch, num_agent, self.fut_mode, self.fut_ts, 2)
-        agent_fut_cls_preds = all_traj_cls_scores[-1].view(batch, num_agent, self.fut_mode)
-        loss_plan_input = [
-            ego_fut_preds,
-            ego_fut_gt,
-            ego_fut_masks,
-            ego_fut_cmd,
-            map_all_pts_preds[-1],
-            map_all_cls_scores[-1].sigmoid(),
-            all_bbox_preds[-1][..., 0:2],
-            agent_fut_preds,
-            all_cls_scores[-1].sigmoid(),
-            agent_fut_cls_preds.sigmoid(),
-        ]
-
-        loss_planning_dict = self.loss_planning(*loss_plan_input)
-        loss_dict["loss_plan_reg"] = loss_planning_dict["loss_plan_reg"]
-        loss_dict["loss_plan_bound"] = loss_planning_dict["loss_plan_bound"]
-        loss_dict["loss_plan_col"] = loss_planning_dict["loss_plan_col"]
-        loss_dict["loss_plan_dir"] = loss_planning_dict["loss_plan_dir"]
-
-        # loss from other decoder layers
-        num_dec_layer = 0
-        for loss_cls_i, loss_bbox_i in zip(losses_cls[:-1], losses_bbox[:-1]):
-            loss_dict[f"d{num_dec_layer}.loss_cls"] = loss_cls_i
-            loss_dict[f"d{num_dec_layer}.loss_bbox"] = loss_bbox_i
-            num_dec_layer += 1
-        # loss from other decoder layers
-        num_dec_layer = 0
-        for map_loss_cls_i, map_loss_bbox_i, map_loss_iou_i, map_loss_pts_i, map_loss_dir_i in zip(
-            map_losses_cls[:-1], map_losses_bbox[:-1], map_losses_iou[:-1], map_losses_pts[:-1], map_losses_dir[:-1]
-        ):
-            loss_dict[f"d{num_dec_layer}.loss_map_cls"] = map_loss_cls_i
-            loss_dict[f"d{num_dec_layer}.loss_map_bbox"] = map_loss_bbox_i
-            loss_dict[f"d{num_dec_layer}.loss_map_iou"] = map_loss_iou_i
-            loss_dict[f"d{num_dec_layer}.loss_map_pts"] = map_loss_pts_i
-            loss_dict[f"d{num_dec_layer}.loss_map_dir"] = map_loss_dir_i
-            num_dec_layer += 1
-
-        # loss of proposal generated from encode feature map.
-        if enc_cls_scores is not None:
-            binary_labels_list = [torch.zeros_like(gt_labels_list[i]) for i in range(len(all_gt_labels_list))]
-            enc_loss_cls, enc_losses_bbox = self.loss_single(
-                enc_cls_scores, enc_bbox_preds, gt_bboxes_list, binary_labels_list, gt_bboxes_ignore
-            )
-            loss_dict["enc_loss_cls"] = enc_loss_cls
-            loss_dict["enc_loss_bbox"] = enc_losses_bbox
-
-        if map_enc_cls_scores is not None:
-            map_binary_labels_list = [
-                torch.zeros_like(map_gt_labels_list[i]) for i in range(len(map_all_gt_labels_list))
-            ]
-            # TODO bug here, but we dont care enc_loss now
-            (
-                map_enc_loss_cls,
-                map_enc_loss_bbox,
-                map_enc_loss_iou,
-                map_enc_loss_pts,
-                map_enc_loss_dir,
-            ) = self.map_loss_single(
-                map_enc_cls_scores,
-                map_enc_bbox_preds,
-                map_enc_pts_preds,
-                map_gt_bboxes_list,
-                map_binary_labels_list,
-                map_gt_pts_list,
-                map_gt_bboxes_ignore,
-            )
-            loss_dict["enc_loss_map_cls"] = map_enc_loss_cls
-            loss_dict["enc_loss_map_bbox"] = map_enc_loss_bbox
-            loss_dict["enc_loss_map_iou"] = map_enc_loss_iou
-            loss_dict["enc_loss_map_pts"] = map_enc_loss_pts
-            loss_dict["enc_loss_map_dir"] = map_enc_loss_dir
-
-        return loss_dict
 
     def get_bboxes(self, preds_dicts, img_metas, rescale=False):
         det_preds_dicts = self.bbox_coder.decode(preds_dicts)

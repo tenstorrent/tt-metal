@@ -2,16 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import copy
 import torch
+import copy
+import ttnn
 import os
-import torch.nn as nn
 from scipy.optimize import linear_sum_assignment
+from models.experimental.vadv2.tt.tt_backbone import TtResnet50
 from models.experimental.vadv2.reference.planning_metric import PlanningMetric
-from models.experimental.vadv2.reference.resnet import ResNet, Bottleneck
-from models.experimental.vadv2.reference.fpn import FPN
-from models.experimental.vadv2.reference.head import VADHead
-from models.experimental.vadv2.reference.grid_mask import GridMask
+from models.experimental.vadv2.tt.tt_fpn import TtFPN
+from models.experimental.vadv2.tt.tt_head import TtVADHead
 
 
 def bbox3d2result(bboxes, scores, labels, attrs=None):
@@ -23,11 +22,11 @@ def bbox3d2result(bboxes, scores, labels, attrs=None):
     return result_dict
 
 
-class VAD(nn.Module):
-    """VAD model."""
-
+class TtVAD:
     def __init__(
         self,
+        device,
+        params,
         use_grid_mask=False,
         pts_voxel_layer=None,
         pts_voxel_encoder=None,
@@ -47,12 +46,13 @@ class VAD(nn.Module):
         fut_ts=6,
         fut_mode=6,
     ):
-        super(VAD, self).__init__()
-        self.grid_mask = GridMask(True, True, rotate=1, offset=False, ratio=0.5, mode=1, prob=0.7)
+        super(TtVAD, self).__init__()
         self.use_grid_mask = use_grid_mask
         self.fp16_enabled = False
         self.fut_ts = fut_ts
         self.fut_mode = fut_mode
+        self.params = params
+        self.device = device
 
         # temporal
         self.video_test_mode = video_test_mode
@@ -64,16 +64,11 @@ class VAD(nn.Module):
         }
         self.with_img_neck = True
         self.planning_metric = None
-        self.img_backbone = ResNet(Bottleneck, [3, 4, 6, 3], out_indices=(3,))
-        self.img_neck = FPN(
-            in_channels=[2048],
-            out_channels=256,
-            start_level=0,
-            add_extra_convs="on_output",
-            num_outs=1,
-            relu_before_extra_convs=True,
-        )
-        self.pts_bbox_head = VADHead(
+        self.img_backbone = TtResnet50(params.conv_args["img_backbone"], params.img_backbone, device)
+        self.img_neck = TtFPN(params.conv_args["img_neck"], params.img_neck, device)
+        self.pts_bbox_head = TtVADHead(
+            params=params,
+            device=device,
             with_box_refine=True,
             as_two_stage=False,
             transformer=True,
@@ -91,8 +86,8 @@ class VAD(nn.Module):
             bev_w=100,
             fut_ts=6,
             fut_mode=6,
-            loss_traj={"type": "L1Loss", "loss_weight": 0.2},
-            loss_traj_cls={"type": "FocalLoss", "use_sigmoid": True, "gamma": 2.0, "alpha": 0.25, "loss_weight": 0.2},
+            # loss_traj={'type': 'L1Loss', 'loss_weight': 0.2},
+            # loss_traj_cls={'type': 'FocalLoss', 'use_sigmoid': True, 'gamma': 2.0, 'alpha': 0.25, 'loss_weight': 0.2},
             map_bbox_coder={
                 "type": "MapNMSFreeCoder",
                 "post_center_range": [-20, -35, -20, -35, 20, 35, 20, 35],
@@ -112,11 +107,6 @@ class VAD(nn.Module):
             map_dir_interval=1,
             map_code_size=2,
             map_code_weights=[1.0, 1.0, 1.0, 1.0],
-            loss_map_cls={"type": "FocalLoss", "use_sigmoid": True, "gamma": 2.0, "alpha": 0.25, "loss_weight": 0.8},
-            loss_map_bbox={"type": "L1Loss", "loss_weight": 0.0},
-            loss_map_iou={"type": "GIoULoss", "loss_weight": 0.0},
-            loss_map_pts={"type": "PtsL1Loss", "loss_weight": 0.4},
-            loss_map_dir={"type": "PtsDirCosLoss", "loss_weight": 0.005},
             tot_epoch=12,
             use_traj_lr_warmup=False,
             motion_decoder=True,
@@ -128,10 +118,6 @@ class VAD(nn.Module):
             pe_normalization=True,
             ego_his_encoder=None,
             ego_fut_mode=3,
-            loss_plan_reg={"type": "L1Loss", "loss_weight": 0.25},
-            loss_plan_bound={"type": "PlanMapBoundLoss", "loss_weight": 0.1},
-            loss_plan_col={"type": "PlanAgentDisLoss", "loss_weight": 0.1},
-            loss_plan_dir={"type": "PlanMapThetaLoss", "loss_weight": 0.1},
             ego_agent_decoder=True,
             ego_map_decoder=True,
             query_thresh=0.0,
@@ -143,42 +129,43 @@ class VAD(nn.Module):
 
     def extract_img_feat(self, img, img_metas, len_queue=None):
         """Extract features of images."""
-        B = img.size(0)
+        B = img.shape[0]
 
         if img is not None:
-            # input_shape = img.shape[-2:]
-            # # update real input shape of each single img
-            # for img_meta in img_metas:
-            #     img_meta.update(input_shape=input_shape)
+            if img.shape[0] == 1 and len(img.shape) == 5:
+                img = ttnn.squeeze(img, 0)
 
-            if img.dim() == 5 and img.size(0) == 1:
-                img.squeeze_()
-            elif img.dim() == 5 and img.size(0) > 1:
-                B, N, C, H, W = img.size()
-                img = img.reshape(B * N, C, H, W)
-            if self.use_grid_mask:
-                img = self.grid_mask(img)
-            # from graph import generate_graph
-            # generate_graph(self.img_backbone,img)
-            # assert False
-            img_feats = self.img_backbone(img)
+            elif len(img.shape) == 4 and img.shape[0] > 1:
+                B, N, C, H, W = img.shape
+                img = ttnn.reshape(img, (B * N, C, H, W))
+            img = ttnn.permute(img, (0, 2, 3, 1))
+            N, H, W, C = img.shape
+            batch_size = img.shape[0]
+            img = ttnn.reshape(img, (1, 1, N * H * W, C))
+
+            img_feats = self.img_backbone(img, batch_size=batch_size)
 
             if isinstance(img_feats, dict):
                 img_feats = list(img_feats.values())
         else:
             return None
         if self.with_img_neck:
-            # from graph import generate_graph
-            # generate_graph(self.img_neck,img_feats)
-            # assert False
             img_feats = self.img_neck(img_feats)
         img_feats_reshaped = []
         for img_feat in img_feats:
-            BN, C, H, W = img_feat.size()
+            img_feat = ttnn.unsqueeze(img_feat, 0)
+            img_feat = ttnn.to_layout(img_feat, layout=ttnn.ROW_MAJOR_LAYOUT)
+            img_feat = ttnn.sharded_to_interleaved(img_feat)
+            img_feat = ttnn.reshape(img_feat, (6, 12, 20, img_feat.shape[3]))
+            img_feat = ttnn.permute(img_feat, (0, 3, 1, 2))
+            BN, C, H, W = img_feat.shape
             if len_queue is not None:
-                img_feats_reshaped.append(img_feat.view(int(B / len_queue), len_queue, int(BN / B), C, H, W))
+                img_feat = ttnn.reshape(img_feat, (int(B / len_queue), len_queue, int(BN / B), C, H, W))
+                img_feats_reshaped.append(img_feat)
             else:
-                img_feats_reshaped.append(img_feat.view(B, int(BN / B), C, H, W))
+                img_feat = ttnn.reshape(img_feat, (B, int(BN / B), C, H, W))
+                img_feats_reshaped.append(img_feat)
+        ttnn.deallocate(img_feats[0])
         return img_feats_reshaped
 
     def extract_feat(self, img, img_metas=None, len_queue=None):
@@ -187,25 +174,15 @@ class VAD(nn.Module):
 
         return img_feats
 
-    def forward(self, return_loss=True, **kwargs):
-        """Calls either forward_train or forward_test depending on whether
-        return_loss=True.
-        Note this setting will change the expected inputs. When
-        `return_loss=True`, img and img_metas are single-nested (i.e.
-        torch.Tensor and list[dict]), and when `resturn_loss=False`, img and
-        img_metas should be double nested (i.e.  list[torch.Tensor],
-        list[list[dict]]), with the outer list indicating test time
-        augmentations.
-        """
-
+    def __call__(self, return_loss=True, **kwargs):
         return self.forward_test(**kwargs)
 
     def forward_test(
         self,
         img_metas,
+        gt_bboxes_3d,
+        gt_labels_3d,
         img=None,
-        gt_bboxes_3d=None,
-        gt_labels_3d=None,
         ego_his_trajs=None,
         ego_fut_trajs=None,
         ego_fut_cmd=None,
@@ -219,15 +196,12 @@ class VAD(nn.Module):
         img = [img] if img is None else img
 
         if img_metas[0][0][0]["scene_token"] != self.prev_frame_info["scene_token"]:
-            # the first sample of each scene is truncated
             self.prev_frame_info["prev_bev"] = None
-        # update idx
         self.prev_frame_info["scene_token"] = img_metas[0][0][0]["scene_token"]
-        # do not use temporal information
+
         if not self.video_test_mode:
             self.prev_frame_info["prev_bev"] = None
 
-        # Get the delta of ego position and angle between two timestamps.
         tmp_pos = copy.deepcopy(img_metas[0][0][0]["can_bus"][:3])
         tmp_angle = copy.deepcopy(img_metas[0][0][0]["can_bus"][-1])
         if self.prev_frame_info["prev_bev"] is not None:
@@ -236,10 +210,10 @@ class VAD(nn.Module):
         else:
             img_metas[0][0][0]["can_bus"][-1] = 0
             img_metas[0][0][0]["can_bus"][:3] = 0
-
+        img = ttnn.unsqueeze(img[0][0], 0)
         new_prev_bev, bbox_results = self.simple_test(
             img_metas=img_metas[0][0],
-            img=img[0][0].unsqueeze(0),
+            img=img,
             prev_bev=self.prev_frame_info["prev_bev"],
             gt_bboxes_3d=gt_bboxes_3d,
             gt_labels_3d=gt_labels_3d,
@@ -250,7 +224,6 @@ class VAD(nn.Module):
             gt_attr_labels=gt_attr_labels,
             **kwargs,
         )
-
         # During inference, we save the BEV features and ego motion of each timestamp.
         self.prev_frame_info["prev_pos"] = tmp_pos
         self.prev_frame_info["prev_angle"] = tmp_angle
@@ -276,8 +249,7 @@ class VAD(nn.Module):
         **kwargs,
     ):
         """Test function without augmentaiton."""
-        img_feats = self.extract_feat(img=img, img_metas=img_metas)  # backbone and img neck
-
+        img_feats = self.extract_feat(img=img, img_metas=img_metas)
         bbox_list = [dict() for i in range(len(img_metas))]
         new_prev_bev, bbox_list = self.simple_test_pts(
             img_feats,
@@ -294,10 +266,6 @@ class VAD(nn.Module):
             ego_lcf_feat=ego_lcf_feat,
             gt_attr_labels=gt_attr_labels,
         )
-
-        # for result_dict, pts_bbox in zip(bbox_list, bbox_pts):
-        #     result_dict['pts_bbox'] = pts_bbox
-        #     result_dict['metric_results'] = metric_dict
 
         return new_prev_bev, bbox_list
 
@@ -317,26 +285,20 @@ class VAD(nn.Module):
         ego_lcf_feat=None,
         gt_attr_labels=None,
     ):
-        """Test function"""
-        mapped_class_names = [
-            "car",
-            "truck",
-            "construction_vehicle",
-            "bus",
-            "trailer",
-            "barrier",
-            "motorcycle",
-            "bicycle",
-            "pedestrian",
-            "traffic_cone",
-        ]
-        # from graph import generate_graph
-        # generate_graph(self.pts_bbox_head,x,img_metas,prev_bev,ego_his_trajs,ego_lcf_feat)
-        # assert False
-        outs = self.pts_bbox_head(
-            x, img_metas, prev_bev=prev_bev, ego_his_trajs=ego_his_trajs, ego_lcf_feat=ego_lcf_feat
-        )
-        save_path = "models/experimental/vadv2/reference/dumps"
+        x[0] = ttnn.to_layout(x[0], layout=ttnn.TILE_LAYOUT)
+        outs = self.pts_bbox_head(x, img_metas, prev_bev=prev_bev, ego_his_trajs=None, ego_lcf_feat=None)
+
+        outs["bev_embed"] = ttnn.to_torch(outs["bev_embed"]).float()
+        outs["all_cls_scores"] = ttnn.to_torch(outs["all_cls_scores"]).float()
+        outs["all_bbox_preds"] = ttnn.to_torch(outs["all_bbox_preds"]).float()
+        outs["all_traj_preds"] = ttnn.to_torch(outs["all_traj_preds"]).float()
+        outs["all_traj_cls_scores"] = ttnn.to_torch(outs["all_traj_cls_scores"]).float()
+        outs["map_all_cls_scores"] = ttnn.to_torch(outs["map_all_cls_scores"]).float()
+        outs["map_all_bbox_preds"] = ttnn.to_torch(outs["map_all_bbox_preds"]).float()
+        outs["map_all_pts_preds"] = ttnn.to_torch(outs["map_all_pts_preds"]).float()
+        outs["ego_fut_preds"] = ttnn.to_torch(outs["ego_fut_preds"]).float()
+
+        save_path = "models/experimental/vadv2/tt/dumps"
         os.makedirs(save_path, exist_ok=True)
 
         keys_to_save = [
@@ -456,23 +418,6 @@ class VAD(nn.Module):
         return bbox_list
 
     def map_pred2result(self, bboxes, scores, labels, pts, attrs=None):
-        """Convert detection results to a list of numpy arrays.
-
-        Args:
-            bboxes (torch.Tensor): Bounding boxes with shape of (n, 5).
-            labels (torch.Tensor): Labels with shape of (n, ).
-            scores (torch.Tensor): Scores with shape of (n, ).
-            attrs (torch.Tensor, optional): Attributes with shape of (n, ). \
-                Defaults to None.
-
-        Returns:
-            dict[str, torch.Tensor]: Bounding box results in cpu mode.
-
-                - boxes_3d (torch.Tensor): 3D boxes.
-                - scores (torch.Tensor): Prediction scores.
-                - labels_3d (torch.Tensor): Box labels.
-                - attrs_3d (torch.Tensor, optional): Box attributes.
-        """
         result_dict = dict(
             map_boxes_3d=bboxes.to("cpu"),
             map_scores_3d=scores.cpu(),
@@ -486,20 +431,6 @@ class VAD(nn.Module):
         return result_dict
 
     def assign_pred_to_gt_vip3d(self, bbox_result, gt_bbox, gt_label, match_dis_thresh=2.0):
-        """Assign pred boxs to gt boxs according to object center preds in lcf.
-        Args:
-            bbox_result (dict): Predictions.
-                'boxes_3d': (LiDARInstance3DBoxes)
-                'scores_3d': (Tensor), [num_pred_bbox]
-                'labels_3d': (Tensor), [num_pred_bbox]
-                'trajs_3d': (Tensor), [fut_ts*2]
-            gt_bboxs (LiDARInstance3DBoxes): GT Bboxs.
-            gt_label (Tensor): GT labels for gt_bbox, [num_gt_bbox].
-            match_dis_thresh (float): dis thresh for determine a positive sample for a gt bbox.
-
-        Returns:
-            matched_bbox_result (np.array): assigned pred index for each gt box [num_gt_bbox].
-        """
         dynamic_list = [0, 1, 3, 4, 6, 7, 8]
         matched_bbox_result = torch.ones((len(gt_bbox)), dtype=torch.long) * -1  # -1: not assigned
         gt_centers = gt_bbox.center[:, :2]
