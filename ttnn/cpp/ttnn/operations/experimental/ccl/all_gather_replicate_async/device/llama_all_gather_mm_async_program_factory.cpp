@@ -61,6 +61,37 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
         mesh_device = input_tensor.device();
     }
 
+    // Section for fusion signaler initialization
+    auto tensor_slicer =
+        ttnn::ccl::InterleavedRingAllGatherTensorSlicer(input_tensor, intermediate_tensor, dim, ring_index);
+    const uint32_t num_transfers = ring_size;
+    const uint32_t weight_tensor_width = input_tensor_b.padded_shape()[3] / 32;
+    log_info(tt::LogOp, "LLONG FUSION: dim: {}", dim);
+    log_info(tt::LogOp, "LLONG FUSION: weight_tensor_width: {}", weight_tensor_width);
+    log_info(tt::LogOp, "LLONG FUSION: tensor_slicer.num_rows: {}", tensor_slicer.num_rows);
+    log_info(tt::LogOp, "LLONG FUSION: tensor_slicer.num_cols: {}", tensor_slicer.num_cols);
+    log_info(tt::LogOp, "LLONG FUSION: tensor_slicer.output_page_offset: {}", tensor_slicer.output_page_offset);
+    log_info(tt::LogOp, "LLONG FUSION: num_transfers: {}", num_transfers);
+
+    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =
+        ttnn::experimental::ccl::MatmulFusedOpSignaler(ttnn::experimental::ccl::MatmulFusedOpSignalerType::ALL_GATHER);
+    matmul_fused_op_signaler->init_llama_all_gather(
+        num_transfers,
+        ring_size,
+        ring_index,
+        tensor_slicer.num_cols,
+        tensor_slicer.output_page_offset,
+        tensor_slicer.num_cols *
+            weight_tensor_width /* weight_output_page_offset: stride across a tensor slice in the weight_tensor */
+    );
+    matmul_fused_op_signaler->init_fused_op(
+        program,
+        sender_device,
+        output_tensor.memory_config().shard_spec()->grid,
+        ttnn::experimental::ccl::FusedOpSignalerMode::SINGLE);
+
+    // Section end for fusion signaler initialization
+
     const bool enable_async_intermediate_tensor = false;
 
     bool is_first_chip = ring_index == 0;
@@ -238,7 +269,9 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
          static_cast<uint32_t>(bbox_physical_end_core.x),
          static_cast<uint32_t>(bbox_physical_end_core.y),
          static_cast<uint32_t>(bbox.size()),
-         intermediate_tensor_shard_num_pages});
+         intermediate_tensor_shard_num_pages,
+         matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[0],
+         matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[1]});
     // Kernel Runtime Args
 
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
@@ -260,7 +293,9 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
              static_cast<uint32_t>(bbox_physical_end_core.x),
              static_cast<uint32_t>(bbox_physical_end_core.y),
              static_cast<uint32_t>(bbox.size()),
-             intermediate_tensor_shard_num_pages});
+             intermediate_tensor_shard_num_pages,
+             matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[0],
+             matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[1]});
     }
     log_info(tt::LogOp, "LLONG cores_per_device: {}", cores_per_device);
     uint32_t start_core_index_for_device = intermediate_cores_vec.size() / ring_size * ring_index;
@@ -393,34 +428,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
 
-    auto tensor_slicer =
-        ttnn::ccl::InterleavedRingAllGatherTensorSlicer(input_tensor, intermediate_tensor, dim, ring_index);
-    const uint32_t num_transfers = ring_size;
-    const uint32_t weight_tensor_width = input_tensor_b.padded_shape()[3] / 32;
-    log_info(tt::LogOp, "LLONG FUSION: dim: {}", dim);
-    log_info(tt::LogOp, "LLONG FUSION: weight_tensor_width: {}", weight_tensor_width);
-    log_info(tt::LogOp, "LLONG FUSION: tensor_slicer.num_rows: {}", tensor_slicer.num_rows);
-    log_info(tt::LogOp, "LLONG FUSION: tensor_slicer.num_cols: {}", tensor_slicer.num_cols);
-    log_info(tt::LogOp, "LLONG FUSION: tensor_slicer.output_page_offset: {}", tensor_slicer.output_page_offset);
-    log_info(tt::LogOp, "LLONG FUSION: num_transfers: {}", num_transfers);
-
-    std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =
-        ttnn::experimental::ccl::MatmulFusedOpSignaler(ttnn::experimental::ccl::MatmulFusedOpSignalerType::ALL_GATHER);
-    matmul_fused_op_signaler->init_llama_all_gather(
-        num_transfers,
-        ring_size,
-        ring_index,
-        tensor_slicer.num_cols,
-        tensor_slicer.output_page_offset,
-        tensor_slicer.num_cols *
-            weight_tensor_width /* weight_output_page_offset: stride across a tensor slice in the weight_tensor */
-    );
-    matmul_fused_op_signaler->init_fused_op(
-        program,
-        sender_device,
-        output_tensor.memory_config().shard_spec()->grid,
-        ttnn::experimental::ccl::FusedOpSignalerMode::SINGLE);
-
+    // Call MM program factory with matmul_fused_op_signaler
     std::optional<tt::tt_metal::operation::ProgramWithCallbacks> matmul_program_with_callbacks =
         ttnn::operations::llama_matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
             program,

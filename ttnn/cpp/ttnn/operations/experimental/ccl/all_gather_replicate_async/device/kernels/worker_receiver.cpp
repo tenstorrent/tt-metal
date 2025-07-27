@@ -31,6 +31,8 @@ void kernel_main() {
     const uint32_t bbox_end_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t bbox_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t intermediate_tensor_shard_num_pages = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t fused_op_receiver_signal_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
+
     DPRINT << "signal_semaphore_addr: " << signal_semaphore_addr << ENDL();
     DPRINT << "core_id: " << core_id << ENDL();
     DPRINT << "ring_index: " << ring_index << ENDL();
