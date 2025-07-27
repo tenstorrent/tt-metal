@@ -37,8 +37,6 @@ on:
         default: 'false'
   repository_dispatch:
     types: [trigger-llk-update]
-  schedule:
-    - cron: '0 0,12 * * *'
 
 env:
   BRANCH_NAME: llk-submodule-uplift
