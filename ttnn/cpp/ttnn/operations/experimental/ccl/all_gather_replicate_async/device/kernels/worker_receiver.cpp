@@ -80,5 +80,9 @@ void kernel_main() {
 
     noc_async_write_multicast(
         l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, bbox_size - 1, false);
+
+    uint64_t multicast_sema_addr = multicast_addr_noc | (uint64_t)fused_op_receiver_signal_semaphore_addr;
+    noc_semaphore_set_multicast(fused_op_receiver_signal_semaphore_addr, multicast_sema_addr, bbox_size - 1, false);
+
     noc_async_write_barrier();
 }
