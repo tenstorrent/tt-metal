@@ -395,8 +395,21 @@ jobs:
             local workflow=$1
             local name=$2
 
-            local runs=$(gh run list --workflow "$workflow" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,attempt --jq 'map(select(.status == "completed")) | .[0] // empty')
-            [ "$runs" = "empty" ] && return 1
+            # Get the most recent completed run (if any)
+            local runs=$(
+              gh run list \
+                --workflow "$workflow" \
+                --branch "${{ env.BRANCH_NAME }}" \
+                --limit 5 \
+                --json conclusion,url,status,attempt \
+                --jq 'map(select(.status == "completed")) | .[0]'
+              )
+              
+            # If no completed runs are found, exit early
+            if [ -z "$runs" ]; then
+              echo "❌ Error: No completed runs found for workflow '$workflow' on branch '${{ env.BRANCH_NAME }}'" >&2
+              return 1
+            fi
 
             local conclusion=$(echo "$runs" | jq -r '.conclusion // "unknown"')
             local url=$(echo "$runs" | jq -r '.url // ""')
