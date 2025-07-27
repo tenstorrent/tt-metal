@@ -998,7 +998,7 @@ void MetalContext::initialize_firmware(
                     virtual_core,
                     tt_metal::FWMailboxMsg::ETH_MSG_RELEASE_CORE,
                     {/*l1 addr to exec*/ jit_build_config.fw_launch_addr_value},
-                    true);
+                    false);
             }
 
             break;
