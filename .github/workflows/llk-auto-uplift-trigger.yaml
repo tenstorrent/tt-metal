@@ -37,8 +37,6 @@ on:
         default: false
   repository_dispatch:
     types: [trigger-llk-update]
-  schedule:
-    - cron: '0 0,12 * * *'
 
 env:
   BRANCH_NAME: llk-submodule-uplift
@@ -192,8 +190,8 @@ jobs:
           <!-- WORKFLOW_DECISIONS:should-run-wormhole=$SHOULD_RUN_WH,should-run-blackhole=$SHOULD_RUN_BH -->
 
           ### 🤖 Automation Status
-          - **Created by:** LLK Auto-Uplift Workflow (Simplified)
-          - **Trigger:** $(if [ "${{ github.event_name }}" = "schedule" ]; then echo "Scheduled ($(date))"; elif [ "${{ github.event_name }}" = "repository_dispatch" ]; then echo "Repository Dispatch"; else echo "Manual/Workflow Call"; fi)
+          - **Created by:** LLK Auto-Uplift Workflow
+          - **Trigger:** $(if [ "${{ github.event_name }}" = "repository_dispatch" ]; then echo "Repository Dispatch"; else echo "Manual/Workflow Call"; fi)
 
           ### 🧪 Test Status
           Test results and workflow status will be updated here automatically.
@@ -215,7 +213,7 @@ jobs:
           delete-branch: true
           body-path: pr_body.md
           add-paths: ${{ env.SUBMODULE_PATH }}
-          draft: ${{ inputs.draft }}
+          draft: ${{ inputs.draft == true || format('{0}', inputs.draft) == 'true' }}
           labels: |
             llk-update
             automated
@@ -367,7 +365,6 @@ jobs:
     if: inputs.recheck_tests == true
     runs-on: ubuntu-latest
     outputs:
-      tests-passed: ${{ steps.check.outputs.tests-passed }}
       pr-number: ${{ steps.check.outputs.pr-number }}
     steps:
       - name: Checkout
@@ -390,25 +387,39 @@ jobs:
           DECISIONS=$(echo "$PR_BODY" | grep -o "WORKFLOW_DECISIONS:[^>]*" | head -1)
 
           # Parse decisions
-          SHOULD_RUN_WH=$(echo "$DECISIONS" | grep -o "should-run-wormhole=[^,]*" | cut -d= -f2)
-          SHOULD_RUN_BH=$(echo "$DECISIONS" | grep -o "should-run-blackhole=[^,]*" | cut -d= -f2)
+          SHOULD_RUN_WH=$(echo "$DECISIONS" | grep -o "should-run-wormhole=[^, ]*" | cut -d= -f2)
+          SHOULD_RUN_BH=$(echo "$DECISIONS" | grep -o "should-run-blackhole=[^, ]*" | cut -d= -f2)
 
           # Check workflow results
           check_workflow() {
             local workflow=$1
             local name=$2
 
-            local runs=$(gh run list --workflow "$workflow" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty')
-            [ "$runs" = "empty" ] && return 1
+            # Get the most recent completed run (if any)
+            local runs=$(
+              gh run list \
+                --workflow "$workflow" \
+                --branch "${{ env.BRANCH_NAME }}" \
+                --limit 5 \
+                --json conclusion,url,status,attempt \
+                --jq 'map(select(.status == "completed")) | .[0] | select(. != null)'
+              )
+
+            # If no completed runs are found, exit early
+            if [ -z "$runs" ]; then
+              echo "❌ Error: No completed runs found for workflow '$workflow' on branch '${{ env.BRANCH_NAME }}'" >&2
+              return 1
+            fi
 
             local conclusion=$(echo "$runs" | jq -r '.conclusion // "unknown"')
             local url=$(echo "$runs" | jq -r '.url // ""')
+            local attempt=$(echo "$runs" | jq -r '.attempt // 1')
 
             if [ "$conclusion" = "success" ]; then
               echo "✅ $name passed: [View run]($url)"
               return 0
             else
-              echo "❌ $name failed (conclusion: $conclusion): [View run]($url)"
+              echo "❌ $name failed (conclusion: $conclusion): [View run]($url/attempts/$attempt)"
               return 1
             fi
           }
@@ -434,8 +445,6 @@ jobs:
             fi
           fi
 
-          echo "tests-passed=$ALL_PASSED" >> $GITHUB_OUTPUT
-
           # Comment with results
           if [ "$ALL_PASSED" = "true" ]; then
             COMMENT="✅ **Test Re-check Successful**: All required workflows have passed."$'\n\n'"$RESULTS"
@@ -444,14 +453,16 @@ jobs:
           fi
 
           gh pr comment "$PR_NUMBER" --body "$COMMENT" --repo "${{ github.repository }}"
-          [ "$ALL_PASSED" != "true" ] && exit 1
+          if [ "$ALL_PASSED" != "true" ]; then
+            exit 1
+          fi
 
   finalize:
     needs: [update-submodule, run-tests, recheck-tests]
     if: |
       always() && (
         (inputs.recheck_tests != true && needs.update-submodule.outputs.has-changes == 'true' && needs.update-submodule.result == 'success' && (needs.run-tests.result == 'success' || needs.run-tests.result == 'skipped')) ||
-        (inputs.recheck_tests == true && needs.recheck-tests.outputs.tests-passed == 'true')
+        (inputs.recheck_tests == true && needs.recheck-tests.result == 'success')
       )
     runs-on: ubuntu-latest
     steps:
