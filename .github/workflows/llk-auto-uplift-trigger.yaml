@@ -404,7 +404,7 @@ jobs:
                 --json conclusion,url,status,attempt \
                 --jq 'map(select(.status == "completed")) | .[0]'
               )
-              
+
             # If no completed runs are found, exit early
             if [ -z "$runs" ]; then
               echo "❌ Error: No completed runs found for workflow '$workflow' on branch '${{ env.BRANCH_NAME }}'" >&2
