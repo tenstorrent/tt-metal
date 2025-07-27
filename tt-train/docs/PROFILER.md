@@ -12,6 +12,7 @@
 4. [Running the Profiler](#running-the-profiler)
 5. [Output Artifacts](#output-artifacts)
 6. [Analysing Results](#analysing-results)
+7. [Problems](#problems)
 
 ---
 
@@ -112,3 +113,7 @@ The notebook walks you through:
 Feel free to fork / extend the notebook for your own workflows.
 
 ---
+
+## Problems
+
+Unfortunately, we can't pass command arguments in tracy command, that's why you need to hardcode correct config path in cpp file before building tt-train.
