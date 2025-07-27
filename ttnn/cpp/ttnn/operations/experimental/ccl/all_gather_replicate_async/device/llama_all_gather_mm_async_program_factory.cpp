@@ -271,7 +271,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
          static_cast<uint32_t>(bbox.size()),
          intermediate_tensor_shard_num_pages,
          matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[0],
-         matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[1]});
+         0});  // mm_core_offset
     // Kernel Runtime Args
 
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
@@ -280,6 +280,8 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
 
     // Set runtime args for each core
     for (uint32_t i = 0; i < intermediate_cores_vec.size(); i++) {
+        uint32_t mm_core_offset = (ring_index + ring_size - i) % ring_size;
+
         tt::tt_metal::SetRuntimeArgs(
             program,
             worker_receiver_kernel_id,
@@ -295,7 +297,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
              static_cast<uint32_t>(bbox.size()),
              intermediate_tensor_shard_num_pages,
              matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[0],
-             matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[1]});
+             mm_core_offset});
     }
     log_info(tt::LogOp, "LLONG cores_per_device: {}", cores_per_device);
     uint32_t start_core_index_for_device = intermediate_cores_vec.size() / ring_size * ring_index;

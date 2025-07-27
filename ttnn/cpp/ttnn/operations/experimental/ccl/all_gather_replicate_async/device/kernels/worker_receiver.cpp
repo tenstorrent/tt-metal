@@ -32,6 +32,7 @@ void kernel_main() {
     const uint32_t bbox_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t intermediate_tensor_shard_num_pages = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t fused_op_receiver_signal_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mm_core_offset = get_arg_val<uint32_t>(arg_idx++);
 
     DPRINT << "signal_semaphore_addr: " << signal_semaphore_addr << ENDL();
     DPRINT << "core_id: " << core_id << ENDL();
@@ -47,6 +48,12 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
+
+    // Set up for mcasting to mm workers
+    volatile tt_l1_ptr uint32_t* fused_op_receiver_signal_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fused_op_receiver_signal_semaphore_addr);
+    noc_semaphore_set(fused_op_receiver_signal_semaphore_addr_ptr, VALID);
+
     // if (core_id != ring_index) {
     //     return;
     // }
@@ -66,7 +73,7 @@ void kernel_main() {
     size_t l1_read_addr = get_read_ptr(inter_cb_index);
     const uint64_t multicast_addr_noc = get_noc_multicast_addr(bbox_end_x, bbox_end_y, bbox_start_x, bbox_start_y, 0);
     uint64_t aggregated_tensor_addr_this_core =
-        (uint64_t)aggregated_tensor_addr + core_id * intermediate_tensor_shard_num_pages * tensor0_page_size;
+        (uint64_t)aggregated_tensor_addr + mm_core_offset * intermediate_tensor_shard_num_pages * tensor0_page_size;
     const uint64_t multicast_addr = multicast_addr_noc | aggregated_tensor_addr_this_core;
     // noc_async_write_multicast(
     //     l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, bbox_size, true);
