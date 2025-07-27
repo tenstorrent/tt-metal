@@ -8,6 +8,7 @@ from loguru import logger
 import requests
 import os
 import logging
+import torch
 
 
 def preprocess():
@@ -51,3 +52,30 @@ def load_imagenet_labels(imagenet_class_labels_path):
         categories = [line.strip() for line in f.readlines() if line.strip()]
 
     return categories
+
+
+def get_batch(data_loader):
+    loaded_images = next(data_loader)
+    images = None
+    labels = []
+    transform = torchvision.transforms.Compose(
+        [
+            torchvision.transforms.Resize(224),
+            torchvision.transforms.CenterCrop(224),
+            torchvision.transforms.ToTensor(),
+            torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    )
+    for image in loaded_images:
+        img = image.image
+        labels.append(image.label)
+        if img.mode == "L":
+            img = img.convert(mode="RGB")
+        img = transform(img)
+        img = torch.unsqueeze(img, 0)
+        if images is None:
+            images = img
+        else:
+            images = torch.cat((images, img), dim=0)
+
+    return images, labels
