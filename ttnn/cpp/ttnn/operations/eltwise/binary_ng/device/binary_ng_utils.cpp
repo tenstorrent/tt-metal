@@ -246,6 +246,13 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        case BinaryOpType::LOGICAL_RIGHT_SHIFT:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LOGICAL_RIGHT_SHIFT;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         case BinaryOpType::POWER:
             if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::POWER;
@@ -330,6 +337,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case MUL:
             if (dtype == DataType::UINT16) {
                 return {"mul_int_tile_init();", "mul_uint16_tile"};
+            } else if (dtype == DataType::INT32) {
+                return {"mul_int32_tile_init();", "mul_int32_tile"};
             } else {
                 return {"mul_binary_tile_init();", "mul_binary_tile"};
             }
@@ -353,6 +362,14 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
                 return {"binary_shift_tile_init();", "binary_right_shift_int32_tile"};
             } else {
                 return {"binary_shift_tile_init();", "binary_right_shift_tile"};
+            }
+        case LOGICAL_RIGHT_SHIFT:
+            if (dtype == DataType::UINT32) {
+                return {"binary_shift_tile_init();", "binary_logical_right_shift_uint32_tile"};
+            } else if (dtype == DataType::INT32) {
+                return {"binary_shift_tile_init();", "binary_logical_right_shift_int32_tile"};
+            } else {
+                return {"binary_shift_tile_init();", "binary_logical_right_shift_tile"};
             }
         case BITWISE_AND:
             if (dtype == DataType::UINT16) {

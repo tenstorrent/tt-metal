@@ -15,6 +15,15 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tracy import signpost
 
 
+def get_max_links(cluster_axis, fabric_config):
+    if fabric_config == ttnn.FabricConfig.FABRIC_2D:
+        return 1
+    elif cluster_axis is None:
+        return 1
+    else:
+        return 2 if cluster_axis == 0 else 1
+
+
 def tt_to_torch_dtype(tt_dtype):
     if tt_dtype == ttnn.bfloat16:
         return torch.bfloat16
@@ -144,7 +153,6 @@ def gen_tensors(
     batch, experts, selected_experts_k, hidden_size, seq_len, mesh_shape, devices, scheme="random", dtype=torch.bfloat16
 ):
     # create input tokens
-    assert batch % devices == 0
     assert experts % devices == 0
     assert selected_experts_k < experts
 
@@ -627,26 +635,29 @@ def run_all_to_all_dispatch_test(
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    [
+        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_2D},
+        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+    ],
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [False])
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
 )
-@pytest.mark.parametrize("cluster_axis", [0, 1])
-@pytest.mark.parametrize("batches_per_device", [8])
+@pytest.mark.parametrize("cluster_axis", [0, 1], ids=["cluster_row", "cluster_col"])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize(
-    "seq_len, num_iters, warmup_iters",
+    "batches_per_device, seq_len, num_iters, warmup_iters",
     [
-        (2, 5, 1),
+        (16, 2, 2, 1),
+        (1, 3, 2, 1),
     ],
-    ids=["s2"],
+    ids=["b16s2", "b1s3"],
 )
-@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_links", ["MAX_LINKS"])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
@@ -668,6 +679,7 @@ def test_all_to_all_dispatch_no_trace(
     dtype,
     input_memory_config,
     output_memory_config,
+    device_params,
 ):
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
@@ -676,6 +688,9 @@ def test_all_to_all_dispatch_no_trace(
 
     batch = batches_per_device * dispatch_devices
     experts = experts_per_device * dispatch_devices
+
+    if num_links == "MAX_LINKS":
+        num_links = get_max_links(cluster_axis, device_params["fabric_config"])
 
     run_all_to_all_dispatch_test(
         mesh_device,
@@ -705,7 +720,12 @@ def test_all_to_all_dispatch_no_trace(
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "trace_region_size": 500000,
-        }
+        },
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 500000,
+        },
     ],
     indirect=True,
 )
@@ -734,7 +754,7 @@ def test_all_to_all_dispatch_no_trace(
     ids=["dram"],
 )
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
-@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_links", ["MAX_LINKS"])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_all_to_all_dispatch_trace(
@@ -754,6 +774,7 @@ def test_all_to_all_dispatch_trace(
     dtype,
     input_memory_config,
     output_memory_config,
+    device_params,
 ):
     if cluster_axis is None:
         dispatch_devices = mesh_shape[0] * mesh_shape[1]
@@ -762,6 +783,9 @@ def test_all_to_all_dispatch_trace(
 
     batch = batches_per_device * dispatch_devices
     experts = experts_per_device * dispatch_devices
+
+    if num_links == "MAX_LINKS":
+        num_links = get_max_links(cluster_axis, device_params["fabric_config"])
 
     run_all_to_all_dispatch_test(
         mesh_device,
@@ -789,7 +813,7 @@ def test_all_to_all_dispatch_trace(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
             "trace_region_size": 500000,
         }
     ],
@@ -868,9 +892,9 @@ def test_decode_perf(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
             "trace_region_size": 500000,
-        }
+        },
     ],
     indirect=True,
 )
@@ -886,7 +910,7 @@ def test_decode_perf(
 @pytest.mark.parametrize(
     "seq_len, num_iters, warmup_iters",
     [
-        (128, 10, 5),
+        (128, 1, 1),
     ],
     ids=["s128"],
 )

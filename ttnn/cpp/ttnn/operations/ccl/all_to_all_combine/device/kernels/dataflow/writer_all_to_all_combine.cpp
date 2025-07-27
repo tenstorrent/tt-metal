@@ -17,9 +17,9 @@ using namespace ttnn::operations::ccl::common;
 
 namespace detail {
 
-template <uint32_t SourceChipId, uint32_t BatchSize, uint32_t MeshCols, uint32_t MeshRows, ReplicateGroup Axis>
+template <uint32_t SourceChipId, uint32_t BatchSize, uint32_t MeshRows, uint32_t MeshCols, ReplicateGroup Axis>
 inline uint32_t get_device_idx_from_batch_idx(const uint32_t b) {
-    constexpr uint32_t Replicate_Group = (Axis == ReplicateGroup::NONE)   ? MeshCols * MeshRows
+    constexpr uint32_t Replicate_Group = (Axis == ReplicateGroup::NONE)   ? MeshRows * MeshCols
                                          : (Axis == ReplicateGroup::COLS) ? MeshRows
                                                                           : MeshCols;
 
@@ -36,11 +36,11 @@ inline uint32_t get_device_idx_from_batch_idx(const uint32_t b) {
 }
 
 // output per device is [K, B/replicate_group, 1, H]
-template <uint32_t BatchSize, uint32_t SeqSize, uint32_t MeshCols, uint32_t MeshRows, ReplicateGroup Axis>
+template <uint32_t BatchSize, uint32_t SeqSize, uint32_t MeshRows, uint32_t MeshCols, ReplicateGroup Axis>
 inline uint32_t get_output_page_idx(const uint32_t b, const uint32_t s, const uint32_t k) {
     uint32_t batch_devices;
     if constexpr (Axis == ReplicateGroup::NONE) {
-        batch_devices = MeshCols * MeshRows;
+        batch_devices = MeshRows * MeshCols;
     } else if constexpr (Axis == ReplicateGroup::ROWS) {
         batch_devices = MeshCols;
     } else {
@@ -49,7 +49,8 @@ inline uint32_t get_output_page_idx(const uint32_t b, const uint32_t s, const ui
 
     const uint32_t batch_per_device = BatchSize / batch_devices;
     const uint32_t bidx= b % batch_per_device;
-    return k * batch_per_device *SeqSize + bidx*SeqSize+s;
+
+    return k * batch_per_device * SeqSize + bidx * SeqSize + s;
 }
 }  // namespace detail
 
@@ -70,6 +71,9 @@ void kernel_main() {
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(13);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(14);  // ew_dim
     constexpr uint32_t fabric_max_packet_size_bytes = get_compile_time_arg_val(15);
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(16);
+    constexpr tt::tt_fabric::Topology topology = tt::tt_fabric::Topology(get_compile_time_arg_val(17));
+    constexpr uint32_t locally_reduced = get_compile_time_arg_val(18);
 
 #ifdef REPLICATE_GROUP_AXIS
     constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_GROUP_AXIS);
@@ -122,30 +126,54 @@ void kernel_main() {
 
                 // figure out output page index, noc address.
                 const uint32_t output_page_idx =
-                    detail::get_output_page_idx<batch_size, seq_size, mesh_cols, mesh_rows, replicate_axis>(b,s,k);
+                    detail::get_output_page_idx<batch_size, seq_size, mesh_rows, mesh_cols, replicate_axis>(b, s, k);
                 const uint64_t output_noc_addr = get_noc_addr(output_page_idx, output_addrgen);
 
                 // figure out which device to send data to and routing
                 const auto dest_device_idx = detail::
-                    get_device_idx_from_batch_idx<src_chip_id, batch_size, mesh_cols, mesh_rows, replicate_axis>(b);
+                    get_device_idx_from_batch_idx<src_chip_id, batch_size, mesh_rows, mesh_cols, replicate_axis>(b);
                 const auto& dest_chip_id = dest_chip_ids[dest_device_idx];
 
-                if (dest_chip_id == src_chip_id) {
+                if (dest_device_idx == linearized_mesh_coord) {
                     noc_async_write(src_data_l1_ptr,output_noc_addr,data_size_bytes);
                     noc_async_write_barrier();
                 } else {
-                    const auto& dest_mesh_id = dest_mesh_ids[dest_device_idx];
-                    dispatch_input_remote_device<src_chip_id, mesh_cols, mesh_rows, fabric_max_packet_size_bytes>(
-                        dest_chip_id,
-                        dest_mesh_id,
-                        alignment,
-                        data_size_bytes,
-                        src_data_l1_ptr,
-                        output_noc_addr,
-                        fabric_connections,
-                        packet_headers[0]);
+                    if constexpr (is_1d_topology<topology>()) {
+                        fabric_send_chip_unicast_noc_unicast_1d<
+                            linearized_mesh_coord,
+                            topology,
+                            mesh_rows,
+                            mesh_cols,
+                            fabric_max_packet_size_bytes>(
+                            fabric_connections,
+                            packet_headers[0],
+                            dest_device_idx,
+                            src_data_l1_ptr,
+                            output_noc_addr,
+                            data_size_bytes,
+                            alignment);
+                    } else {
+                        const auto& dest_mesh_id = dest_mesh_ids[dest_device_idx];
+                        fabric_send_chip_unicast_noc_unicast<
+                            src_chip_id,
+                            mesh_rows,
+                            mesh_cols,
+                            fabric_max_packet_size_bytes>(
+                            fabric_connections,
+                            packet_headers[0],
+                            dest_chip_id,
+                            dest_mesh_id,
+                            src_data_l1_ptr,
+                            output_noc_addr,
+                            data_size_bytes,
+                            alignment);
+                    }
                 }
                 cb_pop_front(data_cb_id,1);
+
+                if constexpr (locally_reduced) {
+                    break;
+                }
             }
         }
         cb_pop_front(metadata_cb_id, 1);
@@ -157,27 +185,29 @@ void kernel_main() {
     for(uint32_t device_idx=0;device_idx < num_devices;++device_idx){
         const auto & dest_chip_id = dest_chip_ids[device_idx];
 
-        if (dest_chip_id == src_chip_id) {
+        if (device_idx == linearized_mesh_coord) {
             noc_semaphore_inc(get_noc_addr(global_semaphore_addr), 1);
             noc_async_atomic_barrier();
-        } else if (is_configured_target<src_chip_id, mesh_cols, mesh_rows, replicate_axis>(dest_chip_id)) {
-            const auto & dest_mesh_id = dest_mesh_ids[device_idx];
-            const uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
+        } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, replicate_axis>(device_idx)) {
+            const auto& dest_mesh_id = dest_mesh_ids[device_idx];
 
-            packet_headers[1]->to_noc_unicast_atomic_inc(
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{global_noc_semaphore_addr, 1, 32, true});
-
-            fabric_set_unicast_route(
-                const_cast<LowLatencyMeshPacketHeader*>(packet_headers[1]),
-                static_cast<eth_chan_directions>(fabric_connections[route].direction),
-                src_chip_id,
-                dest_chip_id,
-                dest_mesh_id,
-                mesh_cols);
-
-            fabric_connections[route].wait_for_empty_write_slot();
-            fabric_connections[route].send_payload_flush_blocking_from_address(
-                reinterpret_cast<uint32_t>(packet_headers[1]), sizeof(PACKET_HEADER_TYPE));
+            if constexpr (is_1d_topology<topology>()) {
+                fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
+                    linearized_mesh_coord,
+                    topology,
+                    mesh_rows,
+                    mesh_cols>(fabric_connections, packet_headers[1], device_idx, global_noc_semaphore_addr, 1, true);
+            } else {
+                const auto& dest_chip_id = dest_chip_ids[device_idx];
+                fabric_send_chip_unicast_noc_unicast_semaphore_only<src_chip_id, mesh_rows, mesh_cols>(
+                    fabric_connections,
+                    packet_headers[1],
+                    dest_chip_id,
+                    dest_mesh_id,
+                    global_noc_semaphore_addr,
+                    1,
+                    true);
+            }
         }
     }
 

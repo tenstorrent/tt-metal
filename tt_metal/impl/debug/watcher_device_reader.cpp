@@ -84,8 +84,7 @@ CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord& virtu
         return CoreType::DRAM;
     }
 
-    CoreType core_type =
-        soc_desc.translate_coord_to(virtual_coord, CoordSystem::PHYSICAL, CoordSystem::PHYSICAL).core_type;
+    CoreType core_type = soc_desc.translate_coord_to(virtual_coord, CoordSystem::NOC0, CoordSystem::NOC0).core_type;
     if (core_type == CoreType::TENSIX) {
         core_type = CoreType::WORKER;
     }
@@ -175,17 +174,10 @@ const launch_msg_t* get_valid_launch_message(const mailboxes_t* mbox_data) {
 }
 }  // anonymous namespace
 
-namespace tt::watcher {
+namespace tt::tt_metal {
 
-WatcherDeviceReader::WatcherDeviceReader(
-    FILE* f,
-    chip_id_t device_id,
-    std::vector<string>& kernel_names,
-    void (*set_watcher_exception_message)(const string&)) :
-    f(f),
-    device_id(device_id),
-    kernel_names(kernel_names),
-    set_watcher_exception_message(set_watcher_exception_message) {
+WatcherDeviceReader::WatcherDeviceReader(FILE* f, chip_id_t device_id, const std::vector<string>& kernel_names) :
+    f(f), device_id(device_id), kernel_names(kernel_names) {
     // On init, read out eth link retraining register so that we can see if retraining has occurred. WH only for now.
     if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::WORMHOLE_B0 &&
         tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled()) {
@@ -440,6 +432,14 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     ValidateKernelIDs(virtual_core, &(mbox_data->launch[launch_msg_read_ptr]));
 
     // Whether or not watcher data is available depends on a flag set on the device.
+    if (mbox_data->watcher.enable != WatcherEnabled and mbox_data->watcher.enable != WatcherDisabled) {
+        TT_THROW(
+            "Watcher read invalid watcher.enable on {}. Read {}, valid values are {} and {}.",
+            core_str,
+            mbox_data->watcher.enable,
+            WatcherEnabled,
+            WatcherDisabled);
+    }
     bool enabled = (mbox_data->watcher.enable == WatcherEnabled);
 
     if (enabled) {
@@ -603,6 +603,10 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
             error_msg = get_noc_target_str(device_id, core, noc, san);
             error_msg += string(san->is_target ? " (NOC target" : " (Local L1") + " overwrites mailboxes).";
             break;
+        case DebugSanitizeNocLinkedTransactionViolation:
+            error_msg = get_noc_target_str(device_id, core, noc, san);
+            error_msg += fmt::format(" (submitting a non-mcast transaction when there's a linked transaction).");
+            break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",
@@ -619,7 +623,7 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
         DumpRingBuffer(core, mbox_data, true);
         LogRunningKernels(core, launch_msg);
         // Save the error string for checking later in unit tests.
-        set_watcher_exception_message(fmt::format("{}: {}", core_str, error_msg));
+        MetalContext::instance().watcher_server()->set_exception_message(fmt::format("{}: {}", core_str, error_msg));
         TT_THROW("{}: {}", core_str, error_msg);
     }
 }
@@ -711,7 +715,7 @@ void WatcherDeviceReader::DumpAssertTrippedDetails(
     DumpRingBuffer(core, mbox_data, true);
     const launch_msg_t* launch_msg = get_valid_launch_message(mbox_data);
     LogRunningKernels(core, launch_msg);
-    set_watcher_exception_message(error_msg);
+    MetalContext::instance().watcher_server()->set_exception_message(error_msg);
     TT_THROW("Watcher detected tripped assert and stopped device.");
 }
 
@@ -730,7 +734,8 @@ void WatcherDeviceReader::DumpPauseStatus(CoreDescriptor& core, const string& co
             DumpRingBuffer(core, mbox_data, true);
             LogRunningKernels(core, get_valid_launch_message(mbox_data));
             // Save the error string for checking later in unit tests.
-            set_watcher_exception_message(fmt::format("{}: {}", core_str, error_reason));
+            MetalContext::instance().watcher_server()->set_exception_message(
+                fmt::format("{}: {}", core_str, error_reason));
             TT_THROW("{}", error_reason);
         }
     }
@@ -1078,4 +1083,4 @@ string WatcherDeviceReader::GetKernelName(CoreDescriptor& core, const launch_msg
     return "";
 }
 
-}  // namespace tt::watcher
+}  // namespace tt::tt_metal

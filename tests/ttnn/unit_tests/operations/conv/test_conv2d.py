@@ -6,6 +6,7 @@ import pytest
 from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import run_conv, torch_tensor_map, HS, WS, BS
 import ttnn
 import torch
+from models.utility_functions import skip_for_blackhole
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -70,9 +71,6 @@ def test_conv_features(
     packer_l1_acc,
     input_dtype,
 ):
-    if output_layout == ttnn.ROW_MAJOR_LAYOUT and shard_layout == WS:
-        pytest.skip("Bug in Width Sharded Row Major Tensor Creation when height%32!=0. #19408")
-
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
 
@@ -108,6 +106,7 @@ SliceHeight = ttnn.Conv2dSliceHeight
 SliceWidth = ttnn.Conv2dSliceWidth
 
 
+@skip_for_blackhole("Not fully tested on Blackhole")
 @pytest.mark.parametrize(
     "input_layout, dtype",
     [[ttnn.TILE_LAYOUT, ttnn.bfloat8_b], [ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16]],
@@ -123,10 +122,7 @@ SliceWidth = ttnn.Conv2dSliceWidth
         (2, 64,   64,   384,   64,    SliceHeight,   6,  ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
         (1, 4,    32,   1024,  1024,  SliceWidth,    4,  ttnn.bfloat8_b, (5, 5), (1, 1), (0, 0), (1, 1), 32,      ttnn.MathFidelity.LoFi  ),
         (1, 64,   128,  992,   992,   SliceWidth,   64,  ttnn.bfloat8_b, (2, 2), (1, 1), (0, 0), (1, 1), 32 * 4,  ttnn.MathFidelity.LoFi  ),
-
-        # Test fails due to limitation in Tensor Infra to accurately represent padded shapes.
-        # https://github.com/tenstorrent/tt-metal/issues/24425git
-        # (1, 2904, 2904,  48,    48,   SliceWidth,   4,  ttnn.bfloat8_b, (3, 3), (1, 1), (0, 0), (1, 1), 32,  ttnn.MathFidelity.HiFi4  ),
+        (1, 2904, 2904,  48,    48,   SliceWidth,   4,  ttnn.bfloat8_b, (3, 3), (1, 1), (0, 0), (1, 1), 32,  ttnn.MathFidelity.HiFi4  ),
         (1, 2944, 2944,  48,    48,   SliceWidth,   4,  ttnn.bfloat8_b,  (3, 3), (1, 1), (0, 0), (1, 1), 32,  ttnn.MathFidelity.HiFi4  ),
     )
     # fmt: on

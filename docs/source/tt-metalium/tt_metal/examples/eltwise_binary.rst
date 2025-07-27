@@ -80,7 +80,7 @@ Data preparation and upload is the same as before. For this example, buffer 0 wi
 Circular buffers
 ----------------
 
-Here we introduce a new concept: circular buffers. They are communication channels between the different kernel on a Tensix. Conceptually they act as pipes between different kernels. There are in total 16 circular buffers supported on a Tensix. To utilize them, the host program must allocate the circular buffers and utilize the appropriate circular buffer index in the kernel.
+Here we introduce a new concept: circular buffers. They are communication channels between the different kernel on a Tensix. Conceptually they act as pipes between different kernels. There are in total 32 circular buffers supported on a Tensix. To utilize them, the host program must allocate the circular buffers and utilize the appropriate circular buffer index in the kernel.
 
 
 
@@ -125,16 +125,21 @@ In the previous example (DRAM loopback), we used a single kernel to perform the 
 
 .. code-block:: cpp
 
+    std::vector<uint32_t> reader_args;
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_args);
     auto reader = CreateKernel(
         program,
         "tt_metal/programming_examples/eltwise_binary/kernels/dataflow/read_tiles.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_args});
+    std::vector<uint32_t> writer_args;
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_args);
     auto writer = CreateKernel(
         program,
         "tt_metal/programming_examples/eltwise_binary/kernels/dataflow/write_tile.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = writer_args});
     auto compute = CreateKernel(
         program,
         "tt_metal/programming_examples/eltwise_binary/kernels/compute/tiles_add.cpp",
@@ -161,16 +166,11 @@ To do so, the reader creates 2 interleaved address generators. Unlike on most pr
 
         const uint32_t tile_size_bytes = get_tile_size(cb_in0);
 
-        const InterleavedAddrGenFast<true> in0 = {
-            .bank_base_address = in0_addr,
-            .page_size = tile_size_bytes,
-            .data_format = DataFormat::Float16_b,
-        };
-        const InterleavedAddrGenFast<true> in1 = {
-            .bank_base_address = in1_addr,
-            .page_size = tile_size_bytes,
-            .data_format = DataFormat::Float16_b,
-        };
+        constexpr auto in0_args = TensorAccessorArgs<0>();
+        const auto in0 = TensorAccessor(in0_args, in0_addr, tile_size_bytes);
+
+        constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
+        const auto in1 = TensorAccessor(in1_args, in1_addr, tile_size_bytes);
 
         for (uint32_t i = 0; i < n_tiles; i++) {
             cb_reserve_back(cb_in0, 1);
@@ -237,11 +237,8 @@ The writer kernel looks similar to the reader kernel. Instead of reading, it wri
 
         const uint32_t tile_size_bytes = get_tile_size(cb_out0);
 
-        const InterleavedAddrGenFast<true> out = {
-            .bank_base_address = out_addr,
-            .page_size = tile_size_bytes,
-            .data_format = DataFormat::Float16_b,
-        };
+        constexpr auto out_args = TensorAccessorArgs<0>();
+        const auto out = TensorAccessor(out_args, out_addr, tile_size_bytes);
 
         for (uint32_t i = 0; i < n_tiles; i++) {
             cb_wait_front(cb_out0, 1);

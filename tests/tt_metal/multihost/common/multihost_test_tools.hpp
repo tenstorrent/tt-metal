@@ -99,7 +99,7 @@ inline int multihost_main(int argc, char** argv) {
 
     ::testing::InitGoogleTest(&argc, argv);
 
-    auto ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     // Skip all tests if lacking fault tolerance.
     if (!ctx->supports_fault_tolerance()) {
@@ -116,7 +116,7 @@ inline int multihost_main(int argc, char** argv) {
     int local_rc = RUN_ALL_TESTS();
 
     // need to make sure that  we get context after the tests, old one could be revoked
-    auto context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     fmt::print("Rank {}: local rc = {}\n", *context->rank(), local_rc);
     // Propagate the worst return code to all ranks
 

@@ -25,6 +25,10 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
 
     const auto& input = tensor_args.input;
     const auto& ops_chain = args.op_chain;
+    float value = 0.0f;
+    if (!ops_chain[0].params.empty()) {
+        value = ops_chain[0].params[0];
+    }
 
     tt::tt_metal::Program program{};
 
@@ -48,6 +52,14 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+
+    uint32_t tmp0_cb_index = tt::CBIndex::c_1;  // temporary buffer for intermediate results
+    if (ops_chain[0].op_type == UnaryOpType::HARDSHRINK) {
+        tt::tt_metal::CircularBufferConfig cb_tmp0_config =
+            tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tmp0_cb_index, cb_data_format}})
+                .set_page_size(tmp0_cb_index, single_tile_size);
+        auto cb_tmp0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_tmp0_config);
+    }
 
     uint32_t output_cb_index = tt::CBIndex::c_2;
     uint32_t num_output_tiles = 2;
@@ -79,18 +91,19 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
 
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         num_tiles_per_core_group_1,  // per_core_block_cnt
-        1                            // per_core_block_size
+        1,                           // per_core_block_size
     };
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (args.preserve_fp32_precision) {
         unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[tmp0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
     }
 
     bool math_approx_mode = std::all_of(
         args.op_chain.begin(), args.op_chain.end(), [](const auto& u) { return utils::get_op_approx_mode(u.op_type); });
     std::map<std::string, std::string> unary_defines = utils::get_block_defines(args.op_chain, "0", "0", input.dtype());
-    auto path = utils::get_compute_kernel_path(ops_chain[0].op_type, compute_root);
+    auto path = utils::get_compute_kernel_path(ops_chain[0].op_type, compute_root, input.dtype());
 
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
@@ -105,13 +118,14 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
             .compile_args = compute_kernel_args_group_1,
             .defines = unary_defines});
 
+    auto eltwise_unary_kernel_group_2_id = 0;
     if (!core_group_2.ranges().empty()) {
         std::vector<uint32_t> compute_kernel_args_group_2 = {
             num_tiles_per_core_group_2,  // per_core_block_cnt
-            1                            // per_core_block_size
+            1,                           // per_core_block_size
         };
 
-        auto eltwise_unary_kernel_group_2_id = tt::tt_metal::CreateKernel(
+        eltwise_unary_kernel_group_2_id = tt::tt_metal::CreateKernel(
             program,
             path,
             core_group_2,
@@ -125,13 +139,17 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
                 .defines = unary_defines});
     }
 
+    const auto packed_scalar = std::bit_cast<uint32_t>(value);
+
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_tiles_per_core = 0;
+        auto kernel_id = eltwise_unary_kernel_group_1_id;
         if (core_group_1.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_1;
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
+            kernel_id = eltwise_unary_kernel_group_2_id;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
         }
@@ -141,6 +159,8 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
 
         tt::tt_metal::SetRuntimeArgs(
             program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles_per_core, num_tiles_written});
+
+        tt::tt_metal::SetRuntimeArgs(program, kernel_id, core, {packed_scalar});
         num_tiles_written += num_tiles_per_core;
     }
 

@@ -5,7 +5,8 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
-#include "utils/bfloat16.h"
+
+#include "argmax_common.hpp"
 
 void kernel_main() {
     // Runtime args
@@ -44,14 +45,14 @@ void kernel_main() {
 
     // CB in L1 memory for storing input
     const uint32_t src_cb_addr = get_write_ptr(src_cb_idx);
-    volatile tt_l1_ptr uint16_t* in_vals = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src_cb_addr);
+    constexpr DataFormat src_cb_addr_data_format = get_dataformat(src_cb_idx);
 
     // CB in L1 memory for storing output
     const uint32_t dst_cb_addr = get_write_ptr(dst_cb_idx);
     volatile tt_l1_ptr uint32_t* out_idxs = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_cb_addr);
 
     uint32_t max_idx = 0;
-    uint16_t max_val = NEG_INF_BFLOAT16;
+    auto max_val = get_default_value<src_cb_addr_data_format>();
 
     //-------------------------------------------------------------------------
     // Main loop - run by all cores
@@ -64,15 +65,12 @@ void kernel_main() {
             // Reset max_val for each new output
             if constexpr (not reduce_all) {
                 max_idx = 0;
-                max_val = NEG_INF_BFLOAT16;
+                max_val = get_default_value<src_cb_addr_data_format>();
             }
 
             for (uint32_t i = 0; i < red_dim_units; ++i) {
-                uint16_t val = in_vals[i];
-                if (bfloat16_greater(val, max_val)) {
-                    max_idx = reduce_all ? (k * inner_dim_units * red_dim_units + j * red_dim_units + i) : i;
-                    max_val = val;
-                }
+                compare_values<src_cb_addr_data_format>(
+                    src_cb_addr, max_val, max_idx, i, j, k, red_dim_units, reduce_all, inner_dim_units);
             }
             if constexpr (not reduce_all) {
                 out_idxs[j] = max_idx;

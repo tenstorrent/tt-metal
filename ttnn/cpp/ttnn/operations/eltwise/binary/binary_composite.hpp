@@ -496,6 +496,11 @@ struct ExecuteBitwiseRightShift {
         std::optional<bool> use_legacy = std::nullopt);
 };
 
+struct ExecuteLogicalLeftShift : ExecuteBitwiseLeftShift {
+    // Inherits all functionality from ExecuteBitwiseLeftShift
+    // but creates a distinct type for registration
+};
+
 }  // namespace binary
 }  // namespace operations
 
@@ -528,9 +533,6 @@ constexpr auto floor_div = ttnn::register_operation<
 constexpr auto bias_gelu = ttnn::register_operation<
     "ttnn::bias_gelu",
     operations::binary::ExecuteBiasGelu<operations::binary::BinaryOpType::BIAS_GELU>>();
-constexpr auto scatter = ttnn::register_operation<
-    "ttnn::scatter",
-    operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::SCATTER>>();
 constexpr auto outer = ttnn::register_operation<
     "ttnn::outer",
     operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::OUTER>>();
@@ -546,6 +548,8 @@ constexpr auto bitwise_or = ttnn::register_operation<"ttnn::bitwise_or", operati
 constexpr auto bitwise_xor = ttnn::register_operation<"ttnn::bitwise_xor", operations::binary::ExecuteBitwiseXor>();
 constexpr auto bitwise_left_shift =
     ttnn::register_operation<"ttnn::bitwise_left_shift", operations::binary::ExecuteBitwiseLeftShift>();
+constexpr auto logical_left_shift =
+    ttnn::register_operation<"ttnn::logical_left_shift", operations::binary::ExecuteLogicalLeftShift>();
 constexpr auto bitwise_right_shift =
     ttnn::register_operation<"ttnn::bitwise_right_shift", operations::binary::ExecuteBitwiseRightShift>();
 constexpr auto pow = ttnn::register_operation<"ttnn::pow", operations::binary::ExecutePower>();

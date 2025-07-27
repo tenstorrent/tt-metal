@@ -15,7 +15,7 @@
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 
-#include <ttnn/tensor/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace accessor_benchmarks {
 
@@ -136,6 +136,14 @@ TEST_P(AccessorBenchmarks, GetNocAddr) {
         mesh_device_,
         "accessor_get_noc_addr_benchmarks",
         "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_get_noc_addr_page_id_benchmark.cpp");
+}
+
+TEST_P(AccessorBenchmarks, GetNocAddrPageCoord) {
+    benchmark_all_args_combinations_single_core(
+        GetParam(),
+        mesh_device_,
+        "accessor_get_noc_addr_page_coord_benchmarks",
+        "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_get_noc_addr_page_coord_benchmark.cpp");
 }
 
 TEST_P(AccessorBenchmarks, Constructor) {

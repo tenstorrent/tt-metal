@@ -156,4 +156,8 @@ uint32_t select_link(
     }
 }
 
+uint32_t get_linearized_index(const ttnn::MeshCoordinate& mesh_coordinate, const ttnn::MeshDeviceView& mesh_view) {
+    return mesh_coordinate[0] * mesh_view.num_cols() + mesh_coordinate[1];
+}
+
 }  // namespace ttnn::operations::ccl::common

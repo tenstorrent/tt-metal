@@ -13,6 +13,7 @@ usage()
     echo "[--validate, -v]            Validate that required packages are installed"
     echo "[--docker, -d]              Specialize execution for docker"
     echo "[--no-distributed]          Don't install distributed compute dependencies (OpenMPI)"
+    echo "[--hugepages]               Install hugepages dependency"
     exit 1
 }
 
@@ -264,6 +265,8 @@ prep_ubuntu_system() {
     # Add LLVM repository for Clang 17
     wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add -
     echo "deb http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-17 main" | tee /etc/apt/sources.list.d/llvm-17.list
+    # Also v20
+    echo "deb http://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-20 main" | tee /etc/apt/sources.list.d/llvm-20.list
 
     # Add Kitware repository for latest CMake
     wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | gpg --dearmor - | tee /usr/share/keyrings/kitware-archive-keyring.gpg >/dev/null
@@ -357,7 +360,7 @@ install_sfpi() {
     rm -rf $TEMP_DIR
 }
 
-install_mpi_ulfm(){
+install_mpi_ulfm() {
     # Only install if distributed flag is set
     if [ "$distributed" -ne 1 ]; then
         echo "[INFO] Skipping MPI ULFM installation (distributed mode not enabled)"
@@ -437,8 +440,8 @@ install() {
     install_llvm
     install_mpi_ulfm
 
-    # Configure system (hugepages, etc.) - only for baremetal (not docker)
-    if [ "$docker" -ne 1 ]; then
+    # Configure system (hugepages, etc.) - only for baremetal if requested (not docker)
+    if [ "$docker" -ne 1 ] && [ "$hugepages" -eq 1 ]; then
         configure_hugepages
     fi
 }
@@ -470,6 +473,7 @@ fi
 validate=0
 docker=0
 distributed=1
+hugepages=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -486,6 +490,10 @@ while [ $# -gt 0 ]; do
             ;;
         --no-distributed)
             distributed=0
+            shift
+            ;;
+        --hugepages)
+            hugepages=1
             shift
             ;;
         *)

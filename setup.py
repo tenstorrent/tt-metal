@@ -134,11 +134,11 @@ def get_from_precompiled_dir():
 
 
 @dataclass(frozen=True)
-class MetalliumBuildConfig:
+class MetaliumBuildConfig:
     from_precompiled_dir = get_from_precompiled_dir()
 
 
-metal_build_config = MetalliumBuildConfig()
+metal_build_config = MetaliumBuildConfig()
 
 
 class CMakeBuild(build_ext):
@@ -191,8 +191,8 @@ class CMakeBuild(build_ext):
                     "Ninja",
                     "-DCMAKE_BUILD_TYPE=Release",
                     "-DCMAKE_INSTALL_PREFIX=build_Release",
-                    "-DBUILD_SHARED_LIBS=OFF",
-                    "-DTT_INSTALL=OFF",
+                    "-DBUILD_SHARED_LIBS=ON",
+                    "-DTT_INSTALL=ON",
                     "-DTT_UNITY_BUILDS=ON",
                     "-DTT_ENABLE_LIGHT_METAL_TRACE=ON",
                     "-DWITH_PYTHON_BINDINGS=ON",
@@ -205,6 +205,12 @@ class CMakeBuild(build_ext):
                     cmake_args.extend(
                         [
                             "-DENABLE_TRACY=ON",
+                        ]
+                    )
+                else:
+                    cmake_args.extend(
+                        [
+                            "-DENABLE_TRACY=OFF",
                         ]
                     )
 
@@ -294,6 +300,8 @@ class CMakeBuild(build_ext):
             "core_descriptors/*.yaml",
             "fabric/hw/**/*",
             "fabric/mesh_graph_descriptors/*.yaml",
+            "fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
+            "fabric/impl/kernels/tt_fabric_mux.cpp",
             "hw/**/*",
             "hostdevcommon/api/hostdevcommon/**/*",
             "impl/dispatch/kernels/**/*",
