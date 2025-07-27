@@ -25,6 +25,8 @@ void kernel_main() {
     auto arg_ptr = reinterpret_cast<volatile uint32_t*>(arg_base);
     // post a heartbeat to the same address for the host api to read
     auto heartbeat_ptr = reinterpret_cast<volatile uint32_t*>(0x7CC70);
+    volatile uint32_t* const debug_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
+
     uint32_t heartbeat_cnt = 0;
 
     // poll for msg. when there is a message pretend to process it and clear
@@ -50,7 +52,13 @@ void kernel_main() {
                 buffer_ptr[i] = 0xd0e50000 | msg_type;
                 // arg_ptr[0] = 0;
                 do_nothing(msg_type);
+
                 if (msg_type != msg_count || arg_ptr[0] != msg_count) {
+                    debug_dump_addr[1] = 0xfffffff1;
+                    debug_dump_addr[2] = buffer_ptr[i];
+                    debug_dump_addr[3] = msg_type;
+                    debug_dump_addr[4] = msg_count;
+                    debug_dump_addr[5] = arg_ptr[0];
                     while (true) {
                         __asm__ volatile("nop");
                     }

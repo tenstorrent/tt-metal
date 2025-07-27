@@ -124,13 +124,17 @@ void __attribute__((noinline)) Application() {
     // to base firmware while the host is still initializing
     volatile uint32_t* const debug_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
     volatile uint32_t* const debug_run_count = reinterpret_cast<volatile uint32_t*>(0x3680);
+    volatile uint32_t* mailbox_pointer = reinterpret_cast<volatile uint32_t*>(0x7D000);
     debug_run_count[0]++;
 
-    debug_dump_addr[0] = 0x11111111;
+    debug_dump_addr[0] = 0x22222222;
+    debug_dump_addr[2] = mailbox_pointer[0];
+    debug_dump_addr[3] = mailbox_pointer[1];
+    debug_dump_addr[4] = mailbox_pointer[2];
+
     do {
         __asm__ volatile("fence");
     } while (gEnableFwFlag[0] != 1);
-    debug_dump_addr[0] = 0x22222222;
 
     mailboxes->subordinate_sync.all = RUN_SYNC_MSG_ALL_SUBORDINATES_DONE;
     mailboxes->subordinate_sync.dm1 = RUN_SYNC_MSG_INIT;
