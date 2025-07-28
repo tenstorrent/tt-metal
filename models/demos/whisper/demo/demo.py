@@ -51,10 +51,10 @@ def pad_input_32(tensor, value):
 
 def load_conditional_generation_ref_model():
     hf_ref_model = (
-        WhisperForConditionalGeneration.from_pretrained("distil-whisper/distil-large-v3").to(torch.bfloat16).eval()
+        WhisperForConditionalGeneration.from_pretrained("openai/whisper-large-v3").to(torch.bfloat16).eval()
     )
-    processor = AutoProcessor.from_pretrained("distil-whisper/distil-large-v3", language="English", task="transcribe")
-    feature_extractor = AutoFeatureExtractor.from_pretrained("distil-whisper/distil-large-v3")
+    processor = AutoProcessor.from_pretrained("openai/whisper-large-v3", language="English", task="transcribe")
+    feature_extractor = AutoFeatureExtractor.from_pretrained("openai/whisper-large-v3")
     config = hf_ref_model.config
     return (
         hf_ref_model,
@@ -79,7 +79,7 @@ def init_conditional_generation_tt_model(hf_ref_model, config, ttnn_model, devic
         device=device,
     )
 
-    # Note: config.max_length is 448 for distil-whisper/distil-large-v3
+    # Note: config.max_length is 448 for openai/whisper-large-v3
     kv_cache = init_kv_cache(config, device, max_batch_size, max_seq_len=max_seq_len)
 
     return parameters, ttnn_linear_weight, kv_cache
@@ -134,7 +134,7 @@ def run_generate(
             ttnn.from_torch(torch.zeros(unpadded_batch_size), device=device, dtype=ttnn.int32) if kv_cache else None
         )
 
-        MAX_GEN_LEN = config.max_length  # 448 for distil-whisper/distil-large-v3
+        MAX_GEN_LEN = config.max_length  # 448 for openai/whisper-large-v3
         print_each_iter = False
         output_ids = []
         total_decode_time = 0
