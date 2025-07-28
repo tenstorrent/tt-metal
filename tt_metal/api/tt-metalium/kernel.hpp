@@ -70,7 +70,7 @@ struct KernelSource {
 
 class Kernel {
 public:
-    virtual ~Kernel() {}
+    virtual ~Kernel() = default;
 
     std::string name() const;
 

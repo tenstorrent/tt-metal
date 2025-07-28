@@ -22,9 +22,9 @@
 
 namespace tt::tt_metal::distributed {
 
-using MeshSocketTest = T3000MeshDeviceFixture;
-using MeshSocketTest1DFabric = T3000MeshDevice1DFabricFixture;
-using MeshSocketTest2DFabric = T3000MeshDevice2DFabricFixture;
+using MeshSocketTest = MeshDevice2x4Fixture;
+using MeshSocketTest1DFabric = MeshDevice2x4Fabric1DFixture;
+using MeshSocketTest2DFabric = MeshDevice2x4Fabric2DFixture;
 
 struct SocketCoreMapping {
     CoreCoord sender_core;
@@ -552,7 +552,6 @@ void test_single_connection_multi_device_socket(
 
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -607,13 +606,6 @@ void test_single_connection_multi_device_socket(
     std::iota(src_vec.begin(), src_vec.end(), 0);
     WriteShard(md0->mesh_command_queue(), sender_data_buffer, src_vec, MeshCoordinate(0, 0));
 
-    const auto reserved_packet_header_CB_index = tt::CB::c_in0;
-
-    tt::tt_metal::CircularBufferConfig sender_cb_reserved_packet_header_config =
-        tt::tt_metal::CircularBufferConfig(
-            2 * packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::UInt32}})
-            .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-
     auto sender_program = CreateProgram();
     auto sender_kernel = CreateKernel(
         sender_program,
@@ -629,9 +621,6 @@ void test_single_connection_multi_device_socket(
                  static_cast<uint32_t>(data_size)},
             .defines = {{"FABRIC_MAX_PACKET_SIZE", std::to_string(fabric_max_packet_size)}}});
 
-    auto sender_packet_header_CB_handle =
-        CreateCircularBuffer(sender_program, sender_logical_coord, sender_cb_reserved_packet_header_config);
-
     std::vector<uint32_t> sender_rtas;
     tt_fabric::append_fabric_connection_rt_args(
         sender_fabric_node_id, recv_fabric_node_id, 0, sender_program, {sender_logical_coord}, sender_rtas);
@@ -639,14 +628,6 @@ void test_single_connection_multi_device_socket(
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_coord, sender_rtas);
 
     auto recv_program = CreateProgram();
-
-    tt::tt_metal::CircularBufferConfig recv_cb_packet_header_config =
-        tt::tt_metal::CircularBufferConfig(
-            packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::UInt32}})
-            .set_page_size(tt::CB::c_in0, packet_header_size_bytes);
-
-    auto recv_packet_header_CB_handle =
-        CreateCircularBuffer(recv_program, recv_logical_coord, recv_cb_packet_header_config);
 
     KernelHandle recv_kernel;
     if (use_cbs) {
@@ -692,7 +673,6 @@ void test_single_connection_multi_device_socket(
                 .noc = NOC::RISCV_0_default,
                 .compile_args = {
                     static_cast<uint32_t>(recv_socket.get_config_buffer()->address()),
-                    static_cast<uint32_t>(reserved_packet_header_CB_index),
                     static_cast<uint32_t>(output_cb_index),
                     static_cast<uint32_t>(recv_data_buffer->address()),
                     static_cast<uint32_t>(page_size),
@@ -708,7 +688,6 @@ void test_single_connection_multi_device_socket(
                 .noc = NOC::RISCV_0_default,
                 .compile_args = {
                     static_cast<uint32_t>(recv_socket.get_config_buffer()->address()),
-                    static_cast<uint32_t>(reserved_packet_header_CB_index),
                     static_cast<uint32_t>(page_size),
                     static_cast<uint32_t>(data_size),
                     static_cast<uint32_t>(recv_virtual_coord.x),
@@ -755,7 +734,6 @@ void test_single_connection_multi_device_socket_with_workers(
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
 
     auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
     // Used to setup fabric connections
     const uint32_t sender_physical_device_id = md0->get_device(MeshCoordinate(0, 0))->id();
@@ -809,13 +787,6 @@ void test_single_connection_multi_device_socket_with_workers(
 
     WriteShard(md0->mesh_command_queue(), sender_data_buffer, src_vec, MeshCoordinate(0, 0));
 
-    const auto reserved_packet_header_CB_index = tt::CB::c_in0;
-
-    tt::tt_metal::CircularBufferConfig sender_cb_reserved_packet_header_config =
-        tt::tt_metal::CircularBufferConfig(
-            2 * packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::UInt32}})
-            .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-
     auto sender_program = CreateProgram();
     auto sender_kernel = CreateKernel(
         sender_program,
@@ -831,9 +802,6 @@ void test_single_connection_multi_device_socket_with_workers(
                  static_cast<uint32_t>(data_size)},
             .defines = {{"FABRIC_MAX_PACKET_SIZE", std::to_string(fabric_max_packet_size)}}});
 
-    auto sender_packet_header_CB_handle =
-        CreateCircularBuffer(sender_program, sender_logical_coord, sender_cb_reserved_packet_header_config);
-
     std::vector<uint32_t> sender_rtas;
     tt_fabric::append_fabric_connection_rt_args(
         sender_fabric_node_id, recv_fabric_node_id, 0, sender_program, {sender_logical_coord}, sender_rtas);
@@ -844,14 +812,6 @@ void test_single_connection_multi_device_socket_with_workers(
 
     CoreRangeSet recv_worker_crs =
         CoreRangeSet(std::array{CoreRange(recv_logical_coord), CoreRange(worker_logical_coord)}).merge_ranges();
-
-    tt::tt_metal::CircularBufferConfig recv_cb_packet_header_config =
-        tt::tt_metal::CircularBufferConfig(
-            packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::UInt32}})
-            .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-
-    auto recv_packet_header_CB_handle =
-        CreateCircularBuffer(recv_program, recv_logical_coord, recv_cb_packet_header_config);
 
     // Create CB on both receiver and worker so that receiver knows the address
     auto config_cb_index = tt::CBIndex::c_1;
@@ -952,9 +912,6 @@ std::shared_ptr<Program> create_sender_program(
     const auto recv_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(recv_physical_device_id);
 
     auto fabric_max_packet_size = tt_fabric::get_tt_fabric_max_payload_size_bytes();
-    auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
-
-    const auto reserved_packet_header_CB_index = tt::CB::c_in0;
     auto sender_program = std::make_shared<Program>();
     auto sender_kernel = CreateKernel(
         *sender_program,
@@ -970,12 +927,6 @@ std::shared_ptr<Program> create_sender_program(
                  static_cast<uint32_t>(data_size)},
             .defines = {{"FABRIC_MAX_PACKET_SIZE", std::to_string(fabric_max_packet_size)}}});
 
-    tt::tt_metal::CircularBufferConfig sender_cb_reserved_packet_header_config =
-        tt::tt_metal::CircularBufferConfig(
-            2 * packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::UInt32}})
-            .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    auto sender_packet_header_CB_handle =
-        CreateCircularBuffer(*sender_program, sender_logical_coord, sender_cb_reserved_packet_header_config);
     std::vector<uint32_t> sender_rtas;
     tt_fabric::append_fabric_connection_rt_args(
         sender_fabric_node_id,
@@ -1003,9 +954,6 @@ std::shared_ptr<Program> create_split_reduce_program(
     chip_id_t recv_physical_device_id,
     uint32_t sender0_link_idx,
     uint32_t sender1_link_idx) {
-    auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
-
-    auto reserved_packet_header_CB_index = tt::CB::c_in0;
     auto config0_cb_index = tt::CBIndex::c_1;
     auto config1_cb_index = tt::CBIndex::c_2;
     auto in0_cb_index = tt::CBIndex::c_3;
@@ -1025,9 +973,6 @@ std::shared_ptr<Program> create_split_reduce_program(
 
     auto recv_program = std::make_shared<Program>();
 
-    auto recv_cb_packet_header_config =
-        CircularBufferConfig(packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::UInt32}})
-            .set_page_size(tt::CB::c_in0, packet_header_size_bytes);
     auto config_cb_config0 =
         CircularBufferConfig(sizeof(receiver_socket_md), {{config0_cb_index, tt::DataFormat::UInt32}})
             .set_page_size(config0_cb_index, sizeof(receiver_socket_md));
@@ -1045,8 +990,6 @@ std::shared_ptr<Program> create_split_reduce_program(
             std::array{
                 CoreRange(recv_logical_coord_0), CoreRange(recv_logical_coord_1), CoreRange(reduce_logical_coord)})
             .merge_ranges();
-    // Fabric header CB
-    auto recv_packet_header_CB_handle = CreateCircularBuffer(*recv_program, recv_crs, recv_cb_packet_header_config);
     // Socket Config CB
     auto config_cb_handle0 = CreateCircularBuffer(*recv_program, recv_worker_crs, config_cb_config0);
     auto config_cb_handle1 = CreateCircularBuffer(*recv_program, recv_worker_crs, config_cb_config1);
@@ -1158,10 +1101,6 @@ std::shared_ptr<Program> create_reduce_program(
     uint32_t sender0_link_idx,
     uint32_t sender1_link_idx,
     uint32_t recv_link_idx) {
-    auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
-
-    auto reserved_receiver_packet_header_CB_index = tt::CBIndex::c_0;
-    auto reserved_sender_packet_header_CB_index = tt::CBIndex::c_1;
     auto out_cb_index = tt::CBIndex::c_2;
 
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -1178,21 +1117,10 @@ std::shared_ptr<Program> create_reduce_program(
 
     auto reduce_program = std::make_shared<Program>();
 
-    auto recv_cb_packet_header_config =
-        CircularBufferConfig(
-            packet_header_size_bytes * 2, {{reserved_receiver_packet_header_CB_index, tt::DataFormat::UInt32}})
-            .set_page_size(reserved_receiver_packet_header_CB_index, packet_header_size_bytes);
-    auto send_cb_packet_header_config =
-        CircularBufferConfig(
-            packet_header_size_bytes * 2, {{reserved_sender_packet_header_CB_index, tt::DataFormat::UInt32}})
-            .set_page_size(reserved_sender_packet_header_CB_index, packet_header_size_bytes);
     auto output_cb_config = CircularBufferConfig(2 * page_size, {{out_cb_index, tt::DataFormat::UInt32}})
                                 .set_page_size(out_cb_index, page_size);
     CoreRangeSet reduce_crs = CoreRangeSet(reduce_logical_coord).merge_ranges();
 
-    // Fabric header CB
-    auto recv_packet_header_CB_handle = CreateCircularBuffer(*reduce_program, reduce_crs, recv_cb_packet_header_config);
-    auto send_packet_header_CB_handle = CreateCircularBuffer(*reduce_program, reduce_crs, send_cb_packet_header_config);
     // Data CBs
     auto out_cb_handle = CreateCircularBuffer(*reduce_program, reduce_crs, output_cb_config);
 
@@ -1208,7 +1136,6 @@ std::shared_ptr<Program> create_reduce_program(
                 static_cast<uint32_t>(recv_socket_1.get_config_buffer()->address()),
                 static_cast<uint32_t>(page_size),
                 static_cast<uint32_t>(data_size),
-                static_cast<uint32_t>(reserved_receiver_packet_header_CB_index),
                 static_cast<uint32_t>(out_cb_index)}});
 
     auto send_kernel = CreateKernel(
@@ -1222,7 +1149,6 @@ std::shared_ptr<Program> create_reduce_program(
                 static_cast<uint32_t>(send_socket_2.get_config_buffer()->address()),
                 static_cast<uint32_t>(page_size),
                 static_cast<uint32_t>(data_size),
-                static_cast<uint32_t>(reserved_sender_packet_header_CB_index),
                 static_cast<uint32_t>(out_cb_index)}});
 
     std::vector<uint32_t> recv_rtas;
@@ -1262,10 +1188,6 @@ std::shared_ptr<Program> create_recv_program(
     chip_id_t sender_physical_device_id,
     chip_id_t recv_physical_device_id,
     uint32_t recv_link_idx) {
-    auto packet_header_size_bytes = tt_fabric::get_tt_fabric_packet_header_size_bytes();
-
-    auto reserved_packet_header_CB_index = tt::CB::c_in0;
-
     // Used to setup fabric connections
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto sender_fabric_node_id =
@@ -1277,13 +1199,7 @@ std::shared_ptr<Program> create_recv_program(
 
     auto recv_program = std::make_shared<Program>();
 
-    auto recv_cb_packet_header_config =
-        CircularBufferConfig(packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::UInt32}})
-            .set_page_size(tt::CB::c_in0, packet_header_size_bytes);
     CoreRangeSet recv_crs = CoreRangeSet(std::array{CoreRange(recv_logical_coord)}).merge_ranges();
-
-    // Fabric header CB
-    auto recv_packet_header_CB_handle = CreateCircularBuffer(*recv_program, recv_crs, recv_cb_packet_header_config);
 
     auto recv_kernel = CreateKernel(
         *recv_program,
@@ -1294,7 +1210,6 @@ std::shared_ptr<Program> create_recv_program(
             .noc = NOC::RISCV_0_default,
             .compile_args = {
                 static_cast<uint32_t>(recv_socket.get_config_buffer()->address()),
-                static_cast<uint32_t>(reserved_packet_header_CB_index),
                 static_cast<uint32_t>(page_size),
                 static_cast<uint32_t>(data_size),
                 static_cast<uint32_t>(output_virtual_coord.x),

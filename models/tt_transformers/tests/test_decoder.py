@@ -60,7 +60,7 @@ def test_decoder_inference(
 ):
     dtype = ttnn.bfloat8_b
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
@@ -156,7 +156,7 @@ def test_decoder_inference(
         logger.info(f"[Decoder] Generating token {i}")
 
         # input = torch.randn(1, 32, 4096)
-        pt_decode_input = (torch.rand(batch_size, seqlen, model_args.dim) * 2) - 1
+        pt_decode_input = (torch.rand(batch_size, seqlen, model_args.dim, dtype=torch.bfloat16) * 2) - 1
         tt_decode_input = pt_decode_input.clone()
 
         decode_input = model_args.prepare_residual_tensor_decode(

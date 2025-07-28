@@ -212,6 +212,7 @@ struct TestTrafficConfig {
     std::optional<CoreCoord> dst_logical_core;
     std::optional<uint32_t> target_address;
     std::optional<uint32_t> atomic_inc_address;
+    std::optional<uint32_t> link_id;  // Link ID for multi-link tests
     // TODO: add later
     // mode - BW, latency etc
 };
@@ -220,12 +221,13 @@ struct TestTrafficSenderConfig {
     TrafficParameters parameters;
     FabricNodeId src_node_id;
     std::vector<FabricNodeId> dst_node_ids;
-    std::unordered_map<RoutingDirection, uint32_t> hops;
+    std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
     CoreCoord dst_logical_core;
     size_t target_address;
     std::optional<size_t> atomic_inc_address;
     uint32_t dst_noc_encoding;  // TODO: decide if we should keep it here or not
     uint32_t payload_buffer_size;  // Add payload buffer size field
+    std::optional<uint32_t> link_id;  // Link ID for multi-link tests
 
     std::vector<uint32_t> get_args(bool is_sync_config = false) const;
 };
@@ -272,15 +274,15 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
         } else if (this->parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
             TT_FATAL(!this->dst_node_ids.empty(), "2D multicast should have at least one destination node.");
             const auto& dst_rep_node_id = this->dst_node_ids[0];  // Representative destination
-            auto adjusted_hops = this->hops;
+            auto adjusted_hops = *(this->hops);
 
             // Handle dynamic routing by adjusting hops
             bool is_dynamic_routing = (this->parameters.routing_type == RoutingType::Dynamic);
             if (is_dynamic_routing) {
-                auto north_hops = hops.count(RoutingDirection::N) > 0 ? hops.at(RoutingDirection::N) : 0;
-                auto south_hops = hops.count(RoutingDirection::S) > 0 ? hops.at(RoutingDirection::S) : 0;
-                auto east_hops = hops.count(RoutingDirection::E) > 0 ? hops.at(RoutingDirection::E) : 0;
-                auto west_hops = hops.count(RoutingDirection::W) > 0 ? hops.at(RoutingDirection::W) : 0;
+                auto north_hops = hops->count(RoutingDirection::N) > 0 ? hops->at(RoutingDirection::N) : 0;
+                auto south_hops = hops->count(RoutingDirection::S) > 0 ? hops->at(RoutingDirection::S) : 0;
+                auto east_hops = hops->count(RoutingDirection::E) > 0 ? hops->at(RoutingDirection::E) : 0;
+                auto west_hops = hops->count(RoutingDirection::W) > 0 ? hops->at(RoutingDirection::W) : 0;
                 // for dynamic routing, decrement north/south hops by 1, since the start dst node is accounted as one
                 // hop.
                 if (north_hops > 0) {
@@ -308,7 +310,7 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
         }
     } else {  // 1D logic
         uint32_t num_hops_1d = 0;
-        for (const auto& [_, hops_in_dir] : this->hops) {
+        for (const auto& [_, hops_in_dir] : *(this->hops)) {
             if (hops_in_dir > 0) {
                 num_hops_1d = hops_in_dir;
                 break;
