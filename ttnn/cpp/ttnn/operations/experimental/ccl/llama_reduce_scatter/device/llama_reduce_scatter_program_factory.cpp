@@ -594,8 +594,7 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
         tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, cb_input_tensor_config);  // input buffer
     auto cb_output_tensor_handle =
         tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, cb_output_tensor_config);  // output buffer
-    auto cb_client_interface_handle =
-        tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, packet_header_cb_config);  // client interface
+    tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, packet_header_cb_config);      // client interface
     auto cb_fabric_receiver_handle =
         tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, fabric_receiver_cb_config);
     tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, fabric_sender_cb_config);

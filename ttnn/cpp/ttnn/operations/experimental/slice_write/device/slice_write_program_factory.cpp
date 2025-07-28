@@ -507,8 +507,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
 
     uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(input_tensor);
 
-    uint32_t input_row_size_bytes = input_shard_shape[1] * input_tensor.element_size();
-
     std::uint32_t num_dims = static_cast<std::uint32_t>(actual_input_shape.rank());
     std::vector<uint32_t> num_output_tiles_per_dim(num_dims);
     std::vector<uint32_t> num_input_tiles_per_dim(num_dims);
@@ -562,10 +560,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
         accumulated_input_total_tiles_per_dim);
 
     using namespace tt::tt_metal::experimental;
-    auto src_buffer_alignment = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
-                                    ? hal::get_dram_alignment()
-                                    : hal::get_l1_alignment();
-    uint32_t input_row_size_bytes_offset = tt::round_up(input_row_size_bytes, src_buffer_alignment);
     TT_FATAL(
         output_tensor_start[-1] == 0,
         "slice_write expects output start for the last dimension to be 0. Got {}",
@@ -901,7 +895,7 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
         num_sticks_per_core_group_2,
         max_read_size);
 
-    for (uint32_t i = 0, num_sticks_written = 0; i < num_cores_total; i++) {
+    for (uint32_t i = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);
@@ -944,7 +938,7 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
                 num_sticks_per_core_group_2,
                 max_read_size);
 
-            for (uint32_t i = 0, num_tiles_written = 0; i < num_cores_total; i++) {
+            for (uint32_t i = 0; i < num_cores_total; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
                 SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
                 SetRuntimeArgs(program, unary_writer_kernel_id, core, all_runtime_args[i].second);

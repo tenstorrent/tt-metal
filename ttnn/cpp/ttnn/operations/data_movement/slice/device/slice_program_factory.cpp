@@ -252,7 +252,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
         num_sticks_per_core_group_2,
         MAX_READ_SIZE);
 
-    for (uint32_t i = 0, num_sticks_written = 0; i < num_cores_total; i++) {
+    for (uint32_t i = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
 
@@ -304,7 +304,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
                 num_sticks_per_core_group_2,
                 MAX_READ_SIZE);
 
-            for (uint32_t i = 0, num_tiles_written = 0; i < num_cores_total; i++) {
+            for (uint32_t i = 0; i < num_cores_total; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
                 auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
@@ -460,8 +460,6 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
 
-    uint32_t unpadded_row_size_bytes = output_shape[-1] * input_tensor.element_size();
-
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
     std::vector<uint32_t> num_unpadded_sticks_per_dim(num_dims);
     std::vector<uint32_t> num_padded_sticks_per_dim(num_dims);
@@ -483,8 +481,6 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         num_padded_sticks_per_dim[i] = num_padded_dim;
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
-
-    uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, TILE_WIDTH / 2);
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_unpadded);
 

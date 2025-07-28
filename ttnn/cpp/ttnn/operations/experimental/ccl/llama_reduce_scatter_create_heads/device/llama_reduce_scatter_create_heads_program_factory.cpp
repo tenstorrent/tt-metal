@@ -421,7 +421,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         packet_size_bytes = per_worker_num_blocks * input_block_size;
         num_blocks_per_packet = packet_size_bytes / input_block_size;
     }
-    uint32_t num_packets_to_send = (ncores_input + num_blocks_per_packet - 1) / num_blocks_per_packet;
 
     uint32_t num_workers_per_link = 1;
 
@@ -570,8 +569,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, cb_input_tensor_config);  // input buffer
     // auto cb_output_tensor_handle =
     //     tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, cb_output_tensor_config);  // output buffer
-    auto cb_client_interface_handle =
-        tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, packet_header_cb_config);  // client interface
+    tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, packet_header_cb_config);  // client interface
     auto cb_fabric_receiver_handle =
         tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, fabric_receiver_cb_config);
     tt::tt_metal::CreateCircularBuffer(program, all_cores_grid, fabric_sender_cb_config);

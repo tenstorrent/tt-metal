@@ -231,8 +231,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
 
     // Get OP Config, topology config
     uint32_t page_size = input_tensor.buffer()->page_size();
-    auto [num_targets_forward, num_targets_backward, dynamic_alternate] =
-        ccl::get_forward_backward_configuration(ring_size, ring_index, topology);
 
     // Get worker cores
     // 2 senders per direction (2: forward, backward) per link (num_links)
@@ -302,27 +300,23 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     tt::tt_metal::CircularBufferConfig cb_input_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{input_cb_index, df}})
             .set_page_size(input_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_input_workers =
-        CreateCircularBuffer(program, sender_worker_core_range_set, cb_input_config);
+    CreateCircularBuffer(program, sender_worker_core_range_set, cb_input_config);
     uint32_t intermediate_cb_index = tt::CB::c_in1;
     tt::tt_metal::CircularBufferConfig cb_intermediate_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{intermediate_cb_index, df}})
             .set_page_size(intermediate_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_intermediate_workers =
-        CreateCircularBuffer(program, sender_worker_core_range_set, cb_intermediate_config);
+    CreateCircularBuffer(program, sender_worker_core_range_set, cb_intermediate_config);
     uint32_t reader_output_cb_index = tt::CB::c_in2;
     tt::tt_metal::CircularBufferConfig cb_reader_output_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{reader_output_cb_index, df}})
             .set_page_size(reader_output_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_reader_output_workers =
-        CreateCircularBuffer(program, sender_worker_core_range_set, cb_reader_output_config);
+    CreateCircularBuffer(program, sender_worker_core_range_set, cb_reader_output_config);
     uint32_t compute_output_cb_index = tt::CB::c_in3;
     tt::tt_metal::CircularBufferConfig cb_compute_output_config =
         tt::tt_metal::CircularBufferConfig(
             cb_num_pages * l1_scratch_cb_page_size_bytes, {{compute_output_cb_index, df}})
             .set_page_size(compute_output_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_compute_output_workers =
-        CreateCircularBuffer(program, sender_worker_core_range_set, cb_compute_output_config);
+    CreateCircularBuffer(program, sender_worker_core_range_set, cb_compute_output_config);
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in4;
@@ -333,8 +327,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
             num_packet_headers_storable * packet_header_size_bytes * 2,
             {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    auto reserved_packet_header_CB_handle =
-        CreateCircularBuffer(program, sender_worker_core_range_set, cb_reserved_packet_header_config);
+    CreateCircularBuffer(program, sender_worker_core_range_set, cb_reserved_packet_header_config);
 
     TT_FATAL(
         !(input_tensor_shape[3] % tt::constants::TILE_WIDTH),
@@ -788,27 +781,23 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     tt::tt_metal::CircularBufferConfig cb_input_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{input_cb_index, df}})
             .set_page_size(input_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_input_workers =
-        CreateCircularBuffer(program, sender_worker_core_range_set, cb_input_config);
+    CreateCircularBuffer(program, sender_worker_core_range_set, cb_input_config);
     uint32_t intermediate_cb_index = tt::CB::c_in1;
     tt::tt_metal::CircularBufferConfig cb_intermediate_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{intermediate_cb_index, df}})
             .set_page_size(intermediate_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_intermediate_workers =
-        CreateCircularBuffer(program, sender_worker_core_range_set, cb_intermediate_config);
+    CreateCircularBuffer(program, sender_worker_core_range_set, cb_intermediate_config);
     uint32_t reader_output_cb_index = tt::CB::c_in2;
     tt::tt_metal::CircularBufferConfig cb_reader_output_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{reader_output_cb_index, df}})
             .set_page_size(reader_output_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_reader_output_workers =
-        CreateCircularBuffer(program, sender_worker_core_range_set, cb_reader_output_config);
+    CreateCircularBuffer(program, sender_worker_core_range_set, cb_reader_output_config);
     uint32_t compute_output_cb_index = tt::CB::c_in3;
     tt::tt_metal::CircularBufferConfig cb_compute_output_config =
         tt::tt_metal::CircularBufferConfig(
             cb_num_pages * l1_scratch_cb_page_size_bytes, {{compute_output_cb_index, df}})
             .set_page_size(compute_output_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_compute_output_workers =
-        CreateCircularBuffer(program, sender_worker_core_range_set, cb_compute_output_config);
+    CreateCircularBuffer(program, sender_worker_core_range_set, cb_compute_output_config);
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in4;
@@ -819,8 +808,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             num_packet_headers_storable * packet_header_size_bytes,
             {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    auto reserved_packet_header_CB_handle =
-        CreateCircularBuffer(program, sender_worker_core_range_set, cb_reserved_packet_header_config);
+    CreateCircularBuffer(program, sender_worker_core_range_set, cb_reserved_packet_header_config);
 
     // Tensor Info
     const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();

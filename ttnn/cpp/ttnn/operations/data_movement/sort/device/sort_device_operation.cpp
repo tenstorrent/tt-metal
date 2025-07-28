@@ -62,8 +62,6 @@ void SortDeviceOperation::validate_on_program_cache_miss(
     const uint32_t input_tensor_tile_size = tt::constants::TILE_HW * input_data_format_size_bytes;
     const uint32_t value_tensor_tile_size = tt::constants::TILE_HW * input_data_format_size_bytes;
     const uint32_t index_tensor_tile_size = tt::constants::TILE_HW * sizeof(uint16_t);
-    const uint32_t row_memory_size_bytes =
-        (input_tensor_tile_size + value_tensor_tile_size + index_tensor_tile_size) * Wt;
 
     TT_FATAL(
         tensor_args.input_tensor.buffer() != nullptr,

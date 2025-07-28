@@ -148,15 +148,13 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         tt::tt_metal::CircularBufferConfig(
             cb_num_pages * l1_scratch_cb_page_size_bytes, {{sender_forward_cb_index, df}})
             .set_page_size(sender_forward_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_sender_forward_workers =
-        CreateCircularBuffer(program, sender_forward_core_ranges, cb_sender_forward_config);
+    CreateCircularBuffer(program, sender_forward_core_ranges, cb_sender_forward_config);
     uint32_t sender_backward_cb_index = tt::CB::c_in2;
     tt::tt_metal::CircularBufferConfig cb_sender_backward_config =
         tt::tt_metal::CircularBufferConfig(
             cb_num_pages * l1_scratch_cb_page_size_bytes, {{sender_backward_cb_index, df}})
             .set_page_size(sender_backward_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_sender_backward_workers =
-        CreateCircularBuffer(program, sender_backward_core_ranges, cb_sender_backward_config);
+    CreateCircularBuffer(program, sender_backward_core_ranges, cb_sender_backward_config);
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_forward_CB_index = tt::CB::c_in1;
@@ -167,16 +165,14 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
             num_packet_headers_storable * packet_header_size_bytes * 2,
             {{reserved_packet_header_forward_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_forward_CB_index, packet_header_size_bytes);
-    auto reserved_packet_header_forward_CB_handle =
-        CreateCircularBuffer(program, sender_forward_core_ranges, cb_reserved_packet_header_forward_config);
+    CreateCircularBuffer(program, sender_forward_core_ranges, cb_reserved_packet_header_forward_config);
     const auto reserved_packet_header_backward_CB_index = tt::CB::c_in1;
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_backward_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * 2,
             {{reserved_packet_header_backward_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_backward_CB_index, packet_header_size_bytes);
-    auto reserved_packet_header_backward_CB_handle =
-        CreateCircularBuffer(program, sender_backward_core_ranges, cb_reserved_packet_header_backward_config);
+    CreateCircularBuffer(program, sender_backward_core_ranges, cb_reserved_packet_header_backward_config);
 
     // Tensor Info
     const auto input_tensor_buffer_type = input_tensor[0].buffer()->buffer_type();

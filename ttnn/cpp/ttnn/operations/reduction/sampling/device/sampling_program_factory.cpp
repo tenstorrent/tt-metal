@@ -170,8 +170,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
             Ht * TILE_HEIGHT * aligned_final_indices_rm_unit_size,
             {{final_indices_rm_cb_index, input_indices_cb_data_format}})
             .set_page_size(final_indices_rm_cb_index, aligned_final_indices_rm_unit_size);
-    auto cb_final_indices_rm_tensor =
-        tt::tt_metal::CreateCircularBuffer(program, core_grid, final_indices_rm_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, core_grid, final_indices_rm_cb_config);
 
     // // Output sampling indices
     uint32_t output_unit_size = output_tensor.element_size();

@@ -227,7 +227,7 @@ void override_runtime_args_mc_hc(
     auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
 
-    uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
+    uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1];
     uint32_t HW = H * W;
     uint32_t HW_bytes = HW * input_tensor.element_size();
     uint32_t CHW = C * H * W;
@@ -325,7 +325,7 @@ void override_runtime_args_mc_hc_rm(
     auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
 
-    uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
+    uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1];
     uint32_t W_bytes = W * input_tensor.element_size();
 
     uint32_t max_read_size = 2048;  // TILE size
@@ -426,8 +426,6 @@ void override_runtime_args_mc_hc_tiled_interleaved(
     auto tile_hw = (tile_shape[0] * tile_shape[1]);
     uint32_t num_tensor_tiles = input_tensor.physical_volume() / tile_hw;
     uint32_t num_output_tiles = output_tensor.physical_volume() / tile_hw;
-    uint32_t W = input_tensor.logical_shape()[3], H = input_tensor.logical_shape()[2],
-             C = input_tensor.logical_shape()[1], N = input_tensor.logical_shape()[0];
     uint32_t padded_num_tensor_tiles = num_output_tiles / (output_tensor.padded_shape()[2] /
                                                            tile_shape[0]);  // only last row of Ct should have padding
 
@@ -512,11 +510,8 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
     auto tile = a.tensor_spec().tile();
     auto tile_shape = tile.get_tile_shape();
     auto face_shape = tile.get_face_shape();
-    uint32_t num_output_tiles = output.physical_volume() / (tile_shape[0] * tile_shape[1]);
-    uint32_t W = a.logical_shape()[3], H = a.logical_shape()[2], C = a.logical_shape()[1], N = a.logical_shape()[0];
+    uint32_t W = a.logical_shape()[3], H = a.logical_shape()[2], C = a.logical_shape()[1];
     bool needs_padding = (C % tile_shape[1] != 0) && pad_value.has_value();
-    uint32_t padded_num_tensor_tiles =
-        num_output_tiles / (output.padded_shape()[2] / tile_shape[0]);  // only last row of Ct should have padding
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
@@ -844,7 +839,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     const Tensor& input_tensor, Tensor& output_tensor, uint32_t num_cores, uint32_t num_cores_x, uint32_t num_cores_y) {
     auto input_shape = input_tensor.padded_shape();
 
-    uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
+    uint32_t H = input_shape[2], C = input_shape[1];
 
     auto shard_spec = input_tensor.shard_spec().value();
     uint32_t shard_height = shard_spec.shape[0];
@@ -942,8 +937,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     }
 
     uint32_t num_H_per_core = shard_height / H > 0 ? shard_height / H : 1;  // the number of H blocks in a shard
-
-    uint32_t num_core_per_C = C / shard_height > 0 ? C / shard_height : 1;  // the number of cores for (dst) C block
 
     uint32_t num_C_blocks_per_core = shard_height > C ? shard_height / C : 1;
 
@@ -1263,7 +1256,7 @@ void override_runtime_args_wh(
     uint32_t num_tiles_per_core_group_2) {
     auto input_shape = input_tensor.padded_shape();
 
-    uint32_t W = input_shape[3], H = input_shape[2], NC = input_shape[1] * input_shape[0];
+    uint32_t W = input_shape[3], H = input_shape[2];
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
@@ -1383,7 +1376,7 @@ void override_runtime_args_wh_rm(
     uint32_t num_hw_blocks_per_core_group_2) {
     auto input_shape = input_tensor.logical_shape();
 
-    uint32_t W = input_shape[3], H = input_shape[2], NC = input_shape[1] * input_shape[0];
+    uint32_t W = input_shape[3], H = input_shape[2];
 
     auto& cached_reader_args = GetRuntimeArgs(program, reader_kernel_id);
     auto& cached_compute_args = GetRuntimeArgs(program, compute_kernel_id);
@@ -1464,8 +1457,7 @@ void override_runtime_args_wh_rm(
 
 operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor& output) {
     uint32_t num_tensor_tiles = a.physical_volume() / TILE_HW;
-    uint32_t W = a.logical_shape()[3], H = a.logical_shape()[2], C = a.logical_shape()[1], N = a.logical_shape()[0],
-             NC = a.logical_shape()[1] * a.logical_shape()[0];
+    uint32_t W = a.logical_shape()[3], H = a.logical_shape()[2], NC = a.logical_shape()[1] * a.logical_shape()[0];
     bool row_major = a.layout() == Layout::ROW_MAJOR;
 
     uint32_t ht = (H + TILE_HEIGHT - 1) / TILE_HEIGHT;
@@ -1784,7 +1776,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
     auto padded_shape = a.padded_shape();
     auto shard_shape = shard_spec.shape;
 
-    uint32_t H = padded_shape[2], W = padded_shape[3];
+    uint32_t H = padded_shape[2];
     uint32_t Hs = shard_shape[0], Ws = shard_shape[1];
 
     uint32_t Hts = Hs / tile.tile_shape[0];
@@ -1865,7 +1857,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
         auto padded_shape = src_tensor.padded_shape();
         auto shard_shape = shard_spec.shape;
 
-        uint32_t H = padded_shape[2], W = padded_shape[3];
+        uint32_t H = padded_shape[2];
         uint32_t Hs = shard_shape[0], Ws = shard_shape[1];
 
         uint32_t Hts = Hs / tile.tile_shape[0];
@@ -1917,7 +1909,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
 
-    uint32_t W = a.logical_shape()[3], H = a.logical_shape()[2], C = a.logical_shape()[1], N = a.logical_shape()[0];
+    uint32_t W = a.logical_shape()[3], H = a.logical_shape()[2];
     uint32_t stick_size_bytes = W * a.element_size();
     uint32_t ht = (H + TILE_HEIGHT - 1) / TILE_HEIGHT;
     uint32_t wt = (W + TILE_WIDTH - 1) / TILE_WIDTH;

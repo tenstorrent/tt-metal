@@ -243,8 +243,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     tt::tt_metal::CircularBufferConfig cb_sender_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{sender_cb_index, df}})
             .set_page_size(sender_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_sender_workers =
-        CreateCircularBuffer(program, sender_worker_core_range_set, cb_sender_config);
+    CreateCircularBuffer(program, sender_worker_core_range_set, cb_sender_config);
 
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in1;
@@ -255,8 +254,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
             num_packet_headers_storable * packet_header_size_bytes * 2,
             {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    auto reserved_packet_header_CB_handle =
-        CreateCircularBuffer(program, sender_worker_core_range_set, cb_reserved_packet_header_config);
+    CreateCircularBuffer(program, sender_worker_core_range_set, cb_reserved_packet_header_config);
 
     bool input_is_sharded = input_tensor.is_sharded();
     bool output_is_sharded = output_tensor.is_sharded();
@@ -644,8 +642,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
             num_packet_headers_storable * packet_header_size_bytes * 2,
             {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    auto reserved_packet_header_CB_handle =
-        CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
+    CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
     // KERNEL CREATION
     // Reader

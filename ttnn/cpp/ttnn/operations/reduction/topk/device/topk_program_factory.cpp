@@ -339,8 +339,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     tt::tt_metal::CircularBufferConfig index_input_intermed0_config =
         tt::tt_metal::CircularBufferConfig(cb_in_units * index_tile_size, {{index_cb_index, index_cb_data_format}})
             .set_page_size(index_cb_index, index_tile_size);
-    auto cb_index_tensor =
-        tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, index_input_intermed0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, index_input_intermed0_config);
 
     // Single buffered circular buffer that holds the transposed input tiles
     uint32_t input_transposed_cb_index = tt::CBIndex::c_24;
@@ -348,8 +347,7 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         tt::tt_metal::CircularBufferConfig(
             Wt_local * value_tile_size, {{input_transposed_cb_index, input_cb_data_format}})
             .set_page_size(input_transposed_cb_index, input_tile_size);
-    auto cb_input_transposed_tiles =
-        tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, input_transposed_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, input_transposed_cb_config);
 
     // Single buffered circular buffer that holds the transposed index tiles
     uint32_t index_transposed_cb_index = tt::CBIndex::c_25;
@@ -357,38 +355,33 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         tt::tt_metal::CircularBufferConfig(
             Wt_local * index_tile_size, {{index_transposed_cb_index, index_cb_data_format}})
             .set_page_size(index_transposed_cb_index, index_tile_size);
-    auto cb_index_transposed_tiles =
-        tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, index_transposed_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, index_transposed_cb_config);
 
     uint32_t gathered_values_cb_index = tt::CBIndex::c_26;
     tt::tt_metal::CircularBufferConfig gathered_values_cb_config =
         tt::tt_metal::CircularBufferConfig(
             Wt_final * value_tile_size, {{gathered_values_cb_index, value_cb_data_format}})
             .set_page_size(gathered_values_cb_index, value_tile_size);
-    auto cb_gathered_topk_values_tensor =
-        tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, gathered_values_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, gathered_values_cb_config);
 
     uint32_t gathered_indices_cb_index = tt::CBIndex::c_27;
     tt::tt_metal::CircularBufferConfig gathered_indices_cb_config =
         tt::tt_metal::CircularBufferConfig(
             Wt_final * index_tile_size, {{gathered_indices_cb_index, index_cb_data_format}})
             .set_page_size(gathered_indices_cb_index, index_tile_size);
-    auto cb_gathered_topk_indices_tensor =
-        tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, gathered_indices_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, gathered_indices_cb_config);
 
     uint32_t final_values_cb_index = tt::CBIndex::c_28;
     tt::tt_metal::CircularBufferConfig final_values_cb_config =
         tt::tt_metal::CircularBufferConfig(Wt_final * value_tile_size, {{final_values_cb_index, value_cb_data_format}})
             .set_page_size(final_values_cb_index, value_tile_size);
-    auto cb_final_topk_values_tensor =
-        tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, final_values_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, final_values_cb_config);
 
     uint32_t final_indices_cb_index = tt::CBIndex::c_29;
     tt::tt_metal::CircularBufferConfig final_indices_cb_config =
         tt::tt_metal::CircularBufferConfig(Wt_final * index_tile_size, {{final_indices_cb_index, index_cb_data_format}})
             .set_page_size(final_indices_cb_index, index_tile_size);
-    auto cb_final_topk_index_tensor =
-        tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, final_indices_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, final_indices_cb_config);
 
     // Output topk values
     uint32_t values_cb_index = tt::CBIndex::c_16;

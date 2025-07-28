@@ -91,8 +91,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
             packet_header_cb_num_pages * packet_header_cb_page_size, {{packet_header_cb_index, tt::DataFormat::UInt32}})
             .set_page_size(packet_header_cb_index, packet_header_cb_page_size);
 
-    tt::tt_metal::CBHandle cb_packet_header_worker =
-        CreateCircularBuffer(program, sender_core_coord, cb_packet_header_config);
+    CreateCircularBuffer(program, sender_core_coord, cb_packet_header_config);
 
     bool socket_storage_in_dram =
         mesh_socket.get_config().socket_mem_config.socket_storage_type == tt::tt_metal::BufferType::DRAM;

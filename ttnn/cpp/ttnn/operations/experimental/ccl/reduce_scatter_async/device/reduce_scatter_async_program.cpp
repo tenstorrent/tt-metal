@@ -1046,9 +1046,6 @@ static void create_non_end_of_line_final_reducer_worker_commands(
     log_trace(tt::LogOp, "--------------------------------------");
     log_trace(tt::LogOp, "CREATE WORKER (final reducer - not end. Device={})", builder_config.device->id());
 
-    size_t const num_partial_reducer_workers_per_direction =
-        builder_config.worker_cores.get().partial_reducers[LineDirection::FORWARD].size();
-
     std::array<TensorSyncBundle, 2> const& partial_output_tensor_sync_bundles = {
         TensorSyncBundle{
             all_program_tensors.local_output_partial[LineDirection::FORWARD],
@@ -1400,7 +1397,6 @@ static void create_end_of_line_worker_commands(
         remote_writer_worker_sliced_fwd, remote_writer_worker_sliced_bwd};
 
     std::array<std::vector<CoreCoord>, 2> const reader_worker_cores_per_direction = worker_cores.partial_reducers_vec;
-    std::array<std::vector<CoreCoord>, 2> const& writer_worker_cores_per_direction = reader_worker_cores_per_direction;
 
     auto const local_partial_output_tensor_slice = convert_to_whole_tensor_slice(*all_tensors.local_final_output_tensor);
     auto writer_end_of_line_output_worker_slices =
@@ -1518,7 +1514,6 @@ static void create_end_of_line_worker_runtime_args(
     WorkerCoreBundle const& worker_cores = builder_config.worker_cores.get();
 
     std::array<std::vector<CoreCoord>, 2> const reader_worker_cores_per_direction = worker_cores.partial_reducers_vec;
-    std::array<std::vector<CoreCoord>, 2> const& writer_worker_cores_per_direction = reader_worker_cores_per_direction;
     auto num_workers = worker_cores.partial_reducers_vec[LineDirection::FORWARD].size();
 
     // Generate the kernels themselves
@@ -1786,7 +1781,6 @@ static void initialize_op_internal_tensor_syncs(
     WorkerCoreBundle const& worker_cores,
     GlobalSemaphore const& from_remote_sem,
     GlobalSemaphore const& to_remote_sem) {
-    auto core_coord_lt = [](CoreCoord const& a, CoreCoord const& b) { return a.y < b.y || (a.y == b.y && a.x < b.x); };
 
     TT_FATAL(
         worker_cores.partial_reducers_vec[LineDirection::BACKWARD].size() > 0,

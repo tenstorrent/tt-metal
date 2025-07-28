@@ -78,8 +78,6 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
     auto all_cores = num_cores_to_corerangeset_in_subcoregrids(cores[0], ncores, sub_core_grids, true);
     uint32_t nblocks_per_core = nblocks / ncores;
 
-    uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,
-             num_output_rows_unpadded = 0;
     std::vector<CoreCoord> cores_with_rtargs;
 
     uint32_t num_input_tiles = ntiles_per_block * 2;
@@ -266,8 +264,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
         ttnn::split_blocks_for_tilize(CoreCoord(ncores_x, ncores_y), nblocks);
 
     bool row_major = true;
-    uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,
-             num_output_rows_unpadded = 0;
+    uint32_t block_row_size = 0;
     std::vector<CoreCoord> cores_with_rtargs;
 
     uint32_t num_input_tiles = ntiles_per_block * 2;

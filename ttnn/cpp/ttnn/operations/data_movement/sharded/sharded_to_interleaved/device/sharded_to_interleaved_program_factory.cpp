@@ -229,7 +229,6 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
                     }
                 }
             }
-            uint32_t dram_alignment = hal::get_dram_alignment();
             uint32_t l1_alignment = hal::get_l1_alignment();
             uint32_t padded_shard_width = align(output_unit_size, dst_buffer->alignment());
             if(is_blackhole or is_l1_aligned) {
