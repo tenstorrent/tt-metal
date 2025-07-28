@@ -18,18 +18,9 @@ from enum import Enum
 from contextlib import redirect_stdout
 import io
 
-try:
-    import psycopg2
-    from psycopg2.extras import RealDictCursor
-except ImportError:
-    print("Please install psycopg2-binary: pip install psycopg2-binary")
-    sys.exit(1)
-
-try:
-    import pytest
-except ImportError:
-    print("Please install pytest: pip install pytest")
-    sys.exit(1)
+import psycopg2
+from psycopg2.extras import RealDictCursor
+import pytest
 
 
 # --- Status Enum ---
@@ -92,7 +83,7 @@ def get_device_arch_name():
         return os.getenv("ARCH_NAME", "unknown")
 
 
-def get_postgres_config(env="prod"):
+def get_postgres_config():
     config = {
         "host": os.getenv("POSTGRES_HOST"),
         "port": os.getenv("POSTGRES_PORT", "5432"),
@@ -127,6 +118,7 @@ def initialize_postgres_database(pg_config):
             initiated_by VARCHAR(255) NOT NULL,
             host VARCHAR(255),
             device VARCHAR(255),
+            type VARCHAR(255),
             run_contents VARCHAR(1024),
             git_author VARCHAR(255),
             git_branch_name VARCHAR(255),
@@ -192,14 +184,15 @@ def push_run(pg_config, start_time_ts, status="success", run_contents=None):
         conn = psycopg2.connect(**pg_config)
         cursor = conn.cursor()
         insert_run_query = """
-        INSERT INTO runs (initiated_by, host, device, run_contents, git_author, git_branch_name, git_commit_hash, start_time_ts, status)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO runs (initiated_by, host, device, type, run_contents, git_author, git_branch_name, git_commit_hash, start_time_ts, status)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """
         run_data = (
             get_initiated_by(),
             get_hostname(),
             get_device_arch_name(),
+            "unit_test",
             run_contents,
             get_git_author(),
             get_git_branch(),
@@ -262,12 +255,15 @@ def push_test_and_cases(pg_config, run_id, file_path, test_cases_results):
         cursor.execute(test_insert_query, (run_id, str(file_path), test_start_time, test_end_time, "success"))
         test_id = cursor.fetchone()[0]
 
-        # 2. Insert each test case
+        # 2. Insert test cases in batch
         case_statuses = []
         testcase_insert_query = """
         INSERT INTO unit_testcases (test_id, name, start_time_ts, end_time_ts, status, suite_name, test_vector, message, exception, e2e_perf, device_perf, error_signature)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
+
+        # Prepare all case values for batch insert
+        batch_values = []
         for case in test_cases_results:
             db_status = case["status"].value
             case_statuses.append(db_status)
@@ -287,7 +283,11 @@ def push_test_and_cases(pg_config, run_id, file_path, test_cases_results):
                 json.dumps(case.get("device_perf")) if case.get("device_perf") else None,
                 error_sig,
             )
-            cursor.execute(testcase_insert_query, case_values)
+            batch_values.append(case_values)
+
+        # Execute batch insert
+        if batch_values:
+            cursor.executemany(testcase_insert_query, batch_values)
 
         # 3. Determine and update the overall test status
         test_status = map_test_status_to_run_status(case_statuses)
@@ -374,6 +374,9 @@ class ResultCollector:
         serializable_params = {k: str(v) for k, v in params.items()} if params else None
 
         full_name = report.nodeid.split("::")[-1]
+        # Remove parameters from the test name (they're stored separately in test_parameters)
+        if "[" in full_name:
+            full_name = full_name.split("[")[0]
         if len(full_name) > 255:
             full_name = full_name[:252] + "..."
 
@@ -501,12 +504,6 @@ if __name__ == "__main__":
         help="A comma-separated list of paths to test files or directories to run. Directories will be searched recursively for files starting with 'test_'.",
     )
     parser.add_argument(
-        "--postgres-env",
-        default="dev",
-        choices=["dev", "prod"],
-        help="PostgreSQL environment to use ('dev' or 'prod').",
-    )
-    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Perform a dry run to count test cases without executing them or connecting to the database.",
@@ -565,7 +562,7 @@ if __name__ == "__main__":
         sys.exit(0)
 
     # Normal execution mode (existing code)
-    pg_config = get_postgres_config(args.postgres_env)
+    pg_config = get_postgres_config()
 
     # 1. Initialize DB
     initialize_postgres_database(pg_config)
@@ -573,7 +570,7 @@ if __name__ == "__main__":
     # 2. Create a new run
     run_start_time = dt.datetime.now()
     test_paths_list = [path.strip() for path in args.test_paths.split(",")]
-    run_contents = ", ".join(test_paths_list)
+    run_contents = ", ".join([path.removeprefix("tests/ttnn/unit_tests/") for path in test_paths_list])
     run_id = push_run(pg_config, run_start_time, run_contents=run_contents)
 
     # 3. Discover and run tests

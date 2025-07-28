@@ -427,6 +427,7 @@ def initialize_postgres_database():
             initiated_by VARCHAR(255) NOT NULL,
             host VARCHAR(255),
             device VARCHAR(255),
+            type VARCHAR(255),
             run_contents VARCHAR(1024),
             git_author VARCHAR(255),
             git_branch_name VARCHAR(255),
@@ -542,8 +543,8 @@ def push_run(
 
         # Insert run result into the runs table
         insert_run_query = """
-        INSERT INTO runs (initiated_by, host, git_author, git_branch_name, git_commit_hash, start_time_ts, status, run_contents, device)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        INSERT INTO runs (initiated_by, host, git_author, git_branch_name, git_commit_hash, start_time_ts, status, run_contents, device, type)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """
         cursor.execute(
@@ -558,6 +559,7 @@ def push_run(
                 status,
                 run_contents,
                 device,
+                "sweep",
             ),
         )
         conn.commit()
@@ -1320,8 +1322,8 @@ def export_test_results_postgres(header_info, results, run_start_time, run_end_t
         run_insert_query = """
         INSERT INTO runs (
             initiated_by, host, git_author, git_branch_name, git_commit_hash,
-            start_time_ts, end_time_ts, status, run_contents, device
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            start_time_ts, end_time_ts, status, run_contents, device, type
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """
 
@@ -1336,6 +1338,7 @@ def export_test_results_postgres(header_info, results, run_start_time, run_end_t
             "success",  # Will be updated after processing all results
             run_contents,
             device,
+            "sweep",
         )
 
         cursor.execute(run_insert_query, run_values)

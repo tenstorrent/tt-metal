@@ -38,6 +38,9 @@ protobuf==3.20.0
 transformers == 4.53.0
 huggingface-hub >= 0.30.0
 
+# For PostgreSQL database connectivity
+psycopg-binary
+
 # testing
 pytest==7.2.2
 pytest-timeout==2.2.0
