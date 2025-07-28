@@ -14,10 +14,11 @@ void kernel_main() {
     constexpr uint32_t sem_wait_val = get_compile_time_arg_val(0);
     constexpr uint32_t inter_cb_index = get_compile_time_arg_val(1);
     constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(2);
+    constexpr uint32_t ring_size = get_compile_time_arg_val(3);
     DPRINT << "sem_wait_val: " << sem_wait_val << ENDL();
     DPRINT << "inter_cb_index: " << inter_cb_index << ENDL();
     DPRINT << "tensor0_page_size: " << tensor0_page_size << ENDL();
-
+    DPRINT << "ring_size: " << ring_size << ENDL();
     // runtime args
     size_t arg_idx = 0;
     const uint32_t signal_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -31,7 +32,8 @@ void kernel_main() {
     const uint32_t bbox_end_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t bbox_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t intermediate_tensor_shard_num_pages = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t fused_op_receiver_signal_semaphore_addr = get_arg_val<uint32_t>(arg_idx++);
+    tt_l1_ptr uint32_t* fused_op_receiver_signal_semaphore_addr = (tt_l1_ptr uint32_t*)get_arg_addr(arg_idx);
+    arg_idx += ring_size;
     const uint32_t mm_core_offset = get_arg_val<uint32_t>(arg_idx++);
 
     DPRINT << "signal_semaphore_addr: " << signal_semaphore_addr << ENDL();
@@ -51,7 +53,7 @@ void kernel_main() {
 
     // Set up for mcasting to mm workers
     volatile tt_l1_ptr uint32_t* fused_op_receiver_signal_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fused_op_receiver_signal_semaphore_addr);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fused_op_receiver_signal_semaphore_addr[core_id]);
     noc_semaphore_set(fused_op_receiver_signal_semaphore_addr_ptr, VALID);
 
     // if (core_id != ring_index) {
@@ -81,8 +83,9 @@ void kernel_main() {
     noc_async_write_multicast(
         l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, bbox_size - 1, false);
 
-    uint64_t multicast_sema_addr = multicast_addr_noc | (uint64_t)fused_op_receiver_signal_semaphore_addr;
-    noc_semaphore_set_multicast(fused_op_receiver_signal_semaphore_addr, multicast_sema_addr, bbox_size - 1, false);
+    uint64_t multicast_sema_addr = multicast_addr_noc | (uint64_t)fused_op_receiver_signal_semaphore_addr[core_id];
+    noc_semaphore_set_multicast(
+        fused_op_receiver_signal_semaphore_addr[core_id], multicast_sema_addr, bbox_size - 1, false);
 
     noc_async_write_barrier();
 }

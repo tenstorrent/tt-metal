@@ -250,6 +250,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
         num_links,                  // sem_wait_val
         inter_cb_index,             // intermediate cb index
         op_config.get_page_size(),  // tensor0_page_size
+        ring_size,                  // ring_size
     };
     auto worker_receiver_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -272,6 +273,9 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
          static_cast<uint32_t>(bbox.size()),
          intermediate_tensor_shard_num_pages,
          matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[0],
+         matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[1],
+         matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[2],
+         matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[3],
          0});  // mm_core_offset
     // Kernel Runtime Args
 
@@ -298,6 +302,9 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
              static_cast<uint32_t>(bbox.size()),
              intermediate_tensor_shard_num_pages,
              matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[0],
+             matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[1],
+             matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[2],
+             matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[3],
              mm_core_offset});
     }
     log_info(tt::LogOp, "LLONG FUSION: cores_per_device: {}", cores_per_device);
