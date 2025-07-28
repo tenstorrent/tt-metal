@@ -28,6 +28,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/util.hpp>
+#include "distributed/mesh_event_impl.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -340,7 +341,9 @@ TEST_F(MeshEventsTestSuite, EventQuery) {
         }
     }
     // Create a dummy event from the future that has not been issued yet.
-    auto event = MeshEvent(0xffff, mesh_device_.get(), 0, MeshCoordinateRange(mesh_device_->shape()));
+    auto impl =
+        std::make_unique<MeshEventImpl>(0xffff, mesh_device_.get(), 0, MeshCoordinateRange(mesh_device_->shape()));
+    auto event = MeshEvent(std::move(impl));
     EXPECT_FALSE(EventQuery(event));  // Querying an event that has not been issued should return false.
 }
 

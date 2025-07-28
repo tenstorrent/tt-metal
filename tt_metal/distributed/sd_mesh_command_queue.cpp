@@ -7,6 +7,7 @@
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "mesh_event_impl.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -67,13 +68,17 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
 MeshEvent SDMeshCommandQueue::enqueue_record_event(
     tt::stl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRange>& device_range) {
     // No synchronization is needed for slow dispatch, returning a dummy value
-    return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
+    auto impl = std::make_unique<MeshEventImpl>(
+        0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
+    return MeshEvent(std::move(impl));
 }
 
 MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
     tt::stl::Span<const SubDeviceId>, const std::optional<MeshCoordinateRange>& device_range) {
     // No synchronization is needed for slow dispatch, returning a dummy value
-    return MeshEvent(0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
+    auto impl = std::make_unique<MeshEventImpl>(
+        0, mesh_device_, id_, device_range.value_or(MeshCoordinateRange(mesh_device_->shape())));
+    return MeshEvent(std::move(impl));
 }
 
 void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {}

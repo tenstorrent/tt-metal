@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <ostream>
 
 #include <tt-metalium/mesh_coord.hpp>
@@ -14,6 +15,7 @@ namespace tt {
 namespace tt_metal {
 namespace distributed {
 class MeshDevice;
+class MeshEventImpl;
 }  // namespace distributed
 }  // namespace tt_metal
 }  // namespace tt
@@ -22,9 +24,15 @@ namespace tt::tt_metal::distributed {
 
 class MeshEvent {
 public:
-    MeshEvent(uint32_t id, MeshDevice* device, uint32_t mesh_cq_id, const MeshCoordinateRange& device_range);
+    MeshEvent(std::unique_ptr<MeshEventImpl> impl);
+    ~MeshEvent();
 
-    // Returns references to the event data.
+    MeshEvent(const MeshEvent& other);
+    MeshEvent& operator=(const MeshEvent& other);
+
+    MeshEvent(MeshEvent&& other) noexcept;
+    MeshEvent& operator=(MeshEvent&& other) noexcept;
+
     uint32_t id() const;
     MeshDevice* device() const;
     uint32_t mesh_cq_id() const;
@@ -33,10 +41,7 @@ public:
     friend std::ostream& operator<<(std::ostream& os, const MeshEvent& event);
 
 private:
-    uint32_t id_ = 0;
-    MeshDevice* device_ = nullptr;
-    uint32_t mesh_cq_id_ = 0;
-    MeshCoordinateRange device_range_;
+    std::unique_ptr<MeshEventImpl> pimpl_;
 };
 
 }  // namespace tt::tt_metal::distributed
