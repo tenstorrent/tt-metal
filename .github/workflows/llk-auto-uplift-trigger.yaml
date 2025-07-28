@@ -43,7 +43,6 @@ env:
   SUBMODULE_PATH: tt_metal/third_party/tt_llk
   WORKFLOW_TIMEOUT: 240
   MAX_RETRIES: 3
-  IS_DRAFT_PR: true
 
 permissions:
   contents: write
@@ -214,7 +213,7 @@ jobs:
           delete-branch: true
           body-path: pr_body.md
           add-paths: ${{ env.SUBMODULE_PATH }}
-          draft: ${{ inputs.draft || env.IS_DRAFT_PR }}
+          draft: ${{ github.event_name == 'repository_dispatch' || inputs.draft }}
           labels: |
             llk-update
             automated
