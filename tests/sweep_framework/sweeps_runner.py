@@ -626,7 +626,9 @@ def push_test(run_id, header_info, test_results, test_start_time, test_end_time)
         """
         cursor.execute(test_insert_query, (run_id, sweep_name, test_start_time, test_end_time, "success"))
         test_id = cursor.fetchone()[0]
-        # Create testcase record
+
+        # Insert test cases in batch
+        test_statuses = []
         testcase_insert_query = """
         INSERT INTO sweep_testcases (
             test_id, name, start_time_ts, end_time_ts,
@@ -636,7 +638,9 @@ def push_test(run_id, header_info, test_results, test_start_time, test_end_time)
             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         )
         """
-        test_statuses = []
+
+        # Prepare all testcase values for batch insert
+        batch_values = []
         for i, result in enumerate(test_results):
             # Map test status to db status
             db_status = map_test_status_to_db_status(result.get("status", None))
@@ -659,9 +663,13 @@ def push_test(run_id, header_info, test_results, test_start_time, test_end_time)
                 json.dumps(result.get("device_perf")) if result.get("device_perf") else None,
                 error_sig,
             )
-            cursor.execute(testcase_insert_query, testcase_values)
+            batch_values.append(testcase_values)
+
+        # Execute batch insert
+        if batch_values:
+            cursor.executemany(testcase_insert_query, batch_values)
             logger.info(
-                f"Successfully pushed {testcase_name} testcase result to PostgreSQL database for test {test_id}"
+                f"Successfully pushed {len(batch_values)} testcase results to PostgreSQL database for test {test_id}"
             )
 
         # Update test status based on testcase results
@@ -1384,25 +1392,24 @@ def export_test_results_postgres(header_info, results, run_start_time, run_end_t
             test_id = cursor.fetchone()[0]
 
             test_statuses = []
+            testcase_insert_query = """
+            INSERT INTO sweep_testcases (
+                test_id, name, start_time_ts, end_time_ts,
+                status, suite_name, test_vector, message, exception,
+                e2e_perf, device_perf, error_signature
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+            """
 
-            # Process each test case within this test module
+            # Prepare all testcase values for batch insert
+            batch_values = []
             for idx, result in test_results_group:
                 header = header_info[idx]
 
                 # Map test status to database status
                 db_status = map_test_status_to_db_status(result.get("status"))
                 test_statuses.append(db_status)
-
-                # Create testcase record
-                testcase_insert_query = """
-                INSERT INTO sweep_testcases (
-                    test_id, name, start_time_ts, end_time_ts,
-                    status, suite_name, test_vector, message, exception,
-                    e2e_perf, device_perf, error_signature
-                ) VALUES (
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                )
-                """
 
                 exception_text = result.get("exception", None)
                 error_sig = generate_error_signature(exception_text)
@@ -1421,8 +1428,11 @@ def export_test_results_postgres(header_info, results, run_start_time, run_end_t
                     json.dumps(result.get("device_perf")) if result.get("device_perf") else None,
                     error_sig,
                 )
+                batch_values.append(testcase_values)
 
-                cursor.execute(testcase_insert_query, testcase_values)
+            # Execute batch insert
+            if batch_values:
+                cursor.executemany(testcase_insert_query, batch_values)
 
             # Update test status based on testcase results
             test_status = map_test_status_to_run_status(test_statuses)
