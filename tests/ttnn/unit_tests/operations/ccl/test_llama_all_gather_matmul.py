@@ -45,7 +45,7 @@ RING_CRS = ttnn.CoreRangeSet(
 )
 HOP_GRID = ttnn.CoreRangeSet(
     [
-        ttnn.CoreRange(ttnn.CoreCoord(3, 6), ttnn.CoreCoord(3, 6)),
+        # ttnn.CoreRange(ttnn.CoreCoord(3, 6), ttnn.CoreCoord(3, 6)),
     ]
 )
 FF1_CRS = ttnn.num_cores_to_corerangeset_in_subcoregrids(ttnn.CoreCoord(1, 0), 28, SUB_DEVICE_CRS, row_wise=True)
@@ -287,7 +287,6 @@ def run_llama_all_gather_matmul_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
-
     logger.info(f"Input shape: {in0_shape[2:]}, Padded shape: {[M, K_per_device_per_shard * input_num_cores]}")
     in0_tensor = torch.randn(in0_shape)
     tt_input_tensor = ttnn.from_torch(
@@ -308,7 +307,6 @@ def run_llama_all_gather_matmul_impl(
         memory_config=in1_sharded_mem_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
     )
-
     intermediate_tensor = torch.zeros(intermediate_shape)
     tt_intermediate_tensors = []
     for i in range(num_buffers):

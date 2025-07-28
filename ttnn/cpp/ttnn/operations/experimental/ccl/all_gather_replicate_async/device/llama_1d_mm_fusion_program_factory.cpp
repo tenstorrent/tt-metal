@@ -1641,6 +1641,7 @@ process_gather_in0_program_and_create_override_variables(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<CoreRangeSet> restricted_cores,
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler) {
+    log_info(tt::LogOp, "LLONG FUSION: process_gather_in0_program_and_create_override_variables");
     const auto& b = b_tensors[0];
     const auto num_output_cb = out_buffers.size();
     const auto batch = b_tensors.size();
@@ -1650,7 +1651,7 @@ process_gather_in0_program_and_create_override_variables(
 
     /* Core setup */
     constexpr bool row_major = true;
-    CoreRangeSet all_worker_cores = a.shard_spec().value().grid;
+    CoreRangeSet all_worker_cores = b.shard_spec().value().grid;
     CoreRangeSet non_idle_cores = all_worker_cores.merge(hop_cores);
     CoreRangeSet all_cores = non_idle_cores;
     std::vector<CoreRange> non_idle_cores_vec;
@@ -1666,17 +1667,37 @@ process_gather_in0_program_and_create_override_variables(
             non_idle_cores_vec.push_back(intersection.bounding_box());
         }
     }
-    all_cores = CoreRangeSet(non_idle_cores_vec);
+    // all_cores = CoreRangeSet(non_idle_cores_vec);
     std::vector<CoreRange> ring_list = all_worker_cores.ranges();
     std::vector<CoreRange> hop_list = hop_cores.ranges();
     ring_list.insert(ring_list.end(), hop_list.begin(), hop_list.end());
 
     CoreRangeSet ring_cores = CoreRangeSet(ring_list);
+    all_cores = ring_cores;
     const uint32_t num_cores = all_worker_cores.num_cores();
     const uint32_t ring_size = num_cores;
 
     uint32_t num_hop_cores = hop_cores.num_cores();
     bool use_hop_cores = num_hop_cores > 0;
+
+    log_info(
+        tt::LogOp,
+        "LLONG FUSION: num_cores: {}, ring_size: {}, num_hop_cores: {}, use_hop_cores: {}",
+        num_cores,
+        ring_size,
+        num_hop_cores,
+        use_hop_cores);
+    log_info(tt::LogOp, "LLONG FUSION: all_cores: {}", all_cores);
+    log_info(tt::LogOp, "LLONG FUSION: ring_cores: {}", ring_cores);
+    log_info(tt::LogOp, "LLONG FUSION: hop_cores: {}", hop_cores);
+    log_info(tt::LogOp, "LLONG FUSION: non_idle_cores: {}", non_idle_cores);
+    log_info(tt::LogOp, "LLONG FUSION: subdevice_cores: {}", subdevice_cores);
+    log_info(
+        tt::LogOp,
+        "LLONG FUSION: restricted_cores: {}",
+        restricted_cores.has_value() ? restricted_cores.value() : CoreRangeSet());
+    log_info(tt::LogOp, "LLONG FUSION: in0_buffer: {}", in0_buffer->address());
+    log_info(tt::LogOp, "LLONG FUSION: in1_buffer: {}", in1_buffer->address());
 
     /* Inner dim padding */
     const uint32_t Kt_pad = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1] * num_cores;
@@ -1703,6 +1724,12 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
     uint32_t in0_CB_tiles = per_core_M * in0_shard_width_in_tiles;
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
+    log_info(
+        tt::LogOp,
+        "LLONG FUSION: in0_shard_width_in_tiles: {}, in0_CB_tiles: {}, in0_CB_size: {}",
+        in0_shard_width_in_tiles,
+        in0_CB_tiles,
+        in0_CB_size);
 
     /* in1 */
     uint32_t in1_shard_height_in_tiles = 0;
@@ -1801,21 +1828,21 @@ process_gather_in0_program_and_create_override_variables(
         tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
             .set_page_size(src2_cb_index, in2_single_tile_size)
             .set_tile_dims(src2_cb_index, in0_tile);
-    auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
+    // auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
 
     uint32_t sync_cb_index = base_cb_index + 3;
     uint32_t sync_cb_size_bytes = 16;
     tt_metal::CircularBufferConfig sync_cb_config =
         tt_metal::CircularBufferConfig(sync_cb_size_bytes, {{sync_cb_index, DataFormat::UInt16}})
             .set_page_size(sync_cb_index, sync_cb_size_bytes);
-    auto cb_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
+    // auto cb_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
 
     uint32_t sync_cb2_index = base_cb_index + 4;
     uint32_t sync_cb2_size_bytes = 16;
     tt_metal::CircularBufferConfig sync_cb2_config =
         tt_metal::CircularBufferConfig(sync_cb2_size_bytes, {{sync_cb2_index, DataFormat::UInt16}})
             .set_page_size(sync_cb2_index, sync_cb2_size_bytes);
-    auto cb2_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb2_config);
+    // auto cb2_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb2_config);
 
     uint32_t output_cb_index = base_cb_index + 5;  // output operands start at index 16
     uint32_t interm0_cb_index = base_cb_index + 6;
@@ -1925,13 +1952,13 @@ process_gather_in0_program_and_create_override_variables(
     TT_FATAL(
         out_block_num_subblocks == 1 || !untilize_out,
         "untilize_out is not supported for cases that out_block_num_subblocks > 1");
-    log_info(tt::LogOp, "in0_block_w: {}", in0_block_w);
-    log_info(tt::LogOp, "in0_num_subblocks: {}", in0_num_subblocks);
-    log_info(tt::LogOp, "in0_block_num_tiles: {}", in0_block_num_tiles);
-    log_info(tt::LogOp, "in0_subblock_num_tiles: {}", in0_subblock_num_tiles);
-    log_info(tt::LogOp, "in1_num_subblocks: {}", in1_num_subblocks);
-    log_info(tt::LogOp, "in1_block_num_tiles: {}", in1_block_num_tiles);
-    log_info(tt::LogOp, "in1_block_size_bytes: {}", in1_block_size_bytes);
+    log_info(tt::LogOp, "LLONG FUSION: in0_block_w: {}", in0_block_w);
+    log_info(tt::LogOp, "LLONG FUSION: in0_num_subblocks: {}", in0_num_subblocks);
+    log_info(tt::LogOp, "LLONG FUSION: in0_block_num_tiles: {}", in0_block_num_tiles);
+    log_info(tt::LogOp, "LLONG FUSION: in0_subblock_num_tiles: {}", in0_subblock_num_tiles);
+    log_info(tt::LogOp, "LLONG FUSION: in1_num_subblocks: {}", in1_num_subblocks);
+    log_info(tt::LogOp, "LLONG FUSION: in1_block_num_tiles: {}", in1_block_num_tiles);
+    log_info(tt::LogOp, "LLONG FUSION: in1_block_size_bytes: {}", in1_block_size_bytes);
     std::vector<uint32_t> compute_kernel_args = {
         in0_block_w,             // in0_block_w
         in0_num_subblocks,       // in0_num_subblocks
@@ -2007,14 +2034,16 @@ process_gather_in0_program_and_create_override_variables(
         use_dedicated_noc ? tt_metal::NOC_MODE::DM_DEDICATED_NOC : tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
 
     // Init the signaler
-    if (fused_op_signaler.has_value()) {
+    if (fused_op_signaler.has_value() && fused_op_signaler.value().fused_op_type ==
+                                             ttnn::experimental::ccl::MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER) {
         ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
         signaler.init_llama_rs_cores_mm(all_cores, program, device, 0);
     }
     /* Create the kernels */
     auto mm_kernel_in0_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_ring_all_gather.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_replicate_async/device/kernels/"
+        "reader_bmm_tile_layout_in0_ring_all_gather.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -2024,7 +2053,8 @@ process_gather_in0_program_and_create_override_variables(
     // Each core needs to signal to all RS cores, need to get a count of how many cores are in all_cores
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_ring_all_gather.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_replicate_async/device/kernels/"
+        "reader_bmm_tile_layout_in1_ring_all_gather.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -2035,7 +2065,8 @@ process_gather_in0_program_and_create_override_variables(
 
     auto mm_kernel = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation_gathered.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_replicate_async/device/kernels/compute/"
+        "bmm_large_block_zm_fused_bias_activation_gathered.cpp",
         all_cores,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -2070,7 +2101,9 @@ process_gather_in0_program_and_create_override_variables(
             // in1
             std::vector<uint32_t> mm_kernel_in1_sender_writer_args;
             mm_kernel_in1_sender_writer_args.push_back((std::uint32_t)core_type);
-            if (fused_op_signaler.has_value()) {
+            if (fused_op_signaler.has_value() &&
+                fused_op_signaler.value().fused_op_type ==
+                    ttnn::experimental::ccl::MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER) {
                 ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
                 signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, device);
             }
@@ -2170,7 +2203,9 @@ process_gather_in0_program_and_create_override_variables(
             mm_in1_args.push_back((std::uint32_t)vc);
             mm_in1_args.push_back((std::uint32_t)dram_read_offset);
         }
-        if (fused_op_signaler.has_value()) {
+        if (fused_op_signaler.has_value() &&
+            fused_op_signaler.value().fused_op_type ==
+                ttnn::experimental::ccl::MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER) {
             ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
             signaler.push_llama_rs_rt_args_for_mm(mm_in1_args, core, in1_noc, device);
         }
@@ -2215,7 +2250,9 @@ process_gather_in0_program_and_create_override_variables(
         // in1
         std::vector<uint32_t> mm_kernel_in1_sender_writer_args;
         mm_kernel_in1_sender_writer_args.push_back((std::uint32_t)core_type);
-        if (fused_op_signaler.has_value()) {
+        if (fused_op_signaler.has_value() &&
+            fused_op_signaler.value().fused_op_type ==
+                ttnn::experimental::ccl::MatmulFusedOpSignalerType::LLAMA_REDUCE_SCATTER) {
             ttnn::experimental::ccl::MatmulFusedOpSignaler& signaler = fused_op_signaler.value();
             signaler.push_llama_rs_rt_args_for_mm(mm_kernel_in1_sender_writer_args, core, in1_noc, device);
         }
@@ -2237,7 +2274,7 @@ process_gather_in0_program_and_create_override_variables(
         all_cores_vec,
         0,
         ttnn::operations::matmul::Matmul1DType::GATHER_IN0};
-}
+}  // end of process_gather_in0_program_and_create_override_variables
 
 inline void override_mcast_in1_program_parameters(
     const ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t& override_variables,
@@ -2498,8 +2535,14 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
 
     TT_FATAL(output_tensors.size() == b_tensors.size(), "number of outputs must match number of inputs b");
 
-    const auto& ashape = a.padded_shape();
+    const auto& ashape = Shape{
+        1,
+        1,
+        a.memory_config().nd_shard_spec()->shard_shape[-2],
+        a.memory_config().nd_shard_spec()->shard_shape[-1]};  // one shard of aggregated tensor will be in0
     const auto& bshape = b.padded_shape();
+    log_info(tt::LogOp, "a shape: {}", ashape);
+    log_info(tt::LogOp, "b shape: {}", bshape);
     auto in0_tile = a.tensor_spec().tile();
     auto in1_tile = b.tensor_spec().tile();
     // cannot use the output tensor tile directly as that might be changed by user override
@@ -2858,9 +2901,6 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler>& fused_op_signaler,
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    log_info(tt::LogOp, "LLONG FUSION: matmul_multi_core_reuse_mcast_1d_optimized_helper");
-    return {.program = std::move(program), .override_runtime_arguments_callback = std::nullopt};
-    /*
     ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t shared_vars =
         llama_matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
             program,
@@ -2875,7 +2915,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
             fused_op_signaler,
             global_cb,
             sub_device_id,
-            tt::CBIndex::c_0,
+            fused_op_signaler->cb_index_start,
             std::nullopt);
     auto override_runtime_arguments_callback =
         [shared_vars](
@@ -2889,7 +2929,6 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
-    */
 }
 
 }  // namespace llama_matmul

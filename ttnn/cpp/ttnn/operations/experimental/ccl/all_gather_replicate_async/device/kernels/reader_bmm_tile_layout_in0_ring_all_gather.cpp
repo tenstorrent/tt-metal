@@ -11,6 +11,7 @@
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
 void kernel_main() {
+    return;
     // Compile time args
     constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(1);

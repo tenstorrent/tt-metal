@@ -435,7 +435,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
     std::optional<tt::tt_metal::operation::ProgramWithCallbacks> matmul_program_with_callbacks =
         ttnn::operations::llama_matmul::matmul_multi_core_reuse_mcast_1d_optimized_helper(
             program,
-            intermediate_tensor,       // in0
+            aggregated_tensor,         // in0
             {input_tensor_b},          // in1
             std::nullopt,              // bias
             {output_tensor},           // out0
