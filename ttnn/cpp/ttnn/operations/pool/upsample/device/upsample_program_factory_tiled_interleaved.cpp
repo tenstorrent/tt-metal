@@ -35,9 +35,6 @@ operation::ProgramWithCallbacks upsample_tiled_interleaved(
     tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    uint32_t output_num_units = output.physical_volume() / output.padded_shape()[-1];  // N*H*W for outout
-    uint32_t input_num_units = input.physical_volume() / input.padded_shape()[-1];     // N*H*W for input
-
     auto output_shape = output.padded_shape();
     // This should allocate a DRAM buffer on the device
     tt_metal::IDevice* device = output.device();
@@ -48,13 +45,11 @@ operation::ProgramWithCallbacks upsample_tiled_interleaved(
     const auto& tile_shape = input.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
-    uint32_t tile_volume = tile_height * tile_width;
 
     uint32_t num_input_tiles_in_row = input_tensor_width / tile_width;
     uint32_t num_input_tiles_in_col = input_tensor_height / tile_height;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     auto
@@ -123,8 +118,6 @@ operation::ProgramWithCallbacks upsample_tiled_interleaved(
     bool dst_stick_size_is_pow2 = is_power_of_two_at_least_32(output_stick_size);
     uint32_t dst_log_base_2_of_page_size = dst_stick_size_is_pow2 ? (std::uint32_t)log2(output_stick_size) : 0;
 
-    // uint32_t output_element_size = output.element_size();
-
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_cb_index,
         (std::uint32_t)dst_is_dram,
@@ -170,7 +163,7 @@ operation::ProgramWithCallbacks upsample_tiled_interleaved(
     std::vector<uint32_t> writer_rt_arguments{
         dst_buffer->address(),
         0,  // set in loop, num of blocks on core
-        0   // set in loop, stard_id of first input stick
+        0   // set in loop, start_id of first input stick
     };
 
     for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
