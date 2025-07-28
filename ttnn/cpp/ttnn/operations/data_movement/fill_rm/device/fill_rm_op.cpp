@@ -7,6 +7,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/util.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
 
@@ -100,6 +101,18 @@ void FillRM::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(
         this->output_mem_config.memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "FillRM does not currently support sharding");
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> FillRM::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = output_tensors.at(0);
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
 }
 
 std::vector<ttnn::TensorSpec> FillRM::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
