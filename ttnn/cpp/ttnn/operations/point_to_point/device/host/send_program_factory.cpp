@@ -9,74 +9,10 @@
 #include <tt-metalium/work_split.hpp>
 #include "point_to_point_device_op.hpp"
 
-using ttnn::operations::ccl::common::get_linearized_index;
-
 using tt::tt_fabric::FabricNodeId;
 using tt::tt_fabric::get_fabric_node_id_from_physical_chip_id;
 
 namespace ttnn::operations::point_to_point {
-namespace detail {
-
-auto one_d_fabric_routing_vector(const MeshCoordinate& src_coord, const MeshCoordinate& dest_coord) {
-    // transmit along row
-    if (src_coord[0] == dest_coord[0]) {
-        constexpr auto dim = 1;
-        const int hops = dest_coord[dim] - src_coord[dim];
-        bool is_fwd = (hops > 0);
-
-        return std::make_tuple(std::abs(hops), is_fwd, dim);
-    }
-    // transmit along col
-    else if (src_coord[1] == dest_coord[1]) {
-        constexpr auto dim = 0;
-        const int hops = dest_coord[dim] - src_coord[dim];
-        bool is_fwd = (hops > 0);
-
-        return std::make_tuple(std::abs(hops), is_fwd, dim);
-    } else {
-        TT_THROW("Routing coordinates {} and {} invalid for 1D fabric", src_coord, dest_coord);
-        return std::make_tuple(0, false, 0);
-    }
-}
-
-auto one_d_fabric_routing(
-    const MeshDevice* mesh_device,
-    const MeshCoordinate& src_coord,
-    const MeshCoordinate& dest_coord,
-    const ::ttnn::ccl::Topology& topology) {
-    const auto& mesh_shape = mesh_device->get_view().shape();
-
-    // sign indicates direction, however fabrics' forward/backward concept is reversed
-    const auto [line_hops, line_is_forward, dim] = one_d_fabric_routing_vector(src_coord, dest_coord);
-
-    TT_FATAL(line_hops != 0, "Should not be send/receiving to the same device");
-
-    auto get_neighbor_id = [&src_coord, &mesh_device, &mesh_shape, dim](
-                               bool is_forward, MeshCoordinate::BoundaryMode boundary_mode) {
-        const auto neighbor_coord = src_coord.get_neighbor(mesh_shape, (is_forward ? 1 : -1), dim, boundary_mode);
-
-        TT_FATAL(neighbor_coord.has_value(), "Can't find neighbor for {}", src_coord);
-        auto next_device = mesh_device->get_device(neighbor_coord.value());
-        const auto next_fabric_id = get_fabric_node_id_from_physical_chip_id(next_device->id());
-
-        TT_FATAL(next_device != nullptr, "Did not find next device");
-        return next_fabric_id;
-    };
-
-    if (topology == ::ttnn::ccl::Topology::Ring) {
-        int ring_hops = line_hops + (line_hops < 0 ? -1 : 1) * mesh_shape[dim];
-
-        if (std::abs(ring_hops) < std::abs(line_hops)) {
-            bool ring_is_forward = (ring_hops > 0);
-
-            const auto next_fabric_id = get_neighbor_id(ring_is_forward, MeshCoordinate::BoundaryMode::WRAP);
-            return std::make_tuple(std::abs(ring_hops), !ring_is_forward, next_fabric_id);
-        }
-    }
-    const auto next_fabric_id = get_neighbor_id(line_is_forward, MeshCoordinate::BoundaryMode::NONE);
-    return std::make_tuple(line_hops, !line_is_forward, next_fabric_id);
-}
-}  // namespace detail
 
 ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> send_program_factory(
     const PointToPointOp::tensor_args_t& tensor_args,
@@ -87,6 +23,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     auto mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor.device());
     const auto& topology = operation_attributes.topology;
     const auto& input_tensor = tensor_args.input_tensor;
+    const auto& sender_semaphore = operation_attributes.sender_semaphore;
     const auto& receiver_semaphore = operation_attributes.receiver_semaphore;
 
     // basic accounting
@@ -155,7 +92,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const bool output_is_dram = output_tensors.at(0).buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     const std::vector<uint32_t> writer_ct_args = {
-        sender_cb_id, packet_cb_id, packet_header_cb_id, output_is_dram, l1_alignment};
+        sender_cb_id, packet_header_cb_id, packet_cb_id, output_is_dram, l1_alignment};
 
     tt::tt_metal::KernelHandle send_unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -163,7 +100,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
-    constexpr auto link_idx = 0;  // equivalent to num_links = 0
+    constexpr auto link_idx = 0;  // for single link implementation
 
     uint32_t page_idx_start = 0, page_idx_end = 0;
     std::vector<CoreCoord> sender_cores;
@@ -195,6 +132,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             packet_size_bytes,
             num_pages_per_packet,
             num_page_segments,
+            sender_semaphore.address(),
             receiver_semaphore.address(),
             dst_is_forward,
         };
@@ -215,7 +153,6 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
         sender_cores.push_back(c);
     }
 
-    // !TODO implement program cache #23425
     return {
         std::move(program),
         PointToPointOp::SendReceive::shared_variables_t{

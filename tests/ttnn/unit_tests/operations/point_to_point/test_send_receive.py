@@ -67,13 +67,18 @@ def test_send_receive(mesh_device, shape_coords, layout, dtype):
     coord0, coord1 = (ttnn.MeshCoordinate(c) for c in coords)
 
     lrange0 = lcoord0 + shape[0]
+    lrange1 = lcoord1 + shape[0]
 
     input_tensor_torch = torch.zeros(multi_device_shape, dtype=dtype)
     input_tensor_torch[lcoord0:lrange0, :, :, :] = (
         torch.linspace(1, prod(shape), prod(shape)).reshape(shape).to(dtype=dtype)
     )
     input_tensor = ttnn.from_torch(
-        input_tensor_torch, layout=layout, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
+        input_tensor_torch,
+        layout=layout,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
 
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
@@ -88,9 +93,11 @@ def test_send_receive(mesh_device, shape_coords, layout, dtype):
         coord0,
         coord1,
         ttnn.Topology.Linear,
+        send_semaphore,
         receiver_semaphore,
     )
     sent_tensor_torch = ttnn.to_torch(sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    assert_equal(input_tensor_torch[lcoord0:lrange0, :, :, :], sent_tensor_torch[lcoord1:lrange1, :, :, :])
 
     # test optional output tensor
     return_tensor = ttnn.from_torch(
@@ -100,9 +107,14 @@ def test_send_receive(mesh_device, shape_coords, layout, dtype):
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
     ttnn.point_to_point(
-        sent_tensor, coord1, coord0, ttnn.Topology.Linear, send_semaphore, optional_output_tensor=return_tensor
+        sent_tensor,
+        coord1,
+        coord0,
+        ttnn.Topology.Linear,
+        receiver_semaphore,
+        send_semaphore,
+        optional_output_tensor=return_tensor,
     )
 
     torch_return_tensor = ttnn.to_torch(return_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-
     assert_equal(input_tensor_torch[lcoord0:lrange0, :, :, :], torch_return_tensor[lcoord0:lrange0, :, :, :])
