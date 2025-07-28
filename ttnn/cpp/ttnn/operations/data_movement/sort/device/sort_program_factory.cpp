@@ -38,8 +38,6 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
     const bool value_tensor_is_dram = value_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     const bool index_tensor_is_dram = index_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    const uint32_t num_input_tiles = tensor_args.input_tensor.physical_volume() / tt::constants::TILE_HW;
-
     const auto input_shape = tensor_args.input_tensor.padded_shape();
     const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tt::constants::TILE_HEIGHT;
     const uint32_t Wt = input_shape[3] / tt::constants::TILE_WIDTH;
@@ -327,8 +325,6 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
     const auto tile_hw = tile_width * tile_height;
-
-    const uint32_t num_input_tiles = tensor_args.input_tensor.physical_volume() / tile_hw;
 
     const auto input_shape = tensor_args.input_tensor.padded_shape();
     const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;

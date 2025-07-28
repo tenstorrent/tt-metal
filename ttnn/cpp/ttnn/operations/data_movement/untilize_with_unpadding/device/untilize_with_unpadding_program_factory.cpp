@@ -59,7 +59,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     auto output_y = output_shape.rank() >= 2 ? output_shape[-2] : 1;
     auto output_x = output_shape[-1];
 
-    uint32_t num_padded_sticks = input_w * input_z * input_y;
     uint32_t padded_stick_size = input_x * output.element_size();  // Assuming bfloat16 dataformat
     uint32_t unpadded_stick_size = output_x * output.element_size();
 
@@ -906,7 +905,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
 
     IDevice* device = a.device();
 
-    auto grid_size = device->compute_with_storage_grid_size();
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,
              num_output_rows_unpadded = 0;
     CoreCoord end_core;
@@ -973,7 +971,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
                                                                           output.buffer())
                                                                     : std::make_tuple(tt::CBIndex::c_17, CBHandle{});
 
-    Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
@@ -1163,7 +1160,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
 
-        bool src_sharded = input_tensors.at(0).memory_config().is_sharded();
         bool out_sharded = output_tensors.at(0).memory_config().is_sharded();
 
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);

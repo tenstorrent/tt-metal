@@ -112,7 +112,6 @@ static_assert(
     static_cast<size_t>(LineDirection::BACKWARD) ==
     static_cast<size_t>(ttnn::ccl::LineDirection::BACKWARD));
 
-constexpr LineDirection relay_to_final_output_dir = LineDirection::FORWARD;
 // TODO: promote to header
 
 struct ReduceScatterCircularBuffers {
@@ -700,7 +699,6 @@ static void generate_final_reducer_reader_worker_command_streams(
     using namespace ttnn::ccl::cmd::uops;
     using namespace ttnn::ccl::cmd::builder;
 
-    auto const& all_tensors = builder_config.all_tensors.get();
     auto const& reader_cbs = builder_config.all_cbs.get().final_reducer_reader;
     size_t num_partial_reducer_workers =
         builder_config.worker_cores.get().partial_reducers[LineDirection::FORWARD].size();
@@ -751,7 +749,6 @@ static void generate_final_reducer_writer_worker_command_streams(
     auto const tensor_slice = generate_tensor_slices(1, *output_tensor_sync_bundle.tensor, 0).at(0);
     auto worker_slices = split_tensor_slices_across_workers_page_aligned(num_workers, {tensor_slice});
 
-    auto const& sync = output_tensor_sync_bundle.sync_spec;
     TT_FATAL(
         worker_slices.size() == num_workers,
         "Internal error. Expected number of worker slices to match number of workers");
@@ -798,7 +795,6 @@ static void generate_partial_reducer_reader_worker_command_streams(
     log_trace(
         tt::LogOp, "generate_partial_reducer_reader_worker_command_streams. topologyu: {}", topology_config.topology());
 
-    bool in0_async_mode_specified = in0_tensor_sync.has_value();
     bool in1_async_mode_specified = in1_tensor_sync.has_value();
     TT_FATAL(in1_async_mode_specified, "Internal error. Expected input tensor sync to be populated");
     auto const& from_remote_input_tensor_sync = in1_tensor_sync;

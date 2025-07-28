@@ -131,8 +131,6 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     auto [num_cores_x, per_core_tiles_x] =
         tt::tt_metal::get_max_cores_divisible_by_tiles_per_core_tiles(num_tiles_dim_2, num_cores_x_limit / num_cores_z);
 
-    uint32_t per_core_tiles = per_core_tiles_x * per_core_tiles_y * (z / num_cores_z);
-
     uint32_t start_core_x = 0;
     uint32_t start_core_y = 0;
 

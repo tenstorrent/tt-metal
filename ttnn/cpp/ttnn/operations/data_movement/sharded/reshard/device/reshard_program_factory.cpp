@@ -300,7 +300,6 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     const auto remote_shard_spec = remote_tensor.shard_spec().value();
     const auto& all_cores = local_shard_spec.grid;
 
-    auto local_core_type = local_tensor.buffer()->core_type();
     auto remote_core_type = remote_tensor.buffer()->core_type();
     constexpr uint32_t cb_index = tt::CBIndex::c_0;
     constexpr uint32_t cb_scratch_index = tt::CBIndex::c_1;
@@ -565,7 +564,6 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
     const auto remote_shard_spec = remote_tensor.shard_spec().value();
     const auto& all_cores = local_shard_spec.grid;
 
-    const auto local_core_type = local_tensor.buffer()->core_type();
     const auto remote_core_type = remote_tensor.buffer()->core_type();
     bool interface_with_dram = (remote_core_type == CoreType::DRAM);
     const auto local_cores = corerange_to_cores(

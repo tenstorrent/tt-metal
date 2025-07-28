@@ -44,8 +44,6 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     bool values_is_dram = values_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool index_is_dram = index_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    uint32_t num_input_tiles = input_tensor.physical_volume() / TILE_HW;
-
     auto input_shape = input_tensor.padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
     uint32_t Wt = input_shape[3] / TILE_WIDTH;
@@ -296,7 +294,6 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
                                      ? input_indices_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM
                                      : false;
 
-    uint32_t num_input_tiles = input_tensor.physical_volume() / TILE_HW;
     auto device = input_tensor.device();
 
     auto input_shape = input_tensor.padded_shape();
@@ -520,7 +517,6 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
         final_cores_range_set,
         tt::tt_metal::ComputeConfig{.compile_args = compute_args_final});
 
-    int core_h = 0;
     int core_w = 0;
     bool ascending = !largest;
     for (auto core : local_cores) {

@@ -178,8 +178,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto indices_data_format = tt::tt_metal::datatype_to_dataformat_converter(indices_tensor.dtype());
     auto mapping_data_format = tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.dtype());
 
-    constexpr uint32_t buffering_factor = 2;
-
     // input sharded buffer
     uint32_t input_tensor_cb_id = tt::CBIndex::c_0;
     // full indices buffer
@@ -362,8 +360,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     };
 
     const auto& writer_compile_time_args = reader_compile_time_args;
-
-    auto input_buffer = input_tensor.buffer();
 
     std::map<std::string, std::string> reader_defines = {
         {"AXIS", std::to_string(operation_attributes.axis.has_value() ? operation_attributes.axis.value() : -1)},

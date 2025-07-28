@@ -231,7 +231,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     TT_FATAL(num_chunks_per_shard < 32, "num_chunks_per_shard must be < 32, got {}", num_chunks_per_shard);
     TT_FATAL(chunk_granularity >= 4, "chunk_granularity must be >= 4, got {}", chunk_granularity);
 
-    const uint32_t receiver_num_pages = pages_per_packet * 3;  // triple buffering
     const uint32_t receiver_cb_index = tt::CB::c_in0;
 
     /**

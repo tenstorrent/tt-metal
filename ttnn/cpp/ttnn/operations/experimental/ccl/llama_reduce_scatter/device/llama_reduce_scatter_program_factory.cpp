@@ -385,7 +385,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
 
     std::map<std::string, std::string> reader_defines = {{"DEVICE_ORDER", device_order}};
 
-    const auto& input_shape = input_tensor.logical_shape();
     auto& output_tensor = tensor_return_value;
     const auto& input_tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     const auto& output_tile_shape = output_tensor.tensor_spec().tile().get_tile_shape();
@@ -396,11 +395,9 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     auto output_shard_spec = output_tensor.shard_spec().value();
     const auto& cross_device_semaphore = operation_attributes.cross_device_semaphore;
 
-    uint32_t input_shard_height = input_shard_spec.shape[0];
     uint32_t input_shard_width = input_shard_spec.shape[1];
     uint32_t input_tiles_per_core_width = input_shard_width / input_tile_shape[1];
 
-    uint32_t output_shard_height = output_shard_spec.shape[0];
     uint32_t output_shard_width = output_shard_spec.shape[1];
     uint32_t output_tiles_per_core_width = output_shard_width / input_tile_shape[1];
 

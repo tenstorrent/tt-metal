@@ -124,7 +124,6 @@ ttnn::Tensor pad_to_tile_vol(
         padding_vec.emplace_back(0, padded_height - padded_shape[-2]);
         padding_vec.emplace_back(0, padded_width - padded_shape[-1]);
 
-        constexpr bool pad_use_multicore = true;
         auto padded_output = ttnn::pad(queue_id, tensor, padding_vec, value, use_multicore, memory_config);
         TT_FATAL(
             padded_output.padded_shape()[-1] % tt::constants::TILE_WIDTH == 0 &&

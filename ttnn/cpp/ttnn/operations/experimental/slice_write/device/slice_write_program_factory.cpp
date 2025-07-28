@@ -179,7 +179,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     uint32_t max_read_size) {
     tt::tt_metal::IDevice* device = input_tensor.device();
 
-    auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.logical_shape();
     for (uint32_t i = 0; i < input_shape.rank(); i++) {
@@ -284,7 +283,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
     auto num_cores_total = cores.size();
 
-    auto total_num_input_sticks = input_tensor.physical_volume() / input_shape[-1];
     const auto num_sticks_per_core = shard_spec.shape[0];
     // issue more reads before calling barrier
     const uint32_t num_sticks_per_core_read =
@@ -363,8 +361,6 @@ static operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
     auto input_shape = input.logical_shape();
     auto output_shape = output.logical_shape();
 
-    uint32_t num_unpadded_sticks = input.physical_volume() / input_shape[-1];
-
     TT_FATAL(input.shard_spec().has_value(), "Input tensor should be sharded");
     TT_FATAL(
         input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
@@ -377,10 +373,8 @@ static operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
     log_debug(tt::LogOp, "Input cores = {}", input_cores);
     log_debug(tt::LogOp, "Input shard spec = {}", shard_spec);
 
-    auto total_num_input_sticks = input.physical_volume() / input_shape[-1];
     auto num_input_sticks_per_core = shard_spec.shape[0];
 
-    uint32_t output_row_size_bytes = output_shape[-1] * output.element_size();
     uint32_t input_row_size_bytes = shard_spec.shape[1] * input.element_size();
 
     auto src_buffer_alignment = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
@@ -498,7 +492,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     const std::vector<CoreCoord>& cores) {
     tt::tt_metal::IDevice* device = input_tensor.device();
 
-    auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto actual_input_shape = input_tensor.logical_shape();
@@ -521,7 +514,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
 
     uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(input_tensor);
 
-    uint32_t output_row_size_bytes = output_shape[-1] * input_tensor.element_size();
     uint32_t input_row_size_bytes = input_shard_shape[1] * input_tensor.element_size();
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(actual_input_shape.rank());
@@ -717,8 +709,6 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
 
     TT_FATAL(input.shard_spec().has_value(), "Input tensor should be sharded");
 
-    bool is_height_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
-
     auto shard_spec = input.shard_spec().value();
     auto input_cores = shard_spec.grid;
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
@@ -736,8 +726,6 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     const uint32_t src0_cb_index = tt::CBIndex::c_0;
-
-    std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
 
     uint32_t num_tiles_height_per_core = shard_spec.shape[0] / TILE_HEIGHT;
     uint32_t num_tiles_channel_per_core = shard_spec.shape[1] / TILE_HEIGHT;
@@ -847,7 +835,6 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
 
-    uint32_t output_row_size_bytes = output_padded_shape[-1] * output.element_size();
     uint32_t input_row_size_bytes = input_padded_shape[-1] * input.element_size();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
@@ -856,8 +843,6 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
-    uint32_t src_stick_size = input_row_size_bytes;
 
     uint32_t max_read_size = 4096;
 

@@ -635,8 +635,6 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
-    tt::tt_metal::Buffer* src0_dram_buffer = a.buffer();
-
     log_debug(tt::LogOp, "transpose_hc_multi_core");
     log_debug(tt::LogOp, "sub_tile_line_bytes: {}", sub_tile_line_bytes);
     log_debug(tt::LogOp, "cb_data_format: {}", cb_data_format);
@@ -945,17 +943,11 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
         log_debug(tt::LogOp, "core: {}", core);
     }
 
-    uint32_t CH = C * H;
-
     uint32_t num_H_per_core = shard_height / H > 0 ? shard_height / H : 1;  // the number of H blocks in a shard
-
-    uint32_t shard_C_per_core = shard_height > C ? C : shard_height;  // the number of shards of (dst) C blocks per core
 
     uint32_t num_core_per_C = C / shard_height > 0 ? C / shard_height : 1;  // the number of cores for (dst) C block
 
     uint32_t num_C_blocks_per_core = shard_height > C ? shard_height / C : 1;
-
-    uint32_t curr_core_offset = 0;
 
     uint32_t curr_c = 0, curr_h = 0;
     for (uint32_t i = 0, curr_sticks_read = 0; i < num_cores; i++) {
@@ -1129,12 +1121,8 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor& a,
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
 
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
-
     uint32_t W = a.logical_shape()[3], H = a.logical_shape()[2], C = a.logical_shape()[1], N = a.logical_shape()[0];
     uint32_t stick_size_bytes = W * a.element_size();
-
-    tt::tt_metal::IDevice* device = a.device();
 
     auto shard_spec = a.shard_spec().value();
     uint32_t shard_height = shard_spec.shape[0];
@@ -1158,8 +1146,6 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor& a,
     log_debug(tt::LogOp, "num_cores: {}", num_cores);
 
     auto output_shape = output.padded_shape();
-
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
@@ -1284,7 +1270,6 @@ void override_runtime_args_wh(
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
 
-    uint32_t num_tensor_tiles = input_tensor.physical_volume() / TILE_HW;
     auto HtWt = Ht * Wt;
 
     auto& cached_reader_args = GetRuntimeArgs(program, reader_kernel_id);
@@ -1731,7 +1716,6 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
 
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
     const auto tile = a.tensor_spec().tile();
     const uint32_t tile_hw = tile.get_tile_hw();
 
@@ -1749,8 +1733,6 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
 
     auto& all_cores = shard_spec.grid;
     uint32_t num_tiles_per_shard = shard_spec.numel() / tile_hw;
-
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = num_tiles_per_shard;
@@ -1937,8 +1919,6 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tt_metal::detail::TileSize(dst_cb_data_format);
 
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
-
     uint32_t W = a.logical_shape()[3], H = a.logical_shape()[2], C = a.logical_shape()[1], N = a.logical_shape()[0];
     uint32_t stick_size_bytes = W * a.element_size();
     uint32_t ht = (H + TILE_HEIGHT - 1) / TILE_HEIGHT;
@@ -1986,10 +1966,6 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
 
     log_debug(tt::LogOp, "shard_height: {}", shard_height);
     log_debug(tt::LogOp, "dst_single_tile_size: {}", dst_single_tile_size);
-
-    bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
-
-    tt::tt_metal::IDevice* device = a.device();
 
     bool fp32_dest_acc_en = src0_cb_data_format == tt::DataFormat::Float32;
 

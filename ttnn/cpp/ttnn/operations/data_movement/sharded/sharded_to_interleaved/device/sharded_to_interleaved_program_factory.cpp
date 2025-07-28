@@ -26,7 +26,6 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_height, num_units_per_shard_height_last,
         num_units_per_shard_width_last;
 
-    tt_metal::IDevice* device = input.device();
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -101,7 +100,6 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
     }
 
-    auto src_buffer = input.buffer();
 
     auto dst_buffer = output.buffer();
 
@@ -157,7 +155,6 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     uint32_t curr_idx_h = 0;
     uint32_t curr_idx_w = 0;
 
-    uint32_t padded_offset_bytes;
 
     for (const auto& core : cores) {
         uint32_t shard_height = num_units_per_shard_height;

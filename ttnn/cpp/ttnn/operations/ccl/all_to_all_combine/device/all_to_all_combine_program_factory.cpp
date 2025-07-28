@@ -62,7 +62,6 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto fabric_node_id = get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
     const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
 
-    const auto& input_shape = input_tensor.tensor_spec().logical_shape();
     const auto& mapping_shape = mapping_tensor.tensor_spec().logical_shape();
     const auto& metadata_shape = metadata_tensor.tensor_spec().logical_shape();
 
@@ -198,7 +197,6 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
     const auto& axis = operation_attributes.axis;
 
-    const uint32_t batch_replicate_dim = axis.has_value() ? mesh_device->shape()[axis.value()] : 1;
     const auto fabric_max_packet_size_bytes = get_tt_fabric_channel_buffer_size_bytes();
     const uint32_t max_packet_size_bytes =
         input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;

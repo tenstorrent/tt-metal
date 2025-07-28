@@ -30,7 +30,6 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t max_read_size) {
     tt::tt_metal::IDevice* device = input_tensor.device();
 
-    auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
@@ -460,11 +459,9 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t num_cores_y_padded) {
     tt::tt_metal::IDevice* device = input_tensor.device();
 
-    auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
 
-    uint32_t padded_row_size_bytes = input_shape[-1] * input_tensor.element_size();
     uint32_t unpadded_row_size_bytes = output_shape[-1] * input_tensor.element_size();
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
@@ -645,8 +642,6 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     log_debug(tt::LogOp, "shard_height_unpadded: {}", shard_height_unpadded);
     log_debug(tt::LogOp, "all_cores_unpadded: {}", all_cores_unpadded);
     log_debug(tt::LogOp, "num_cores_unpadded: {}", num_cores_unpadded);
-
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -962,7 +957,6 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
         const Tensor& dst_tensor = output_tensors[0];
         uint32_t num_unpadded_tiles = dst_tensor.physical_volume() / TILE_HW;
 
-        uint32_t num_cores_x = compute_with_storage_grid_size.x;
         uint32_t num_cores_total = cores.size();
 
         auto

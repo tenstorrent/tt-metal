@@ -41,7 +41,6 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
     bool input_indices_is_dram = input_indices_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool output_is_dram = output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    uint32_t num_input_values_tiles = input_values_tensor.physical_volume() / TILE_HW;
     auto device = input_values_tensor.device();
 
     auto input_shape = input_values_tensor.logical_shape();

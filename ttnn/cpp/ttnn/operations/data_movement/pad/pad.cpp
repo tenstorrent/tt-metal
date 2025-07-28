@@ -79,7 +79,6 @@ ttnn::Tensor pad_impl(
 
             auto width_distinct = [](const auto& shape, const auto& other_shape) { return shape[3] != other_shape[3]; };
 
-            uint32_t input_w = input_logical_shape[3];
             uint32_t output_w = output_padded_shape[3];
 
             if (width_distinct(input_logical_shape, output_padded_shape)) {

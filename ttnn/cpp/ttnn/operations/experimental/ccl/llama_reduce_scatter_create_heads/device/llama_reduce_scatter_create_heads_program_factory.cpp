@@ -352,10 +352,7 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     const auto v_output_grid = v_output_shard_spec.grid;
     const auto& cross_device_semaphore = operation_attributes.cross_device_semaphore;
 
-    uint32_t input_shard_height = input_shard_spec.shape[0];
     uint32_t input_shard_width = input_shard_spec.shape[1];
-
-    uint32_t q_output_shard_height = q_output_shard_spec.shape[0];
 
     uint32_t ncores_input = (input_tensor_width + input_shard_width - 1) / input_shard_width;
 

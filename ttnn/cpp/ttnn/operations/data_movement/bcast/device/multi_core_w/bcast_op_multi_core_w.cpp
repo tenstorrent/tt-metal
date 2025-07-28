@@ -32,7 +32,6 @@ operation::ProgramWithCallbacks bcast_multi_core_w(
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
 
-    uint32_t num_tensor_tiles = NC * Ht * Wt;
     uint32_t num_btensor_tiles = NC * bH * bW / TILE_HW;
 
     uint32_t bnc1 = (bN * bC == 1) ? 1 : 0;
@@ -212,7 +211,6 @@ operation::ProgramWithCallbacks bcast_multi_core_w(
             uint32_t Wt = W / TILE_WIDTH;
             uint32_t Ht = H / TILE_HEIGHT;
 
-            uint32_t num_tensor_tiles = NC * Ht * Wt;
             uint32_t num_btensor_tiles = NC * bH * bW / TILE_HW;
 
             uint32_t bnc1 = (bN * bC == 1) ? 1 : 0;

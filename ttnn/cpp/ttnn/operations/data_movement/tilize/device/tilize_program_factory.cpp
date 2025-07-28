@@ -195,7 +195,6 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
 
     uint32_t row_size_bytes = a.padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
 
-    const uint32_t onetile = 1;
     if (core_range.size() > 0) {
         create_cb(
             tt::CBIndex::c_0, program, core_range, input_single_tile_size, single_block_size, input_cb_data_format);
@@ -281,7 +280,6 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
         third_dim = log_shape[-3] * log_shape[-4];
     }
 
-    uint32_t tile_width = output.tensor_spec().tile().get_width();
     uint32_t tile_height = output.tensor_spec().tile().get_height();
 
     uint32_t total_num_rows = a.logical_shape()[-2];
@@ -632,10 +630,6 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    uint32_t num_tiles = input.physical_volume() / TILE_HW;
-
-    tt::tt_metal::IDevice* device = input.device();
-
     auto shard_spec = input.shard_spec().value();
     uint32_t num_tiles_per_shard = shard_spec.shape[0] * shard_spec.shape[1] / TILE_HW;
     uint32_t num_tiles_per_row = shard_spec.shape[1] / TILE_WIDTH;
@@ -659,13 +653,10 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
         output_cb_data_format,
         output.buffer());
 
-    auto src_buffer = input.buffer();
-
     auto dst_buffer = output.buffer();
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(

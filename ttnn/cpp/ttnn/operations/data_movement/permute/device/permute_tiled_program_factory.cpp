@@ -102,11 +102,7 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_page_size = detail::tile_size(input_tensor);
 
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-
     uint32_t num_tiles = detail::num_tiles(tensor_return_value);
-
-    tt::tt_metal::IDevice* device = input_tensor.device();
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_pages_to_read = 2;
@@ -295,12 +291,8 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_page_size = detail::tile_size(input_tensor);
 
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-
     uint32_t num_tiles = detail::num_tiles(input_tensor);
     uint32_t num_output_tiles = detail::num_tiles(tensor_return_value);
-
-    tt::tt_metal::IDevice* device = input_tensor.device();
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t padding_cb_index = tt::CBIndex::c_1;
@@ -654,16 +646,11 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
             ? num_faces_w
             : (final_tile_real_x == 0 ? num_faces_w : ((final_tile_real_x + face_shape[1] - 1) / face_shape[1]));
 
-    uint32_t num_tiles = detail::num_tiles(input_tensor);
     uint32_t num_output_tiles = detail::num_tiles(tensor_return_value);
-
-    tt::tt_metal::IDevice* device = input_tensor.device();
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     uint32_t src2_cb_index = tt::CBIndex::c_2;
-
-    uint32_t output_cb_index = src0_cb_index;
 
     uint32_t num_input_pages_to_read = 2;
 

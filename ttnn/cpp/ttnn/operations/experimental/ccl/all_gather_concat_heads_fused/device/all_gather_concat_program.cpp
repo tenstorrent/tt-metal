@@ -76,7 +76,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     ttnn::MeshDevice* mesh_device = input_tensor.mesh_device();
     const bool enable_async_output_tensor = false;
 
-    const TensorSpec& output_intermediate_tensor_spec = temp_tensor.tensor_spec();
     auto ring_core_ranges = output_tensor.shard_spec().value().grid.ranges();
 
     bool is_first_chip = ring_index == 0;
@@ -167,8 +166,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     auto face_h = face_shape[0];
     auto face_w = face_shape[1];
     uint32_t first_phase = 1;
-
-    const uint32_t head_tiles = head_dim / tile_w;
 
     uint32_t element_size = temp_tensor.element_size();
     uint32_t sub_tile_line_bytes = face_w * element_size;

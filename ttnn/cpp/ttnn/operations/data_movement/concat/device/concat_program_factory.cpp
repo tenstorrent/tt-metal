@@ -168,7 +168,6 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
     CBHandle cb_output_transpose =
         create_circular_buffer(cb_output_transpose_id, out_total_tiles_width, tile_size, data_format, nullptr);
 
-    const bool is_rm_shard_orientation = output.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
     std::vector<uint32_t> compile_time_args_0 = {
         0,
         1,
@@ -258,8 +257,6 @@ tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_height_multi
     tt_metal::Program program = tt_metal::CreateProgram();
 
     tt_metal::IDevice* device = output.device();
-
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
     uint32_t num_output_rows = output.padded_shape()[-2];
     uint32_t num_input_tensors = input_tensors.size();
@@ -566,7 +563,6 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
 
     tt_metal::IDevice* device = output.device();
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     // CoreRangeSet all_cores({CoreRange(CoreCoord(0,0), compute_with_storage_grid_size)});
 
     uint32_t num_output_rows = output.padded_shape()[-1];

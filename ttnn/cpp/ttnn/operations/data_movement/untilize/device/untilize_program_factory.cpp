@@ -45,8 +45,6 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    IDevice* device = a.device();
-
     uint32_t ntiles = a.physical_volume() / TILE_HW;
     uint32_t ncores = sub_core_grids.num_cores();
     for (uint32_t core_id = ncores; core_id >= 1; core_id--) {
@@ -80,7 +78,6 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
     auto all_cores = num_cores_to_corerangeset_in_subcoregrids(cores[0], ncores, sub_core_grids, true);
     uint32_t nblocks_per_core = nblocks / ncores;
 
-    bool row_major = true;
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,
              num_output_rows_unpadded = 0;
     std::vector<CoreCoord> cores_with_rtargs;
@@ -752,7 +749,6 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    tt::tt_metal::IDevice* device = a.device();
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -1344,7 +1340,6 @@ operation::ProgramWithCallbacks untilize_single_core(
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    tt::tt_metal::IDevice* device = a.device();
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");

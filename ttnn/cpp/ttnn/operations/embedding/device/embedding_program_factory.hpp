@@ -84,7 +84,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::Buffer* a_buffer = a.buffer();
     tt_metal::Buffer* out_buffer = output.buffer();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -377,7 +376,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::Buffer* a_buffer = a.buffer();
     tt_metal::Buffer* out_buffer = output.buffer();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -629,8 +627,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     //                 Buffer Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    tt_metal::Buffer* a_buffer = a.buffer();
-
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -661,8 +657,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     uint32_t batch_size = a.logical_shape()[0];  // num rows
     uint32_t num_cols = a.logical_shape()[-1];
     uint32_t volume = num_cols * batch_size;
-
-    auto num_embedding_dims = weights.padded_shape()[-1];
 
     // setup problem and grid size
     uint32_t start_core_x = 0;
@@ -720,7 +714,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
 
     uint32_t output_cb_index = src0_cb_index;
 
-    bool input_stick_size_is_power_of_two = is_power_of_two_at_least_32(input_page_size);
     bool weight_stick_size_is_power_of_two = is_power_of_two_at_least_32(weight_page_size);
     uint32_t weight_log2_stick_size =
         weight_stick_size_is_power_of_two ? (std::uint32_t)std::log2(weight_page_size) : 0;

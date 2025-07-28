@@ -273,7 +273,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
     uint32_t unpadded_row_size_bytes = a.padded_shape()[-1] * a.element_size();     // Assuming bfloat16 dataformat
     uint32_t padded_row_size_bytes = output.padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
 
-    const uint32_t onetile = 1;
     if (core_range.size() > 0) {
         create_cb(
             tt::CBIndex::c_0, program, core_range, input_single_tile_size, single_block_size, input_cb_data_format);
@@ -360,7 +359,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
         third_dim = log_shape[-3] * log_shape[-4];
     }
 
-    uint32_t tile_width = output.tensor_spec().tile().get_width();
     uint32_t tile_height = output.tensor_spec().tile().get_height();
 
     uint32_t total_num_rows = a.logical_shape()[-2];
@@ -727,8 +725,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    IDevice* device = a.device();
-
     auto input_shard_spec = a.shard_spec().value();
     auto output_shard_spec = output.shard_spec().value();
 
@@ -768,7 +764,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
         output_cb_data_format,
         out_sharded ? output.buffer() : nullptr);
 
-    Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 

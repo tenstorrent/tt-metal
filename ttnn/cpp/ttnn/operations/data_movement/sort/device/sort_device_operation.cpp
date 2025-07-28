@@ -65,8 +65,6 @@ void SortDeviceOperation::validate_on_program_cache_miss(
     const uint32_t row_memory_size_bytes =
         (input_tensor_tile_size + value_tensor_tile_size + index_tensor_tile_size) * Wt;
 
-    const auto device = tensor_args.input_tensor.device();
-
     TT_FATAL(
         tensor_args.input_tensor.buffer() != nullptr,
         "Operands need to be allocated in buffers on the device. Buffer is null.");

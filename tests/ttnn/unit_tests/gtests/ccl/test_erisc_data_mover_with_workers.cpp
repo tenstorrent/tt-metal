@@ -393,7 +393,6 @@ bool RunWriteBWTest(
         local_output_buffers.push_back(output_buffer);
     }
 
-    bool output_is_dram = test_config.output_buffer_type == tt_metal::BufferType::DRAM;
     for (const auto& buffer_id : local_output_buffers) {
         tt_metal::detail::WriteToBuffer(buffer_id, all_zeros);
     }
@@ -403,7 +402,6 @@ bool RunWriteBWTest(
 
     uint32_t erisc_handshake_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
-    uint32_t chip0_next_buffer_address = erisc_handshake_address + 16;
     std::vector<uint32_t> chip0_edm_args = {erisc_handshake_address};
 
     ////////////////////////////////////////////////////////////////////////////

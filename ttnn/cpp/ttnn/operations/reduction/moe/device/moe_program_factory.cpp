@@ -21,7 +21,6 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(
 
     CoreRange core({0, 0}, {0, 0});
 
-    bool fp32_dest_acc_en = true;
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     tt::DataFormat topk_mask_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(topk_mask_tensor.dtype());
     tt::DataFormat expert_mask_cb_data_format =
@@ -49,7 +48,6 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(
     bool expert_mask_is_dram = expert_mask_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool out_is_dram = out_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    uint32_t num_input_tiles = input_tensor.physical_volume() / tt::constants::TILE_HW;
     uint32_t num_out_tiles = out_tensor.physical_volume() / tt::constants::TILE_HW;
     uint32_t scale_tiles = 1;
 

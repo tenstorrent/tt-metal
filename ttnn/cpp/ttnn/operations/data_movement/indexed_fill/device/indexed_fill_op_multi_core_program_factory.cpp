@@ -47,7 +47,6 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
             .set_page_size(cb_index, rounded_page_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    tt::DataFormat batch_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(batch_ids.dtype());
     uint32_t batch_page_size = round_up_to_mul32(b * sizeof(uint32_t));
     tt::tt_metal::CircularBufferConfig batch_cb_config =
         tt::tt_metal::CircularBufferConfig(2 * batch_page_size, {{batch_cb_index, cb_data_format}})
