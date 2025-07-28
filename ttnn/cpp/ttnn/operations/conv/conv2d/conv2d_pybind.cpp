@@ -267,6 +267,7 @@ void py_bind_conv2d(py::module& module) {
         py::kw_only(),
         py::arg("slice_type"),
         py::arg("num_slices"));
+    py_conv_slice_config.def(py::init<Conv2dSliceConfig::SliceType>(), py::kw_only(), py::arg("slice_type"));
     py_conv_slice_config.def_readwrite(
         "slice_type",
         &Conv2dSliceConfig::slice_type,
