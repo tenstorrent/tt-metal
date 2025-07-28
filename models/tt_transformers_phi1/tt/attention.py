@@ -54,6 +54,8 @@ class Attention(LightweightModule):
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
 
+        self.partial_rotary_factor = configuration.partial_rotary_factor
+
         self.arch_name = configuration.arch_name
         # TODO: Fix this once all-gather supports < tile_size
         if self.TG:
@@ -143,6 +145,8 @@ class Attention(LightweightModule):
         # Initialize bias tensors as None
         self.wqkv_bias_decode = None
         self.wqkv_bias_prefill = None
+        self.o_bias_decode = None
+        self.o_bias_prefill = None
 
         # Create combined QKV bias if present in state dict
         if f"{wq_str}.bias" in self.state_dict:
@@ -311,6 +315,22 @@ class Attention(LightweightModule):
             self.init_kv_cache(configuration, weight_cache_path)
 
         self.scale = self.head_dim**-0.5
+
+        self.o_bias_prefill = ttnn.as_tensor(
+            self.state_dict[f"{wo_str}.bias"],
+             device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT,
+            cache_file_name=cache_name("o_bias_prefill_sharded"),
+        )
+
+        self.o_bias_prefill = ttnn.reshape(
+                self.o_bias_prefill,
+                (1, 1, 1, self.o_bias_prefill.shape[-1]),
+                (1, 1, self.o_bias_prefill.shape[-2], self.o_bias_prefill.shape[-1]),
+            )
 
     def init_kv_cache(self, configuration, weight_cache_path):
         """
@@ -689,26 +709,44 @@ class Attention(LightweightModule):
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
 
-        q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
-            q_heads_1QSD_pre_rot,
+        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
+
+
+        # Partial rotary embedding
+        rotary_ndims = self.head_dim * self.partial_rotary_factor
+        query_rot, query_pass = ttnn.chunk(q_heads_1QSD_pre_rot, 2, dim=-1)
+        key_rot, key_pass = ttnn.chunk(k_heads_1KSD_pre_rot, 2, dim=-1)
+
+        q_heads_1QSD_rot = ttnn.experimental.rotary_embedding_llama(
+            query_rot,
             rot_mats[0],
             rot_mats[1],
             self.transformation_mats["prefill"],
             is_decode_mode=False,
         )
         ttnn.deallocate(q_heads_1QSD_pre_rot)
+        ttnn.deallocate(query_rot)
 
-        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
-            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
 
-        k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
-            k_heads_1KSD_pre_rot,
+        k_heads_1KSD_rot = ttnn.experimental.rotary_embedding_llama(
+            key_rot,
             rot_mats[0],
             rot_mats[1],
             self.transformation_mats["prefill"],
             is_decode_mode=False,
         )
-        ttnn.deallocate(k_heads_1KSD_pre_rot)
+        # ttnn.deallocate(k_heads_1KSD_pre_rot)
+        ttnn.deallocate(key_rot)
+
+        q_heads_1QSD = ttnn.concat(
+            [q_heads_1QSD_rot, query_pass], dim=-1
+        )  # Concatenate the rotary and pass-through parts of the query heads
+        k_heads_1KSD = ttnn.concat(
+            [k_heads_1KSD_rot, key_pass], dim=-1
+        )  # Concatenate the rotary and pass-through parts of the key heads 
+
+
 
         # Fill KV-Cache
         if kv_cache:
@@ -718,10 +756,18 @@ class Attention(LightweightModule):
 
         k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=self.kv_cache_dtype)
         ttnn.deallocate(k_heads_1KSD)
-
+ 
         # sharding k_fill to deal with update_cache memory limitation
         if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
-            k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
+            # k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
+
+            k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=self.kv_cache_dtype)
+            a,b = ttnn.chunk(k_heads_1KSD_pre_rot, 2, dim=-1)  
+            c = ttnn.concat([a, b], dim=-1)  
+            d = ttnn.concat([b, b], dim=-1)
+            k_fill = ttnn.interleaved_to_sharded(a, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
+
+
         else:
             k_fill = k_heads_1KSD_8b
 
@@ -846,6 +892,11 @@ class Attention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.ccl_dtype,
             )
+
+        ##增加dense的bias
+         # FIXME: surely ttnn.linear bias should work?
+        if self.o_bias_prefill is not None:
+            output_11SH = output_11SH + self.o_bias_prefill
 
         return output_11SH
 

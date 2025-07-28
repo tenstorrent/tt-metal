@@ -82,6 +82,7 @@ def test_attention_inference(
         model_args.rope_theta,
         model_args.rope_scaling_factor,
         model_args.orig_context_len,
+        model_args.partial_rotary_factor,
     )
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
 
@@ -141,7 +142,7 @@ def test_attention_inference(
         force_replicated=False if model_args.is_galaxy else True,
     )
 
-    tt_out = tt_model(
+    tt_out_tt = tt_model(
         attention_input,
         current_pos=None,
         rot_mats=rot_mats,
@@ -150,12 +151,12 @@ def test_attention_inference(
         page_table=page_table_tt,
     )
     tt_out = ttnn.to_torch(
-        tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape)
+        tt_out_tt, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape)
     )
     tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, max_seq_len, -1)  # [ batch, seq, hidden_dim]
     positions = torch.LongTensor(range(max_seq_len))
     freqs_cis_i = precompute_freqs_cis(
-        model_args.head_dim,
+        int(model_args.head_dim * model_args.partial_rotary_factor),
         model_args.max_seq_len * 2,
         model_args.rope_theta,
         model_args.rope_scaling_factor,

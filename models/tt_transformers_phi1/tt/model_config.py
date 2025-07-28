@@ -2048,7 +2048,7 @@ class ModelArgs:
             model = self.reference_transformer(wrap=False)
             layer = model.lm_head
             layer._load_state_dict = layer.load_state_dict
-            layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
+            layer.load_state_dict = lambda x: layer._load_state_dict(x)
             return layer
 
     def reference_transformer(self, wrap=True, load_checkpoint=False):
