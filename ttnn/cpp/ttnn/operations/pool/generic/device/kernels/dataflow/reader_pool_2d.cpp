@@ -79,43 +79,40 @@ template <
     bool is_large_kernel>
 ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
-    // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
-    // otherwise we can reduce 8 tiles at a time.
     constexpr uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
     constexpr uint32_t MAX_BYTES_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
     constexpr uint32_t in_ntiles_c = in_c / TILE_WIDTH;
     constexpr bool tilize_reconfig =
         in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 && (window_h * window_w) <= 16;
-    constexpr uint32_t max_write_inc =
-        wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover;  // in_cb is MAX_BYTES_PER_REDUCTION for wide reductions
+    constexpr uint32_t max_write_inc = wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover;
 
     uint32_t in_l1_write_addr_base = get_write_ptr(in_cb_id);
+
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
-        uint32_t read_bytes;
-        if constexpr (wide_reduction) {
-            DPRINT << "in_nbytes_c" << in_nbytes_c << ENDL();
-            const bool last_c_block = c_i == in_nblocks_c - 1;
-            read_bytes = !last_c_block ? MAX_BYTES_PER_REDUCTION : in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION;
-        } else {
-            read_bytes = in_nbytes_c;
-        }
+        uint32_t read_bytes = wide_reduction ? ((c_i == in_nblocks_c - 1) ? in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION
+                                                                          : MAX_BYTES_PER_REDUCTION)
+                                             : in_nbytes_c;
+
         uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
         uint32_t processed_sticks = 0;
         cb_reserve_back(in_cb_id, 1);
+
         for (uint32_t h = 0; h < window_h; ++h) {
-            auto process_h = [&](uint32_t w_offset, uint32_t w_multiple) __attribute__((always_inline)) {
-                const uint32_t stick_offset = ind + w_offset + h * in_w_padded;
+            for (uint32_t w = 0; w < window_w; ++w) {
+                const uint32_t stick_offset = ind + w + h * in_w_padded;
                 const uint32_t read_offset =
                     in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_BYTES_PER_REDUCTION);
-                noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes * w_multiple);
-                // if compute is using tilize_reconfig we will only untilize the needed number of tiles rather
-                // than the entire MAX_TILES_PER_REDUCTION, thus we use a different offset for the write address
+
+                noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes);
+
                 if constexpr (tilize_reconfig) {
-                    in_l1_write_addr += read_bytes * w_multiple;
+                    in_l1_write_addr += max_write_inc;
                 } else {
-                    in_l1_write_addr += max_write_inc * w_multiple;
+                    in_l1_write_addr += max_write_inc;
                 }
-                processed_sticks += w_multiple;
+
+                processed_sticks++;
+
                 if constexpr (is_large_kernel) {
                     if ((processed_sticks % max_sticks_for_reduction) == 0 ||
                         processed_sticks == total_elems_to_reduce) {
@@ -123,14 +120,8 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                         cb_push_back(in_cb_id, 1);
                         cb_reserve_back(in_cb_id, 1);
                         in_l1_write_addr = get_write_ptr(in_cb_id);
-                        // If next is last chunk, fill whole buffer with the init_value. note for max pool we do
-                        // not need to fill the CB for the partial chunk since as long as we have N>1 chunks we
-                        // are guaranteed that the junk data remaining from chunk N-1 will fill the entire CB and
-                        // cannot contain values greater than the max value, and if we have N=1 chunks we already
-                        // initialized the entire CB with the init value, but for avg pool we need to fill the
-                        // entire CB with the init value since the junk data will contribute to the average.
+
                         if constexpr (is_avg_pool) {
-                            // clear the in CB
                             if ((total_elems_to_reduce - processed_sticks) < max_sticks_for_reduction &&
                                 processed_sticks != total_elems_to_reduce) {
                                 clear_out_tiles<clear_value_cb_id, in_cb_ntiles>(
@@ -139,22 +130,9 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                         }
                     }
                 }
-            };
-
-            bool use_contiguous_read = !wide_reduction;
-            if constexpr (is_large_kernel) {
-                bool whole_row_remaining =
-                    window_w <= max_sticks_for_reduction - (processed_sticks % max_sticks_for_reduction);
-                use_contiguous_read &= whole_row_remaining;
-            }
-            if (use_contiguous_read) {  // read entire row as one chunk
-                process_h(0, window_w);
-            } else {  // read rows stick by stick
-                for (uint32_t w = 0; w < window_w; ++w) {
-                    process_h(w, 1);
-                }
             }
         }
+
         if constexpr (!is_large_kernel) {
             noc_async_read_barrier();
             cb_push_back(in_cb_id, 1);
