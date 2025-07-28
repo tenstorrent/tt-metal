@@ -8,6 +8,7 @@ import transformers
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.demos.sentence_bert.common import load_torch_model
 from models.demos.sentence_bert.reference.sentence_bert import BertEncoder
 from models.demos.sentence_bert.ttnn.common import custom_preprocessor
 from models.demos.sentence_bert.ttnn.ttnn_sentencebert_encoder import TtnnSentenceBertEncoder
@@ -21,13 +22,15 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
-def test_ttnn_sentence_bert_encoder(device, inputs):
-    transformers_model = transformers.AutoModel.from_pretrained(inputs[0]).encoder.eval()
+def test_ttnn_sentence_bert_encoder(device, inputs, model_location_generator):
+    target_prefix = f"encoder."
     config = transformers.BertConfig.from_pretrained(inputs[0])
     hidden_states = torch.randn(inputs[1], dtype=torch.bfloat16)
     attention_mask = torch.randn(inputs[2], dtype=torch.bfloat16)
     reference_module = BertEncoder(config).to(torch.bfloat16)
-    reference_module.load_state_dict(transformers_model.state_dict())
+    reference_module = load_torch_model(
+        reference_module, target_prefix=target_prefix, model_location_generator=model_location_generator
+    )
     reference_out = reference_module(
         hidden_states,
         attention_mask,
