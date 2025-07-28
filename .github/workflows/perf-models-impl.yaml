@@ -59,7 +59,6 @@ jobs:
               - models/demos/yolov7/tests/perf/
               # This is bad. This should be referencing .../tests directory
               - models/demos/wormhole/distilbert/tests/test_perf_distilbert.py
-              # This is bad. This should be referencing .../tests directory
               - models/demos/segformer/tests/perf/
               - models/demos/metal_BERT_large_11/tests/
               - models/demos/yolov8s_world/tests/perf/
