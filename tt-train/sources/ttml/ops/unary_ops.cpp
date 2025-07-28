@@ -14,6 +14,7 @@
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/operations.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::ops {
@@ -50,10 +51,11 @@ autograd::TensorPtr gelu(const autograd::TensorPtr& tensor) {
     return out;
 }
 
-autograd::TensorPtr silu(const autograd::TensorPtr& tensor) {
+autograd::TensorPtr silu(const autograd::TensorPtr& tensor, bool use_composite_bw) {
     auto out = autograd::create_tensor(ttnn::silu(tensor->get_value()));
-    autograd::GradFunction grad = [tensor, out]() {
-        auto res = ttnn::silu_bw(out->get_grad(), tensor->get_value());
+    autograd::GradFunction grad = [tensor, out, use_composite_bw]() {
+        auto res = use_composite_bw ? ttnn::silu_bw(out->get_grad(), tensor->get_value())
+                                    : ttml::metal::silu_bw(tensor->get_value(), out->get_grad());
         assert(res.size() == 1U && "Silu backward should return only one gradient");
         tensor->add_grad(res.front().value());
     };
