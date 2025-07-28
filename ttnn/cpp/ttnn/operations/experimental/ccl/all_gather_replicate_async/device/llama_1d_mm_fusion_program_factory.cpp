@@ -1744,6 +1744,7 @@ process_gather_in0_program_and_create_override_variables(
         in1_shard_width_in_tiles =
             in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1] / num_global_cb_receivers;
         in1_CB_tiles = in1_shard_height_in_tiles * in1_shard_width_in_tiles;
+        log_info(tt::LogOp, "LLONG FUSION: num_global_cb_receivers: {}", num_global_cb_receivers);
         log_info(tt::LogOp, "LLONG FUSION: in1_shard_height_in_tiles: {}", in1_shard_height_in_tiles);
         log_info(tt::LogOp, "LLONG FUSION: in1_shard_width_in_tiles: {}", in1_shard_width_in_tiles);
         log_info(tt::LogOp, "LLONG FUSION: in1_CB_tiles: {}", in1_CB_tiles);
@@ -1844,7 +1845,7 @@ process_gather_in0_program_and_create_override_variables(
     tt_metal::CircularBufferConfig sync_cb_config =
         tt_metal::CircularBufferConfig(sync_cb_size_bytes, {{sync_cb_index, DataFormat::UInt16}})
             .set_page_size(sync_cb_index, sync_cb_size_bytes);
-    // auto cb_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
+    auto cb_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
     log_info(tt::LogOp, "LLONG FUSION: sync_cb_size_bytes: {}", sync_cb_size_bytes);
 
     uint32_t sync_cb2_index = base_cb_index + 4;
@@ -1852,7 +1853,7 @@ process_gather_in0_program_and_create_override_variables(
     tt_metal::CircularBufferConfig sync_cb2_config =
         tt_metal::CircularBufferConfig(sync_cb2_size_bytes, {{sync_cb2_index, DataFormat::UInt16}})
             .set_page_size(sync_cb2_index, sync_cb2_size_bytes);
-    // auto cb2_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb2_config);
+    auto cb2_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb2_config);
     log_info(tt::LogOp, "LLONG FUSION: sync_cb2_size_bytes: {}", sync_cb2_size_bytes);
 
     uint32_t output_cb_index = base_cb_index + 5;  // output operands start at index 16
