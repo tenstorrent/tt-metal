@@ -454,7 +454,7 @@ using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
 // clang-format off
 /**
  * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
- * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
  *
  * Return value: void
  *
@@ -496,7 +496,7 @@ void SetRuntimeArgs(
 // clang-format off
 /**
  * Set multiple runtime arguments of a kernel at once during runtime, each mapping to a specific core. The runtime args for each core may be unique.
- * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
  *
  * Return value: void
  *
@@ -517,7 +517,7 @@ void SetRuntimeArgs(
 // clang-format off
 /**
  * Set runtime args for a kernel that are sent to the specified cores using the command queue. This API must be used when Asynchronous Command Queue Mode is enabled.
- * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
  *
  * Return value: void
  *
@@ -538,7 +538,7 @@ void SetRuntimeArgs(
 // clang-format off
 /**
  * Set multiple runtime arguments of a kernel using the command queue. Each core can have distinct arguments. This API must be used when Asynchronous Command Queue Mode is enabled.
- * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
  *
  * Return value: void
  * | Argument     | Description                                                            | Type                                                   | Valid Range                                                                | Required |
@@ -573,7 +573,7 @@ void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::S
 // clang-format off
 /**
  * Set common (shared by all cores) runtime args for a kernel that are sent to all cores during runtime. This API needs to be called to update the common runtime args for the kernel.
- * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
  *
  * Return value: void
  *
