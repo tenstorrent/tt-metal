@@ -32,7 +32,6 @@ MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::create(
     auto num = input.physical_volume() / H / W;
 
     uint32_t num_kernel_rows = num * Ht;
-    uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =

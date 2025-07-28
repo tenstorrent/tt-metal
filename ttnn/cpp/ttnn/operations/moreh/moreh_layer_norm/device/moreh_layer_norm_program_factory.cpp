@@ -33,7 +33,6 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     auto& mean_inp = tensor_args.mean;
     auto& rstd_inp = tensor_args.rstd;
 
-    auto& output_tensors = output_tensor;
     const std::optional<const Tensor>& output = output_tensor.at(0);
 
     std::optional<Tensor> mean = std::nullopt;

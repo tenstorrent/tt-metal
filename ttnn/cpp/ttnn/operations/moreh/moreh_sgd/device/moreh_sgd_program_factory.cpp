@@ -48,7 +48,6 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     tt::tt_metal::IDevice* device = param_in.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t units_to_divide = num * Ht * Wt;
-    uint32_t core_w = grid.x;
     uint32_t core_h = grid.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -164,14 +163,6 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const auto param_in_addr = param_in.buffer()->address();
-    const auto grad_addr = grad.buffer()->address();
-    const auto momentum_buffer_in_addr =
-        momentum_buffer_in.has_value() ? momentum_buffer_in.value().buffer()->address() : 0;
-
-    const auto param_out_addr = param_out.buffer()->address();
-    const auto momentum_buffer_out_addr =
-        momentum_buffer_out.has_value() ? momentum_buffer_out->buffer()->address() : 0;
 
     auto core_x_offset = 0;
     auto core_y_offset = 0;
