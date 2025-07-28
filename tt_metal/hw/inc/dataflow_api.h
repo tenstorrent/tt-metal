@@ -1919,6 +1919,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid(
     WAYPOINT("NAWW");
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, dst_noc_addr, size, -1);
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
+    while (!noc_cmd_buf_ready(noc, cmd_buf));
 
     ncrisc_noc_fast_write<noc_mode, true /* use_trid */, update_counter>(
         noc,
