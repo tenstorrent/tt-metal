@@ -420,6 +420,11 @@ void do_debug_test(
             mailbox_val = llrt::read_hex_vec_from_core(device->id(), virtual_core, buffer_base, sizeof(uint32_t))[0];
             msg_status = mailbox_val & 0xffff0000;
         }
+
+        // We didnt write what we wanted?
+        if ((mailbox_val & 0xffff) != msg_i) {
+            TT_THROW("Read msg i {} but expected {}", mailbox_val, msg_i);
+        }
     }
 
     std::cerr << "Check final value\n";
