@@ -106,7 +106,7 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
                 noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes);
 
                 if constexpr (tilize_reconfig) {
-                    in_l1_write_addr += max_write_inc;
+                    in_l1_write_addr += read_bytes;
                 } else {
                     in_l1_write_addr += max_write_inc;
                 }
