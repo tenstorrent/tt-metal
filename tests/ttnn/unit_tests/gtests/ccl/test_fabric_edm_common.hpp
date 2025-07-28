@@ -1423,14 +1423,14 @@ int TestLoopbackEntrypoint(
     chip_1_edm_builder.my_eth_channel = tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
     // Create the loopback connection on the second device
     chip_1_edm_builder.connect_to_downstream_edm(chip_1_edm_builder);
-    auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
+    ttnn::ccl::generate_edm_kernel(
         fabric_sender_program,
         sender_device,
         chip_0_edm_builder,
         eth_sender_core,
         DataMovementProcessor::RISCV_0,
         NOC::NOC_0);
-    auto remote_edm_kernel = ttnn::ccl::generate_edm_kernel(
+    ttnn::ccl::generate_edm_kernel(
         fabric_receiver_program,
         receiver_device,
         chip_1_edm_builder,
@@ -3656,8 +3656,7 @@ void Run1DFullMeshFabricPacketSendTest(
                 tt_metal::CircularBufferConfig cb_src1_config =
                     tt_metal::CircularBufferConfig(max_packet_payload_size_bytes, {{source_payload_cb_index, cb_df}})
                         .set_page_size(source_payload_cb_index, max_packet_payload_size_bytes);
-                CBHandle sender_workers_payload_cb =
-                    CreateCircularBuffer(program, worker_cores_per_axis[axis], cb_src1_config);
+                CreateCircularBuffer(program, worker_cores_per_axis[axis], cb_src1_config);
 
                 auto worker_kernel_id = tt_metal::CreateKernel(
                     program,
@@ -3850,8 +3849,6 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     size_t line_size = num_devices;
     size_t num_devices_with_workers = line_size;
     constexpr bool line_sync = false;
-
-    auto worker_core_logical = [](size_t link) { return CoreCoord(link, 0); };
 
     // static constexpr size_t source_l1_buffer_address = 1000000;
     static constexpr uint32_t source_payload_cb_index = tt::CB::c_in0;

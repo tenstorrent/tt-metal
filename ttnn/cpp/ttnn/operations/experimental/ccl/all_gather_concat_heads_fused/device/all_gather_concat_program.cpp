@@ -190,8 +190,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
             num_packet_headers_storable * packet_header_size_bytes * 2,
             {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    auto reserved_packet_header_CB_handle =
-        CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
+    CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
     uint32_t q_output_cb_index = tt::CBIndex::c_16;
     tt::tt_metal::CircularBufferConfig cb_q_output_config =
@@ -525,8 +524,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         }
         // in_tile_offset_by_batch is the start address of each batch in the input tile. The first face_h batches are in
         // the upper half of the tile and rest are in the lower half of tile.
-        uint32_t in_tile_offset_by_batch = get_tile_offset_by_batch(i, face_h, sub_tile_line_bytes);
-
         const auto& core = cores[i];
         std::vector<uint32_t> input_cores_x;
         std::vector<uint32_t> input_cores_y;

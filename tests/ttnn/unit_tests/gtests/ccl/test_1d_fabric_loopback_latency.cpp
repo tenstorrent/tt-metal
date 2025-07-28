@@ -274,7 +274,6 @@ inline void RunPersistent1dFabricLatencyTest(
                 ? "tests/ttnn/unit_tests/gtests/ccl/kernels/1D_fabric_loopback_latency_test_writer.cpp"
                 : "tests/ttnn/unit_tests/gtests/ccl/kernels/1D_fabric_latency_datapath_congestion_writer.cpp";
         if (is_latency_packet_sender) {
-            const auto& packet_spec = std::get<LatencyPacketTestWriterSpec>(writer_specs[i]->spec);
             bool payloads_are_mcast = false;
             bool sem_inc_only = writer_specs.at(i)->message_size_bytes == 0;
             worker_ct_args = {!sem_inc_only && enable_fused_payload_with_sync, payloads_are_mcast, sem_inc_only};

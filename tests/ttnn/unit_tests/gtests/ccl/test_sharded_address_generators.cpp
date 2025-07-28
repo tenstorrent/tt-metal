@@ -292,8 +292,6 @@ static void run_height_sharded_tensor_slice_indexer_get_page_location_test(
     std::size_t worker_shard_cores_start_x,
 
     bool is_shard_grid_transposed) {
-    const std::size_t global_num_pages = pages_per_shard_y * pages_per_shard_x * shard_grid_width * shard_grid_height;
-
     auto addrgen = address_generators::
         HeightShardedAddressGenerator<UnharvestedWormholeWorkerToNocLookup, address_generators::DeviceHeightShardSpec>(
             UnharvestedWormholeWorkerToNocLookup(),
@@ -444,8 +442,6 @@ static void run_block_sharded_tensor_slice_indexer_get_page_location_test(
     std::size_t worker_shard_cores_start_x,
 
     bool is_shard_grid_transposed) {
-    const std::size_t global_num_pages = pages_per_shard_y * pages_per_shard_x * shard_grid_width * shard_grid_height;
-
     auto addrgen = address_generators::
         BlockShardedAddressGenerator<UnharvestedWormholeWorkerToNocLookup, address_generators::DeviceBlockShardSpec>(
             UnharvestedWormholeWorkerToNocLookup(),

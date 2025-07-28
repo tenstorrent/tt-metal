@@ -159,12 +159,10 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
 
     const auto out_total_tiles_width = in0_total_tiles_width + in1_total_tiles_width;
     const uint32_t cb_concat_id = cb_inputs.size() + 3;
-    CBHandle cb_concat =
-        create_circular_buffer(cb_concat_id, out_total_tiles_width, bf16_tile_size, bf16_data_format, nullptr);
+    create_circular_buffer(cb_concat_id, out_total_tiles_width, bf16_tile_size, bf16_data_format, nullptr);
 
     const uint32_t cb_output_transpose_id = cb_inputs.size() + 4;
-    CBHandle cb_output_transpose =
-        create_circular_buffer(cb_output_transpose_id, out_total_tiles_width, tile_size, data_format, nullptr);
+    create_circular_buffer(cb_output_transpose_id, out_total_tiles_width, tile_size, data_format, nullptr);
 
     std::vector<uint32_t> compile_time_args_0 = {
         0,
@@ -368,39 +366,39 @@ tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_height_multi
         const auto [first, last] = split(cores, cores.size() - 1);
         const auto first_cores = cores_to_corerangeset(first);
         const auto last_cores = cores_to_corerangeset(last);
-        tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
             "reader_height_sharded_width_concat_two_tensors.cpp",
             first_cores,
             tt_metal::ReaderDataMovementConfig(compile_time_args_0));
-        tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
             "reader_height_sharded_width_concat_two_tensors.cpp",
             first_cores,
             tt_metal::WriterDataMovementConfig(compile_time_args_1));
 
-        tt_metal::KernelHandle unary_reader_kernel_last_id = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
             "reader_height_sharded_width_concat_two_tensors.cpp",
             last_cores,
             tt_metal::ReaderDataMovementConfig(compile_time_args_0_last));
-        tt_metal::KernelHandle unary_writer_kernel_last_id = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
             "reader_height_sharded_width_concat_two_tensors.cpp",
             last_cores,
             tt_metal::WriterDataMovementConfig(compile_time_args_1_last));
     } else {
-        tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
             "reader_height_sharded_width_concat_two_tensors.cpp",
             all_cores,
             tt_metal::ReaderDataMovementConfig(compile_time_args_0));
-        tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
             "reader_height_sharded_width_concat_two_tensors.cpp",
@@ -556,8 +554,6 @@ tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
 tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
     const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output) {
     tt_metal::Program program = tt_metal::CreateProgram();
-
-    tt_metal::IDevice* device = output.device();
 
     // CoreRangeSet all_cores({CoreRange(CoreCoord(0,0), compute_with_storage_grid_size)});
 
@@ -749,7 +745,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_pages * single_page_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_page_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t num_dims = output.padded_shape().rank();
 

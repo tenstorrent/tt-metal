@@ -368,7 +368,6 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
             single_block_size_row_arg = single_block_size;
             single_block_size_col_arg = single_block_size_cliff_col;
         }
-        uint32_t size_per_row_per_block = nblocks_per_core * TILE_WIDTH * a.element_size();
 
         //  reader runtime args
         std::vector<uint32_t> reader_rt_args = {
