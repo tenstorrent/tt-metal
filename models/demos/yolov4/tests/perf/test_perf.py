@@ -18,7 +18,9 @@ from models.utility_functions import run_for_wormhole_b0
 @run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 40960, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": 11 * 1024, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype",
@@ -28,7 +30,7 @@ from models.utility_functions import run_for_wormhole_b0
     "resolution, expected_inference_throughput",
     [
         ((320, 320), 103),
-        ((640, 640), 52),
+        ((640, 640), 47),
     ],
 )
 def test_perf_e2e_yolov4(device, batch_size, act_dtype, weight_dtype, resolution, expected_inference_throughput):
@@ -77,7 +79,7 @@ def test_perf_e2e_yolov4(device, batch_size, act_dtype, weight_dtype, resolution
 @pytest.mark.parametrize(
     "batch_size, model_name, expected_perf",
     [
-        (1, "yolov4", 93.6),
+        (1, "yolov4", 96.5),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

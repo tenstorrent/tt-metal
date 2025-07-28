@@ -24,21 +24,12 @@ MorehDotBackwardOperation::SingleCore::cached_program_t MorehDotBackwardOperatio
     const uint32_t core_num = 1;
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
-    uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
 
     auto* src0_buffer = output_grad.buffer();
     auto* src1_buffer = input.buffer();
     auto* src2_buffer = other.buffer();
 
     uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
-    float scaler = 1.0f;
-    const auto& a_shape_wo_padding = input.logical_shape();
-    uint32_t pad_h = a_shape_wo_padding[2] % tt::constants::TILE_HEIGHT;
-    uint32_t pad_w = a_shape_wo_padding[3] % tt::constants::TILE_WIDTH;
-    uint32_t mask_h = (pad_h == 0) ? (tt::constants::TILE_HEIGHT) : (pad_h);
-    uint32_t mask_w = (pad_w == 0) ? (tt::constants::TILE_WIDTH) : (pad_w);
-
-    IDevice* device = input.device();
 
     const uint32_t in0_t = 2;
     const uint32_t in1_t = 2;
@@ -144,8 +135,8 @@ void MorehDotBackwardOperation::SingleCore::override_runtime_arguments(
     const auto& output_grad_buffer = tensor_args.output_grad.buffer();
     const auto& input_buffer = tensor_args.input.buffer();
     const auto& other_buffer = tensor_args.other.buffer();
-    const auto input_grad_buffer = tensor_return_value.at(0);
-    const auto other_grad_buffer = tensor_return_value.at(1);
+    const auto& input_grad_buffer = tensor_return_value.at(0);
+    const auto& other_grad_buffer = tensor_return_value.at(1);
 
     {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, CoreCoord{0, 0});

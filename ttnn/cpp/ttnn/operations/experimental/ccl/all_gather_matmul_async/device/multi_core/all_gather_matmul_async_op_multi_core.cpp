@@ -49,7 +49,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
     const uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_direction_opt,
+    std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset,
 
     /* Matmul Params */
@@ -67,7 +71,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
         ttnn::ccl::InterleavedRingAllGatherTensorSlicer(input_tensor, all_gather_output_tensor, dim, ring_index);
     bool is_clockwise_direction = true;
     const uint32_t num_transfers = 4;
-    const uint32_t weight_tensor_width = weight_tensor.get_padded_shape()[3] / 32;
+    const uint32_t weight_tensor_width = weight_tensor.padded_shape()[3] / 32;
 
     ////////////////////////////////////////////////////////
 
@@ -144,7 +148,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
 
     // All Gather
     tt::tt_metal::operation::ProgramWithCallbacks program_with_callbacks =
-        ttnn::all_gather_async_minimal_interleaved_helper(
+        ttnn::all_gather_async_minimal_default_helper(
             matmul_program_with_callbacks->program,
             input_tensor,
             target_device,
@@ -157,8 +161,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_matmul_async_multi_core
             ring_index,
             topology,
             semaphore,
+            barrier_semaphore,
             sub_device_id,
             all_gather_fused_op_signaler,
+            chunks_per_sync,
+            num_workers_per_direction_opt,
+            num_buffers_per_channel,
             core_grid_offset);
     const auto all_gather_override_runtime_arguments_callback =
         program_with_callbacks.override_runtime_arguments_callback;

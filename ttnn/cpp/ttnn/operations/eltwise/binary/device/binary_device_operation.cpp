@@ -23,18 +23,17 @@ namespace utils {
             return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32)
                 || (a == DataType::UINT32 && b == DataType::UINT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::SUB:
+        case BinaryOpType::MUL:
             return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32)
                 || (a == DataType::UINT16 && b == DataType::UINT16));
-        case BinaryOpType::MUL:
-            return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::DIV:
         case BinaryOpType::RSUB:
         case BinaryOpType::LOGADDEXP:
         case BinaryOpType::LOGADDEXP2:
         case BinaryOpType::LDEXP:
         case BinaryOpType::SQUARED_DIFFERENCE:
-        case BinaryOpType::LOGICAL_AND:
         case BinaryOpType::BIAS_GELU: return (a == DataType::FLOAT32 && b == DataType::FLOAT32);
+        case BinaryOpType::LOGICAL_AND:
         case BinaryOpType::LOGICAL_OR:
         case BinaryOpType::LOGICAL_XOR:
         case BinaryOpType::GT:
@@ -116,7 +115,6 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
     using namespace tt::constants;
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
-    const auto& output_tensor = tensor_args.output_tensor;
 
     TT_FATAL(input_tensor_b.has_value() != attributes.scalar.has_value(), "Either the tensor b or scalar should be set");
 
@@ -177,7 +175,6 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
 void BinaryDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
-    const auto& output_tensor = tensor_args.output_tensor;
 
     const auto& input_shape_a = input_tensor_a.logical_shape();
 
@@ -298,9 +295,9 @@ tt::stl::hash::hash_t BinaryDeviceOperation::compute_program_hash(
 
     if (input_tensor_b.has_value()) {
         TT_ASSERT(
-            std::holds_alternative<DeviceStorage>(input_tensor_b->get_storage()),
+            std::holds_alternative<DeviceStorage>(input_tensor_b->storage()),
             "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(input_tensor_b->get_storage()));
+            tt::stl::get_active_type_name_in_variant(input_tensor_b->storage()));
 
         return operation::hash_operation<BinaryDeviceOperation>(
             attributes,

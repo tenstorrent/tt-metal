@@ -88,8 +88,6 @@ tt::tt_metal::HostBuffer create_host_buffer_from_bytes(
 
 flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     const Tensor& tensor, flatbuffers::FlatBufferBuilder& builder, std::vector<tt::tt_metal::HostBuffer>& buffers) {
-    const auto& storage = tensor.storage();
-
     TT_FATAL(buffers.empty(), "Buffers vector must be empty");
     TT_FATAL(!is_device_tensor(tensor), "Device tensors are not supported in flatbuffer serialization");
 
@@ -186,7 +184,8 @@ Tensor from_flatbuffer(
 
     tt::tt_metal::HostStorage host_storage{std::move(distributed_buffer)};
 
-    return Tensor(std::move(host_storage), spec, strategy);
+    // TODO (#25340): Add TensorTopology to flatbuffer serialization and properly handle it in deserialization.
+    return Tensor(std::move(host_storage), spec, strategy, tt::tt_metal::TensorTopology{});
 }
 
 }  // namespace ttnn

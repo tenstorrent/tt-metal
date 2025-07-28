@@ -17,16 +17,16 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
             return (
                 (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT32 && b == UINT32) ||
                 (a == UINT16 && b == UINT16));
-        case SUB: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
-        case MUL: return ((a == FLOAT32 && b == FLOAT32) || (a == UINT16 && b == UINT16));
+        case SUB:
+        case MUL: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
         case DIV:
         case RSUB:
         case LOGADDEXP:
         case LOGADDEXP2:
         case LDEXP:
         case SQUARED_DIFFERENCE:
-        case LOGICAL_AND:
         case BIAS_GELU: return (a == FLOAT32 && b == FLOAT32);
+        case LOGICAL_AND:
         case LOGICAL_OR:
         case LOGICAL_XOR:
         case GT:
@@ -417,9 +417,9 @@ tt::stl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
 
     if (input_tensor_b.has_value()) {
         TT_ASSERT(
-            std::holds_alternative<DeviceStorage>(input_tensor_b->get_storage()),
+            std::holds_alternative<DeviceStorage>(input_tensor_b->storage()),
             "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(input_tensor_b->get_storage()));
+            tt::stl::get_active_type_name_in_variant(input_tensor_b->storage()));
 
         return operation::hash_operation<BinaryNgDeviceOperation>(
             attributes,

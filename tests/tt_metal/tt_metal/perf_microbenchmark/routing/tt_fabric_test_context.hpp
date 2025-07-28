@@ -91,8 +91,10 @@ public:
             *this->fixture_, *this->fixture_, policies, sender_memory_map_, receiver_memory_map_);
     }
 
+    uint32_t get_randomized_master_seed() const { return fixture_->get_randomized_master_seed(); }
+
     void setup_devices() {
-        const auto& available_coords = this->fixture_->get_available_device_coordinates();
+        const auto& available_coords = this->fixture_->get_host_local_device_coordinates();
         for (const auto& coord : available_coords) {
             // Create TestDevice with access to memory maps
             test_devices_.emplace(
@@ -117,62 +119,67 @@ public:
             // patterns.
             this->set_global_sync(config.global_sync);
             this->set_global_sync_val(config.global_sync_val);
+            this->set_benchmark_mode(config.benchmark_mode);
 
             log_info(tt::LogTest, "Enabled sync, global sync value: {}, ", global_sync_val_);
+            log_info(tt::LogTest, "Ubenchmark mode: {}, ", benchmark_mode_);
 
             for (const auto& sync_sender : config.global_sync_configs) {
-                CoreCoord sync_core = sync_sender.core.value();
-                const auto& device_coord = this->fixture_->get_device_coord(sync_sender.device);
+                // currently initializing our sync configs to be on senders local to the current hos
+                if (fixture_->is_local_fabric_node_id(sync_sender.device)) {
+                    CoreCoord sync_core = sync_sender.core.value();
+                    const auto& device_coord = this->fixture_->get_device_coord(sync_sender.device);
 
-                // Track global sync core for this device
-                device_global_sync_cores_[sync_sender.device] = sync_core;
+                    // Track global sync core for this device
+                    device_global_sync_cores_[sync_sender.device] = sync_core;
 
-                // Process each already-split sync pattern for this device
-                for (const auto& sync_pattern : sync_sender.patterns) {
-                    // Convert sync pattern to TestTrafficSenderConfig format
-                    const auto& dest = sync_pattern.destination.value();
+                    // Process each already-split sync pattern for this device
+                    for (const auto& sync_pattern : sync_sender.patterns) {
+                        // Convert sync pattern to TestTrafficSenderConfig format
+                        const auto& dest = sync_pattern.destination.value();
 
-                    // Patterns are now already split into single-direction hops
-                    auto single_direction_hops = dest.hops.value();
+                        // Patterns are now already split into single-direction hops
+                        auto single_direction_hops = dest.hops.value();
 
-                    TrafficParameters sync_traffic_parameters = {
-                        .chip_send_type = sync_pattern.ftype.value(),
-                        .noc_send_type = sync_pattern.ntype.value(),
-                        .payload_size_bytes = sync_pattern.size.value(),
-                        .num_packets = sync_pattern.num_packets.value(),
-                        .atomic_inc_val = sync_pattern.atomic_inc_val,
-                        .atomic_inc_wrap = sync_pattern.atomic_inc_wrap,
-                        .mcast_start_hops = sync_pattern.mcast_start_hops,
-                        .seed = config.seed,
-                        .topology = config.fabric_setup.topology,
-                        .routing_type = config.fabric_setup.routing_type.value(),
-                        .mesh_shape = this->fixture_->get_mesh_shape(),
-                    };
+                        TrafficParameters sync_traffic_parameters = {
+                            .chip_send_type = sync_pattern.ftype.value(),
+                            .noc_send_type = sync_pattern.ntype.value(),
+                            .payload_size_bytes = sync_pattern.size.value(),
+                            .num_packets = sync_pattern.num_packets.value(),
+                            .atomic_inc_val = sync_pattern.atomic_inc_val,
+                            .atomic_inc_wrap = sync_pattern.atomic_inc_wrap,
+                            .mcast_start_hops = sync_pattern.mcast_start_hops,
+                            .seed = config.seed,
+                            .topology = config.fabric_setup.topology,
+                            .routing_type = config.fabric_setup.routing_type.value(),
+                            .mesh_shape = this->fixture_->get_mesh_shape(),
+                        };
 
-                    // For sync patterns, we use a dummy destination core and fixed sync address
-                    // The actual sync will be handled by atomic operations
-                    CoreCoord dummy_dst_core = {0, 0};  // Sync doesn't need specific dst core
-                    uint32_t sync_address =
-                        this->sender_memory_map_.get_global_sync_address();  // Hard-coded sync address
-                    uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(
-                        sync_sender.device, sync_core);  // populate the master coord
+                        // For sync patterns, we use a dummy destination core and fixed sync address
+                        // The actual sync will be handled by atomic operations
+                        CoreCoord dummy_dst_core = {0, 0};  // Sync doesn't need specific dst core
+                        uint32_t sync_address =
+                            this->sender_memory_map_.get_global_sync_address();  // Hard-coded sync address
+                        uint32_t dst_noc_encoding =
+                            this->fixture_->get_worker_noc_encoding(sync_core);  // populate the master coord
 
-                    // for 2d mcast case
-                    auto dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
-                        sync_sender.device, single_direction_hops, sync_traffic_parameters.chip_send_type);
+                        // for 2d mcast case
+                        auto dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
+                            sync_sender.device, single_direction_hops, sync_traffic_parameters.chip_send_type);
 
-                    TestTrafficSenderConfig sync_config = {
-                        .parameters = sync_traffic_parameters,
-                        .src_node_id = sync_sender.device,
-                        .dst_node_ids = dst_node_ids,   // Empty for multicast sync
-                        .hops = single_direction_hops,  // Use already single-direction hops
-                        .dst_logical_core = dummy_dst_core,
-                        .target_address = sync_address,
-                        .atomic_inc_address = sync_address,
-                        .dst_noc_encoding = dst_noc_encoding};
+                        TestTrafficSenderConfig sync_config = {
+                            .parameters = sync_traffic_parameters,
+                            .src_node_id = sync_sender.device,
+                            .dst_node_ids = dst_node_ids,   // Empty for multicast sync
+                            .hops = single_direction_hops,  // Use already single-direction hops
+                            .dst_logical_core = dummy_dst_core,
+                            .target_address = sync_address,
+                            .atomic_inc_address = sync_address,
+                            .dst_noc_encoding = dst_noc_encoding};
 
-                    // Add sync config to the master sender on this device
-                    this->test_devices_.at(device_coord).add_sender_sync_config(sync_core, std::move(sync_config));
+                        // Add sync config to the master sender on this device
+                        this->test_devices_.at(device_coord).add_sender_sync_config(sync_core, std::move(sync_config));
+                    }
                 }
             }
 
@@ -230,6 +237,7 @@ public:
                     .dst_logical_core = dest.core,
                     .target_address = dest.target_address,
                     .atomic_inc_address = dest.atomic_inc_address,
+                    .link_id = sender.link_id,
                 };
 
                 if (dest.device.has_value()) {
@@ -261,19 +269,23 @@ public:
 
         // clear the global sync cores in device_global_sync_cores_ using zero_out_buffer_on_cores
         for (const auto& [device_id, global_sync_core] : device_global_sync_cores_) {
-            const auto& device_coord = fixture_->get_device_coord(device_id);
-            std::vector<CoreCoord> cores = {global_sync_core};
-            // zero out the global sync address for global sync core
-            fixture_->zero_out_buffer_on_cores(device_coord, cores, global_sync_address, global_sync_memory_size);
-            // also need to zero out the local sync address for global sync core
-            fixture_->zero_out_buffer_on_cores(device_coord, cores, local_sync_address, global_sync_memory_size);
+            if (fixture_->is_local_fabric_node_id(device_id)) {
+                const auto& device_coord = fixture_->get_device_coord(device_id);
+                std::vector<CoreCoord> cores = {global_sync_core};
+                // zero out the global sync address for global sync core
+                fixture_->zero_out_buffer_on_cores(device_coord, cores, global_sync_address, global_sync_memory_size);
+                // also need to zero out the local sync address for global sync core
+                fixture_->zero_out_buffer_on_cores(device_coord, cores, local_sync_address, global_sync_memory_size);
+            }
         }
 
         // clear the local sync cores in device_local_sync_cores_ using zero_out_buffer_on_cores
         for (const auto& [device_id, local_sync_cores] : device_local_sync_cores_) {
-            const auto& device_coord = fixture_->get_device_coord(device_id);
-            fixture_->zero_out_buffer_on_cores(
-                device_coord, local_sync_cores, local_sync_address, local_sync_memory_size);
+            if (fixture_->is_local_fabric_node_id(device_id)) {
+                const auto& device_coord = fixture_->get_device_coord(device_id);
+                fixture_->zero_out_buffer_on_cores(
+                    device_coord, local_sync_cores, local_sync_address, local_sync_memory_size);
+            }
         }
 
         log_info(
@@ -304,7 +316,7 @@ public:
 
     void launch_programs() { fixture_->run_programs(); }
 
-    void wait_for_prorgams() { fixture_->wait_for_programs(); }
+    void wait_for_programs() { fixture_->wait_for_programs(); }
 
     void validate_results() {
         for (const auto& [_, test_device] : test_devices_) {
@@ -353,9 +365,9 @@ public:
         }
 
         // Write detailed header
-        csv_stream
-            << "test_name,topology,num_devices,device,direction,total_traffic_count,num_packets,packet_size,cycles,"
-               "bandwidth_gb_s,packets_per_second\n";
+        csv_stream << "test_name,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,"
+                      "packet_size,cycles,"
+                      "bandwidth_gb_s,packets_per_second\n";
         csv_stream.close();
 
         log_info(tt::LogTest, "Initialized CSV file: {}", csv_file_path_.string());
@@ -373,7 +385,8 @@ public:
         }
 
         // Write summary header
-        summary_csv_stream << "test_name,topology,num_devices,packet_size,cycles,bandwidth_gb_s,packets_per_second\n";
+        summary_csv_stream
+            << "test_name,topology,num_devices,num_links,packet_size,cycles,bandwidth_gb_s,packets_per_second\n";
         summary_csv_stream.close();
 
         log_info(tt::LogTest, "Initialized summary CSV file: {}", csv_summary_file_path_.string());
@@ -405,8 +418,6 @@ private:
         // This function now assumes all allocation has been done by the GlobalAllocator.
         // It is responsible for taking the planned config and setting up the TestDevice objects.
         const auto& src_node_id = traffic_config.src_node_id;
-        const auto& src_coord = this->fixture_->get_device_coord(src_node_id);
-        auto& src_test_device = this->test_devices_.at(src_coord);
 
         CoreCoord src_logical_core = traffic_config.src_logical_core.value();
         CoreCoord dst_logical_core = traffic_config.dst_logical_core.value();
@@ -414,19 +425,22 @@ private:
         uint32_t atomic_inc_address = traffic_config.atomic_inc_address.value_or(0);
 
         std::vector<FabricNodeId> dst_node_ids;
-        std::unordered_map<RoutingDirection, uint32_t> hops;
+        std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops = std::nullopt;
 
         if (traffic_config.hops.has_value()) {
-            hops = traffic_config.hops.value();
+            hops = traffic_config.hops;
             dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
-                traffic_config.src_node_id, hops, traffic_config.parameters.chip_send_type);
+                traffic_config.src_node_id, hops.value(), traffic_config.parameters.chip_send_type);
         } else {
             dst_node_ids = traffic_config.dst_node_ids.value();
-            hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
+
+            // assign hops for 2d LL and 1D
+            if (!(fixture_->use_dynamic_routing())) {
+                hops = this->fixture_->get_hops_to_chip(src_node_id, dst_node_ids[0]);
+            }
         }
 
-        const auto& dst_rep_coord = this->fixture_->get_device_coord(dst_node_ids[0]);
-        uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(dst_rep_coord, dst_logical_core);
+        uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(dst_logical_core);
         uint32_t sender_id = fixture_->get_worker_id(traffic_config.src_node_id, src_logical_core);
 
         // Get payload buffer size from receiver memory map (cached during initialization)
@@ -441,7 +455,8 @@ private:
             .target_address = target_address,
             .atomic_inc_address = atomic_inc_address,
             .dst_noc_encoding = dst_noc_encoding,
-            .payload_buffer_size = payload_buffer_size};
+            .payload_buffer_size = payload_buffer_size,
+            .link_id = traffic_config.link_id};
 
         TestTrafficReceiverConfig receiver_config = {
             .parameters = traffic_config.parameters,
@@ -450,10 +465,17 @@ private:
             .atomic_inc_address = atomic_inc_address,
             .payload_buffer_size = payload_buffer_size};
 
-        src_test_device.add_sender_traffic_config(src_logical_core, std::move(sender_config));
+        if (fixture_->is_local_fabric_node_id(src_node_id)) {
+            const auto& src_coord = this->fixture_->get_device_coord(src_node_id);
+            auto& src_test_device = this->test_devices_.at(src_coord);
+            src_test_device.add_sender_traffic_config(src_logical_core, std::move(sender_config));
+        }
+
         for (const auto& dst_node_id : dst_node_ids) {
-            const auto& dst_coord = this->fixture_->get_device_coord(dst_node_id);
-            this->test_devices_.at(dst_coord).add_receiver_traffic_config(dst_logical_core, receiver_config);
+            if (fixture_->is_local_fabric_node_id(dst_node_id)) {
+                const auto& dst_coord = this->fixture_->get_device_coord(dst_node_id);
+                this->test_devices_.at(dst_coord).add_receiver_traffic_config(dst_logical_core, receiver_config);
+            }
         }
     }
 
@@ -462,8 +484,7 @@ private:
         uint32_t l1_unreserved_base = this->fixture_->get_l1_unreserved_base();
         uint32_t l1_unreserved_size = this->fixture_->get_l1_unreserved_size();
         uint32_t l1_alignment = this->fixture_->get_l1_alignment();
-        uint32_t default_payload_chunk_size = allocation_policies_.default_payload_chunk_size.value_or(
-            tt::tt_fabric::fabric_tests::detail::DEFAULT_PAYLOAD_CHUNK_SIZE_BYTES);
+        uint32_t default_payload_chunk_size = allocation_policies_.default_payload_chunk_size;
         uint32_t max_configs_per_core = std::max(
             allocation_policies_.sender_config.max_configs_per_core,
             allocation_policies_.receiver_config.max_configs_per_core);
@@ -494,7 +515,11 @@ private:
             // Process regular senders only (ignore sync senders)
             for (const auto& [core_coord, sender] : test_device.get_senders()) {
                 for (const auto& [config, fabric_conn_idx] : sender.get_configs()) {
-                    trace_traffic_path(src_node_id, config);
+                    // trace only one of the links, use link 0 as default
+                    uint32_t link_id = config.link_id.value_or(0);
+                    if (link_id == 0) {
+                        trace_traffic_path(src_node_id, config);
+                    }
                 }
             }
         }
@@ -531,13 +556,24 @@ private:
         const auto& hops = config.hops;
 
         // Find the initial direction and total hops for ring traversal
-        for (const auto& [initial_direction, hop_count] : hops) {
+        for (const auto& [initial_direction, hop_count] : *hops) {
             if (hop_count == 0) {
                 continue;
             }
 
-            // Use the shared ring traversal helper from fixture
-            auto ring_path = fixture_->trace_wrap_around_mesh_ring_path(src_node_id, initial_direction, hop_count);
+            // Use the appropriate ring traversal helper based on mesh type
+            std::vector<std::pair<FabricNodeId, RoutingDirection>> ring_path;
+
+            // Check if this is a wrap-around mesh
+            bool is_wrap_around = fixture_->wrap_around_mesh(src_node_id);
+
+            if (is_wrap_around) {
+                // Use the existing wrap-around mesh logic
+                ring_path = fixture_->trace_wrap_around_mesh_ring_path(src_node_id, initial_direction, hop_count);
+            } else {
+                // Use the new non wrap-around mesh logic
+                ring_path = fixture_->trace_ring_path(src_node_id, initial_direction, hop_count);
+            }
 
             // Count traffic at each device boundary
             // ring_path contains (destination_node, direction_to_reach_it)
@@ -551,7 +587,7 @@ private:
     }
 
     void trace_line_or_mesh_traffic_path(const FabricNodeId& src_node_id, const TestTrafficSenderConfig& config) {
-        auto remaining_hops = config.hops;  // Make a copy to modify
+        auto remaining_hops = config.hops.value();  // Make a copy to modify
         FabricNodeId current_node = src_node_id;
 
         // For mesh topology, use dimension-order routing
@@ -661,34 +697,27 @@ private:
 
                 uint64_t core_cycles = device_core_cycles_[device_node_id][core];
 
-                // Get unique directions this core sends traffic to
-                std::set<RoutingDirection> core_directions;
+                // Get unique (direction, link_id) pairs this core sends traffic to
+                std::set<std::pair<RoutingDirection, uint32_t>> core_direction_links;
                 for (const auto& [config, fabric_conn_idx] : sender.get_configs()) {
-                    RoutingDirection direction = fixture_->get_forwarding_direction(config.hops);
-                    core_directions.insert(direction);
+                    RoutingDirection direction = fixture_->get_forwarding_direction(*config.hops);
+                    uint32_t link_id = config.link_id.value_or(0);  // Default to link 0 if not specified
+                    core_direction_links.insert({direction, link_id});
                 }
 
-                // Add cycles to each direction this core sends to
-                // Only one core per device should send in each direction
-                for (const auto& direction : core_directions) {
-                    if (device_direction_cycles_[device_node_id].count(direction) > 0) {
+                // Add cycles to each (direction, link_id) pair this core sends to
+                // Only one core per device should send in each (direction, link) combination
+                for (const auto& [direction, link_id] : core_direction_links) {
+                    if (device_direction_cycles_[device_node_id][direction].count(link_id) > 0) {
                         TT_THROW(
-                            "Multiple cores on device {} are sending traffic in direction {}. "
-                            "Only one core per device should send in each direction.",
+                            "Multiple cores on device {} are sending traffic in direction {} on link {}. "
+                            "Only one core per device should send in each (direction, link) combination.",
                             device_node_id.chip_id,
-                            direction);
+                            direction,
+                            link_id);
                     }
-                    device_direction_cycles_[device_node_id][direction] = core_cycles;
+                    device_direction_cycles_[device_node_id][direction][link_id] = core_cycles;
                 }
-            }
-        }
-
-        // Print direction-based results
-        log_debug(tt::LogTest, "Performance profiling by direction:");
-        // Results are automatically sorted by device ID and direction
-        for (const auto& [device_id, direction_cycles] : device_direction_cycles_) {
-            for (const auto& [direction, cycles] : direction_cycles) {
-                log_debug(tt::LogTest, "Device {} Direction {} Cycles: {}", device_id.chip_id, direction, cycles);
             }
         }
     }
@@ -712,108 +741,114 @@ private:
         uint32_t device_freq = std::numeric_limits<uint32_t>::max();
         std::set<uint32_t> num_devices_set;
 
-        for (const auto& [device_id, direction_cycles_map] : device_direction_cycles_) {
-            for (const auto& [direction, cycles] : direction_cycles_map) {
-                if (cycles == 0) {
-                    continue;  // Skip to avoid division by zero
-                }
-
-                // Get traffic count for this device and direction
-                if (outgoing_traffic_.count(device_id) > 0 && outgoing_traffic_[device_id].count(direction) > 0) {
-                    total_traffic_count = outgoing_traffic_[device_id][direction];
-                }
-
-                // calculate the max for summary info
-                max_cycles = std::max(max_cycles, cycles);
-                max_traffic_count = std::max(max_traffic_count, total_traffic_count);
-
-                // Find sender configs that send in this direction to get payload size and packet count
-                for (const auto& [device_coord, test_device] : test_devices_) {
-                    if (test_device.get_node_id() != device_id) {
-                        continue;
+        for (const auto& [device_id, direction_map] : device_direction_cycles_) {
+            for (const auto& [direction, link_map] : direction_map) {
+                for (const auto& [link_id, cycles] : link_map) {
+                    if (cycles == 0) {
+                        continue;  // Skip to avoid division by zero
                     }
 
-                    bool found_connected_core = false;
-                    for (const auto& [core, sender] : test_device.get_senders()) {
-                        for (const auto& [config, fabric_conn_idx] : sender.get_configs()) {
-                            RoutingDirection config_direction = fixture_->get_forwarding_direction(config.hops);
-                            if (config_direction == direction) {
-                                uint32_t payload_size_bytes = config.parameters.payload_size_bytes;
-                                num_packets = config.parameters.num_packets;
-                                total_bytes =
-                                    static_cast<uint64_t>(payload_size_bytes) * num_packets * total_traffic_count;
-                                total_packets = static_cast<uint64_t>(num_packets) * total_traffic_count;
-                                packet_size = payload_size_bytes;
-                                found_connected_core = true;
+                    // Get traffic count for this device and direction
+                    if (outgoing_traffic_.count(device_id) > 0 && outgoing_traffic_[device_id].count(direction) > 0) {
+                        total_traffic_count = outgoing_traffic_[device_id][direction];
+                    }
+
+                    // calculate the max for summary info
+                    max_cycles = std::max(max_cycles, cycles);
+                    max_traffic_count = std::max(max_traffic_count, total_traffic_count);
+
+                    // Find sender configs that send in this direction and link to get payload size and packet count
+                    for (const auto& [device_coord, test_device] : test_devices_) {
+                        if (test_device.get_node_id() != device_id) {
+                            continue;
+                        }
+
+                        bool found_connected_core = false;
+                        for (const auto& [core, sender] : test_device.get_senders()) {
+                            for (const auto& [config, fabric_conn_idx] : sender.get_configs()) {
+                                RoutingDirection config_direction = fixture_->get_forwarding_direction(config.hops.value());
+                                uint32_t config_link_id = config.link_id.value_or(0);
+                                if (config_direction == direction && config_link_id == link_id) {
+                                    uint32_t payload_size_bytes = config.parameters.payload_size_bytes;
+                                    num_packets = config.parameters.num_packets;
+                                    total_bytes =
+                                        static_cast<uint64_t>(payload_size_bytes) * num_packets * total_traffic_count;
+                                    total_packets = static_cast<uint64_t>(num_packets) * total_traffic_count;
+                                    packet_size = payload_size_bytes;
+                                    found_connected_core = true;
+                                    break;
+                                }
+                            }
+                            if (found_connected_core) {
                                 break;
                             }
                         }
-                        if (found_connected_core) {
-                            break;
+                    }
+
+                    // Calculate bandwidth in Bytes/cycle and convert to GB/s
+                    const auto physical_chip_id = tt::tt_metal::MetalContext::instance()
+                                                      .get_control_plane()
+                                                      .get_physical_chip_id_from_fabric_node_id(device_id);
+                    const auto device_frequency_mhz =
+                        tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(physical_chip_id);
+                    uint32_t device_frequency_hz = device_frequency_mhz * 1e6;
+                    // use min frequency (in real senario we will have the same freq)
+                    device_freq = std::min(device_freq, device_frequency_hz);
+                    const auto duration_seconds =
+                        static_cast<double>(cycles) / static_cast<double>(device_frequency_hz);
+
+                    double bandwidth_bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(cycles);
+                    double bandwidth_gb_s = (bandwidth_bytes_per_cycle * device_frequency_mhz) / 1e3;
+                    double packets_per_second = static_cast<double>(total_packets) / duration_seconds;
+
+                    // TODO: need to fugure out a better way to show the number of devices in a test.
+                    // Ex, we compute number of devices for linear topology test as NS and EW seperated.
+                    // But in a mesh topology setup, how do we run linear topology and still show seperate
+                    // number of devices? There will be even more choices for arbitary unicast setups.
+                    uint32_t num_devices = 0;
+                    const auto mesh_shape = fixture_->get_mesh_shape();
+                    const auto topology = fixture_->get_topology();
+                    if (topology == Topology::Linear) {
+                        if (direction == RoutingDirection::N or direction == RoutingDirection::S) {
+                            num_devices = mesh_shape[0];
+                        } else {
+                            num_devices = mesh_shape[1];
                         }
+                    } else if (topology == Topology::Ring) {
+                        num_devices = 2 * (mesh_shape[0] - 1 + mesh_shape[1] - 1);
+                    } else if (topology == Topology::Mesh) {
+                        num_devices = mesh_shape[0] * mesh_shape[1];
                     }
+                    // save all possible num devices
+                    num_devices_set.insert(num_devices);
+
+                    log_info(
+                        tt::LogTest,
+                        "Device {} Direction {} Link {} Bandwidth: {:.6f} GB/s (Total Packets: {}, Packet Size: {}, "
+                        "Total Bytes: "
+                        "{}, "
+                        "Cycles: {})",
+                        device_id.chip_id,
+                        direction,
+                        link_id,
+                        bandwidth_gb_s,
+                        total_packets,
+                        packet_size,
+                        total_bytes,
+                        cycles);
+
+                    // Store result for CSV generation (using GB/s)
+                    bandwidth_results_.emplace_back(BandwidthResult{
+                        .num_devices = num_devices,
+                        .device_id = device_id.chip_id,
+                        .direction = direction,
+                        .total_traffic_count = total_traffic_count,
+                        .num_packets = num_packets,
+                        .packet_size = packet_size,
+                        .cycles = cycles,
+                        .bandwidth_gb_s = bandwidth_gb_s,
+                        .packets_per_second = packets_per_second});
                 }
-
-                // Calculate bandwidth in Bytes/cycle and convert to GB/s
-                const auto physical_chip_id =
-                    tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_chip_id_from_fabric_node_id(
-                        device_id);
-                const auto device_frequency_mhz =
-                    tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(physical_chip_id);
-                uint32_t device_frequency_hz = device_frequency_mhz * 1e6;
-                // use min frequency (in real senario we will have the same freq)
-                device_freq = std::min(device_freq, device_frequency_hz);
-                const auto duration_seconds = static_cast<double>(cycles) / static_cast<double>(device_frequency_hz);
-
-                double bandwidth_bytes_per_cycle = static_cast<double>(total_bytes) / static_cast<double>(cycles);
-                double bandwidth_gb_s = (bandwidth_bytes_per_cycle * device_frequency_mhz) / 1e3;
-                double packets_per_second = static_cast<double>(total_packets) / duration_seconds;
-
-                // TODO: need to fugure out a better way to show the number of devices in a test.
-                // Ex, we compute number of devices for linear topology test as NS and EW seperated.
-                // But in a mesh topology setup, how do we run linear topology and still show seperate
-                // number of devices? There will be even more choices for arbitary unicast setups.
-                uint32_t num_devices = 0;
-                const auto mesh_shape = fixture_->get_mesh_shape();
-                const auto topology = fixture_->get_topology();
-                if (topology == Topology::Linear) {
-                    if (direction == RoutingDirection::N or direction == RoutingDirection::S) {
-                        num_devices = mesh_shape[0];
-                    } else {
-                        num_devices = mesh_shape[1];
-                    }
-                } else if (topology == Topology::Ring) {
-                    num_devices = 2 * (mesh_shape[0] - 1 + mesh_shape[1] - 1);
-                } else if (topology == Topology::Mesh) {
-                    num_devices = mesh_shape[0] * mesh_shape[1];
-                }
-                // save all possible num devices
-                num_devices_set.insert(num_devices);
-
-                log_info(
-                    tt::LogTest,
-                    "Device {} Direction {} Bandwidth: {:.6f} GB/s (Total Packets: {}, Packet Size: {}, Total Bytes: "
-                    "{}, "
-                    "Cycles: {})",
-                    device_id.chip_id,
-                    direction,
-                    bandwidth_gb_s,
-                    total_packets,
-                    packet_size,
-                    total_bytes,
-                    cycles);
-
-                // Store result for CSV generation (using GB/s)
-                bandwidth_results_.emplace_back(BandwidthResult{
-                    .num_devices = num_devices,
-                    .device_id = device_id.chip_id,
-                    .direction = direction,
-                    .total_traffic_count = total_traffic_count,
-                    .num_packets = num_packets,
-                    .packet_size = packet_size,
-                    .cycles = cycles,
-                    .bandwidth_gb_s = bandwidth_gb_s,
-                    .packets_per_second = packets_per_second});
             }
         }
 
@@ -844,7 +879,7 @@ private:
         // Write data rows (header already written in initialize_csv_file)
         for (const auto& result : bandwidth_results_) {
             csv_stream << config.name << "," << magic_enum::enum_name(config.fabric_setup.topology) << ","
-                       << result.num_devices << "," << result.device_id << ","
+                       << result.num_devices << "," << result.device_id << "," << config.fabric_setup.num_links << ","
                        << magic_enum::enum_name(result.direction) << "," << result.total_traffic_count << ","
                        << result.num_packets << "," << result.packet_size << "," << result.cycles << "," << std::fixed
                        << std::setprecision(6) << result.bandwidth_gb_s << "," << std::fixed << std::setprecision(3)
@@ -875,9 +910,10 @@ private:
             num_devices_str += "]";
 
             summary_csv_stream << config.name << "," << magic_enum::enum_name(config.fabric_setup.topology) << ",\""
-                               << num_devices_str << "\"," << result.packet_size << "," << result.cycles << ","
-                               << std::fixed << std::setprecision(6) << result.bandwidth_gb_s << "," << std::fixed
-                               << std::setprecision(3) << result.packets_per_second << "\n";
+                               << num_devices_str << "\"," << config.fabric_setup.num_links << "," << result.packet_size
+                               << "," << result.cycles << "," << std::fixed << std::setprecision(6)
+                               << result.bandwidth_gb_s << "," << std::fixed << std::setprecision(3)
+                               << result.packets_per_second << "\n";
         }
 
         summary_csv_stream.close();
@@ -903,7 +939,7 @@ private:
     // Performance profiling data
     // TODO: add link index into the result
     std::map<FabricNodeId, std::map<RoutingDirection, uint32_t>> outgoing_traffic_;
-    std::map<FabricNodeId, std::map<RoutingDirection, uint64_t>> device_direction_cycles_;
+    std::map<FabricNodeId, std::map<RoutingDirection, std::map<uint32_t, uint64_t>>> device_direction_cycles_;
     std::map<FabricNodeId, std::map<CoreCoord, uint64_t>> device_core_cycles_;
     std::vector<BandwidthResult> bandwidth_results_;
     std::vector<BandwidthResultSummary> bandwidth_results_summary_;

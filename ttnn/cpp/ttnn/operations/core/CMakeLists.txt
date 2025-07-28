@@ -6,6 +6,16 @@ TT_ENABLE_UNITY_BUILD(ttnn_op_core)
 
 target_sources(
     ttnn_op_core
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
+            core.hpp
+            to_dtype/to_dtype_op.hpp
+            to_layout/to_layout_op.hpp
+            compute_kernel/compute_kernel_config.hpp
+            to_memory_config/to_memory_config_op.hpp
     PRIVATE
         compute_kernel/compute_kernel_config.cpp
         core.cpp
@@ -16,9 +26,9 @@ target_sources(
 target_include_directories(ttnn_op_core PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(
     ttnn_op_core
-    PRIVATE
-        TT::Metalium
+    PUBLIC
         TTNN::Core
+        TT::Metalium
 )
 
-install(TARGETS ttnn_op_core LIBRARY COMPONENT tar)
+install(TARGETS ttnn_op_core FILE_SET api COMPONENT ttnn-dev LIBRARY COMPONENT tar)

@@ -37,7 +37,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128, cache_hf=True)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -59,7 +59,7 @@ def test_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds, ensure_gc)
         dtype=dtype,
         model_config=model_args.get_model_config(),
     )
-    torch_input = torch.randn(1, 1, seq_len, model_args.dim)
+    torch_input = torch.randn(1, 1, seq_len, model_args.dim, dtype=torch.bfloat16)
     reference_output = reference_model(torch_input)
     tt_input = ttnn.from_torch(
         torch_input,

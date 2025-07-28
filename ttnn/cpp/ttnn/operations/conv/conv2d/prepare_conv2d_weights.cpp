@@ -53,7 +53,10 @@ template <typename T, typename Fn>
 Tensor convert_tensor(const Tensor& input_tensor, const Fn& compute, const TensorSpec& output_spec) {
     TT_FATAL(is_cpu_tensor(input_tensor), "convert_tensor only supports cpu tensors");
     return Tensor(
-        input_tensor.host_storage().transform(compute), output_spec, input_tensor.distributed_tensor_config());
+        input_tensor.host_storage().transform(compute),
+        output_spec,
+        input_tensor.distributed_tensor_config(),
+        input_tensor.tensor_topology());
 }
 
 template <typename Func, typename... Args>
@@ -604,10 +607,11 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
             TensorSpec(
                 output_shape,
                 tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{})),
-            conv_weight_tensor.distributed_tensor_config());
+            conv_weight_tensor.distributed_tensor_config(),
+            conv_weight_tensor.tensor_topology());
     };
 
-    auto storage = conv_weight_tensor.host_storage();
+    const auto& storage = conv_weight_tensor.host_storage();
     switch (dtype) {
         case DataType::FLOAT32: return fold_weights.template operator()<float>(storage);
         case DataType::BFLOAT16: return fold_weights.template operator()<bfloat16>(storage);
@@ -803,7 +807,8 @@ static OptimizedConvBlockConfig get_opt_block_config(
         kernel_size[0],
         kernel_size[1],
         get_fp32_dest_acc_en(compute_config),
-        conv_config.enable_split_reader);
+        conv_config.enable_split_reader,
+        conv_config.full_inner_dim);
 }
 
 static uint32_t calculate_out_channels_padded(uint32_t out_channels, const ParallelConfig& output_parallel_config) {

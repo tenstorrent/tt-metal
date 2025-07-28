@@ -441,7 +441,7 @@ Result conv2d_DRAM(
                 sliced_output_tensor,
                 ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}),
                 ttnn::Shape(
-                    {batch_size, output_slice_height, output_slice_width, sliced_output_tensor.get_padded_shape()[3]}));
+                    {batch_size, output_slice_height, output_slice_width, sliced_output_tensor.padded_shape()[3]}));
         }
         ttnn::experimental::slice_write(
             queue_id,
@@ -728,6 +728,7 @@ Result conv2d_L1(
             compute_config,
             conv_config.enable_act_double_buffer,
             conv_config.enable_weights_double_buffer,
+            conv_config.full_inner_dim,
             enable_split_reader);
 
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {

@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <limits>
 #include <vector>
+#include <type_traits>
 #include <sys/types.h>
 
 #include <gtest/gtest.h>
@@ -308,19 +310,22 @@ namespace {
 template <typename T>
 std::vector<T>& get_test_data(size_t n_elements = 128 * 128) {
     static std::vector<T> data;
-    static size_t max_n_elements = 0;
-    if (n_elements > max_n_elements) {
-        max_n_elements = n_elements;
-    } else {
-        if (!data.empty()) {
-            return data;
+    static size_t current_size = 0;
+
+    if (n_elements > current_size) {
+        data.resize(n_elements);
+
+        for (size_t i = 0; i < n_elements; ++i) {
+            if constexpr (std::is_floating_point_v<T>) {
+                data[i] = static_cast<T>(i);
+            } else if constexpr (std::is_integral_v<T>) {
+                data[i] = static_cast<T>(i % (static_cast<size_t>(std::numeric_limits<T>::max()) + 1));
+            } else {
+                data[i] = static_cast<T>(static_cast<float>(i));
+            }
         }
-    }
 
-    data.resize(n_elements);
-
-    for (size_t i = 0; i < n_elements; i++) {
-        data[i] = static_cast<T>(static_cast<float>(i));
+        current_size = n_elements;
     }
 
     return data;

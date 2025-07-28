@@ -75,6 +75,12 @@ RunTimeOptions::RunTimeOptions() {
         }
     }
 
+    const char* custom_fabric_mesh_graph_desc_path_str = std::getenv("TT_MESH_GRAPH_DESC_PATH");
+    if (custom_fabric_mesh_graph_desc_path_str != nullptr) {
+        this->is_custom_fabric_mesh_graph_desc_path_set = true;
+        this->custom_fabric_mesh_graph_desc_path = std::string(custom_fabric_mesh_graph_desc_path_str);
+    }
+
     build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);
 
     ParseWatcherEnv();
@@ -240,6 +246,10 @@ RunTimeOptions::RunTimeOptions() {
     if (getenv("TT_METAL_WATCHER_KEEP_ERRORS")) {
         watcher_keep_errors = true;
     }
+
+    if (getenv("TT_METAL_FABRIC_BLACKHOLE_TWO_ERISC")) {
+        this->enable_2_erisc_mode_with_fabric = true;
+    }
 }
 
 const std::string& RunTimeOptions::get_root_dir() const {
@@ -285,6 +295,8 @@ void RunTimeOptions::ParseWatcherEnv() {
     watcher_settings.phys_coords = (getenv("TT_METAL_WATCHER_PHYS_COORDS") != nullptr);
     watcher_settings.text_start = (getenv("TT_METAL_WATCHER_TEXT_START") != nullptr);
     watcher_settings.skip_logging = (getenv("TT_METAL_WATCHER_SKIP_LOGGING") != nullptr);
+    watcher_settings.noc_sanitize_linked_transaction =
+        (getenv("TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION") != nullptr);
     // Auto unpause is for testing only, no env var.
     watcher_settings.auto_unpause = false;
 
@@ -314,6 +326,11 @@ void RunTimeOptions::ParseWatcherEnv() {
         TT_ASSERT(
             watcher_disabled_features.find(watcher_noc_sanitize_str) == watcher_disabled_features.end(),
             "TT_METAL_WATCHER_DEBUG_DELAY requires TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=0");
+    }
+    if (watcher_settings.noc_sanitize_linked_transaction) {
+        TT_ASSERT(
+            watcher_disabled_features.find(watcher_noc_sanitize_str) == watcher_disabled_features.end(),
+            "TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION requires TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=0");
     }
 }
 
