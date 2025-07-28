@@ -48,8 +48,9 @@ template <bool APPROXIMATE, ckernel::ActivationType ACTIVATION, int ITERATIONS =
 inline void llk_math_eltwise_unary_sfpu_celu(
     uint dst_index, uint32_t alpha, uint32_t alpha_recip, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        static_cast<void (*)(uint32_t, uint32_t)>(
-            ckernel::sfpu::_calculate_activation_<APPROXIMATE, ACTIVATION, ITERATIONS>),
+        [](uint32_t alpha, uint32_t alpha_recip) {
+            ckernel::sfpu::_calculate_activation_<APPROXIMATE, ACTIVATION, ITERATIONS>(alpha, alpha_recip);
+        },
         dst_index,
         vector_mode,
         alpha,

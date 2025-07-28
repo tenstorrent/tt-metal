@@ -492,12 +492,12 @@ template <typename unary_operation_t>
 void bind_unary_operation_with_float_parameter_default(
     py::module& module,
     const unary_operation_t& operation,
-    const std::string& parameter_name,
-    const std::string& parameter_doc,
+    const std::string_view& parameter_name,
+    const std::string_view& parameter_doc,
     const float parameter_default,
-    const std::string& info_doc,
-    const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = "") {
+    const std::string_view& info_doc,
+    const std::string_view& supported_dtype = "BFLOAT16",
+    const std::string_view& note = "") {
     auto doc = fmt::format(
         R"doc(
         Applies {0} to :attr:`input_tensor` element-wise with {2}.
@@ -561,7 +561,7 @@ void bind_unary_operation_with_float_parameter_default(
                QueueId queue_id) { return self(queue_id, input_tensor, parameter, memory_config, output_tensor); },
             py::arg("input_tensor"),
             py::kw_only(),
-            py::arg(parameter_name.c_str()) = parameter_default,
+            py::arg(parameter_name.data()) = parameter_default,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
