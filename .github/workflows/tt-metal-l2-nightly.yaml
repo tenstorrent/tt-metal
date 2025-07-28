@@ -25,6 +25,11 @@ on:
         required: false
         type: boolean
         default: false
+      run_didt_tests:
+        description: 'Run DIDT tests'
+        required: false
+        type: boolean
+        default: false
       timeout:
         description: 'Test timeout in minutes'
         required: false
@@ -66,6 +71,7 @@ jobs:
       run_pool_tests: ${{ github.event_name == 'schedule' || inputs.run_pool_tests }}
       run_sdxl_tests: ${{ github.event_name == 'schedule' || inputs.run_sdxl_tests }}
   didt-tests:
+    if: ${{ github.event_name == 'schedule' || inputs.run_didt_tests }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/didt-tests.yaml
