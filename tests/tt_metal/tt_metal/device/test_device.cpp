@@ -468,6 +468,9 @@ TEST(Debugging, Test_Active_Eth) {
     do_debug_test(device, buffer_base, arg_base, num_writes, virtual_core, true);
 
     detail::WaitProgramDone(device, program, false);
+
+    auto num_errors = llrt::read_hex_vec_from_core(device->id(), virtual_core, 0x36b0, sizeof(uint32_t) * 8)[6];
+    std::cerr << "Number of errors = " << std::dec << static_cast<uint32_t>(num_errors) << std::endl;
 }
 
 TEST(Debugging, Test_Tensix) {

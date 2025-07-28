@@ -30,6 +30,7 @@ void kernel_main() {
     volatile uint32_t* const debug_dump = reinterpret_cast<volatile uint32_t*>(debug_dump_addr);
 
     uint32_t heartbeat_cnt = 0;
+    debug_dump[6] = 0;
 
     // poll for msg. when there is a message pretend to process it and clear
     invalidate_l1_cache();
@@ -68,6 +69,7 @@ void kernel_main() {
                     // while (true) {
                     //     __asm__ volatile("nop");
                     // }
+                    debug_dump[6]++;
                 }
             } else if (msg_status == 0xdead0000) {
                 return;
