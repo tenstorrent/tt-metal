@@ -101,17 +101,5 @@ jobs:
           cd /work  # Go back to root for test_tutorials.py
           python3 -m pytest tests/ttnn/unit_tests/test_tutorials.py -v
 
-      # - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-      #   if: ${{ failure() }}
-      #   with:
-      #     slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-      #     owner: U06CXU895AP # Michael Chiou
-
-      # - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-      #   timeout-minutes: 10
-      #   if: ${{ !cancelled() }}
-      #   with:
-      #     prefix: "test_reports_"
-
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
