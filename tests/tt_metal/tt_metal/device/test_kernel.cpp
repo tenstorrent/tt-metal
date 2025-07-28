@@ -46,6 +46,7 @@ void kernel_main() {
             volatile uint32_t val = buffer_ptr[i];
             volatile uint32_t msg_status = val & 0xffff0000;
             volatile uint32_t msg_type = val & 0xffff;
+            volatile uint32_t arg_val = arg_ptr[0];
             if (msg_status == 0xca110000) {
                 invalidate_l1_cache();
                 msg_count++;
@@ -53,12 +54,12 @@ void kernel_main() {
                 // arg_ptr[0] = 0;
                 do_nothing(msg_type);
 
-                if (msg_type != msg_count || arg_ptr[0] != msg_count) {
+                if (msg_type != msg_count || arg_val != msg_count) {
                     debug_dump_addr[1] = 0xfffffff1;
                     debug_dump_addr[2] = buffer_ptr[i];
                     debug_dump_addr[3] = msg_type;
                     debug_dump_addr[4] = msg_count;
-                    debug_dump_addr[5] = arg_ptr[0];
+                    debug_dump_addr[5] = arg_val;
                     while (true) {
                         __asm__ volatile("nop");
                     }
