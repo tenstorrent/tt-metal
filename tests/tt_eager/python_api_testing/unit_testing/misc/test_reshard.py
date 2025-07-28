@@ -663,3 +663,59 @@ def test_dram_reshard_with_program_cache(
         )
 
     assert device.num_program_cache_entries() == 1
+
+
+@skip_for_blackhole("GH Issue #15234")
+@pytest.mark.parametrize(
+    "input_shape, input_layout, input_shard_grid,  input_shard_shape, input_shard_orientation, input_sharding_scheme, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme",
+    [
+        (
+            [1, 1, 128, 128],
+            ttnn.TILE_LAYOUT,
+            [[(0, 0), (1, 1)]],
+            (64, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (3, 3)]],
+            (32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16])
+def test_reshard_2(
+    device,
+    input_shape,
+    input_layout,
+    input_shard_grid,
+    input_shard_shape,
+    input_shard_orientation,
+    input_sharding_scheme,
+    output_shard_grid,
+    output_shard_shape,
+    output_shard_orientation,
+    output_sharding_scheme,
+    tt_dtype,
+):
+    torch_tensor, torch_tensor_after_round_trip = run_reshard_test(
+        device,
+        input_shape,
+        input_layout,
+        input_shard_grid,
+        input_shard_shape,
+        input_shard_orientation,
+        input_sharding_scheme,
+        output_shard_grid,
+        output_shard_shape,
+        output_shard_orientation,
+        output_sharding_scheme,
+        tt_dtype,
+    )
+
+    assert torch_tensor.shape == torch_tensor_after_round_trip.shape
+    if tt_dtype != ttnn.bfloat8_b:
+        passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
+    else:
+        passing, output = comp_pcc(torch_tensor, torch_tensor_after_round_trip)
+    assert passing, output
