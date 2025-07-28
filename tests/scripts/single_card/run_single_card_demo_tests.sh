@@ -26,7 +26,7 @@ run_segformer_func() {
   #Segformer Segmentation Demo
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py --timeout 600; fail+=$?
 
-  ## Commenting out Segformer Classification Demo, since weights are not available in CIv2
+  ## Commenting out Segformer Classification Demo, since weights are not available in CIv2. Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
   #Segformer Classification Demo
   # WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py --timeout 600; fail+=$?
 
@@ -78,6 +78,7 @@ run_ufld_v2_func() {
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/demo/demo.py --timeout 600
   #ufld_v2 eval
   ## Commenting out UFLDv2 eval since CIv2 does not support dataset download from Kaggle
+  # Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
   #WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/demo/dataset_evaluation.py --timeout 1500
 }
 run_vgg_func() {
@@ -245,6 +246,7 @@ run_yolov8s_perf() {
 }
 
 # commenting out the test from CI due to HF issue. TODO explore AWS alternative suggested by infra team.
+# Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
 # run_mobilenetv2_perf(){
 
 #  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo --timeout 600
@@ -286,6 +288,7 @@ run_yolov7_demo() {
 }
 
 # Commenting out VGG_Unet Demo since CIv2 does not support dataset download from Kaggle
+# Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
 # run_vgg_unet_demo() {
 
 #  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/vgg_unet/demo/demo.py --timeout 600
