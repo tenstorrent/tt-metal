@@ -417,26 +417,18 @@ class TtCLIPTextTransformer:
     ) -> ttnn.Tensor:
         ids_t = ttnn.to_torch(input_ids)
 
-        # print(f"DEBUG: Token sequence: {ids_t[0].tolist()}")
-
         # from HF: if self.eos_token_id == 2: use argmax, else: search for eos_token_id
         if eos_token_id == 2:
             # use argmax (highest token ID position)
             eos_idx = ids_t.to(dtype=torch.int, device=ids_t.device).argmax(dim=-1)
-            # print(f"DEBUG: Using argmax strategy, position: {eos_idx.tolist()}")
         else:
             # search for specific eos_token_id
             eos_mask = (ids_t.to(dtype=torch.int, device=ids_t.device) == eos_token_id).int()
             eos_idx = eos_mask.argmax(dim=-1)
-            # print(f"DEBUG: Searching for EOS token {eos_token_id}, position: {eos_idx.tolist()}")
-
-        # print(f"DEBUG: Token at selected position: {ids_t[0, eos_idx[0]].item()}")
 
         seq_t = ttnn.to_torch(seq_emb)  # [B, S, H]
         b = torch.arange(seq_t.size(0))
         pooled_t = seq_t[b, eos_idx]  # [B, H]
-
-        # print(f"DEBUG: Pooled output mean: {pooled_t.mean().item():.6f}, std: {pooled_t.std().item():.6f}")
 
         return ttnn.from_torch(pooled_t, dtype=seq_emb.get_dtype(), layout=ttnn.TILE_LAYOUT, device=device)
 
