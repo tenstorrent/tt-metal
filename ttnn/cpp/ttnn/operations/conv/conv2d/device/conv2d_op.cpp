@@ -71,6 +71,7 @@ Tensor optimized_conv_new(
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
+    bool full_inner_dim,
     bool enable_split_reader,
     bool enable_subblock_padding) {
     TT_FATAL(b.layout() == Layout::TILE,
@@ -108,6 +109,7 @@ Tensor optimized_conv_new(
         compute_kernel_config,
         enable_act_double_buffer,
         enable_weights_double_buffer,
+        full_inner_dim,
         enable_split_reader,
         enable_subblock_padding);
     IDevice* device = a.device();
@@ -239,7 +241,8 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         enable_act_double_buffer,
         enable_weights_double_buffer,
         enable_split_reader,
-        enable_subblock_padding);
+        enable_subblock_padding,
+        full_inner_dim);
 
     const uint32_t post_op_l1_allocation_size =
         device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
