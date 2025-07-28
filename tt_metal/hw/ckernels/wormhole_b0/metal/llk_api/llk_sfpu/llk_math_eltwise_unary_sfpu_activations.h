@@ -42,7 +42,7 @@ inline void llk_math_eltwise_unary_sfpu_softsign(uint dst_index, int vector_mode
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_celu_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::celu, APPROXIMATE>(
-        ckernel::sfpu::_init_exponential_<APPROXIMATE, APPROXIMATE, p_sfpu::kCONST_1_FP16B>);
+        ckernel::sfpu::_init_exponential_<APPROXIMATE, /*FAST_APPROX=*/APPROXIMATE, /*SCALE=*/p_sfpu::kCONST_1_FP16B>);
 }
 
 template <bool APPROXIMATE, ckernel::ActivationType ACTIVATION, int ITERATIONS = 8>
