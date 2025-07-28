@@ -138,7 +138,7 @@ class TtCLIPMLP:
 
         if self._hidden_act == "gelu":
             hidden_states = gelu(hidden_states)  # HF default gelu
-        else:  # quick gelu
+        else:  # quick approx gelu
             hidden_states = hidden_states * ttnn.sigmoid(1.702 * hidden_states)
 
         hidden_states = self._fc2(hidden_states)
@@ -146,7 +146,8 @@ class TtCLIPMLP:
 
 
 def gelu(x: ttnn.Tensor) -> ttnn.Tensor:
-    # GELU(x) = 0.5 * x * (1 + erf(x / sqrt(2))) - ttnn.gelu is the same, but avoiding for potential issues (see ttnn.layernorm)
+    # GELU(x) = 0.5 * x * (1 + erf(x / sqrt(2)))
+    # ttnn.gelu is the same, but avoiding for potential issues (see ttnn.layernorm)
     sqrt_2 = math.sqrt(2.0)
     x_div_sqrt2 = ttnn.multiply(x, 1.0 / sqrt_2)
     erf_x = ttnn.erf(x_div_sqrt2)
@@ -402,7 +403,7 @@ class TtCLIPTextTransformer:
             hidden_states, weight=self._final_layer_norm, bias=self._final_layer_norm_bias, epsilon=self._layer_norm_eps
         )
 
-        # pool based on the eos_token_id strategy (same as HF)
+        # pool based on the eos_token_id strategy (same as HF):
         # if eos_token_id not provided, use a fallback
         if eos_token_id is None:
             # fallback: assume eos_token_id = 2 (common for clip models based on logs)
@@ -415,12 +416,11 @@ class TtCLIPTextTransformer:
     def _gather_eos(
         self, seq_emb: ttnn.Tensor, input_ids: ttnn.Tensor, eos_token_id: int, device: ttnn.Device
     ) -> ttnn.Tensor:
-        """Return tensor of shape [B, hidden] pooled exactly like HuggingFace CLIP."""
         ids_t = ttnn.to_torch(input_ids)
 
         # print(f"DEBUG: Token sequence: {ids_t[0].tolist()}")
 
-        # from HF - if self.eos_token_id == 2: use argmax, else: search for eos_token_id
+        # from HF: if self.eos_token_id == 2: use argmax, else: search for eos_token_id
         if eos_token_id == 2:
             # use argmax (highest token ID position)
             eos_idx = ids_t.to(dtype=torch.int, device=ids_t.device).argmax(dim=-1)
