@@ -93,10 +93,11 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
         uint32_t read_bytes;
         if constexpr (wide_reduction) {
+            DPRINT << "in_nbytes_c" << in_nbytes_c << ENDL();
             const bool last_c_block = c_i == in_nblocks_c - 1;
-            read_bytes = !last_c_block ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover - c_i * MAX_BYTES_PER_REDUCTION;
+            read_bytes = !last_c_block ? MAX_BYTES_PER_REDUCTION : in_nbytes_c - c_i * MAX_BYTES_PER_REDUCTION;
         } else {
-            read_bytes = in_nbytes_leftover;
+            read_bytes = in_nbytes_c;
         }
         uint32_t in_l1_write_addr = get_write_ptr(in_cb_id);
         uint32_t processed_sticks = 0;
@@ -250,17 +251,14 @@ void kernel_main() {
 
     constexpr uint32_t window_size_hw = window_h * window_w;
     constexpr uint32_t face_r_dim = window_size_hw < 16 ? window_size_hw : 16;
-    constexpr bool is_partial_tile = in_c < 32;
-    constexpr uint32_t num_faces_in_input_tile = is_partial_tile                                           ? 1
-                                                 : (max_sticks_for_reduction < 32 || window_size_hw <= 16) ? 2
-                                                                                                           : 4;
+    constexpr uint32_t num_faces_in_input_tile = (max_sticks_for_reduction < 32 || window_size_hw <= 16) ? 2 : 4;
     constexpr bool is_large_kernel = (window_h * window_w) > max_sticks_for_reduction;
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
         remaining_elems ? window_size_hw / max_sticks_for_reduction + 1 : window_size_hw / max_sticks_for_reduction;
     // we only need to initialize the in_cb if we will not fill each reduction chunk with valid data
     constexpr bool need_to_initialize_in_cb = remaining_elems && face_r_dim == 16 &&
-                                              (num_faces_in_input_tile == 4 || is_partial_tile) &&
+                                              (num_faces_in_input_tile == 4 || last_tile_is_partial) &&
                                               interm_reduction_chunks <= multi_buffering_factor;
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
