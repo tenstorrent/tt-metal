@@ -509,10 +509,9 @@ void bind_unary_operation_with_float_parameter_default(
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            {2} (float): {3}.
 
         Keyword Args:
-            {2} (float): {3}. Defaults to `{2}`.
+            {2} (float): Defaults to `{3}`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to `0`.
@@ -529,11 +528,11 @@ void bind_unary_operation_with_float_parameter_default(
                * - Dtypes
                  - Layouts
                  - Ranks
-               * - {5}
+               * - {6}
                  - TILE
                  - 2, 3, 4
 
-            {6}
+            {7}
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
