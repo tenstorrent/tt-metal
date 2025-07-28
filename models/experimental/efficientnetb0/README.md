@@ -26,5 +26,5 @@ The entry point to efficientnetb0 is in `models/experimental/efficientnetb0/tt/t
 ## How to run
 Use the following command to run the EfficientNetb0 model :
 ```python
-pytest --disable-warnings tests/ttnn/integration_tests/efficientnetb0/test_ttnn_efficientnetb0.py
+pytest --disable-warnings models/experimental/efficientnetb0/tests/pcc/test_ttnn_efficientnetb0.py
 ```
