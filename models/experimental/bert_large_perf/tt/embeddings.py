@@ -2,10 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 import torch
 
 
-class TtEmbeddings(torch.nn.Module):
+class TtEmbeddings(LightweightModule):
     def __init__(self):
         super().__init__()
 

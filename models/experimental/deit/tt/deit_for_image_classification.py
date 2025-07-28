@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from typing import Optional, Union
-from torch import nn
 from transformers import DeiTForImageClassification
 
 import ttnn
@@ -16,7 +16,7 @@ from models.utility_functions import (
 )
 
 
-class TtDeiTForImageClassification(nn.Module):
+class TtDeiTForImageClassification(LightweightModule):
     def __init__(
         self,
         config: DeiTConfig(),

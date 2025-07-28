@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from models.common.lightweightmodule import LightweightModule
 from loguru import logger
 import torch
 from transformers import BertForQuestionAnswering, BertTokenizer, pipeline
@@ -144,7 +145,7 @@ def sample_bert_input(
     return samples
 
 
-class TtBertForQuestionAnswering(torch.nn.Module):
+class TtBertForQuestionAnswering(LightweightModule):
     def __init__(self, config, hugging_face_reference_model, seq_len, device):
         super().__init__()
 
