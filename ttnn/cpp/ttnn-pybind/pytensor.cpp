@@ -80,9 +80,9 @@ void log_external_operation(const operation::ExternalOperation& operation, const
 #endif
 
 template <typename... Args>
-void log_from_cpp(Args&&... message) {
+void log_from_cpp(const char* file, int line, const char* func, Args&&... message) {
     auto logging = pybind11::module_::import("logging");
-    auto logger = logging.attr("getLogger")("your_module_name");
+    auto logger = logging.attr("getLogger")("py_log_cxx");
 
     // Convert arguments to Python objects and join with spaces
     auto builtins = pybind11::module_::import("builtins");
@@ -96,13 +96,23 @@ void log_from_cpp(Args&&... message) {
     auto join_str = pybind11::str(" ");
     auto formatted_message = join_str.attr("join")(py_args);
 
-    // py::print(formatted_message);
+    // Create a LogRecord manually
+    auto log_record = logging.attr("LogRecord")(
+        "py_log_cxx",                          // name
+        logging.attr("DEBUG"),                 // level
+        std::filesystem::path(file).string(),  // pathname
+        line,                                  // lineno
+        formatted_message,                     // msg
+        pybind11::tuple(),                     // args
+        pybind11::none(),                      // exc_info
+        func,                                  // func
+        pybind11::none()                       // stack_info
+    );
 
-    logger.attr("debug")(formatted_message);
-    // std::cout << formatted_message.cast<std::string>() << std::endl;
+    // Handle the record
+    logger.attr("handle")(log_record);
 }
-
-// #define py_log(...) log_from_cpp(__LINE__, "[" #__VA_ARGS__ "] =" __VA_OPT__(, ) __VA_ARGS__);
+// #define py_log(...) log_from_cpp(__FILE__, __LINE__, __func__, "[" #__VA_ARGS__ "] =" __VA_OPT__(, ) __VA_ARGS__);
 #define py_log(...)
 
 template <typename T>
@@ -418,9 +428,10 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
         } else {
             py_log("no missing data type");
         }
-    } else if (tensor.attr("dtype").equal(torch.attr("uint8")) && dtype && dtype.value() != DataType::UINT8) {
+    } else if (tensor.attr("dtype").equal(torch.attr("uint8"))) {
+        // https://github.com/tenstorrent/tt-metal/issues/21682 typecast missing support for uint8
         py_log();
-        tensor = tensor.attr("to")(*ttnn_fallback_type_mapping(dtype));
+        do_host_conversion_through_fallback();
     } else if (
         HANDLE_FLOAT32_BUG_23405 && tensor.attr("dtype").equal(torch.attr("float32")) && dtype &&
         dtype.value() != DataType::FLOAT32) {
@@ -599,8 +610,7 @@ Tensor convert_python_tensor_to_tt_tensor(
 
     output = tt::tt_metal::set_tensor_id(output);
     py_log("output result ok");
-    py_log(strategy->construct_with_data_type, strategy->tensor);
-    py_log(output);
+    py_log(strategy->construct_with_data_type);
 
     if (memory_config.is_sharded()) {
         py_log("Sharded memory config");

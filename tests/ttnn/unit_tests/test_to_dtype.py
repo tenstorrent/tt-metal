@@ -153,6 +153,61 @@ def test_dtype_conversion_on_device(device, shape, ttnn_dtype, torch_dtype, ttnn
     )
 
 
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (4, 4),
+        (32, 32),
+    ],
+)
+@pytest.mark.parametrize("ttnn_dtype_from", ALL_TYPES)
+@pytest.mark.parametrize("ttnn_dtype_to", ALL_TYPES)
+def test_typecast_accuracy(shape, device, ttnn_dtype_from, ttnn_dtype_to):
+    if ttnn_dtype_from == ttnn.uint8 or ttnn_dtype_to == ttnn.uint8:
+        pytest.skip("uint8 is not supported by the typecast directly")
+
+    float_types = [ttnn.float32, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b]
+    ttnn_from_is_float = ttnn_dtype_from in float_types
+    ttnn_to_is_float = ttnn_dtype_to in float_types
+
+    conversion_pcc = None
+
+    if ttnn_dtype_from == ttnn_dtype_to:
+        conversion_pcc = 1
+
+    elif ttnn_dtype_to == ttnn.bfloat4_b:
+        conversion_pcc = 0.960
+
+    elif ttnn_dtype_to == ttnn.bfloat8_b:
+        conversion_pcc = 0.999
+
+    else:
+        conversion_pcc = 0.9999
+
+    if ttnn_from_is_float:
+        input_tensor = ttnn.rand(shape, device=device, dtype=ttnn_dtype_from) * 100
+
+    else:
+        input_tensor = ttnn.rand(shape, device=device, dtype=ttnn_dtype_from, low=0, high=100)
+
+    input_torch_tensor = torch.Tensor(input_tensor.to_list())
+    output_tensor = ttnn.typecast(input_tensor, dtype=ttnn_dtype_to)
+    output_torch_tensor = torch.Tensor(output_tensor.to_list())
+
+    pcc_passed, pcc_message = comp_pcc(input_torch_tensor, output_torch_tensor, conversion_pcc)
+    assert pcc_passed, f"""
+{pcc_message}
+input_tensor:
+{input_tensor}
+input_torch_tensor:
+{input_torch_tensor}
+output_tensor:
+{output_tensor}
+output_torch_tensor:
+{output_torch_tensor}
+    """
+
+
 @pytest.mark.parametrize("height", [32])
 @pytest.mark.parametrize("width", [32])
 @pytest.mark.parametrize("to_dtype", FLOAT_TYPES)
