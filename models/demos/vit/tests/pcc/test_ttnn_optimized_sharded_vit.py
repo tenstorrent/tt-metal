@@ -65,7 +65,6 @@ def test_vit_patch_embeddings(device, model_name, batch_size, image_size, image_
             shard_spec,
         ),
     )
-    # pixel_values = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
 
@@ -112,11 +111,6 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
     position_embeddings = ttnn.from_torch(
         torch_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
     )
-    # torch_cls_token_padded = torch.nn.functional.pad(torch_cls_token, (0, 0, 0, 196, 0, 0))
-    # torch_cls_position_embeddings = torch.add(torch_cls_token_padded, torch_position_embeddings)
-    # cls_position_embeddings = ttnn.from_torch(
-    #     torch_cls_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
-    # )
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -210,7 +204,6 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
             core_grid=config.core_grid,
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            # orientation=ttnn.ShardOrientation.COLUMN_MAJOR,
         ),
         dtype=ttnn.bfloat8_b,
     )
@@ -290,7 +283,6 @@ def test_vit_output(device, model_name, batch_size, sequence_size):
             core_grid=config.core_grid,
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            # orientation=ttnn.ShardOrientation.COLUMN_MAJOR,
         ),
         dtype=ttnn.bfloat8_b,
     )
@@ -352,7 +344,6 @@ def test_vit_layer(device, model_name, batch_size, sequence_size):
             core_grid=config.core_grid,
             strategy=ttnn.ShardStrategy.BLOCK,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            # orientation=ttnn.ShardOrientation.COLUMN_MAJOR,
         ),
         dtype=ttnn.bfloat8_b,
     )
@@ -463,11 +454,6 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     position_embeddings = ttnn.from_torch(
         torch_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
     )
-    # torch_cls_token_padded = torch.nn.functional.pad(torch_cls_token, (0, 0, 0, 196, 0, 0))
-    # torch_cls_position_embeddings = torch.add(torch_cls_token_padded, torch_position_embeddings)
-    # cls_position_embeddings = ttnn.from_torch(
-    #     torch_cls_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
-    # )
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,

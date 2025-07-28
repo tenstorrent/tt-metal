@@ -29,9 +29,7 @@ def test_yolov8s_640(device, input_tensor, use_pretrained_weights, model_locatio
 
     inp_h, inp_w = input_tensor.shape[2], input_tensor.shape[3]
     if use_pretrained_weights:
-        # TODO: enable weights from CIv2 once reference implementation is available
-        # torch_model = load_torch_model(model_location_generator)
-        torch_model = load_torch_model()
+        torch_model = load_torch_model(model_location_generator)
         state_dict = torch_model.state_dict()
 
     parameters = custom_preprocessor(device, state_dict, inp_h=inp_h, inp_w=inp_w)

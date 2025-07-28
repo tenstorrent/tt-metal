@@ -79,12 +79,9 @@ def test_vit_patch_embeddings(device, model_name, image_size_h, image_size_w, im
         custom_preprocessor=ttnn_functional_vit_highres.custom_preprocessor,
     )
 
-    # pixel_values = ttnn.from_torch(torch_pixel_values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     patch_size = 16
     pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
     pixel_values = torch.nn.functional.pad(pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
-    print(pixel_values.shape)
-    # pixel_values = pixel_values.reshape(batch_size, image_size, image_size // patch_size, 4 * patch_size) # run it on device
     pixel_values = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     output = ttnn_functional_vit_highres.vit_patch_embeddings(

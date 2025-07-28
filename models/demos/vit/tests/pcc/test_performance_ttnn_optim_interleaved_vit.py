@@ -163,10 +163,6 @@ def test_performance_vit_e2e(device, model_name, batch_size, image_size, sequenc
         device=device,
     )
 
-    # pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
-    # pixel_values = torch.nn.functional.pad(pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
-    # pixel_values = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
     torch_attention_mask = torch.ones(config.num_hidden_layers, sequence_size, dtype=torch.float32)
     if torch_attention_mask is not None:
         head_masks = [
@@ -209,7 +205,6 @@ def test_performance_vit_e2e(device, model_name, batch_size, image_size, sequenc
             tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec),
             tt_dtype=ttnn.bfloat16,
         )
-        # pixel_values = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
         tt_output = functional_vit.vit(
             config,

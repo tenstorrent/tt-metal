@@ -35,8 +35,6 @@ def interpolate_pos_encoding(
     Source:
     https://github.com/facebookresearch/dino/blob/de9ee3df6cf39fac952ab558447af1fa1365362a/vision_transformer.py#L174
     """
-
-    # num_patches = embeddings.shape[1] - 1
     num_positions = position_embeddings.shape[1] - 1
     if num_patches == num_positions and height == width:
         return position_embeddings
@@ -45,8 +43,7 @@ def interpolate_pos_encoding(
     dim = position_embeddings.shape[-1]
     h0 = height // patch_size
     w0 = width // patch_size
-    # we add a small number to avoid floating point error in the interpolation
-    # see discussion at https://github.com/facebookresearch/dino/issues/8
+
     h0, w0 = h0 + 0.1, w0 + 0.1
     patch_pos_embed = patch_pos_embed.reshape(1, int(math.sqrt(num_positions)), int(math.sqrt(num_positions)), dim)
     patch_pos_embed = patch_pos_embed.permute(0, 3, 1, 2)
@@ -70,8 +67,6 @@ def interpolate_pos_encoding(
 @pytest.mark.parametrize("sequence_size", [448])
 @pytest.mark.parametrize("functional_vit", [ttnn_functional_vit_highres, ttnn_optimized_vit_highres])
 def test_performance_vit_encoder(device, model_name, batch_size, sequence_size, functional_vit):
-    # disable_persistent_kernel_cache()
-
     config = ViTConfig.from_pretrained(model_name)
     config.num_hidden_layers = 12
     model = ViTForImageClassification.from_pretrained("google/vit-base-patch16-224", config=config).vit.encoder
@@ -137,28 +132,10 @@ def test_performance_vit_encoder(device, model_name, batch_size, sequence_size, 
         tt_output = ttnn.from_device(tt_output)
         end = time.time()
         durations.append(end - start)
-        # enable_persistent_kernel_cache()
 
-    # inference_and_compile_time, inference_time, *_ = durations
     inference_time = durations
 
-    """
-    expected_compile_time, expected_inference_time = get_expected_times(functional_vit)
-    prep_perf_report(
-        model_name=tt_model_name,
-        batch_size=batch_size,
-        inference_and_compile_time=inference_and_compile_time,
-        inference_time=inference_time,
-        expected_compile_time=expected_compile_time,
-        expected_inference_time=expected_inference_time,
-        comments="",
-        inference_time_cpu=0.0,
-    )
-    """
-
-    # logger.info(f"Compile time: {inference_and_compile_time - inference_time}")
     logger.info(f"Inference time: {inference_time}")
-    # logger.info(f"Samples per second: {1 / inference_time * batch_size}")
 
 
 @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
@@ -171,8 +148,6 @@ def test_performance_vit_encoder(device, model_name, batch_size, sequence_size, 
 @pytest.mark.parametrize("sequence_size", [448])
 @pytest.mark.parametrize("functional_vit", [ttnn_functional_vit_highres, ttnn_optimized_vit_highres])
 def test_performance_vit_e2e(device, model_name, batch_size, image_size, sequence_size, functional_vit):
-    # disable_persistent_kernel_cache()
-
     config = transformers.ViTConfig.from_pretrained(model_name)
     model = transformers.ViTForImageClassification.from_pretrained("google/vit-base-patch16-224")
 
@@ -184,7 +159,6 @@ def test_performance_vit_e2e(device, model_name, batch_size, image_size, sequenc
         image, return_tensors="pt", do_resize=False, do_center_crop=False
     ).pixel_values.to(torch.bfloat16)
 
-    # torch_pixel_values = torch.rand((1, 3, 960, 960))
     torch_attention_mask = (
         None  # torch.zeros(1, sequence_size) if functional_vit == ttnn_optimized_functional_vit else None
     )
@@ -224,7 +198,6 @@ def test_performance_vit_e2e(device, model_name, batch_size, image_size, sequenc
         layout=ttnn.TILE_LAYOUT,
         device=device,
         dtype=ttnn.bfloat8_b,
-        # memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     if torch_attention_mask is not None:
@@ -255,25 +228,7 @@ def test_performance_vit_e2e(device, model_name, batch_size, image_size, sequenc
         tt_output = ttnn.from_device(tt_output)
         end = time.time()
         durations.append(end - start)
-        # enable_persistent_kernel_cache()
 
-    # inference_and_compile_time, inference_time, *_ = durations
     inference_time, *_ = durations
 
-    """
-    expected_compile_time, expected_inference_time = get_expected_times(functional_vit)
-    prep_perf_report(
-        model_name=tt_model_name,
-        batch_size=batch_size,
-        inference_and_compile_time=inference_and_compile_time,
-        inference_time=inference_time,
-        expected_compile_time=expected_compile_time,
-        expected_inference_time=expected_inference_time,
-        comments="",
-        inference_time_cpu=0.0,
-    )
-    """
-
-    # logger.info(f"Compile time: {inference_and_compile_time - inference_time}")
     logger.info(f"Inference time: {inference_time}")
-    # logger.info(f"Samples per second: {1 / inference_time * batch_size}")

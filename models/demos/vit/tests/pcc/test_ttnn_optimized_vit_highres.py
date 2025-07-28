@@ -73,12 +73,9 @@ def test_vit_patch_embeddings(device, model_name, image_size_h, image_size_w, im
         custom_preprocessor=ttnn_optimized_vit_highres.custom_preprocessor,
     )
 
-    # pixel_values = ttnn.from_torch(torch_pixel_values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     patch_size = 16
     pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
     pixel_values = torch.nn.functional.pad(pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
-    print(pixel_values.shape)
-    # pixel_values = pixel_values.reshape(batch_size, image_size, image_size // patch_size, 4 * patch_size) # run it on device
     pixel_values = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     output = ttnn_optimized_vit_highres.vit_patch_embeddings(
@@ -89,13 +86,6 @@ def test_vit_patch_embeddings(device, model_name, image_size_h, image_size_w, im
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output[0], 0.9999)
-
-
-# padding
-# 1024 / 16 = 64
-# 64*64 + 32 = 4128 (from cls_token concat)
-# 4352 = (4128 + 224)
-# 4352 / 8 = 136
 
 
 @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
@@ -133,12 +123,10 @@ def test_vit_embeddings(device, model_name, image_size_h, image_size_w):
         custom_preprocessor=ttnn_optimized_vit_highres.custom_preprocessor,
     )
 
-    # pixel_values = ttnn.from_torch(torch_pixel_values, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     patch_size = 16
     pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
     pixel_values = torch.nn.functional.pad(pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
     print(pixel_values.shape)
-    # pixel_values = pixel_values.reshape(batch_size, image_size, image_size // patch_size, 4 * patch_size) # run it on device
     pixel_values = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     output = ttnn_optimized_vit_highres.vit_embeddings(
@@ -148,10 +136,6 @@ def test_vit_embeddings(device, model_name, image_size_h, image_size_w):
         parameters=parameters,
     )
     output = ttnn.to_torch(output)
-    print(output.shape)
-
-    # pad_size = (0, 0, 0, 255)  # 224 + 31
-    # torch_output = torch.nn.functional.pad(torch_output, pad_size, "constant", 0)
 
     assert_with_pcc(torch_output, output[0], 0.9999)
 
@@ -387,13 +371,6 @@ def test_vit_encoder(device, model_name, sequence_size):
     output = ttnn.to_torch(output)
 
     assert_with_pcc(torch_output, output, 0.9999)
-
-
-# padding
-# 1024 / 16 = 64
-# 64*64 + 32 = 4128 (from cls_token concat)
-# 4352 = (4128 + 224)
-# 4352 / 8 = 136
 
 
 @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")

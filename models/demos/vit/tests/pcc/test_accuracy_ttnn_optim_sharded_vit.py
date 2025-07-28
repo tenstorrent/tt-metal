@@ -106,7 +106,6 @@ def test_accuracy(
         head_masks = [None for _ in range(config.num_hidden_layers)]
 
     config = ttnn_optimized_sharded_vit_gs.update_model_config(config, batch_size)
-    ##################
 
     iterations = 50
     imagenet_label_dict = get_imagenet_label_dict()

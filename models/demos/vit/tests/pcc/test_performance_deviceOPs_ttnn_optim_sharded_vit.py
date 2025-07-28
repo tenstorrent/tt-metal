@@ -32,8 +32,6 @@ def get_expected_times(functional_vit):
 @pytest.mark.parametrize("image_channels", [3])
 @pytest.mark.parametrize("functional_vit", [ttnn_optimized_sharded_vit_gs])
 def test_performance_vit_embeddings(device, model_name, batch_size, image_size, image_channels, functional_vit):
-    # ttnn.experimental.device.EnableMemoryReports()
-
     config = transformers.ViTConfig.from_pretrained(model_name)
     model = transformers.ViTForImageClassification.from_pretrained("google/vit-base-patch16-224")
 
@@ -50,10 +48,7 @@ def test_performance_vit_embeddings(device, model_name, batch_size, image_size, 
     else:
         torch_cls_token = torch.nn.Parameter(torch_cls_token)
         torch_position_embeddings = torch.nn.Parameter(torch_position_embeddings)
-    # cls_token = ttnn.from_torch(torch_cls_token, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-    # position_embeddings = ttnn.from_torch(
-    #     torch_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
-    # )
+
     torch_cls_token_padded = torch.nn.functional.pad(torch_cls_token, (0, 0, 0, 196, 0, 0))
     torch_cls_position_embeddings = torch.add(torch_cls_token_padded, torch_position_embeddings)
     cls_position_embeddings = ttnn.from_torch(
@@ -90,7 +85,6 @@ def test_performance_vit_embeddings(device, model_name, batch_size, image_size, 
         tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec),
         tt_dtype=ttnn.bfloat16,
     )
-    # pixel_values = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     durations = []
     for _ in range(1):
@@ -98,7 +92,6 @@ def test_performance_vit_embeddings(device, model_name, batch_size, image_size, 
         tt_output = functional_vit.vit_embeddings(
             config,
             pixel_values,
-            # cls_token,
             cls_position_embeddings,
             parameters=parameters,
         )
@@ -119,8 +112,6 @@ def test_performance_vit_embeddings(device, model_name, batch_size, image_size, 
 @pytest.mark.parametrize("sequence_size", [196])  ## padded from 197 to 224
 @pytest.mark.parametrize("functional_vit", [ttnn_optimized_sharded_vit_gs])
 def test_performance_vit_encoder(device, model_name, batch_size, sequence_size, functional_vit):
-    # disable_persistent_kernel_cache()
-
     config = transformers.ViTConfig.from_pretrained(model_name)
     config.num_hidden_layers = 12
     model = transformers.ViTForImageClassification.from_pretrained(
@@ -191,8 +182,6 @@ def test_performance_vit_encoder(device, model_name, batch_size, sequence_size, 
 @pytest.mark.parametrize("sequence_size", [224])
 @pytest.mark.parametrize("functional_vit", [ttnn_optimized_sharded_vit_gs])
 def test_performance_vit_e2e(device, model_name, batch_size, image_size, sequence_size, functional_vit):
-    # disable_persistent_kernel_cache()
-
     config = transformers.ViTConfig.from_pretrained(model_name)
     config.num_hidden_layers = 12
     model = transformers.ViTForImageClassification.from_pretrained("google/vit-base-patch16-224", config=config)
@@ -218,11 +207,6 @@ def test_performance_vit_e2e(device, model_name, batch_size, image_size, sequenc
     position_embeddings = ttnn.from_torch(
         torch_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
     )
-    # torch_cls_token_padded = torch.nn.functional.pad(torch_cls_token, (0, 0, 0, 196, 0, 0))
-    # torch_cls_position_embeddings = torch.add(torch_cls_token_padded, torch_position_embeddings)
-    # cls_position_embeddings = ttnn.from_torch(
-    #     torch_cls_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
-    # )
 
     if functional_vit == ttnn_optimized_sharded_vit_gs:
         tt_model_name = f"ttnn_{model_name}_optimized"
@@ -280,7 +264,6 @@ def test_performance_vit_e2e(device, model_name, batch_size, image_size, sequenc
             tt_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec),
             tt_dtype=ttnn.bfloat16,
         )
-        # pixel_values = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
         tt_output = functional_vit.vit(
             config,

@@ -123,7 +123,6 @@ def test_performance_vit_e2e(device, model_name, batch_size, image_size, sequenc
     torch_pixel_values = image_processor(image, return_tensors="pt").pixel_values.to(torch.bfloat16)
     torch_pixel_values = torch_pixel_values.repeat(batch_size, 1, 1, 1)
 
-    # cls_token expand to batch_size
     model_state_dict = model.state_dict()
     torch_cls_token = model_state_dict["vit.embeddings.cls_token"]
     torch_position_embeddings = model_state_dict["vit.embeddings.position_embeddings"]
@@ -137,11 +136,6 @@ def test_performance_vit_e2e(device, model_name, batch_size, image_size, sequenc
     position_embeddings = ttnn.from_torch(
         torch_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
     )
-    # torch_cls_token_padded = torch.nn.functional.pad(torch_cls_token, (0, 0, 0, 196, 0, 0))
-    # torch_cls_position_embeddings = torch.add(torch_cls_token_padded, torch_position_embeddings)
-    # cls_position_embeddings = ttnn.from_torch(
-    #     torch_cls_position_embeddings, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
-    # )
 
     if functional_vit == ttnn_optimized_sharded_vit_gs:
         tt_model_name = f"ttnn_{model_name}_optimized"
@@ -187,8 +181,6 @@ def test_performance_vit_e2e(device, model_name, batch_size, image_size, sequenc
     n_cores = 8
     shard_spec = ttnn.ShardSpec(shard_grid, [N * H * W // n_cores, C], ttnn.ShardOrientation.ROW_MAJOR)
 
-    # tracyProfiler = tracy.Profiler()
-    # tracyProfiler.enable()
     for _ in range(10):
         start = time.time()
         pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
@@ -216,7 +208,6 @@ def test_performance_vit_e2e(device, model_name, batch_size, image_size, sequenc
         end = time.time()
         durations.append(end - start)
 
-    # tracyProfiler.disable()
     inference_and_compile_time, *inference_times = durations
     average_inference_time = sum(inference_times) / len(inference_times)
 

@@ -98,8 +98,6 @@ def test_accuracy(
     else:
         head_masks = [None for _ in range(config.num_hidden_layers)]
 
-    ##################
-
     iterations = 50
     imagenet_label_dict = get_imagenet_label_dict()
 

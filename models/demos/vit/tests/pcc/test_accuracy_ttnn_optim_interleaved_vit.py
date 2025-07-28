@@ -93,8 +93,6 @@ def test_accuracy(
         device=device,
     )
 
-    ##################
-
     iterations = 50
     imagenet_label_dict = get_imagenet_label_dict()
 

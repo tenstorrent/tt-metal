@@ -313,8 +313,6 @@ def test_vit_layer(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    # assert_with_pcc(torch_output, output, 0.9999)
-
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         convert_to_ttnn=lambda *_: False,
@@ -457,7 +455,6 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
         ),
         tt_dtype=ttnn.bfloat16,
     )
-    # pixel_values = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     if torch_attention_mask is not None:
         head_masks = [

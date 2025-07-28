@@ -44,7 +44,6 @@ def interpolate_pos_encoding(
     https://github.com/facebookresearch/dino/blob/de9ee3df6cf39fac952ab558447af1fa1365362a/vision_transformer.py#L174
     """
 
-    # num_patches = embeddings.shape[1] - 1
     num_positions = position_embeddings.shape[1] - 1
     if num_patches == num_positions and height == width:
         return position_embeddings
@@ -78,8 +77,6 @@ def interpolate_pos_encoding(
 @pytest.mark.parametrize("sequence_size", [448])
 @pytest.mark.parametrize("functional_vit", [ttnn_functional_vit_highres, ttnn_optimized_vit_highres])
 def test_performance_vit_encoder(device, model_name, batch_size, sequence_size, functional_vit):
-    # disable_persistent_kernel_cache()
-
     config = transformers.ViTConfig.from_pretrained(model_name)
     config.num_hidden_layers = 12
     model = transformers.ViTForImageClassification.from_pretrained(
@@ -191,7 +188,6 @@ def test_performance_vit_e2e(device, model_name, batch_size, image_size, sequenc
         image, return_tensors="pt", do_resize=False, do_center_crop=False
     ).pixel_values.to(torch.bfloat16)
 
-    # torch_pixel_values = torch.rand((1, 3, 960, 960))
     torch_attention_mask = (
         None  # torch.zeros(1, sequence_size) if functional_vit == ttnn_optimized_functional_vit else None
     )
@@ -231,7 +227,6 @@ def test_performance_vit_e2e(device, model_name, batch_size, image_size, sequenc
         layout=ttnn.TILE_LAYOUT,
         device=device,
         dtype=ttnn.bfloat8_b,
-        # memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     if torch_attention_mask is not None:

@@ -27,7 +27,6 @@ def interpolate_pos_encoding(
     https://github.com/facebookresearch/dino/blob/de9ee3df6cf39fac952ab558447af1fa1365362a/vision_transformer.py#L174
     """
 
-    # num_patches = embeddings.shape[1] - 1
     num_positions = position_embeddings.shape[1] - 1
     if num_patches == num_positions and height == width:
         return position_embeddings
@@ -314,7 +313,6 @@ def test_vit(model_name, batch_size, image_size, image_channels):
     model = model.to(torch.bfloat16)
 
     torch_pixel_values = torch_random((batch_size, image_channels, image_size, image_size), -1, 1, dtype=torch.bfloat16)
-    # torch_output, *_ = model(torch_pixel_values).last_hidden_state
     torch_output, *_ = model(torch_pixel_values, interpolate_pos_encoding=True).logits
 
     parameters = preprocess_model_parameters(
