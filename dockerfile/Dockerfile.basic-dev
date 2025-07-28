@@ -35,7 +35,7 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 
 # Install the SFPI compiler
-COPY /install_minimum_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_minimum_dependencies.sh
+COPY scripts/basic_dev_image/install_minimum_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_minimum_dependencies.sh
 COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
 RUN chmod +x /opt/tt_metal_infra/scripts/docker/install_minimum_dependencies.sh
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_minimum_dependencies.sh
