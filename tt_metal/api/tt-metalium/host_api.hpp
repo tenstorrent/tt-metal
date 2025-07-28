@@ -557,9 +557,8 @@ void SetRuntimeArgs(
 
 // clang-format off
 /**
- * Set common (shared by all cores) runtime args for a kernel that are sent to all cores during runtime. This API needs
- * to be called to update the common runtime args for the kernel. Maximum of 255 allowed runtime args per core (unique
- * and common runtime args count toward same limit).
+ * Set common (shared by all cores) runtime args for a kernel that are sent to all cores during runtime. This API needs to be called to update the common runtime args for the kernel.
+ * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
  *
  * Return value: void
  *
