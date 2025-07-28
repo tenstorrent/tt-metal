@@ -1740,7 +1740,7 @@ template <
 FORCE_INLINE void noc_inline_dw_write_with_state(
     uint32_t val, uint32_t addr = 0, uint8_t cmd_buf = write_at_cmd_buf, uint8_t noc = noc_index) {
     WAYPOINT("NWIW");
-    noc_fast_write_dw_inline_with_state<update_addr_lo, update_addr_hi, update_val, posted, update_counter>(
+    noc_fast_write_dw_inline_with_state<noc_mode, update_addr_lo, update_addr_hi, update_val, posted, update_counter>(
         noc, cmd_buf, val, addr);
     WAYPOINT("NWID");
 }

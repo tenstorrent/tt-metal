@@ -1138,6 +1138,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
  */
 // clang-format on
 template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
     bool update_addr_lo = false,
     bool update_addr_hi = false,
     bool update_val = false,
