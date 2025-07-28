@@ -60,12 +60,12 @@ def test_sentence_bert_demo_inference(device, inputs, model_name, sequence_lengt
     ).post_processed_output
     ttnn_module = SentenceBERTPerformantRunner(
         device=device,
+        model_location_generator=model_location_generator,
         input_ids=input_ids,
         extended_mask=extended_mask,
         attention_mask=attention_mask,
         token_type_ids=token_type_ids,
         position_ids=position_ids,
-        model_location_generator=model_location_generator,
     )
     ttnn_module._capture_sentencebert_trace_2cqs()
     ttnn_out = ttnn_module.run(input_ids, token_type_ids, position_ids, extended_mask, attention_mask)

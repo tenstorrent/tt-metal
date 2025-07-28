@@ -80,6 +80,7 @@ def test_sentence_bert_eval(
         if ttnn_module is None:
             ttnn_module = SentenceBERTPerformantRunner(
                 device=device,
+                model_location_generator=model_location_generator,
                 input_ids=input_ids,
                 extended_mask=extended_mask,
                 attention_mask=attention_mask,
