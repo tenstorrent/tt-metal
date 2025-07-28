@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import torch
 import torch.nn as nn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_midblock2d import TtUNetMidBlock2D
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_upblock2d import TtUpDecoderBlock2D
@@ -177,9 +176,4 @@ class TtDecoder(nn.Module):
         )
         C = self.conv_out_params["output_channels"]
 
-        # Convert to torch
-        hidden_states = ttnn.to_torch(hidden_states, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0)).float()
-        hidden_states = hidden_states.reshape(self.batch_size * B, H, W, C)
-        hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
-
-        return hidden_states
+        return hidden_states, [C, H, W]

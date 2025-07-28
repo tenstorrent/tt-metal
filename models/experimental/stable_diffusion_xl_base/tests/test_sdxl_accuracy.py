@@ -11,7 +11,7 @@ import urllib
 from loguru import logger
 import statistics
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
-from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
+from models.experimental.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE, SDXL_TRACE_REGION_SIZE
 import json
 from models.utility_functions import profiler
 
@@ -20,7 +20,9 @@ COCO_CAPTIONS_DOWNLOAD_PATH = "https://github.com/mlcommons/inference/raw/4b1d11
 OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE, "trace_region_size": SDXL_TRACE_REGION_SIZE}], indirect=True
+)
 @pytest.mark.parametrize(
     "num_inference_steps",
     ((50),),
@@ -33,6 +35,14 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
     ],
     ids=("device_vae", "host_vae"),
 )
+@pytest.mark.parametrize(
+    "capture_trace",
+    [
+        (True),
+        (False),
+    ],
+    ids=("with_trace", "no_trace"),
+)
 @pytest.mark.parametrize("captions_path", ["models/experimental/stable_diffusion_xl_base/coco_data/captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["models/experimental/stable_diffusion_xl_base/coco_data/val2014.npz"])
 def test_accuracy_sdxl(
@@ -40,6 +50,7 @@ def test_accuracy_sdxl(
     is_ci_env,
     num_inference_steps,
     vae_on_device,
+    capture_trace,
     captions_path,
     coco_statistics_path,
     evaluation_range,
@@ -60,6 +71,7 @@ def test_accuracy_sdxl(
         prompts,
         num_inference_steps,
         vae_on_device,
+        capture_trace,
         evaluation_range,
     )
 
