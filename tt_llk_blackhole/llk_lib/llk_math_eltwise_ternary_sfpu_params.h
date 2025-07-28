@@ -5,7 +5,6 @@
 #pragma once
 #include <utility>
 
-#include "ckernel_sfpu_where.h"
 #include "llk_math_eltwise_ternary_sfpu.h"
 #include "llk_sfpu_types.h"
 
