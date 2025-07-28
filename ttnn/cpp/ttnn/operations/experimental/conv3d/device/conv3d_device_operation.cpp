@@ -167,7 +167,6 @@ std::vector<TensorSpec> Conv3dOp::compute_output_specs(const std::vector<Tensor>
     uint32_t T_in = input_tensor_a_shape[1];
     uint32_t H_in = input_tensor_a_shape[2];
     uint32_t W_in = input_tensor_a_shape[3];
-    uint32_t C_in = input_tensor_a_shape[4];
     uint32_t C_out = config.output_channels;
 
     auto [T_out, H_out, W_out] = detail::compute_output_dims(T_in, H_in, W_in, config.padding, config.kernel_size);

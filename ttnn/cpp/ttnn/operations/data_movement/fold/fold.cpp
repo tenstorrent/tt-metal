@@ -172,8 +172,6 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     auto padded_w = w + pad_w * 2;  // front and end padding
     auto padded_h32 = tt::round_up(padded_h, TILE_HEIGHT);
     auto padded_w32 = tt::round_up(padded_w, TILE_HEIGHT);
-    auto pad_h_right = padded_h32 - (h + pad_h);
-    auto pad_w_right = padded_w32 - (w + pad_w);
     auto target_h = padded_h / stride_h;
     auto target_w = padded_w / stride_w;
     auto target_c = padded_c * stride_h * stride_w;
