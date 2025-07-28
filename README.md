@@ -34,38 +34,43 @@
 
 ## Featured Models
 
-The following models are undergoing development and optimizations to achieve performance, accuracy, and compatibility goals. Follow each model link for more information
+The following models are undergoing development and optimizations to achieve performance, accuracy, and compatibility goals. Follow each model link for more information.
+- Time to first token (TTFT) descibes in milliseconds how long it takes for the model to generate the first token.
+- T/S/U measures tokens per second per user. The T/S/U reported is the throughput of the first token generated after prefill, i.e. 1 / inter token latency.
+- T/S measures tokens per second, where T/S = T/S/U * batch.
+- Tensor Parallel (TP) and Data Parallel (DP) define parallelization factors across mulitiple devices.
+- Performance numbers were collected using the tt-metal model demos (accessible via the model links). If running with a vLLM inference server, performance may be different.
 
 ### [Qwen 3 32B (TP=8)](./models/tt_transformers)
-| Batch | Hardware                                                 | ttft (ms) | t/s/u | Target<br>t/s/u | t/s    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
+| Batch | Hardware                                                 | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
 |-------|----------------------------------------------------------|-----------|-------|-----------------|--------|---------------------------------------------------|---------------------------------------------------------------------------------------------------|
 | 32    | [QuietBox (Wormhole)](https://tenstorrent.com/hardware/tt-quietbox) | 109       | 22.1  | 30              | 707.2  | [v0.59.0-rc52](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc52) | [f028da1](https://github.com/tenstorrent/vllm/tree/f028da11b5b8205272bf18a478de93bd2dd3e29e/tt_metal) |
 ### [DeepSeek R1 Distill Llama 3.3 70B (TP=8)](./models/tt_transformers)
-| Batch | Hardware                                                 | ttft (ms) | t/s/u | Target<br>t/s/u | t/s    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
+| Batch | Hardware                                                 | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
 |-------|----------------------------------------------------------|-----------|-------|-----------------|--------|---------------------------------------------------|---------------------------------------------------------------------------------------------------|
 | 32    | [QuietBox  (Wormhole)](https://tenstorrent.com/hardware/tt-quietbox) | 159       | 15.9  | 20    | 508.8  | [v0.59.0-rc53](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc53) | [f028da1](https://github.com/tenstorrent/vllm/tree/f028da11b5b8205272bf18a478de93bd2dd3e29e/tt_metal)      |
 ### [Llama 3.1 70B (TP=32)](./models/demos/llama3_subdevices)
-| Batch | Hardware                                                 | ttft (ms) | t/s/u | Target<br>t/s/u | t/s    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
+| Batch | Hardware                                                 | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
 |-------|----------------------------------------------------------|-----------|-------|-----------------|--------|---------------------------------------------------|---------------------------------------------------------------------------------------------------|
 | 32    | [Galaxy (Wormhole)](https://tenstorrent.com/hardware/galaxy) | 68      | 66.7  | 80              | 2134.4  | [v0.60.0-rc20](https://github.com/tenstorrent/tt-metal/tree/v0.60.0-rc20) | [5cbc982](https://github.com/tenstorrent/vllm/tree/5cbc982913907d1645df3693069ad53c4925f37d/tt_metal) |
 ### [Llama 3.2 11B Vision (TP=2)](./models/tt_transformers)
-| Batch | Hardware                                                 | ttft (ms) | t/s/u | Target<br>t/s/u | t/s    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
+| Batch | Hardware                                                 | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
 |-------|----------------------------------------------------------|-----------|-------|-----------------|--------|---------------------------------------------------|---------------------------------------------------------------------------------------------------|
 | 16    | [n300 (Wormhole)](https://tenstorrent.com/hardware/wormhole) | 2550 | 15.8 | 17 | 252.8 | [v0.56.0-rc6](https://github.com/tenstorrent/tt-metal/tree/v0.56.0-rc6) | [e2e0002](https://github.com/tenstorrent/vllm/tree/e2e0002ac7dcbc5793983c0f967474d4dcab21f8/tt_metal) |
 ### [Qwen 2.5 72B (TP=8)](./models/tt_transformers)
-| Batch | Hardware                                                 | ttft (ms) | t/s/u | Target<br>t/s/u | t/s    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
+| Batch | Hardware                                                 | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
 |-------|----------------------------------------------------------|-----------|-------|-----------------|--------|---------------------------------------------------|---------------------------------------------------------------------------------------------------|
 | 32    | [QuietBox (Wormhole)](https://tenstorrent.com/hardware/tt-quietbox) | 319       | 14.6  | 20              | 467.2  | [v0.59.0-rc52](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc52) | [f028da1](https://github.com/tenstorrent/vllm/tree/f028da11b5b8205272bf18a478de93bd2dd3e29e/tt_metal) |
 ### [Llama 3.1 8B](./models/tt_transformers)
-| Batch | Hardware                                                 | ttft (ms) | t/s/u | Target<br>t/s/u | t/s    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
+| Batch | Hardware                                                 | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
 |-------|----------------------------------------------------------|-----------|-------|-----------------|--------|---------------------------------------------------|---------------------------------------------------------------------------------------------------|
 | 32     | [p100 (Blackhole)](https://tenstorrent.com/hardware/blackhole)        | 87       | 26.5   |               | 848.0   | [v0.59.0-rc3](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc3) | [739dcaa](https://github.com/tenstorrent/vllm/tree/739dcaa2915fa29d757c25a02c17aadce0c58055/tt_metal) |
 ### [Llama 3.1 8B](./models/tt_transformers)
-| Batch | Hardware                                                 | ttft (ms) | t/s/u | Target<br>t/s/u | t/s    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
+| Batch | Hardware                                                 | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
 |-------|----------------------------------------------------------|-----------|-------|-----------------|--------|---------------------------------------------------|---------------------------------------------------------------------------------------------------|
 | 32     | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole)        | 69       | 29.1   |               | 931.2   | [v0.59.0-rc3](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc3) | [739dcaa](https://github.com/tenstorrent/vllm/tree/739dcaa2915fa29d757c25a02c17aadce0c58055/tt_metal) |(https://github.com/tenstorrent/vllm/tree/739dcaa2915fa29d757c25a02c17aadce0c58055/tt_metal) |
 ### [Llama 3.1 8B](./models/tt_transformers)
-| Batch | Hardware                                                 | ttft (ms) | t/s/u | Target<br>t/s/u | t/s    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
+| Batch | Hardware                                                 | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
 |-------|----------------------------------------------------------|-----------|-------|-----------------|--------|---------------------------------------------------|---------------------------------------------------------------------------------------------------|
 | 32     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 104       | 24.8  | 23              | 793.6   | [v0.59.0-rc52](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc52) | [f028da1](https://github.com/tenstorrent/vllm/tree/f028da11b5b8205272bf18a478de93bd2dd3e29e/tt_metal) |
 
@@ -73,11 +78,6 @@ The following models are undergoing development and optimizations to achieve per
 >
 > **Notes:**
 >
-> - ttft = time to first token | t/s/u = tokens/second/user | t/s = tokens/second; where t/s = t/s/u * batch.
-> - TP = Tensor Parallel, DP = Data Parallel; Defines parallelization factors across multiple devices.
-> - The reported LLM performance is for an input sequence length (number of rows filled in the KV cache) of 128 for all models except Mamba (which can accept any sequence length).
-> - The t/s/u reported is the throughput of the first token generated after prefill, i.e. 1 / inter token latency.
-> - Performance numbers were collected using the tt-metal model demos (accessible via the model links). If running with a vLLM inference server, performance may be different.
 > - \* Blackhole software optimization is under active development.  Please join us in shaping the future of open source AI! <br> [\[Discord\]](https://discord.gg/tenstorrent) [\[Developer Hub\]](https://tenstorrent.com/developers)
 > - For more information regarding vLLM installation and environment creation visit the [Tenstorrent vLLM repository](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md).
 
