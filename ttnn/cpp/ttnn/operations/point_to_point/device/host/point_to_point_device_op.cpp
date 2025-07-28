@@ -40,6 +40,66 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> compute_aligned_packet_dims(
 
     return std::make_tuple(packet_size_bytes, max_num_pages_per_packet, num_page_segments, total_packets);
 }
+
+auto one_d_fabric_routing_vector(const MeshCoordinate& src_coord, const MeshCoordinate& dest_coord) {
+    // transmit along row
+    if (src_coord[0] == dest_coord[0]) {
+        constexpr auto dim = 1;
+        const int hops = dest_coord[dim] - src_coord[dim];
+        bool is_fwd = (hops > 0);
+
+        return std::make_tuple(std::abs(hops), is_fwd, dim);
+    }
+    // transmit along col
+    else if (src_coord[1] == dest_coord[1]) {
+        constexpr auto dim = 0;
+        const int hops = dest_coord[dim] - src_coord[dim];
+        bool is_fwd = (hops > 0);
+
+        return std::make_tuple(std::abs(hops), is_fwd, dim);
+    } else {
+        TT_THROW("Routing coordinates {} and {} invalid for 1D fabric", src_coord, dest_coord);
+        return std::make_tuple(0, false, 0);
+    }
+}
+
+std::tuple<uint32_t, bool, tt::tt_fabric::FabricNodeId> one_d_fabric_routing(
+    const MeshDevice* mesh_device,
+    const MeshCoordinate& src_coord,
+    const MeshCoordinate& dest_coord,
+    const ::ttnn::ccl::Topology topology) {
+    const auto& mesh_shape = mesh_device->get_view().shape();
+
+    // sign indicates direction, however fabrics' forward/backward concept is reversed
+    const auto [line_hops, line_is_forward, dim] = one_d_fabric_routing_vector(src_coord, dest_coord);
+
+    TT_FATAL(line_hops != 0, "Should not be send/receiving to the same device");
+
+    auto get_neighbor_id = [&src_coord, &mesh_device, &mesh_shape, dim](
+                               bool is_forward, MeshCoordinate::BoundaryMode boundary_mode) {
+        const auto neighbor_coord = src_coord.get_neighbor(mesh_shape, (is_forward ? 1 : -1), dim, boundary_mode);
+
+        TT_FATAL(neighbor_coord.has_value(), "Can't find neighbor for {}", src_coord);
+        auto next_device = mesh_device->get_device(neighbor_coord.value());
+        const auto next_fabric_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(next_device->id());
+
+        TT_FATAL(next_device != nullptr, "Did not find next device");
+        return next_fabric_id;
+    };
+
+    if (topology == ::ttnn::ccl::Topology::Ring) {
+        int ring_hops = line_hops + (line_hops < 0 ? -1 : 1) * mesh_shape[dim];
+
+        if (std::abs(ring_hops) < std::abs(line_hops)) {
+            bool ring_is_forward = (ring_hops > 0);
+
+            const auto next_fabric_id = get_neighbor_id(ring_is_forward, MeshCoordinate::BoundaryMode::WRAP);
+            return std::make_tuple(std::abs(ring_hops), !ring_is_forward, next_fabric_id);
+        }
+    }
+    const auto next_fabric_id = get_neighbor_id(line_is_forward, MeshCoordinate::BoundaryMode::NONE);
+    return std::make_tuple(line_hops, !line_is_forward, next_fabric_id);
+}
 }  // namespace detail
 
 using cached_workload_t = device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t>;
@@ -142,7 +202,11 @@ PointToPointOp::SendReceive::cached_mesh_workload_t PointToPointOp::SendReceive:
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    for (const auto& coord : tensor_coords.coords()) {
+    const auto& send_coordinate = operation_attributes.send_coord;
+    const auto& receive_coordinate = operation_attributes.receive_coord;
+    std::array<MeshCoordinate, 2> use_coords = {send_coordinate, receive_coordinate};
+
+    for (const auto& coord : use_coords) {
         auto cached_workload = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_workload.program));
         shared_variables.emplace(coord, std::move(cached_workload.shared_variables));
@@ -155,8 +219,8 @@ cached_workload_t PointToPointOp::SendReceive::create_at(
     const ttnn::MeshCoordinate& mesh_coordinate,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
-    const auto send_coordinate = operation_attributes.send_coord;
-    const auto receive_coordinate = operation_attributes.receive_coord;
+    const auto& send_coordinate = operation_attributes.send_coord;
+    const auto& receive_coordinate = operation_attributes.receive_coord;
 
     if (mesh_coordinate == send_coordinate) {
         return send_program_factory(
@@ -166,7 +230,8 @@ cached_workload_t PointToPointOp::SendReceive::create_at(
         return receive_program_factory(operation_attributes, tensor_return_value);
     }
 
-    return receive_program_factory(operation_attributes, tensor_return_value, true);
+    TT_THROW("Invalid coordinate in p2p");
+    return {Program{}, shared_variables_t{}};
 }
 
 void PointToPointOp::SendReceive::override_runtime_arguments(

@@ -66,6 +66,7 @@ void py_bind_point_to_point(py::module& module) {
                const MeshCoordinate& send_coord,
                const MeshCoordinate& receive_coord,
                const ccl::Topology topology,
+               const GlobalSemaphore& sender_semaphore,
                const GlobalSemaphore& receiver_semaphore,
                const std::optional<ttnn::Tensor> optional_output_tensor,
                QueueId queue_id) {
@@ -75,6 +76,7 @@ void py_bind_point_to_point(py::module& module) {
                     send_coord,
                     receive_coord,
                     topology,
+                    sender_semaphore,
                     receiver_semaphore,
                     optional_output_tensor);
             },
@@ -82,6 +84,7 @@ void py_bind_point_to_point(py::module& module) {
             py::arg("send_coord"),
             py::arg("receive_coord"),
             py::arg("topology"),
+            py::arg("sender_semaphore"),
             py::arg("receiver_semaphore"),
             py::kw_only(),
             py::arg("optional_output_tensor") = std::nullopt,

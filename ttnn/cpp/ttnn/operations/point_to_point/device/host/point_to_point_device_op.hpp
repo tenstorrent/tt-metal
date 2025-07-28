@@ -19,6 +19,7 @@ struct PointToPointOp {
         const MeshCoordinate& send_coord;
         const MeshCoordinate& receive_coord;
         const ::ttnn::ccl::Topology topology;
+        const tt::tt_metal::GlobalSemaphore sender_semaphore;
         const tt::tt_metal::GlobalSemaphore receiver_semaphore;
 
         // put this in here to hash on tensor spec
@@ -104,10 +105,12 @@ struct PointToPointOp {
         const ::ttnn::ccl::Topology& topology,
         const MeshCoordinate& send_coord,
         const MeshCoordinate& receive_coord,
+        const tt::tt_metal::GlobalSemaphore& sender_semaphore,
         const tt::tt_metal::GlobalSemaphore& receiver_semaphore,
         const std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
         return std::make_tuple(
-            operation_attributes_t{send_coord, receive_coord, topology, receiver_semaphore, input_tensor.tensor_spec()},
+            operation_attributes_t{
+                send_coord, receive_coord, topology, sender_semaphore, receiver_semaphore, input_tensor.tensor_spec()},
             tensor_args_t{input_tensor, optional_output_tensor});
     };
 
@@ -118,6 +121,13 @@ private:
 namespace detail {
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> compute_aligned_packet_dims(
     const DataType& dtype, const uint32_t page_size_bytes, const uint32_t num_pages, const uint32_t alignment);
+
+std::tuple<uint32_t, bool, tt::tt_fabric::FabricNodeId> one_d_fabric_routing(
+    const MeshDevice* mesh_device,
+    const MeshCoordinate& src_coord,
+    const MeshCoordinate& dest_coord,
+    ::ttnn::ccl::Topology topology);
+
 }  // namespace detail
 
 device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> send_program_factory(
@@ -129,9 +139,7 @@ device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t>
 
 device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> receive_program_factory(
     const PointToPointOp::operation_attributes_t& operation_attributes,
-    PointToPointOp::tensor_return_value_t& output_tensor,
-    bool nullop = false);
-
+    PointToPointOp::tensor_return_value_t& output_tensor);
 }  // namespace operations::point_to_point
 
 namespace prim {
