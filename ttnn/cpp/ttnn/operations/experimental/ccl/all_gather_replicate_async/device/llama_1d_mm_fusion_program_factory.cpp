@@ -1744,6 +1744,9 @@ process_gather_in0_program_and_create_override_variables(
         in1_shard_width_in_tiles =
             in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1] / num_global_cb_receivers;
         in1_CB_tiles = in1_shard_height_in_tiles * in1_shard_width_in_tiles;
+        log_info(tt::LogOp, "LLONG FUSION: in1_shard_height_in_tiles: {}", in1_shard_height_in_tiles);
+        log_info(tt::LogOp, "LLONG FUSION: in1_shard_width_in_tiles: {}", in1_shard_width_in_tiles);
+        log_info(tt::LogOp, "LLONG FUSION: in1_CB_tiles: {}", in1_CB_tiles);
     }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
@@ -1763,6 +1766,9 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t in2_single_tile_size = in0_single_tile_size;
     uint32_t in2_CB_tiles = (ring_size - 1) * in0_CB_tiles;  // All shards except local
     uint32_t in2_CB_size = in2_CB_tiles * in2_single_tile_size;
+    log_info(tt::LogOp, "LLONG FUSION: in2_single_tile_size: {}", in2_single_tile_size);
+    log_info(tt::LogOp, "LLONG FUSION: in2_CB_tiles: {}", in2_CB_tiles);
+    log_info(tt::LogOp, "LLONG FUSION: in2_CB_size: {}", in2_CB_size);
 
     /* out */
     uint32_t out_block_tiles = per_core_M * per_core_N;
@@ -1799,6 +1805,7 @@ process_gather_in0_program_and_create_override_variables(
             .set_tile_dims(src0_cb_index, in0_tile)
             .set_globally_allocated_address(*in0_buffer);
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, src0_cb_config);
+    log_info(tt::LogOp, "LLONG FUSION: in0_CB_size: {}", in0_CB_size);
 
     uint32_t src1_cb_index = base_cb_index + 1;
     tt::tt_metal::CBHandle cb_src1;
@@ -1822,6 +1829,7 @@ process_gather_in0_program_and_create_override_variables(
         }
         cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
     }
+    log_info(tt::LogOp, "LLONG FUSION: in1_CB_size: {}", in1_CB_size);
 
     uint32_t src2_cb_index = base_cb_index + 2;
     tt_metal::CircularBufferConfig src2_cb_config =
@@ -1829,6 +1837,7 @@ process_gather_in0_program_and_create_override_variables(
             .set_page_size(src2_cb_index, in2_single_tile_size)
             .set_tile_dims(src2_cb_index, in0_tile);
     // auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
+    log_info(tt::LogOp, "LLONG FUSION: in2_CB_size: {}", in2_CB_size);
 
     uint32_t sync_cb_index = base_cb_index + 3;
     uint32_t sync_cb_size_bytes = 16;
@@ -1836,6 +1845,7 @@ process_gather_in0_program_and_create_override_variables(
         tt_metal::CircularBufferConfig(sync_cb_size_bytes, {{sync_cb_index, DataFormat::UInt16}})
             .set_page_size(sync_cb_index, sync_cb_size_bytes);
     // auto cb_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
+    log_info(tt::LogOp, "LLONG FUSION: sync_cb_size_bytes: {}", sync_cb_size_bytes);
 
     uint32_t sync_cb2_index = base_cb_index + 4;
     uint32_t sync_cb2_size_bytes = 16;
@@ -1843,6 +1853,7 @@ process_gather_in0_program_and_create_override_variables(
         tt_metal::CircularBufferConfig(sync_cb2_size_bytes, {{sync_cb2_index, DataFormat::UInt16}})
             .set_page_size(sync_cb2_index, sync_cb2_size_bytes);
     // auto cb2_sync = tt_metal::CreateCircularBuffer(program, all_cores, sync_cb2_config);
+    log_info(tt::LogOp, "LLONG FUSION: sync_cb2_size_bytes: {}", sync_cb2_size_bytes);
 
     uint32_t output_cb_index = base_cb_index + 5;  // output operands start at index 16
     uint32_t interm0_cb_index = base_cb_index + 6;
@@ -1911,6 +1922,11 @@ process_gather_in0_program_and_create_override_variables(
                                    .set_tile_dims(interm0_cb_index, output_tile)
                                    .set_globally_allocated_address(*out_buffer);
             auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+            log_info(
+                tt::LogOp,
+                "LLONG FUSION: output_cb_index: {}, interm0_cb_index: {}",
+                output_cb_index,
+                interm0_cb_index);
             cb_outputs.push_back(cb_output);
             output_cb_indices.push_back(output_cb_index);
             interm_cb_indices.push_back(interm0_cb_index);
