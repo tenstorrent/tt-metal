@@ -48,6 +48,7 @@ def test_run_vit_trace_2cqs_inference(
         vit_trace_2cq.initialize_vit_trace_2cqs_inference(
             mesh_device,
             batch_size_per_device,
+            model_location_generator=model_location_generator,
         )
         profiler.end(f"compile")
 

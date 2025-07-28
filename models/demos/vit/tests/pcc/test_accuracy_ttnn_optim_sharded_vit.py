@@ -7,12 +7,12 @@ import ast
 
 import pytest
 import torch
-import transformers
 from loguru import logger
 from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.demos.vit.common import load_torch_model
 from models.demos.vit.tt import ttnn_optimized_sharded_vit_gs
 from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
 from models.utility_functions import (
@@ -56,10 +56,8 @@ def test_accuracy(
 ):
     disable_persistent_kernel_cache()
 
-    config = transformers.ViTConfig.from_pretrained(model_name)
-    config.num_hidden_layers = 12
-    model = transformers.ViTForImageClassification.from_pretrained("google/vit-base-patch16-224", config=config)
-    model = model.to(torch.bfloat16)
+    model = load_torch_model(model_location_generator)
+    config = model.config
 
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
     torch_attention_mask = torch.ones(config.num_hidden_layers, sequence_size, dtype=torch.float32)

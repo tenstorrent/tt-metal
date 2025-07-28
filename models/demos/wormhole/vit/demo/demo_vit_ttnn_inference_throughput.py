@@ -7,10 +7,11 @@ import time
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoImageProcessor, ViTConfig, ViTForImageClassification
+from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.demos.vit.common import load_torch_model
 from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh
 from models.demos.wormhole.vit.demo.vit_helper_funcs import get_batch, get_data_loader
 from models.perf.perf_utils import prep_perf_report
@@ -34,7 +35,7 @@ os.environ["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": true}'
 
 
 @pytest.mark.skipif(is_blackhole(), reason="Unsupported on BH")
-def test_vit(device):
+def test_vit(device, model_location_generator):
     torch.manual_seed(0)
 
     disable_persistent_kernel_cache()
@@ -43,8 +44,8 @@ def test_vit(device):
     batch_size = 8
     sequence_size = 224
 
-    config = ViTConfig.from_pretrained(model_name)
-    model = ViTForImageClassification.from_pretrained(model_name, config=config)
+    model = load_torch_model(model_location_generator, embedding=True)
+    config = model.config
     config = ttnn_optimized_sharded_vit_wh.update_model_config(config, batch_size)
     image_processor = AutoImageProcessor.from_pretrained(model_name)
 

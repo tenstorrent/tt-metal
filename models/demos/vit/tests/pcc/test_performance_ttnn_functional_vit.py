@@ -6,13 +6,13 @@ import time
 
 import pytest
 import torch
-import transformers
 from datasets import load_dataset
 from loguru import logger
 from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.demos.vit.common import load_torch_model
 from models.demos.vit.tt import ttnn_functional_vit
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import (
@@ -38,14 +38,14 @@ def get_expected_times(functional_vit):
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [224])  ## padded from 197 to 224
 @pytest.mark.parametrize("functional_vit", [ttnn_functional_vit])
-def test_performance_vit_encoder(device, model_name, batch_size, sequence_size, functional_vit):
+def test_performance_vit_encoder(
+    device, model_name, batch_size, sequence_size, functional_vit, model_location_generator
+):
     disable_persistent_kernel_cache()
 
-    config = transformers.ViTConfig.from_pretrained(model_name)
-    config.num_hidden_layers = 12
-    model = transformers.ViTForImageClassification.from_pretrained(
-        "google/vit-base-patch16-224", config=config
-    ).vit.encoder
+    model = load_torch_model(model_location_generator)
+    config = model.config
+    model = model.vit.encoder
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
     torch_attention_mask = torch.ones(config.num_hidden_layers, sequence_size, dtype=torch.float32)
@@ -110,12 +110,13 @@ def test_performance_vit_encoder(device, model_name, batch_size, sequence_size, 
 @pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("sequence_size", [224])
 @pytest.mark.parametrize("functional_vit", [ttnn_functional_vit])
-def test_performance_vit_e2e(device, model_name, batch_size, image_size, sequence_size, functional_vit):
+def test_performance_vit_e2e(
+    device, model_name, batch_size, image_size, sequence_size, functional_vit, model_location_generator
+):
     disable_persistent_kernel_cache()
 
-    config = transformers.ViTConfig.from_pretrained(model_name)
-    config.num_hidden_layers = 12
-    model = transformers.ViTForImageClassification.from_pretrained("google/vit-base-patch16-224", config=config)
+    model = load_torch_model(model_location_generator)
+    config = model.config
 
     dataset = load_dataset("huggingface/cats-image")
     image = dataset["test"]["image"]

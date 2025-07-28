@@ -12,6 +12,7 @@ from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.demos.vit.common import load_torch_model
 from models.demos.vit.tt import ttnn_optimized_vit_highres_gs as ttnn_optimized_vit_highres
 from models.utility_functions import is_blackhole, is_wormhole_b0, torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -58,11 +59,11 @@ def interpolate_pos_encoding(
 @pytest.mark.parametrize("image_size_h", [1024])
 @pytest.mark.parametrize("image_size_w", [1024])
 @pytest.mark.parametrize("image_channels", [3])
-def test_vit_patch_embeddings(device, model_name, image_size_h, image_size_w, image_channels):
+def test_vit_patch_embeddings(device, model_name, image_size_h, image_size_w, image_channels, model_location_generator):
     torch.manual_seed(0)
 
-    config = transformers.ViTConfig.from_pretrained(model_name)
-    model = transformers.ViTForImageClassification.from_pretrained("google/vit-base-patch16-224")
+    model = load_torch_model(model_location_generator, embedding=True)
+    config = model.config
 
     torch_pixel_values = torch_random((1, image_channels, image_size_h, image_size_w), -1, 1, dtype=torch.float32)
     torch_output, *_ = model.vit.embeddings.patch_embeddings(torch_pixel_values, interpolate_pos_encoding=True)
@@ -93,11 +94,11 @@ def test_vit_patch_embeddings(device, model_name, image_size_h, image_size_w, im
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("image_size_h", [1024])
 @pytest.mark.parametrize("image_size_w", [1024])
-def test_vit_embeddings(device, model_name, image_size_h, image_size_w):
+def test_vit_embeddings(device, model_name, image_size_h, image_size_w, model_location_generator):
     torch.manual_seed(0)
 
-    config = transformers.ViTConfig.from_pretrained(model_name)
-    model = transformers.ViTForImageClassification.from_pretrained("google/vit-base-patch16-224")
+    model = load_torch_model(model_location_generator, embedding=True)
+    config = model.config
 
     dataset = load_dataset("huggingface/cats-image")
     image = dataset["test"]["image"][0].resize((image_size_h, image_size_w))
@@ -274,12 +275,12 @@ def test_vit_output(device, model_name, sequence_size):
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("sequence_size", [4032])
-def test_vit_layer(device, model_name, batch_size, sequence_size):
+def test_vit_layer(device, model_name, batch_size, sequence_size, model_location_generator):
     torch.manual_seed(0)
 
-    config = transformers.ViTConfig.from_pretrained(model_name)
-    model = transformers.ViTForImageClassification.from_pretrained("google/vit-base-patch16-224").vit.encoder.layer[0]
-    # print(model)
+    model = load_torch_model(model_location_generator, embedding=True)
+    config = model.config
+    model = model.vit.encoder.layer[0]
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
     torch_attention_mask = torch.ones(batch_size, 1, 1, sequence_size, dtype=torch.float32)
@@ -322,14 +323,12 @@ def test_vit_layer(device, model_name, batch_size, sequence_size):
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("sequence_size", [640])  #
-def test_vit_encoder(device, model_name, sequence_size):
+def test_vit_encoder(device, model_name, sequence_size, model_location_generator):
     torch.manual_seed(0)
 
-    config = transformers.ViTConfig.from_pretrained(model_name)
-    config.num_hidden_layers = 12
-    model = transformers.ViTForImageClassification.from_pretrained(
-        "google/vit-base-patch16-224", config=config
-    ).vit.encoder
+    model = load_torch_model(model_location_generator)
+    config = model.config
+    model = model.vit.encoder
 
     torch_hidden_states = torch_random((1, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
     torch_attention_mask = torch.ones(config.num_hidden_layers, sequence_size, dtype=torch.float32)
@@ -379,12 +378,11 @@ def test_vit_encoder(device, model_name, sequence_size):
 @pytest.mark.parametrize("image_size_h", [1024])
 @pytest.mark.parametrize("image_size_w", [1024])
 @pytest.mark.parametrize("sequence_size", [4032])
-def test_vit(device, model_name, image_size_h, image_size_w, sequence_size):
+def test_vit(device, model_name, image_size_h, image_size_w, sequence_size, model_location_generator):
     torch.manual_seed(0)
 
-    config = transformers.ViTConfig.from_pretrained(model_name)
-    config.num_hidden_layers = 12
-    model = transformers.ViTForImageClassification.from_pretrained("google/vit-base-patch16-224", config=config)
+    model = load_torch_model(model_location_generator)
+    config = model.config
 
     dataset = load_dataset("huggingface/cats-image")
     image = dataset["test"]["image"][0].resize((image_size_h, image_size_w))

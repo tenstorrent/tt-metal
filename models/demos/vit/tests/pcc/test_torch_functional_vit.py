@@ -7,6 +7,7 @@ import torch
 import transformers
 from ttnn.model_preprocessing import preprocess_model_parameters
 
+from models.demos.vit.common import load_torch_model
 from models.demos.vit.reference import torch_functional_vit
 from models.utility_functions import is_blackhole, is_wormhole_b0, torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -233,12 +234,11 @@ def test_vit_encoder(model_name, batch_size, sequence_size):
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("image_channels", [3])
-def test_vit(model_name, batch_size, image_size, image_channels):
+def test_vit(model_name, batch_size, image_size, image_channels, model_location_generator):
     torch.manual_seed(0)
 
-    config = transformers.ViTConfig.from_pretrained(model_name)
-    model = transformers.ViTForImageClassification.from_pretrained("google/vit-base-patch16-224")
-    model = model.to(torch.bfloat16)
+    model = load_torch_model(model_location_generator, embedding=True)
+    config = model.config
 
     torch_pixel_values = torch_random((batch_size, image_channels, image_size, image_size), -1, 1, dtype=torch.bfloat16)
     torch_output, *_ = model(torch_pixel_values).logits
