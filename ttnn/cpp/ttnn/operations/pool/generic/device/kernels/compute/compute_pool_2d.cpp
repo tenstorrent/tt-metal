@@ -40,10 +40,9 @@ void MAIN {
     constexpr uint32_t face_r_dim = window_size_hw < 16 ? window_size_hw : 16;
     constexpr bool last_tile_is_partial = in_c % 32 != 0 && in_c % 32 < 16;
     constexpr uint32_t num_faces_in_input_tile = (max_sticks_for_reduction < 32 || window_size_hw <= 16) ? 2 : 4;
-    constexpr uint32_t num_faces_in_output_tile = last_tile_is_partial ? 1 : 2;
+    constexpr uint32_t num_faces_in_output_tile = 2;
     constexpr uint32_t num_faces_in_last_output_tile = last_tile_is_partial ? 1 : 2;
     constexpr uint32_t num_out_sticks = 1;
-    constexpr uint32_t num_tiles_c = last_tile_is_partial ? in_ntiles_c - 1 : in_ntiles_c;
 
     constexpr bool is_avg_pool = REDUCE_OP == PoolType::SUM;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
@@ -51,9 +50,9 @@ void MAIN {
     constexpr bool is_large_kernel = window_size_hw > max_sticks_for_reduction;
     constexpr uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
     constexpr uint32_t max_tiles_per_iter =
-        num_tiles_c < MAX_TILES_PER_REDUCTION ? num_tiles_c : MAX_TILES_PER_REDUCTION;
+        in_ntiles_c < MAX_TILES_PER_REDUCTION ? in_ntiles_c : MAX_TILES_PER_REDUCTION;
     constexpr uint32_t partial_iter_output_tiles =
-        num_tiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : num_tiles_c % MAX_TILES_PER_REDUCTION;
+        in_ntiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MAX_TILES_PER_REDUCTION;
 
     static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::SUM, "Only supports REDUCE_OP = MAX or Sum");
     constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
@@ -66,7 +65,7 @@ void MAIN {
     constexpr bool tilize_reconfig =
         in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 && window_size_hw <= 16;
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
-        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_last_input_tile, face_r_dim);
+        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_input_tile, face_r_dim);
     pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
@@ -125,18 +124,18 @@ void MAIN {
             tile_regs_commit();
             tile_regs_wait();
             if (last_c_block) {
-                if constexpr (last_tile_is_partial) {
-                    if (partial_iter_output_tiles > 1) {
-                        pack_untilize_dest<partial_iter_output_tiles - 1, partial_iter_output_tiles>(
-                            out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                        pack_untilize_dest_init<1>(out_cb_id, num_out_sticks, num_faces_in_last_output_tile);
-                    }
-                    pack_untilize_dest<1, partial_iter_output_tiles>(
-                        out_cb_id, 1, partial_iter_output_tiles - 1, num_out_sticks, num_faces_in_last_output_tile);
-                } else {
-                    pack_untilize_dest<partial_iter_output_tiles>(
-                        out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                }
+                // if constexpr (last_tile_is_partial) {
+                //     if (partial_iter_output_tiles > 1) {
+                //         pack_untilize_dest<partial_iter_output_tiles - 1, partial_iter_output_tiles>(
+                //             out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                //         pack_untilize_dest_init<1>(out_cb_id, num_out_sticks, num_faces_in_last_output_tile);
+                //     }
+                //     pack_untilize_dest<1, partial_iter_output_tiles>(
+                //         out_cb_id, 1, partial_iter_output_tiles - 1, num_out_sticks, num_faces_in_last_output_tile);
+                // } else {
+                pack_untilize_dest<partial_iter_output_tiles>(
+                    out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                // }
                 cb_push_back(out_cb_id, tiles_to_reserve);
             } else {
                 DPRINT << "rest of the cases" << ENDL();
