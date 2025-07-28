@@ -422,6 +422,12 @@ void do_debug_test(
         }
     }
 
+    std::cerr << "Check final value\n";
+    // Output the buffer values to see if we receive the final value on the core
+    auto buffer_val = llrt::read_hex_vec_from_core(device->id(), virtual_core, buffer_base, sizeof(uint32_t))[0];
+    auto arg_val = llrt::read_hex_vec_from_core(device->id(), virtual_core, arg_base, sizeof(uint32_t))[0];
+    EXPECT_EQ(buffer_val, 0xd0e50000 | ((num_writes - 1) & 0xffff));
+
     std::cerr << "Kernel done" << std::endl;
     llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{0xdead0000}, buffer_base);
 }

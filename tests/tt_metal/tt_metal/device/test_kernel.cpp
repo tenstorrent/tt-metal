@@ -63,9 +63,11 @@ void kernel_main() {
                     debug_dump[3] = msg_type;
                     debug_dump[4] = msg_count;
                     debug_dump[5] = arg_val;
-                    while (true) {
-                        __asm__ volatile("nop");
-                    }
+                    // expect the correct message because this was the wrong one
+                    msg_count--;
+                    // while (true) {
+                    //     __asm__ volatile("nop");
+                    // }
                 }
             } else if (msg_status == 0xdead0000) {
                 return;
