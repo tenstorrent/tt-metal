@@ -80,7 +80,6 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
                 it += stride_size;
             } else {
                 const auto start_core = it->value().first;
-                const auto start_page = it->value().second;
                 Stride stride = Stride{.core = {0, 0}, .data = 0};
                 if ((it + 1) == end) {
                     ret_map[output_core].push_back(PageStride{

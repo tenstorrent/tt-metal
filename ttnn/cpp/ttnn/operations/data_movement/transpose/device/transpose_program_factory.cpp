@@ -956,8 +956,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     uint32_t num_C_blocks_per_core = shard_height > C ? shard_height / C : 1;
 
     uint32_t curr_core_offset = 0;
-    uint32_t curr_core = 0;
-    uint32_t curr_N = 0;
 
     uint32_t curr_c = 0, curr_h = 0;
     for (uint32_t i = 0, curr_sticks_read = 0; i < num_cores; i++) {

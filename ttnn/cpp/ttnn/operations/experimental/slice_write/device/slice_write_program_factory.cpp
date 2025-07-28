@@ -510,7 +510,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
 
     auto shard_spec = input_tensor.shard_spec().value();
     auto input_cores = shard_spec.grid;

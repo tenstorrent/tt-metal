@@ -195,7 +195,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
     // tensor shape
     const auto& shape = a.padded_shape();
-    uint32_t M = a.physical_volume() / shape[-1];
     uint32_t K = shape[-1];
     uint32_t Kt = K / TILE_WIDTH;
     // block

@@ -241,7 +241,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     uint32_t num_mux_cores_per_direction_per_link = 1;
     uint32_t num_cores_per_link =
         num_directions_per_link * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
-    uint32_t num_workers_per_link = num_directions_per_link * num_workers_per_direction;
     const auto [all_core_range, all_cores] =
         choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
     std::set<CoreRange> sender_worker_core_ranges;

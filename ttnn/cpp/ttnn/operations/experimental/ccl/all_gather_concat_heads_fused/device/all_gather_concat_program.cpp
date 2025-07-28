@@ -157,12 +157,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     // concat info
     const auto& input_concat_shape = temp_tensor.padded_shape();
     const uint32_t head_dim = input_concat_shape[-1];
-    const uint32_t batch = input_concat_shape[1];
     uint32_t single_tile_size =
         tt::tt_metal::detail::TileSize(tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()));
 
     auto tile_shape = temp_tensor.tensor_spec().tile().get_tile_shape();
-    auto tile_h = tile_shape[0];
     auto tile_w = tile_shape[1];
 
     auto face_shape = temp_tensor.tensor_spec().tile().get_face_shape();
@@ -171,7 +169,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     uint32_t first_phase = 1;
 
     const uint32_t head_tiles = head_dim / tile_w;
-    const uint32_t head_size = head_tiles * single_tile_size;
 
     uint32_t element_size = temp_tensor.element_size();
     uint32_t sub_tile_line_bytes = face_w * element_size;
