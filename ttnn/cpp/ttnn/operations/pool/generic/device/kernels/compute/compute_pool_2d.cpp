@@ -92,9 +92,10 @@ void MAIN {
             const bool first_c_block = c_i == 0;
             const uint32_t tiles_to_reduce =
                 tilize_reconfig ? (last_c_block ? partial_iter_output_tiles : max_tiles_per_iter) : max_tiles_per_iter;
+            const uint32_t number_of_tiles = last_c_block ? partial_iter_output_tiles : max_tiles_per_iter;
             const uint32_t tiles_to_reserve =
-                last_tile_is_partial ? (tiles_to_reduce - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
-                                     : tiles_to_reduce * num_faces_in_output_tile;
+                last_tile_is_partial ? (number_of_tiles - 1) * num_faces_in_output_tile + num_faces_in_last_output_tile
+                                     : number_of_tiles * num_faces_in_output_tile;
             cb_reserve_back(out_cb_id, tiles_to_reserve);
             if constexpr (tilize_reconfig) {
                 if (first_c_block || last_c_block) {
