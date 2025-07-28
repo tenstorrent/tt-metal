@@ -111,6 +111,7 @@ SliceWidth = ttnn.Conv2dSliceWidth
     "input_layout, dtype",
     [[ttnn.TILE_LAYOUT, ttnn.bfloat8_b], [ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16]],
 )
+@pytest.mark.parametrize("auto_slice", [True, False])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_channels, output_channels, input_height, input_width, slice_type, num_slices, weights_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity",
@@ -153,6 +154,7 @@ def test_conv_dram(
     fp32_accum,
     input_layout,
     packer_l1_acc,
+    auto_slice,
 ):
     if device.core_grid.y == 7:
         pytest.skip("Tests have been configured for N150.")
@@ -187,6 +189,6 @@ def test_conv_dram(
         fast_compare=True,
         slice_config=ttnn.Conv2dSliceConfig(
             slice_type=slice_type,
-            num_slices=num_slices,
+            num_slices=0 if auto_slice else num_slices,
         ),
     )
