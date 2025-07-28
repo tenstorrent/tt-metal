@@ -12,6 +12,12 @@
 #include <tt-metalium/fabric.hpp>
 
 #include "tests/tt_metal/multihost/fabric_tests/mesh_socket_yaml_parser.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
+#include "impl/context/metal_context.hpp"
+
+using MeshId = tt::tt_fabric::MeshId;
+using MeshShape = tt::tt_fabric::MeshShape;
+using ControlPlane = tt::tt_fabric::ControlPlane;
 
 namespace tt::tt_fabric::mesh_socket_tests {
 
@@ -72,6 +78,8 @@ public:
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> get_mesh_device() const;
 
 private:
+    void initialize_and_validate_custom_physical_config(const PhysicalMeshConfig& physical_mesh_config);
+
     /**
      * @brief Run a specific test configuration
      *
@@ -157,6 +165,11 @@ private:
 
     // Test execution state
     std::unordered_map<std::string, size_t> test_name_to_index_;
+
+    // Control plane and mesh configuration
+    ControlPlane* control_plane_ptr_;
+    MeshId local_mesh_id_;
+    MeshShape mesh_shape_;
 
     // Default test parameters
     static constexpr uint32_t DEFAULT_NUM_TRANSACTIONS = 20;
