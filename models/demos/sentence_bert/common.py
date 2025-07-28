@@ -26,7 +26,7 @@ def load_torch_model(reference_model, target_prefix="", model_location_generator
         state_dict = torch_model.state_dict()
     else:
         weights = (
-            model_location_generator("vision_models/sentence_bert", model_subdir="", download_if_ci_v2=True)
+            model_location_generator("vision-models/sentence_bert", model_subdir="", download_if_ci_v2=True)
             / "bert_base_turkish_cased_mean_nli_stsb_tr.pth"
         )
         state_dict = torch.load(weights)
