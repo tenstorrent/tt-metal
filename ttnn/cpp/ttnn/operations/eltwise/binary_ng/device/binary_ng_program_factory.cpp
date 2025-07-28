@@ -628,11 +628,12 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
             tt::CBIndex::c_4, program, all_device_cores, b_intermediate_single_tile_size, 1, b_intermediate_format);
     }
 
-    auto [a_cb_llk, a_cb_llk_handle] =
+    if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_A) {
         create_cb(tt::CBIndex::c_5, program, all_device_cores, a_single_tile_size, 2, a_data_format);
-
-    auto [b_cb_llk, b_cb_llk_handle] =
+    }
+    if (operation_attributes.subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
         create_cb(tt::CBIndex::c_6, program, all_device_cores, b_single_tile_size, 2, b_data_format);
+    }
 
     auto [c_cb, c_cb_handle] = create_cb(
         tt::CBIndex::c_2,
