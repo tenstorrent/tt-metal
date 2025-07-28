@@ -1843,7 +1843,7 @@ void py_module(py::module& module) {
         ttnn::logical_not,
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{!input\_tensor_i}})doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32)doc");
     bind_unary_operation(
         module,
         ttnn::ltz,
@@ -1960,6 +1960,12 @@ void py_module(py::module& module) {
         module,
         ttnn::asinh,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|asinh|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation(
+        module,
+        ttnn::hardsigmoid,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|hardsigmoid|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
@@ -2142,7 +2148,7 @@ void py_module(py::module& module) {
         ttnn::logical_not_,
         R"doc(Performs logical_not inplace function on :attr:`input_tensor`.)doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32)doc");
     bind_unary_composite(
         module,
         ttnn::normalize_global,
@@ -2156,9 +2162,6 @@ void py_module(py::module& module) {
 
     bind_unary_composite_floats_with_default(
         module, ttnn::hardswish, "scale", "Scale value", 1.0f / 6.0f, "shift", "Shift value", 0.5f);
-
-    bind_unary_composite_floats_with_default(
-        module, ttnn::hardsigmoid, "scale", "Scale value", 1.0f / 6.0f, "shift", "Shift value", 0.5f);
 
     bind_hardtanh(module, ttnn::hardtanh, "min_val", "min value", -1.0f, "max_val", "max value", 1.0f);
 

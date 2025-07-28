@@ -419,6 +419,7 @@ class ModelArgs:
         max_batch_size=1,
         max_seq_len=1024 * 128,
         optimizations=None,
+        cache_hf=False,  # Set to False to reduce memory usage by not caching HF model
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
@@ -441,6 +442,7 @@ class ModelArgs:
         self.from_hf_url = False  # updated below if true
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
         self.dummy_weights = dummy_weights
+        self.cache_hf_flag = cache_hf  # Whether to cache HF model to avoid multiple loads (uses extra memory)
         self.cached_hf_model = None  # Save any HF model object to avoid loading it multiple times for reference methods
 
         assert not os.getenv(
@@ -1356,6 +1358,26 @@ class ModelArgs:
         else:
             return ""
 
+    def _get_hidden_activation_type(self, config):
+        activation_map = {
+            "gelu": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0),
+            "gelu_pytorch_tanh": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 1.0),
+            "relu": ttnn.UnaryOpType.RELU,
+            "silu": ttnn.UnaryOpType.SILU,
+            "swish": ttnn.UnaryOpType.SILU,
+        }
+
+        hidden_activation = config.get("hidden_act") or config.get("hidden_activation")
+        if not hidden_activation:
+            # Default to SILU if no activation is specified
+            return ttnn.UnaryOpType.SILU
+
+        hidden_activation = hidden_activation.lower()
+        if hidden_activation not in activation_map:
+            raise NotImplementedError(f"Unsupported activation '{hidden_activation}'")
+
+        return activation_map.get(hidden_activation, ttnn.UnaryOpType.SILU)
+
     def _set_model_specific_params(self):
         # Gemma3 specific params
         self.rms_norm_add_unit_offset = "gemma-3" in self.base_model_name.lower()
@@ -1373,7 +1395,7 @@ class ModelArgs:
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
-        self.head_dim = text_config.get("head_dim", self.dim // self.n_heads)
+        self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
         if is_hf:
             self.max_context_len = text_config.get("max_position_embeddings")
         else:
@@ -1445,6 +1467,11 @@ class ModelArgs:
         else:
             self.rope_scaling_factor = None
             self.orig_context_len = None
+
+        self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
+
+        # Configurable MLP activation type
+        self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
         # Vision params (Meta-specific)
         self.vision_chunk_size = config.get("vision_chunk_size", -1)
@@ -1615,8 +1642,15 @@ class ModelArgs:
             if self.from_hf_url:
                 from transformers import AutoConfig, AutoModelForCausalLM
 
-                model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                self.cached_hf_model = model
+                model = AutoModelForCausalLM.from_pretrained(
+                    self.CKPT_DIR,
+                    torch_dtype="auto"
+                    # Note that the default setting is torch.dtype.float32, but model weights are
+                    # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
+                    # unnecessary cast.
+                )
+                if self.cache_hf_flag:
+                    self.cached_hf_model = model
                 state_dict = model.state_dict()
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
@@ -1959,7 +1993,78 @@ class ModelArgs:
             # Create a HuggingFace AutoTokenizer
             from transformers import AutoTokenizer
 
-            tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
+            # Mapping of base model names to their known tokenizer paths
+            # These are the original models that have proper tokenizers
+            base_model_tokenizer_mapping = {
+                "Qwen2.5-0.5B": "Qwen/Qwen2.5-Coder-0.5B-Instruct",
+                "Qwen2.5-1.5B": "Qwen/Qwen2.5-1.5B-Instruct",
+                "Qwen2.5-3B": "Qwen/Qwen2.5-3B-Instruct",
+                "Qwen2.5-7B": "Qwen/Qwen2.5-7B-Instruct",
+                "Qwen2.5-14B": "Qwen/Qwen2.5-14B-Instruct",
+                "Qwen2.5-32B": "Qwen/Qwen2.5-32B-Instruct",
+                "Qwen2.5-72B": "Qwen/Qwen2.5-72B-Instruct",
+                "Llama-3.1-8B": "meta-llama/Llama-3.1-8B-Instruct",
+                "Llama-3.1-70B": "meta-llama/Llama-3.1-70B-Instruct",
+                "Llama-3.2-1B": "meta-llama/Llama-3.2-1B-Instruct",
+                "Llama-3.2-3B": "meta-llama/Llama-3.2-3B-Instruct",
+                "Llama-3.2-11B": "meta-llama/Llama-3.2-11B-Vision-Instruct",
+                "Llama-3.2-90B": "meta-llama/Llama-3.2-90B-Vision-Instruct",
+                "Mistral-7B": "mistralai/Mistral-7B-Instruct-v0.3",
+            }
+
+            logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
+            logger.info(f"Model name: {self.model_name}")
+            logger.info(f"Base model name: {self.base_model_name}")
+
+            try:
+                # Try to load tokenizer from the original model path
+                tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
+                logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
+            except Exception as e:
+                logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
+
+                # Try to use base model tokenizer as fallback
+                fallback_tokenizer_path = base_model_tokenizer_mapping.get(self.base_model_name)
+
+                # If no direct match, try to infer from model name patterns
+                if not fallback_tokenizer_path:
+                    model_name_lower = self.model_name.lower()
+                    if "qwen2.5" in model_name_lower and "0.5b" in model_name_lower:
+                        fallback_tokenizer_path = "Qwen/Qwen2.5-Coder-0.5B-Instruct"
+                    elif "qwen2.5" in model_name_lower and "1.5b" in model_name_lower:
+                        fallback_tokenizer_path = "Qwen/Qwen2.5-1.5B-Instruct"
+                    elif "qwen2.5" in model_name_lower and "3b" in model_name_lower:
+                        fallback_tokenizer_path = "Qwen/Qwen2.5-3B-Instruct"
+                    elif "qwen2.5" in model_name_lower and "7b" in model_name_lower:
+                        fallback_tokenizer_path = "Qwen/Qwen2.5-7B-Instruct"
+                    elif "qwen2.5" in model_name_lower and "14b" in model_name_lower:
+                        fallback_tokenizer_path = "Qwen/Qwen2.5-14B-Instruct"
+                    elif "qwen2.5" in model_name_lower and "32b" in model_name_lower:
+                        fallback_tokenizer_path = "Qwen/Qwen2.5-32B-Instruct"
+                    elif "qwen2.5" in model_name_lower and "72b" in model_name_lower:
+                        fallback_tokenizer_path = "Qwen/Qwen2.5-72B-Instruct"
+                    elif "llama" in model_name_lower and "3.1" in model_name_lower and "8b" in model_name_lower:
+                        fallback_tokenizer_path = "meta-llama/Llama-3.1-8B-Instruct"
+                    elif "llama" in model_name_lower and "3.1" in model_name_lower and "70b" in model_name_lower:
+                        fallback_tokenizer_path = "meta-llama/Llama-3.1-70B-Instruct"
+                    elif "llama" in model_name_lower and "3.2" in model_name_lower and "1b" in model_name_lower:
+                        fallback_tokenizer_path = "meta-llama/Llama-3.2-1B-Instruct"
+                    elif "llama" in model_name_lower and "3.2" in model_name_lower and "3b" in model_name_lower:
+                        fallback_tokenizer_path = "meta-llama/Llama-3.2-3B-Instruct"
+                    elif "mistral" in model_name_lower and "7b" in model_name_lower:
+                        fallback_tokenizer_path = "mistralai/Mistral-7B-Instruct-v0.3"
+
+                if fallback_tokenizer_path:
+                    logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
+                    try:
+                        tokenizer = AutoTokenizer.from_pretrained(fallback_tokenizer_path)
+                        logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
+                    except Exception as fallback_e:
+                        logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
+                        raise fallback_e
+                else:
+                    logger.error(f"No fallback tokenizer found for base model: {self.base_model_name}")
+                    raise e
 
             # Add meta-compatible stop token list to the HF tokenizer
             if not "stop_tokens" in tokenizer.__dict__:
@@ -2013,11 +2118,14 @@ class ModelArgs:
                 config.num_hidden_layers = self.n_layers
                 model = AutoModelForCausalLM.from_config(config)
             else:
-                if self.cached_hf_model is None:
+                if self.cache_hf_flag and self.cached_hf_model is None:
                     model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
                     self.cached_hf_model = model
-                else:
+                elif self.cache_hf_flag and self.cached_hf_model is not None:
                     model = self.cached_hf_model
+                else:
+                    # No caching - load fresh each time
+                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
                 # HACK: Assume that we want the language model layers only
                 if hasattr(model, "language_model"):
                     model.model = model.language_model
@@ -2077,12 +2185,7 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            # TODO: Generalize for other HF models
-            model_name_env = os.getenv("HF_MODEL")
-            if model_name_env is not None and "mistral" in model_name_env.lower():
-                wrapper = HfDecoderWrapper(layer, self.head_dim, layer.self_attn.rotary_emb)
-            else:
-                wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
+            wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
             return wrapper
 
     def reference_attention(self):
@@ -2093,7 +2196,7 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            use_position_embeddings = layer.__class__.__name__ == "Qwen3Attention"
+            use_position_embeddings = layer.__class__.__name__ in ("Qwen3Attention", "MistralAttention")
             wrapper = HfAttentionWrapper(
                 layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
             )
@@ -2257,12 +2360,7 @@ class HfDecoderWrapper:
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
-        # TODO: Generalize for other HF models
-        model_name_env = os.getenv("HF_MODEL")
-        if model_name_env is not None and "mistral" in model_name_env.lower():
-            position_embeddings = self.rotary_emb(x, x.shape[1])
-        else:
-            position_embeddings = self.rotary_emb(x, position_ids)
+        position_embeddings = self.rotary_emb(x, position_ids)
 
         if mask is not None:
             while len(mask.shape) < 4:

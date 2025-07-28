@@ -1,11 +1,4 @@
 tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_tilize_api.h
-tt_metal/impl/dispatch/kernels/eth_tunneler.cpp
-tt_metal/impl/dispatch/kernels/packet_demux.cpp
-tt_metal/impl/dispatch/kernels/packet_mux.cpp
-tt_metal/impl/dispatch/kernels/packet_queue.hpp
-tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp
-tt_metal/impl/dispatch/kernels/vc_eth_tunneler.cpp
-tt_metal/impl/dispatch/kernels/vc_packet_router.cpp
 ttnn/cpp/pybind11/tensor.cpp
 ttnn/cpp/ttnn/device_operation.hpp
 ttnn/cpp/ttnn/graph/graph_processor.cpp
@@ -64,17 +57,6 @@ tests/tt_metal/tt_metal/dispatch/sub_device_test_utils.hpp
 tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/pgm_dispatch_golden.json
 tests/tt_metal/tt_metal/perf_microbenchmark/10_dram_read_remote_cb_sync/test_dram_read_remote_cb.cpp
 tests/tt_metal/tt_metal/perf_microbenchmark/11_remote_cb_sync_matmul_single_core/test_remote_cb_sync_matmul.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_rx.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_tx.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_mux_demux.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_mux_demux_2level.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_tx_rx.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_vc_bi_tunnel_2ep.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_vc_bi_tunnel_4ep.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_vc_loopback_tunnel.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_vc_mux_demux.cpp
-tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_vc_uni_tunnel.cpp
 tests/ttnn/unit_tests/gtests/test_ccl_on_galaxy.cpp
 
 # Suspicious Formatting Could Cause Issues

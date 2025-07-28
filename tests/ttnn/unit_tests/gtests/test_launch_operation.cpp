@@ -152,9 +152,9 @@ TEST(LaunchOperationTest, MeshDeviceOperationAdapterGetName) {
         "ExampleDeviceOperation");
 }
 
-using LaunchOperationT3000Test = tt::tt_metal::T3000MeshDeviceFixture;
+using LaunchOperation2x4Test = tt::tt_metal::MeshDevice2x4Fixture;
 
-TEST_F(LaunchOperationT3000Test, UniformTensor) {
+TEST_F(LaunchOperation2x4Test, UniformTensor) {
     const TensorSpec tensor_spec = TensorSpec(
         ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     auto full_tensor = tt::tt_metal::allocate_tensor_on_device(tensor_spec, mesh_device_.get());
@@ -174,7 +174,7 @@ TEST_F(LaunchOperationT3000Test, UniformTensor) {
             ttnn::MeshCoordinate{1, 3}));
 }
 
-TEST_F(LaunchOperationT3000Test, UnevenTensor) {
+TEST_F(LaunchOperation2x4Test, UnevenTensor) {
     auto uneven_tensor = make_tensor_with_num_shards(2, mesh_device_.get());
 
     EXPECT_THAT(uneven_tensor.device_storage().coords, SizeIs(2));
@@ -187,7 +187,7 @@ TEST_F(LaunchOperationT3000Test, UnevenTensor) {
             ttnn::MeshCoordinate{0, 1}));
 }
 
-TEST_F(LaunchOperationT3000Test, FilterTensorShards) {
+TEST_F(LaunchOperation2x4Test, FilterTensorShards) {
     const TensorSpec tensor_spec = TensorSpec(
         ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
     auto full_tensor = tt::tt_metal::allocate_tensor_on_device(tensor_spec, mesh_device_.get());
@@ -244,7 +244,7 @@ TEST_F(LaunchOperationT3000Test, FilterTensorShards) {
     EXPECT_THAT(extract_tensor_coordinates(full_tensor), IsEmpty());
 }
 
-TEST_F(LaunchOperationT3000Test, LaunchOpFilterTensorShards) {
+TEST_F(LaunchOperation2x4Test, LaunchOpFilterTensorShards) {
     auto full_tensor = make_tensor_with_num_shards(8, mesh_device_.get());
     auto sum = ttnn::add(full_tensor, full_tensor);
 
@@ -272,7 +272,7 @@ TEST_F(LaunchOperationT3000Test, LaunchOpFilterTensorShards) {
             ttnn::MeshCoordinate{0, 1}));
 }
 
-TEST_F(LaunchOperationT3000Test, CachingHeterogeneousDispatch) {
+TEST_F(LaunchOperation2x4Test, CachingHeterogeneousDispatch) {
     EXPECT_EQ(mesh_device_->get_program_cache().num_entries(), 0);
 
     auto full_tensor = make_tensor_with_num_shards(8, mesh_device_.get());

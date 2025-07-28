@@ -9,6 +9,9 @@ from tqdm import tqdm
 import json
 from pathlib import Path
 from loguru import logger
+from time import time
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 
 
 # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
@@ -126,7 +129,7 @@ def load_meta_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):
         checkpoints = [ckpt_name for ckpt_name in checkpoints if ckpt_name.stem.startswith("layers_")]
         checkpoint = load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx)
     else:
-        checkpoint = load_sharded_checkpoints(checkpoints, n_layers)
+        checkpoint = load_sharded_checkpoints_optimized(checkpoints, n_layers)
 
     return checkpoint
 
@@ -146,6 +149,48 @@ def load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx):
 
         loaded_ckpt = torch.load(ckpt, map_location="cpu")
         checkpoint.update(loaded_ckpt)
+    return checkpoint
+
+
+def load_sharded_checkpoints_optimized(checkpoints, n_layers):
+    logger.info(f"Loading {len(checkpoints)} checkpoint files")
+    start_time = time()
+
+    def load_single_checkpoint(ckpt_path):
+        local_data = defaultdict(list)
+        loaded_ckpt = torch.load(ckpt_path, map_location="cpu")
+        for key, value in loaded_ckpt.items():
+            if "layers." in key:
+                layer_num = int(key.split("layers.")[1].split(".")[0])
+                if n_layers and layer_num >= n_layers:
+                    continue
+            local_data[key].append(value)
+        del loaded_ckpt
+        return local_data
+
+    all_checkpoints = []
+    with ThreadPoolExecutor(max_workers=min(8, len(checkpoints))) as executor:
+        for result in tqdm(executor.map(load_single_checkpoint, checkpoints), total=len(checkpoints)):
+            all_checkpoints.append(result)
+
+    # Merge all dictionaries
+    checkpoint = defaultdict(list)
+    for partial in all_checkpoints:
+        for key, values in partial.items():
+            checkpoint[key].extend(values)
+
+    # Concatenate checkpoint values
+    for key, values in checkpoint.items():
+        if len(values) == 1 or "norm" in key:
+            checkpoint[key] = values[0]
+        elif key in {"tok_embeddings.weight", "output.weight"}:
+            assert values[0].shape[1] == 8192  # FIXME: make configurable
+            checkpoint[key] = torch.cat(values, dim=0)
+        else:
+            cat_dim = values[0].shape.index(min(values[0].shape))
+            checkpoint[key] = torch.cat(values, dim=cat_dim)
+
+    logger.info(f"Loaded and merged in {time() - start_time:.2f}s")
     return checkpoint
 
 

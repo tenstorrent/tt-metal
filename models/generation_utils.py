@@ -5,13 +5,12 @@
 import torch
 from loguru import logger
 from transformers.generation.configuration_utils import GenerationConfig
-from transformers.generation.logits_process import (
+from transformers.generation.logits_process import (  # ForceTokensLogitsProcessor,
     EncoderNoRepeatNGramLogitsProcessor,
     EncoderRepetitionPenaltyLogitsProcessor,
     ExponentialDecayLengthPenalty,
     ForcedBOSTokenLogitsProcessor,
     ForcedEOSTokenLogitsProcessor,
-    ForceTokensLogitsProcessor,
     HammingDiversityLogitsProcessor,
     InfNanRemoveLogitsProcessor,
     LogitNormalization,
@@ -88,7 +87,7 @@ def _get_logits_processor(
         generation_config.encoder_no_repeat_ngram_size is not None
         and generation_config.encoder_no_repeat_ngram_size > 0
     ):
-        if self.config.is_encoder_decoder:
+        if len(encoder_input_ids.shape) == 2:
             processors.append(
                 EncoderNoRepeatNGramLogitsProcessor(generation_config.encoder_no_repeat_ngram_size, encoder_input_ids)
             )
@@ -146,12 +145,7 @@ def _get_logits_processor(
             if (input_ids_seq_length > 1 or generation_config.forced_bos_token_id is None)
             else begin_index + 1
         )
-        if generation_config.forced_decoder_ids is not None:
-            # generation starts after the last token that is forced
-            begin_index += generation_config.forced_decoder_ids[-1][0]
         processors.append(SuppressTokensAtBeginLogitsProcessor(generation_config.begin_suppress_tokens, begin_index))
-    if generation_config.forced_decoder_ids is not None:
-        processors.append(ForceTokensLogitsProcessor(generation_config.forced_decoder_ids))
     processors = _merge_criteria_processor_list(processors, logits_processor)
     # `LogitNormalization` should always be the last logit processor, when present
     if generation_config.renormalize_logits is True:

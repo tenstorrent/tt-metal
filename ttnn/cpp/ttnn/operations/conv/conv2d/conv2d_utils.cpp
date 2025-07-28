@@ -458,6 +458,14 @@ bool is_1d_deptwise_conv(
     return is_depthwise_conv && is_1d_conv(kernel_width, image_width) && !has_bias;
 }
 
+bool is_singlecore_skip_mcast(
+    const OptimizedConvParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout) {
+    if (memory_layout != TensorMemoryLayout::BLOCK_SHARDED && memory_layout != TensorMemoryLayout::WIDTH_SHARDED) {
+        return false;
+    }
+    return parallelization_config.num_cores_c * parallelization_config.num_cores_nhw == 1;
+}
+
 template <typename DeviceType>
 DeviceComputeKernelConfig get_conv_default_compute_kernel_config(DeviceType* device) {
     return init_device_compute_kernel_config(device->arch(), std::nullopt, MathFidelity::HiFi4, true, false, false);
@@ -999,7 +1007,8 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     const DataType input_datatype,
     const DataType output_datatype,
     const bool enable_bias,
-    bool is_1d_depthwise_conv) {
+    bool is_1d_depthwise_conv,
+    bool skip_act_cb_create) {
     // Input shard doesn't affect L1 usage calculation.
     std::array<uint32_t, 2> dummy_input_shard_shape = {0, 0};
     std::vector<CBInfo> cb_info = get_cb_info(
@@ -1013,7 +1022,8 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         output_datatype,
         dummy_input_shard_shape,
         enable_bias,
-        is_1d_depthwise_conv);
+        is_1d_depthwise_conv,
+        skip_act_cb_create);
     uint32_t total_CB_size = 0;
     uint32_t output_size = 0;
     for (const CBInfo& cb : cb_info) {

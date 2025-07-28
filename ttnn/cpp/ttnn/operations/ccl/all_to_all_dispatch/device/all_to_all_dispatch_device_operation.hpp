@@ -16,6 +16,7 @@
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
+#include <vector>
 
 namespace ttnn::operations::ccl {
 
@@ -59,7 +60,7 @@ struct AllToAllDispatchDeviceOperation {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle ternary_reader_kernel_id;
             tt::tt_metal::KernelHandle binary_writer_kernel_id;
-            CoreCoord core;
+            std::vector<CoreCoord> cores;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

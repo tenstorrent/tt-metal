@@ -31,3 +31,10 @@ def pytest_addoption(parser):
         type=bool,
         help="Whether to print token output every decode iteration",
     )
+    parser.addoption(
+        "--prefill_profile",
+        action="store",
+        default=False,
+        type=bool,
+        help="Whether to enable prefill profile mode",
+    )
