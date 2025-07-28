@@ -22,9 +22,8 @@ def parse_args():
         description="Compare performance benchmarks against golden values."
     )
     parser.add_argument(
-        "--json",
+        "json",
         type=argparse.FileType("r"),
-        required=True,
         help="Path to the JSON file with benchmark results.",
     )
     parser.add_argument(
