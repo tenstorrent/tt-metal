@@ -139,11 +139,6 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         auto remote_config_device_tensor1 = sliding_window::move_config_tensor_to_device(
             remote_config_tensor1, parallel_config_, is_block_sharded, device);
 
-        DataType type = input_tensor.dtype();
-        int num_cores = this->parallel_config_.grid.num_cores();
-        int num_cores_c = conv::get_num_cores_channels_from_parallel_config(this->parallel_config_);
-        int stick_size = input_tensor.padded_shape()[3] / num_cores_c;
-
         int pad_h = config_.get_pad_h() + config_.get_ceil_pad_h();
         int pad_w = config_.get_pad_w() + config_.get_ceil_pad_w();
         bool padding_exists = pad_h > 0 || pad_w > 0;
@@ -241,9 +236,6 @@ Tensor halo_op(
     // NOTE: for HEIGHT_SHARDED, ncores_nhw == ncores
     //       for BLOCK_SHARDED, ncores_nhw is just the ncores along height dim (last tensor dim is split along
     //       width)
-    bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-
-    auto device = input_tensor.device();
 
     auto sliding_window_hash = config.get_hash();
     if (!HaloDeviceOperation::sliding_window_max_out_nsticks_per_core.contains(sliding_window_hash)) {
