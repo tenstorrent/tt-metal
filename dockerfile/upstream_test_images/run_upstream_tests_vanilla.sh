@@ -16,7 +16,7 @@ test_suite_bh_single_pcie_metal_unit_tests() {
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardProgramFixture.*
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=CommandQueueProgramFixture.*
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQProgramFixture.*
-    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=RandomProgramFixture.*
+    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=*RandomProgramFixture.*
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=CommandQueueSingleCardBufferFixture.* # Tests EnqueueRead/EnqueueWrite Buffer from DRAM/L1
 
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_api --gtest_filter=*SimpleDram*:*SimpleL1* # Executable is dependent on arch (provided through GitHub CI workflow scripts)

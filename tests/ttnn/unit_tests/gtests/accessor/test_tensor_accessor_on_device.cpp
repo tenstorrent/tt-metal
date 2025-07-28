@@ -16,9 +16,9 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/tensor_accessor_args.hpp"
 
 namespace tensor_accessor_device_tests {
 
@@ -73,7 +73,7 @@ static void test_single_core_reshard(
     CBHandle cb_in0_idx = tt::CBIndex::c_0;
     auto c_in0_config = CircularBufferConfig(aligned_page_size * num_tiles, {{cb_in0_idx, data_format}})
                             .set_page_size(cb_in0_idx, aligned_page_size);
-    auto cb_in0_id = CreateCircularBuffer(program, grid, c_in0_config);
+    CreateCircularBuffer(program, grid, c_in0_config);
 
     const auto input_accessor_args = TensorAccessorArgs(*input_buffer, params.crta_config);
     const auto output_accessor_args = TensorAccessorArgs(*output_buffer, params.crta_config);
@@ -156,8 +156,8 @@ static void test_multi_core_copy(const CopyParams& params, tt::tt_metal::distrib
     const auto output_accessor_args = TensorAccessorArgs(*output_buffer);
 
     std::vector<uint32_t> compile_time_args{aligned_page_size};
-    input_accessor_args.append_args(compile_time_args);
-    output_accessor_args.append_args(compile_time_args);
+    input_accessor_args.append_to(compile_time_args);
+    output_accessor_args.append_to(compile_time_args);
 
     KernelHandle kernel_id = CreateKernel(
         program,

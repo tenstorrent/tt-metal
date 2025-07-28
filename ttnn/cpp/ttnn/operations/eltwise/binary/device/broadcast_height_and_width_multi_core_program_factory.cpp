@@ -53,7 +53,6 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
     uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
     uint32_t bC = bshape.rank() >= 3 ? bshape[-3] : 1;
     uint32_t NC = N * C;
-    uint32_t HW = H * W;
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
@@ -276,7 +275,6 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
     auto& compute_with_storage_grid_size = cached_program.shared_variables.compute_with_storage_grid_size;
     auto& cb_src0 = cached_program.shared_variables.cb_src0;
     auto& src0_single_tile_size = cached_program.shared_variables.src0_single_tile_size;
-    auto& src1_single_tile_size = cached_program.shared_variables.src1_single_tile_size;
     auto& dst_single_tile_size = cached_program.shared_variables.dst_single_tile_size;
     auto& cb_output = cached_program.shared_variables.cb_output;
 
@@ -307,7 +305,6 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
     uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
     uint32_t bC = bshape.rank() >= 3 ? bshape[-3] : 1;
     uint32_t NC = N * C;
-    uint32_t HW = H * W;
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;

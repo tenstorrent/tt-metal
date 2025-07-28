@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <string>
 #include <tt_stl/indestructible.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/distributed_context.hpp>
@@ -72,10 +73,10 @@ public:
 
     // Control plane accessors
     tt::tt_fabric::ControlPlane& get_control_plane();
-    void set_custom_control_plane_mesh_graph(
+    void set_custom_fabric_topology(
         const std::string& mesh_graph_desc_file,
         const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
-    void set_default_control_plane_mesh_graph();
+    void set_default_fabric_topology();
     void set_fabric_config(
         tt_fabric::FabricConfig fabric_config,
         tt_fabric::FabricReliabilityMode reliability_mode =
@@ -95,6 +96,7 @@ private:
     void clear_dram_state(chip_id_t device_id);
     void clear_launch_messages_on_eth_cores(chip_id_t device_id);
     void initialize_control_plane();
+    void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
     void teardown_fabric_config();
 
     void reset_cores(chip_id_t device_id);
@@ -152,6 +154,8 @@ private:
     // according to which links are available.
     tt_fabric::FabricReliabilityMode fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
     uint8_t num_fabric_active_routing_planes_ = 0;
+    std::map<tt_fabric::FabricNodeId, chip_id_t> logical_mesh_chip_id_to_physical_chip_id_mapping_;
+    std::optional<std::string> custom_mesh_graph_desc_path_ = std::nullopt;
 };
 
 }  // namespace tt::tt_metal
