@@ -155,7 +155,6 @@ std::vector<CBInfo> get_cb_info(
         .data_format = output_df});
 
     // Tilized act CB
-    const uint32_t tlized_act_cb_num_tiles = act_block_num_tiles;
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::ACT_TILIZED,
         .num_pages = act_block_num_tiles,
