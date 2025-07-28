@@ -128,8 +128,7 @@ std::optional<ParallelConfig> determine_valid_parallel_config(
     return pconfig;
 }
 
-std::tuple<uint32_t, bool, uint32_t, tt::DataFormat, uint32_t, bool, uint32_t, bool, uint32_t, bool>
-get_factory_parameters(
+FactoryParameters get_factory_parameters(
     uint32_t num_shards_c, const Tensor& input, uint32_t kernel_h, uint32_t kernel_w, Pool2DType pool_type) {
     uint32_t multi_buffering_factor = 2;
     bool split_reader = true;
@@ -151,17 +150,17 @@ get_factory_parameters(
     const uint32_t MAX_TILES_PER_REDUCTION = (is_avg_pool && is_large_kernel) ? 4 : 8;
     const bool is_wide_reduction = in_ntiles_c > MAX_TILES_PER_REDUCTION;
 
-    return std::make_tuple(
-        multi_buffering_factor,
-        split_reader,
-        nbytes,
-        data_format,
-        in_ntiles_c,
-        is_avg_pool,
-        max_rows_for_reduction,
-        is_large_kernel,
-        MAX_TILES_PER_REDUCTION,
-        is_wide_reduction);
+    return FactoryParameters{
+        .multi_buffering_factor = multi_buffering_factor,
+        .split_reader = split_reader,
+        .nbytes = nbytes,
+        .data_format = data_format,
+        .in_ntiles_c = in_ntiles_c,
+        .is_avg_pool = is_avg_pool,
+        .max_rows_for_reduction = max_rows_for_reduction,
+        .is_large_kernel = is_large_kernel,
+        .MAX_TILES_PER_REDUCTION = MAX_TILES_PER_REDUCTION,
+        .is_wide_reduction = is_wide_reduction};
 }
 
 uint32_t calculate_L1_usage(
@@ -192,54 +191,44 @@ uint32_t calculate_L1_usage(
         num_shards_c = grid_size.x;
     }
 
-    auto
-        [multi_buffering_factor,
-         split_reader,
-         nbytes,
-         data_format,
-         in_ntiles_c,
-         is_avg_pool,
-         max_rows_for_reduction,
-         is_large_kernel,
-         MAX_TILES_PER_REDUCTION,
-         is_wide_reduction] = get_factory_parameters(num_shards_c, input, kernel_h, kernel_w, pool_type);
+    FactoryParameters params = get_factory_parameters(num_shards_c, input, kernel_h, kernel_w, pool_type);
 
     bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
 
     // scalar CB as coefficient of reduce
-    uint32_t in_scalar_cb_pagesize = tt::constants::TILE_HW * nbytes;
-    uint32_t in_scalar_cb_npages = multi_buffering_factor;
+    uint32_t in_scalar_cb_pagesize = tt::constants::TILE_HW * params.nbytes;
+    uint32_t in_scalar_cb_npages = params.multi_buffering_factor;
     uint32_t in_scalar_cb_size_0 = in_scalar_cb_npages * in_scalar_cb_pagesize;
     uint32_t in_scalar_cb_size_1 = 0;
 
-    if (pool_type == Pool2DType::AVG_POOL2D && split_reader && !one_scalar_per_core) {
+    if (pool_type == Pool2DType::AVG_POOL2D && params.split_reader && !one_scalar_per_core) {
         in_scalar_cb_size_1 = in_scalar_cb_npages * in_scalar_cb_pagesize;
     }
 
-    uint32_t clear_value_cb_size = tt::constants::TILE_HW * nbytes;
+    uint32_t clear_value_cb_size = tt::constants::TILE_HW * params.nbytes;
 
     uint32_t in_cb_sz = 0;
-    if (is_wide_reduction) {
-        in_cb_sz = MAX_TILES_PER_REDUCTION * tt::constants::TILE_HW;
+    if (params.is_wide_reduction) {
+        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_HW;
     } else {
-        in_cb_sz = in_ntiles_c * tt::constants::TILE_HW;
+        in_cb_sz = params.in_ntiles_c * tt::constants::TILE_HW;
     }
 
     uint32_t in_cb_page_padded = tt::round_up(in_cb_sz, tt::constants::TILE_HW);
-    uint32_t in_cb_pagesize = nbytes * in_cb_page_padded;
-    uint32_t in_cb_npages = multi_buffering_factor;
+    uint32_t in_cb_pagesize = params.nbytes * in_cb_page_padded;
+    uint32_t in_cb_npages = params.multi_buffering_factor;
     uint32_t in_cb_config_0_size = in_cb_npages * in_cb_pagesize;
     uint32_t in_cb_config_1_size = 0;
 
-    if (split_reader) {
+    if (params.split_reader) {
         in_cb_config_1_size = in_cb_npages * in_cb_pagesize;
     }
 
     // after reduction
     uint32_t out_cb_pagesize =
-        std::min(tt::constants::TILE_WIDTH, output_memory.shard_spec().value().shape[1]) * nbytes;
-    uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] * in_ntiles_c;
+        std::min(tt::constants::TILE_WIDTH, output_memory.shard_spec().value().shape[1]) * params.nbytes;
+    uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] * params.in_ntiles_c;
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
 
     uint32_t alignment_bytes = tt::tt_metal::hal::get_dram_alignment();
