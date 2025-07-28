@@ -12,8 +12,7 @@ namespace sfpu {
 sfpi_inline sfpi::vFloat _sfpu_exp2_21f_(sfpi::vFloat val) {
     sfpi::vFloat y = 0.0f;
     v_if(val > -127.f) {
-        val = val * 0.6931471805f;
-        sfpi::vInt z = sfpu::_float_to_int32_(val * sfpi::vFloat(0x00b8aa3b) + sfpi::vFloat(0x3f800000));
+        sfpi::vInt z = sfpu::_float_to_int32_(val * sfpi::vFloat(0x00800000) + sfpi::vFloat(0x3f800000));
         sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Extract exponent
         sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa
 
