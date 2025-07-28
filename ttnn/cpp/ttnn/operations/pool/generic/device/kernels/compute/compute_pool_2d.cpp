@@ -38,7 +38,7 @@ void MAIN {
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
 
     constexpr uint32_t face_r_dim = window_size_hw < 16 ? window_size_hw : 16;
-    constexpr bool last_tile_is_partial = in_c % 32 != 0 && in_c % 32 < 16;
+    constexpr bool last_tile_is_partial = in_c % 32 != 0 && in_c % 32 < 17;
     constexpr uint32_t num_faces_in_input_tile = (max_sticks_for_reduction < 32 || window_size_hw <= 16) ? 2 : 4;
     constexpr uint32_t num_faces_in_output_tile = 2;
     constexpr uint32_t num_faces_in_last_output_tile = last_tile_is_partial ? 1 : 2;
