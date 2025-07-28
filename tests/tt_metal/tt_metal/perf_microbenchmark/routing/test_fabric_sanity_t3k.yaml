@@ -127,6 +127,41 @@ Tests:
     patterns:
       - type: all_to_all_multicast
 
+  - name: "PacketSizesMeshMulticast"
+    fabric_setup:
+      topology: Mesh
+      # more links caused rt args exceed 256
+      num_links: 1
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all_multicast
+
+  - name: "PacketSizesMeshMulticastDynamic"
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+      # more links caused rt args exceed 256
+      num_links: 1
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all_multicast
+
   - name: "SingleSenderMeshUnicastAllDevices"
     fabric_setup:
       topology: Mesh
