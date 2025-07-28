@@ -3,6 +3,17 @@ name: "(TG) Choose your pipeline"
 on:
   workflow_dispatch:
     inputs:
+      trigger_type:
+        description: "⚠️ CHECKBOX options below are used only when 'manual' is selected; otherwise, predefined settings apply. ⚠️"
+        required: true
+        type: choice
+        options:
+          - manual
+          - model-pr
+          - op-pr
+          - nightly
+          - hw-self-test
+        default: "manual"
       build-type:
         required: false
         type: choice
@@ -13,17 +24,11 @@ on:
           - ASan
           - TSan
         default: "Release"
-      topology:
-        required: false
-        type: choice
-        options:
-          - config-tg
-          - topology-6u
-        default: "config-tg"
-      extra-tag:
+      extra-tag: # set in-service and topology-6u by default
+        description: "You can specify only one topology, 'topology-6u' or 'config-tg'. Default is config-tg."
         required: true
         type: string
-        default: "in-service"
+        default: "in-service,config-tg"
       tg-quick:
         required: false
         type: boolean
@@ -45,103 +50,172 @@ on:
         required: false
         type: boolean
         default: false
-      tg-nightly:
-        description: "tg-nightly (Warning: Long running test! Do not choose this unless there is a specific need. Requires tracy build)"
-        required: false
-        type: boolean
-        default: false
       tg-stress:
         required: false
         type: boolean
         default: false
 run-name: ${{ inputs.description }}
 jobs:
+  # Centralized logic to determine what should run
+  determine-tests:
+    runs-on: ubuntu-latest
+    outputs:
+      run-quick: ${{ steps.logic.outputs.run-quick }}
+      run-unit: ${{ steps.logic.outputs.run-unit }}
+      run-frequent: ${{ steps.logic.outputs.run-frequent }}
+      run-demo: ${{ steps.logic.outputs.run-demo }}
+      run-model-perf: ${{ steps.logic.outputs.run-model-perf }}
+      run-stress: ${{ steps.logic.outputs.run-stress }}
+      clean-extra-tag: ${{ steps.logic.outputs.clean-extra-tag }}
+      is-config-tg: ${{ steps.logic.outputs.is-config-tg }}
+    steps:
+      - name: Determine test execution
+        id: logic
+        # Skip all but tg-quick if trigger-type is not manual
+        run: |
+          EXTRA_TAG="${{ inputs.extra-tag }}"
+          # (remove both config-tg and topology-6u) from EXTRA_TAG
+          # and clean up any extra commas
+          # e.g. "config-tg,in-service" -> "in-service"
+          CLEANED=$(echo "$EXTRA_TAG" | sed -e 's/\bconfig-tg\b//g' -e 's/\btopology-6u\b//g' -e 's/,,/,/g' -e 's/^,//' -e 's/,$//')
+
+          # Check which tag is present
+          if [[ "$EXTRA_TAG" == *"topology-6u"* ]]; then
+            IS_CONFIG_TG=false
+          else
+            IS_CONFIG_TG=true  # set config-tg if topology-6u is not present
+          fi
+
+          echo "clean-extra-tag=$CLEANED" >> $GITHUB_OUTPUT
+          echo "is-config-tg=$IS_CONFIG_TG" >> $GITHUB_OUTPUT
+
+          case "${{ inputs.trigger_type }}" in
+            "manual")
+              echo "run-quick=${{ inputs.tg-quick }}" >> $GITHUB_OUTPUT
+              echo "run-unit=${{ inputs.tg-unit }}" >> $GITHUB_OUTPUT
+              echo "run-frequent=${{ inputs.tg-frequent }}" >> $GITHUB_OUTPUT
+              echo "run-demo=${{ inputs.tg-demo }}" >> $GITHUB_OUTPUT
+              echo "run-model-perf=${{ inputs.tg-model-perf }}" >> $GITHUB_OUTPUT
+              echo "run-stress=${{ inputs.tg-stress }}" >> $GITHUB_OUTPUT
+              ;;
+            "model-pr")
+              echo "run-quick=true" >> $GITHUB_OUTPUT
+              echo "run-unit=false" >> $GITHUB_OUTPUT
+              echo "run-frequent=true" >> $GITHUB_OUTPUT
+              echo "run-demo=true" >> $GITHUB_OUTPUT
+              echo "run-model-perf=true" >> $GITHUB_OUTPUT
+              echo "run-stress=true" >> $GITHUB_OUTPUT
+              ;;
+            "op-pr")
+              echo "run-quick=false" >> $GITHUB_OUTPUT
+              echo "run-unit=true" >> $GITHUB_OUTPUT
+              echo "run-frequent=false" >> $GITHUB_OUTPUT
+              echo "run-demo=false" >> $GITHUB_OUTPUT
+              echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              echo "run-stress=false" >> $GITHUB_OUTPUT
+              ;;
+            "nightly")
+              echo "run-quick=false" >> $GITHUB_OUTPUT
+              echo "run-unit=true" >> $GITHUB_OUTPUT
+              echo "run-frequent=true" >> $GITHUB_OUTPUT
+              echo "run-demo=true" >> $GITHUB_OUTPUT
+              echo "run-model-perf=true" >> $GITHUB_OUTPUT
+              echo "run-stress=true" >> $GITHUB_OUTPUT
+              ;;
+            "hw-self-test")
+              echo "run-quick=false" >> $GITHUB_OUTPUT
+              echo "run-unit=false" >> $GITHUB_OUTPUT
+              echo "run-frequent=true" >> $GITHUB_OUTPUT
+              echo "run-demo=false" >> $GITHUB_OUTPUT
+              echo "run-model-perf=true" >> $GITHUB_OUTPUT
+              echo "run-stress=true" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "run-quick=true" >> $GITHUB_OUTPUT
+              echo "run-unit=false" >> $GITHUB_OUTPUT
+              echo "run-frequent=false" >> $GITHUB_OUTPUT
+              echo "run-demo=false" >> $GITHUB_OUTPUT
+              echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              echo "run-stress=false" >> $GITHUB_OUTPUT
+              ;;
+          esac
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
     secrets: inherit
+    needs: determine-tests
     with:
       build-type: ${{ inputs.build-type }}
-      tracy: ${{ inputs.tg-model-perf || inputs.tg-nightly }}
+      tracy: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
       build-wheel: true
       version: 22.04
   tg-quick:
-    if: ${{ inputs.tg-quick }}
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-quick == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-quick.yaml
     with:
-      extra-tag: ${{ inputs.extra-tag }}
+      extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology-4u: ${{ inputs.topology == 'config-tg' }}
-      topology-6u: ${{ inputs.topology == 'topology-6u' }}
+      topology-4u: ${{ needs.determine-tests.outputs.is-config-tg == 'true'}}
+      topology-6u: ${{ needs.determine-tests.outputs.is-config-tg == 'false'}}
+
   tg-unit-tests:
-    if: ${{ inputs.tg-unit }}
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-unit == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-unit-tests-impl.yaml
     with:
-      extra-tag: ${{ inputs.extra-tag }}
+      extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ inputs.topology }}
+      topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
   tg-frequent-tests:
-    if: ${{ inputs.tg-frequent }}
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-frequent == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-frequent-tests-impl.yaml
     with:
-      extra-tag: ${{ inputs.extra-tag }}
+      extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ inputs.topology }}
+      topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
   tg-demo-tests:
-    if: ${{ inputs.tg-demo }}
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-demo-tests-impl.yaml
     with:
-      extra-tag: ${{ inputs.extra-tag }}
+      extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ inputs.topology }}
+      topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
   tg-model-perf-tests:
-    if: ${{ inputs.tg-model-perf }}
-    needs: build-artifact
+    if: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-model-perf-tests-impl.yaml
     with:
-      extra-tag: ${{ inputs.extra-tag }}
+      extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ inputs.topology }}
-  tg-nightly-tests:
-    needs: build-artifact
-    if: ${{ inputs.tg-nightly }}
-    secrets: inherit
-    uses: ./.github/workflows/tg-nightly-tests-impl.yaml
-    with:
-      extra-tag: ${{ inputs.extra-tag }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology: ${{ inputs.topology }}
+      topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
   tg-stress-test:
-    needs: build-artifact
-    if: ${{ inputs.tg-stress }}
+    if: ${{ needs.determine-tests.outputs.run-stress == 'true' }}
+    needs: [build-artifact, determine-tests]
     secrets: inherit
     uses: ./.github/workflows/tg-stress.yaml
     with:
-      extra-tag: ${{ inputs.extra-tag }}
+      extra-tag: ${{ needs.determine-tests.outputs.clean-extra-tag }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      topology-4u: ${{ inputs.topology == 'config-tg' }}
-      topology-6u: ${{ inputs.topology == 'topology-6u' }}
+      topology-4u: ${{ needs.determine-tests.outputs.is-config-tg == 'true'}}
+      topology-6u: ${{ needs.determine-tests.outputs.is-config-tg == 'false'}}
