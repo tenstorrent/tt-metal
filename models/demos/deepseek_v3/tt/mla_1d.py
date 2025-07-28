@@ -61,38 +61,12 @@ class MLA1D(AbstractModule):
             Dict mapping operation names to their TTNN weight file paths
         """
 
-        weight_config = {}
-
         dim = hf_config.hidden_size
         hidden_dim = hf_config.intermediate_size
         num_heads = hf_config.num_attention_heads
         kv_lora_rank = hf_config.kv_lora_rank
         qk_nope_head_dim = hf_config.qk_nope_head_dim
         v_head_dim = hf_config.v_head_dim
-
-        def add_weight_config(
-            torch_weight,
-            our_name,
-            kwarg_name,
-            dtype,
-            mem_config,
-            layout,
-            mesh_mapper,
-        ):
-            """Helper function to convert and save weights, updating weight_config."""
-            ttnn_weight = ttnn.as_tensor(
-                torch_weight,
-                dtype=dtype,
-                device=mesh_device,
-                mesh_mapper=mesh_mapper,
-                layout=layout,
-                memory_config=mem_config,
-            )
-            ttnn_weight = ttnn.unsqueeze_to_4D(ttnn_weight)
-
-            # Add to weight config
-            weight_file_path = output_path / f"{our_name}.{kwarg_name}.weight"
-            weight_config[our_name] = {kwarg_name: save_and_get_path(weight_file_path, ttnn_weight)}
 
         hf_ttnn_name_mapping = {
             "q_a_proj": "wq_a",
@@ -108,7 +82,7 @@ class MLA1D(AbstractModule):
         torch_weight = state_dict[f"{our_name}.weight"]
         torch_weight = torch.transpose(torch_weight, -2, -1)
 
-        add_weight_config(
+        wq_a_weight_config = MLA1D.get_weight_config(
             torch_weight,
             our_name,
             "input_tensor_b",
@@ -120,6 +94,8 @@ class MLA1D(AbstractModule):
                 dims=[None, -2],
                 mesh_shape=list(mesh_device.shape),
             ),
+            mesh_device=mesh_device,
+            output_path=output_path,
         )
 
         # wq_b
@@ -128,7 +104,7 @@ class MLA1D(AbstractModule):
         torch_weight = state_dict[f"{our_name}.weight"]
         torch_weight = torch.transpose(torch_weight, -2, -1)
 
-        add_weight_config(
+        wq_b_weight_config = MLA1D.get_weight_config(
             torch_weight,
             our_name,
             "input_tensor_b",
@@ -140,6 +116,8 @@ class MLA1D(AbstractModule):
                 dims=[None, -1],
                 mesh_shape=list(mesh_device.shape),
             ),
+            mesh_device=mesh_device,
+            output_path=output_path,
         )
 
         # wkv_a
@@ -148,7 +126,7 @@ class MLA1D(AbstractModule):
         torch_weight = state_dict[f"{our_name}.weight"]
         torch_weight = torch.transpose(torch_weight, -2, -1)
 
-        add_weight_config(
+        wkv_a_weight_config = MLA1D.get_weight_config(
             torch_weight,
             our_name,
             "input_tensor_b",
@@ -160,6 +138,8 @@ class MLA1D(AbstractModule):
                 dims=[None, -2],
                 mesh_shape=list(mesh_device.shape),
             ),
+            mesh_device=mesh_device,
+            output_path=output_path,
         )
 
         # wkv_b1
@@ -176,7 +156,7 @@ class MLA1D(AbstractModule):
             -2, -1
         )  # [num_heads, kv_lora_rank, v_head_dim]
 
-        add_weight_config(
+        wkv_b1_weight_config = MLA1D.get_weight_config(
             torch_weight_k,
             our_name + "1",
             "input_tensor_b",
@@ -188,9 +168,11 @@ class MLA1D(AbstractModule):
                 dims=[None, -3],
                 mesh_shape=list(mesh_device.shape),
             ),
+            mesh_device=mesh_device,
+            output_path=output_path,
         )
 
-        add_weight_config(
+        wkv_b2_weight_config = MLA1D.get_weight_config(
             torch_weight_v,
             our_name + "2",
             "input_tensor_b",
@@ -202,6 +184,8 @@ class MLA1D(AbstractModule):
                 dims=[None, -3],
                 mesh_shape=list(mesh_device.shape),
             ),
+            mesh_device=mesh_device,
+            output_path=output_path,
         )
 
         # wo
@@ -210,7 +194,7 @@ class MLA1D(AbstractModule):
         torch_weight = state_dict[f"{our_name}.weight"]
         torch_weight = torch.transpose(torch_weight, -2, -1)
 
-        add_weight_config(
+        wo_weight_config = MLA1D.get_weight_config(
             torch_weight,
             our_name,
             "input_tensor_b",
@@ -222,12 +206,14 @@ class MLA1D(AbstractModule):
                 dims=[None, -1],
                 mesh_shape=list(mesh_device.shape),
             ),
+            mesh_device=mesh_device,
+            output_path=output_path,
         )
 
         # Norm weights
         our_name = "q_norm"
         q_norm_state_dict = {"weight": state_dict[f"{our_name}.weight"]}
-        weight_config["q_norm"] = RMSNorm.convert_weights(
+        q_norm_weight_config = RMSNorm.convert_weights(
             hf_config,
             q_norm_state_dict,
             output_path / "q_norm",
@@ -236,14 +222,51 @@ class MLA1D(AbstractModule):
 
         our_name = "kv_norm"
         kv_norm_state_dict = {"weight": state_dict[f"{our_name}.weight"]}
-        weight_config["kv_norm"] = RMSNorm.convert_weights(
+        kv_norm_weight_config = RMSNorm.convert_weights(
             hf_config,
             kv_norm_state_dict,
             output_path / "kv_norm",
             mesh_device,
         )
 
-        return weight_config
+        return {
+            **wq_a_weight_config,
+            **wq_b_weight_config,
+            **wkv_a_weight_config,
+            **wkv_b1_weight_config,
+            **wkv_b2_weight_config,
+            **wo_weight_config,
+            "q_norm": q_norm_weight_config,
+            "kv_norm": kv_norm_weight_config,
+        }
+
+    @classmethod
+    def get_weight_config(
+        cls,
+        torch_weight,
+        our_name,
+        kwarg_name,
+        dtype,
+        mem_config,
+        layout,
+        mesh_mapper,
+        mesh_device,
+        output_path: Path,
+    ) -> dict:
+        """Helper function to convert and save weights, returning the weight config."""
+        ttnn_weight = ttnn.as_tensor(
+            torch_weight,
+            dtype=dtype,
+            device=mesh_device,
+            mesh_mapper=mesh_mapper,
+            layout=layout,
+            memory_config=mem_config,
+        )
+        ttnn_weight = ttnn.unsqueeze_to_4D(ttnn_weight)
+
+        # Create weight config
+        weight_file_path = output_path / f"{our_name}.{kwarg_name}.weight"
+        return {our_name: {kwarg_name: save_and_get_path(weight_file_path, ttnn_weight)}}
 
     @classmethod
     def prefill_model_config(
