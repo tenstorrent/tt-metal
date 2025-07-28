@@ -50,3 +50,6 @@ ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
 
 # Ensure the virtual environment is activated on shell startup
 RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+
+# Add PyTorch CPU wheels to pip config
+RUN python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
