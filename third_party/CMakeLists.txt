@@ -49,13 +49,6 @@ ensureboosttarget(container)
 ensureboosttarget(smart_ptr)
 ensureboosttarget(interprocess)
 
-add_library(span INTERFACE)
-target_link_libraries(
-    span
-    INTERFACE
-        "$<BUILD_INTERFACE:Boost::core>" # FIXME: this is a hack so we do not need to package up Boost
-)
-
 add_library(small_vector INTERFACE)
 target_link_libraries(
     small_vector

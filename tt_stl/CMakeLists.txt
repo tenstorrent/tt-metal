@@ -38,7 +38,6 @@ target_link_libraries(
         Reflect::Reflect
         magic_enum::magic_enum
         nlohmann_json::nlohmann_json
-        span
         small_vector
         fmt::fmt-header-only
         tt-logger::tt-logger
