@@ -42,14 +42,6 @@ def run_avg_pool2d(
     in_n, in_c, in_h, in_w = input_shape
     torch.manual_seed(0)
     torch_input = randomize_tensor(tensor_map, input_shape)
-    counter = 0
-
-    # for n in range(torch_input.shape[0]):
-    #     for c in range(torch_input.shape[1]):
-    #         for h in range(torch_input.shape[2]):
-    #             for w in range(torch_input.shape[3]):
-    #                 torch_input[n, c, h, w] = counter
-    #                 counter = counter + 1
 
     ## Test setup for Actual.
     if dtype == ttnn.bfloat8_b:
@@ -86,13 +78,6 @@ def run_avg_pool2d(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         applied_shard_scheme=shard_scheme,
     )
-
-    # for n in range(ttnn_output.shape[0]):
-    #     for c in range(ttnn_output.shape[1]):
-    #         for h in range(ttnn_output.shape[2]):
-    #             for w in range(ttnn_output.shape[3]):
-    #                 value = ttnn_output[n, c, h, w]
-    #                 print(f"ttnn_output[{n}, {c}, {h}, {w}] = {value}")
 
     if run_twice:
         ttnn_output = ttnn.avg_pool2d(
