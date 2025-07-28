@@ -28,34 +28,28 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    try {
-        // Create parser and parse the configuration
-        MeshSocketYamlParser parser;
-        MeshSocketTestConfiguration config = parser.parse_file(yaml_file_path.value());
+    // Create parser and parse the configuration
+    MeshSocketYamlParser parser;
+    MeshSocketTestConfiguration config = parser.parse_file(yaml_file_path.value());
 
-        log_info(tt::LogTest, "Successfully parsed YAML configuration from: {}", yaml_file_path.value());
+    log_info(tt::LogTest, "Successfully parsed YAML configuration from: {}", yaml_file_path.value());
 
-        if (cmdline_parser.print_configs()) {
-            MeshSocketYamlParser::print_test_configuration(config);
-            return 0;
-        }
-
-        // Create and run the test runner
-        log_info(tt::LogTest, "Creating MeshSocketTestRunner...");
-        MeshSocketTestRunner runner(config);
-
-        // Initialize the runner (sets up fabric and MeshDevice)
-        runner.initialize();
-
-        // Run all tests defined in the configuration
-        runner.run_all_tests();
-
-        // Cleanup is handled automatically by destructor
-        log_info(tt::LogTest, "All tests completed successfully!");
+    if (cmdline_parser.print_configs()) {
+        MeshSocketYamlParser::print_test_configuration(config);
         return 0;
-
-    } catch (const std::exception& e) {
-        log_error(tt::LogTest, "Error processing YAML file: {}", e.what());
-        return 1;
     }
+
+    // Create and run the test runner
+    log_info(tt::LogTest, "Creating MeshSocketTestRunner...");
+    MeshSocketTestRunner runner(config);
+
+    // Initialize the runner (sets up fabric and MeshDevice)
+    runner.initialize();
+
+    // Run all tests defined in the configuration
+    runner.run_all_tests();
+
+    // Cleanup is handled automatically by destructor
+    log_info(tt::LogTest, "All tests completed successfully!");
+    return 0;
 }

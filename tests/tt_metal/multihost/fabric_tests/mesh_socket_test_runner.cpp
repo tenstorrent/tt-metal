@@ -7,16 +7,17 @@
 
 #include <stdexcept>
 #include <algorithm>
+#include <map>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/control_plane.hpp>
+#include "tt_metal/fabric/fabric_context.hpp"
+#include <tt-metalium/hal_types.hpp>
 
 namespace tt::tt_fabric::mesh_socket_tests {
 
 MeshSocketTestRunner::MeshSocketTestRunner(const MeshSocketTestConfiguration& config) :
-    config_(config), mesh_device_(nullptr), is_initialized_(false) {
-    distributed_context_ = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    local_rank_ = distributed_context_->rank();
+    config_(config), mesh_device_(nullptr), is_initialized_(false), control_plane_ptr_(nullptr) {
     log_info(tt::LogTest, "MeshSocketTestRunner created with {} tests", config_.tests.size());
 }
 
@@ -32,23 +33,30 @@ void MeshSocketTestRunner::initialize() {
         return;
     }
 
-    try {
-        log_info(tt::LogTest, "Initializing MeshSocketTestRunner...");
+    distributed_context_ = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    local_rank_ = distributed_context_->rank();
+    log_info(tt::LogTest, "Initializing MeshSocketTestRunner...");
 
-        // Setup fabric configuration first
-        setup_fabric_configuration();
-
-        // Initialize MeshDevice
-        initialize_mesh_device();
-
-        is_initialized_ = true;
-        log_info(tt::LogTest, "MeshSocketTestRunner initialization completed successfully");
-
-    } catch (const std::exception& e) {
-        log_error(tt::LogTest, "Failed to initialize MeshSocketTestRunner: {}", e.what());
-        cleanup();
-        throw std::runtime_error("MeshSocketTestRunner initialization failed: " + std::string(e.what()));
+    // Initialize physical mesh if provided
+    if (config_.physical_mesh_config.has_value()) {
+        initialize_and_validate_custom_physical_config(config_.physical_mesh_config.value());
     }
+
+    // Setup fabric configuration first
+    setup_fabric_configuration();
+
+    // Initialize control plane and get mesh shape
+    control_plane_ptr_ = &tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    // Get mesh shape from control plane
+    mesh_shape_ = control_plane_ptr_->get_physical_mesh_shape(
+        control_plane_ptr_->get_user_physical_mesh_ids()[0], MeshScope::GLOBAL);
+
+    // Initialize MeshDevice
+    initialize_mesh_device();
+
+    is_initialized_ = true;
+    log_info(tt::LogTest, "MeshSocketTestRunner initialization completed successfully");
 }
 
 void MeshSocketTestRunner::run_all_tests() {
@@ -62,13 +70,9 @@ void MeshSocketTestRunner::run_all_tests() {
         const auto& test = config_.tests[i];
         log_info(tt::LogTest, "=== Running Test {}/{}: '{}' ===", i + 1, config_.tests.size(), test.name);
 
-        try {
-            run_test(test);
-            log_info(tt::LogTest, "✓ Test '{}' completed successfully", test.name);
-        } catch (const std::exception& e) {
-            log_error(tt::LogTest, "✗ Test '{}' failed: {}", test.name, e.what());
-            throw;
-        }
+        run_test(test);
+        Finish(mesh_device_->mesh_command_queue(0));
+        log_info(tt::LogTest, "✓ Test '{}' completed successfully", test.name);
     }
 
     log_info(tt::LogTest, "All tests completed successfully!");
@@ -88,6 +92,32 @@ void MeshSocketTestRunner::cleanup() {
 
 std::shared_ptr<tt::tt_metal::distributed::MeshDevice> MeshSocketTestRunner::get_mesh_device() const {
     return mesh_device_;
+}
+
+void MeshSocketTestRunner::initialize_and_validate_custom_physical_config(
+    const PhysicalMeshConfig& physical_mesh_config) {
+    const auto mesh_id_str = std::string(std::getenv("TT_MESH_ID"));
+    const auto host_rank_str = std::string(std::getenv("TT_HOST_RANK"));
+
+    local_mesh_id_ = MeshId{std::stoi(mesh_id_str)};
+    const auto local_rank = tt::tt_metal::distributed::multihost::Rank{std::stoi(host_rank_str)};
+
+    const auto& eth_coord_mapping = physical_mesh_config.eth_coord_mapping;
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+    // ethernet coordinate chip mapping, which should be migrated away from
+    std::map<FabricNodeId, chip_id_t> chip_to_eth_coord_mapping;
+    for (std::uint32_t mesh_id = 0; mesh_id < eth_coord_mapping.size(); mesh_id++) {
+        if (mesh_id == *local_mesh_id_) {
+            for (std::uint32_t chip_id = 0; chip_id < eth_coord_mapping[mesh_id].size(); chip_id++) {
+                const auto& eth_coord = eth_coord_mapping[mesh_id][chip_id];
+                chip_to_eth_coord_mapping.insert(
+                    {FabricNodeId(MeshId{mesh_id}, chip_id), cluster.get_physical_chip_id_from_eth_coord(eth_coord)});
+            }
+        }
+    }
+    tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
+        physical_mesh_config.mesh_descriptor_path, chip_to_eth_coord_mapping);
 }
 
 void MeshSocketTestRunner::run_test(const ParsedTestConfig& test) {
@@ -123,11 +153,9 @@ void MeshSocketTestRunner::run_test(const ParsedTestConfig& test) {
 void MeshSocketTestRunner::initialize_mesh_device() {
     log_info(tt::LogTest, "Initializing MeshDevice...");
 
-    // Create MeshDevice - the distributed context and device pool should already be set up
-    // The MeshDevice will use the default mesh shape from the system
-    mesh_device_ = tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig(
-        tt::tt_metal::distributed::MeshShape{2, 2}  // Default 2x2 for now, can be made configurable
-        ));
+    // Create MeshDevice using the mesh shape obtained from control plane
+    mesh_device_ =
+        tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig(mesh_shape_));
 
     if (!mesh_device_) {
         throw std::runtime_error("Failed to create MeshDevice");
@@ -166,15 +194,10 @@ std::vector<tt::tt_metal::distributed::MeshSocket> MeshSocketTestRunner::create_
         bool is_receiver = (socket_config.receiver_rank == local_rank_);
 
         if (is_sender || is_receiver) {
-            try {
-                auto mesh_socket_config = convert_to_socket_config(socket_config, test.memory_config);
-                sockets.emplace_back(mesh_device_, mesh_socket_config);
+            auto mesh_socket_config = convert_to_socket_config(socket_config, test.memory_config);
+            sockets.emplace_back(mesh_device_, mesh_socket_config);
 
-                log_info(tt::LogTest, "Created socket: rank {} as {}", local_rank_, is_sender ? "sender" : "receiver");
-            } catch (const std::exception& e) {
-                log_error(tt::LogTest, "Failed to create socket: {}", e.what());
-                throw;
-            }
+            log_info(tt::LogTest, "Created socket: rank {} as {}", local_rank_, is_sender ? "sender" : "receiver");
         }
     }
 
@@ -218,6 +241,7 @@ void MeshSocketTestRunner::execute_socket_test(
     // Use the existing test_socket_send_recv function from socket_send_recv_utils.cpp
     tt::tt_fabric::fabric_router_tests::multihost::multihost_utils::test_socket_send_recv(
         mesh_device_, socket, test.memory_config.data_size, test.memory_config.page_size, DEFAULT_NUM_TRANSACTIONS);
+    distributed_context_->barrier();
 }
 
 std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>
