@@ -494,7 +494,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     std::string compute_kernel_fname =
         "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp";
 
-    CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
+    auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
     uint32_t temporary_size = program.get_cb_memory_size();
     uint32_t post_allocate_size =
@@ -666,10 +666,6 @@ void Pool2D::MultiCore::override_runtime_arguments(
     auto& program = cached_program.program;
     auto& raw_in_cb = cached_program.shared_variables.raw_in_cb;
     auto& cb_out = cached_program.shared_variables.cb_out;
-<<<<<<< HEAD
-=======
-    auto& ncores = cached_program.shared_variables.ncores;
->>>>>>> 3ae021bbb7 (#0: squash)
 
     const auto& input_tensor = tensor_args.input_tensor_;
 
