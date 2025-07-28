@@ -38,7 +38,8 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
             core_grid (CoreGrid, optional): Defaults to `None`.
             inplace (bool, optional): Defaults to `True`.
             output_layout (ttnn.Layout, optional): Defaults to `None`.
-
+            num_out_blocks (int, optional): Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the op. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -58,7 +59,8 @@ void bind_normalization_group_norm_operation(nb::module_& mod) {
             nb::arg("core_grid") = std::nullopt,
             nb::arg("inplace") = true,
             nb::arg("output_layout") = std::nullopt,
-            nb::arg("num_out_blocks") = std::nullopt});
+            nb::arg("num_out_blocks") = std::nullopt,
+            nb::arg("compute_kernel_config") = std::nullopt});
 }
 }  // namespace
 

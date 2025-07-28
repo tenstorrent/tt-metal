@@ -25,7 +25,6 @@ void bind_moreh_cumsum_operation(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("output") = std::nullopt,
             nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt,
         });
 }
 
@@ -40,7 +39,6 @@ void bind_moreh_cumsum_backward_operation(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("input_grad") = std::nullopt,
             nb::arg("memory_config") = std::nullopt,
-            nb::arg("compute_kernel_config") = std::nullopt,
         });
 }
 

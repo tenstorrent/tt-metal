@@ -148,5 +148,101 @@ void bind_sdpa_decode(nb::module_& mod) {
             nb::arg("compute_kernel_config").noconvert() = std::nullopt,
             nb::arg("queue_id") = DefaultQueueId,
         });
+
+    using MLAOperationType = decltype(ttnn::transformer::flash_multi_latent_attention_decode);
+    ttnn::bind_registered_operation(
+        module,
+        ttnn::transformer::flash_multi_latent_attention_decode,
+        doc,
+        ttnn::nanobind_overload_t{
+            [](const MLAOperationType& self,
+               const ttnn::Tensor& input_tensor_q,
+               const ttnn::Tensor& input_tensor_k,
+               const uint32_t head_dim_v,
+               const bool is_causal,
+               const std::optional<const Tensor>& attn_mask,
+               const std::vector<uint32_t>& cur_pos,
+               const std::optional<const Tensor>& cur_pos_tensor,
+               std::optional<float> scale,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<SDPAProgramConfig> program_config,
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+               QueueId queue_id) {
+                return self(
+                    queue_id,
+                    input_tensor_q,
+                    input_tensor_k,
+                    head_dim_v,
+                    is_causal,
+                    attn_mask,
+                    cur_pos,
+                    cur_pos_tensor,
+                    scale,
+                    memory_config,
+                    program_config,
+                    compute_kernel_config);
+            },
+            nb::arg("input_tensor_q").noconvert(),
+            nb::arg("input_tensor_k").noconvert(),
+            nb::arg("head_dim_v").noconvert(),
+            nb::kw_only(),
+            nb::arg("is_causal").noconvert() = true,
+            nb::arg("attn_mask").noconvert() = std::nullopt,
+            nb::arg("cur_pos").noconvert() = std::vector<uint32_t>(),
+            nb::arg("cur_pos_tensor").noconvert() = std::nullopt,
+            nb::arg("scale").noconvert() = std::nullopt,
+            nb::arg("memory_config").noconvert() = std::nullopt,
+            nb::arg("program_config").noconvert() = std::nullopt,
+            nb::arg("compute_kernel_config").noconvert() = std::nullopt,
+            nb::arg("queue_id") = DefaultQueueId,
+        });
+
+    using PagedMLAOperationType = decltype(ttnn::transformer::paged_flash_multi_latent_attention_decode);
+    ttnn::bind_registered_operation(
+        mod,
+        ttnn::transformer::paged_flash_multi_latent_attention_decode,
+        doc,
+        ttnn::nanobind_overload_t{
+            [](const PagedMLAOperationType& self,
+               const ttnn::Tensor& input_tensor_q,
+               const ttnn::Tensor& input_tensor_k,
+               const uint32_t head_dim_v,
+               const ttnn::Tensor& page_table_tensor,
+               const bool is_causal,
+               const std::optional<const Tensor>& attn_mask,
+               const std::optional<const Tensor>& cur_pos_tensor,
+               std::optional<float> scale,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<SDPAProgramConfig> program_config,
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+               QueueId queue_id) {
+                return self(
+                    queue_id,
+                    input_tensor_q,
+                    input_tensor_k,
+                    head_dim_v,
+                    page_table_tensor,
+                    is_causal,
+                    attn_mask,
+                    cur_pos_tensor,
+                    scale,
+                    memory_config,
+                    program_config,
+                    compute_kernel_config);
+            },
+            nb::arg("input_tensor_q").noconvert(),
+            nb::arg("input_tensor_k").noconvert(),
+            nb::arg("head_dim_v").noconvert(),
+            nb::arg("page_table_tensor").noconvert(),
+            nb::kw_only(),
+            nb::arg("is_causal").noconvert() = true,
+            nb::arg("attn_mask").noconvert() = std::nullopt,
+            nb::arg("cur_pos_tensor").noconvert() = std::nullopt,
+            nb::arg("scale").noconvert() = std::nullopt,
+            nb::arg("memory_config").noconvert() = std::nullopt,
+            nb::arg("program_config").noconvert() = std::nullopt,
+            nb::arg("compute_kernel_config").noconvert() = std::nullopt,
+            nb::arg("queue_id") = DefaultQueueId,
+        });
 }
 }  // namespace ttnn::operations::transformer

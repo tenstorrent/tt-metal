@@ -92,7 +92,7 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
                const ttnn::Tensor& input_indices_tensor,
                const std::vector<uint16_t>& k,
                const std::vector<float>& p,
-               const uint32_t seed,
+               const std::optional<uint32_t>& seed,
                const std::optional<CoreRangeSet>& sub_core_grids,
                std::optional<ttnn::Tensor> optional_output_tensor,
                QueueId queue_id) {
@@ -111,7 +111,7 @@ void bind_reduction_sampling_operation(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("k").noconvert(),
             nb::arg("p").noconvert(),
-            nb::arg("seed").noconvert() = 0,
+            nb::arg("seed").noconvert() = std::nullopt,
             nb::arg("sub_core_grids") = std::nullopt,
             nb::arg("output_tensor") = std::nullopt,
             nb::arg("queue_id") = DefaultQueueId});

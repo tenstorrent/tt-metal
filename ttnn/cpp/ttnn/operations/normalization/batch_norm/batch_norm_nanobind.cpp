@@ -36,6 +36,7 @@ void bind_batch_norm_operation(nb::module_& mod) {
             training (bool, optional): Selection between training mode and inference (evaluation) mode. Defaults to `False` (Inference mode).
             output (ttnn.Tensor, optional): Preallocated output tensor to store batch norm result of shape `[N, C, H, W]`. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): device compute kernel configuration for the operation. Defaults to `None`.
             queue_id (int, optional): command queue id. Defaults to 0.
 
 
@@ -82,6 +83,7 @@ void bind_batch_norm_operation(nb::module_& mod) {
             nb::arg("bias") = std::nullopt,
             nb::arg("output") = std::nullopt,
             nb::arg("memory_config") = std::nullopt,
+            nb::arg("compute_kernel_config") = std::nullopt,
             nb::arg("queue_id") = DefaultQueueId});
 }
 }  // namespace ttnn::operations::normalization::detail

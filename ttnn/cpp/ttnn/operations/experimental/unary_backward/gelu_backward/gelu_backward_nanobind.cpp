@@ -5,10 +5,12 @@
 #include "gelu_backward_nanobind.hpp"
 
 #include <optional>
+#include <string>
 
 #include <fmt/format.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward.hpp"
@@ -69,7 +71,7 @@ void bind_experimental_gelu_backward_operation(nb::module_& mod) {
             [](const OperationType& self,
                const Tensor& grad_output_tensor,
                const Tensor& input_tensor,
-               const string& approximate,
+               const std::string& approximate,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor>& input_grad_tensor,
                QueueId queue_id) -> ttnn::Tensor {

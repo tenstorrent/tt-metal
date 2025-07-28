@@ -45,8 +45,8 @@ void bind_all_reduce_create_qkv_heads(nb::module_& mod, const ccl_operation_t& o
                std::optional<const uint32_t> num_kv_heads,
                const std::optional<const uint32_t> slice_size,
                const std::optional<MemoryConfig>& final_memory_config,
-               const std::optional<const DataType> dtype)
-                -> std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> {
+               const std::optional<const DataType> dtype,
+               bool use_noc1_only) -> std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> {
                 return self(
                     input_tensor,
                     buffer_tensor,
@@ -62,7 +62,8 @@ void bind_all_reduce_create_qkv_heads(nb::module_& mod, const ccl_operation_t& o
                     num_kv_heads,
                     slice_size,
                     final_memory_config,
-                    dtype);
+                    dtype,
+                    use_noc1_only);
             },
             nb::arg("input_tensor"),
             nb::arg("buffer_tensor"),
@@ -79,7 +80,8 @@ void bind_all_reduce_create_qkv_heads(nb::module_& mod, const ccl_operation_t& o
             nb::arg("num_kv_heads") = std::nullopt,
             nb::arg("slice_size") = std::nullopt,
             nb::arg("final_memory_config") = std::nullopt,
-            nb::arg("dtype") = std::nullopt});
+            nb::arg("dtype") = std::nullopt,
+            nb::arg("use_noc1_only") = false});
 }
 
 }  // namespace
