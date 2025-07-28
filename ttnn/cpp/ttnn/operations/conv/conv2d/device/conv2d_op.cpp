@@ -247,6 +247,10 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
     const uint32_t post_op_l1_allocation_size =
         device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
     auto actual_cb_size = program_with_cbs.program.get_cb_memory_size();
+    log_info(
+        tt::LogOp,
+        "OptimizedConvNew: Post Op L1 small Allocation Size = {}",
+        device->allocator()->get_statistics(tt::tt_metal::BufferType::L1_SMALL).total_allocated_bytes);
 
     auto kernel_dims =
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second});
