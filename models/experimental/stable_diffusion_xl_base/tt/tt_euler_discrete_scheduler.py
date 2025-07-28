@@ -257,6 +257,8 @@ class TtEulerDiscreteScheduler(nn.Module):
         process from the learned model outputs (most often the predicted noise).
         """
 
+        assert timestep is None, "timestep is expected to be None"
+
         if not self.is_scale_input_called:
             logger.warning(
                 "The `scale_model_input` function should be called before `step` to ensure correct denoising. "
@@ -270,6 +272,10 @@ class TtEulerDiscreteScheduler(nn.Module):
         # this is a potential accuracy pitfall
         # Upcast to avoid precision issues when computing prev_sample
         # sample = sample.to(torch.float32)
+
+        sigma = self.sigmas[self.step_index]
+        gamma = min(s_churn / (len(self.sigmas) - 1), 2**0.5 - 1) if s_tmin <= sigma <= s_tmax else 0.0
+        assert gamma == 0, "gamma > 0 is not supported in this version"
 
         # 1. compute predicted original sample (x_0) from sigma-scaled predicted noise
         # NOTE: "original_sample" should not be an expected prediction_type but is left in for
