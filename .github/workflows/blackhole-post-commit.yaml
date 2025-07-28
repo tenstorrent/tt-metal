@@ -249,6 +249,19 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
 
+  test-ttnn-tutorials:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/ttnn-tutorials-post-commit.yaml
+    strategy:
+      fail-fast: false
+    with:
+      arch: blackhole
+      runner-label: ${{ inputs.runner-label || 'BH' }}
+      docker-image: ${{ needs.build-artifact.outputs.basic-dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
   # LLMBox-only demo tests
   blackhole-llmbox-demo-tests:
     needs: build-artifact
