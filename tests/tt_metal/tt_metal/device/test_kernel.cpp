@@ -9,6 +9,8 @@
 constexpr uint32_t num_writes = get_compile_time_arg_val(0);
 constexpr uint32_t buffer_base = get_compile_time_arg_val(1);
 constexpr uint32_t arg_base = get_compile_time_arg_val(2);
+constexpr uint32_t heartbeat = get_compile_time_arg_val(3);
+constexpr uint32_t debug_dump_addr = get_compile_time_arg_val(4);
 
 __attribute__((noinline)) void do_nothing(uint32_t i) {
 #pragma GCC unroll 1
@@ -24,8 +26,8 @@ void kernel_main() {
     auto buffer_ptr = reinterpret_cast<volatile uint32_t*>(buffer_base);
     auto arg_ptr = reinterpret_cast<volatile uint32_t*>(arg_base);
     // post a heartbeat to the same address for the host api to read
-    auto heartbeat_ptr = reinterpret_cast<volatile uint32_t*>(0x7CC70);
-    volatile uint32_t* const debug_dump_addr = reinterpret_cast<volatile uint32_t*>(0x36b0);
+    auto heartbeat_ptr = reinterpret_cast<volatile uint32_t*>(heartbeat);
+    volatile uint32_t* const debug_dump = reinterpret_cast<volatile uint32_t*>(debug_dump_addr);
 
     uint32_t heartbeat_cnt = 0;
 
@@ -43,6 +45,7 @@ void kernel_main() {
             __asm__ volatile("nop");
         }
         for (uint32_t i = 0; i < 4; ++i) {
+            invalidate_l1_cache();
             volatile uint32_t val = buffer_ptr[i];
             volatile uint32_t msg_status = val & 0xffff0000;
             volatile uint32_t msg_type = val & 0xffff;
@@ -51,15 +54,15 @@ void kernel_main() {
                 invalidate_l1_cache();
                 msg_count++;
                 buffer_ptr[i] = 0xd0e50000 | msg_type;
-                // arg_ptr[0] = 0;
+                arg_ptr[0] = 0;
                 do_nothing(msg_type);
 
                 if (msg_type != msg_count || arg_val != msg_count) {
-                    debug_dump_addr[1] = 0xfffffff1;
-                    debug_dump_addr[2] = buffer_ptr[i];
-                    debug_dump_addr[3] = msg_type;
-                    debug_dump_addr[4] = msg_count;
-                    debug_dump_addr[5] = arg_val;
+                    debug_dump[1] = 0xfffffff1;
+                    debug_dump[2] = buffer_ptr[i];
+                    debug_dump[3] = msg_type;
+                    debug_dump[4] = msg_count;
+                    debug_dump[5] = arg_val;
                     while (true) {
                         __asm__ volatile("nop");
                     }

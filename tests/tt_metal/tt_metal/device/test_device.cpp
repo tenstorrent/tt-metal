@@ -365,41 +365,43 @@ TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
 //     }
 // }
 
-TEST(Debugging, Test) {
-    if (!std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
-        GTEST_SKIP();
+void wait_for_heartbeat_custom(chip_id_t device_id, const CoreCoord& virtual_core, uint32_t heartbeat_addr) {
+    uint32_t heartbeat_val = llrt::read_hex_vec_from_core(device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
+    uint32_t previous_heartbeat_val = heartbeat_val;
+    const auto start = std::chrono::high_resolution_clock::now();
+    constexpr auto k_sleep_time = std::chrono::nanoseconds{50};
+
+    while (heartbeat_val == previous_heartbeat_val) {
+        std::this_thread::sleep_for(k_sleep_time);
+        tt_driver_atomics::lfence();
+        previous_heartbeat_val = heartbeat_val;
+        heartbeat_val = llrt::read_hex_vec_from_core(device_id, virtual_core, heartbeat_addr, sizeof(uint32_t))[0];
+        const auto now = std::chrono::high_resolution_clock::now();
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+        if (elapsed > 10000) {
+            std::cerr << "timed out waiting" << std::endl;
+            std::abort();
+        }
     }
-    auto device = CreateDevice(0);
-    constexpr uint32_t num_writes = 60000;
-    constexpr uint32_t total_size = num_writes * sizeof(uint32_t);
-    uint32_t l1_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    uint32_t arg_base = l1_base;
-    uint32_t buffer_base = l1_base + 16;
 
-    std::cerr << "l1_base " << std::hex << l1_base << std::endl;
-    std::cerr << "buffer_base " << std::hex << buffer_base << std::endl;
+    std::cerr << "wait_for_heartbeat done" << std::endl;
+}
 
-    std::vector<uint32_t> ct_args = {num_writes, buffer_base, arg_base};
-    std::vector<uint32_t> zero_buffer(num_writes, 0);
-
-    const auto& core = CoreCoord{0, 11};
-    // Zero buffer
-    const auto& virtual_core = device->virtual_core_from_logical_core(core, CoreType::ETH);
-    llrt::write_hex_vec_to_core(device->id(), virtual_core, zero_buffer, buffer_base);
-    llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{0}, arg_base);
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
-
-    tt_metal::Program program = tt_metal::CreateProgram();
-    tt_metal::KernelHandle kernel = tt_metal::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/device/test_kernel.cpp",
-        core,
-        tt_metal::EthernetConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .compile_args = ct_args});
-    tt_metal::detail::LaunchProgram(device, program, false);
-
+void do_debug_test(
+    tt::tt_metal::IDevice* device,
+    uint32_t buffer_base,
+    uint32_t arg_base,
+    uint32_t num_writes,
+    const CoreCoord& virtual_core,
+    bool is_eth,
+    uint32_t tensix_heartbeat_addr = 0) {
     // Write dummy messages to process
     for (uint32_t i = 1; i < num_writes; ++i) {
-        llrt::internal_::wait_for_heartbeat(device->id(), virtual_core);
+        if (is_eth) {
+            llrt::internal_::wait_for_heartbeat(device->id(), virtual_core);
+        } else {
+            wait_for_heartbeat_custom(device->id(), virtual_core, tensix_heartbeat_addr);
+        }
         uint32_t msg_i = i & 0xffff;
         std::cerr << "message i " << std::dec << i << " sent" << " " << std::hex << (0xca110000 | msg_i) << std::endl;
         llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{msg_i}, arg_base);
@@ -422,6 +424,82 @@ TEST(Debugging, Test) {
 
     std::cerr << "Kernel done" << std::endl;
     llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{0xdead0000}, buffer_base);
+}
+
+TEST(Debugging, Test_Active_Eth) {
+    if (!std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+        GTEST_SKIP();
+    }
+    auto device = CreateDevice(0);
+    constexpr uint32_t num_writes = 60000;
+    constexpr uint32_t total_size = num_writes * sizeof(uint32_t);
+    uint32_t l1_base =
+        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+    uint32_t arg_base = l1_base;
+    uint32_t buffer_base = l1_base + 16;
+
+    std::cerr << "l1_base " << std::hex << l1_base << std::endl;
+    std::cerr << "buffer_base " << std::hex << buffer_base << std::endl;
+
+    std::vector<uint32_t> ct_args = {num_writes, buffer_base, arg_base, 0x7CC70, 0x36b0};
+    std::vector<uint32_t> zero_buffer(num_writes, 0);
+
+    const auto& core = CoreCoord{0, 11};
+    // Zero buffer
+    const auto& virtual_core = device->virtual_core_from_logical_core(core, CoreType::ETH);
+    llrt::write_hex_vec_to_core(device->id(), virtual_core, zero_buffer, buffer_base);
+    llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{0}, arg_base);
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+
+    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::KernelHandle kernel = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/device/test_kernel.cpp",
+        core,
+        tt_metal::EthernetConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .compile_args = ct_args});
+    tt_metal::detail::LaunchProgram(device, program, false);
+
+    do_debug_test(device, buffer_base, arg_base, num_writes, virtual_core, true);
+
+    detail::WaitProgramDone(device, program, false);
+}
+
+TEST(Debugging, Test_Tensix) {
+    if (!std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+        GTEST_SKIP();
+    }
+    auto device = CreateDevice(0);
+    constexpr uint32_t num_writes = 60000;
+    constexpr uint32_t total_size = num_writes * sizeof(uint32_t);
+    uint32_t l1_base = MetalContext::instance().hal().get_dev_addr(
+        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    uint32_t heartbeat_base = l1_base;
+    uint32_t debug_dump_base = heartbeat_base + 16;
+    uint32_t arg_base = debug_dump_base + 64;
+    uint32_t buffer_base = arg_base + 16;
+
+    std::cerr << "l1_base " << std::hex << l1_base << std::endl;
+    std::cerr << "buffer_base " << std::hex << buffer_base << std::endl;
+
+    std::vector<uint32_t> ct_args = {num_writes, buffer_base, arg_base, heartbeat_base, debug_dump_base};
+    std::vector<uint32_t> zero_buffer(num_writes, 0);
+
+    const auto& core = CoreCoord{0, 0};
+    // Zero buffer
+    const auto& virtual_core = device->virtual_core_from_logical_core(core, CoreType::WORKER);
+    llrt::write_hex_vec_to_core(device->id(), virtual_core, zero_buffer, buffer_base);
+    llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{0}, arg_base);
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+
+    tt_metal::Program program = tt_metal::CreateProgram();
+    tt_metal::KernelHandle kernel = tt_metal::CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/device/test_kernel.cpp",
+        core,
+        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .compile_args = ct_args});
+    tt_metal::detail::LaunchProgram(device, program, false);
+
+    do_debug_test(device, buffer_base, arg_base, num_writes, virtual_core, false, heartbeat_base);
 
     detail::WaitProgramDone(device, program, false);
 }

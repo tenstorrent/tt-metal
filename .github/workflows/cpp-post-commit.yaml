@@ -43,22 +43,26 @@ jobs:
           #     ./build/test/tt_metal/unit_tests_debug_tools
           # - name: dispatch
           #   cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch" # 15 minutes
-          - name: eth and misc 1
-            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test || python tests/ttnn/unit_tests/check_heartbeat.py
-          - name: eth and misc 2
-            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test || python tests/ttnn/unit_tests/check_heartbeat.py
-          - name: eth and misc 3
-            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test || python tests/ttnn/unit_tests/check_heartbeat.py
-          - name: eth and misc 4
-            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test || python tests/ttnn/unit_tests/check_heartbeat.py
-          - name: eth and misc 5
-            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test || python tests/ttnn/unit_tests/check_heartbeat.py
-          - name: eth and misc 6
-            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test || python tests/ttnn/unit_tests/check_heartbeat.py
-          - name: eth and misc 7
-            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test || python tests/ttnn/unit_tests/check_heartbeat.py
-          - name: eth and misc 8
-            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test || python tests/ttnn/unit_tests/check_heartbeat.py
+          - name: eth 1
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test_Active_Eth
+          - name: eth 2
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test_Active_Eth
+          - name: eth 3
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test_Active_Eth
+          - name: eth 4
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test_Active_Eth
+          - name: eth 5
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test_Active_Eth
+          - name: tensix 1
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test_Tensix
+          - name: tensix 2
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test_Tensix
+          - name: tensix 3
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test_Tensix
+          - name: tensix 4
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test_Tensix
+          - name: tensix 5
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test_Tensix
             # cmd: |
             #   ./build/test/tt_metal/unit_tests_eth
             #   ./build/test/tt_metal/unit_tests_misc
@@ -104,11 +108,11 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
 
-      - name: Install TT-Lens Debug tool
-        run: |
-          echo "Installing TT-Lens Debug tool"
-          pip3 install git+https://github.com/tenstorrent/tt-exalens
-        shell: bash
+      # - name: Install TT-Lens Debug tool
+      #   run: |
+      #     echo "Installing TT-Lens Debug tool"
+      #     pip3 install git+https://github.com/tenstorrent/tt-exalens
+      #   shell: bash
 
       - name: ${{ matrix.test-group.name }} tests
         #GH Issue 16167
