@@ -73,7 +73,7 @@ static void test_single_core_reshard(
     CBHandle cb_in0_idx = tt::CBIndex::c_0;
     auto c_in0_config = CircularBufferConfig(aligned_page_size * num_tiles, {{cb_in0_idx, data_format}})
                             .set_page_size(cb_in0_idx, aligned_page_size);
-    auto cb_in0_id = CreateCircularBuffer(program, grid, c_in0_config);
+    CreateCircularBuffer(program, grid, c_in0_config);
 
     const auto input_accessor_args = TensorAccessorArgs(*input_buffer, params.crta_config);
     const auto output_accessor_args = TensorAccessorArgs(*output_buffer, params.crta_config);
