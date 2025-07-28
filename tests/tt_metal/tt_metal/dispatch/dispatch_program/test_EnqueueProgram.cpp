@@ -1613,7 +1613,7 @@ TEST_F(UnitMeshCQFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore) {
     }
 }
 
-TEST_F(UnitMeshCQFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore_255_PerKernel) {
+TEST_F(UnitMeshCQFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore_MaxRuntimeArgs_PerKernel) {
     for (const auto& device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
@@ -1621,8 +1621,9 @@ TEST_F(UnitMeshCQFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore_255_Per
         CoreRangeSet cr_set(cr);
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
+        auto n_rt = tt::tt_metal::max_runtime_args;
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
-            device, device->mesh_command_queue(), dummy_program_config, 255, 255, 255, 1));
+            device, device->mesh_command_queue(), dummy_program_config, n_rt, n_rt, n_rt, 1));
     }
 }
 
@@ -1681,27 +1682,27 @@ TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute) {
     }
 }
 
-// Max number of 255 unique RT args.
-TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute_255_UniqueArgs) {
+// Max number of max_runtime_args unique RT args.
+TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute_MaxRuntimeArgs_UniqueArgs) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (const auto& device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
-            device, dummy_program_config, 255, 0, tt::RISCV::COMPUTE));
+            device, dummy_program_config, tt::tt_metal::max_runtime_args, 0, tt::RISCV::COMPUTE));
     }
 }
 
-// Max number of 255 common RT args.
-TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute_255_CommonArgs) {
+// Max number of max_runtime_args common RT args.
+TEST_F(UnitMeshCQFixture, TensixIncrementRuntimeArgsSanityMultiCoreCompute_MaxRuntimeArgs_CommonArgs) {
     CoreRange cr0({1, 1}, {2, 2});
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
     for (const auto& device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
-            device, dummy_program_config, 0, 255, tt::RISCV::COMPUTE));
+            device, dummy_program_config, 0, tt::tt_metal::max_runtime_args, tt::RISCV::COMPUTE));
     }
 }
 
