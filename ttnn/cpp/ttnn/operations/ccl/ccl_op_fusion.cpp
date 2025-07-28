@@ -230,8 +230,14 @@ void MatmulFusedOpSignaler::init_fused_op(
         },
         core_range_to_signal);
     // Create the semaphores
-    this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
-    this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
+    if (fused_op_type == MatmulFusedOpSignalerType::LLAMA_ALL_GATHER) {
+        for (uint32_t i = 0; i < ring_size; i++) {
+            this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
+        }
+    } else {
+        this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
+        this->fused_op_receiver_signal_semaphores.push_back(CreateSemaphore(program, core_range_to_signal, 0));
+    }
 
     // Set the number of fused op cores to signal
     this->num_fused_op_cores_to_signal = this->fused_op_receiver_cores_noc.size();

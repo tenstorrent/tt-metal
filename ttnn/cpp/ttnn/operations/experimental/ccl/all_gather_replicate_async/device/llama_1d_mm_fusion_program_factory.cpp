@@ -1675,7 +1675,8 @@ process_gather_in0_program_and_create_override_variables(
     CoreRangeSet ring_cores = CoreRangeSet(ring_list);
     all_cores = ring_cores;
     const uint32_t num_cores = all_worker_cores.num_cores();
-    const uint32_t ring_size = num_cores;
+    const uint32_t ring_size =
+        fused_op_signaler->ring_size;  // use ccl ring size instead of num_cores = local core ring size for fused op
 
     uint32_t num_hop_cores = hop_cores.num_cores();
     bool use_hop_cores = num_hop_cores > 0;
@@ -1700,10 +1701,13 @@ process_gather_in0_program_and_create_override_variables(
     log_info(tt::LogOp, "LLONG FUSION: in1_buffer: {}", in1_buffer->address());
 
     /* Inner dim padding */
-    const uint32_t Kt_pad = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1] * num_cores;
-    in0_block_w = Kt_pad / num_cores;
+    const uint32_t Kt_pad = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
+    in0_block_w = Kt_pad / ring_size;
 
     uint32_t num_blocks = Kt_pad / in0_block_w;
+    log_info(tt::LogOp, "LLONG FUSION: Kt_pad: {}", Kt_pad);
+    log_info(tt::LogOp, "LLONG FUSION: in0_block_w: {}", in0_block_w);
+    log_info(tt::LogOp, "LLONG FUSION: num_blocks: {}", num_blocks);
     // Only enable packer l1 accumulation when there are spills, otherwise
     // unnecessary overhead for reconfigs are added
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
