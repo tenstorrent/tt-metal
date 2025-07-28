@@ -19,9 +19,13 @@ void UpSample::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to copy need to be allocated in buffers on device!");
     if (input_tensor_a.layout() == Layout::TILE) {
+        TT_FATAL(mode_ == "nearest", "Only nearest upsample mode is supported for tiled inputs");
         TT_FATAL(
             input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "Only interleaved memory layout is supported for tiled input");
+        TT_FATAL(
+            input_tensor_a.padded_shape() == input_tensor_a.logical_shape(),
+            "Only tile aligned tile input is currently supported");
     }
     TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16, "Input tensor data type should be BFLOAT16");
     if (input_tensor_a.memory_config().is_sharded()) {
