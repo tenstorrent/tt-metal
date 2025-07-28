@@ -29,12 +29,15 @@ operation::ProgramWithCallbacks upsample_multi_core_interleaved(
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_unit_size = input.padded_shape()[-1] * input.element_size();
+    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_unit_size = output.padded_shape()[-1] * output.element_size();
 
-    uint32_t input_num_units = input.physical_volume() / input.padded_shape()[-1];  // N*H*W for input
+    uint32_t output_num_units = output.physical_volume() / output.padded_shape()[-1];  // N*H*W for outout
+    uint32_t input_num_units = input.physical_volume() / input.padded_shape()[-1];     // N*H*W for input
 
     auto output_shape = output.padded_shape();
     // This should allocate a DRAM buffer on the device
+    tt_metal::IDevice* device = output.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
