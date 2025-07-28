@@ -272,7 +272,8 @@ protected:
         this->create_devices(90000000);
     }
 };
-class UnitMeshCQSingleCardBufferFixture : virtual public UnitMeshCQSingleCardFixture {};
+
+using UnitMeshCQSingleCardBufferFixture = UnitMeshCQSingleCardFixture;
 
 class CommandQueueSingleCardBufferFixture : public CommandQueueSingleCardFixture {};
 
