@@ -22,14 +22,16 @@ from models.utility_functions import run_for_wormhole_b0
 )
 @pytest.mark.parametrize("batch_size, sequence_length", [(8, 384)])
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.models_performance_virtual_machine
-def test_e2e_performant_sentencebert(device, batch_size, sequence_length, act_dtype, weight_dtype):
+def test_e2e_performant_sentencebert(
+    device, batch_size, sequence_length, act_dtype, weight_dtype, model_location_generator
+):
     performant_runner = SentenceBERTPerformantRunner(
         device=device,
         device_batch_size=batch_size,
         sequence_length=sequence_length,
         act_dtype=act_dtype,
         weight_dtype=weight_dtype,
+        model_location_generator=model_location_generator,
     )
     performant_runner._capture_sentencebert_trace_2cqs()
     inference_times = []
