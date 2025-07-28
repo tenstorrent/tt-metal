@@ -9,7 +9,7 @@
 set -e
 
 usage() {
-    echo "Usage: sudo ./install_sfpi.sh [options]"
+    echo "Usage: sudo ./install_minimum_dependencies.sh [options]"
     echo
     echo "[--help, -h]                List this help"
     echo
