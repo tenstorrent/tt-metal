@@ -21,6 +21,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/system_mesh.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 
 #include "tt_metal/fabric/fabric_context.hpp"
@@ -39,6 +40,9 @@ using ReplicatedBufferConfig = tt::tt_metal::distributed::ReplicatedBufferConfig
 using MeshBuffer = tt::tt_metal::distributed::MeshBuffer;
 using BufferDistributionSpec = tt::tt_metal::BufferDistributionSpec;
 using Shape = tt::tt_metal::Shape;
+using HostRankId = tt::tt_fabric::HostRankId;
+using SystemMesh = tt::tt_metal::distributed::SystemMesh;
+using MeshDeviceConfig = tt::tt_metal::distributed::MeshDeviceConfig;
 
 using Topology = tt::tt_fabric::Topology;
 
@@ -55,7 +59,7 @@ struct pair_hash {
     }
 };
 
-class TestFixture : public IDeviceInfoProvider, public IRouteManager {
+class TestFixture : public IDeviceInfoProvider, public IRouteManager, public IDistributedContextManager {
     static constexpr uint32_t ROW_DIM = 0;
     static constexpr uint32_t COL_DIM = 1;
 
@@ -67,32 +71,18 @@ class TestFixture : public IDeviceInfoProvider, public IRouteManager {
         topology_to_fabric_config_map;
 
 public:
-    void init() {
-        control_plane_ptr_ = &tt::tt_metal::MetalContext::instance().get_control_plane();
-        const auto user_meshes = control_plane_ptr_->get_user_physical_mesh_ids();
-        TT_FATAL(
-            user_meshes.size() == 1,
-            "Only expected a single user mesh for a single host, but got: {}",
-            user_meshes.size());
-
-        // TODO: for now we are just dealing with user mesh 0 here
-        available_mesh_ids_.insert(user_meshes[0]);
-        mesh_shape_ = control_plane_ptr_->get_physical_mesh_shape(user_meshes[0]);
-        const auto coordinates = MeshCoordinateRange(mesh_shape_);
-        for (const auto& coord : coordinates) {
-            available_device_coordinates_.push_back(coord);
+    void init(std::optional<PhysicalMeshConfig> physical_mesh_config = std::nullopt) {
+        if (physical_mesh_config.has_value()) {
+            initialize_and_validate_custom_physical_config(physical_mesh_config.value());
         }
 
-        // TODO: available node ids should be able to capture the node ids for other meshes as well
-        const auto mesh_id = user_meshes[0];
-        for (auto i = 0; i < available_device_coordinates_.size(); i++) {
-            available_node_ids_.emplace_back(FabricNodeId(mesh_id, i));
-        }
-
+        // to ensure fabric config is set first, which affects mesh graph descriptor selection
         current_fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
     }
 
-    std::vector<MeshCoordinate> get_available_device_coordinates() const { return this->available_device_coordinates_; }
+    MeshCoordinateRange get_host_local_device_coordinates() const {
+        return control_plane_ptr_->get_coord_range(local_mesh_id_, MeshScope::LOCAL);
+    }
 
     void open_devices(Topology topology, RoutingType routing_type) {
         auto it = topology_to_fabric_config_map.find({topology, routing_type});
@@ -136,8 +126,13 @@ public:
         mesh_device_->close();
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
 
-        mesh_coordinate_to_node_id_.clear();
-        node_id_to_mesh_coordinate_.clear();
+        // Clear all class members
+        control_plane_ptr_ = nullptr;
+        local_available_node_ids_.clear();
+        global_available_node_ids_.clear();
+        available_mesh_ids_.clear();
+        mesh_device_.reset();
+        mesh_workload_.reset();
         current_fabric_config_ = tt::tt_fabric::FabricConfig::DISABLED;
         are_devices_open_ = false;
     }
@@ -150,37 +145,23 @@ public:
     }
 
     FabricNodeId get_fabric_node_id(const MeshCoordinate& device_coord) const override {
-        return mesh_coordinate_to_node_id_.at(device_coord);
+        const auto& mesh_graph = control_plane_ptr_->get_mesh_graph();
+        return FabricNodeId(local_mesh_id_, mesh_graph.coordinate_to_chip(local_mesh_id_, device_coord));
     }
 
     FabricNodeId get_fabric_node_id(MeshId mesh_id, const MeshCoordinate& device_coord) const override {
-        TT_FATAL(
-            available_mesh_ids_.count(mesh_id) > 0,
-            "Mesh id: {} is not available for querying fabric node id",
-            mesh_id);
-        TT_FATAL(
-            mesh_coordinate_to_node_id_.count(device_coord) > 0,
-            "Mesh coordinate: {} is not available for querying fabric node id",
-            device_coord);
-        return mesh_coordinate_to_node_id_.at(device_coord);
+        const auto& mesh_graph = control_plane_ptr_->get_mesh_graph();
+        return FabricNodeId(mesh_id, mesh_graph.coordinate_to_chip(mesh_id, device_coord));
     }
 
     MeshCoordinate get_device_coord(const FabricNodeId& node_id) const override {
-        auto it = node_id_to_mesh_coordinate_.find(node_id);
-        TT_FATAL(it != node_id_to_mesh_coordinate_.end(), "Unknown node id: {} for querying mesh coord", node_id);
-
-        return it->second;
+        const auto& mesh_graph = control_plane_ptr_->get_mesh_graph();
+        return mesh_graph.chip_to_coordinate(node_id.mesh_id, node_id.chip_id);
     }
 
-    uint32_t get_worker_noc_encoding(const MeshCoordinate& device_coord, const CoreCoord logical_core) const override {
-        auto* device = mesh_device_->get_device(device_coord);
-        const auto virtual_core = device->worker_core_from_logical_core(logical_core);
+    uint32_t get_worker_noc_encoding(const CoreCoord logical_core) const override {
+        const auto virtual_core = mesh_device_->worker_core_from_logical_core(logical_core);
         return tt_metal::MetalContext::instance().hal().noc_xy_encoding(virtual_core.x, virtual_core.y);
-    }
-
-    uint32_t get_worker_noc_encoding(const FabricNodeId& node_id, const CoreCoord logical_core) const override {
-        const auto& device_coord = get_device_coord(node_id);
-        return get_worker_noc_encoding(device_coord, logical_core);
     }
 
     CoreCoord get_worker_grid_size() const override { return mesh_device_->compute_with_storage_grid_size(); }
@@ -189,7 +170,14 @@ public:
         return (*node_id.mesh_id << 12) | (node_id.chip_id << 8) | (logical_core.x << 4) | (logical_core.y);
     }
 
-    std::vector<FabricNodeId> get_all_node_ids() const override { return available_node_ids_; }
+    std::vector<FabricNodeId> get_local_node_ids() const override { return local_available_node_ids_; }
+
+    std::vector<FabricNodeId> get_global_node_ids() const override { return global_available_node_ids_; }
+
+    bool is_local_fabric_node_id(const FabricNodeId& id) const override {
+        return std::find(local_available_node_ids_.begin(), local_available_node_ids_.end(), id) !=
+               local_available_node_ids_.end();
+    };
 
     uint32_t get_l1_unreserved_base() const override {
         return tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
@@ -212,32 +200,41 @@ public:
      * This function takes hop information and computes the actual destination nodes that would be visited during a ring
      * traversal multicast.
      *
-     * For ring topology, nodes are arranged in a serpentine pattern where:
-     * - Traffic flows in a ring/circular pattern around the mesh
-     * - The direction of turn (at mesh boundaries) depends on the current row/position
-     * - Upper rows: East → South, Lower rows: East → North
-     * - Left columns: South → East, Right columns: South → West
+     * For ring topology, there are two cases:
+     * 1. Wrap-around mesh: nodes are arranged in a serpentine pattern where traffic flows in a ring/circular pattern
+     *    around the mesh. The direction of turn (at mesh boundaries) depends on the current row/position.
+     * 2. Non wrap-around mesh: when hitting a boundary, traffic wraps around to the opposite edge of the mesh.
      */
-    std::vector<FabricNodeId> get_wrap_around_mesh_ring_topology_dst_node_ids(
+    std::vector<FabricNodeId> get_ring_topology_dst_node_ids(
         const FabricNodeId& src_node_id, RoutingDirection initial_direction, uint32_t total_hops) const {
-        // Use the common ring traversal helper
-        auto ring_path = trace_wrap_around_mesh_ring_path(src_node_id, initial_direction, total_hops);
+        std::vector<std::pair<FabricNodeId, RoutingDirection>> ring_path;
+
+        // Check if this is a wrap-around mesh
+        bool is_wrap_around = wrap_around_mesh(src_node_id);
+
+        if (is_wrap_around) {
+            // Use the existing wrap-around mesh logic
+            ring_path = trace_wrap_around_mesh_ring_path(src_node_id, initial_direction, total_hops);
+        } else {
+            // Use the new non wrap-around mesh logic
+            ring_path = trace_ring_path(src_node_id, initial_direction, total_hops);
+        }
 
         std::vector<FabricNodeId> ring_destinations;
         ring_destinations.reserve(total_hops);
 
         // Extract destination nodes (skip the source node, get the next nodes in path)
         for (const auto& [current_node, direction] : ring_path) {
-            // Get the next node in this direction
             ring_destinations.push_back(current_node);
         }
 
         log_debug(
             tt::LogTest,
-            "src_node: {}, ring_destinations: {}, total_hops: {}",
+            "src_node: {}, ring_destinations: {}, total_hops: {}, is_wrap_around: {}",
             src_node_id,
             ring_destinations,
-            total_hops);
+            total_hops,
+            is_wrap_around);
 
         return ring_destinations;
     }
@@ -330,6 +327,23 @@ public:
             mesh_device_->mesh_command_queue(), mesh_buffer, zero_buffer, device_coord, true);
     }
 
+    // Local runtime args function - writes args to local args buffer instead of using SetRuntimeArgs
+    void write_data_to_core(
+        const MeshCoordinate& device_coord,
+        const CoreCoord& core,
+        uint32_t local_args_address,
+        const std::vector<uint32_t>& args) const override {
+        auto mesh_buffer = create_mesh_buffer_helper({core}, local_args_address, args.size() * sizeof(uint32_t));
+
+        const auto total_size = args.size() * sizeof(uint32_t);
+        std::vector<uint32_t> all_args_buffer;
+        all_args_buffer.reserve(total_size / sizeof(uint32_t));
+        all_args_buffer.insert(all_args_buffer.end(), args.begin(), args.end());
+
+        tt::tt_metal::distributed::WriteShard(
+            mesh_device_->mesh_command_queue(), mesh_buffer, all_args_buffer, device_coord, true);
+    }
+
     // ======================================================================================
     // IRouteManager methods
     // ======================================================================================
@@ -351,24 +365,37 @@ public:
                 }
             }
             TT_FATAL(total_hops != 0, "all directions has 0 hops");
-            return get_wrap_around_mesh_ring_topology_dst_node_ids(src_node, initial_direction, total_hops);
+            return get_ring_topology_dst_node_ids(src_node, initial_direction, total_hops);
         }
 
         std::vector<FabricNodeId> dst_nodes;
-        const MeshCoordinate& src_coord = get_device_coord(src_node);
-
         bool use_displacement_for_dst_nodes =
             chip_send_type == ChipSendType::CHIP_UNICAST || this->topology_ == Topology::Linear;
+
         if (use_displacement_for_dst_nodes) {
+            const MeshCoordinate& src_coord = get_device_coord(src_node);
             auto displacements = convert_hops_to_displacement(hops);
             for (const auto& displacement : displacements) {
                 // Ignore zero-length displacements that can occur for some directions in the hops map
                 if (displacement == MeshCoordinate::zero_coordinate(displacement.dims())) {
                     continue;
                 }
+
                 const auto dst_coord = get_coord_from_displacement(src_coord, displacement);
-                // For unicast, we only care about the final destination of each displacement vector.
-                dst_nodes.push_back(get_fabric_node_id(dst_coord));
+
+                if (chip_send_type == ChipSendType::CHIP_UNICAST) {
+                    // For unicast, we only care about the final destination of each displacement vector.
+                    dst_nodes.push_back(get_fabric_node_id(dst_coord));
+                } else if (chip_send_type == ChipSendType::CHIP_MULTICAST) {
+                    // For multicast, we care about all nodes along the path.
+                    const auto coords_in_path = get_coords_from_range(src_coord, dst_coord);
+                    for (const auto& coord : coords_in_path) {
+                        if (coord == src_coord) {
+                            continue;  // Don't include the source itself
+                        }
+                        dst_nodes.push_back(get_fabric_node_id(coord));
+                    }
+                }
             }
         } else if (chip_send_type == ChipSendType::CHIP_MULTICAST) {
             dst_nodes = get_mesh_topology_dst_node_ids(src_node, hops);
@@ -381,12 +408,12 @@ public:
             return true;
         }
 
-        auto first_coord = node_id_to_mesh_coordinate_.at(node_ids[0]);
+        auto first_coord = get_device_coord(node_ids[0]);
         bool all_same_row = true;
         bool all_same_col = true;
 
         for (size_t i = 1; i < node_ids.size(); ++i) {
-            auto next_coord = node_id_to_mesh_coordinate_.at(node_ids[i]);
+            auto next_coord = get_device_coord(node_ids[i]);
             if (next_coord[COL_DIM] != first_coord[COL_DIM]) {
                 all_same_col = false;
             }
@@ -407,7 +434,7 @@ public:
     }
 
     std::vector<std::pair<FabricNodeId, FabricNodeId>> get_full_device_random_pairs(std::mt19937& gen) const override {
-        auto unpaired = get_all_node_ids();
+        auto unpaired = get_global_node_ids();
 
         if (unpaired.size() % 2 != 0) {
             log_warning(
@@ -457,7 +484,7 @@ public:
     }
 
     std::vector<std::pair<FabricNodeId, FabricNodeId>> get_all_to_all_unicast_pairs() const override {
-        const auto device_ids = get_all_node_ids();
+        const auto device_ids = get_global_node_ids();
         std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
         pairs.reserve(device_ids.size() * (device_ids.size() - 1));
         for (const auto& src_node : device_ids) {
@@ -602,7 +629,7 @@ public:
         return std::make_pair(dst_node_forward, dst_node_backward);
     }
 
-    uint32_t get_num_sync_devices() const override {
+    uint32_t get_num_sync_devices() const {
         uint32_t num_devices;
         switch (topology_) {
             case tt::tt_fabric::Topology::Linear: {
@@ -610,8 +637,12 @@ public:
                 return num_devices;
             }
             case tt::tt_fabric::Topology::Ring: {
-                // sync using full ring mcast, ie, mcast on both forward/backward path.
-                num_devices = 2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1);
+                if (wrap_around_mesh_) {
+                    // sync using full ring mcast, ie, mcast on both forward/backward path.
+                    num_devices = 2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1);
+                } else {
+                    num_devices = mesh_shape_[NS_DIM] + mesh_shape_[EW_DIM] - 1;
+                }
                 return num_devices;
             }
             case tt::tt_fabric::Topology::Mesh: {
@@ -622,7 +653,7 @@ public:
         }
     }
 
-    std::unordered_map<RoutingDirection, uint32_t> get_full_or_half_ring_mcast_hops(
+    std::unordered_map<RoutingDirection, uint32_t> get_wrap_around_mesh_full_or_half_ring_mcast_hops(
         const FabricNodeId& src_node_id,
         const FabricNodeId& dst_node_forward_id,
         const FabricNodeId& dst_node_backward_id,
@@ -637,8 +668,53 @@ public:
 
         auto num_forward_hops = 0;
         auto num_backward_hops = 0;
-        // TODO: fix for 6U since this is not a valide config for it.
         uint32_t full_hop_count = 2 * (mesh_shape_[NS_DIM] - 1 + mesh_shape_[EW_DIM] - 1) - 1;
+
+        if (pattern_type == HighLevelTrafficPattern::FullRingMulticast) {
+            num_forward_hops = full_hop_count;
+            num_backward_hops = full_hop_count;
+        } else if (pattern_type == HighLevelTrafficPattern::HalfRingMulticast) {
+            num_forward_hops = tt::div_up(full_hop_count, 2);
+            num_backward_hops = full_hop_count - num_forward_hops;
+            if (src_node_id.chip_id % 2 == 0) {
+                std::swap(num_forward_hops, num_backward_hops);
+            }
+        } else {
+            TT_THROW(
+                "Unsupported pattern type for ring multicast: only FullRingMulticast and HalfRingMulticast are "
+                "supported");
+        }
+
+        hops[direction_forward] = num_forward_hops;
+        hops[direction_backward] = num_backward_hops;
+
+        return hops;
+    }
+
+    std::unordered_map<RoutingDirection, uint32_t> get_full_or_half_ring_mcast_hops(
+        const FabricNodeId& src_node_id, HighLevelTrafficPattern pattern_type, uint32_t dim) const override {
+        std::unordered_map<RoutingDirection, uint32_t> hops;
+        for (const auto& direction : FabricContext::routing_directions) {
+            hops[direction] = 0;
+        }
+
+        auto num_forward_hops = 0;
+        auto num_backward_hops = 0;
+        uint32_t full_hop_count = 0;
+        RoutingDirection direction_forward = RoutingDirection::N;
+        RoutingDirection direction_backward = RoutingDirection::N;
+
+        if (dim == NS_DIM) {
+            full_hop_count = mesh_shape_[NS_DIM] - 1;
+            direction_forward = RoutingDirection::N;
+            direction_backward = RoutingDirection::S;
+        } else if (dim == EW_DIM) {
+            full_hop_count = mesh_shape_[EW_DIM] - 1;
+            direction_forward = RoutingDirection::E;
+            direction_backward = RoutingDirection::W;
+        } else {
+            TT_THROW("input mesh dim is not supported: {}", dim);
+        }
 
         if (pattern_type == HighLevelTrafficPattern::FullRingMulticast) {
             num_forward_hops = full_hop_count;
@@ -730,7 +806,7 @@ public:
     }
 
     FabricNodeId get_random_unicast_destination(FabricNodeId src_node_id, std::mt19937& gen) const override {
-        auto all_devices = this->get_all_node_ids();
+        auto all_devices = this->get_global_node_ids();
         std::vector<FabricNodeId> possible_dsts;
         possible_dsts.reserve(all_devices.size());
         for (const auto& dev : all_devices) {
@@ -756,6 +832,10 @@ public:
     MeshShape get_mesh_shape() const override { return mesh_shape_; }
 
     Topology get_topology() const { return topology_; }
+
+    bool wrap_around_mesh(FabricNodeId node) const override {
+        return control_plane_ptr_->get_fabric_context().is_wrap_around_mesh(node.mesh_id);
+    }
 
     RoutingDirection get_forwarding_direction(
         const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const override {
@@ -823,22 +903,39 @@ public:
 
         switch (topology_) {
             case tt::tt_fabric::Topology::Ring: {
-                // Get ring neighbors - returns nullopt for non-perimeter devices
-                auto ring_neighbors = this->get_wrap_around_mesh_ring_neighbors(src_device, devices);
+                if (wrap_around_mesh_) {
+                    // Get ring neighbors - returns nullopt for non-perimeter devices
+                    auto ring_neighbors = this->get_wrap_around_mesh_ring_neighbors(src_device, devices);
+                    // Check if the result is valid (has value)
+                    if (!ring_neighbors.has_value()) {
+                        // Skip this device as it's not on the perimeter and can't participate in ring multicast
+                        log_info(LogTest, "Skipping device {} as it's not on the perimeter ring", src_device.chip_id);
+                        return {{}, 0};
+                    }
 
-                // Check if the result is valid (has value)
-                if (!ring_neighbors.has_value()) {
-                    // Skip this device as it's not on the perimeter and can't participate in ring multicast
-                    log_info(LogTest, "Skipping device {} as it's not on the perimeter ring", src_device.chip_id);
-                    return {{}, 0};
+                    // Extract the valid ring neighbors
+                    auto [dst_node_forward, dst_node_backward] = ring_neighbors.value();
+
+                    multi_directional_hops = this->get_wrap_around_mesh_full_or_half_ring_mcast_hops(
+                        src_device, dst_node_forward, dst_node_backward, HighLevelTrafficPattern::FullRingMulticast);
+
+                } else {
+                    // if not wrap around mesh, then need to get the neighbours on all directions.
+                    auto ns_hops = this->get_full_or_half_ring_mcast_hops(
+                        src_device, HighLevelTrafficPattern::FullRingMulticast, NS_DIM);
+                    auto ew_hops = this->get_full_or_half_ring_mcast_hops(
+                        src_device, HighLevelTrafficPattern::FullRingMulticast, EW_DIM);
+                    for (const auto& [direction, hops] : ns_hops) {
+                        if (hops != 0) {
+                            multi_directional_hops[direction] = hops;
+                        }
+                    }
+                    for (const auto& [direction, hops] : ew_hops) {
+                        if (hops != 0) {
+                            multi_directional_hops[direction] = hops;
+                        }
+                    }
                 }
-
-                // Extract the valid ring neighbors
-                auto [dst_node_forward, dst_node_backward] = ring_neighbors.value();
-
-                multi_directional_hops = this->get_full_or_half_ring_mcast_hops(
-                    src_device, dst_node_forward, dst_node_backward, HighLevelTrafficPattern::FullRingMulticast);
-
                 // minus 2 because full ring pattern traverse each node twice.
                 auto num_sync_devices = this->get_num_sync_devices();
                 global_sync_val =
@@ -1085,6 +1182,164 @@ public:
         return path;
     }
 
+    // Helper function to trace ring path with boundary wraparound logic for non wrap-around meshes
+    std::vector<std::pair<FabricNodeId, RoutingDirection>> trace_ring_path(
+        const FabricNodeId& src_node_id, RoutingDirection initial_direction, uint32_t total_hops) const {
+        std::vector<std::pair<FabricNodeId, RoutingDirection>> path;
+        path.reserve(total_hops);
+
+        // Get starting coordinate
+        MeshCoordinate current_coord = get_device_coord(src_node_id);
+        RoutingDirection current_direction = initial_direction;
+        FabricNodeId current_node = src_node_id;
+
+        for (uint32_t hop = 0; hop < total_hops; ++hop) {
+            // Try to move in current direction
+            MeshCoordinate next_coord = current_coord;
+            bool need_wraparound = false;
+
+            switch (current_direction) {
+                case RoutingDirection::N:
+                    if (current_coord[NS_DIM] == 0) {
+                        // Wrap around to bottom edge
+                        next_coord = MeshCoordinate(mesh_shape_[NS_DIM] - 1, current_coord[EW_DIM]);
+                        need_wraparound = true;
+                    } else {
+                        next_coord = MeshCoordinate(current_coord[NS_DIM] - 1, current_coord[EW_DIM]);
+                    }
+                    break;
+                case RoutingDirection::S:
+                    if (current_coord[NS_DIM] == mesh_shape_[NS_DIM] - 1) {
+                        // Wrap around to top edge
+                        next_coord = MeshCoordinate(0, current_coord[EW_DIM]);
+                        need_wraparound = true;
+                    } else {
+                        next_coord = MeshCoordinate(current_coord[NS_DIM] + 1, current_coord[EW_DIM]);
+                    }
+                    break;
+                case RoutingDirection::E:
+                    if (current_coord[EW_DIM] == mesh_shape_[EW_DIM] - 1) {
+                        // Wrap around to left edge
+                        next_coord = MeshCoordinate(current_coord[NS_DIM], 0);
+                        need_wraparound = true;
+                    } else {
+                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] + 1);
+                    }
+                    break;
+                case RoutingDirection::W:
+                    if (current_coord[EW_DIM] == 0) {
+                        // Wrap around to right edge
+                        next_coord = MeshCoordinate(current_coord[NS_DIM], mesh_shape_[EW_DIM] - 1);
+                        need_wraparound = true;
+                    } else {
+                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] - 1);
+                    }
+                    break;
+                default: TT_THROW("routing direction not supported: {}", current_direction);
+            }
+
+            // Move to next coordinate
+            current_coord = next_coord;
+            current_node = get_fabric_node_id(current_coord);
+
+            log_debug(
+                tt::LogTest,
+                "hop {}: moved from {} to {} in direction {}, wraparound: {}",
+                hop,
+                get_device_coord(src_node_id),
+                current_coord,
+                current_direction,
+                need_wraparound);
+
+            // Record current node and outgoing direction
+            path.emplace_back(current_node, current_direction);
+        }
+
+        return path;
+    }
+
+    bool validate_num_links_supported(uint32_t num_links) const override {
+        // Validate that num_links doesn't exceed available routing planes for any row/column
+        const auto num_pci_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_pci_devices();
+        const auto num_devices = tt::tt_metal::MetalContext::instance().get_cluster().number_of_devices();
+
+        std::vector<FabricNodeId> devices = get_local_node_ids();
+        for (const auto& device : devices) {
+            uint32_t max_routing_planes = get_max_routing_planes_for_device(device);
+            // TODO: remove this once we have correct
+            if (num_pci_devices != num_devices) {
+                max_routing_planes -= 1;
+            }
+            if (num_links > max_routing_planes) {
+                log_warning(
+                    LogTest,
+                    "Skipping: Requested num_links ({}) exceeds maximum available routing planes ({}) for "
+                    "device {}. "
+                    "Please reduce num_links or check your fabric configuration.",
+                    num_links,
+                    max_routing_planes,
+                    device.chip_id);
+                return false;  // Indicate test should be skipped
+            }
+        }
+
+        return true;
+    }
+
+    uint32_t get_max_routing_planes_for_device(const FabricNodeId& node_id) const {
+        // Find the minimum number of routing planes across all directions for this device
+        uint32_t min_routing_planes = std::numeric_limits<uint32_t>::max();
+
+        // Check all possible directions
+        for (const auto& direction : FabricContext::routing_directions) {
+            size_t routing_planes =
+                control_plane_ptr_->get_num_available_routing_planes_in_direction(node_id, direction);
+            if (routing_planes > 0) {  // Only consider directions that have routing planes
+                min_routing_planes = std::min(min_routing_planes, static_cast<uint32_t>(routing_planes));
+            }
+        }
+
+        // If no valid directions found, return 0
+        return (min_routing_planes == std::numeric_limits<uint32_t>::max()) ? 0 : min_routing_planes;
+    }
+
+    // ======================================================================================
+    // IDistributedContextManager methods
+    // ======================================================================================
+    uint32_t get_randomized_master_seed() const override {
+        uint32_t master_seed = std::random_device()();
+        log_info(tt::LogTest, "No master seed provided. Using randomly generated seed: {}", master_seed);
+
+        const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+        // only need to handshake if we need to generate seed, since each host will have the same commandline arguments.
+        if (*(distributed_context->size()) > 1) {
+            if (*(distributed_context->rank()) == 0) {
+                master_seed = std::random_device()();
+                for (int recv_host_rank = 1; recv_host_rank < *(distributed_context->size()); ++recv_host_rank) {
+                    distributed_context->send(
+                        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
+                        tt::tt_metal::distributed::multihost::Rank{recv_host_rank},  // send to receiver host
+                        tt::tt_metal::distributed::multihost::Tag{0}                 // exchange seed over tag 0
+                    );
+                }
+                log_info(tt::LogTest, "Master seed sent: {}", master_seed);
+            } else {
+                distributed_context->recv(
+                    tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&master_seed), sizeof(master_seed)),
+                    tt::tt_metal::distributed::multihost::Rank{0},  // receive from sender host
+                    tt::tt_metal::distributed::multihost::Tag{0}    // exchange seed over tag 0
+                );
+                log_info(tt::LogTest, "Master seed received : {}", master_seed);
+            }
+        }
+        return master_seed;
+    }
+
+    void barrier() const override {
+        const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+        distributed_context->barrier();
+    }
+
 private:
     ControlPlane* control_plane_ptr_;
     Topology topology_;
@@ -1092,45 +1347,90 @@ private:
     MeshShape mesh_shape_;
     std::set<MeshId> available_mesh_ids_;
     tt::tt_fabric::FabricConfig current_fabric_config_;
-    std::vector<MeshCoordinate> available_device_coordinates_;
-    std::vector<FabricNodeId> available_node_ids_;
+    std::vector<FabricNodeId> local_available_node_ids_;
+    std::vector<FabricNodeId> global_available_node_ids_;
     std::shared_ptr<MeshDevice> mesh_device_;
-    std::unordered_map<MeshCoordinate, FabricNodeId> mesh_coordinate_to_node_id_;
-    std::unordered_map<FabricNodeId, MeshCoordinate> node_id_to_mesh_coordinate_;
     std::shared_ptr<MeshWorkload> mesh_workload_;
+    MeshId local_mesh_id_;
+    std::optional<HostRankId> local_host_rank_;
+
     bool are_devices_open_ = false;
+    bool wrap_around_mesh_ = false;
+
+    void initialize_and_validate_custom_physical_config(const PhysicalMeshConfig& physical_mesh_config) {
+        const auto mesh_id_str = std::string(std::getenv("TT_MESH_ID"));
+        const auto host_rank_str = std::string(std::getenv("TT_HOST_RANK"));
+
+        const auto local_mesh_id = MeshId{std::stoi(mesh_id_str)};
+        local_host_rank_ = HostRankId{std::stoi(host_rank_str)};
+
+        const auto& eth_coord_mapping = physical_mesh_config.eth_coord_mapping;
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+
+        // ethernet coordinate chip mapping, which should be migrated away from
+        std::map<FabricNodeId, chip_id_t> chip_to_eth_coord_mapping;
+        for (std::uint32_t mesh_id = 0; mesh_id < eth_coord_mapping.size(); mesh_id++) {
+            if (mesh_id == *local_mesh_id) {
+                for (std::uint32_t chip_id = 0; chip_id < eth_coord_mapping[mesh_id].size(); chip_id++) {
+                    const auto& eth_coord = eth_coord_mapping[mesh_id][chip_id];
+                    chip_to_eth_coord_mapping.insert(
+                        {FabricNodeId(MeshId{mesh_id}, chip_id),
+                         cluster.get_physical_chip_id_from_eth_coord(eth_coord)});
+                }
+            }
+        }
+        tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
+            physical_mesh_config.mesh_descriptor_path, chip_to_eth_coord_mapping);
+
+        const auto user_mesh_id =
+            tt::tt_metal::MetalContext::instance().get_control_plane().get_user_physical_mesh_ids()[0];
+        // ensure user specified matches what control plane sees
+        TT_FATAL(
+            *user_mesh_id == *local_mesh_id,
+            "Local mesh id {} does not not match user mesh id {}",
+            *user_mesh_id,
+            *local_mesh_id);
+    }
 
     void open_devices_internal(tt::tt_fabric::FabricConfig fabric_config) {
+        // Set fabric config FIRST, before any control plane access, this will reset control plane in metal context
         tt::tt_fabric::SetFabricConfig(fabric_config);
-        mesh_device_ = MeshDevice::create(mesh_shape_);
+
+        // Now it's safe to initialize control plane (will use correct mesh graph descriptor)
+        control_plane_ptr_ = &tt::tt_metal::MetalContext::instance().get_control_plane();
+
+        // Initialize mesh and device info that was deferred from init()
+        const auto user_meshes = control_plane_ptr_->get_user_physical_mesh_ids();
+        TT_FATAL(
+            user_meshes.size() == 1,
+            "Only expected a single user mesh for a single host, but got: {}",
+            user_meshes.size());
+
+        local_mesh_id_ = user_meshes[0];
+
+        available_mesh_ids_.insert(local_mesh_id_);
+        mesh_shape_ = control_plane_ptr_->get_physical_mesh_shape(local_mesh_id_, MeshScope::GLOBAL);
+
+        const auto& mesh_graph = control_plane_ptr_->get_mesh_graph();
+
+        for (auto mesh_id : mesh_graph.get_mesh_ids()) {
+            if (mesh_id == local_mesh_id_) {  // Populate all nodes available locally. Note the use of host rank to
+                                              // ensure compatibility with big mesh
+                for (auto chip : mesh_graph.get_chip_ids(mesh_id, local_host_rank_)) {
+                    local_available_node_ids_.emplace_back(FabricNodeId(MeshId{mesh_id}, chip.value()));
+                }
+            }  // Populate Ids across all hosts and meshes
+            for (auto chip : mesh_graph.get_chip_ids(mesh_id)) {
+                global_available_node_ids_.emplace_back(FabricNodeId(MeshId{mesh_id}, chip.value()));
+            }
+        }
+
+        mesh_device_ = MeshDevice::create(MeshDeviceConfig(mesh_shape_));
+
+        // Now fabric context should be initialized, safe to query wrap_around_mesh
+        wrap_around_mesh_ = control_plane_ptr_->get_fabric_context().is_wrap_around_mesh(user_meshes[0]);
 
         TT_FATAL(mesh_device_ != nullptr, "Failed to create MeshDevice with shape {}", mesh_shape_);
-
-        for (const auto& coord : available_device_coordinates_) {
-            TT_FATAL(
-                coord.dims() == mesh_shape_.dims(),
-                "Device coordinate {} has different dimensions than mesh shape {}",
-                coord,
-                mesh_shape_);
-
-            // Validate coordinate bounds
-            for (size_t i = 0; i < coord.dims(); ++i) {
-                TT_FATAL(
-                    coord[i] < mesh_shape_[i],
-                    "Device coordinate {} is out of bounds for mesh shape {} (dimension {} >= {})",
-                    coord,
-                    mesh_shape_,
-                    i,
-                    mesh_shape_[i]);
-            }
-
-            auto* device = mesh_device_->get_device(coord);
-            TT_FATAL(device != nullptr, "Failed to get device at coordinate {}", coord);
-
-            const auto fabric_node_id = control_plane_ptr_->get_fabric_node_id_from_physical_chip_id(device->id());
-            mesh_coordinate_to_node_id_.emplace(coord, fabric_node_id);
-            node_id_to_mesh_coordinate_.emplace(fabric_node_id, coord);
-        }
 
         current_fabric_config_ = fabric_config;
         are_devices_open_ = true;

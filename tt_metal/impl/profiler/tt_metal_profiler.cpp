@@ -659,6 +659,7 @@ void InitDeviceProfiler(IDevice* device) {
         const uint32_t num_dram_banks = soc_desc.get_num_dram_views();
 
         auto& profiler = tt_metal_device_profiler_map.at(device_id);
+        profiler.setLastFDDumpAsNotDone();
         profiler.profile_buffer_bank_size_bytes = bank_size_bytes;
         profiler.profile_buffer.resize(profiler.profile_buffer_bank_size_bytes * num_dram_banks / sizeof(uint32_t));
 
@@ -703,9 +704,18 @@ void DumpDeviceProfileResults(
 
     std::scoped_lock<std::mutex> lock(device_mutex);
 
-    if (getDeviceProfilerState()) {
+    auto profiler_it = tt_metal_device_profiler_map.find(device->id());
+    if (getDeviceProfilerState() && profiler_it != tt_metal_device_profiler_map.end()) {
+        DeviceProfiler& profiler = profiler_it->second;
         if (state != ProfilerDumpState::ONLY_DISPATCH_CORES) {
             if (tt::DevicePool::instance().is_dispatch_firmware_active() && !isGalaxyMMIODevice(device)) {
+                if (profiler.isLastFDDumpDone() && state == ProfilerDumpState::LAST_FD_DUMP) {
+                    ZoneScopedN("Skipping! Last FD dispatch is done");
+                    return;
+                } else if (state == ProfilerDumpState::LAST_FD_DUMP) {
+                    profiler.setLastFDDumpAsDone();
+                }
+
                 if (auto mesh_device = device->get_mesh_device()) {
                     mesh_device->mesh_command_queue().finish();
                 } else {
@@ -755,19 +765,14 @@ void DumpDeviceProfileResults(
             not tt::tt_metal::MetalContext::instance().dprint_server(),
             "Debug print server is running, cannot dump device profiler data");
 
-        auto profiler_it = tt_metal_device_profiler_map.find(device->id());
-        if (profiler_it != tt_metal_device_profiler_map.end()) {
-            DeviceProfiler& profiler = profiler_it->second;
-            profiler.setDeviceArchitecture(device->arch());
-            profiler.dumpResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
-            if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
-                profiler.pushTracyDeviceResults();
-            }
+        profiler.setDeviceArchitecture(device->arch());
+        profiler.dumpResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
+            profiler.pushTracyDeviceResults();
         }
     }
 #endif
 }
-
 void DumpDeviceProfileResults(
     IDevice* device, ProfilerDumpState state, const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
