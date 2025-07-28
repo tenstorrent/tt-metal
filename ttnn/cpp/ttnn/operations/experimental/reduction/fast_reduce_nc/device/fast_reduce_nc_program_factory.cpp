@@ -102,7 +102,6 @@ operation::ProgramWithCallbacks reduce_nc_factory(
     // When dim=0, nd sharded, tile sizes are the same, the shards are compatible
     // with the kernel accesses, tensor shape is divisible by shard shape, and
     // number of shards is larger than core count, divide the work by shards.
-    uint32_t input_shard_size = 1;
     uint32_t output_shard_size = 1;
     auto input_tile = input.tensor_spec().tile().get_tile_shape();
     auto output_tile = output.tensor_spec().tile().get_tile_shape();

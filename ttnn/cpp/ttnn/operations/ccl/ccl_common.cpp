@@ -505,7 +505,6 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
     // The `output_page_offset` will be the starting page offset for this slice index (corresponds to )
     // ring index). Each worker will operate out of that slice and then advance to the next slice for
     // for the next ring index/timestep
-    uint32_t slice_size_in_bytes = std::numeric_limits<uint32_t>::max();
     if (row_major) {
         if (slice_dim_is_width) {
             TT_THROW("Reduce scatter row-major interleaved does not yet support a width dim");

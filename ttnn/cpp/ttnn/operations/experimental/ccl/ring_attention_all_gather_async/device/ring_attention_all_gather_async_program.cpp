@@ -179,7 +179,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         CreateCircularBuffer(program, sender_backward_core_ranges, cb_reserved_packet_header_backward_config);
 
     // Tensor Info
-    const auto input_tensor_layout = input_tensor[0].buffer()->buffer_layout();
     const auto input_tensor_buffer_type = input_tensor[0].buffer()->buffer_type();
     const auto input_tensor_num_pages = input_tensor[0].buffer()->num_pages();
     const auto output_tensor_buffer_type = output_tensor[0].buffer()->buffer_type();

@@ -133,7 +133,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     }
 
     // Get worker cores, assuming 1 worker per link
-    uint32_t num_workers_per_link = 1;
     auto [sender_worker_core_range, sender_worker_cores] = llama_specific::get_custom_worker_core_placement(num_links);
 
     // Tensor Info
@@ -155,12 +154,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
 
     // concat info
     const auto& input_concat_shape = temp_tensor.padded_shape();
-    const uint32_t head_dim = input_concat_shape[-1];
     uint32_t single_tile_size =
         tt::tt_metal::detail::TileSize(tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()));
 
     auto tile_shape = temp_tensor.tensor_spec().tile().get_tile_shape();
-    auto tile_w = tile_shape[1];
 
     auto face_shape = temp_tensor.tensor_spec().tile().get_face_shape();
     auto face_h = face_shape[0];

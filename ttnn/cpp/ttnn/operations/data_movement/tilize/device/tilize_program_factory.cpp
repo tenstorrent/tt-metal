@@ -26,7 +26,6 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::IDevice* device = a.device();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -268,7 +267,6 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
 
     // log2(TILE_WIDTH * data_format_size_in_bytes)
-    uint32_t shift_bits = (a.dtype() == DataType::BFLOAT16) ? 6 : 7;
 
     uint32_t num_tiles_2d = output.padded_shape()[-1] * output.padded_shape()[-2] / TILE_HW;
 

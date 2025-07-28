@@ -356,7 +356,6 @@ static operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
     const ttnn::Shape& output_tensor_end) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::IDevice* device = input.device();
 
     auto input_shape = input.logical_shape();
     auto output_shape = output.logical_shape();

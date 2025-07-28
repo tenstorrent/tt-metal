@@ -44,7 +44,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
     int32_t num_tiles = a.physical_volume() / TILE_HW;
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::IDevice* device = a.device();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -902,8 +901,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
-
-    IDevice* device = a.device();
 
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,
              num_output_rows_unpadded = 0;

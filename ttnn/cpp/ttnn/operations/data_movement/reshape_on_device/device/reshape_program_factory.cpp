@@ -26,7 +26,6 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
     uint32_t num_tiles = a.physical_volume() / tt::constants::TILE_HW;
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::IDevice* device = a.device();
 
     auto output_shape = output.padded_shape();
 

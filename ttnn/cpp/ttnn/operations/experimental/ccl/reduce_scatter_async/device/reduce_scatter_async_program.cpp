@@ -941,7 +941,6 @@ static void generate_partial_reducer_writer_worker_command_streams(
     auto internal_command_stream_sync_sem_id = CreateSemaphore(builder_config.program.get(), worker_cores, 0);
     for (size_t w = 0; w < num_workers; w++) {
         {  // Command stream 0
-            const size_t operand_index = 0;
             auto& worker_command_stream0 = worker_command_streams.writer_cmds0[worker_cores_vec[w]];
             for (size_t i = 0; i < remote_out_worker_tensor_slices[w].size(); i++) {
                 auto const& s = remote_out_worker_tensor_slices[w][i];
@@ -995,7 +994,6 @@ static void generate_partial_reducer_writer_worker_command_streams(
             worker_command_stream0.push_back(local_core_semaphore_inc(internal_command_stream_sync_sem_id, 1));
         }
         {  // Command stream 1
-            const size_t operand_index = 1;
             auto& worker_command_stream1 = worker_command_streams.writer_cmds1[worker_cores_vec[w]];
 
             TT_FATAL(

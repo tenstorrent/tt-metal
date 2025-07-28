@@ -144,7 +144,6 @@ void RMSAllGather::validate(
                 uint32_t Mt = M / input_height;
                 uint32_t Kt = K / input_width;
                 // block
-                uint32_t block_w = program_config.block_w * input_width;
                 const auto shard_spec = a.shard_spec().value();
                 // check dims
                 TT_FATAL(

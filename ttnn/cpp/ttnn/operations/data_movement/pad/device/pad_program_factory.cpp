@@ -187,7 +187,6 @@ operation::ProgramWithCallbacks pad_tile(
     CoreRange core({0, 0}, {0, 0});
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::IDevice* device = a.device();
 
     auto output_shape = output_padded_shape;
 

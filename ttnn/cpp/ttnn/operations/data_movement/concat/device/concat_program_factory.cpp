@@ -256,8 +256,6 @@ tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_height_multi
 
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    tt_metal::IDevice* device = output.device();
-
     uint32_t num_output_rows = output.padded_shape()[-2];
     uint32_t num_input_tensors = input_tensors.size();
 

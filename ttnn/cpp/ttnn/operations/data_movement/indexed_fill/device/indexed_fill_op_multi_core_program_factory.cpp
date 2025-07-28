@@ -34,7 +34,6 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
     TT_ASSERT(batch_ids.padded_shape()[-1] == b);
 
     // parallelize across batch
-    uint32_t num_units = B;
     uint32_t cb_index = 0;
     uint32_t batch_cb_index = 1;
 

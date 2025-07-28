@@ -24,7 +24,6 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_single_core(
     uint32_t num_tiles = a.physical_volume() / TILE_HW;
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::IDevice* device = a.device();
 
     uint32_t num_input_tiles = 2;
     tt_metal::CircularBufferConfig cb_src0_config =

@@ -59,7 +59,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     CoreRange core({0, 0}, {0, 0});
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::IDevice* device = a.device();
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
@@ -347,7 +346,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
 
     uint32_t packed_pad_value = get_packed_value(a, pad_value);
     // log2(TILE_WIDTH * data_format_size_in_bytes)
-    uint32_t shift_bits = (a.dtype() == DataType::BFLOAT16) ? 6 : 7;
 
     uint32_t num_tiles_2d = output.padded_shape()[-1] * output.padded_shape()[-2] / TILE_HW;
 

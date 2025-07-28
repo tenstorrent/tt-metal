@@ -111,7 +111,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     uint32_t weight_page_size = weights.padded_shape()[-1] * weights_element_size_bytes;
 
     // weights shape is [1, 1, num_embeddings, num_dim]
-    uint32_t num_embeddings = weights.padded_shape()[-2];
 
     uint32_t batch_size = a.padded_shape()[0];
     uint32_t num_output_rows_per_batch = a.padded_shape()[-1];
@@ -405,7 +404,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     uint32_t output_page_size = output.padded_shape()[-1] * output_element_size_bytes;
 
     // weights shape is [1, 1, num_embeddings, num_dim]
-    uint32_t num_embeddings = weights.padded_shape()[-2];
 
     uint32_t batch_size = a.padded_shape()[0];
     uint32_t num_output_rows_per_batch = a.padded_shape()[-1];
@@ -416,7 +414,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     uint32_t num_blocks_per_batch = num_output_rows_per_batch;
 
     // setup problem and grid size
-    uint32_t start_core_x = 0;
 
     uint32_t problem_size = num_blocks;
 

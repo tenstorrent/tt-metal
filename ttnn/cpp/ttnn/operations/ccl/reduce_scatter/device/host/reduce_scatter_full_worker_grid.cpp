@@ -218,7 +218,6 @@ static std::tuple<KernelHandle, KernelHandle, KernelHandle, std::optional<Kernel
         (topology_config.ring_index == 0 || topology_config.ring_index == topology_config.ring_size - 1);
 
     // If we we implementing a line, and are at the end of the line
-    bool worker_grid_split_in_half = is_start_chip_in_line;
 
     KernelHandle worker_receiver_kernel_id, worker_sender_kernel_id, worker_reduce_kernel_id;
     std::optional<KernelHandle> line_start_sender_kernel_id;
