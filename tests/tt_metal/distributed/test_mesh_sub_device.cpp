@@ -65,7 +65,7 @@ TEST_F(MeshSubDeviceTestSuite, SyncWorkloadsOnSubDevice) {
     AddProgramToMeshWorkload(incrementer_mesh_workload, std::move(incrementer_program), devices);
     for (uint32_t i = 0; i < num_iters; i++) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_mesh_workload, false);
-        mesh_device_->set_sub_device_stall_group({SubDeviceId{0}});
+        mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, true);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_mesh_workload, false);
         mesh_device_->reset_sub_device_stall_group();
@@ -136,7 +136,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
     AddProgramToMeshWorkload(datacopy_mesh_workload, std::move(datacopy_program), devices);
 
     for (int i = 0; i < 50; i++) {
-        mesh_device_->set_sub_device_stall_group({SubDeviceId{2}});
+        mesh_device_->set_sub_device_stall_group({{SubDeviceId{2}}});
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, false);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), datacopy_mesh_workload, false);
 
@@ -148,8 +148,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
         EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
 
         for (auto device : mesh_device_->get_devices()) {
-            llrt::write_hex_vec_to_core(
-                device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
+            llrt::write_hex_vec_to_core(device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
         }
         mesh_device_->reset_sub_device_stall_group();
         for (std::size_t logical_x = 0; logical_x < output_buf->device()->num_cols(); logical_x++) {
@@ -203,14 +202,14 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceSwitching) {
     for (uint32_t i = 0; i < num_iters; i++) {
         mesh_device_->load_sub_device_manager(sub_device_manager_0);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_mesh_workload, false);
-        mesh_device_->set_sub_device_stall_group({SubDeviceId{0}});
+        mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, true);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_mesh_workload, false);
         mesh_device_->reset_sub_device_stall_group();
 
         mesh_device_->load_sub_device_manager(sub_device_manager_1);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_mesh_workload_1, false);
-        mesh_device_->set_sub_device_stall_group({SubDeviceId{0}});
+        mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload_1, true);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_mesh_workload_1, false);
         mesh_device_->reset_sub_device_stall_group();
@@ -245,7 +244,7 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceBasicProgramsReuse) {
     // Run programs on sub-device manager 1
     for (uint32_t i = 0; i < k_num_iters; i++) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_mesh_workload, false);
-        mesh_device_->set_sub_device_stall_group({SubDeviceId{0}});
+        mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, true);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_mesh_workload, false);
         mesh_device_->reset_sub_device_stall_group();
@@ -256,13 +255,13 @@ TEST_F(MeshSubDeviceTestSuite, SubDeviceBasicProgramsReuse) {
     mesh_device_->load_sub_device_manager(sub_device_manager_2);
     for (uint32_t i = 0; i < k_num_iters; i++) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_mesh_workload, false);
-        mesh_device_->set_sub_device_stall_group({SubDeviceId{1}});
+        mesh_device_->set_sub_device_stall_group({{SubDeviceId{1}}});
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, true);
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_mesh_workload, false);
         mesh_device_->reset_sub_device_stall_group();
     }
     Finish(mesh_device_->mesh_command_queue());
 }
-}
+}  // namespace tt::tt_metal
 }  // namespace
 }  // namespace tt::tt_metal::distributed::test
