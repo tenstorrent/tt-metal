@@ -108,11 +108,11 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
     }
 
     // Each direction has a ready semaphore and there's a global sync semaphore, per link.
-    const auto num_directions_per_link = 3;
+    const auto num_expected_semaphores = 3;
     TT_FATAL(
-        semaphore.size() == num_directions_per_link,
+        semaphore.size() == num_expected_semaphores,
         "Error, semaphore size should be {} but has {}",
-        num_directions_per_link,
+        num_expected_semaphores,
         semaphore.size());
 }
 
