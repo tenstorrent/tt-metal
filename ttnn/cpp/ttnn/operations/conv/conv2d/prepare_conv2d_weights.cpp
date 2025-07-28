@@ -807,7 +807,8 @@ static OptimizedConvBlockConfig get_opt_block_config(
         kernel_size[0],
         kernel_size[1],
         get_fp32_dest_acc_en(compute_config),
-        conv_config.enable_split_reader);
+        conv_config.enable_split_reader,
+        conv_config.full_inner_dim);
 }
 
 static uint32_t calculate_out_channels_padded(uint32_t out_channels, const ParallelConfig& output_parallel_config) {

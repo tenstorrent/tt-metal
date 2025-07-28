@@ -33,7 +33,7 @@ jobs:
         id: is_organization_member
         env:
           GITHUB_ORG: tenstorrent
-          ORG_READ_GITHUB_TOKEN: ${{ secrets.ORG_READ_GITHUB_TOKEN })
+          ORG_READ_GITHUB_TOKEN: ${{ secrets.ORG_READ_GITHUB_TOKEN }}
         run: |
           http_status=$(curl -o /dev/null -s -w '%{http_code}' -H "Authorization: Bearer $ORG_READ_GITHUB_TOKEN" https://api.github.com/orgs/${{ env.GITHUB_ORG }}/members/${{ env.USERNAME }})
           if [ "$http_status" -eq 204 ]; then

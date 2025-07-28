@@ -64,7 +64,7 @@ enum class EnqueueCommandType {
 
 class Command {
 public:
-    Command() {}
+    Command() = default;
     virtual void process() {};
     virtual EnqueueCommandType type() = 0;
 };

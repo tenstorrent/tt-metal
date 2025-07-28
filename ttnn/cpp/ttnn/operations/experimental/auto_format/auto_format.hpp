@@ -24,7 +24,7 @@ class AutoFormat {
 private:
     inline static tt::tt_metal::distributed::MeshDevice* device = nullptr;
 
-    AutoFormat() {}
+    AutoFormat() = default;
 
 public:
     /**

@@ -72,8 +72,6 @@ private:
     class ScopedDevices {
     private:
         std::vector<MaybeRemote<IDevice*>> devices_;
-
-        std::vector<IDevice*> local_devices_;
         std::map<chip_id_t, IDevice*> opened_local_devices_;
 
     public:
