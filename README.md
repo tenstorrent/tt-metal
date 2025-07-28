@@ -41,6 +41,7 @@ Performance Metrics Notes:
 - T/S/U measures tokens per second per user. The T/S/U reported is the throughput of the first token generated after prefill, i.e. 1 / inter token latency.
 - T/S measures tokens per second, where T/S = T/S/U * batch.
 - Tensor Parallel (TP) and Data Parallel (DP) define parallelization factors across mulitiple devices.
+- Report LLM performance is for an input sequence length (number of rows filled in the KV cache) of 128 for all models except Mamba.
 - Performance numbers were collected using the tt-metal model demos (accessible via the model links). If running with a vLLM inference server, performance may be different.
 
 ### [Qwen 3 32B (TP=8)](./models/tt_transformers)
