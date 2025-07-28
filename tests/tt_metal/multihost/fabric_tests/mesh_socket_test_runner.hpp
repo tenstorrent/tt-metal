@@ -5,118 +5,162 @@
 #pragma once
 
 #include <memory>
-#include <random>
+#include <vector>
 #include <unordered_map>
 
-#include "tests/tt_metal/multihost/fabric_tests/mesh_socket_yaml_parser.hpp"
-#include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/fabric.hpp>
 
+#include "tests/tt_metal/multihost/fabric_tests/mesh_socket_yaml_parser.hpp"
+
 namespace tt::tt_fabric::mesh_socket_tests {
 
-using MeshDevice = tt::tt_metal::distributed::MeshDevice;
-using MeshSocket = tt::tt_metal::distributed::MeshSocket;
-using SocketConfig = tt::tt_metal::distributed::SocketConfig;
-using SocketConnection = tt::tt_metal::distributed::SocketConnection;
-using SocketMemoryConfig = tt::tt_metal::distributed::SocketMemoryConfig;
-using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
-
-struct TestExecutionContext {
-    std::shared_ptr<MeshDevice> mesh_device;
-    uint32_t current_rank;
-    uint32_t total_ranks;
-    std::shared_ptr<DistributedContext> distributed_context;
-};
-
-// Main test runner class
+/**
+ * @brief Main test runner class that manages MeshDevice and MeshSocket lifetimes
+ * and orchestrates socket test execution using the existing socket_send_recv_utils.
+ */
 class MeshSocketTestRunner {
 public:
-    MeshSocketTestRunner();
+    /**
+     * @brief Construct a new MeshSocketTestRunner
+     *
+     * @param config The parsed YAML configuration containing test definitions
+     */
+    explicit MeshSocketTestRunner(const MeshSocketTestConfiguration& config);
+
+    /**
+     * @brief Destructor - ensures proper cleanup of all resources
+     */
     ~MeshSocketTestRunner();
 
-    // Main execution methods
-    void run_tests_from_config(const MeshSocketTestConfiguration& config);
-    void setup_fabric_context(const std::optional<PhysicalMeshConfig>& mesh_config);
+    // Delete copy constructor and assignment operator to prevent accidental copying
+    MeshSocketTestRunner(const MeshSocketTestRunner&) = delete;
+    MeshSocketTestRunner& operator=(const MeshSocketTestRunner&) = delete;
+
+    /**
+     * @brief Initialize the test environment and MeshDevice
+     *
+     * @throws std::runtime_error if initialization fails
+     */
+    void initialize();
+
+    /**
+     * @brief Run all tests defined in the configuration
+     *
+     * @throws std::runtime_error if any test fails
+     */
+    void run_all_tests();
+
+    /**
+     * @brief Run a specific test by name
+     *
+     * @param test_name Name of the test to run
+     * @throws std::runtime_error if test not found or execution fails
+     */
+    void run_test_by_name(const std::string& test_name);
+
+    /**
+     * @brief Clean up all resources and close MeshDevice
+     */
     void cleanup();
 
-    // Statistics and reporting
-    const TestExecutionStats& get_execution_stats() const { return stats_; }
-    void print_execution_summary() const;
+    /**
+     * @brief Get the current MeshDevice (for advanced usage)
+     *
+     * @return std::shared_ptr<tt::tt_metal::distributed::MeshDevice>
+     */
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> get_mesh_device() const;
 
 private:
-    // Test generation methods
-    std::vector<ResolvedTestConfig> generate_tests(const MeshSocketTestConfiguration& config);
-    ResolvedTestConfig resolve_test_config(const TestConfig& test, const DefaultConfig& defaults);
-    std::vector<ResolvedSocketConfig> expand_pattern_to_sockets(
-        const PatternExpansionConfig& pattern, const MemoryConfig& memory, uint32_t iterations);
+    /**
+     * @brief Run a specific test configuration
+     *
+     * @param test The test configuration to execute
+     */
+    void run_test(const ParsedTestConfig& test);
 
-    // Pattern expansion methods
-    std::vector<ResolvedSocketConfig> expand_all_to_all_devices(
-        const PatternExpansionConfig& pattern, const MemoryConfig& memory, uint32_t iterations);
-    std::vector<ResolvedSocketConfig> expand_all_to_all_meshes(
-        const PatternExpansionConfig& pattern, const MemoryConfig& memory, uint32_t iterations);
-    std::vector<ResolvedSocketConfig> expand_random_pairings(
-        const PatternExpansionConfig& pattern, const MemoryConfig& memory, uint32_t iterations);
+    /**
+     * @brief Initialize the MeshDevice based on fabric configuration
+     */
+    void initialize_mesh_device();
 
-    // Socket configuration methods
-    ResolvedSocketConfig create_resolved_socket_config(
-        const SocketConfig& socket, const MemoryConfig& default_memory, uint32_t default_iterations);
-    SocketConfig create_tt_socket_config(const SocketConnectionConfig& connection, const MemoryConfig& memory);
-    SocketMemoryConfig create_socket_memory_config(const MemoryConfig& memory);
-    std::vector<SocketConnection> create_socket_connections(const std::vector<SocketConnectionConfig>& connections);
+    /**
+     * @brief Setup fabric configuration before device initialization
+     */
+    void setup_fabric_configuration();
 
-    // Test execution methods
-    void execute_test(const ResolvedTestConfig& test);
-    void execute_socket_test(const ResolvedSocketConfig& socket);
+    /**
+     * @brief Create MeshSockets for a given test configuration
+     *
+     * @param test The test configuration
+     * @return std::vector<tt::tt_metal::distributed::MeshSocket> Vector of created sockets
+     */
+    std::vector<tt::tt_metal::distributed::MeshSocket> create_sockets_for_test(const ParsedTestConfig& test);
 
-    // Host communication and synchronization
-    void setup_host_communication();
-    uint32_t exchange_seed_with_hosts();
-    void synchronize_hosts();
+    /**
+     * @brief Convert TestSocketConfig to tt::tt_metal::distributed::SocketConfig
+     *
+     * @param socket_config The YAML-parsed socket configuration
+     * @param memory_config The memory configuration for the socket
+     * @return tt::tt_metal::distributed::SocketConfig
+     */
+    tt::tt_metal::distributed::SocketConfig convert_to_socket_config(
+        const TestSocketConfig& socket_config, const MemoryConfig& memory_config);
 
-    // Validation methods
-    void validate_mesh_coordinates(const std::vector<MeshCoordinate>& coords);
-    void validate_socket_configuration(const ResolvedSocketConfig& socket);
-    void validate_runtime_environment();
+    /**
+     * @brief Convert SocketConnectionConfig to tt::tt_metal::distributed::SocketConnection
+     *
+     * @param connection_config The YAML-parsed connection configuration
+     * @return tt::tt_metal::distributed::SocketConnection
+     */
+    tt::tt_metal::distributed::SocketConnection convert_to_socket_connection(
+        const SocketConnectionConfig& connection_config);
 
-    // Device discovery and management
-    std::vector<MeshCoordinate> discover_available_devices();
-    std::vector<uint32_t> get_available_host_ranks();
-    bool is_sender_for_socket(const ResolvedSocketConfig& socket) const;
-    bool is_receiver_for_socket(const ResolvedSocketConfig& socket) const;
+    /**
+     * @brief Execute socket test using the test_socket_send_recv utility function
+     *
+     * @param socket The MeshSocket to test
+     * @param test The test configuration containing memory and iteration settings
+     */
+    void execute_socket_test(tt::tt_metal::distributed::MeshSocket& socket, const ParsedTestConfig& test);
 
-    // Utility methods
-    MemoryConfig merge_memory_config(const std::optional<MemoryConfig>& specific, const MemoryConfig& default_config);
-    bool should_run_test(const std::string& test_name, const std::optional<std::vector<std::string>>& run_tests);
-    void log_test_progress(const std::string& test_name, size_t current, size_t total);
-    void record_test_result(const std::string& test_name, bool success, std::chrono::milliseconds execution_time);
+    /**
+     * @brief Get the current distributed context
+     *
+     * @return std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>
+     */
+    std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> get_distributed_context() const;
 
-    // Random number generation for pattern expansion
-    uint32_t get_random_device_index();
-    std::pair<MeshCoordinate, MeshCoordinate> get_random_device_pair();
+    /**
+     * @brief Validate that the current rank can participate in the given test
+     *
+     * @param test The test configuration to validate
+     * @return true if current rank should participate, false otherwise
+     */
+    bool should_participate_in_test(const ParsedTestConfig& test) const;
 
-    // Error handling and recovery
-    void handle_test_failure(const std::string& test_name, const std::exception& e);
-    void cleanup_failed_test();
+    /**
+     * @brief Log test execution details
+     *
+     * @param test The test being executed
+     * @param socket_index Index of the socket being tested
+     * @param total_sockets Total number of sockets in the test
+     */
+    void log_test_execution(const ParsedTestConfig& test, size_t socket_index, size_t total_sockets) const;
 
-private:
-    TestExecutionContext execution_context_;
-    TestExecutionStats stats_;
-    std::mt19937 random_generator_;
+    // Configuration and state
+    MeshSocketTestConfiguration config_;
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
+    bool is_initialized_;
+    tt::tt_metal::distributed::multihost::Rank local_rank_;
+    std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> distributed_context_;
 
-    // Cached device and mesh information
-    std::vector<MeshCoordinate> available_devices_;
-    std::vector<uint32_t> available_host_ranks_;
-    MeshShape mesh_shape_;
+    // Test execution state
+    std::unordered_map<std::string, size_t> test_name_to_index_;
 
-    // Configuration state
-    bool is_initialized_ = false;
-    std::string current_test_name_;
-
-    // Constants
-    static constexpr uint32_t DEFAULT_RANDOM_SEED = 12345;
-    static constexpr uint32_t MAX_RETRY_ATTEMPTS = 3;
+    // Default test parameters
+    static constexpr uint32_t DEFAULT_NUM_TRANSACTIONS = 20;
+    static constexpr uint32_t DEFAULT_NUM_ITERATIONS = 1;
 };
 
 }  // namespace tt::tt_fabric::mesh_socket_tests

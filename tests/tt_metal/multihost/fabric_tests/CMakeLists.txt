@@ -28,7 +28,13 @@ target_link_libraries(multi_host_fabric PRIVATE test_metal_common_libs)
 add_library(mesh_socket_components OBJECT)
 add_library(TT::Metalium::Test::Distributed::MeshSocketComponents ALIAS mesh_socket_components)
 
-target_sources(mesh_socket_components PRIVATE mesh_socket_yaml_parser.cpp)
+target_sources(
+    mesh_socket_components
+    PRIVATE
+        mesh_socket_yaml_parser.cpp
+        mesh_socket_test_runner.cpp
+        socket_send_recv_utils.cpp
+)
 
 target_include_directories(
     mesh_socket_components
