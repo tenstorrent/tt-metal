@@ -55,12 +55,12 @@ jobs:
             cmd: |
               TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=MultiCommandQueue*Fixture.*
               TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQ*Fixture.*
-          - name: ttnn cpp unit tests
-            cmd: ./build/test/ttnn/unit_tests_ttnn # Planning to move this to PR Gate
           - name: CCL
             cmd: |
               ./build/test/ttnn/unit_tests_ttnn_ccl
               ./build/test/ttnn/unit_tests_ttnn_ccl_ops
+          - name: ttnn tensor accessor
+            cmd: "./build/test/ttnn/unit_tests_ttnn_accessor"
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
       image: ${{ inputs.docker-image }}

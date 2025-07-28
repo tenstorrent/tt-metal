@@ -9,10 +9,9 @@ from loguru import logger
 
 import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
-from models.tt_transformers.tt.common import PagedAttentionConfig, get_rot_transformation_mat
+from models.tt_transformers.tt.common import PagedAttentionConfig, get_prefill_rot_mat, get_rot_transformation_mat
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.tt_transformers.tt.rope import get_rot_mats
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
@@ -85,12 +84,13 @@ def test_decoder_inference(
     all_tests_pass = True
 
     # pre-compute the rotational embedding matrix and send to device
-    rot_mats = get_rot_mats(
-        head_dim=model_args.head_dim,
-        device=mesh_device,
-        seq_len=max_seq_len,
-        theta=model_args.rope_theta,
-        rope_scaling=model_args.rope_scaling,
+    rot_mats = get_prefill_rot_mat(
+        model_args.head_dim,
+        mesh_device,
+        max_seq_len,
+        model_args.rope_theta,
+        model_args.rope_scaling_factor,
+        model_args.orig_context_len,
     )
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
     transformation_mats_prefill = ttnn.as_tensor(
@@ -141,7 +141,7 @@ def test_decoder_inference(
 
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
-        pt_decode_input = (torch.rand(batch_size, max_seq_len, model_args.dim) * 2) - 1
+        pt_decode_input = (torch.rand(batch_size, max_seq_len, model_args.dim, dtype=torch.bfloat16) * 2) - 1
         tt_decode_input = pt_decode_input.clone()
         decode_input = model_args.prepare_residual_tensor_prefill(
             tt_decode_input,
@@ -151,7 +151,7 @@ def test_decoder_inference(
             model_args.head_dim,
             model_args.max_seq_len * 2,
             model_args.rope_theta,
-            model_args.rope_scaling.factor if model_args.rope_scaling else None,
+            model_args.rope_scaling_factor,
         )[positions]
 
         # Reference model

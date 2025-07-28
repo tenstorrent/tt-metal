@@ -84,7 +84,8 @@ def test_decoder_inference(
         model_args.head_dim,
         model_args.max_seq_len,
         model_args.rope_theta,
-        model_args.rope_scaling,
+        model_args.rope_scaling_factor,
+        model_args.orig_context_len,
     )
     transformation_mats = rope_setup.get_both_trans_mats()
 
@@ -134,8 +135,8 @@ def test_decoder_inference(
         model_args.head_dim,
         model_args.max_seq_len * 2,
         model_args.rope_theta,
-        model_args.rope_scaling.factor if model_args.rope_scaling else None,
-        model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
+        model_args.rope_scaling_factor,
+        model_args.orig_context_len,
     )
     freqs_cis = torch.complex(cos, sin)
 
@@ -155,7 +156,7 @@ def test_decoder_inference(
         logger.info(f"[Decoder] Generating token {i}")
 
         # input = torch.randn(1, 32, 4096)
-        pt_decode_input = (torch.rand(batch_size, seqlen, model_args.dim) * 2) - 1
+        pt_decode_input = (torch.rand(batch_size, seqlen, model_args.dim, dtype=torch.bfloat16) * 2) - 1
         tt_decode_input = pt_decode_input.clone()
 
         decode_input = model_args.prepare_residual_tensor_decode(
