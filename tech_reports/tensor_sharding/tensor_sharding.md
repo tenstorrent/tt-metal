@@ -19,7 +19,7 @@ By default, tensors use an interleaved (non-sharded) memory layout: data is spli
 2D sharding encompasses height, width, and block sharding strategies. In this approach, all higher dimensions of a tensor are combined into the height dimension, effectively reshaping the tensor into a 2D form (height × width) before dividing it into shards.
 
 ### Height Sharding
-Height sharding divides a tensor along its height dimension (all dimensions except the last one are collapsed into height). Each shard contains consecutive rows of the original tensor, and these shards are distributed across the list of cores. This strategy is particularly effective for operations that process data row-wise.
+Height sharding divides a tensor along its height dimension (all dimensions except the last one are collapsed into height). Each shard contains consecutive rows of the original tensor, and these shards are distributed across the specified memory banks. This strategy is particularly effective for operations that process data row-wise.
 
 <img src="images/h_sharding.svg" style="width:500px;"/>
 
@@ -83,7 +83,7 @@ height_sharded_tensor = ttnn.from_torch(
 </details>
 
 ### Width Sharding
-Width sharding divides a tensor along its width dimension (the last dimension), while all higher dimensions are collapsed into height. Each shard contains consecutive columns of the original tensor, and these shards are distributed across the list of cores. This strategy is optimal for operations that process data column-wise.
+Width sharding divides a tensor along its width dimension (the last dimension), while all higher dimensions are collapsed into height. Each shard contains consecutive columns of the original tensor, and these shards are distributed across the specified memory banks. This strategy is optimal for operations that process data column-wise.
 
 <img src="images/w_sharding.svg" style="width:500px;"/>
 
@@ -149,11 +149,11 @@ width_sharded_tensor = ttnn.from_torch(
 </details>
 
 ### Block Sharding
-Block sharding divides a tensor into a 2D grid of rectangular blocks, where each block contains a contiguous region spanning both height and width dimensions. The tensor is split along both the height and width axes simultaneously, creating a grid pattern of shards. These shards are then distributed in a 1-to-1 mapping onto a consecutive 2D grid of memory banks, where each core receives exactly one block.
+Block sharding divides a tensor into a 2D grid of rectangular blocks, where each block contains a contiguous region spanning both height and width dimensions. The tensor is split along both the height and width axes simultaneously, creating a grid pattern of shards. These shards are then distributed in a 1-to-1 mapping onto a corresponding 2D grid of memory banks, where each memory bank receives exactly one block.
 
 <img src="images/block_sharding.svg" style="width:500px;"/>
 
-For example, if you have a tensor of shape (H, W) and a 2×2 core grid, the tensor is divided into 4 blocks arranged in a 2×2 pattern. Core (0,0) gets the top-left block, core (0,1) gets the top-right block, core (1,0) gets the bottom-left block, and core (1,1) gets the bottom-right block. This creates optimal data locality since each core operates on a spatially coherent region of the original tensor.
+For example, if you have a tensor of shape (H, W) and a 2×2 core grid, the tensor is divided into 4 blocks arranged in a 2×2 pattern. Memory bank (0,0) gets the top-left block, memory bank (0,1) gets the top-right block, memory bank (1,0) gets the bottom-left block, and memory bank (1,1) gets the bottom-right block. This creates optimal data locality since each memory bank operates on a spatially coherent region of the original tensor.
 
 **Usage Example:**
 ```python
@@ -222,11 +222,11 @@ block_sharded_tensor = ttnn.from_torch(
 
 ND (N-dimensional) sharding extends tensor sharding beyond the traditional 2D approach by distributing data across multiple tensor dimensions simultaneously. Unlike 2D sharding which collapses higher dimensions into height, ND sharding preserves the original tensor dimensionality and can shard across any combination of dimensions (batch, sequence length, channels, etc.).
 
-ND sharding divides a tensor along multiple specified dimensions, creating an N-dimensional grid of shards that are distributed across the list of cores in a round-robin manner. Unlike the 2D sharding strategies above where each core receives exactly one shard, ND sharding allows multiple shards per core. Each shard is a hypercube-shaped region that spans the specified dimensions. This approach provides maximum flexibility for optimizing data locality and parallelization patterns based on the specific operation requirements.
+ND sharding breaks a tensor into smaller pieces by choosing which dimensions to split. Think of it like cutting a 3D block of data: you can choose to slice it horizontally, vertically, depth-wise, or any combination of these directions. The resulting pieces are distributed across the specified memory banks, and unlike 2D sharding where each memory bank gets exactly one piece, ND sharding can put multiple pieces onto the same memory bank. This flexibility allows you to optimize how data is arranged based on what your specific operation needs to do efficiently.
 
 **Visual Examples:**
 
-The following examples demonstrate how ND sharding distributes 3D tensor data across a 2D grid of cores. You can observe those and other examples using an [interactive visualizer](https://supermina999.github.io/sharding-visual/).
+The following examples demonstrate how ND sharding distributes 3D tensor data across a 2D grid of cores. You can observe these and other examples using an [interactive visualizer](https://supermina999.github.io/sharding-visual/).
 
 **Example 1: Simple 3D Sharding**
 - Tensor shape: (4, 4, 4)
@@ -238,7 +238,7 @@ The following examples demonstrate how ND sharding distributes 3D tensor data ac
 <img src="images/nd_4x4x4_to_2x2x2_cores_2x2_end.png" style="width:250px;"/>
 </p>
 
-This shows how a 4×4×4 tensor is divided into eight 2×2×2 shards, which are then distributed across 4 cores in round-robin order. Each core receives 2 shards.
+This shows how a 4×4×4 tensor is divided into eight 2×2×2 shards, which are then distributed across 4 memory banks in round-robin order. Each memory bank receives 2 shards.
 
 **Example 2: Uneven Shard Distribution**
 - Tensor shape: (4, 4, 3)
@@ -250,7 +250,7 @@ This shows how a 4×4×4 tensor is divided into eight 2×2×2 shards, which are 
 <img src="images/nd_4x4x3_to_2x2x3_cores_1x3_end.png" style="width:250px;"/>
 </p>
 
-This demonstrates how a 4×4×3 tensor is split into four 2×2×3 shards distributed across 3 cores. Core 0 gets 2 shards, while cores 1 and 2 each get 1 shard, showing the round-robin distribution pattern.
+This demonstrates how a 4×4×3 tensor is split into four 2×2×3 shards distributed across 3 memory banks. Memory bank 0 gets 2 shards, while memory banks 1 and 2 each get 1 shard, showing the round-robin distribution pattern.
 
 **Example 3: Single Dimension Sharding**
 - Tensor shape: (3, 6, 4)
@@ -262,7 +262,7 @@ This demonstrates how a 4×4×3 tensor is split into four 2×2×3 shards distrib
 <img src="images/nd_3x6x4_to_3x2x4_cores_2x2_end.png" style="width:250px;"/>
 </p>
 
-Here, only the middle dimension is sharded, creating three 3×2×4 shards. This shows how ND sharding can selectively shard specific dimensions while keeping others intact.
+Here, only the middle dimension is sharded, which creates three 3×2×4 shards. This shows how ND sharding can selectively shard specific dimensions while keeping others intact.
 
 **Example 4: Small Core Grid with Many Shards**
 - Tensor shape: (4, 6, 3)
@@ -274,7 +274,7 @@ Here, only the middle dimension is sharded, creating three 3×2×4 shards. This 
 <img src="images/nd_4x6x3_to_2x2x3_cores_1x2_end.png" style="width:250px;"/>
 </p>
 
-A 4×6×3 tensor creates six 2×2×3 shards distributed across only 2 cores. Each core receives 3 shards, illustrating how ND sharding efficiently handles cases where there are more shards than cores.
+A 4×6×3 tensor creates six 2×2×3 shards distributed across only 2 memory banks. Each memory bank receives 3 shards, illustrating how ND sharding efficiently handles cases where there are more shards than memory banks.
 
 **Usage Examples:**
 
@@ -312,7 +312,7 @@ torch_tensor = torch.randn(nd_spec_features.shape)
 feature_sharded = ttnn.from_torch(torch_tensor, spec=nd_spec_features, device=device)
 ```
 
-> **Note:** ND sharding is experimental and may not be supported with certain operations.
+> **Note:** ND sharding is experimental and may not be supported by certain operations.
 
 <details>
 <summary><strong>Advanced API - Custom ND Shard Specification</strong></summary>
