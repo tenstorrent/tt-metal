@@ -329,14 +329,7 @@ def run_demo_inference(
 )
 @pytest.mark.parametrize(
     "prompt",
-    (
-        (
-            [
-                "An astronaut riding a green horse",
-                "A futuristic cityscape at sunset, with flying cars and glowing skyscrapers, ultra-detailed, cinematic lighting, 4k",
-            ]
-        ),
-    ),
+    (("An astronaut riding a green horse"),),
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
