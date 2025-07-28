@@ -370,7 +370,6 @@ get_padded_slice_runtime_args_tile_sharded_output(
         "Number of tiles per channel {} should be equal to number of output shard width in tiles {}",
         num_tiles_per_channel,
         tt::div_up(output_shard_shape[1], tt::constants::TILE_WIDTH));
-    uint32_t num_tiles_height_per_core = tt::div_up(output_shard_spec.shape[0], tt::constants::TILE_HEIGHT);
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
 
@@ -516,9 +515,8 @@ get_padded_slice_runtime_args_tile_sharded_output(
             input_tensor, ttnn::Shape(start_index_in_input_per_dim));
         uint32_t input_end_id = ttnn::operations::data_movement::get_tiled_start_offset(
             input_tensor, ttnn::Shape(end_index_in_input_per_dim), true);
-        uint32_t output_start_id = ttnn::operations::data_movement::get_tiled_start_offset(
-            actual_output_shape, ttnn::Shape(start_index_per_dim));
-        uint32_t output_end_id = ttnn::operations::data_movement::get_tiled_start_offset(
+        ttnn::operations::data_movement::get_tiled_start_offset(actual_output_shape, ttnn::Shape(start_index_per_dim));
+        ttnn::operations::data_movement::get_tiled_start_offset(
             actual_output_shape, ttnn::Shape(end_index_per_dim), true);
 
         int32_t num_full_rows = ((end_index_per_dim[0] - start_index_per_dim[0]) * actual_output_shape[1]) +

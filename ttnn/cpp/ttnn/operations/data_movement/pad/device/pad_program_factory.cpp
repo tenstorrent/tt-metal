@@ -584,8 +584,6 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
     uint32_t start_src_stick_wi = 0;  // start of stick segment for 2d decomp
     uint32_t start_dst_stick_wi = 0;
     int32_t local_nsticks = ntiles_per_core_h * TILE_HEIGHT;
-    int32_t rem_nbatch =
-        nbatch;  // per core h, there are ncores_per_batch_h cores, ie each batch ncores_h = ncores_per_batch_h
     for (int32_t b = 0; b < nbatch; ++b) {
         int32_t rem_src_nsticks = a.padded_shape()[2];
         for (uint32_t j = 0; j < ncores_per_batch_h; ++j) {
@@ -720,10 +718,9 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
 
-    uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
+    uint32_t H = input_shape[2], C = input_shape[1], N = input_shape[0];
 
-    uint32_t W_padded = output_shape[3], H_padded = output_shape[2], C_padded = output_shape[1],
-             N_padded = output_shape[0];
+    uint32_t H_padded = output_shape[2], C_padded = output_shape[1];
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
     std::vector<uint32_t> start_dim_offset(num_dims, 0);
@@ -956,8 +953,8 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
             uint32_t num_cores_total = num_cores_x * num_cores_y;
 
             auto output_tensor_shape = dst_tensor.logical_shape();
-            uint32_t W_padded = output_tensor_shape[3], H_padded = output_tensor_shape[2],
-                     C_padded = output_tensor_shape[1], N_padded = output_tensor_shape[0];
+            uint32_t H_padded = output_tensor_shape[2], C_padded = output_tensor_shape[1],
+                     N_padded = output_tensor_shape[0];
             uint32_t NCH_padded = H_padded * C_padded * N_padded;
 
             auto
@@ -1037,10 +1034,9 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
 
-    uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
+    uint32_t H = input_shape[2], C = input_shape[1], N = input_shape[0];
 
-    uint32_t W_padded = output_shape[3], H_padded = output_shape[2], C_padded = output_shape[1],
-             N_padded = output_shape[0];
+    uint32_t H_padded = output_shape[2], C_padded = output_shape[1];
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
     std::vector<uint32_t> start_dim_offset(num_dims, 0);

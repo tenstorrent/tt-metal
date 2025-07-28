@@ -709,8 +709,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
 
     uint32_t output_cb_index = src0_cb_index;
 
-    bool weight_stick_size_is_power_of_two = is_power_of_two_at_least_32(weight_page_size);
-
     // Create Kernels
     // reader
     std::vector<uint32_t> embedding_compile_time_args = {

@@ -284,11 +284,9 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_indices_tensor_config);
     tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_mapping_tensor_config);
     tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, packet_header_cb_config);
-    auto send_preparation_buffer_cb =
-        tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_send_preparation_buffer_config);
+    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_send_preparation_buffer_config);
     if (operation_attributes.impl == AllToAllTransferType::FullPacket) {
-        auto metadata_buffer_cb =
-            tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_metadata_buffer_config);
+        tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_metadata_buffer_config);
     }
 
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;

@@ -19,10 +19,8 @@ operation::ProgramWithCallbacks bcast_sharded_h(
     const Tensor& a, const Tensor& b, const Tensor& output, BcastOpMath bcast_math /*, BcastOpDim bcast_dim*/) {
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
-    uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1, C = ashape.rank() >= 3 ? ashape[-3] : 1, H = ashape[-2],
-             W = ashape[-1];
-    uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1, bC = bshape.rank() >= 3 ? bshape[-3] : 1, bH = bshape[-2],
-             bW = bshape[-1];
+    uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1, C = ashape.rank() >= 3 ? ashape[-3] : 1;
+    uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
     uint32_t NC = N * C;
 
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -203,7 +201,7 @@ operation::ProgramWithCallbacks bcast_sharded_h(
         uint32_t ncores = shard_spec.num_cores();
         uint32_t Wt = 0, Ht = 0;
         const auto ashape = input_tensors.at(0).padded_shape();
-        uint32_t N = ashape[0], C = ashape[1], H = ashape[2], W = ashape[3];
+        uint32_t N = ashape[0], C = ashape[1];
         uint32_t bN = input_tensors.at(1).padded_shape()[0];
         uint32_t NC = N * C;
         if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {

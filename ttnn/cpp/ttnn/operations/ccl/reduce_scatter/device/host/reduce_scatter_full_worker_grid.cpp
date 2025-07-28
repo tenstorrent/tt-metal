@@ -769,9 +769,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
         std::min(input_tensor_num_units_per_tensor_slice, (edm_buffer_size_bytes / op_config.get_page_size())) * 2;
     uint32_t cb_num_pages_per_packet = cb_num_pages / 2;
     log_trace(tt::LogOp, "cb_num_pages: {}", cb_num_pages);
-    auto const& [cb_src0_workers, cb_src1_workers, cb_dst0_sender_workers, cb_short_circuit_sender_workers, optional_cb_src0_workers_2, optional_cb_src1_workers_2, optional_cb_dst0_sender_workers_2, optional_cb_short_circuit_sender_workers_2] =
-        create_worker_circular_buffers(
-            input_tensor, op_config, worker_core_range, second_worker_core_range, cb_num_pages, program);
+    create_worker_circular_buffers(
+        input_tensor, op_config, worker_core_range, second_worker_core_range, cb_num_pages, program);
 
     uint32_t max_worker_slice_in_bytes = compute_maximum_worker_slice_in_bytes(
         topology, cb_num_pages, cb_num_pages, cb_num_pages, edm_buffer_size_bytes, op_config.get_page_size());

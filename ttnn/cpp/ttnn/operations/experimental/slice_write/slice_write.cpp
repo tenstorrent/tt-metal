@@ -35,8 +35,6 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     TT_FATAL(padded_output_shape.rank() == 4, "Output tensor must have rank 4");
 
     bool no_step = step[0] == 1 && step[1] == 1 && step[2] == 1 && step[3] == 1;
-    bool ends_max = ends[0] == padded_output_shape[0] && ends[1] == padded_output_shape[1] &&
-                    ends[2] == padded_output_shape[2] && ends[3] == padded_output_shape[3];
 
     TT_FATAL(no_step, "Slice Write does not support strides");
 
@@ -78,7 +76,6 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
 
     // Sharding is only 2D.
     if (input.is_sharded() && logical_input_shape[0] == 1 && logical_input_shape[1] == 1) {
-        uint32_t calc_nhw_volume = actual_shape[0] * actual_shape[1] * actual_shape[2];
         auto shard_spec = input_tensor.shard_spec().value();
 
         auto input_cores = shard_spec.grid;
@@ -94,8 +91,6 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
             }
         }
 
-        uint32_t calc_nhw_volume_padded =
-            tt::round_up(tt::div_up(calc_nhw_volume, num_cores_nhw), tt::constants::TILE_HEIGHT) * num_cores_nhw;
     } else {
         for (int i = 0; i < 4; i++) {
             TT_FATAL(

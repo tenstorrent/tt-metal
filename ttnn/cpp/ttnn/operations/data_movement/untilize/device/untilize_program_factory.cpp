@@ -264,7 +264,6 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
         ttnn::split_blocks_for_tilize(CoreCoord(ncores_x, ncores_y), nblocks);
 
     bool row_major = true;
-    uint32_t block_row_size = 0;
     std::vector<CoreCoord> cores_with_rtargs;
 
     uint32_t num_input_tiles = ntiles_per_block * 2;
