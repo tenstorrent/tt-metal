@@ -115,7 +115,7 @@ Tests:
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 2048
+      size: 4096
       num_packets: 200000
 
     patterns:
@@ -133,7 +133,7 @@ Tests:
     defaults:
       ftype: mcast
       ntype: unicast_write
-      size: 2048
+      size: 4096
       num_packets: 200000
 
     patterns:
@@ -151,7 +151,7 @@ Tests:
     defaults:
       ftype: unicast
       ntype: unicast_write
-      size: 2048
+      size: 4096
       num_packets: 200000
 
     senders:
