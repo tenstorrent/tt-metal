@@ -69,19 +69,22 @@ void test_socket_send_recv(
     if (distributed_context->rank() == sender_rank) {
         seed = std::chrono::steady_clock::now().time_since_epoch().count();
         if (sender_rank != recv_rank) {
+            log_info(tt::LogTest, "Sending seed to rank {}", recv_rank);
             distributed_context->send(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
                 recv_rank,                                    // send to receiver host
                 tt::tt_metal::distributed::multihost::Tag{0}  // exchange seed over tag 0
             );
         }
-    } else {
+    } else if (distributed_context->rank() == recv_rank) {
+        log_info(tt::LogTest, "Receiving seed from rank {}", sender_rank);
         distributed_context->recv(
             tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
             sender_rank,                                  // recv from sender host
             tt::tt_metal::distributed::multihost::Tag{0}  // exchange seed over tag 0
         );
     }
+    log_info(tt::LogTest, "Seed: {}", seed);
 
     std::mt19937 gen(seed);
     std::uniform_int_distribution<uint32_t> dis(0, UINT32_MAX);
@@ -152,7 +155,7 @@ void test_socket_send_recv(
             // Run workload performing Data Movement over the socket
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), sender_mesh_workload, false);
             Finish(mesh_device_->mesh_command_queue());
-        } else {
+        } else if (distributed_context->rank() == recv_rank) {
             auto recv_virtual_coord = mesh_device_->worker_core_from_logical_core(recv_core);
             auto recv_data_shard_params =
                 ShardSpecBuffer(CoreRangeSet(recv_core), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
