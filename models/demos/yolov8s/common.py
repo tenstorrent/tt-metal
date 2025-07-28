@@ -19,6 +19,7 @@ def load_torch_model(model_location_generator=None):
         )
         state_dict = torch.load(weights_path)
         torch_model = YOLO("yolov8s.yaml")
+        torch_model = torch_model.model
 
     torch_model.load_state_dict(state_dict)
     torch_model.eval()

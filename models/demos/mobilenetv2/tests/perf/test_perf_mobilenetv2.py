@@ -19,7 +19,7 @@ def get_expected_times(name):
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [MOBILENETV2_BATCH_SIZE, 3178],
+        [MOBILENETV2_BATCH_SIZE, 3335],
     ],
 )
 def test_perf_device_mobilenetv2(batch_size, expected_perf):

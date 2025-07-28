@@ -89,7 +89,7 @@ def test_demo(
                 ttnn.bfloat8_b,
                 model_task=model_task,
                 resolution=(640, 640),
-                model_location_generator=None,
+                model_location_generator=model_location_generator,
                 torch_input_tensor=im,
             )
             performant_runner._capture_yolov9_trace_2cqs()

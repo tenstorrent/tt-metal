@@ -21,7 +21,6 @@ def load_torch_model(model_location_generator=None):
         )
         yolov11_ckpt = torch.load(weights_path)
         state_dict = yolov11_ckpt["model"].float().state_dict()
-        # state_dict = {k.replace("model.", "", 1): v for k, v in state_dict.items()}
 
     torch_model.load_state_dict(state_dict)
     torch_model.eval()

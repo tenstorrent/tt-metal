@@ -28,7 +28,7 @@ def load_torch_model(reference_model, target_prefix, module="semantic_sub", mode
         state_dict = torch_model.state_dict()
     else:
         weights = (
-            model_location_generator("vision_models/segformer", model_subdir="", download_if_ci_v2=True)
+            model_location_generator("vision-models/segformer", model_subdir="", download_if_ci_v2=True)
             / "segformer_b0_ade_512_512.pth"
         )
         # TODO CIv2 weight load for Image Classification. Issue - https://github.com/tenstorrent/tt-metal/issues/25888
