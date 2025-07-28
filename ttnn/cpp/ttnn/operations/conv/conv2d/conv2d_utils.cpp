@@ -1137,7 +1137,7 @@ uint32_t calculate_conv_dram_L1(
         compute_kernel_config,
         parallel_config,
         output_parallel_config,
-        in_channels,
+        tt::round_up(in_channels, constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(parallel_config)),
         out_channels,
         batch_size,
         output_slice_height,
