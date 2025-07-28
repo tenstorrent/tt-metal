@@ -135,8 +135,6 @@ RISCVs
 RISCs
 ReadFromDevice
 ReduceDim
-RepeatTrace
-ReplayTrace
 ResNet
 RuntimeArgs
 SETPRECISION
