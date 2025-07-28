@@ -33,7 +33,7 @@ Resource link - [source](https://huggingface.co/emrecan/bert-base-turkish-cased-
 Use the following command to run the model :
 
 ```
-pytest --disable-warnings tests/ttnn/integration_tests/sentence_bert/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model
+pytest --disable-warnings models/demos/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model
 ```
 
 ###  Performant Model with Trace+2CQ
@@ -44,7 +44,7 @@ pytest --disable-warnings tests/ttnn/integration_tests/sentence_bert/test_ttnn_s
 Use the following command to run the performant Model with Trace+2CQs (without mean-pooling):
 
 ```
-pytest --disable-warnings models/demos/sentence_bert/tests/test_sentence_bert_e2e_performant.py
+pytest --disable-warnings models/demos/sentence_bert/tests/perf/test_sentence_bert_e2e_performant.py
 ```
 
 ### Performant Demo with Trace+2CQ

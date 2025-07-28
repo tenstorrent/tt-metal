@@ -1,1 +1,1 @@
-../../../ttnn/integration_tests/sentence_bert/test_ttnn_sentencebert_intermediate.py
+../../../../models/demos/sentence_bert/tests/pcc/test_ttnn_sentencebert_intermediate.py
