@@ -66,7 +66,6 @@ void SortDeviceOperation::validate_on_program_cache_miss(
         (input_tensor_tile_size + value_tensor_tile_size + index_tensor_tile_size) * Wt;
 
     const auto device = tensor_args.input_tensor.device();
-    const auto l1_mem_size_bytes = device->l1_size_per_core();
 
     TT_FATAL(
         tensor_args.input_tensor.buffer() != nullptr,

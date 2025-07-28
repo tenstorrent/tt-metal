@@ -141,11 +141,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     // Tensor Info
     const auto input_tensor_layout = input_tensor.buffer()->buffer_layout();
     const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
-    const auto input_tensor_page_layout = input_tensor.layout();
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const auto output_tensor_layout = output_tensor.buffer()->buffer_layout();
     const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
-    const auto output_tensor_page_layout = output_tensor.layout();
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& output_tensor_shape = output_tensor.padded_shape();
 
@@ -154,7 +151,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
 
     auto mesh_device = input_tensor.mesh_device();
-    const bool enable_async_output_tensor = false;
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
@@ -193,7 +189,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
 
     uint32_t num_cores_per_link =
         num_directions_per_link * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
-    uint32_t num_workers_per_link = num_directions_per_link * num_workers_per_direction;
 
     const auto [all_core_range, all_cores] =
         choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
@@ -309,8 +304,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         uint32_t output_tensor_Ht = output_tensor_shape[2] / TILE_WIDTH;
 
         for (uint32_t dir = 0; dir < num_directions_per_link; dir++) {
-            const bool is_forward = dir;
-
             // Fabrix mux kernel
             uint32_t mux_core_offset =
                 link * num_cores_per_link + dir * (num_mux_cores_per_direction_per_link + num_workers_per_direction);

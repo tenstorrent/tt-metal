@@ -357,7 +357,6 @@ void PermuteDeviceOperation::MultiCoreBlockedGeneric::override_runtime_arguments
     auto& program = cached_program.program;
     auto& unary_reader_kernel_id = cached_program.shared_variables.unary_reader_kernel_id;
     auto& unary_writer_kernel_id = cached_program.shared_variables.unary_writer_kernel_id;
-    auto& compute_kernel_id = cached_program.shared_variables.compute_kernel_id;
 
     const auto& input_tensor = tensor_args.input_tensor;
     auto& output_tensor = tensor_return_value;

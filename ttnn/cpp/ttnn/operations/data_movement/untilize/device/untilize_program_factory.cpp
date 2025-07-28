@@ -75,17 +75,14 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
         ntiles % ntiles_per_block == 0);
 
     uint32_t nblocks = (ntiles / ntiles_per_block);
-    uint32_t block_size_nbytes = input_single_tile_size;
 
     auto cores = corerange_to_cores(sub_core_grids, ncores, true);
     auto all_cores = num_cores_to_corerangeset_in_subcoregrids(cores[0], ncores, sub_core_grids, true);
     uint32_t nblocks_per_core = nblocks / ncores;
 
     bool row_major = true;
-    bool src_block_sharded = false;
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,
              num_output_rows_unpadded = 0;
-    CoreCoord end_core;
     std::vector<CoreCoord> cores_with_rtargs;
 
     uint32_t num_input_tiles = ntiles_per_block * 2;
@@ -267,16 +264,13 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
         ntiles % ntiles_per_block == 0);
 
     uint32_t nblocks = (ntiles / ntiles_per_block);
-    uint32_t block_size_nbytes = input_single_tile_size;
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
         ttnn::split_blocks_for_tilize(CoreCoord(ncores_x, ncores_y), nblocks);
 
     bool row_major = true;
-    bool src_block_sharded = false;
     uint32_t num_rows_block = 0, block_row_size = 0, output_row_size = 0, last_block_row_size_unpadded = 0,
              num_output_rows_unpadded = 0;
-    CoreCoord end_core;
     std::vector<CoreCoord> cores_with_rtargs;
 
     uint32_t num_input_tiles = ntiles_per_block * 2;
@@ -472,7 +466,6 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
     const auto& input_shape = a.padded_shape();
-    const auto& output_shape = output.padded_shape();
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
@@ -905,7 +898,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
     const auto& tile_shape = a.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
-    uint32_t tile_volume = tile_height * tile_width;
 
     bool input_is_sharded = a.is_sharded();
     bool output_is_sharded = output.is_sharded();
@@ -1316,7 +1308,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
         auto dst_buffer = output_tensors.at(0).buffer();
 
         bool input_is_sharded = input_tensors.at(0).is_sharded();
-        bool output_is_sharded = output_tensors.at(0).is_sharded();
 
         // Reader
         if (input_is_sharded) {

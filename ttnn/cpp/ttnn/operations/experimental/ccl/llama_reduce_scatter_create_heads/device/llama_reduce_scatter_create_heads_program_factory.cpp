@@ -339,8 +339,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     std::map<std::string, std::string> reader_defines = {{"DEVICE_ORDER", device_order}};
 
     const auto& input_shape = input_tensor.logical_shape();
-    const auto dim = operation_attributes.dim;
-    uint32_t rank = input_shape.size();
     auto& q_output_tensor = tensor_return_value[0];
     auto& k_output_tensor = tensor_return_value[1];
     auto& v_output_tensor = tensor_return_value[2];
@@ -358,11 +356,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     uint32_t input_shard_width = input_shard_spec.shape[1];
 
     uint32_t q_output_shard_height = q_output_shard_spec.shape[0];
-    uint32_t q_output_shard_width = q_output_shard_spec.shape[1];
-    uint32_t k_output_shard_height = k_output_shard_spec.shape[0];
-    uint32_t k_output_shard_width = k_output_shard_spec.shape[1];
-    uint32_t v_output_shard_height = v_output_shard_spec.shape[0];
-    uint32_t v_output_shard_width = v_output_shard_spec.shape[1];
 
     uint32_t ncores_input = (input_tensor_width + input_shard_width - 1) / input_shard_width;
 
@@ -376,9 +369,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     uint32_t output_cores_per_device = ncores_output;
 
     auto input_tensor_buffer = input_tensor.buffer();
-    auto q_output_tensor_buffer = q_output_tensor.buffer();
-    auto k_output_tensor_buffer = k_output_tensor.buffer();
-    auto v_output_tensor_buffer = v_output_tensor.buffer();
 
     uint32_t q_base_addr = q_output_tensor.buffer()->address();
     uint32_t k_base_addr = k_output_tensor.buffer()->address();
@@ -407,7 +397,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t input_block_size = input_sticks_per_device * input_shard_width * input_tensor.element_size();
-    uint32_t input_page_size = input_shard_width * input_tensor.element_size();
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
@@ -436,7 +425,6 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
         num_blocks_per_packet = packet_size_bytes / input_block_size;
     }
     uint32_t num_packets_to_send = (ncores_input + num_blocks_per_packet - 1) / num_blocks_per_packet;
-    uint32_t num_packets_to_send_per_worker = (num_packets_to_send + num_links - 1) / num_links;
 
     uint32_t num_workers_per_link = 1;
 

@@ -39,7 +39,6 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
     const bool index_tensor_is_dram = index_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     const uint32_t num_input_tiles = tensor_args.input_tensor.physical_volume() / tt::constants::TILE_HW;
-    const uint32_t num_value_tiles = output_tensors.at(0).physical_volume() / tt::constants::TILE_HW;
 
     const auto input_shape = tensor_args.input_tensor.padded_shape();
     const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tt::constants::TILE_HEIGHT;
@@ -330,7 +329,6 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
     const auto tile_hw = tile_width * tile_height;
 
     const uint32_t num_input_tiles = tensor_args.input_tensor.physical_volume() / tile_hw;
-    const uint32_t num_value_tiles = output_tensors.at(0).physical_volume() / tile_hw;
 
     const auto input_shape = tensor_args.input_tensor.padded_shape();
     const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
@@ -750,7 +748,6 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
     const uint32_t number_of_available_cores = total_number_of_cores - 1;  // One core for coordinator
 
     const uint32_t all_core_utilization_loop_count = total_work_units / number_of_available_cores;
-    const uint32_t all_core_utilization_loop_residuum = total_work_units % number_of_available_cores;
 
     // uint32 index tensor support
     const bool is_32_bit_data = index_tensor_cb_data_format == tt::DataFormat::UInt32;
@@ -867,7 +864,6 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
     const auto coordinator_core_physical_coord = device->worker_core_from_logical_core(coordinator_core);
 
     const auto start_core_logical = core_range.ranges()[0].start_coord;
-    const auto end_core_logical = core_range.ranges()[core_range.ranges().size() - 1].end_coord;
     const auto start_core_physical_coord = device->worker_core_from_logical_core(start_core_logical);
     const auto end_core_physical_coord = device->worker_core_from_logical_core(coordinator_core);
 

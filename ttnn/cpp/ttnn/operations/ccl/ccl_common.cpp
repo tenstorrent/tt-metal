@@ -114,7 +114,6 @@ SenderRecieverConfig get_device_sender_receiver_config_in_ring(
     TT_FATAL(
         mesh_view.is_mesh_2d(),
         "CLL operation invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-    const auto view_index = (cluster_axis == 0) ? mesh_coord[1] : mesh_coord[0];
     config.device_index = (cluster_axis == 0) ? mesh_coord[0] : mesh_coord[1];
 
     auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {

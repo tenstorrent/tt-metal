@@ -364,7 +364,6 @@ get_padded_slice_runtime_args_tile_sharded_output(
     }
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
 
     uint32_t num_tiles_per_channel = tt::div_up(input_padded_shape[3], tt::constants::TILE_WIDTH);
     num_tiles_per_channel = num_tiles_per_channel / num_cores_channels;

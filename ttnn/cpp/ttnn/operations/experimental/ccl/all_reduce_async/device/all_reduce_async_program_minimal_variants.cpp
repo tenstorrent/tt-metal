@@ -68,7 +68,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
 
     tt::tt_metal::Program program{};
     auto mesh_device = input_tensor.mesh_device();
-    auto single_device = mesh_device->get_devices().at(0);
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
     log_trace(

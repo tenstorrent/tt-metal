@@ -27,10 +27,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
     uint32_t W = ashape[-1];
     uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
     uint32_t bC = bshape.rank() >= 3 ? bshape[-3] : 1;
-    uint32_t bH = bshape[-2];
-    uint32_t bW = bshape[-1];
     uint32_t NC = N * C;
-    uint32_t HW = H * W;
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
@@ -245,10 +242,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
         uint32_t W = ashape[-1];
         uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
         uint32_t bC = bshape.rank() >= 3 ? bshape[-3] : 1;
-        uint32_t bH = bshape[-2];
-        uint32_t bW = bshape[-1];
         uint32_t NC = N * C;
-        uint32_t HW = H * W;
 
         uint32_t Wt = W / TILE_WIDTH;
         uint32_t Ht = H / TILE_HEIGHT;

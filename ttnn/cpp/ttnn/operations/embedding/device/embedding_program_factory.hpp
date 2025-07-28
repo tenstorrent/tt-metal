@@ -85,7 +85,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     ////////////////////////////////////////////////////////////////////////////
 
     tt_metal::Buffer* a_buffer = a.buffer();
-    tt_metal::Buffer* weights_buffer = weights.buffer();
     tt_metal::Buffer* out_buffer = output.buffer();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -93,7 +92,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
     IDevice* device = a.device();
-    auto dst_addr = output.buffer()->address();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -136,8 +134,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     } else {
         auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-        uint32_t num_cores_x = compute_with_storage_grid_size.x;
-        uint32_t num_cores_y = compute_with_storage_grid_size.y;
         std::tie(
             num_cores,
             all_cores,
@@ -150,7 +146,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         row_major = false;
     }
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
 
     // Create Buffers
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -383,7 +378,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     ////////////////////////////////////////////////////////////////////////////
 
     tt_metal::Buffer* a_buffer = a.buffer();
-    tt_metal::Buffer* weights_buffer = weights.buffer();
     tt_metal::Buffer* out_buffer = output.buffer();
 
     ////////////////////////////////////////////////////////////////////////////
@@ -391,7 +385,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
     IDevice* device = a.device();
-    auto dst_addr = output.buffer()->address();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -426,13 +419,10 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
 
     // setup problem and grid size
     uint32_t start_core_x = 0;
-    uint32_t start_core_y = 0;
 
     uint32_t problem_size = num_blocks;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     uint32_t num_cores, num_blocks_per_core_group_1, num_blocks_per_core_group_2;
     CoreRangeSet all_cores, core_group_1, core_group_2;
@@ -456,13 +446,11 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, problem_size);
     }
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
 
     // Create Buffers
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     tt::DataFormat weights_cb_data_format = tt_metal::datatype_to_dataformat_converter(weights.dtype());
-    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     constexpr uint32_t out_cb_index = CBIndex::c_0;
     uint32_t rounded_weight_page_size = round_up_to_mul32(weight_page_size);
@@ -554,7 +542,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     }
 
     uint32_t input_offset = 0;
-    uint32_t weight_offset = 0;
 
     auto cores = corerange_to_cores(all_cores, std::nullopt, row_major);
     std::vector<uint32_t> reader_runtime_args = {
@@ -643,15 +630,12 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     ////////////////////////////////////////////////////////////////////////////
 
     tt_metal::Buffer* a_buffer = a.buffer();
-    tt_metal::Buffer* weights_buffer = weights.buffer();
-    tt_metal::Buffer* out_buffer = output.buffer();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     // This should allocate a DRAM buffer on the device
     auto device = a.device();
-    auto dst_addr = output.buffer()->address();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -682,7 +666,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
 
     // setup problem and grid size
     uint32_t start_core_x = 0;
-    uint32_t start_core_y = 0;
 
     uint32_t problem_size = volume;
 
@@ -700,13 +683,11 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     uint32_t num_blocks_per_core_group_2 = work.units_per_core_group_2;
 
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
 
     // Create Buffers
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     tt::DataFormat weights_cb_data_format = tt_metal::datatype_to_dataformat_converter(weights.dtype());
-    tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     constexpr uint32_t src0_cb_index = CBIndex::c_0;
     uint32_t rounded_weight_page_size = round_up_to_mul32(weight_page_size);
@@ -740,7 +721,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     uint32_t output_cb_index = src0_cb_index;
 
     bool input_stick_size_is_power_of_two = is_power_of_two_at_least_32(input_page_size);
-    uint32_t input_log2_stick_size = input_stick_size_is_power_of_two ? (std::uint32_t)std::log2(input_page_size) : 0;
     bool weight_stick_size_is_power_of_two = is_power_of_two_at_least_32(weight_page_size);
     uint32_t weight_log2_stick_size =
         weight_stick_size_is_power_of_two ? (std::uint32_t)std::log2(weight_page_size) : 0;

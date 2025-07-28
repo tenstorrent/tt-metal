@@ -28,7 +28,6 @@ operation::ProgramWithCallbacks bcast_multi_core_w(
     uint32_t bH = bshape[-2];
     uint32_t bW = bshape[-1];
     uint32_t NC = N * C;
-    uint32_t HW = H * W;
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
@@ -209,7 +208,6 @@ operation::ProgramWithCallbacks bcast_multi_core_w(
             uint32_t bH = bshape[-2];
             uint32_t bW = bshape[-1];
             uint32_t NC = N * C;
-            uint32_t HW = H * W;
 
             uint32_t Wt = W / TILE_WIDTH;
             uint32_t Ht = H / TILE_HEIGHT;

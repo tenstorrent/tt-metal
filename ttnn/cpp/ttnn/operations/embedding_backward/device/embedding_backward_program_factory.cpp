@@ -27,7 +27,6 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     tt_metal::Buffer* out_buffer = output.buffer();
 
     IDevice* device = grad_tensor.device();
-    auto dst_addr = out_buffer->address();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup

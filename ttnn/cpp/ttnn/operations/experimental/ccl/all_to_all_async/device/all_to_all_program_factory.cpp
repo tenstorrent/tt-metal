@@ -273,12 +273,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     // Tensor Info
     const auto input_tensor_layout = input_tensor.buffer()->buffer_layout();
     const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
-    const auto input_tensor_page_layout = input_tensor.layout();
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const auto output_tensor_layout = output_buffer.buffer()->buffer_layout();
     const auto output_tensor_buffer_type = output_buffer.buffer()->buffer_type();
-    const auto output_tensor_page_layout = output_buffer.layout();
-    const auto output_tensor_num_pages = output_buffer.buffer()->num_pages();
 
     const uint32_t N_DRAM_BANKS = device->num_dram_channels();
 

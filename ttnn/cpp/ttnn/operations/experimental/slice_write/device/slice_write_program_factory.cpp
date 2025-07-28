@@ -370,8 +370,6 @@ static operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
         input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
             input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
         "Input tensor should be height or block sharded");
-    bool is_height_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
-    bool is_block_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     auto shard_spec = input.shard_spec().value();
     auto input_cores = shard_spec.grid;
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
@@ -513,7 +511,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
     auto shard_spec = input_tensor.shard_spec().value();
     auto input_cores = shard_spec.grid;
@@ -524,7 +521,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     bool is_width_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
     uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(input_tensor);
-    uint32_t num_tiles_channel_per_core = shard_spec.shape[1] / TILE_WIDTH;
 
     uint32_t output_row_size_bytes = output_shape[-1] * input_tensor.element_size();
     uint32_t input_row_size_bytes = input_shard_shape[1] * input_tensor.element_size();
@@ -687,7 +683,6 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = input.device();
-    const auto& output_padded_shape = output.padded_shape();
     const auto& input_padded_shape = input.padded_shape();
 
     auto input_shape = input.logical_shape();
@@ -700,7 +695,6 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
     log_debug(tt::LogOp, "Slice Write Input Shape : {} ,Actual Input Shape: {}", input_shape, input_shape);
     TT_FATAL(input.dtype() == output.dtype(), "Input & output should have the same dtype");
@@ -725,8 +719,6 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
     TT_FATAL(input.shard_spec().has_value(), "Input tensor should be sharded");
 
     bool is_height_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
-    bool is_block_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-    bool is_width_sharded = input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
     auto shard_spec = input.shard_spec().value();
     auto input_cores = shard_spec.grid;
@@ -867,7 +859,6 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     uint32_t src_stick_size = input_row_size_bytes;
-    uint32_t dst_stick_size = output_row_size_bytes;
 
     uint32_t max_read_size = 4096;
 

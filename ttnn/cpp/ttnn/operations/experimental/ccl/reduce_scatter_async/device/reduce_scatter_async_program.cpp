@@ -435,7 +435,6 @@ static WorkerCoreBundle select_worker_cores_for_line_topology(size_t num_links, 
 
     static constexpr std::size_t num_directions_per_line = 2;
     WorkerCoreBundle worker_cores;
-    size_t current_chunk = 0;
 
     constexpr size_t num_final_reducers_per_link = 1;
     constexpr size_t per_link_num_workers_needed = num_directions_per_line + num_final_reducers_per_link;
@@ -1050,7 +1049,6 @@ static void create_non_end_of_line_final_reducer_worker_commands(
     std::unordered_map<CoreCoord, size_t>& math_page_counts_out) {
     auto const& final_reducer_worker_cores = builder_config.worker_cores.get().final_reducers_vec;
     auto const& all_program_tensors = builder_config.all_tensors.get();
-    auto const& all_cbs = builder_config.all_cbs.get();
     log_trace(tt::LogOp, "--------------------------------------");
     log_trace(tt::LogOp, "CREATE WORKER (final reducer - not end. Device={})", builder_config.device->id());
 
@@ -1091,9 +1089,6 @@ static void populate_partial_reduce_worker_commands(
     std::unordered_map<CoreCoord, size_t>& math_page_counts_out) {
     auto const& partial_reducer_worker_cores = builder_config.worker_cores.get().partial_reducers_vec;
     auto const& all_tensors = builder_config.all_tensors.get();
-    auto const& all_cbs = builder_config.all_cbs.get();
-    auto const& topology_config = builder_config.topology_config.get();
-    auto const& kernel_ids = builder_config.kernel_ids.get();
     log_trace(tt::LogOp, "--------------------------------------");
     log_trace(tt::LogOp, "CREATE WORKER (partial reducer - not end. Device={})", builder_config.device->id());
 
@@ -1212,7 +1207,6 @@ static void populate_partial_reduce_rt_args(
 
     auto const& all_tensors = builder_config.all_tensors.get();
     auto const& kernel_ids = builder_config.kernel_ids.get();
-    auto device = builder_config.device;
 
     auto const& partial_reducer_worker_cores = builder_config.worker_cores.get().partial_reducers_vec;
     std::array<std::vector<CoreCoord>, 2> partial_reducer_worker_cores_vec = {
@@ -1539,7 +1533,6 @@ static void create_end_of_line_worker_runtime_args(
     for (auto direction : {LineDirection::FORWARD, LineDirection::BACKWARD}) {
         bool is_start_of_line = builder_config.topology_config.get().is_first_device_in_line(direction);
         auto const& reader_worker_cores = reader_worker_cores_per_direction[direction];
-        bool is_forward_direction = direction == LineDirection::FORWARD;
 
 
         Tensor* output_tensor_ptr = nullptr;
@@ -2086,7 +2079,6 @@ void lower_command_streams_to_noc_commands(
         bool is_start_of_line = builder_config.topology_config.get().is_last_device_in_line(direction);
 
         auto const& partial_reducers = builder_config.worker_cores.get().partial_reducers_vec[direction];
-        auto const& final_reducers = builder_config.worker_cores.get().final_reducers_vec;
 
         lower_command_streams(
             partial_reducers, command_streams.reader_cmds0, *builder_config.all_tensors.get().input_tensor);
@@ -2148,7 +2140,6 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
     const GlobalSemaphore& to_remote_sem,
     const std::optional<SubDeviceId>& sub_device_id) {
     using namespace ttnn::ccl::worker_detail;
-    bool do_dynamic_fabric_bringup_and_teardown = fabric_mode == fabric_lifetime_mode::TRANSIENT;
 
     // Constants/ "Globals"
     constexpr auto math_in0_cb = tt::CBIndex::c_0;
@@ -2276,7 +2267,6 @@ operation::ProgramWithCallbacks reduce_scatter_async_on_instantiated_edm_fabric(
         page_size,
         pages_per_cb_packet,
         dim};
-    bool is_end_of_line = topology_config.is_at_end_of_line();
 
     log_trace(tt::LogOp, "Pages per CB packet: {}", pages_per_cb_packet);
     WorkerCommandStreams command_streams;

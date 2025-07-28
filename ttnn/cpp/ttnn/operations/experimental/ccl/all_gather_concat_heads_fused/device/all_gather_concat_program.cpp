@@ -146,7 +146,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     const auto input_tensor_shard_num_pages = logical_dim_2;
 
     const auto output_interm_tensor_cores = temp_tensor.memory_config().shard_spec()->grid;
-    const auto output_interm_tensor_shard_shape = temp_tensor.memory_config().shard_spec()->shape;
     const auto output_interm_tensor_shard_num_pages = logical_dim_2;
     const auto row_size = input_tensor.padded_shape()[-1] / 2 * output_tensor.element_size();
 
@@ -165,27 +164,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     auto tile_shape = temp_tensor.tensor_spec().tile().get_tile_shape();
     auto tile_h = tile_shape[0];
     auto tile_w = tile_shape[1];
-    auto tile_hw = tile_h * tile_w;
 
     auto face_shape = temp_tensor.tensor_spec().tile().get_face_shape();
     auto face_h = face_shape[0];
     auto face_w = face_shape[1];
-    auto face_hw = face_h * face_w;
     uint32_t first_phase = 1;
-    uint32_t second_phase = 2;
 
     const uint32_t head_tiles = head_dim / tile_w;
     const uint32_t head_size = head_tiles * single_tile_size;
-    const uint32_t tile_size = head_size / head_tiles;
 
     uint32_t element_size = temp_tensor.element_size();
     uint32_t sub_tile_line_bytes = face_w * element_size;
     auto q_shard_spec = output_tensor.shard_spec().value();
     auto q_cores = q_shard_spec.grid;
-    auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
     auto in_shard_spec = temp_tensor.shard_spec().value();
     auto in_cores = in_shard_spec.grid;
-    auto in_num_tiles = in_shard_spec.shape[0] * in_shard_spec.shape[1] / TILE_HW;
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
@@ -251,7 +244,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
         }
     }
     const auto& sem_cores_updated = CoreRangeSet(sem_cores_vector);
-    uint32_t q_base_addr = temp_tensor.buffer()->address();
     // cores to read and write to output
     const uint32_t num_cores = q_cores.num_cores();  // number of cores of the output
     const auto& cores = corerange_to_cores(q_cores, num_cores, true);
@@ -262,7 +254,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     // cores for input
     const uint32_t in_num_cores = in_cores.num_cores();  // number of cores of the input
     const auto& in_cores_vec = corerange_to_cores(in_cores, in_num_cores, true);
-    const uint32_t num_tiles_per_core_concat = (head_tiles * batch) / in_num_cores;
 
     std::vector<uint32_t> noc_x_coords;
     noc_x_coords.reserve(in_num_cores);

@@ -270,13 +270,10 @@ size_t generate_ccl_tensor_slice_command_args(
         log_trace(tt::LogOp, "Generating full tensor spec command args");
         add_ccl_command_arg_to_runtime_args<ttnn::ccl::cmd::CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>(
             current_tensor_slice, args_out);
-        const size_t args_index_new = args_out.size();
         // We can reused cached values for the first slice
         num_command_args_added++;
     } else {
         auto const& last_slice = last_tensor_slice.value();
-        const std::size_t args_index_old = args_out.size();
-        auto header_index = args_out.size();
 
         // tensor shape
         if (last_slice.tensor_shape != current_tensor_slice.tensor_shape) {
@@ -1431,7 +1428,6 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
     const std::size_t num_commands_expected = this->input_tensor_partition.partition_size;
 
     auto const& tensor_shape = worker_slice.tensor_shape;
-    auto const& tensor_slice_shape = worker_slice.tensor_slice_shape;
 
     auto num_slices = input_tensor_partition.partition_size;
     auto start_slice_index = input_tensor_partition.partition_index;

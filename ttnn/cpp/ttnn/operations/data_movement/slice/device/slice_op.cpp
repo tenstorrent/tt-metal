@@ -72,8 +72,6 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
 
     if (tensor.padded_shape().rank() >= 2) {
         const auto& shape = tensor.padded_shape();
-        uint32_t num_pages = tensor.physical_volume() / shape[-1];
-        uint32_t upper_dims_compressed = get_upper_dims_compressed(shape);
         start_offset = get_upper_start_offset(tensor, slice_start);
         start_offset += slice_start[-2];
     }

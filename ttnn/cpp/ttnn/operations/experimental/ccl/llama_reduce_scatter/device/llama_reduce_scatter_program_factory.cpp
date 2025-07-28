@@ -386,16 +386,11 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     std::map<std::string, std::string> reader_defines = {{"DEVICE_ORDER", device_order}};
 
     const auto& input_shape = input_tensor.logical_shape();
-    const auto dim = operation_attributes.dim;
-    uint32_t rank = input_shape.size();
     auto& output_tensor = tensor_return_value;
-    auto& output_shape = output_tensor.logical_shape();
-    auto& padded_output_shape = output_tensor.padded_shape();
     const auto& input_tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     const auto& output_tile_shape = output_tensor.tensor_spec().tile().get_tile_shape();
     auto input_tensor_width = input_tensor.logical_shape()[-1];
     auto output_tensor_width = output_tensor.logical_shape()[-1];
-    auto input_tensor_width_in_tiles = input_tensor.logical_shape()[-1] / input_tile_shape[1];
     auto output_tensor_width_in_tiles = output_tensor.logical_shape()[-1] / output_tile_shape[1];
     auto input_shard_spec = input_tensor.shard_spec().value();
     auto output_shard_spec = output_tensor.shard_spec().value();
@@ -423,7 +418,6 @@ LlamaReduceScatterDeviceOperation::LlamaReduceScatterAdd::create_at_program_proc
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     uint32_t input_page_size = tile_size(cb_data_format);
-    uint32_t output_page_size = tile_size(cb_data_format);
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};

@@ -84,8 +84,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset) {
     auto mesh_device = input_tensor[0].mesh_device();
-    const bool enable_async_output_tensor = false;
-    const bool enable_persistent_fabric_mode = true;
     const bool is_first_chip = ring_index == 0;
     const bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
@@ -183,11 +181,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     // Tensor Info
     const auto input_tensor_layout = input_tensor[0].buffer()->buffer_layout();
     const auto input_tensor_buffer_type = input_tensor[0].buffer()->buffer_type();
-    const auto input_tensor_page_layout = input_tensor[0].layout();
     const auto input_tensor_num_pages = input_tensor[0].buffer()->num_pages();
-    const auto output_tensor_layout = output_tensor[0].buffer()->buffer_layout();
     const auto output_tensor_buffer_type = output_tensor[0].buffer()->buffer_type();
-    const auto output_tensor_page_layout = output_tensor[0].layout();
     const auto input_tensor_shape = input_tensor[0].padded_shape();
     const auto output_tensor_shape = output_tensor[0].padded_shape();
     const uint32_t num_inputs = input_tensor.size();

@@ -88,8 +88,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     ////////////////////////////////////////////////////////////////////////////
     ttnn::MeshDevice* mesh_device = a.mesh_device();
     tt::tt_metal::Program program{};
-    bool is_first_chip = ring_index == 0;
-    bool is_last_chip = ring_index == ring_size - 1;
     uint32_t output_page_size = 0;
     uint32_t stats_page_size;
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -199,11 +197,9 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     const auto& shape = a.padded_shape();
     uint32_t M = a.physical_volume() / shape[-1];
     uint32_t K = shape[-1];
-    uint32_t Mt = M / TILE_WIDTH;
     uint32_t Kt = K / TILE_WIDTH;
     // block
     uint32_t block_w = block_wt * TILE_WIDTH;
-    uint32_t block_h = TILE_HEIGHT;
     uint32_t num_blocks = 0;
 
     auto bbox = shard_spec.grid.bounding_box();
@@ -254,7 +250,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     // post_all_gather_stats_block_tiles
     uint32_t post_all_gather_stats_block_tiles = 1;
     uint32_t num_distributed_devices = 1;
-    uint32_t pre_num_distributed_devices = 1;
     if (stats.has_value()) {
         post_all_gather_stats_block_tiles = stats.value().padded_shape()[-1] / TILE_WIDTH;
         num_distributed_devices = post_all_gather_stats_block_tiles;
@@ -271,13 +266,10 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     uint32_t in5_CB_size = in0_block_tiles * gamma_single_tile_size / 1;
     // itermediate buffers change later
     uint32_t x_CB_size = in0_block_tiles * single_tile_size;
-    uint32_t xmm_CB_size = in0_block_tiles * single_tile_size;
     uint32_t ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
     uint32_t ex_CB_size = ex_partial_CB_size;
     uint32_t ex_global_CB_size = ex_partial_CB_size;
     uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
-    uint32_t xmm2_CB_size = in0_block_tiles * single_tile_size;
-    uint32_t ex2pe_CB_size = single_tile_size;
     uint32_t stats_cb_size = post_all_gather_stats_block_tiles * single_tile_size;
     uint32_t stats_reduced_cb_size = single_tile_size;
     // output buffer size
@@ -295,7 +287,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
     uint32_t num_cores_x = grid_size.x;
     uint32_t num_cores_y = grid_size.y;
-    uint32_t num_cores = num_cores_x * num_cores_y;
     uint32_t num_cores_all_to_all = 1;
     uint32_t num_blocks_first_stage = num_blocks;
     uint32_t num_blocks_second_stage = 0;

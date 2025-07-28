@@ -213,7 +213,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset) {
     auto mesh_device = input_tensor.mesh_device();
-    const bool enable_async_output_tensor = false;
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
 
@@ -284,7 +283,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto num_batches = input_tensor_shape[0];
     const auto batch_slice_num_pages = input_tensor_num_pages / ring_size / num_batches;
-    const auto batch_slice_num_pages_per_worker = batch_slice_num_pages / (num_workers_per_link * num_links);
 
     // scatter-write currently only supports 2 distinct noc addresses, and is only supported for wormhole
     uint32_t max_target_noc_addresses_per_packet = 1;
@@ -710,8 +708,6 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
      *
      */
     auto mesh_device = input_tensor.mesh_device();
-    const bool enable_async_output_tensor = false;
-    const bool enable_persistent_fabric_mode = true;
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
 
@@ -741,7 +737,6 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
 
     uint32_t num_cores_per_link =
         num_directions_per_link * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
-    uint32_t num_workers_per_link = num_directions_per_link * num_workers_per_direction;
 
     const auto [all_core_range, all_cores] =
         choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);

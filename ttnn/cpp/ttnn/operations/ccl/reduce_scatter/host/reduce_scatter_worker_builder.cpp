@@ -565,7 +565,6 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_
     const std::size_t num_commands_expected = this->topology_config.ring_size - 1;
 
     auto const& tensor_shape = this->worker_input_slice.tensor_shape;
-    auto const& tensor_slice_shape = this->worker_input_slice.tensor_slice_shape;
 
     auto num_slices = topology_config.ring_size;
     auto start_slice_index = topology_config.ring_index == 0 ? topology_config.ring_size - 1 : 0;

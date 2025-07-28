@@ -260,7 +260,6 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool old_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(old_stick_size);
     uint32_t old_log2_stick_size = old_stick_size_is_power_of_two ? (std::uint32_t)std::log2(old_stick_size) : 0;
-    bool is_new_stick_larger = new_stick_size > old_stick_size;
     uint32_t new_old_stick_size_ratio =
         new_stick_size > old_stick_size ? new_stick_size / old_stick_size : old_stick_size / new_stick_size;
     std::vector<uint32_t> reader_ct_args = {

@@ -103,7 +103,6 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
     uint32_t input_page_size = detail::tile_size(input_tensor);
 
     tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    uint32_t output_page_size = detail::tile_size(tensor_return_value);
 
     uint32_t num_tiles = detail::num_tiles(tensor_return_value);
 
@@ -297,7 +296,6 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     uint32_t input_page_size = detail::tile_size(input_tensor);
 
     tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    uint32_t output_page_size = detail::tile_size(tensor_return_value);
 
     uint32_t num_tiles = detail::num_tiles(input_tensor);
     uint32_t num_output_tiles = detail::num_tiles(tensor_return_value);
@@ -564,7 +562,6 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     uint32_t rank = dims.size();
     auto& output_tensor = tensor_return_value;
     auto& output_shape = output_tensor.logical_shape();
-    auto& padded_output_shape = output_tensor.padded_shape();
     const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     const auto& face_shape = input_tensor.tensor_spec().tile().get_face_shape();
 
@@ -608,7 +605,6 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     uint32_t x_blocks = X_p / x_block_size;
 
     uint32_t num_faces_w = tile_shape[1] / face_shape[1];
-    uint32_t num_faces_h = tile_shape[0] / face_shape[0];
 
     uint32_t padded_xw_volume = X_p * W_p;
     for (uint32_t i = 0; i < rank - 1; i++) {

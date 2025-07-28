@@ -616,7 +616,6 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     // input shard spec
     auto shard_spec_padded = a.shard_spec().value();
     uint32_t shard_height_padded = shard_spec_padded.shape[0];
-    uint32_t shard_width_padded = shard_spec_padded.shape[1];
 
     auto& all_cores_padded = shard_spec_padded.grid;
     uint32_t num_cores_padded = shard_spec_padded.num_cores();
@@ -633,7 +632,6 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     // output shard spec
     auto shard_spec_unpadded = output.shard_spec().value();
     uint32_t shard_height_unpadded = shard_spec_unpadded.shape[0];
-    uint32_t shard_width_unpadded = shard_spec_unpadded.shape[1];
     bool row_major = shard_spec_unpadded.orientation == ShardOrientation::ROW_MAJOR;
 
     auto& all_cores_unpadded = shard_spec_unpadded.grid;
@@ -965,7 +963,6 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
         uint32_t num_unpadded_tiles = dst_tensor.physical_volume() / TILE_HW;
 
         uint32_t num_cores_x = compute_with_storage_grid_size.x;
-        uint32_t num_cores_y = compute_with_storage_grid_size.y;
         uint32_t num_cores_total = cores.size();
 
         auto

@@ -95,7 +95,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_mesh_workload(
     tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    auto mesh_device = tensor_args.input_tensor.mesh_device();
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value, tensor_coords);
@@ -158,7 +157,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     uint32_t hidden_size = input_shape[-1];
     uint32_t batch_size = input_shape[0] * dispatch_devices;
-    uint32_t seq_len = indices_shape[-2];
 
     uint32_t tokens_per_device = detail::get_num_rows(input_tensor);
     uint32_t selected_experts_k = indices_shape[-1];
@@ -366,10 +364,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     const auto& writer_compile_time_args = reader_compile_time_args;
 
     auto input_buffer = input_tensor.buffer();
-    auto indices_buffer = indices_tensor.buffer();
-    auto mapping_buffer = mapping_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
-    auto metadata_buffer = metadata_tensor.buffer();
 
     std::map<std::string, std::string> reader_defines = {
         {"AXIS", std::to_string(operation_attributes.axis.has_value() ? operation_attributes.axis.value() : -1)},

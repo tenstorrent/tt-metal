@@ -539,7 +539,6 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     bool has_cliff = core_range_cliff.size() > 0;
 
     uint32_t ncores_full = ncores - has_cliff;
-    uint32_t ncores_x = grid_size.x;
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;
     const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
@@ -641,8 +640,6 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
     uint32_t num_tiles_per_shard = shard_spec.shape[0] * shard_spec.shape[1] / TILE_HW;
     uint32_t num_tiles_per_row = shard_spec.shape[1] / TILE_WIDTH;
     auto all_cores = shard_spec.grid;
-    uint32_t num_cores_x = device->compute_with_storage_grid_size().x;
-    uint32_t num_cores = all_cores.num_cores();
 
     auto [src0_cb_index, cb_src0] = create_cb(
         tt::CBIndex::c_0,

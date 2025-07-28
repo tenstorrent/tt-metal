@@ -234,7 +234,6 @@ void override_runtime_args_mc_hc(
     uint32_t CHW_bytes = CHW * input_tensor.element_size();
 
     uint32_t Wt = W / TILE_WIDTH;
-    uint32_t Ht = H / TILE_HEIGHT;
     uint32_t Ct = C / TILE_HEIGHT;
     uint32_t CtHWt = Ct * H * Wt;
     uint32_t CtWt = Ct * Wt;
@@ -429,7 +428,6 @@ void override_runtime_args_mc_hc_tiled_interleaved(
     uint32_t num_output_tiles = output_tensor.physical_volume() / tile_hw;
     uint32_t W = input_tensor.logical_shape()[3], H = input_tensor.logical_shape()[2],
              C = input_tensor.logical_shape()[1], N = input_tensor.logical_shape()[0];
-    bool needs_padding = C % tile_shape[0] != 0;
     uint32_t padded_num_tensor_tiles = num_output_tiles / (output_tensor.padded_shape()[2] /
                                                            tile_shape[0]);  // only last row of Ct should have padding
 
@@ -514,7 +512,6 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
     auto tile = a.tensor_spec().tile();
     auto tile_shape = tile.get_tile_shape();
     auto face_shape = tile.get_face_shape();
-    uint32_t num_tensor_tiles = a.physical_volume() / (tile_shape[0] * tile_shape[1]);
     uint32_t num_output_tiles = output.physical_volume() / (tile_shape[0] * tile_shape[1]);
     uint32_t W = a.logical_shape()[3], H = a.logical_shape()[2], C = a.logical_shape()[1], N = a.logical_shape()[0];
     bool needs_padding = (C % tile_shape[1] != 0) && pad_value.has_value();
@@ -527,7 +524,6 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_tiled_interleaved(
     auto compute_with_storage_grid_size = a.device()->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
-    uint32_t num_cores_total = num_cores_x * num_cores_y;
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -849,15 +845,12 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_mc_hc_rm_sharded(
     const Tensor& input_tensor, Tensor& output_tensor, uint32_t num_cores, uint32_t num_cores_x, uint32_t num_cores_y) {
     auto input_buffer = input_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
-    uint32_t W_bytes = W * input_tensor.element_size();
 
     auto shard_spec = input_tensor.shard_spec().value();
     uint32_t shard_height = shard_spec.shape[0];
-    uint32_t shard_width = shard_spec.shape[1];
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
     tt::tt_metal::IDevice* device = input_tensor.device();
@@ -919,17 +912,14 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_mc_hc_rm_sharded_special_case(
     const Tensor& input_tensor, Tensor& output_tensor, uint32_t num_cores, uint32_t num_cores_x, uint32_t num_cores_y) {
     auto input_buffer = input_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
-    uint32_t W_bytes = W * input_tensor.element_size();
     uint32_t total_height = N * C * H;
     uint32_t stick_size_bytes = W * input_tensor.element_size();
 
     auto shard_spec = input_tensor.shard_spec().value();
     uint32_t shard_height = shard_spec.shape[0];
-    uint32_t shard_width = shard_spec.shape[1];
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
     tt::tt_metal::IDevice* device = input_tensor.device();
@@ -956,33 +946,21 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     }
 
     uint32_t CH = C * H;
-    uint32_t NCH = N * C * H;
 
-    uint32_t num_H_per_core = shard_height / H > 0 ? shard_height / H : 1;    // the number of H blocks in a shard
-    uint32_t num_N_per_core = shard_height / CH > 0 ? shard_height / CH : 1;  // the number of N blocks in a shard
+    uint32_t num_H_per_core = shard_height / H > 0 ? shard_height / H : 1;  // the number of H blocks in a shard
 
     uint32_t shard_C_per_core = shard_height > C ? C : shard_height;  // the number of shards of (dst) C blocks per core
-    uint32_t shard_H_per_core = shard_height > H ? H : shard_height;  // the number of shards of H blocks per core
 
     uint32_t num_core_per_C = C / shard_height > 0 ? C / shard_height : 1;  // the number of cores for (dst) C block
-    uint32_t num_core_per_H = H / shard_height > 0 ? H / shard_height : 1;  // the number of cores for H block
 
     uint32_t num_C_blocks_per_core = shard_height > C ? shard_height / C : 1;
 
     uint32_t curr_core_offset = 0;
-    uint32_t curr_height = 0;
     uint32_t curr_core = 0;
     uint32_t curr_N = 0;
-    uint32_t curr_C = 0;
-    uint32_t curr_H = 0;
-    uint32_t curr_C_shard = 0;
-    uint32_t curr_H_shard = 0;
 
     uint32_t curr_c = 0, curr_h = 0;
     for (uint32_t i = 0, curr_sticks_read = 0; i < num_cores; i++) {
-        auto core = cores[i];
-        uint32_t pre_core = curr_core;
-        uint32_t pre_N = curr_N;
         std::vector<uint32_t> read_cores_indices;
         std::vector<uint32_t> read_cores_noc_x;
         std::vector<uint32_t> read_cores_noc_y;
@@ -1156,14 +1134,12 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor& a,
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
     uint32_t W = a.logical_shape()[3], H = a.logical_shape()[2], C = a.logical_shape()[1], N = a.logical_shape()[0];
-    uint32_t total_height = N * C * H;
     uint32_t stick_size_bytes = W * a.element_size();
 
     tt::tt_metal::IDevice* device = a.device();
 
     auto shard_spec = a.shard_spec().value();
     uint32_t shard_height = shard_spec.shape[0];
-    uint32_t shard_width = shard_spec.shape[1];
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
     bool is_special_case = false;
@@ -1306,7 +1282,6 @@ void override_runtime_args_wh(
     auto input_shape = input_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], NC = input_shape[1] * input_shape[0];
-    uint32_t HW = H * W;
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
@@ -1428,8 +1403,6 @@ void override_runtime_args_wh_rm(
     auto input_shape = input_tensor.logical_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], NC = input_shape[1] * input_shape[0];
-    uint32_t ht = (H + TILE_HEIGHT - 1) / TILE_HEIGHT;
-    uint32_t wt = (W + TILE_WIDTH - 1) / TILE_WIDTH;
 
     auto& cached_reader_args = GetRuntimeArgs(program, reader_kernel_id);
     auto& cached_compute_args = GetRuntimeArgs(program, compute_kernel_id);
@@ -1763,7 +1736,6 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     const auto tile = a.tensor_spec().tile();
     const uint32_t tile_hw = tile.get_tile_hw();
-    int32_t num_tiles = a.physical_volume() / tile_hw;
 
     tt::tt_metal::IDevice* device = a.device();
 
@@ -1778,7 +1750,6 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
     bool row_major = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
 
     auto& all_cores = shard_spec.grid;
-    uint32_t num_cores = all_cores.num_cores();
     uint32_t num_tiles_per_shard = shard_spec.numel() / tile_hw;
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
@@ -1900,7 +1871,6 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded(const Tensor& a,
 
         const auto tile = src_tensor.tensor_spec().tile();
         const uint32_t tile_hw = tile.get_tile_hw();
-        int32_t num_tiles = src_tensor.physical_volume() / tile_hw;
 
         uint32_t num_tiles_per_shard = shard_spec.numel() / tile_hw;
 
@@ -1972,7 +1942,6 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
     uint32_t W = a.logical_shape()[3], H = a.logical_shape()[2], C = a.logical_shape()[1], N = a.logical_shape()[0];
-    uint32_t total_height = N * C * H;
     uint32_t stick_size_bytes = W * a.element_size();
     uint32_t ht = (H + TILE_HEIGHT - 1) / TILE_HEIGHT;
     uint32_t wt = (W + TILE_WIDTH - 1) / TILE_WIDTH;
@@ -2015,7 +1984,6 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
 
     auto shard_spec = a.shard_spec().value();
     uint32_t shard_height = shard_spec.shape[0];
-    uint32_t shard_width = shard_spec.shape[1];
     uint32_t num_hw_blocks_per_core = shard_height / H;
 
     log_debug(tt::LogOp, "shard_height: {}", shard_height);

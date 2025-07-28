@@ -30,7 +30,6 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(
     tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
     tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
     tt::DataFormat value_cb_data_format = tt::DataFormat::Float16_b;
-    tt::DataFormat im_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
     uint32_t input_tile_size = tile_size(input_cb_data_format);
     uint32_t topk_mask_tile_size = tile_size(topk_mask_cb_data_format);

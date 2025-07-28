@@ -452,7 +452,6 @@ inline void RunPersistent1dFabricLatencyTest(
     }
     for (size_t i = 0; i < programs.size(); i++) {
         auto d = devices_with_workers.at(i);
-        auto& program = programs.at(i);
         tt_metal::detail::DumpDeviceProfileResults(d);
     }
     log_info(tt::LogTest, "Finished");

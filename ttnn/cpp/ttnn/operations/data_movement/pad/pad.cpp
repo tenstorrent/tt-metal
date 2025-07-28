@@ -198,7 +198,6 @@ ttnn::Tensor pad_impl(
     }
 
     auto pad_front = padding | std::views::transform([](const auto& p) { return p.before_elements; });
-    auto pad_back = padding | std::views::transform([](const auto& p) { return p.after_elements; });
 
     if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
         const int target_height = output_padded_shape[padding_size - 2];

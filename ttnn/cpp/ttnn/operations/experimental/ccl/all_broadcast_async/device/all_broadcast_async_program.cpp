@@ -285,7 +285,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
-            const auto& output = output_tensors[0];
 
             auto semaphore = static_cast<const ttnn::AllBroadcastAsync*>(operation)->semaphore;
 

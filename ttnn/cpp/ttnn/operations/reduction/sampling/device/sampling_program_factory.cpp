@@ -28,7 +28,6 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
         tt::tt_metal::datatype_to_dataformat_converter(input_values_tensor.dtype());
     tt::DataFormat input_indices_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_indices_tensor.dtype());
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat index_cb_data_format = tt::DataFormat::UInt16;
 
     uint32_t input_values_tile_size = tile_size(input_values_cb_data_format);
@@ -43,7 +42,6 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
     bool output_is_dram = output_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     uint32_t num_input_values_tiles = input_values_tensor.physical_volume() / TILE_HW;
-    uint32_t num_input_indices_tiles = input_indices_tensor.physical_volume() / TILE_HW;
     auto device = input_values_tensor.device();
 
     auto input_shape = input_values_tensor.logical_shape();
@@ -52,8 +50,6 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
     auto num_cores = Ht * TILE_HEIGHT;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
     CoreRangeSet core_grid = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, true);
 
     if (sub_core_grids.has_value()) {

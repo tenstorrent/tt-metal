@@ -1396,7 +1396,6 @@ int TestLoopbackEntrypoint(
 
     std::vector<Program> programs(1);
     std::optional<std::vector<Program>> fabric_programs;
-    auto& sender_program = programs.at(0);
 
     log_info(tt::LogTest, "Enabling persistent fabric");
     fabric_programs = std::vector<Program>(2);
@@ -3553,7 +3552,6 @@ void Run1DFullMeshFabricPacketSendTest(
 
     const bool use_galaxy = num_devices == 32;
     const bool use_tg = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 4;
-    const bool is_6u_galaxy = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 32;
 
     create_fabric_fixture<FABRIC_DEVICE_FIXTURE>(test_fixture_, use_galaxy);
     auto view = *(test_fixture_->view_);

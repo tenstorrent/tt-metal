@@ -45,7 +45,6 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
     bool index_is_dram = index_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     uint32_t num_input_tiles = input_tensor.physical_volume() / TILE_HW;
-    uint32_t num_value_tiles = value_tensor.physical_volume() / TILE_HW;
 
     auto input_shape = input_tensor.padded_shape();
     uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / TILE_HEIGHT;
@@ -298,7 +297,6 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
                                      : false;
 
     uint32_t num_input_tiles = input_tensor.physical_volume() / TILE_HW;
-    uint32_t num_value_tiles = value_tensor.physical_volume() / TILE_HW;
     auto device = input_tensor.device();
 
     auto input_shape = input_tensor.padded_shape();

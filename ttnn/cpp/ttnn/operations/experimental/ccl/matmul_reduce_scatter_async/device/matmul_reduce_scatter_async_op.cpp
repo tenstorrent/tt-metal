@@ -36,8 +36,6 @@ void MatmulReduceScatterAsync::validate_with_output_tensors(
     TT_ASSERT(input_tensors.size() == 2, "MatmulReduceScatterAsync requires 2 input tensors: [input, weight]");
     auto& input_tensor = input_tensors[0];
     auto& weight_tensor = input_tensors[1];
-    auto& intermediate_tensor = output_tensors.at(0).value();
-    auto& reduce_scatter_output_tensor = output_tensors.at(1).value();
     // // Reduce Scatter validate
     // this->reduce_scatter_minimal_async_struct.validate_with_output_tensors(
     //     {}, {intermediate_tensor, reduce_scatter_output_tensor});

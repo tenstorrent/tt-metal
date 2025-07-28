@@ -60,7 +60,6 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto src_physical_device_id = mesh_device->get_device(mesh_coordinate)->id();
 
     const auto fabric_node_id = get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
-    const uint32_t src_mesh_id = *fabric_node_id.mesh_id;
     const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
 
     const auto& input_shape = input_tensor.tensor_spec().logical_shape();
@@ -68,7 +67,6 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto& metadata_shape = metadata_tensor.tensor_spec().logical_shape();
 
     const uint32_t num_devices = mesh_view.num_devices();
-    const uint32_t hidden_size = input_shape[-1];
     const uint32_t batch_size = metadata_shape[1];
     const uint32_t seq_size = metadata_shape[2];
     const uint32_t selected_experts_k = metadata_shape[-1];

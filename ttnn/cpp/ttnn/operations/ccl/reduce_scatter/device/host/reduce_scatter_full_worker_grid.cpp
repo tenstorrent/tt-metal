@@ -85,7 +85,6 @@ static void add_worker_config_to_edm_builders(
     EdmInterfaceAddresses& edm_interface_addresses) {
     bool is_linear = topology_config.is_linear;
     for (std::size_t c = 0; c < num_channels_per_edm; ++c) {
-        std::size_t num_workers_per_eth_buffer = 1;
         auto global_worker_index = get_global_worker_id(link, c, num_channels_per_edm);
         TT_ASSERT(global_worker_index < all_worker_attributes.size());
         WorkerAttributes const& worker_attrs = all_worker_attributes[global_worker_index];
@@ -442,7 +441,6 @@ static WorkerTransferInfo compute_num_edm_messages_per_channel(
     TT_ASSERT(page_size_in_bytes > 0);
     log_trace(tt::LogOp, "WorkerTransferInfo");
     const std::size_t num_links = topology_config.num_links;
-    std::size_t total_num_workers = num_edm_channels * num_links;
 
     auto get_iter_begin = [num_edm_channels](auto& vec, std::size_t link) -> auto {
         return vec.begin() + (link * num_edm_channels);

@@ -151,7 +151,6 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
     }
 
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
