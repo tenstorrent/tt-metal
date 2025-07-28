@@ -44,7 +44,7 @@ def test_forward_pass(
     seq_len,
     reference_model,
     hf_config,
-    temp_dir,
+    tmp_path,
     mesh_device,
 ):
     """Test forward pass against reference model."""
@@ -60,7 +60,7 @@ def test_forward_pass(
     reference_output = reference_model(torch_input)
 
     # Setup: Convert weights and get weight_config
-    weight_config = MoE.convert_weights(hf_config, hf_state_dict, temp_dir, mesh_device)
+    weight_config = MoE.convert_weights(hf_config, hf_state_dict, tmp_path, mesh_device)
 
     # Generate appropriate config
     ccl = CCL1D(hf_config, mesh_device)
