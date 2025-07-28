@@ -84,7 +84,7 @@ def run_nd_reshard_test(
     return torch_tensor, round_trip_tensor, expected_resharded_tensor
 
 
-# TODO: Make implementation for cases when tile size changes
+# TODO: Make implementation for cases when page size changes
 @pytest.mark.parametrize(
     "input_shape, layout, input_shard_shape, input_shard_orientation, output_shard_shape, output_shard_orientation, input_grid",
     [
