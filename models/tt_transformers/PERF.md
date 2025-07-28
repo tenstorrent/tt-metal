@@ -19,10 +19,10 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Llama-3.2-1B      | T3K         | 77        | 96        | 119.8         | 32        |
 | Llama-3.2-1B      | TG          | 77        | 96        | 51.0          |           |
 | Llama-3.2-3B      | N150        | 87        | 97        | 54.0          | 55        |
-| Llama-3.2-3B      | N300        | 88        | 97        | 68.0          | 39        |
+| Llama-3.2-3B      | N300        | 87        | 97        | 68.0          | 39        |
 | Llama-3.2-3B      | T3K         | 88        | 97        | 68.5          | 52        |
 | Llama-3.2-3B      | TG          | 87        | 97        | 33.5          |           |
-| Llama-3.1-8B      | N150        | 89        | 98        | 28.3          | 104       |
+| Llama-3.1-8B      | N150        | 88        | 98        | 28.3          | 104       |
 | Llama-3.1-8B      | N300        | 89        | 97        | 44.2          | 67        |
 | Llama-3.1-8B      | T3K         | 88        | 97        | 64.3          | 53        |
 | Llama-3.1-8B      | T3K  (DP=4) |           |           | 39.6          | 58        |
