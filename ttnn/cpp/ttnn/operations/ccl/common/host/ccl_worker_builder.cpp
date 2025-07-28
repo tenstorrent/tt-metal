@@ -264,7 +264,6 @@ size_t generate_ccl_tensor_slice_command_args(
     std::size_t num_command_args_added = 0;
     auto const args_index_old = args_out.size();
     if (!last_tensor_slice.has_value()) {
-        const std::size_t args_index_old = args_out.size();
         // push back Command Header
         // push back arg 0 header
         log_trace(tt::LogOp, "Generating full tensor spec command args");

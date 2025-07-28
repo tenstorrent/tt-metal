@@ -71,7 +71,6 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
     uint32_t start_offset = 0;
 
     if (tensor.padded_shape().rank() >= 2) {
-        const auto& shape = tensor.padded_shape();
         start_offset = get_upper_start_offset(tensor, slice_start);
         start_offset += slice_start[-2];
     }

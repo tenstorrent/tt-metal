@@ -84,7 +84,6 @@ void setup_runtime(
 
 operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
     const Tensor& input_tensor, std::vector<Tensor>& output_tensors, const MemoryConfig& mem_config) {
-    uint32_t dim = 3;
     uint32_t num_chunks = 2;
 
     auto input_shape = input_tensor.padded_shape();

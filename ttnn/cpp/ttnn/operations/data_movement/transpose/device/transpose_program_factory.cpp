@@ -842,7 +842,6 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
 
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_mc_hc_rm_sharded(
     const Tensor& input_tensor, Tensor& output_tensor, uint32_t num_cores, uint32_t num_cores_x, uint32_t num_cores_y) {
-    auto input_buffer = input_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];
@@ -909,7 +908,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_mc_hc_rm_sharded_special_case(
     const Tensor& input_tensor, Tensor& output_tensor, uint32_t num_cores, uint32_t num_cores_x, uint32_t num_cores_y) {
-    auto input_buffer = input_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], C = input_shape[1], N = input_shape[0];

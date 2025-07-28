@@ -1207,7 +1207,6 @@ static void populate_partial_reduce_rt_args(
         partial_reducer_worker_cores[LineDirection::FORWARD], partial_reducer_worker_cores[LineDirection::BACKWARD]};
 
     for (auto line_direction : {LineDirection::FORWARD, LineDirection::BACKWARD}) {
-        bool is_forward_direction = line_direction == LineDirection::FORWARD;
         uint32_t link = 0;
         for (size_t i = 0; i < partial_reducer_worker_cores_vec[line_direction].size(); i++) {
             auto const& w_logical = partial_reducer_worker_cores_vec[line_direction][i];
@@ -1414,7 +1413,6 @@ static void create_end_of_line_worker_commands(
         num_workers);
 
     for (auto direction : {LineDirection::FORWARD, LineDirection::BACKWARD}) {
-        bool is_forward_direction = direction == LineDirection::FORWARD;
         bool is_start_of_line = topology_config.is_first_device_in_line(direction);
 
         auto const& reader_worker_cores = reader_worker_cores_per_direction[direction];

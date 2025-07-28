@@ -1038,7 +1038,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
 
-    auto untilize_kernel_id = CreateKernel(
+    CreateKernel(
         program,
         compute_kernel,
         all_cores,
@@ -1067,7 +1067,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         }
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, all_cores, writer_rt_args);
     } else {
-        uint32_t tile_start_id = 0;
         cores = grid_to_cores(ncores, ncores_x, ncores_y, row_major);
         for (uint32_t i = 0; i < cores.size(); ++i) {
             CoreCoord& core = cores[i];

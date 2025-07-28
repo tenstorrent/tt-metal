@@ -10,9 +10,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
-void MoveDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-}
+void MoveDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {}
 
 std::vector<ttnn::TensorSpec> MoveDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {

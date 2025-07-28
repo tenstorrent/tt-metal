@@ -36,8 +36,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm(
     uint32_t num_sticks_per_core_group_1,
     uint32_t num_sticks_per_core_group_2,
     uint32_t max_read_size) {
-    tt::tt_metal::IDevice* device = input_tensor.device();
-
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
@@ -177,8 +175,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     const ttnn::Shape& output_tensor_end,
     const std::vector<CoreCoord>& cores,
     uint32_t max_read_size) {
-    tt::tt_metal::IDevice* device = input_tensor.device();
-
     auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.logical_shape();
     for (uint32_t i = 0; i < input_shape.rank(); i++) {
@@ -489,8 +485,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     const ttnn::Shape& output_tensor_start,
     const ttnn::Shape& output_tensor_end,
     const std::vector<CoreCoord>& cores) {
-    tt::tt_metal::IDevice* device = input_tensor.device();
-
     auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto actual_input_shape = input_tensor.logical_shape();
