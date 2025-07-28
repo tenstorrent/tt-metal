@@ -23,7 +23,9 @@ protected:
     virtual void write_shard_to_device(
         const MeshBuffer& buffer,
         const MeshCoordinate& device_coord,
+        tt::DataFormat data_format,
         const void* src,
+        tt::DataFormat src_data_format,
         const std::optional<BufferRegion>& region,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
     virtual void read_shard_from_device(
@@ -39,7 +41,8 @@ protected:
 
 private:
     // Helper functions for read and write entire Sharded-MeshBuffers
-    void write_sharded_buffer(const MeshBuffer& buffer, const void* src);
+    void write_sharded_buffer(
+        const MeshBuffer& buffer, tt::DataFormat data_format, const void* src, tt::DataFormat src_data_format);
     void read_sharded_buffer(MeshBuffer& buffer, void* dst);
 
     // Must be called with lock_api_function_() held.
@@ -50,7 +53,9 @@ private:
     // Must be called with lock_api_function_() held.
     void enqueue_write_shards_nolock(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        tt::DataFormat data_format,
         const std::vector<ShardDataTransfer>& shard_data_transfers,
+        tt::DataFormat src_data_format,
         bool blocking);
 
 public:
@@ -78,6 +83,32 @@ public:
     void enqueue_write(
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const DistributedHostBuffer& host_buffer,
+        bool blocking) override;
+    void enqueue_write_shard_to_sub_grid_with_conversion(
+        const MeshBuffer& buffer,
+        tt::DataFormat data_format,
+        const void* host_data,
+        tt::DataFormat src_data_format,
+        const MeshCoordinateRange& device_range,
+        bool blocking,
+        std::optional<BufferRegion> region = std::nullopt) override;
+    void enqueue_write_shards_with_conversion(
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        tt::DataFormat data_format,
+        const std::vector<ShardDataTransfer>& shard_data_transfers,
+        tt::DataFormat src_data_format,
+        bool blocking) override;
+    void enqueue_write_mesh_buffer_with_conversion(
+        const std::shared_ptr<MeshBuffer>& buffer,
+        tt::DataFormat data_format,
+        const void* host_data,
+        tt::DataFormat src_data_format,
+        bool blocking) override;
+    void enqueue_write_with_conversion(
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        tt::DataFormat data_format,
+        const DistributedHostBuffer& host_buffer,
+        tt::DataFormat src_data_format,
         bool blocking) override;
 
     // MeshBuffer Read APIs
