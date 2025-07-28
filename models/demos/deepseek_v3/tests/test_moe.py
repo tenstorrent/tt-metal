@@ -45,10 +45,8 @@ def test_forward_pass(
     reference_model,
     hf_config_single_layer,
     temp_dir,
-    galaxy_or_t3k_mesh,
+    mesh_device,
 ):
-    mesh_device = galaxy_or_t3k_mesh
-
     """Test forward pass against reference model."""
     batch_size = 1
 
