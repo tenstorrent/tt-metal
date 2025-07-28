@@ -66,11 +66,11 @@ def test_send_receive(mesh_device, shape_coords, layout, dtype):
     lcoord0, lcoord1 = (_linear_coord(c, list(mesh_device.shape)) for c in coords)
     coord0, coord1 = (ttnn.MeshCoordinate(c) for c in coords)
 
-    lrange0 = lcoord0 + shape[0]
-    lrange1 = lcoord1 + shape[0]
+    idx_start0, idx_end0 = lcoord0 * shape[0], (lcoord0 + 1) * shape[0]
+    idx_start1, idx_end1 = lcoord1 * shape[0], (lcoord1 + 1) * shape[0]
 
     input_tensor_torch = torch.zeros(multi_device_shape, dtype=dtype)
-    input_tensor_torch[lcoord0:lrange0, :, :, :] = (
+    input_tensor_torch[idx_start0:idx_end0, :, :, :] = (
         torch.linspace(1, prod(shape), prod(shape)).reshape(shape).to(dtype=dtype)
     )
     input_tensor = ttnn.from_torch(
@@ -97,7 +97,7 @@ def test_send_receive(mesh_device, shape_coords, layout, dtype):
         receiver_semaphore,
     )
     sent_tensor_torch = ttnn.to_torch(sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-    assert_equal(input_tensor_torch[lcoord0:lrange0, :, :, :], sent_tensor_torch[lcoord1:lrange1, :, :, :])
+    assert_equal(input_tensor_torch[idx_start0:idx_end0, :, :, :], sent_tensor_torch[idx_start1:idx_end1, :, :, :])
 
     # test optional output tensor
     return_tensor = ttnn.from_torch(
@@ -117,4 +117,4 @@ def test_send_receive(mesh_device, shape_coords, layout, dtype):
     )
 
     torch_return_tensor = ttnn.to_torch(return_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-    assert_equal(input_tensor_torch[lcoord0:lrange0, :, :, :], torch_return_tensor[lcoord0:lrange0, :, :, :])
+    assert_equal(input_tensor_torch[idx_start0:idx_end0, :, :, :], torch_return_tensor[idx_start0:idx_end0, :, :, :])
