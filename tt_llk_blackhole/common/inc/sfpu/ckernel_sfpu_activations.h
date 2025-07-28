@@ -7,6 +7,7 @@
 #include "ckernel_defs.h"
 #include "sfpi.h"
 #include "sfpi_fp16.h"
+#include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_exp.h"
 #include "sfpu/ckernel_sfpu_relu.h"
 
@@ -21,14 +22,14 @@ struct ActivationImpl;
 template <bool APPROXIMATION_MODE>
 struct ActivationImpl<APPROXIMATION_MODE, ActivationType::Celu>
 {
-    static inline void apply(sfpi::vFloat& v, float param0, float param1)
+    static inline void apply(sfpi::vFloat& v, uint32_t param0, uint32_t param1)
     {
         // All params are in FP16_B format
         // param0 = alpha
         // param1 = alpha_recip
 
-        sfpi::vFloat alpha       = param0;
-        sfpi::vFloat alpha_recip = param1;
+        sfpi::vFloat alpha       = Converter::as_float(param0);
+        sfpi::vFloat alpha_recip = Converter::as_float(param1);
 
         v_if (v < 0.0f)
         {
@@ -55,7 +56,7 @@ struct ActivationImpl<APPROXIMATION_MODE, ActivationType::Hardsigmoid>
 
 // Dispatch wrapper function
 template <bool APPROXIMATION_MODE, ActivationType ACTIVATION_TYPE>
-inline void apply_activation(sfpi::vFloat& v, float param0, float param1)
+inline void apply_activation(sfpi::vFloat& v, uint32_t param0, uint32_t param1)
 {
     ActivationImpl<APPROXIMATION_MODE, ACTIVATION_TYPE>::apply(v, param0, param1);
 }
@@ -68,7 +69,7 @@ inline void apply_activation(sfpi::vFloat& v)
 }
 
 template <bool APPROXIMATION_MODE, ActivationType ACTIVATION_TYPE, int ITERATIONS = 8>
-inline void _calculate_activation_(float param0, float param1)
+inline void _calculate_activation_(uint32_t param0, uint32_t param1)
 {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
