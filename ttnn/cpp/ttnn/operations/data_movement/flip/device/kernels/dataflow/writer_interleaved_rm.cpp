@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 
 void kernel_main() {
     // compile time args
@@ -15,7 +16,6 @@ void kernel_main() {
     uint32_t end_row = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id = tt::CBIndex::c_0;
-
     const InterleavedAddrGen<dst_is_dram> d0 = {.bank_base_address = dst_addr, .page_size = page_size};
 
     for (uint32_t row_id = start_row; row_id < end_row; ++row_id) {
