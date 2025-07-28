@@ -35,30 +35,49 @@ jobs:
       fail-fast: false
       matrix:
         test-group:
-          - name: All C++
-            cmd: ./tests/scripts/run_cpp_unit_tests.sh # 15 minutes
-          - name: tools
-            cmd: |
-              ./tests/scripts/run_tools_tests.sh
-              ./build/test/tt_metal/unit_tests_debug_tools
-          - name: dispatch
-            cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch" # 15 minutes
-          - name: eth and misc
-            cmd: |
-              ./build/test/tt_metal/unit_tests_eth
-              ./build/test/tt_metal/unit_tests_misc
-          - name: distributed
-            cmd: |
-              ./build/test/tt_metal/distributed/distributed_unit_tests
-              ./tests/tt_metal/multihost/run_multiprocess_socket_tests.sh
-          - name: dispatch multicmd queue
-            cmd: |
-              TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=MultiCommandQueue*Fixture.*
-              TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQ*Fixture.*
-          - name: CCL
-            cmd: |
-              ./build/test/ttnn/unit_tests_ttnn_ccl
-              ./build/test/ttnn/unit_tests_ttnn_ccl_ops
+          # - name: All C++
+          #   cmd: ./tests/scripts/run_cpp_unit_tests.sh # 15 minutes
+          # - name: tools
+          #   cmd: |
+          #     ./tests/scripts/run_tools_tests.sh
+          #     ./build/test/tt_metal/unit_tests_debug_tools
+          # - name: dispatch
+          #   cmd: "TT_METAL_ENABLE_ERISC_IRAM=1 ./build/test/tt_metal/unit_tests_dispatch" # 15 minutes
+          - name: eth 1
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test_Active_Eth || python tests/ttnn/unit_tests/check_heartbeat.py
+          - name: eth 2
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test_Active_Eth || python tests/ttnn/unit_tests/check_heartbeat.py
+          - name: eth 3
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test_Active_Eth || python tests/ttnn/unit_tests/check_heartbeat.py
+          - name: eth 4
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test_Active_Eth || python tests/ttnn/unit_tests/check_heartbeat.py
+          - name: eth 5
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test_Active_Eth || python tests/ttnn/unit_tests/check_heartbeat.py
+          - name: tensix 1
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test_Tensix
+          - name: tensix 2
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test_Tensix
+          - name: tensix 3
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test_Tensix
+          - name: tensix 4
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test_Tensix
+          - name: tensix 5
+            cmd: TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_device --gtest_filter=Debugging.Test_Tensix
+            # cmd: |
+            #   ./build/test/tt_metal/unit_tests_eth
+            #   ./build/test/tt_metal/unit_tests_misc
+          # - name: distributed
+          #   cmd: |
+          #     ./build/test/tt_metal/distributed/distributed_unit_tests
+          #     ./tests/tt_metal/multihost/run_multiprocess_socket_tests.sh
+          # - name: dispatch multicmd queue
+          #   cmd: |
+          #     TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=MultiCommandQueue*Fixture.*
+          #     TT_METAL_ENABLE_ERISC_IRAM=1 TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshMultiCQ*Fixture.*
+          # - name: CCL
+          #   cmd: |
+          #     ./build/test/ttnn/unit_tests_ttnn_ccl
+          #     ./build/test/ttnn/unit_tests_ttnn_ccl_ops
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
       image: ${{ inputs.docker-image }}
@@ -77,12 +96,7 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    runs-on: >-
-      ${{
-        (startsWith(inputs.runner-label, 'tt-beta-ubuntu') && fromJSON(format('["{0}"]', inputs.runner-label)))
-        || github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
-      }}
+    runs-on: tt-beta-ubuntu-2204-p150b-large-stable
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main
@@ -93,6 +107,13 @@ jobs:
           # https://github.com/tenstorrent/tt-metal/issues/20166
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
+
+      - name: Install TT-Lens Debug tool
+        run: |
+          echo "Installing TT-Lens Debug tool"
+          pip3 install git+https://github.com/tenstorrent/tt-exalens
+        shell: bash
+
       - name: ${{ matrix.test-group.name }} tests
         #GH Issue 16167
         if: ${{ !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools') }}

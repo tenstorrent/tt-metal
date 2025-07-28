@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <type_traits>
 #include "llrt_common/mailbox.hpp"
 #define COMPILE_FOR_ERISC
 
@@ -71,26 +72,32 @@ HalCoreInfoType create_idle_eth_mem_map() {
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses);
     std::vector<HalJitBuildConfig> processor_types(1);
-    for (std::uint8_t processor_class_idx = 0; processor_class_idx < NumEthDispatchClasses; processor_class_idx++) {
-        DeviceAddr fw_base, local_init, fw_launch;
-        uint32_t fw_launch_value;
-        ll_api::memory::Loading memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP;
+
+    for (int processor_class_idx = 0; processor_class_idx < processor_classes.size(); processor_class_idx++) {
+        DeviceAddr fw_base{}, local_init{}, fw_launch{};
+        uint32_t fw_launch_value{};
+
         switch (static_cast<EthProcessorTypes>(processor_class_idx)) {
             case EthProcessorTypes::DM0: {
                 fw_base = MEM_IERISC_FIRMWARE_BASE;
                 local_init = MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH;
                 fw_launch = IERISC_RESET_PC;
                 fw_launch_value = fw_base;
-            } break;
+                break;
+            }
             case EthProcessorTypes::DM1: {
                 fw_base = MEM_SUBORDINATE_IERISC_FIRMWARE_BASE;
                 local_init = MEM_SUBORDINATE_IERISC_INIT_LOCAL_L1_BASE_SCRATCH;
                 fw_launch = SUBORDINATE_IERISC_RESET_PC;
                 fw_launch_value = fw_base;
-            } break;
-            default:
-                TT_THROW("Unexpected processor class {} for Blackhole Idle Ethernet", processor_class_idx);
+                break;
+            }
+            default: {
+                TT_THROW("Unexpected processor type {} for Blackhole Idle Ethernet", processor_class_idx);
+            }
         }
+
+        constexpr ll_api::memory::Loading memory_load = ll_api::memory::Loading::CONTIGUOUS_XIP;
         processor_types[0] = HalJitBuildConfig{
             .fw_base_addr = fw_base,
             .local_init_addr = local_init,

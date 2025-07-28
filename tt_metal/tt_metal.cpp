@@ -1038,6 +1038,9 @@ KernelHandle CreateEthernetKernel(
     const EthernetConfig& config) {
     HalProgrammableCoreType eth_core_type =
         config.eth_mode == Eth::IDLE ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
+    if (eth_core_type == HalProgrammableCoreType::ACTIVE_ETH) {
+        std::cerr << "Creating active ethernet kernel " << core_range_set.str() << std::endl;
+    }
     const DataMovementConfigStatus& data_movement_config_status =
         CheckDataMovementConfig(eth_core_type, program, core_range_set);
     const bool are_both_riscv_in_use =
