@@ -152,8 +152,6 @@ MorehNllLossUnreducedBackwardDeviceOperation::Factory::cached_program_t moreh_nl
     auto Ct = channel_size / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
 
-    auto target_shape = target.padded_shape();
-
     const bool weight_has_value = weight.has_value();
 
     tt::tt_metal::IDevice* device = target.device();
