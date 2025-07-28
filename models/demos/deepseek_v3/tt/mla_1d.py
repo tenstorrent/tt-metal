@@ -956,7 +956,7 @@ class MLA1D(AbstractModule):
         else:
             cache = torch.zeros(
                 (
-                    even_int_div(MLA1D.MAX_BATCH_SIZE, dp_factor),  # Prefill does not support DP yet
+                    even_int_div(MLA1D.MAX_BATCH_SIZE, dp_factor),
                     1,  # 1 latent kv heads
                     max_seq_len,
                     kvpe_dim,
