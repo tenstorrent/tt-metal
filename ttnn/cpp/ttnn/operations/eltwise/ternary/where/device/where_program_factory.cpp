@@ -151,8 +151,15 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     if (variant == WhereVariant::TTS) {
         // TTS: only value_true tensor exists
         value_true_data_format = datatype_to_dataformat_converter(value_true_tensor.value().dtype());
+
+        // the bfloat16 impl of where_llk uses UINT16 instr set.
+        // If the bfloat16 inputs' CBs are set to UINT16 dataformat this will enable us to get 'NaN' for bfloat16 dtype
+        // We need to test the impact of this on the composite ops that use where op and on the models, since bfloat16
+        // packs nan as inf in all other ops.
+
         // (value_true_tensor.value().dtype() == DataType::BFLOAT16) ? DataType::UINT16
         //                                                           : value_true_tensor.value().dtype());
+
         // Use predicate format as fallback for value_false
         value_false_data_format = predicate_data_format;
     } else if (variant == WhereVariant::TST) {

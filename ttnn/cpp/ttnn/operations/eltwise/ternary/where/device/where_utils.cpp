@@ -71,55 +71,6 @@ std::string get_kernel_file_path(KernelName kernel_name) {
     }
 }
 
-std::map<std::string, std::string> make_dataflow_defines(const DataType dtype, const DataType b_dtype) {
-    std::map<std::string, std::string> defines;
-    // to maintain backward compatibility, we need to support both dtype and b_dtype
-    if (dtype == DataType::FLOAT32) {
-        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
-        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float>";
-        defines["FILL_WITH_VALUE_FLOAT"] = "fill_with_val<1024, float>";
-    } else if (dtype == DataType::INT32) {
-        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
-        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<int32_t>";
-        defines["FILL_WITH_VALUE"] = "fill_with_val<1024, int32_t>";
-    } else if (dtype == DataType::UINT32) {
-        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
-        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<uint32_t>";
-        defines["FILL_WITH_VALUE"] = "fill_with_val<1024, uint32_t>";
-    } else {
-        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfloat16";
-        defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row_bfloat16";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfloat16";
-        defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
-    }
-
-    if (b_dtype == DataType::FLOAT32) {
-        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
-        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<float>";
-        defines["FILL_WITH_VALUE_FLOAT_B"] = "fill_with_val<1024, float>";
-    } else if (b_dtype == DataType::INT32) {
-        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
-        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<int32_t>";
-        defines["FILL_WITH_VALUE_B"] = "fill_with_val<1024, int32_t>";
-    } else if (b_dtype == DataType::UINT32) {
-        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
-        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element<uint32_t>";
-        defines["FILL_WITH_VALUE_B"] = "fill_with_val<1024, uint32_t>";
-    } else {
-        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfloat16";
-        defines["FILL_TILE_WITH_FIRST_ROW_B"] = "fill_tile_with_first_row_bfloat16";
-        defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfloat16";
-        defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
-    }
-    return defines;
-}
-
 uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype) {
     if (dtype == DataType::INT32) {
         return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));

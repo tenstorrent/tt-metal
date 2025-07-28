@@ -14,29 +14,35 @@ def torch_equal_nan(a, b):
     return torch.all((a == b) | (torch.isnan(a) & torch.isnan(b)))
 
 
+# TTT,  // tensor-tensor-tensor
+# TTS,  // tensor-tensor-scalar
+# TST,  // tensor-scalar-tensor
+# TSS,  // tensor-scalar-scalar
+
+
 @pytest.mark.parametrize(
-    "a_shape, b_shape, c_shape",
+    "c_shape, t_shape, f_shape",
     [
         ((2, 3, 64, 128), (2, 3, 64, 128), (2, 3, 64, 128)),  # LLK
         ((3, 2, 3, 64, 128), (3, 2, 3, 64, 128), (3, 2, 3, 64, 128)),  # LLK
         ((256,), (256,), (256,)),  # LLK
     ],
 )
-@pytest.mark.parametrize("scalar", [15.5, float("nan"), 10.0, 5.0, -11.33])
+@pytest.mark.parametrize("scalar", [15.5, float("nan"), float("inf"), 10.0, 5.0, -11.33])
 @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
 @pytest.mark.parametrize("condition", [1, 0])
-def test_ttnn_where(a_shape, b_shape, c_shape, scalar, variant, condition, device):
+def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, device):
     torch.manual_seed(0)
-    C = torch.ones(a_shape, dtype=torch.float32) * condition
+    C = torch.ones(c_shape, dtype=torch.float32) * condition
     if variant == "TTS":
-        T = torch.randn(b_shape, dtype=torch.float32)
+        T = torch.randn(t_shape, dtype=torch.float32)
         F = scalar
     elif variant == "TST":
         T = scalar
-        F = torch.randn(b_shape, dtype=torch.float32)
+        F = torch.randn(f_shape, dtype=torch.float32)
     elif variant == "TTT":
-        T = torch.randn(b_shape, dtype=torch.float32)
-        F = torch.ones(c_shape, dtype=torch.float32) * 10
+        T = torch.randn(t_shape, dtype=torch.float32)
+        F = torch.ones(f_shape, dtype=torch.float32) * 10
     golden = torch.where(C.bool(), T, F)
 
     ttnn_C = ttnn.from_torch(C, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
@@ -51,13 +57,59 @@ def test_ttnn_where(a_shape, b_shape, c_shape, scalar, variant, condition, devic
         ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
     result = ttnn.to_torch(ttnn_result)
-    # print("\ntt result", result)
-    # print("\ngolden", golden)
+
     assert torch_equal_nan(result, golden)
 
 
 @pytest.mark.parametrize(
-    "a_shape, b_shape, c_shape",
+    "c_shape, t_shape, f_shape",
+    [
+        ((2, 3, 64, 128), (2, 3, 64, 128), (2, 3, 64, 128)),  # LLK
+        ((3, 2, 3, 64, 128), (3, 2, 3, 64, 128), (3, 2, 3, 64, 128)),  # LLK
+        ((256,), (256,), (256,)),  # LLK
+    ],
+)
+@pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
+@pytest.mark.parametrize("condition", [1, 0])
+@pytest.mark.parametrize("scalar", [-9, 10, 7])
+def test_ttnn_where_int32(c_shape, t_shape, f_shape, variant, condition, scalar, device):
+    torch.manual_seed(0)
+    C = torch.ones(c_shape, dtype=torch.int32) * condition
+    if variant == "TTS":
+        T = torch.randint(-1000, 1000, t_shape, dtype=torch.int32)
+        F = scalar
+    elif variant == "TST":
+        T = scalar
+        F = torch.randint(-2000, 100, f_shape, dtype=torch.int32)
+    elif variant == "TTT":
+        T = torch.randint(-1000, 1000, t_shape, dtype=torch.int32)
+        F = torch.randint(-2000, 100, f_shape, dtype=torch.int32)
+    golden = torch.where(C.bool(), T, F)
+
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    if variant == "TTS":
+        ttnn_T = ttnn.from_torch(T, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_F = scalar
+    elif variant == "TST":
+        ttnn_T = scalar
+        ttnn_F = ttnn.from_torch(F, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    elif variant == "TTT":
+        ttnn_T = ttnn.from_torch(T, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_F = ttnn.from_torch(F, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
+    result = ttnn.to_torch(ttnn_result)
+
+    assert torch.equal(result, golden)
+
+
+@pytest.mark.parametrize(
+    "tor_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat8_b),
+    ],
+)
+@pytest.mark.parametrize(
+    "c_shape, t_shape, f_shape",
     [
         ((2, 3, 64, 128), (2, 3, 64, 128), (2, 3, 64, 128)),  # LLK
         ((3, 2, 3, 64, 128), (3, 2, 3, 64, 128), (3, 2, 3, 64, 128)),  # LLK
@@ -67,126 +119,40 @@ def test_ttnn_where(a_shape, b_shape, c_shape, scalar, variant, condition, devic
 @pytest.mark.parametrize("scalar", [15.5, -11.5, 0, 55.5])
 @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
 @pytest.mark.parametrize("condition", [1, 0])
-def test_ttnn_where_bf8_b(a_shape, b_shape, c_shape, scalar, variant, condition, device):
+def test_ttnn_where_bfloat8b(tor_dtype, ttnn_dtype, c_shape, t_shape, f_shape, scalar, variant, condition, device):
     torch.manual_seed(0)
-    C = torch.ones(a_shape, dtype=torch.bfloat16) * condition
+    C = torch.ones(c_shape, dtype=tor_dtype) * condition
     if variant == "TTS":
-        T = torch.randn(b_shape, dtype=torch.bfloat16)
+        T = torch.randn(t_shape, dtype=tor_dtype)
         F = scalar
     elif variant == "TST":
         T = scalar
-        F = torch.randn(b_shape, dtype=torch.bfloat16)
+        F = torch.randn(f_shape, dtype=tor_dtype)
     elif variant == "TTT":
-        T = torch.randn(b_shape, dtype=torch.bfloat16)
-        F = torch.ones(c_shape, dtype=torch.bfloat16) * 10
+        T = torch.randn(t_shape, dtype=tor_dtype)
+        F = torch.ones(f_shape, dtype=tor_dtype) * 10
 
-    ttnn_C = ttnn.from_torch(C, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     C = ttnn.to_torch(ttnn_C)
     if variant == "TTS":
-        ttnn_T = ttnn.from_torch(T, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_T = ttnn.from_torch(T, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
         T = ttnn.to_torch(ttnn_T)
         ttnn_F = scalar
     elif variant == "TST":
         ttnn_T = scalar
-        ttnn_F = ttnn.from_torch(F, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-        F = ttnn.to_torch(ttnn_F)
-    elif variant == "TTT":
-        ttnn_T = ttnn.from_torch(T, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-        ttnn_F = ttnn.from_torch(F, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
-        T = ttnn.to_torch(ttnn_T)
-        F = ttnn.to_torch(ttnn_F)
-
-    ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
-
-    result = ttnn.to_torch(ttnn_result)
-    golden = torch.where(C.bool(), T, F)
-    # print("\ntt result", result)
-    # print("\ngolden", golden)
-    assert torch_equal_nan(result, golden)
-
-
-@pytest.mark.parametrize(
-    "a_shape, b_shape, c_shape",
-    [
-        ((2, 3, 64, 128), (2, 3, 64, 128), (2, 3, 64, 128)),  # LLK
-        ((3, 2, 3, 64, 128), (3, 2, 3, 64, 128), (3, 2, 3, 64, 128)),  # LLK
-        ((256,), (256,), (256,)),  # LLK
-    ],
-)
-@pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
-@pytest.mark.parametrize("condition", [1, 0])
-def test_ttnn_where_int32(a_shape, b_shape, c_shape, variant, condition, device):
-    torch.manual_seed(0)
-    C = torch.ones(a_shape, dtype=torch.int32) * condition
-    if variant == "TTS":
-        T = torch.randint(-1000, 1000, b_shape, dtype=torch.int32)
-        F = 7
-    elif variant == "TST":
-        T = 10
-        F = torch.randint(-2000, 100, c_shape, dtype=torch.int32)
-    elif variant == "TTT":
-        T = torch.randint(-1000, 1000, b_shape, dtype=torch.int32)
-        F = torch.randint(-2000, 100, c_shape, dtype=torch.int32)
-    golden = torch.where(C.bool(), T, F)
-
-    ttnn_C = ttnn.from_torch(C, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    if variant == "TTS":
-        ttnn_T = ttnn.from_torch(T, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-        ttnn_F = 7
-    elif variant == "TST":
-        ttnn_T = 10
-        ttnn_F = ttnn.from_torch(F, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    elif variant == "TTT":
-        ttnn_T = ttnn.from_torch(T, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-        ttnn_F = ttnn.from_torch(F, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
-    result = ttnn.to_torch(ttnn_result)
-    # print(result)
-    # print(golden)
-    assert torch.equal(result, golden)
-
-
-@pytest.mark.parametrize("tor_dtype, ttnn_dtype", [(torch.bfloat16, ttnn.bfloat8_b), (torch.bfloat16, ttnn.bfloat4_b)])
-@pytest.mark.parametrize(
-    "a_shape, b_shape, c_shape",
-    [
-        ((2, 3, 64, 128), (2, 3, 64, 128), (2, 3, 64, 128)),
-    ],
-)
-@pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
-@pytest.mark.parametrize("condition", [1, 0])
-def test_ttnn_where_block(tor_dtype, ttnn_dtype, a_shape, b_shape, c_shape, variant, condition, device):
-    torch.manual_seed(400)
-    C = torch.ones(a_shape, dtype=tor_dtype) * condition
-    T = torch.randn(b_shape, dtype=tor_dtype)
-    F = torch.ones(c_shape, dtype=tor_dtype) * 10
-
-    ttnn_C = ttnn.from_torch(C, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    if variant == "TTS":
-        ttnn_T = ttnn.from_torch(T, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-        ttnn_F = 10.0
-    elif variant == "TST":
-        ttnn_T = 5.0
         ttnn_F = ttnn.from_torch(F, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        F = ttnn.to_torch(ttnn_F)
     elif variant == "TTT":
         ttnn_T = ttnn.from_torch(T, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
         ttnn_F = ttnn.from_torch(F, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        T = ttnn.to_torch(ttnn_T)
+        F = ttnn.to_torch(ttnn_F)
 
-    C = ttnn.to_torch(ttnn_C)
-    if variant == "TTS":
-        T = ttnn.to_torch(ttnn_T)
-        F = 10.0
-    elif variant == "TST":
-        T = 5.0
-        F = ttnn.to_torch(ttnn_F)
-    elif variant == "TTT":
-        T = ttnn.to_torch(ttnn_T)
-        F = ttnn.to_torch(ttnn_F)
     ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
-    golden = torch.where(C.bool(), T, F)
+
     result = ttnn.to_torch(ttnn_result)
-    # print(result)
-    # print(golden)
+    golden = torch.where(C.bool(), T, F)
+
     assert torch.equal(result, golden)
 
 
@@ -248,13 +214,6 @@ def test_ttnn_where_nan(device):
     result2 = torch.where(condition_all_ones.bool(), true_values, false_values)
     result3 = torch.where(condition_all_zeros.bool(), true_values, false_values)
 
-    # print("ttnn res", tt_result1)
-    # print("torch res", result1)
-    # print("\nttnn res all true", tt_result2, torch_equal_nan(tt_result2, true_values))
-    # print("torch res", result2, torch_equal_nan(result2, true_values))
-    # print("\nttnn res all false", tt_result3, torch_equal_nan(tt_result3, false_values))
-    # print("torch res", result3, torch_equal_nan(result3, false_values))
-
     assert torch_equal_nan(tt_result1, result1)
     assert torch_equal_nan(tt_result2, result2)
     assert torch_equal_nan(tt_result3, result3)
@@ -262,7 +221,9 @@ def test_ttnn_where_nan(device):
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [32])
-@pytest.mark.parametrize("tor_dtype, ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32)])
+@pytest.mark.parametrize(
+    "tor_dtype, ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32), (torch.int32, ttnn.int32)]
+)
 def test_ttnn_where_mcw(h, w, tor_dtype, ttnn_dtype, device):
     C = torch.arange(h * w, dtype=tor_dtype)
     C = (C % 2).float()  # Alternates 0, 1, 0, 1, ...
@@ -277,13 +238,11 @@ def test_ttnn_where_mcw(h, w, tor_dtype, ttnn_dtype, device):
     ttnn_F = ttnn.from_torch(F, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
     result = ttnn.to_torch(ttnn_result)
-    # torch.set_printoptions(linewidth=200, threshold = 10000 , precision=5, sci_mode = False, edgeitems=17)
-    # print("result", result, result.shape)
-    # print("golden", golden)
+
     assert torch.equal(result, golden)
 
 
-def test_ttnn_where_nan_bf16(device):
+def test_ttnn_where_edge_cases_bf16(device):
     tor_dtype = torch.bfloat16
     ttnn_dtype = ttnn.bfloat16
 
@@ -325,19 +284,12 @@ def test_ttnn_where_nan_bf16(device):
     result2 = torch.where(condition_all_ones.bool(), true_values, false_values)
     result3 = torch.where(condition_all_zeros.bool(), true_values, false_values)
 
-    # print("ttnn res", tt_result1)
-    # print("torch res", result1)
-    # print("\nttnn res all true", tt_result2, torch_equal_nan(tt_result2, true_values))
-    # print("torch res", result2, torch_equal_nan(result2, true_values))
-    # print("\nttnn res all false", tt_result3, torch_equal_nan(tt_result3, false_values))
-    # print("torch res", result3, torch_equal_nan(result3, false_values))
-
     assert torch_equal_nan(tt_result1, result1)
     assert torch_equal_nan(tt_result2, result2)
     assert torch_equal_nan(tt_result3, result3)
 
 
-def test_ttnn_where_nan_bf8b(device):
+def test_bf8b_exponent_behaviour(device):
     tor_dtype = torch.float32
     ttnn_dtype = ttnn.bfloat8_b
 
@@ -381,13 +333,6 @@ def test_ttnn_where_nan_bf8b(device):
     result2 = torch.where(condition_all_ones.bool(), true_values, false_values)
     result3 = torch.where(condition_all_zeros.bool(), true_values, false_values)
 
-    # print("ttnn res", tt_result1)
-    # print("torch res", result1)
-    # print("\nttnn res all true", tt_result2, torch_equal_nan(tt_result2, true_values))
-    # print("torch res", result2, torch_equal_nan(result2, true_values))
-    # print("\nttnn res all false", tt_result3, torch_equal_nan(tt_result3, false_values))
-    # print("torch res", result3, torch_equal_nan(result3, false_values))
-
     assert torch_equal_nan(tt_result1, result1)
     assert torch_equal_nan(tt_result2, result2)
     assert torch_equal_nan(tt_result3, result3)
@@ -415,12 +360,6 @@ def test_where_ttt(device, dtype, h, w):
     ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
     result = ttnn.to_torch(ttnn_result)
 
-    # print(torch.equal(C, ttnn.to_torch(ttnn_C)))
-    # print(torch.equal(T, ttnn.to_torch(ttnn_T)))
-    # print(torch.equal(F, ttnn.to_torch(ttnn_F)))
-
-    # print("golden", golden)
-    # print("result", result)
     assert torch_equal_nan(result, golden)
 
 
@@ -449,11 +388,6 @@ def test_where_tts(device, dtype, h, w, scalar):
     ttnn_result = ttnn.where(ttnn_C, ttnn_T, F)
     result = ttnn.to_torch(ttnn_result)
 
-    # print(torch.equal(C, ttnn.to_torch(ttnn_C)))
-    # print(torch.equal(T, ttnn.to_torch(ttnn_T)))
-
-    # print("golden", golden)
-    # print("result", result)
     assert torch_equal_nan(result, golden)
 
 
@@ -482,11 +416,6 @@ def test_where_tst(device, dtype, h, w, scalar):
     ttnn_result = ttnn.where(ttnn_C, T, ttnn_F)
     result = ttnn.to_torch(ttnn_result)
 
-    # print(torch.equal(C, ttnn.to_torch(ttnn_C)))
-    # print(torch.equal(F, ttnn.to_torch(ttnn_F)))
-
-    # print("golden", golden)
-    # print("result", result)
     assert torch_equal_nan(result, golden)
 
 
@@ -523,10 +452,6 @@ def test_where_tss(device, dtype, h, w, scalar1, scalar2):
     ttnn_result = ttnn.where(ttnn_C, T, F)
     result = ttnn.to_torch(ttnn_result)
 
-    # print(torch.equal(C, ttnn.to_torch(ttnn_C)))
-
-    # print("golden", golden)
-    # print("result", result)
     if dtype == torch.bfloat16:
         assert_with_pcc(result, golden)
     else:
@@ -624,9 +549,6 @@ def test_div_edgcase(device):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    # print("output_tensor", output_tensor)
-    # print("golden_tensor", golden_tensor)
-
     # accurate_mode=True
     # output_tensor tensor([-1., inf, -inf, inf,  3.,  0.], dtype=torch.bfloat16)
     # golden_tensor tensor([-1., inf, -inf, nan,  3.,  0.], dtype=torch.bfloat16)
@@ -657,9 +579,6 @@ def test_addcdiv_edgcase(device):
     # output_tensor tensor([ 0.5000,    -inf,     inf,    -inf, -1.5000,  0.0000],dtype=torch.bfloat16)
     # golden_tensor tensor([ 0.5000,    -inf,     inf,     nan, -1.5000,  0.0000],dtype=torch.bfloat16)
 
-    # print("output_tensor", output_tensor)
-    # print("golden_tensor", golden_tensor)
-
     # Replace NaN values in golden tensor with inf to match expected behavior of ttnn.bfloat16
     golden_tensor = torch.where(
         torch.isnan(golden_tensor), value * torch.tensor(float("inf"), dtype=golden_tensor.dtype), golden_tensor
@@ -669,7 +588,6 @@ def test_addcdiv_edgcase(device):
 
 
 def test_addcdiv_edgcase_fp32(device):
-    # Hardcoded input tensors
     a = torch.tensor([1, 2, -4, 0, -6, 0], dtype=torch.float32)
     b = torch.tensor([-1, 0, 0, 0, -2, 7], dtype=torch.float32)
     c = torch.tensor([0, 0, 0, 0, 0, 0], dtype=torch.float32)
@@ -685,8 +603,5 @@ def test_addcdiv_edgcase_fp32(device):
 
     # output_tensor tensor([ 0.5000,    -inf,     inf,     nan, -1.5000,  0.0000])
     # golden_tensor tensor([ 0.5000,    -inf,     inf,     nan, -1.5000,  0.0000])
-
-    # print("output_tensor", output_tensor1)
-    # print("golden_tensor", golden_tensor)
 
     assert torch_equal_nan(output_tensor1, golden_tensor)
