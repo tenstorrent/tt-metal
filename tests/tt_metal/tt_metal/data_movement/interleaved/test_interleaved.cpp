@@ -14,13 +14,13 @@ using namespace std;
 using namespace tt;
 using namespace tt::test_utils;
 
-namespace unit_tests::dm::interleaved_tile {
+namespace unit_tests::dm::interleaved_page {
 // Test config, i.e. test parameters
 struct InterleavedConfig {
     uint32_t test_id = 0;
     uint32_t num_of_transactions = 0;
-    uint32_t num_tiles = 0;
-    uint32_t tile_size_bytes = 0;
+    uint32_t num_pages = 0;
+    uint32_t page_size_bytes = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
     CoreRangeSet cores = CoreRangeSet();
     bool is_dram = true;  // else is L1
@@ -37,12 +37,12 @@ bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
     // Program
     Program program = CreateProgram();
 
-    const size_t total_size_bytes = test_config.num_tiles * test_config.tile_size_bytes;
+    const size_t total_size_bytes = test_config.num_pages * test_config.page_size_bytes;
 
     InterleavedBufferConfig interleaved_buffer_config{
         .device = device,
         .size = total_size_bytes,
-        .page_size = test_config.tile_size_bytes,
+        .page_size = test_config.page_size_bytes,
         .buffer_type = test_config.is_dram ? BufferType::DRAM : BufferType::L1};
     std::shared_ptr<Buffer> input_buffer;
     input_buffer = CreateBuffer(interleaved_buffer_config);
@@ -68,8 +68,8 @@ bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
     // Compile-time arguments for kernels
     vector<uint32_t> reader_compile_args = {
         (uint32_t)test_config.num_of_transactions,
-        (uint32_t)test_config.num_tiles,
-        (uint32_t)test_config.tile_size_bytes,
+        (uint32_t)test_config.num_pages,
+        (uint32_t)test_config.page_size_bytes,
         (uint32_t)l1_cb_index,
         (uint32_t)test_config.test_id,
         (uint32_t)test_config.is_dram,
@@ -78,8 +78,8 @@ bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
 
     vector<uint32_t> writer_compile_args = {
         (uint32_t)test_config.num_of_transactions,
-        (uint32_t)test_config.num_tiles,
-        (uint32_t)test_config.tile_size_bytes,
+        (uint32_t)test_config.num_pages,
+        (uint32_t)test_config.page_size_bytes,
         (uint32_t)l1_cb_index,
         (uint32_t)test_config.test_id,
         (uint32_t)test_config.is_dram,
@@ -90,7 +90,7 @@ bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
         // Create circular buffers
         CircularBufferConfig l1_cb_config =
             CircularBufferConfig(total_size_bytes, {{l1_cb_index, test_config.l1_data_format}})
-                .set_page_size(l1_cb_index, test_config.tile_size_bytes);
+                .set_page_size(l1_cb_index, test_config.page_size_bytes);
         auto l1_cb = CreateCircularBuffer(program, test_config.cores, l1_cb_config);
     }
 
@@ -109,7 +109,7 @@ bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
     if (test_config.read_kernel) {
         auto reader_kernel = CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/data_movement/interleaved/kernels/interleaved_tile_read.cpp",
+            "tests/tt_metal/tt_metal/data_movement/interleaved/kernels/interleaved_page_read.cpp",
             test_config.cores,
             DataMovementConfig{
                 .processor = test_config.default_noc ? DataMovementProcessor::RISCV_1 : DataMovementProcessor::RISCV_0,
@@ -123,7 +123,7 @@ bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
     if (test_config.write_kernel) {
         auto writer_kernel = CreateKernel(
             program,
-            "tests/tt_metal/tt_metal/data_movement/interleaved/kernels/interleaved_tile_write.cpp",
+            "tests/tt_metal/tt_metal/data_movement/interleaved/kernels/interleaved_page_write.cpp",
             test_config.cores,
             DataMovementConfig{
                 .processor = test_config.default_noc ? DataMovementProcessor::RISCV_0 : DataMovementProcessor::RISCV_1,
@@ -179,43 +179,53 @@ bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
 
     return pcc;
 }
-}  // namespace unit_tests::dm::interleaved_tile
+}  // namespace unit_tests::dm::interleaved_page
 
 /* ========== INTERLEAVED DRAM TESTS ========== */
 
-/* ========== Test case for varying number of tiles; Test id = 61 ========== */
-TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileNumbers) {
+/* ========== Test case for varying number of pages; Test id = 61 ========== */
+TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPageNumbers) {
+    // Physical Constraints
+    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
     // Parameters
-    uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
-    uint32_t num_tiles = 16;
-    uint32_t max_transactions = 64;
+    uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
+    uint32_t max_num_pages = 256;
+    uint32_t num_of_transactions = 1;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
-        // Test config
-        unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
-            .test_id = 61,
-            .num_of_transactions = num_of_transactions,
-            .num_tiles = num_tiles,
-            .tile_size_bytes = tile_size_bytes,
-            .l1_data_format = DataFormat::Float16_b,
-            .cores = core_range_set};
+    for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 4) {
+        if (num_pages > 16) {
+            // avoid writing too large of a memory block at once, prefer to overwrite multiple times
+            num_of_transactions = num_pages / 16;
+            num_pages = 16;
+        }
+        for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
+            // Test config
+            unit_tests::dm::interleaved_page::InterleavedConfig test_config = {
+                .test_id = 61,
+                .num_of_transactions = num_of_transactions,
+                .num_pages = num_pages,
+                .page_size_bytes = page_size_bytes,
+                .l1_data_format = DataFormat::Float16_b,
+                .cores = core_range_set};
 
-        // Run
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            // Run
+            for (unsigned int id = 0; id < num_devices_; id++) {
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            }
         }
     }
 }
 
 /* ========== Test case for varying core location; Test id = 62 ========== */
-TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileCoreLocations) {
+TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPageCoreLocations) {
     // Parameters
-    uint32_t num_tiles = 16;
-    uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
+    uint32_t num_pages = 16;
+    uint32_t page_size_bytes = 32 * 32 * 2;  // = tile
     uint32_t num_of_transactions = 16;
 
     for (unsigned int id = 0; id < num_devices_; id++) {
@@ -227,11 +237,11 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileCoreLocations) {
                 CoreRangeSet core_range_set({CoreRange({x, y}, {x, y})});
                 log_info(tt::LogTest, "Core Location x: {}, y: {}", x, y);
                 // Test config
-                unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
+                unit_tests::dm::interleaved_page::InterleavedConfig test_config = {
                     .test_id = 62,
                     .num_of_transactions = num_of_transactions,
-                    .num_tiles = num_tiles,
-                    .tile_size_bytes = tile_size_bytes,
+                    .num_pages = num_pages,
+                    .page_size_bytes = page_size_bytes,
                     .l1_data_format = DataFormat::Float16_b,
                     .cores = core_range_set};
 
@@ -242,73 +252,93 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileCoreLocations) {
     }
 }
 
-/* ========== Test noc_async_read_tile kernel only; Test id = 63 ========== */
-TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileReadNumbers) {
+/* ========== Test noc_async_read_page kernel only; Test id = 63 ========== */
+TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPageReadNumbers) {
+    // Physical Constraints
+    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
     // Parameters
-    uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
-    uint32_t num_tiles = 16;
-    uint32_t max_transactions = 64;
+    uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
+    uint32_t max_num_pages = 256;
+    uint32_t num_of_transactions = 1;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
-        // Test config
-        unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
-            .test_id = 63,
-            .num_of_transactions = num_of_transactions,
-            .num_tiles = num_tiles,
-            .tile_size_bytes = tile_size_bytes,
-            .l1_data_format = DataFormat::Float16_b,
-            .cores = core_range_set,
-            .is_dram = true,
-            .read_kernel = true,
-            .write_kernel = false};
+    for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 4) {
+        if (num_pages > 16) {
+            // avoid writing too large of a memory block at once, prefer to overwrite multiple times
+            num_of_transactions = num_pages / 16;
+            num_pages = 16;
+        }
+        for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
+            // Test config
+            unit_tests::dm::interleaved_page::InterleavedConfig test_config = {
+                .test_id = 63,
+                .num_of_transactions = num_of_transactions,
+                .num_pages = num_pages,
+                .page_size_bytes = page_size_bytes,
+                .l1_data_format = DataFormat::Float16_b,
+                .cores = core_range_set,
+                .is_dram = true,
+                .read_kernel = true,
+                .write_kernel = false};
 
-        // Run
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            // Run
+            for (unsigned int id = 0; id < num_devices_; id++) {
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            }
         }
     }
 }
 
-/* ========== Test noc_async_write_tile kernel only; Test id = 64 ========== */
-TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileWriteNumbers) {
+/* ========== Test noc_async_write_page kernel only; Test id = 64 ========== */
+TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPageWriteNumbers) {
+    // Physical Constraints
+    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
     // Parameters
-    uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
-    uint32_t num_tiles = 16;
-    uint32_t max_transactions = 64;
+    uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
+    uint32_t max_num_pages = 256;
+    uint32_t num_of_transactions = 1;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
-        // Test config
-        unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
-            .test_id = 64,
-            .num_of_transactions = num_of_transactions,
-            .num_tiles = num_tiles,
-            .tile_size_bytes = tile_size_bytes,
-            .l1_data_format = DataFormat::Float16_b,
-            .cores = core_range_set,
-            .is_dram = true,
-            .read_kernel = false,
-            .write_kernel = true};
+    for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 4) {
+        if (num_pages > 16) {
+            // avoid writing too large of a memory block at once, prefer to overwrite multiple times
+            num_of_transactions = num_pages / 16;
+            num_pages = 16;
+        }
+        for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
+            // Test config
+            unit_tests::dm::interleaved_page::InterleavedConfig test_config = {
+                .test_id = 64,
+                .num_of_transactions = num_of_transactions,
+                .num_pages = num_pages,
+                .page_size_bytes = page_size_bytes,
+                .l1_data_format = DataFormat::Float16_b,
+                .cores = core_range_set,
+                .is_dram = true,
+                .read_kernel = false,
+                .write_kernel = true};
 
-        // Run
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            // Run
+            for (unsigned int id = 0; id < num_devices_; id++) {
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            }
         }
     }
 }
 
 /* ========== Directed Ideal Test Case; Test id = 65 ========== */
-TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileDirectedIdeal) {
+TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPageDirectedIdeal) {
     // Parameters
-    uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
-    uint32_t num_tiles = 16;
+    uint32_t page_size_bytes = 32 * 32 * 2;  // = tile
+    uint32_t num_pages = 16;
     uint32_t num_of_transactions = 64;
 
     // Cores
@@ -316,11 +346,11 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileDirectedIdeal) {
     CoreRangeSet core_range_set({core_range});
 
     // Test config
-    unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
+    unit_tests::dm::interleaved_page::InterleavedConfig test_config = {
         .test_id = 65,
         .num_of_transactions = num_of_transactions,
-        .num_tiles = num_tiles,
-        .tile_size_bytes = tile_size_bytes,
+        .num_pages = num_pages,
+        .page_size_bytes = page_size_bytes,
         .l1_data_format = DataFormat::Float16_b,
         .cores = core_range_set};
 
@@ -330,106 +360,136 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileDirectedIdeal) {
     }
 }
 
-/* ========== Test noc_async_read_tile kernel only with swapped noc; Test id = 72 ========== */
-TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileReadNocSwap) {
+/* ========== Test noc_async_read_page kernel only with swapped noc; Test id = 72 ========== */
+TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPageReadNocSwap) {
+    // Physical Constraints
+    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
     // Parameters
-    uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
-    uint32_t num_tiles = 16;
-    uint32_t max_transactions = 64;
+    uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
+    uint32_t max_num_pages = 256;
+    uint32_t num_of_transactions = 1;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
-        // Test config
-        unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
-            .test_id = 72,
-            .num_of_transactions = num_of_transactions,
-            .num_tiles = num_tiles,
-            .tile_size_bytes = tile_size_bytes,
-            .l1_data_format = DataFormat::Float16_b,
-            .cores = core_range_set,
-            .is_dram = true,
-            .read_kernel = true,
-            .write_kernel = false,
-            .default_noc = false};
+    for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 4) {
+        if (num_pages > 16) {
+            // avoid writing too large of a memory block at once, prefer to overwrite multiple times
+            num_of_transactions = num_pages / 16;
+            num_pages = 16;
+        }
+        for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
+            // Test config
+            unit_tests::dm::interleaved_page::InterleavedConfig test_config = {
+                .test_id = 72,
+                .num_of_transactions = num_of_transactions,
+                .num_pages = num_pages,
+                .page_size_bytes = page_size_bytes,
+                .l1_data_format = DataFormat::Float16_b,
+                .cores = core_range_set,
+                .is_dram = true,
+                .read_kernel = true,
+                .write_kernel = false,
+                .default_noc = false};
 
-        // Run
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            // Run
+            for (unsigned int id = 0; id < num_devices_; id++) {
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            }
         }
     }
 }
 
-/* ========== Test noc_async_write_tile kernel only with swapped noc; Test id = 73 ========== */
-TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedTileWriteNocSwap) {
+/* ========== Test noc_async_write_page kernel only with swapped noc; Test id = 73 ========== */
+TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPageWriteNocSwap) {
+    // Physical Constraints
+    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
     // Parameters
-    uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
-    uint32_t num_tiles = 16;
-    uint32_t max_transactions = 64;
+    uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
+    uint32_t max_num_pages = 256;
+    uint32_t num_of_transactions = 1;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
-        // Test config
-        unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
-            .test_id = 73,
-            .num_of_transactions = num_of_transactions,
-            .num_tiles = num_tiles,
-            .tile_size_bytes = tile_size_bytes,
-            .l1_data_format = DataFormat::Float16_b,
-            .cores = core_range_set,
-            .is_dram = true,
-            .read_kernel = false,
-            .write_kernel = true,
-            .default_noc = false};
+    for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 4) {
+        if (num_pages > 16) {
+            // avoid writing too large of a memory block at once, prefer to overwrite multiple times
+            num_of_transactions = num_pages / 16;
+            num_pages = 16;
+        }
+        for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
+            // Test config
+            unit_tests::dm::interleaved_page::InterleavedConfig test_config = {
+                .test_id = 73,
+                .num_of_transactions = num_of_transactions,
+                .num_pages = num_pages,
+                .page_size_bytes = page_size_bytes,
+                .l1_data_format = DataFormat::Float16_b,
+                .cores = core_range_set,
+                .is_dram = true,
+                .read_kernel = false,
+                .write_kernel = true,
+                .default_noc = false};
 
-        // Run
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            // Run
+            for (unsigned int id = 0; id < num_devices_; id++) {
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            }
         }
     }
 }
 
 /* ========== INTERLEAVED L1 TESTS ========== */
 
-/* ========== Test case for varying number of tiles using interleaved L1; Test id = 66 ========== */
-TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileNumbers) {
+/* ========== Test case for varying number of pages using interleaved L1; Test id = 66 ========== */
+TEST_F(DeviceFixture, TensixDataMovementL1InterleavedPageNumbers) {
+    // Physical Constraints
+    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
     // Parameters
-    uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
-    uint32_t num_tiles = 16;
-    uint32_t max_transactions = 64;
+    uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
+    uint32_t max_num_pages = 256;
+    uint32_t num_of_transactions = 1;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
-        // Test config
-        unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
-            .test_id = 66,
-            .num_of_transactions = num_of_transactions,
-            .num_tiles = num_tiles,
-            .tile_size_bytes = tile_size_bytes,
-            .l1_data_format = DataFormat::Float16_b,
-            .cores = core_range_set,
-            .is_dram = false};
+    for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 4) {
+        if (num_pages > 16) {
+            // avoid writing too large of a memory block at once, prefer to overwrite multiple times
+            num_of_transactions = num_pages / 16;
+            num_pages = 16;
+        }
+        for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
+            // Test config
+            unit_tests::dm::interleaved_page::InterleavedConfig test_config = {
+                .test_id = 66,
+                .num_of_transactions = num_of_transactions,
+                .num_pages = num_pages,
+                .page_size_bytes = page_size_bytes,
+                .l1_data_format = DataFormat::Float16_b,
+                .cores = core_range_set,
+                .is_dram = false};
 
-        // Run
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            // Run
+            for (unsigned int id = 0; id < num_devices_; id++) {
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            }
         }
     }
 }
 
 /* ========== Test case for varying core location; Test id = 67 ========== */
-TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileCoreLocations) {
+TEST_F(DeviceFixture, TensixDataMovementL1InterleavedPageCoreLocations) {
     // Parameters
-    uint32_t num_tiles = 16;
-    uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
+    uint32_t num_pages = 16;
+    uint32_t page_size_bytes = 32 * 32 * 2;  // = tile
     uint32_t num_of_transactions = 16;
 
     for (unsigned int id = 0; id < num_devices_; id++) {
@@ -441,11 +501,11 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileCoreLocations) {
                 CoreRangeSet core_range_set({CoreRange({x, y}, {x, y})});
                 log_info(tt::LogTest, "Core Location x: {}, y: {}", x, y);
                 // Test config
-                unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
+                unit_tests::dm::interleaved_page::InterleavedConfig test_config = {
                     .test_id = 67,
                     .num_of_transactions = 16,
-                    .num_tiles = num_tiles,
-                    .tile_size_bytes = tile_size_bytes,
+                    .num_pages = num_pages,
+                    .page_size_bytes = page_size_bytes,
                     .l1_data_format = DataFormat::Float16_b,
                     .cores = core_range_set,
                     .is_dram = false};
@@ -457,72 +517,92 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileCoreLocations) {
     }
 }
 
-/* ========== Test noc_async_read_tile only; Test id = 68 ========== */
-TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileReadNumbers) {
+/* ========== Test noc_async_read_page only; Test id = 68 ========== */
+TEST_F(DeviceFixture, TensixDataMovementL1InterleavedPageReadNumbers) {
+    // Physical Constraints
+    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
     // Parameters
-    uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
-    uint32_t num_tiles = 16;
-    uint32_t max_transactions = 64;
+    uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
+    uint32_t max_num_pages = 256;
+    uint32_t num_of_transactions = 1;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
-        // Test config
-        unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
-            .test_id = 68,
-            .num_of_transactions = num_of_transactions,
-            .num_tiles = num_tiles,
-            .tile_size_bytes = tile_size_bytes,
-            .l1_data_format = DataFormat::Float16_b,
-            .cores = core_range_set,
-            .is_dram = false,
-            .read_kernel = true,
-            .write_kernel = false};
+    for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 4) {
+        if (num_pages > 16) {
+            // avoid writing too large of a memory block at once, prefer to overwrite multiple times
+            num_of_transactions = num_pages / 16;
+            num_pages = 16;
+        }
+        for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
+            // Test config
+            unit_tests::dm::interleaved_page::InterleavedConfig test_config = {
+                .test_id = 68,
+                .num_of_transactions = num_of_transactions,
+                .num_pages = num_pages,
+                .page_size_bytes = page_size_bytes,
+                .l1_data_format = DataFormat::Float16_b,
+                .cores = core_range_set,
+                .is_dram = false,
+                .read_kernel = true,
+                .write_kernel = false};
 
-        // Run
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            // Run
+            for (unsigned int id = 0; id < num_devices_; id++) {
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            }
         }
     }
 }
-/* ========== Test noc_async_write_tile only; Test id = 69 ========== */
-TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileWriteNumbers) {
+/* ========== Test noc_async_write_page only; Test id = 69 ========== */
+TEST_F(DeviceFixture, TensixDataMovementL1InterleavedPageWriteNumbers) {
+    // Physical Constraints
+    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
     // Parameters
-    uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
-    uint32_t num_tiles = 16;
-    uint32_t max_transactions = 64;
+    uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
+    uint32_t max_num_pages = 256;
+    uint32_t num_of_transactions = 1;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
-        // Test config
-        unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
-            .test_id = 69,
-            .num_of_transactions = num_of_transactions,
-            .num_tiles = num_tiles,
-            .tile_size_bytes = tile_size_bytes,
-            .l1_data_format = DataFormat::Float16_b,
-            .cores = core_range_set,
-            .is_dram = false,
-            .read_kernel = false,
-            .write_kernel = true};
+    for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 4) {
+        if (num_pages > 16) {
+            // avoid writing too large of a memory block at once, prefer to overwrite multiple times
+            num_of_transactions = num_pages / 16;
+            num_pages = 16;
+        }
+        for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
+            // Test config
+            unit_tests::dm::interleaved_page::InterleavedConfig test_config = {
+                .test_id = 69,
+                .num_of_transactions = num_of_transactions,
+                .num_pages = num_pages,
+                .page_size_bytes = page_size_bytes,
+                .l1_data_format = DataFormat::Float16_b,
+                .cores = core_range_set,
+                .is_dram = false,
+                .read_kernel = false,
+                .write_kernel = true};
 
-        // Run
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            // Run
+            for (unsigned int id = 0; id < num_devices_; id++) {
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            }
         }
     }
 }
 
 /* ========== Directed Ideal Test Case; Test id = 71 ========== */
-TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileDirectedIdeal) {
+TEST_F(DeviceFixture, TensixDataMovementL1InterleavedPageDirectedIdeal) {
     // Parameters
-    uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
-    uint32_t num_tiles = 16;
+    uint32_t page_size_bytes = 32 * 32 * 2;  // = tile
+    uint32_t num_pages = 16;
     uint32_t num_of_transactions = 64;
 
     // Cores
@@ -530,11 +610,11 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileDirectedIdeal) {
     CoreRangeSet core_range_set({core_range});
 
     // Test config
-    unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
+    unit_tests::dm::interleaved_page::InterleavedConfig test_config = {
         .test_id = 71,
         .num_of_transactions = num_of_transactions,
-        .num_tiles = num_tiles,
-        .tile_size_bytes = tile_size_bytes,
+        .num_pages = num_pages,
+        .page_size_bytes = page_size_bytes,
         .l1_data_format = DataFormat::Float16_b,
         .cores = core_range_set,
         .is_dram = false};
@@ -545,65 +625,85 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileDirectedIdeal) {
     }
 }
 
-/* ========== Test noc_async_read_tile only with swapped noc; Test id = 74 ========== */
-TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileReadNocSwap) {
+/* ========== Test noc_async_read_page only with swapped noc; Test id = 74 ========== */
+TEST_F(DeviceFixture, TensixDataMovementL1InterleavedPageReadNocSwap) {
+    // Physical Constraints
+    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
     // Parameters
-    uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
-    uint32_t num_tiles = 16;
-    uint32_t max_transactions = 64;
+    uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
+    uint32_t max_num_pages = 256;
+    uint32_t num_of_transactions = 1;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
-        // Test config
-        unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
-            .test_id = 74,
-            .num_of_transactions = num_of_transactions,
-            .num_tiles = num_tiles,
-            .tile_size_bytes = tile_size_bytes,
-            .l1_data_format = DataFormat::Float16_b,
-            .cores = core_range_set,
-            .is_dram = false,
-            .read_kernel = true,
-            .write_kernel = false,
-            .default_noc = false};
+    for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 4) {
+        if (num_pages > 16) {
+            // avoid writing too large of a memory block at once, prefer to overwrite multiple times
+            num_of_transactions = num_pages / 16;
+            num_pages = 16;
+        }
+        for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
+            // Test config
+            unit_tests::dm::interleaved_page::InterleavedConfig test_config = {
+                .test_id = 74,
+                .num_of_transactions = num_of_transactions,
+                .num_pages = num_pages,
+                .page_size_bytes = page_size_bytes,
+                .l1_data_format = DataFormat::Float16_b,
+                .cores = core_range_set,
+                .is_dram = false,
+                .read_kernel = true,
+                .write_kernel = false,
+                .default_noc = false};
 
-        // Run
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            // Run
+            for (unsigned int id = 0; id < num_devices_; id++) {
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            }
         }
     }
 }
-/* ========== Test noc_async_write_tile only; Test id = 75 ========== */
-TEST_F(DeviceFixture, TensixDataMovementL1InterleavedTileWriteNocSwap) {
+/* ========== Test noc_async_write_page only; Test id = 75 ========== */
+TEST_F(DeviceFixture, TensixDataMovementL1InterleavedPageWriteNocSwap) {
+    // Physical Constraints
+    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
     // Parameters
-    uint32_t tile_size_bytes = 32 * 32 * 2;  // = tile size, since bfloat16 is 2 bytes
-    uint32_t num_tiles = 16;
-    uint32_t max_transactions = 64;
+    uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
+    uint32_t max_num_pages = 256;
+    uint32_t num_of_transactions = 1;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 2) {
-        // Test config
-        unit_tests::dm::interleaved_tile::InterleavedConfig test_config = {
-            .test_id = 75,
-            .num_of_transactions = num_of_transactions,
-            .num_tiles = num_tiles,
-            .tile_size_bytes = tile_size_bytes,
-            .l1_data_format = DataFormat::Float16_b,
-            .cores = core_range_set,
-            .is_dram = false,
-            .read_kernel = false,
-            .write_kernel = true,
-            .default_noc = false};
+    for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 4) {
+        if (num_pages > 16) {
+            // avoid writing too large of a memory block at once, prefer to overwrite multiple times
+            num_of_transactions = num_pages / 16;
+            num_pages = 16;
+        }
+        for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
+            // Test config
+            unit_tests::dm::interleaved_page::InterleavedConfig test_config = {
+                .test_id = 75,
+                .num_of_transactions = num_of_transactions,
+                .num_pages = num_pages,
+                .page_size_bytes = page_size_bytes,
+                .l1_data_format = DataFormat::Float16_b,
+                .cores = core_range_set,
+                .is_dram = false,
+                .read_kernel = false,
+                .write_kernel = true,
+                .default_noc = false};
 
-        // Run
-        for (unsigned int id = 0; id < num_devices_; id++) {
-            EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            // Run
+            for (unsigned int id = 0; id < num_devices_; id++) {
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            }
         }
     }
 }
