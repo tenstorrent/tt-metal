@@ -153,11 +153,93 @@ def test_dtype_conversion_on_device(device, shape, ttnn_dtype, torch_dtype, ttnn
     )
 
 
+def format_tensor_as_string(tensor_list: list, precision: int = 4, max_width: int = 120) -> str:
+    def get_tensor_shape(nested_list):
+        if not isinstance(nested_list, list):
+            return []
+        if len(nested_list) == 0:
+            return [0]
+
+        shape = [len(nested_list)]
+        if isinstance(nested_list[0], list):
+            shape.extend(get_tensor_shape(nested_list[0]))
+        return shape
+
+    def format_number(num, width):
+        if isinstance(num, (int, float)):
+            if abs(num) < 1e-10:
+                formatted = "0.0"
+            else:
+                formatted = f"{num:.{precision}f}"
+        else:
+            formatted = str(num)
+        return formatted.rjust(width)
+
+    def get_all_values(nested_list):
+        values = []
+        if isinstance(nested_list, list):
+            for item in nested_list:
+                values.extend(get_all_values(item))
+        else:
+            values.append(nested_list)
+        return values
+
+    def calculate_col_width(nested_list):
+        all_values = get_all_values(nested_list)
+        formatted_values = []
+        for val in all_values:
+            if isinstance(val, (int, float)):
+                formatted_values.append(f"{val:.{precision}f}")
+            else:
+                formatted_values.append(str(val))
+
+        if not formatted_values:
+            return precision + 4
+
+        max_len = max(len(str(val)) for val in formatted_values)
+        return max(max_len + 2, precision + 4)
+
+    def format_recursive(nested_list, depth, col_width, is_last_at_level):
+        if not isinstance(nested_list, list):
+            return format_number(nested_list, col_width)
+
+        if len(nested_list) == 0:
+            return "[]"
+
+        if not isinstance(nested_list[0], list):
+            formatted_items = [format_number(item, col_width) for item in nested_list]
+            return "[ " + "   ".join(formatted_items) + " ]"
+
+        lines = []
+        indent = " " * depth
+
+        for i, item in enumerate(nested_list):
+            is_last = i == len(nested_list) - 1
+            formatted_item = format_recursive(item, depth + 1, col_width, is_last)
+
+            if i == 0:
+                lines.append("[" + formatted_item)
+            else:
+                lines.append(indent + " " + formatted_item)
+
+        if depth > 0:
+            lines[-1] += "]"
+        else:
+            lines[-1] += "]"
+
+        return "\n".join(lines)
+
+    if not isinstance(tensor_list, list) or len(tensor_list) == 0:
+        return "[]"
+
+    col_width = calculate_col_width(tensor_list)
+    return format_recursive(tensor_list, 0, col_width, True)
+
+
 @pytest.mark.parametrize(
     "shape",
     [
-        (4, 4),
-        (32, 32),
+        (8, 4, 12),
     ],
 )
 @pytest.mark.parametrize("ttnn_dtype_from", ALL_TYPES)
@@ -195,17 +277,17 @@ def test_typecast_accuracy(shape, device, ttnn_dtype_from, ttnn_dtype_to):
     output_torch_tensor = torch.Tensor(output_tensor.to_list())
 
     pcc_passed, pcc_message = comp_pcc(input_torch_tensor, output_torch_tensor, conversion_pcc)
-    assert pcc_passed, f"""
+    format_message = f"""
 {pcc_message}
-input_tensor:
-{input_tensor}
-input_torch_tensor:
-{input_torch_tensor}
-output_tensor:
-{output_tensor}
-output_torch_tensor:
-{output_torch_tensor}
+input_tensor {input_tensor.dtype} {input_tensor.shape} {input_tensor.padded_shape}:
+{format_tensor_as_string(input_tensor.to_list())}
+output_tensor {output_tensor.dtype} {output_tensor.shape} {output_tensor.padded_shape}:
+{format_tensor_as_string(output_tensor.to_list())}
     """
+
+    print(format_message)
+
+    assert pcc_passed, format_message
 
 
 @pytest.mark.parametrize("height", [32])

@@ -112,8 +112,139 @@ void log_from_cpp(const char* file, int line, const char* func, Args&&... messag
     // Handle the record
     logger.attr("handle")(log_record);
 }
-// #define py_log(...) log_from_cpp(__FILE__, __LINE__, __func__, "[" #__VA_ARGS__ "] =" __VA_OPT__(, ) __VA_ARGS__);
-#define py_log(...)
+#define py_log(...) log_from_cpp(__FILE__, __LINE__, __func__, "[" #__VA_ARGS__ "] =" __VA_OPT__(, ) __VA_ARGS__);
+// #define py_log(...)
+std::string format_tensor_as_string(pybind11::object tensor, int precision = 4) {
+    pybind11::object tensor_list;
+
+    if (pybind11::hasattr(tensor, "tolist")) {
+        tensor_list = tensor.attr("tolist")();
+    } else if (pybind11::hasattr(tensor, "to_list")) {
+        tensor_list = tensor.attr("to_list")();
+    } else {
+        return "Unsupported tensor type";
+    }
+
+    std::function<std::vector<double>(pybind11::object)> get_all_values;
+    get_all_values = [&](pybind11::object obj) -> std::vector<double> {
+        std::vector<double> values;
+        if (pybind11::isinstance<pybind11::list>(obj)) {
+            for (auto item : obj) {
+                auto sub_values = get_all_values(item.cast<pybind11::object>());
+                values.insert(values.end(), sub_values.begin(), sub_values.end());
+            }
+        } else {
+            try {
+                values.push_back(obj.cast<double>());
+            } catch (...) {
+                values.push_back(0.0);
+            }
+        }
+        return values;
+    };
+
+    auto calculate_col_width = [&](pybind11::object nested_list) -> int {
+        auto all_values = get_all_values(nested_list);
+        if (all_values.empty()) {
+            return precision + 4;
+        }
+
+        int max_len = 0;
+        for (double val : all_values) {
+            std::ostringstream oss;
+            if (std::abs(val) < 1e-10) {
+                oss << "0.0";
+            } else {
+                oss << std::fixed << std::setprecision(precision) << val;
+            }
+            max_len = std::max(max_len, static_cast<int>(oss.str().length()));
+        }
+        return std::max(max_len + 2, precision + 4);
+    };
+
+    auto format_number = [&](pybind11::object obj, int width) -> std::string {
+        std::ostringstream oss;
+        try {
+            double val = obj.cast<double>();
+            if (std::abs(val) < 1e-10) {
+                oss << "0.0";
+            } else {
+                oss << std::fixed << std::setprecision(precision) << val;
+            }
+        } catch (...) {
+            oss << obj.cast<std::string>();
+        }
+
+        std::string formatted = oss.str();
+        if (formatted.length() < width) {
+            return std::string(width - formatted.length(), ' ') + formatted;
+        }
+        return formatted;
+    };
+
+    std::function<std::string(pybind11::object, int, int)> format_recursive;
+    format_recursive = [&](pybind11::object nested_list, int depth, int col_width) -> std::string {
+        if (!pybind11::isinstance<pybind11::list>(nested_list)) {
+            return format_number(nested_list, col_width);
+        }
+
+        pybind11::list list_obj = nested_list.cast<pybind11::list>();
+        if (list_obj.size() == 0) {
+            return "[]";
+        }
+
+        if (!pybind11::isinstance<pybind11::list>(list_obj[0])) {
+            std::ostringstream oss;
+            oss << "[ ";
+            for (size_t i = 0; i < list_obj.size(); ++i) {
+                if (i > 0) {
+                    oss << "   ";
+                }
+                oss << format_number(pybind11::object(list_obj[i]), col_width);
+            }
+            oss << " ]";
+            return oss.str();
+        }
+
+        std::vector<std::string> lines;
+        std::string indent(depth, ' ');
+
+        for (size_t i = 0; i < list_obj.size(); ++i) {
+            std::string formatted_item = format_recursive(pybind11::object(list_obj[i]), depth + 1, col_width);
+
+            if (i == 0) {
+                lines.push_back("[" + formatted_item);
+            } else {
+                lines.push_back(indent + " " + formatted_item);
+            }
+        }
+
+        if (!lines.empty()) {
+            lines.back() += "]";
+        }
+
+        std::ostringstream result;
+        for (size_t i = 0; i < lines.size(); ++i) {
+            if (i > 0) {
+                result << "\n";
+            }
+            result << lines[i];
+        }
+        return result.str();
+    };
+
+    if (!pybind11::isinstance<pybind11::list>(tensor_list)) {
+        return "[]";
+    }
+
+    pybind11::list list_obj = tensor_list.cast<pybind11::list>();
+    if (list_obj.size() == 0) {
+        return "[]";
+    }
+
+    int col_width = calculate_col_width(tensor_list);
+    return format_recursive(tensor_list, 0, col_width);
+}
 
 template <typename T>
 Tensor create_typed_tt_tensor_from_py_data(
@@ -428,6 +559,11 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
         } else {
             py_log("no missing data type");
         }
+    } else if (
+        tensor.attr("dtype").equal(torch.attr("bfloat16")) && dtype.has_value() &&
+        (dtype.value() == DataType::BFLOAT4_B || dtype.value() == DataType::BFLOAT8_B)) {
+        py_log();
+        do_host_conversion_through_fallback();
     } else if (tensor.attr("dtype").equal(torch.attr("uint8"))) {
         // https://github.com/tenstorrent/tt-metal/issues/21682 typecast missing support for uint8
         py_log();
@@ -611,6 +747,14 @@ Tensor convert_python_tensor_to_tt_tensor(
     output = tt::tt_metal::set_tensor_id(output);
     py_log("output result ok");
     py_log(strategy->construct_with_data_type);
+    py_log(
+        "just constructed tensor",
+        output.layout(),
+        output.logical_shape(),
+        output.padded_shape(),
+        output.dtype(),
+        "\n",
+        format_tensor_as_string(pybind11::cast(output)));
 
     if (memory_config.is_sharded()) {
         py_log("Sharded memory config");
@@ -627,6 +771,7 @@ Tensor convert_python_tensor_to_tt_tensor(
             if (device != nullptr && optional_layout.has_value() && output.layout() != optional_layout.value()) {
                 py_log("converting to final layout");
                 output = ttnn::to_layout(output, optional_layout.value(), std::nullopt, memory_config);
+                py_log("conversion to final layout result \n", format_tensor_as_string(pybind11::cast(output)));
             }
         } else {
             if (optional_data_type.has_value() && output.dtype() != optional_data_type.value()) {
@@ -635,16 +780,28 @@ Tensor convert_python_tensor_to_tt_tensor(
                     py_log("executing conversion to layout");
                     ZoneScopedN("pre-typecast layout conversion");
                     output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, memory_config);
+                    py_log(
+                        "conversion to tile layout for type casting\n",
+                        format_tensor_as_string(pybind11::cast(output)));
                     py_log("done initial layout conversion");
                 }
 
                 py_log();
                 output = ttnn::typecast(output, optional_data_type.value());
+                py_log(
+                    "type casting done",
+                    output.layout(),
+                    output.logical_shape(),
+                    output.padded_shape(),
+                    output.dtype(),
+                    "\n",
+                    format_tensor_as_string(pybind11::cast(output)));
 
                 py_log();
                 if (optional_layout.has_value() && output.layout() != optional_layout.value()) {
                     ZoneScopedN("post-typecast layout conversion");
                     output = ttnn::to_layout(output, optional_layout.value(), std::nullopt, memory_config);
+                    py_log("layout conversion after typecast\n", format_tensor_as_string(pybind11::cast(output)));
                 }
                 py_log();
             }
