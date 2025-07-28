@@ -47,7 +47,7 @@ void test_socket_send_recv(
     tt_metal::distributed::MeshSocket& socket,
     uint32_t data_size,
     uint32_t page_size,
-    uint32_t num_txns = 20) {
+    uint32_t num_txns) {
     using namespace tt::tt_metal::distributed::multihost;
     using namespace tt::tt_metal::distributed;
     using namespace tt_metal;
@@ -68,11 +68,13 @@ void test_socket_send_recv(
     uint32_t seed = 0;
     if (distributed_context->rank() == sender_rank) {
         seed = std::chrono::steady_clock::now().time_since_epoch().count();
-        distributed_context->send(
-            tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
-            recv_rank,                                    // send to receiver host
-            tt::tt_metal::distributed::multihost::Tag{0}  // exchange seed over tag 0
-        );
+        if (sender_rank != recv_rank) {
+            distributed_context->send(
+                tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
+                recv_rank,                                    // send to receiver host
+                tt::tt_metal::distributed::multihost::Tag{0}  // exchange seed over tag 0
+            );
+        }
     } else {
         distributed_context->recv(
             tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&seed), sizeof(seed)),
