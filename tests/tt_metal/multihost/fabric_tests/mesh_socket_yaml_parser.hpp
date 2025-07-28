@@ -22,9 +22,9 @@ using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 using CoreCoord = tt::tt_metal::CoreCoord;
 using Rank = tt::tt_metal::distributed::multihost::Rank;
 
-enum class RoutingType {
-    LowLatency,
-    Dynamic,
+enum class RoutingType : uint32_t {
+    LowLatency = 0,
+    Dynamic = 1,
 };
 
 enum class PatternType {
@@ -40,7 +40,7 @@ struct PhysicalMeshConfig {
 
 struct FabricConfig {
     tt::tt_fabric::Topology topology;
-    std::optional<RoutingType> routing_type;
+    RoutingType routing_type;
 };
 
 struct MemoryConfig {
@@ -80,6 +80,7 @@ struct TestConfig {
     MemoryConfig memory_config;
     std::optional<std::vector<TestSocketConfig>> sockets;
     std::optional<std::vector<PatternExpansionConfig>> pattern_expansions;
+    std::optional<uint32_t> num_ranks;
 };
 
 // Second pass expansion of patterns
@@ -104,6 +105,7 @@ public:
     std::optional<uint32_t> get_master_seed();
     bool has_help_option();
     void print_help();
+    bool print_configs();
 
 private:
     const std::vector<std::string>& input_args_;
@@ -123,7 +125,10 @@ public:
     std::vector<ParsedTestConfig> expand_test_configs(const std::vector<TestConfig>& test_configs);
 
     // Validation methods
-    void validate_configuration(const MeshSocketTestConfiguration& config);
+    static void validate_configuration(const MeshSocketTestConfiguration& config);
+
+    // Print configuration for debugging
+    static void print_test_configuration(const MeshSocketTestConfiguration& config);
 
 private:
     // Parsing helper methods
@@ -149,14 +154,14 @@ private:
     std::vector<std::vector<eth_coord_t>> parse_eth_coord_mapping(const YAML::Node& node);
 
     // Validation helper methods
-    void validate_test_config(const TestConfig& test);
-    void validate_parsed_test_config(const ParsedTestConfig& test);
-    void validate_socket_config(const TestSocketConfig& socket);
-    void validate_memory_config(const MemoryConfig& memory);
-    void validate_endpoint_config(const EndpointConfig& endpoint);
-    void validate_pattern_expansion_config(const PatternExpansionConfig& pattern);
-    void validate_fabric_config(const FabricConfig& fabric_config);
-    void validate_physical_mesh_config(const PhysicalMeshConfig& physical_mesh_config);
+    static void validate_test_config(const TestConfig& test);
+    static void validate_parsed_test_config(const ParsedTestConfig& test);
+    static void validate_socket_config(const TestSocketConfig& socket);
+    static void validate_memory_config(const MemoryConfig& memory);
+    static void validate_endpoint_config(const EndpointConfig& endpoint);
+    static void validate_pattern_expansion_config(const PatternExpansionConfig& pattern);
+    static void validate_fabric_config(const FabricConfig& fabric_config);
+    static void validate_physical_mesh_config(const PhysicalMeshConfig& physical_mesh_config);
 
     // Error handling
     void throw_parse_error(const std::string& message, const YAML::Node& node = YAML::Node());

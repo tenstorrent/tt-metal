@@ -43,11 +43,14 @@ std::optional<uint32_t> CmdlineParser::get_master_seed() {
 
 bool CmdlineParser::has_help_option() { return test_args::has_command_option(input_args_, "--help"); }
 
+bool CmdlineParser::print_configs() { return test_args::has_command_option(input_args_, "--print-configs"); }
+
 void CmdlineParser::print_help() {
     log_info(tt::LogTest, "Usage: mesh_socket_test_main --test_config FILE");
     log_info(tt::LogTest, "");
     log_info(tt::LogTest, "--test_config FILE     Path to the YAML test configuration file. ");
     log_info(tt::LogTest, "--master-seed SEED     Master seed for all random operations to ensure reproducibility.");
+    log_info(tt::LogTest, "--print-configs        Print the parsed test configurations and exit.");
     log_info(tt::LogTest, "--help                 Print this help message.");
     log_info(tt::LogTest, "");
     log_info(
@@ -238,6 +241,17 @@ TestConfig MeshSocketYamlParser::parse_test_config(const YAML::Node& node) {
 
     TT_FATAL(node["memory_config"], "Test configuration missing required 'memory_config' field");
     test.memory_config = parse_memory_config(node["memory_config"]);
+
+    // Parse num_ranks (required only when pattern expansions are present)
+    if (node["pattern_expansions"]) {
+        TT_FATAL(node["num_ranks"], "Test configuration with 'pattern_expansions' missing required 'num_ranks' field");
+        test.num_ranks = node["num_ranks"].as<uint32_t>();
+    } else if (node["num_ranks"]) {
+        log_warning(
+            tt::LogTest,
+            "Test '{}' has 'num_ranks' but no 'pattern_expansions' - num_ranks will be ignored",
+            test.name);
+    }
 
     // Parse explicit sockets (optional)
     if (node["sockets"]) {
@@ -487,6 +501,74 @@ void MeshSocketYamlParser::validate_physical_mesh_config(const PhysicalMeshConfi
         log_debug(
             tt::LogTest, "Ethernet coordinate mapping has {} rows", physical_mesh_config.eth_coord_mapping.size());
     }
+}
+
+void MeshSocketYamlParser::print_test_configuration(const MeshSocketTestConfiguration& config) {
+    log_info(tt::LogTest, "=== Parsed MeshSocket Test Configuration ===");
+
+    // Print fabric configuration
+    log_info(tt::LogTest, "Fabric Configuration:");
+    log_info(tt::LogTest, "  Topology: {}", static_cast<int>(config.fabric_config.topology));
+    log_info(tt::LogTest, "  Routing Type: {}", static_cast<int>(config.fabric_config.routing_type));
+
+    // Print physical mesh configuration if present
+    if (config.physical_mesh_config.has_value()) {
+        const auto& physical_mesh = config.physical_mesh_config.value();
+        log_info(tt::LogTest, "Physical Mesh Configuration:");
+        if (!physical_mesh.mesh_descriptor_path.empty()) {
+            log_info(tt::LogTest, "  Mesh Descriptor Path: {}", physical_mesh.mesh_descriptor_path);
+        }
+        if (!physical_mesh.eth_coord_mapping.empty()) {
+            log_info(
+                tt::LogTest,
+                "  Ethernet Coordinate Mapping: {} rows with {} columns each",
+                physical_mesh.eth_coord_mapping.size(),
+                physical_mesh.eth_coord_mapping.empty() ? 0 : physical_mesh.eth_coord_mapping[0].size());
+        }
+    }
+
+    // Print test configurations with detailed information
+    log_info(tt::LogTest, "Parsed Test Configurations: {} tests", config.tests.size());
+    for (size_t i = 0; i < config.tests.size(); ++i) {
+        const auto& test = config.tests[i];
+        log_info(tt::LogTest, "");
+        log_info(tt::LogTest, "Test {}: '{}'", i + 1, test.name);
+
+        if (test.num_iterations.has_value()) {
+            log_info(tt::LogTest, "  Iterations: {}", test.num_iterations.value());
+        }
+
+        log_info(
+            tt::LogTest,
+            "  Memory Config: fifo_size={}, page_size={}, data_size={}",
+            test.memory_config.fifo_size,
+            test.memory_config.page_size,
+            test.memory_config.data_size);
+
+        // Print sockets
+        log_info(tt::LogTest, "  Sockets: {} defined", test.sockets.size());
+        for (size_t socket_idx = 0; socket_idx < test.sockets.size(); ++socket_idx) {
+            const auto& socket = test.sockets[socket_idx];
+            log_info(tt::LogTest, "    Socket {}: {} connections", socket_idx + 1, socket.connections.size());
+            log_info(
+                tt::LogTest, "      Sender Rank: {}, Receiver Rank: {}", *socket.sender_rank, *socket.receiver_rank);
+
+            // Print connection details
+            for (size_t conn_idx = 0; conn_idx < socket.connections.size(); ++conn_idx) {
+                const auto& connection = socket.connections[conn_idx];
+                log_info(
+                    tt::LogTest,
+                    "      Connection {}: [{}, {}] -> [{}, {}]",
+                    conn_idx + 1,
+                    connection.sender.mesh_coord[0],
+                    connection.sender.mesh_coord[1],
+                    connection.receiver.mesh_coord[0],
+                    connection.receiver.mesh_coord[1]);
+            }
+        }
+    }
+
+    log_info(tt::LogTest, "=== End Parsed Configuration ===");
 }
 
 void MeshSocketYamlParser::throw_parse_error(const std::string& message, const YAML::Node& node) {
