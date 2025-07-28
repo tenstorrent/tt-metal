@@ -15,7 +15,7 @@ MESH_DEVICE_STATE_DICT_KEY = "mesh_device"
 WeightConfig = dict[str, "WeightConfig | str"]
 
 _PRIMITIVE_COPYABLE_TYPES = bool | int | float | complex | str | bytes | None | Enum
-# In general, we require ModelConfig to be deepcopyable
+# In general, we require ModelConfig to be serializable (NOTE: mesh device and classes that hold references to the objects on it are NOT serializable).
 ModelPrefillConfig = dict[str, "ModelPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"] | OpConfigBase
 ModelDecodeConfig = dict[str, "ModelDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"] | OpConfigBase
 
