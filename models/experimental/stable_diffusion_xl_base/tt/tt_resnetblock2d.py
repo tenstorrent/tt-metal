@@ -200,16 +200,6 @@ class TtResnetBlock2D(nn.Module):
         if hidden_states.memory_config().memory_layout != self.conv1_config.shard_layout:
             hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
 
-        if C == 1920 and H == 32:
-            mem_cfg = ttnn.create_sharded_memory_config(
-                shape=(204, 256),
-                core_grid=ttnn.CoreGrid(x=8, y=8),
-                strategy=ttnn.ShardStrategy.BLOCK,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
-
         if self.split_conv:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
             hidden_states, [C, H, W], [self.tt_conv1_weights, self.tt_conv1_bias] = split_conv2d(
