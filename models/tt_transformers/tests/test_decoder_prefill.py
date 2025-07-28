@@ -141,7 +141,7 @@ def test_decoder_inference(
 
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
-        pt_decode_input = (torch.rand(batch_size, max_seq_len, model_args.dim, dtype=torch.bfloat16) * 2) - 1
+        pt_decode_input = (torch.rand(batch_size, max_seq_len, model_args.dim) * 2) - 1
         tt_decode_input = pt_decode_input.clone()
         decode_input = model_args.prepare_residual_tensor_prefill(
             tt_decode_input,
