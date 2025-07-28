@@ -184,12 +184,12 @@ ALWI void asin_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(asin, true)); }
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void atan_tile(uint32_t idst) { MATH(SFPU_UNARY_KERNEL_INIT(atan, true)); }
+ALWI void atan_tile(uint32_t idst) { MATH(SFPU_UNARY_NO_PARAM_KERNEL(atan, RC, true, idst)); }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void atan_tile_init() { MATH(SFPU_UNARY_NO_PARAM_KERNEL(atan, RC, true, idst)); }
+ALWI void atan_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(atan, true)); }
 
 // clang-format off
 /**
@@ -205,11 +205,11 @@ ALWI void atan_tile_init() { MATH(SFPU_UNARY_NO_PARAM_KERNEL(atan, RC, true, ids
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void acos_tile(uint32_t idst) { MATH(SFPU_UNARY_KERNEL_INIT(acos, true)); }
+ALWI void acos_tile(uint32_t idst) { MATH(SFPU_UNARY_NO_PARAM_KERNEL(acos, RC, true, idst)); }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void acos_tile_init() { MATH(SFPU_UNARY_NO_PARAM_KERNEL(acos, RC, true, idst)); }
+ALWI void acos_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(acos, true)); }
 
 }  // namespace ckernel
