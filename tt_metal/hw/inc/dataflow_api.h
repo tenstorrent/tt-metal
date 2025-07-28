@@ -2010,8 +2010,8 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
 
     WAYPOINT("NWPW");
     ncrisc_noc_set_transaction_id(noc, cmd_buf, trid);
-    ncrisc_noc_write_with_state<noc_mode, update_counter, !posted>(
-        noc, cmd_buf, src_local_l1_addr, dst_local_l1_addr, size, trid);
+    ncrisc_noc_write_with_state<noc_mode, !posted, update_counter>(
+        noc, cmd_buf, src_local_l1_addr, dst_local_l1_addr, size);
     WAYPOINT("NWPD");
 }
 
