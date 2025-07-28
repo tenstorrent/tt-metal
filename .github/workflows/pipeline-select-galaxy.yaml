@@ -25,7 +25,7 @@ on:
           - TSan
         default: "Release"
       extra-tag: # set in-service and topology-6u by default
-        description: "You can specify topology with 'topology-6u' or 'config-tg' and specific machine."
+        description: "You can specify only one topology, 'topology-6u' or 'config-tg'. Default is config-tg."
         required: true
         type: string
         default: "in-service,config-tg"
