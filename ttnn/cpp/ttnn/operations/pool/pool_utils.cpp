@@ -159,10 +159,6 @@ uint32_t calculate_L1_usage(
 
     const bool is_blackhole = tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE;
 
-    if (input_shape[3] < tt::constants::TILE_WIDTH) {
-        TT_FATAL(input_shape[3] == 16, "Error");
-    }
-
     // CBs
     uint32_t multi_buffering_factor = 2;
 
