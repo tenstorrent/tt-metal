@@ -21,6 +21,12 @@ def randomize_tensor(tensor_map, tensor_shape):
         torch_tensor = tensor_map[tensor_shape]
     else:
         torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+    # torch_tensor = torch.zeros(tensor_shape, dtype=torch.bfloat16)
+    # for n in range(tensor_shape[0]):
+    #     for c in range(tensor_shape[1]):
+    #         for h in range(tensor_shape[2]):
+    #             for w in range(tensor_shape[3]):
+    #                 torch_tensor[n, c, h, w] = h * tensor_shape[3] + w
     return torch_tensor
 
 
