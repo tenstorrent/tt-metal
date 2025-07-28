@@ -1186,6 +1186,18 @@ void DeviceProfiler::serializeJsonNocTraces(
                     phys_eth_route_coord.x,
                     phys_eth_route_coord.y,
                     start_distance);
+                log_warning(
+                    tt::LogMetal,
+                    "fabric_event: {}",
+                    nlohmann::json(fabric_event).dump(2));
+                log_warning(
+                    tt::LogMetal,
+                    "fabric_routing_fields_event: {}",
+                    nlohmann::json(fabric_routing_fields_event).dump(2));
+                log_warning(
+                    tt::LogMetal,
+                    "local_noc_write_event: {}",
+                    nlohmann::json(local_noc_write_event).dump(2));
                 return std::nullopt;
             }
 
@@ -1545,7 +1557,7 @@ void DeviceProfiler::dumpResults(
     }
 
     // serialize noc traces only in normal state, to avoid overwriting individual trace files
-    if (state == ProfilerDumpState::NORMAL && rtoptions.get_profiler_noc_events_enabled()) {
+    if ((state == ProfilerDumpState::NORMAL || state == ProfilerDumpState::LAST_FD_DUMP) && rtoptions.get_profiler_noc_events_enabled()) {
         serializeJsonNocTraces(noc_trace_json_log, rpt_path, device_id, routing_lookup);
         dumpClusterCoordinatesAsJson(std::filesystem::path(rpt_path) / "cluster_coordinates.json");
     }

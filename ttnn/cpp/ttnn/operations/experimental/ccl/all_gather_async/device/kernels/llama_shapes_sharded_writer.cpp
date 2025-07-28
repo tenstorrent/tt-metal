@@ -10,6 +10,7 @@
 #include "minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
+#include "tt_metal/tools/profiler/experimental/fabric_event_profiler.hpp"
 
 using address_t = uint32_t;
 
@@ -135,6 +136,7 @@ void kernel_main() {
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
         pkt_hdr->to_chip_multicast(
             tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_forward)});
+        RECORD_FABRIC_HEADER(pkt_hdr);
         fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
@@ -143,6 +145,7 @@ void kernel_main() {
         pkt_hdr->to_chip_multicast(
             tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_backward)});
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+        RECORD_FABRIC_HEADER(pkt_hdr);
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
