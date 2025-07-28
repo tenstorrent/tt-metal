@@ -178,6 +178,8 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
             postprocess = unary::UnaryOpType::GELU;
             break;
         case BinaryOpType::LOGICAL_AND:
+            process_lhs = unary::UnaryOpType::NEZ;
+            process_rhs = unary::UnaryOpType::NEZ;
             binary_op = EnumT::MUL;
             postprocess = unary::UnaryOpType::NEZ;
             break;
