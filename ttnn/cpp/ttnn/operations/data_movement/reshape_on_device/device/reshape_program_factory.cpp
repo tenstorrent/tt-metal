@@ -37,7 +37,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     uint32_t alignment = src0_is_dram ? hal::get_dram_alignment() : hal::get_l1_alignment();
@@ -52,7 +52,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
         tt::tt_metal::CircularBufferConfig cb_src1_config =
             tt::tt_metal::CircularBufferConfig(alignment, {{src1_cb_index, cb_data_format}})
                 .set_page_size(src1_cb_index, alignment);
-        auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+        tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
     }
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -253,7 +253,7 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_pages * max_page_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, page_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     // Reader compile-time args
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;

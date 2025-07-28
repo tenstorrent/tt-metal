@@ -98,7 +98,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(num_input_tiles * src1_single_tile_size, {{src1_cb_index, src1_cb_data_format}})
             .set_page_size(src1_cb_index, src1_single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, src1_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_device_cores, src1_cb_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = output_sharded ? num_tiles_per_shard : 2;

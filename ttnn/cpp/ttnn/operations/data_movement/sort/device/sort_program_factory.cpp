@@ -108,14 +108,14 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
         tt::tt_metal::CircularBufferConfig(
             cb_in_units * input_tensor_tile_size, {{input_tensor_cb_index, input_tensor_cb_data_format}})
             .set_page_size(input_tensor_cb_index, input_tensor_tile_size);
-    auto cb_input_tensor = tt::tt_metal::CreateCircularBuffer(program, core_range, input_tensor_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, core_range, input_tensor_cb_config);
 
     constexpr uint32_t index_tensor_cb_index = tt::CBIndex::c_1;
     const tt::tt_metal::CircularBufferConfig index_tensor_cb_config =
         tt::tt_metal::CircularBufferConfig(
             cb_in_units * index_tensor_tile_size, {{index_tensor_cb_index, index_tensor_cb_data_format}})
             .set_page_size(index_tensor_cb_index, index_tensor_tile_size);
-    auto cb_index_tensor = tt::tt_metal::CreateCircularBuffer(program, core_range, index_tensor_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, core_range, index_tensor_cb_config);
 
     constexpr uint32_t input_tensor_transposed_cb_index = tt::CBIndex::c_2;
     const tt::tt_metal::CircularBufferConfig input_tensor_transposed_cb_config =
@@ -138,7 +138,7 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
         tt::tt_metal::CircularBufferConfig(
             num_cb_unit * value_tensor_tile_size, {{value_tensor_cb_index, value_tensor_cb_data_format}})
             .set_page_size(value_tensor_cb_index, index_tensor_tile_size);
-    auto cb_value_tensor = tt::tt_metal::CreateCircularBuffer(program, core_range, value_tensor_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, core_range, value_tensor_cb_config);
 
     constexpr uint32_t index_tensor_output_cb_index = tt::CBIndex::c_5;
     const tt::tt_metal::CircularBufferConfig index_tensor_output_cb_config =
@@ -153,7 +153,7 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
     const tt::tt_metal::CircularBufferConfig synchronization_cb_config =
         tt::tt_metal::CircularBufferConfig(synchronization_cb_size, {{synchronization_cb_index, tt::DataFormat::UInt8}})
             .set_page_size(synchronization_cb_index, synchronization_cb_size);
-    auto cb_synchronization = tt::tt_metal::CreateCircularBuffer(program, core_range, synchronization_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, core_range, synchronization_cb_config);
 
     // Kernels
     const std::vector<uint32_t> reader_compile_time_args = {
@@ -324,7 +324,6 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
 
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
-    const auto tile_hw = tile_width * tile_height;
 
     const auto input_shape = tensor_args.input_tensor.padded_shape();
     const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tile_height;
@@ -447,14 +446,14 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         tt::tt_metal::CircularBufferConfig(
             cb_scale_factor * input_tensor_tile_size, {{input_tensor_cb_index, input_tensor_cb_data_format}})
             .set_page_size(input_tensor_cb_index, input_tensor_tile_size);
-    const auto cb_input_tensor = tt::tt_metal::CreateCircularBuffer(program, core_range, input_tensor_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, core_range, input_tensor_cb_config);
 
     constexpr uint32_t index_tensor_cb_index = tt::CBIndex::c_1;
     const tt::tt_metal::CircularBufferConfig index_tensor_cb_config =
         tt::tt_metal::CircularBufferConfig(
             cb_scale_factor * index_tensor_tile_size, {{index_tensor_cb_index, index_tensor_cb_data_format}})
             .set_page_size(index_tensor_cb_index, index_tensor_tile_size);
-    const auto cb_index_tensor = tt::tt_metal::CreateCircularBuffer(program, core_range, index_tensor_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, core_range, index_tensor_cb_config);
 
     constexpr uint32_t input_tensor_transposed_cb_index = tt::CBIndex::c_2;
     const tt::tt_metal::CircularBufferConfig input_tensor_transposed_cb_config =
@@ -479,7 +478,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         tt::tt_metal::CircularBufferConfig(
             cb_scale_factor * value_tensor_tile_size, {{value_tensor_cb_index, value_tensor_cb_data_format}})
             .set_page_size(value_tensor_cb_index, index_tensor_tile_size);
-    const auto cb_value_tensor = tt::tt_metal::CreateCircularBuffer(program, core_range, value_tensor_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, core_range, value_tensor_cb_config);
 
     constexpr uint32_t index_tensor_output_cb_index = tt::CBIndex::c_5;
     const tt::tt_metal::CircularBufferConfig index_tensor_output_cb_config =
@@ -542,7 +541,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
 
     // Semaphores
     const uint32_t semaphore_exchange_readers = CreateSemaphore(program, core_range, 0);
-    const uint32_t semaphore_exchange_writers = CreateSemaphore(program, core_range, 0);
+    CreateSemaphore(program, core_range, 0);
     const uint32_t semaphore_barrier = CreateSemaphore(program, core_range, 0);
 
     // Kernels
@@ -812,14 +811,14 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
         tt::tt_metal::CircularBufferConfig(
             buffer_scale_factor * input_tensor_tile_size, {{input_tensor_cb_index, input_tensor_cb_data_format}})
             .set_page_size(input_tensor_cb_index, input_tensor_tile_size);
-    auto cb_input_tensor = tt::tt_metal::CreateCircularBuffer(program, all_core_set, input_tensor_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_core_set, input_tensor_cb_config);
 
     constexpr uint32_t index_tensor_cb_index = tt::CBIndex::c_1;
     const tt::tt_metal::CircularBufferConfig index_tensor_cb_config =
         tt::tt_metal::CircularBufferConfig(
             buffer_scale_factor * index_tensor_tile_size, {{index_tensor_cb_index, index_tensor_cb_data_format}})
             .set_page_size(index_tensor_cb_index, index_tensor_tile_size);
-    auto cb_index_tensor = tt::tt_metal::CreateCircularBuffer(program, all_core_set, index_tensor_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_core_set, index_tensor_cb_config);
 
     constexpr uint32_t input_tensor_transposed_cb_index = tt::CBIndex::c_2;
     const tt::tt_metal::CircularBufferConfig input_tensor_transposed_cb_config =
@@ -844,7 +843,7 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
         tt::tt_metal::CircularBufferConfig(
             buffer_scale_factor * value_tensor_tile_size, {{input_tensor_output_cb_index, value_tensor_cb_data_format}})
             .set_page_size(input_tensor_output_cb_index, value_tensor_tile_size);
-    auto cb_value_tensor = tt::tt_metal::CreateCircularBuffer(program, all_core_set, input_tensor_output_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_core_set, input_tensor_output_cb_config);
 
     constexpr uint32_t index_tensor_output_cb_index = tt::CBIndex::c_5;
     const tt::tt_metal::CircularBufferConfig index_tensor_output_cb_config =

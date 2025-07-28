@@ -67,7 +67,7 @@ PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOpe
         tt::tt_metal::CircularBufferConfig(
             num_input_pages_to_read * input_rm_page_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, input_rm_page_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t N = operation_attributes.dims.size();
 
@@ -217,20 +217,20 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
         tt::tt_metal::CircularBufferConfig(
             num_input_pages_to_read * input_cb_page_size * x_block_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, input_cb_page_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     tt::tt_metal::CircularBufferConfig cb_src1_config =
         tt::tt_metal::CircularBufferConfig(
             num_input_pages_to_read * output_cb_page_size * w_block_size, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, output_cb_page_size);
-    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     tt::tt_metal::CircularBufferConfig cb_src2_config =
         tt::tt_metal::CircularBufferConfig(
             num_input_pages_to_read * x_block_size * w_block_size * input_tensor.element_size(),
             {{src2_cb_index, cb_data_format}})
             .set_page_size(src2_cb_index, x_block_size * w_block_size * input_tensor.element_size());
-    auto cb_src2 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
 
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {

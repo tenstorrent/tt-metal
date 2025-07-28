@@ -280,10 +280,10 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
 
     // create circular buffers
-    auto input_tensor_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_input_tensor_config);
-    auto indices_tensor_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_indices_tensor_config);
-    auto mapping_tensor_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_mapping_tensor_config);
-    auto packet_header_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, packet_header_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_input_tensor_config);
+    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_indices_tensor_config);
+    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_mapping_tensor_config);
+    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, packet_header_cb_config);
     auto send_preparation_buffer_cb =
         tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_send_preparation_buffer_config);
     if (operation_attributes.impl == AllToAllTransferType::FullPacket) {

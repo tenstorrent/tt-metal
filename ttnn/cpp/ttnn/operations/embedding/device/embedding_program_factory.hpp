@@ -169,13 +169,13 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         tt_metal::CircularBufferConfig(
             buffering * num_tiles_per_block * weights_single_tile_size, {{src0_cb_index, weights_cb_data_format}})
             .set_page_size(src0_cb_index, weights_single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     constexpr uint32_t src1_cb_index = CBIndex::c_1;
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(TILE_HEIGHT * input_element_size_bytes, {{src1_cb_index, input_cb_data_format}})
             .set_page_size(src1_cb_index, TILE_HEIGHT * input_element_size_bytes);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     constexpr uint32_t output_cb_index = CBIndex::c_2;
     uint32_t output_cb_size;
@@ -198,13 +198,13 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         tt_metal::CircularBufferConfig cb_src2_config =
             tt_metal::CircularBufferConfig(cache_page_size, {{src2_cb_index, weights_cb_data_format}})
                 .set_page_size(src2_cb_index, cache_page_size);
-        auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
     } else if (embeddings_type == EmbeddingsType::BINARY) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
         tt_metal::CircularBufferConfig cb_src2_config =
             tt_metal::CircularBufferConfig(2 * cache_page_size, {{src2_cb_index, weights_cb_data_format}})
                 .set_page_size(src2_cb_index, cache_page_size);
-        auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
     }
     uint32_t weight_block_size;
     if (output_sharded) {
@@ -246,7 +246,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
             uint32_t(num_blocks_per_core_group_1),  // per_core_block_cnt
             uint32_t(num_tiles_per_block)           // per_core_block_tile_cnt
         };
-        auto tilize_kernel_id_1 = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp",
             core_group_1,
@@ -260,7 +260,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
             uint32_t(num_blocks_per_core_group_2),  // per_core_block_cnt
             uint32_t(num_tiles_per_block)           // per_core_block_tile_cnt
         };
-        auto tilize_kernel_id_2 = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize.cpp",
             core_group_2,
@@ -469,7 +469,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(block_height * index_page_size, {{src1_cb_index, input_cb_data_format}})
             .set_page_size(src1_cb_index, block_height * index_page_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     constexpr uint32_t src2_cb_index = CBIndex::c_2;
     if (embeddings_type == EmbeddingsType::PADDED) {
@@ -477,13 +477,13 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
         tt_metal::CircularBufferConfig cb_src2_config =
             tt_metal::CircularBufferConfig(cache_page_size, {{src2_cb_index, weights_cb_data_format}})
                 .set_page_size(src2_cb_index, cache_page_size);
-        auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
     } else if (embeddings_type == EmbeddingsType::BINARY) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
         tt_metal::CircularBufferConfig cb_src2_config =
             tt_metal::CircularBufferConfig(2 * cache_page_size, {{src2_cb_index, weights_cb_data_format}})
                 .set_page_size(src2_cb_index, cache_page_size);
-        auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
     }
 
     // Create Kernels
@@ -649,14 +649,12 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     uint32_t output_page_size = output.padded_shape()[-1] * output_element_size_bytes;
 
     // weights shape is [1, 1, num_embeddings, num_dim]
-    uint32_t num_embeddings = weights.padded_shape()[-2];
 
     uint32_t batch_size = a.logical_shape()[0];  // num rows
     uint32_t num_cols = a.logical_shape()[-1];
     uint32_t volume = num_cols * batch_size;
 
     // setup problem and grid size
-    uint32_t start_core_x = 0;
 
     uint32_t problem_size = volume;
 
@@ -685,14 +683,14 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(2 * rounded_weight_page_size, {{src0_cb_index, weights_cb_data_format}})
             .set_page_size(src0_cb_index, rounded_weight_page_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     constexpr uint32_t src1_cb_index = CBIndex::c_1;
     uint32_t index_page_size = round_up_to_mul32(input_element_size_bytes);
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(FACE_HEIGHT * index_page_size, {{src1_cb_index, input_cb_data_format}})
             .set_page_size(src1_cb_index, FACE_HEIGHT * index_page_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     constexpr uint32_t src2_cb_index = CBIndex::c_2;
     if (embeddings_type == EmbeddingsType::PADDED) {
@@ -700,13 +698,13 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
         tt_metal::CircularBufferConfig cb_src2_config =
             tt_metal::CircularBufferConfig(cache_page_size, {{src2_cb_index, weights_cb_data_format}})
                 .set_page_size(src2_cb_index, cache_page_size);
-        auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
     } else if (embeddings_type == EmbeddingsType::BINARY) {
         uint32_t cache_page_size = round_up_to_mul32(weight_page_size);
         tt_metal::CircularBufferConfig cb_src2_config =
             tt_metal::CircularBufferConfig(2 * cache_page_size, {{src2_cb_index, weights_cb_data_format}})
                 .set_page_size(src2_cb_index, cache_page_size);
-        auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
     }
 
     uint32_t output_cb_index = src0_cb_index;

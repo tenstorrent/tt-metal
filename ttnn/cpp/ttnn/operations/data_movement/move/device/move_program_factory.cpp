@@ -92,7 +92,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(size_per_l1_bank, {{cb_index, cb_data_format}})
             .set_page_size(cb_index, aligned_page_size);
-    auto cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
     auto semaphore_id = CreateSemaphore(program, all_cores, 0);
 

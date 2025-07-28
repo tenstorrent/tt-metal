@@ -461,7 +461,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             num_packet_headers_storable * packet_header_size_bytes * 2,
             {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    auto reserved_packet_header_CB_handle = CreateCircularBuffer(program, all_cores, cb_reserved_packet_header_config);
+    CreateCircularBuffer(program, all_cores, cb_reserved_packet_header_config);
 
     uint32_t updated_residual_index = tt::CBIndex::c_21;
     uint32_t original_input_index = tt::CBIndex::c_22;

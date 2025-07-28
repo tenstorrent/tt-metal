@@ -102,7 +102,7 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(
     tt::tt_metal::CircularBufferConfig src1_cb_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * input1_tile_size, {{src1_cb_index, b_df}})
             .set_page_size(src1_cb_index, input1_tile_size);
-    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
     auto src1_buffer = b.buffer();
     auto dst_buffer = output.buffer();

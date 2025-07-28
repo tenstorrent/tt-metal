@@ -97,7 +97,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
         tt_metal::CircularBufferConfig output_cb_out_config =
             tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, output_cb_data_format}})
                 .set_page_size(out_cb_index, output_page_size);
-        auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, output_cb_out_config);
     }
 
 
@@ -142,7 +142,7 @@ operation::ProgramWithCallbacks sharded_to_interleaved_multi_core(
     if (convert_df) {
         std::vector<uint32_t> compute_kernel_args = {num_units_per_shard};
 
-        auto eltwise_unary_kernel_group_1 = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp",
             all_cores,

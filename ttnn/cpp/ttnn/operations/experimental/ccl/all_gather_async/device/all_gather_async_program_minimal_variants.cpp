@@ -634,7 +634,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
+    CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in1;
     static constexpr auto num_packet_headers_storable = 8;

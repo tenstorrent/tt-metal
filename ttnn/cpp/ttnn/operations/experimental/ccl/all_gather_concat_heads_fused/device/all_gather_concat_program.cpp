@@ -153,11 +153,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     log_debug(tt::LogOp, "input_tensor_shard_num_pages: {}", input_tensor_shard_num_pages);
 
     // concat info
-    const auto& input_concat_shape = temp_tensor.padded_shape();
     uint32_t single_tile_size =
         tt::tt_metal::detail::TileSize(tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()));
-
-    auto tile_shape = temp_tensor.tensor_spec().tile().get_tile_shape();
 
     auto face_shape = temp_tensor.tensor_spec().tile().get_face_shape();
     auto face_h = face_shape[0];
@@ -183,7 +180,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
+    CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in1;
     static constexpr auto num_packet_headers_storable = 8;
@@ -207,7 +204,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     tt::tt_metal::CircularBufferConfig cb_pre_tilize_config =
         tt::tt_metal::CircularBufferConfig(output_tensor.padded_shape()[-2] * row_size, {{pre_tilize_cb_index, df}})
             .set_page_size(pre_tilize_cb_index, single_tile_size);
-    auto cb_pre_tilize = tt::tt_metal::CreateCircularBuffer(program, q_cores, cb_pre_tilize_config);
+    tt::tt_metal::CreateCircularBuffer(program, q_cores, cb_pre_tilize_config);
 
     llama_config llama_configuration;
     std::vector<CoreRange> q_cores_vector;
@@ -289,7 +286,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
     std::vector<uint32_t> tilize_ct_args = {
         q_output_cb_index,
     };
-    auto tilize_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/"
         "tilize_writer.cpp",
@@ -301,7 +298,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_concat_llama_sharded(
                 (use_noc1_only) ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = tilize_ct_args});
 
-    auto tilize_compute_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/tilize_compute.cpp",
         q_cores_updated,

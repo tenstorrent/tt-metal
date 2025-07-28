@@ -352,8 +352,8 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
             .set_page_size(tt::CBIndex::c_24, page_size_output);
 
     CoreRange core({0, 0}, {0, 0});
-    auto cb_input_tensor = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
-    auto cb_output_tensor = tt::tt_metal::CreateCircularBuffer(program, core, cb_dst0_config);
+    tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, core, cb_dst0_config);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -894,7 +894,7 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(a.padded_shape().rank());
 

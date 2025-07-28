@@ -159,11 +159,11 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     auto sender_core = sender_cores.at(0);
 
     // create circular buffers
-    const auto input_cb_handle = CreateCircularBuffer(program, sender_core, cb_data_config);
-    const auto mapping_cb_handle = CreateCircularBuffer(program, sender_core, cb_mapping_tensor_config);
-    const auto local_experts_cb_handle = CreateCircularBuffer(program, sender_core, cb_local_experts_config);
-    const auto metadata_cb_handle = CreateCircularBuffer(program, sender_core, cb_metadata_config);
-    const auto client_interface_cb = CreateCircularBuffer(program, sender_core, client_interface_cb_config);
+    CreateCircularBuffer(program, sender_core, cb_data_config);
+    CreateCircularBuffer(program, sender_core, cb_mapping_tensor_config);
+    CreateCircularBuffer(program, sender_core, cb_local_experts_config);
+    CreateCircularBuffer(program, sender_core, cb_metadata_config);
+    CreateCircularBuffer(program, sender_core, client_interface_cb_config);
 
     const uint32_t flat_mesh_idx = mesh_coordinate[0] * mesh_view.num_cols() + mesh_coordinate[1];
 

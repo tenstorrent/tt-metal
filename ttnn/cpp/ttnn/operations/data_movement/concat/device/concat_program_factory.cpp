@@ -151,13 +151,11 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
 
     const auto in0_total_tiles_width = std::get<1>(num_tiles_for_each_input_shard[0]);
     const uint32_t cb_input0_transpose_id = cb_inputs.size() + 1;
-    CBHandle cb_input0_transpose = create_circular_buffer(
-        cb_input0_transpose_id, in0_total_tiles_width, bf16_tile_size, bf16_data_format, nullptr);
+    create_circular_buffer(cb_input0_transpose_id, in0_total_tiles_width, bf16_tile_size, bf16_data_format, nullptr);
 
     const auto in1_total_tiles_width = std::get<1>(num_tiles_for_each_input_shard[1]);
     const uint32_t cb_input1_transpose_id = cb_inputs.size() + 2;
-    CBHandle cb_input1_transpose = create_circular_buffer(
-        cb_input1_transpose_id, in1_total_tiles_width, bf16_tile_size, bf16_data_format, nullptr);
+    create_circular_buffer(cb_input1_transpose_id, in1_total_tiles_width, bf16_tile_size, bf16_data_format, nullptr);
 
     const auto out_total_tiles_width = in0_total_tiles_width + in1_total_tiles_width;
     const uint32_t cb_concat_id = cb_inputs.size() + 3;
@@ -183,13 +181,13 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
         tile_size,
         groups,
     };
-    tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
         "reader_height_sharded_width_concat_two_tensors_tiled.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(compile_time_args_0));
-    tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
         "writer_height_sharded_width_concat_two_tensors_tiled.cpp",
@@ -199,7 +197,7 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
     // TODO: Skip the tile transpose in compute kernel if the following condition is true:
     // >> (input_tensors[0].padded_shape()[-1] / groups % TILE_WIDTH == 0
     // >> && input_tensors[1].padded_shape()[-1] / groups % TILE_WIDTH == 0)
-    tt_metal::KernelHandle compute_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/compute/"
         "height_sharded_width_concat_two_tensors.cpp",

@@ -145,7 +145,7 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
 
-    auto untilize_kernel_id = CreateKernel(
+    CreateKernel(
         program,
         compute_kernel,
         all_cores,
@@ -339,7 +339,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
         log_debug(tt::LogOp, "Using fast pack untilize.");
     }
     if (core_range.ranges().size() > 0) {
-        auto untilize_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             compute_kernel,
             core_range,
@@ -347,7 +347,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
                 .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args, .defines = compute_kernel_defines});
     }
     if (core_range_cliff.ranges().size() > 0) {
-        auto untilize_cliff_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             compute_kernel,
             core_range_cliff,
@@ -548,7 +548,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     }
 
     if (has_cliff_col) {
-        auto [src3_cb_index, cb_src3] = create_cb(
+        create_cb(
             tt::CBIndex::c_0,
             program,
             cliff_col_core_range,
@@ -556,7 +556,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
             single_block_size,
             input_cb_data_format);
 
-        auto [output3_cb_index, cb_output3] = create_cb(
+        create_cb(
             tt::CBIndex::c_16,
             program,
             cliff_col_core_range,
@@ -610,7 +610,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     // compute
 
     if (core_range.size() > 0) {
-        auto untilize_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             core_range,
@@ -619,7 +619,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
                 .compile_args = {single_block_size, single_block_size, third_dim}});
     }
     if (has_cliff_col && has_cliff_row) {
-        auto tilize_col_row_cliff_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_col_row_core_range,
@@ -628,7 +628,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
                 .compile_args = {single_block_size_cliff_col, single_block_size_cliff_row, third_dim}});
     }
     if (has_cliff_row) {
-        auto tilize_row_cliff_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_row_core_range,
@@ -638,7 +638,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     }
 
     if (has_cliff_col) {
-        auto tilize_col_cliff_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_col_core_range,
@@ -828,7 +828,7 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
     }
-    KernelHandle untilize_kernel_id = CreateKernel(
+    CreateKernel(
         program,
         compute_kernel,
         shard_spec.grid,
@@ -1478,7 +1478,7 @@ operation::ProgramWithCallbacks untilize_single_core(
         (uint32_t)num_blocks, (uint32_t)num_tiles_per_block, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
 
     // Compute kernel
-    auto untilize_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         compute_kernel,
         core,

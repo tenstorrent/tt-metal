@@ -49,7 +49,6 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
     tt_metal::Buffer* src0_buffer = a.buffer();
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::IDevice* device = a.device();
 
     tt_metal::Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device");
@@ -59,20 +58,20 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
             .set_page_size(src0_cb_index, src0_single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     tt_metal::CircularBufferConfig cb_scaler_config =
         tt_metal::CircularBufferConfig(
             num_input_tiles * scaler_single_tile_size, {{CBIndex::c_2, scaler_cb_data_format}})
             .set_page_size(CBIndex::c_2, scaler_single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_scaler_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_scaler_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_3;
     uint32_t num_output_tiles = 2;
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
             .set_page_size(output_cb_index, dst_single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     bfloat16 bfloat_scaler_value = bfloat16(scaler);
     uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
@@ -101,7 +100,7 @@ operation::ProgramWithCallbacks reduce_single_core_hw(
         NC,  // NC
     };
 
-    auto reduce_compute_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_hw.cpp",
         core,

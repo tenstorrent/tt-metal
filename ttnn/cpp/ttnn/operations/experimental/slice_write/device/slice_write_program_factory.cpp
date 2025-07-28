@@ -672,7 +672,6 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
     const ttnn::Shape& output_tensor_end) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::IDevice* device = input.device();
     const auto& input_padded_shape = input.padded_shape();
 
     auto input_shape = input.logical_shape();
@@ -816,7 +815,6 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = input.device();
-    const auto& output_padded_shape = output.padded_shape();
     const auto& input_padded_shape = input.padded_shape();
 
     uint32_t num_unpadded_sticks = input.physical_volume() / input.padded_shape()[-1];
@@ -877,7 +875,7 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_read_per_barrier * 2 * cb_page_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, cb_page_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_cb_index, src0_is_dram};
     std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram};

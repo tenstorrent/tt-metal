@@ -211,7 +211,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     auto [sender_buffer, header_buffer] =
         all_to_all_detail::create_sender_buffers(program, sender_worker_core_range, cb_pages, page_size, data_format);
-    auto receiver_buffer = all_to_all_detail::create_receiver_buffer(
+    all_to_all_detail::create_receiver_buffer(
         program, receiver_worker_core_range, pages_per_packet, page_size, data_format);
 
     const auto [chunk_granularity, chunk_num_tiles, num_chunks_per_shard] = all_to_all_detail::calculate_chunk_params(

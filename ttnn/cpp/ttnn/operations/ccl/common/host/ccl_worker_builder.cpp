@@ -848,7 +848,7 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
         num_packet_headers_storable * packet_header_size_bytes,
         packet_header_size_bytes,
         worker_core_range);
-    auto reserved_packet_header_CB_handle = CreateCircularBuffer(program, worker_core_range, cb_config);
+    CreateCircularBuffer(program, worker_core_range, cb_config);
 
     {  // CT ARGS
         std::vector<uint32_t> ct_args = {my_chip_id.value_or(0xFFFF), reserved_packet_header_CB_index};

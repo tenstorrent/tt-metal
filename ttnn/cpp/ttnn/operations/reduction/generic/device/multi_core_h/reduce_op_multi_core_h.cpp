@@ -93,7 +93,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
     tt_metal::CircularBufferConfig cb_scaler_config =
         tt_metal::CircularBufferConfig(1 * scaler_single_tile_size, {{scaler_cb_index, scaler_cb_data_format}})
             .set_page_size(scaler_cb_index, scaler_single_tile_size);
-    auto cb_scaler = tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_scaler_config);
 
     uint32_t output_cb_index = CBIndex::c_3;
     CBHandle cb_output;
@@ -173,7 +173,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
         chunk_size,                 // Column Chunk Size
     };
 
-    auto reduce_compute_kernel_group_1_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp",
         core_group_1,
@@ -191,7 +191,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             chunk_size,                 // Column Chunk Size
         };
 
-        auto reduce_compute_kernel_group_2_id = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h.cpp",
             core_group_2,

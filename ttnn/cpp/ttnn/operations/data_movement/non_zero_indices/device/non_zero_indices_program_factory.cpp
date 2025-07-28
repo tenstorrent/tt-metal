@@ -46,19 +46,19 @@ operation::ProgramWithCallbacks non_zero_indices_single_core(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(2 * rounded_page_size, {{input_cb_index, input_cb_data_format}})
             .set_page_size(input_cb_index, rounded_page_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     tt::tt_metal::CircularBufferConfig cb_dst0_config =
         tt::tt_metal::CircularBufferConfig(2 * 32, {{output_cb_index_0, output_cb_data_format}})
             .set_page_size(output_cb_index_0, 32);
-    auto cb_dst0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_dst0_config);
+    tt::tt_metal::CreateCircularBuffer(program, core, cb_dst0_config);
 
     uint32_t dst_page_size = actual_elements * 4;
     uint32_t dst_rounded_page_size = round_up_to_mul32(dst_page_size);
     tt::tt_metal::CircularBufferConfig cb_dst1_config =
         tt::tt_metal::CircularBufferConfig(2 * dst_rounded_page_size, {{output_cb_index_1, output_cb_data_format}})
             .set_page_size(output_cb_index_1, dst_rounded_page_size);
-    auto cb_dst1 = tt::tt_metal::CreateCircularBuffer(program, core, cb_dst1_config);
+    tt::tt_metal::CreateCircularBuffer(program, core, cb_dst1_config);
 
     std::map<std::string, std::string> defines;
     defines["NUM_BYTES"] = std::to_string(input.element_size());

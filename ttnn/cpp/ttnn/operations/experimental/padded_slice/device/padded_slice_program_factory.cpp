@@ -677,7 +677,7 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         alignment *= 2;
     }
 
-    auto cb_input_tuple = tt::tt_metal::create_cb(
+    tt::tt_metal::create_cb(
         cb_input_index,
         program,
         total_cores,
@@ -685,7 +685,7 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         cb_buffer_size * num_tiles_per_channel,
         input_cb_data_format);
 
-    auto cb_untilized_tuple = tt::tt_metal::create_cb(
+    tt::tt_metal::create_cb(
         cb_untilized_index,
         program,
         total_cores,

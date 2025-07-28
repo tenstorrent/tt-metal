@@ -62,7 +62,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}}).set_page_size(cb_id, cb_pagesize);
-    auto cb = tt::tt_metal::CreateCircularBuffer(program, cores, cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, cores, cb_config);
 
     bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
     bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
@@ -210,14 +210,14 @@ operation::ProgramWithCallbacks pad_tile(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t src1_cb_index = 1;  // For pad buffer
     uint32_t num_pad_tiles = 1;
     tt::tt_metal::CircularBufferConfig cb_src1_config =
         tt::tt_metal::CircularBufferConfig(num_pad_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, single_tile_size);
-    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
@@ -513,7 +513,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
     tt::DataFormat in_df = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}}).set_page_size(cb_id, cb_pagesize);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
     bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
     bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
@@ -842,7 +842,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     tt::tt_metal::CircularBufferConfig cb_src1_config =
         tt::tt_metal::CircularBufferConfig(stick_size_padded_DRAM_aligned, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, stick_size_padded_DRAM_aligned);
-    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
 
     bool unaligned = stick_size_padded_aligned % hal::get_dram_alignment() != 0;
     if (stick_size_padded_front != 0 || unaligned) {
@@ -850,7 +850,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
         tt::tt_metal::CircularBufferConfig cb_src2_config =
             tt::tt_metal::CircularBufferConfig(stick_size_padded_DRAM_aligned, {{src2_cb_index, cb_data_format}})
                 .set_page_size(src2_cb_index, stick_size_padded_DRAM_aligned);
-        auto cb_src2 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src2_config);
+        tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src2_config);
     }
 
     Buffer* src0_buffer = a.buffer();
@@ -937,7 +937,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
             buffer_reader_writer_async_factor * cb_npages * stick_size_padded_aligned,
             {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, stick_size_padded_aligned);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     auto override_runtime_args_callback =
         [reader_kernel_id, writer_kernel_id, compute_with_storage_grid_size, input_tensor_start](
@@ -1271,7 +1271,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
     tt::tt_metal::CircularBufferConfig cb_src1_config =
         tt::tt_metal::CircularBufferConfig(stick_size_padded, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, stick_size_padded);
-    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
@@ -1405,7 +1405,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     tt::tt_metal::CircularBufferConfig cb_pad_val_config =
         tt::tt_metal::CircularBufferConfig(padded_stick_bytes, {{pad_val_cb_index, pad_val_cb_data_format}})
             .set_page_size(pad_val_cb_index, padded_stick_bytes);
-    auto pad_val_cb = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_pad_val_config);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_pad_val_config);
 
     uint32_t W_padding_front_bytes = input_tensor_start[-3] * input_tensor.element_size();
 

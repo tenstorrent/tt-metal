@@ -603,7 +603,7 @@ void generate_sender_worker_kernels(
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_size, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, page_size);
-    CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_core, cb_src0_config);
+    CreateCircularBuffer(program, worker_core, cb_src0_config);
     auto sender_worker_reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/ttnn/unit_tests/gtests/ccl/kernels/fabric_erisc_datamover_sender_worker_reader.cpp",
@@ -870,13 +870,13 @@ void generate_multi_input_test_worker_kernels_for_local_tensor_write(
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_size, {{first_cb_index, df}})
                 .set_page_size(first_cb_index, page_size);
-        CBHandle cb0 = CreateCircularBuffer(program, worker_core, cb_src0_config);
+        CreateCircularBuffer(program, worker_core, cb_src0_config);
     }
     {
         tt_metal::CircularBufferConfig cb_src1_config =
             tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_size, {{second_cb_index, df}})
                 .set_page_size(second_cb_index, page_size);
-        CBHandle cb1 = CreateCircularBuffer(program, worker_core, cb_src1_config);
+        CreateCircularBuffer(program, worker_core, cb_src1_config);
     }
 
     generate_multi_input_test_worker_reader_kernel(
@@ -1881,7 +1881,7 @@ bool RunPipelinedWorkersTest(
             tt_metal::CircularBufferConfig(
                 cb_packet_size_in_pages * num_packets_per_cb * page_size_bytes, {{cb_index, data_format}})
                 .set_page_size(cb_index, page_size_bytes);
-        CBHandle sender_workers_cb = CreateCircularBuffer(program, pipeline_stage_worker_cores[stage], cb_config);
+        CreateCircularBuffer(program, pipeline_stage_worker_cores[stage], cb_config);
     }
 
     // Generate the reader semaphores
@@ -2918,7 +2918,7 @@ void Run1DFabricPacketSendTest(
             tt_metal::CircularBufferConfig cb_src1_config =
                 tt_metal::CircularBufferConfig(max_packet_payload_size_bytes, {{source_payload_cb_index, cb_df}})
                     .set_page_size(source_payload_cb_index, max_packet_payload_size_bytes);
-            CBHandle sender_workers_payload_cb = CreateCircularBuffer(program, worker_cores, cb_src1_config);
+            CreateCircularBuffer(program, worker_cores, cb_src1_config);
 
             std::vector<uint32_t> worker_ct_args = {params.line_sync, params.line_sync};
 
@@ -3952,7 +3952,7 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
         tt_metal::CircularBufferConfig cb_src1_config =
             tt_metal::CircularBufferConfig(packet_payload_size_bytes, {{source_payload_cb_index, cb_df}})
                 .set_page_size(source_payload_cb_index, packet_payload_size_bytes);
-        CBHandle sender_workers_payload_cb = CreateCircularBuffer(program, worker_cores, cb_src1_config);
+        CreateCircularBuffer(program, worker_cores, cb_src1_config);
 
         std::vector<uint32_t> worker_ct_args = {line_sync, line_sync};
 

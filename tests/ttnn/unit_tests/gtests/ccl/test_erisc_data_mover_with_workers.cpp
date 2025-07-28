@@ -156,7 +156,7 @@ void generate_receiver_worker_kernels(
         tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_size, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, page_size);
 
-    tt_metal::CBHandle receiver_workers_cb = CreateCircularBuffer(program, worker_core, cb_src0_config);
+    CreateCircularBuffer(program, worker_core, cb_src0_config);
     std::vector<uint32_t> receiver_worker_writer_compile_args{
         dest_is_dram,  //
         num_pages,     //
@@ -270,7 +270,7 @@ void generate_sender_worker_kernels(
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_size, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, page_size);
-    tt_metal::CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_core, cb_src0_config);
+    CreateCircularBuffer(program, worker_core, cb_src0_config);
     auto sender_worker_reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/ttnn/unit_tests/gtests/ccl/kernels/erisc_datamover_sender_worker_reader.cpp",

@@ -1799,7 +1799,7 @@ static void initialize_op_internal_tensor_syncs(
     auto all_partial_reducer_cores = worker_cores.partial_reducers[LineDirection::FORWARD];
     all_partial_reducer_cores = all_partial_reducer_cores.merge(worker_cores.partial_reducers[LineDirection::BACKWARD]);
 
-    auto partial_reducers_in1_sem_id = CreateSemaphore(program, all_partial_reducer_cores, 0, CoreType::WORKER);
+    CreateSemaphore(program, all_partial_reducer_cores, 0, CoreType::WORKER);
     for (auto direction : {LineDirection::FORWARD, LineDirection::BACKWARD}) {
         all_tensors.input_tensor_from_remote_sync[direction] = TensorSyncSpec{};
         for (auto const& worker_core : partial_reducer_cores[direction]) {

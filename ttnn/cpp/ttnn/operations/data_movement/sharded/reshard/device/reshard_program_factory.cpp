@@ -371,7 +371,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
             tt::tt_metal::CircularBufferConfig(
                 remote_units_per_shard * remote_unit_size_padded, {{cb_scratch_index, data_format}})
                 .set_page_size(cb_scratch_index, unit_size);
-        auto cb_scratch = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_scratch_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_scratch_config);
     }
 
     uint32_t remote_core_idx = 0;

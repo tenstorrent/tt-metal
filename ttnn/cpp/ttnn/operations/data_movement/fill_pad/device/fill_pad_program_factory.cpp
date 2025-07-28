@@ -53,7 +53,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_page_size * 2, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, cb_page_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     bool src_is_dram = tens_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
