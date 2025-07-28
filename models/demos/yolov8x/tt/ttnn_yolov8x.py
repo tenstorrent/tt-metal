@@ -116,6 +116,8 @@ class TtConv:
 
         if self.block_shard:
             conv_config.shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            conv_config.enable_act_double_buffer = True
+            conv_config.enable_weights_double_buffer = True
 
         if self.width_shard:
             conv_config.shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
