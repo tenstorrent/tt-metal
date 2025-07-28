@@ -39,16 +39,21 @@ def test_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
+    state_dict_ref = model_args.load_state_dict_ref()
 
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {
         "weight": state_dict[f"{state_dict_prefix}output.weight"],
     }
+    partial_state_dict_ref = {
+        "weight": state_dict_ref[f"{state_dict_prefix}lm_head.weight"],
+        "bias": state_dict_ref[f"{state_dict_prefix}lm_head.bias"],
+    }
 
     model_args.WEIGHTS_DTYPE = dtype
     reference_model = model_args.reference_lm_head()
-    reference_model.load_state_dict(partial_state_dict)
+    reference_model.load_state_dict(partial_state_dict_ref)
 
     tt_model = LMHead(
         args=model_args,

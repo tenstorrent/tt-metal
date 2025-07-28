@@ -139,3 +139,6 @@ Testing
 
 models/demos/wormhole/phi2
 prepare_tt.sh
+learn_tt
+log_txt
+llama-models
