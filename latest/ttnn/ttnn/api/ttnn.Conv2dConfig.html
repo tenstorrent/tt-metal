@@ -274,6 +274,18 @@ This improves performance, but increases the memory usage of the weights tensor.
 </dl>
 
 <dl class="py property">
+<dt class="sig sig-object py" id="ttnn.Conv2dConfig.full_inner_dim">
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">full_inner_dim</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.full_inner_dim" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Applies only to block sharded layout.
+By default inner dim of activation matrix will be sliced by kernel_h.
+If L1 constraints allowed it we can use full inner dim.
+This will increase perf, but it will take more L1 space.</p>
+</dd>
+</dl>
+
+<dl class="py property">
 <dt class="sig sig-object py" id="ttnn.Conv2dConfig.in_place">
 <em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">in_place</span></span><a class="headerlink" href="#ttnn.Conv2dConfig.in_place" title="Permalink to this definition"></a>
 </dt>
