@@ -89,7 +89,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N300-viommu",
+          "N150-viommu",
           "P150b-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
@@ -111,7 +111,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N300-viommu",
+          "N150-viommu",
           "P150b-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
@@ -149,7 +149,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N300-viommu",
+          "N150-viommu",
         ]
     uses: ./.github/workflows/sdk-examples.yaml
     with:
