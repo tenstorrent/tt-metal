@@ -446,7 +446,6 @@ TEST(TensorAccessorTestsCRTA, CompiletimeTensorCompileTimeShardShapeRuntimeBanks
     using dspec_t = tensor_accessor::
         DistributionSpec<crta_params::rank, crta_params::num_banks, TensorShapeT, ShardShapeT, bank_coords>;
 
-    std::array<uint32_t, crta_params::rank> shard_shape_array = {1, 2};
     std::array<uint16_t, crta_params::num_banks> bank_coord_array{0, 1, 2, 3};
 
     auto dspec_val = dspec_t({}, {}, bank_coord_array);

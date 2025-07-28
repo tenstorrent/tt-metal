@@ -89,7 +89,6 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
         output_shape[operation_attributes.dim] = 1;
     } else {
         ttnn::SmallVector<uint32_t> shape;
-        const std::size_t output_rank = (is_tile_dim) ? (input_rank) : (input_rank - 1);
 
         // e.g. (2, 64, 64) with dim 1 to be (2, 1[32], 64)
         // e.g. (2, 64, 64) with dim 0 to be (64, 64)

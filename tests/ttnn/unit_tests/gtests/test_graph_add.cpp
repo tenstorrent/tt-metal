@@ -61,7 +61,6 @@ class AddOpGraphTestFixture
 TEST_P(AddOpGraphTestFixture, AddGraphTrace) {
     auto param_combination = GetParam();
     auto params = std::get<0>(param_combination);
-    auto run_mode = std::get<1>(param_combination);
 
     {
         const auto input_tensor_a =

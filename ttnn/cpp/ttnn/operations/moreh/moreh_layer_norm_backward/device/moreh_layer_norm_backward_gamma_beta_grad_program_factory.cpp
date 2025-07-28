@@ -33,7 +33,6 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     auto& mean = tensor_args.mean;
     auto& rstd = tensor_args.rstd;
 
-    auto& output_tensors = output_tensor;
     const std::optional<const Tensor>& gamma_grad = output_tensor.at(0);
     const std::optional<const Tensor>& beta_grad = output_tensor.at(1);
 
@@ -54,7 +53,6 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     const auto output_grad_shape = output_grad.padded_shape();
     const auto output_grad_shape_without_padding = output_grad.logical_shape();
-    const auto output_grad_rank = output_grad_shape.rank();
 
     const bool is_lastdim_layer_norm = normalized_dims == 1;
     const bool is_groupnorm = false;

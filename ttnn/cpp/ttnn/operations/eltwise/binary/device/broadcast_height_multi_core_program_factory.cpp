@@ -52,12 +52,10 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
     uint32_t bH = bshape[-2];
     uint32_t bW = bshape[-1];
     uint32_t NC = N * C;
-    uint32_t HW = H * W;
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
 
-    uint32_t num_tensor_tiles = NC * Ht * Wt;
     uint32_t num_btensor_tiles = NC * bH * bW / TILE_HW;
 
     uint32_t bnc1 = (bN * bC == 1) ? 1 : 0;
@@ -97,20 +95,20 @@ BinaryDeviceOperation ::BroadcastHeightMultiCore::create(
     tt_metal::CircularBufferConfig src0_cb_config =
         tt_metal::CircularBufferConfig(num_input_tiles * src0_single_tile_size, {{src0_cb_index, src0_cb_data_format}})
             .set_page_size(src0_cb_index, src0_single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_device_cores, src0_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_device_cores, src0_cb_config);
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(num_input_tiles * src1_single_tile_size, {{src1_cb_index, src1_cb_data_format}})
             .set_page_size(src1_cb_index, src1_single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, src1_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_device_cores, src1_cb_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_2;
     uint32_t num_output_tiles = 2;
     tt_metal::CircularBufferConfig output_cb_config =
         tt_metal::CircularBufferConfig(num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
             .set_page_size(output_cb_index, dst_single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_device_cores, output_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_device_cores, output_cb_config);
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
@@ -249,12 +247,10 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCore::override_runtime_argument
     uint32_t bH = bshape[-2];
     uint32_t bW = bshape[-1];
     uint32_t NC = N * C;
-    uint32_t HW = H * W;
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
 
-    uint32_t num_tensor_tiles = NC * Ht * Wt;
     uint32_t num_btensor_tiles = NC * bH * bW / TILE_HW;
 
     uint32_t bnc1 = (bN * bC == 1) ? 1 : 0;
