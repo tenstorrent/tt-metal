@@ -213,7 +213,7 @@ jobs:
           delete-branch: true
           body-path: pr_body.md
           add-paths: ${{ env.SUBMODULE_PATH }}
-          draft: ${{ github.event_name == 'repository_dispatch' || inputs.draft }}
+          draft: ${{ github.event_name == 'repository_dispatch' || inputs.draft == true }}
           labels: |
             llk-update
             automated
