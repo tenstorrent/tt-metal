@@ -403,8 +403,10 @@ TEST(Debugging, Test) {
         uint32_t msg_i = i & 0xffff;
         std::cerr << "message i " << std::dec << i << " sent" << " " << std::hex << (0xca110000 | msg_i) << std::endl;
         llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{msg_i}, arg_base);
+        std::this_thread::sleep_for(std::chrono::nanoseconds(50));
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
         llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{0xca110000 | msg_i}, buffer_base);
+        std::this_thread::sleep_for(std::chrono::nanoseconds(50));
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
 
         // Wait for kernel to process message
