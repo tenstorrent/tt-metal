@@ -103,7 +103,7 @@ def test_perf(device, reset_seeds):
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 69.9],
+        [1, 74.4],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
