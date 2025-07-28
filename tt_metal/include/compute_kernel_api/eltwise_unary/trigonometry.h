@@ -149,6 +149,67 @@ ALWI void atanh_tile(uint32_t idst) {
         SFPU_THREE_PARAM_KERNEL_USEFP32_FIRST(_calculate_atanh_, APPROX, DST_ACCUM_MODE, 8, idst, (int)VectorMode::RC));
 }
 
-// TODO: add asin, acos, atan
+// clang-format off
+/**
+ * Performs element-wise computation of arcsine on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void asin_tile(uint32_t idst) { MATH(SFPU_UNARY_NO_PARAM_KERNEL(asin, RC, true, idst)); }
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void asin_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(asin, true)); }
+
+// clang-format off
+/**
+ * Performs element-wise computation of arctan on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void atan_tile(uint32_t idst) { MATH(SFPU_UNARY_KERNEL_INIT(atan, true)); }
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void atan_tile_init() { MATH(SFPU_UNARY_NO_PARAM_KERNEL(atan, RC, true, idst)); }
+
+// clang-format off
+/**
+ * Performs element-wise computation of arcossine on each element of a tile
+ * in DST register at index tile_index. The DST register buffer must be in
+ * acquired state via *acquire_dst* call. This call is blocking and is only
+ * available on the compute engine.
+ *
+ * Return value: None
+ *
+ * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+ * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void acos_tile(uint32_t idst) { MATH(SFPU_UNARY_KERNEL_INIT(acos, true)); }
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void acos_tile_init() { MATH(SFPU_UNARY_NO_PARAM_KERNEL(acos, RC, true, idst)); }
 
 }  // namespace ckernel
