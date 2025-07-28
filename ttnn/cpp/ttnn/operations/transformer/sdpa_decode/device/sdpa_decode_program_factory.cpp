@@ -501,6 +501,12 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
                              .set_tile_dims(CBIndex::c_11, col_identity_tile);
     auto c_in11_id = CreateCircularBuffer(program, core_grid, c_in11_config);
 
+    // cb zero config
+    auto c_zero_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{CBIndex::c_12, scalar_df}})
+                             .set_page_size(CBIndex::c_12, scalar_tile_size)
+                             .set_tile_dims(CBIndex::c_12, scalar_tile);
+    auto c_zero_id = CreateCircularBuffer(program, core_grid, c_zero_config);
+
     // cb_qk_im
     auto c_intermed0_config = CircularBufferConfig(qk_tiles * im_tile_size, {{CBIndex::c_24, im_df}})
                                   .set_page_size(CBIndex::c_24, im_tile_size)
@@ -609,6 +615,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     class bfloat16 bfloat_identity_scalar(1.0f);
     uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
 
+    class bfloat16 bfloat_zero_scalar(0.0f);
+    uint32_t packed_zero_scalar = pack_two_bfloat16_into_uint32({bfloat_zero_scalar, bfloat_zero_scalar});
+
     union {
         float f;
         uint32_t u;
@@ -713,6 +722,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         vDHt,
         Sk_chunk_t,
         packed_identity_scalar,
+        packed_zero_scalar,
         scale_union.u,
         num_cores_per_batch,
         num_active_cores,

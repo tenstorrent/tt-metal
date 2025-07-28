@@ -250,6 +250,9 @@ void MAIN {
                 reconfig_data_format(cb_q_in, cb_k_in);  // DEBUG
                 pack_reconfig_data_format(cb_qk_im);
 
+                bool add_mask =
+                    is_causal && k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk || use_attention_mask;
+
                 cb_matmul_blocks(
                     cb_q_in,
                     cb_k_in,
@@ -263,7 +266,9 @@ void MAIN {
                     qk_in0_block_w,
                     qk_subblock_h_dynamic,
                     qk_subblock_w_dynamic,
-                    true /*transpose*/);
+                    true,
+                    add_mask,
+                    cb_mask_in);
 
                 /**
                  * Note
@@ -271,20 +276,6 @@ void MAIN {
                  * where the scaling is fused into exp both in exp(x - max) and exp(prev_max - cur_max).
                  * This gives us scaling for free on the performance-critical exp(x - max) computation.
                  */
-
-                if constexpr (is_causal) {
-                    // For decode, we only apply mask at the last chunk for causal mode
-                    if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
-                        /* QK += MASK */
-                        reconfig_data_format(cb_qk_im, cb_mask_in);
-                        add_block_inplace<false>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
-                    }
-                } else {
-                    if constexpr (use_attention_mask) {
-                        reconfig_data_format(cb_qk_im, cb_mask_in);
-                        add_block_inplace<true>(cb_qk_im, cb_mask_in, qk_chunk_tiles_dynamic);
-                    }
-                }
 
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 pack_reconfig_data_format(cb_cur_max);
@@ -334,7 +325,9 @@ void MAIN {
                     out_in0_block_w_dynamic,
                     out_subblock_h,
                     out_subblock_w,
-                    false /*transpose*/);
+                    false /*transpose*/,
+                    false,
+                    cb_mask_in);
 
                 reconfig_data_format_srca(cb_out_im);
                 cb_pop_front(cb_qk_im, qk_chunk_tiles_dynamic);
