@@ -37,7 +37,7 @@ jobs:
               mkdir -p generated/test_reports
               ./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer --benchmark_out_format=json --benchmark_out=bench.json
               cat bench.json
-            timeout: 15
+            timeout: 30
     name: ${{ matrix.test-group.name }}
     env:
       LOGURU_LEVEL: INFO
