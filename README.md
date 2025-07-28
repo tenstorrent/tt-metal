@@ -34,7 +34,9 @@
 
 ## Featured Models
 
-The following models are undergoing development and optimizations to achieve performance, accuracy, and compatibility goals. Follow each model link for more information.
+The models team is focused on developing the following models into a customer ready state; optimizations to achieve performance, accuracy, and compatibility targets are ongoing, follow each model link for more information.
+
+Performance Metrics Notes:
 - Time to first token (TTFT) descibes in milliseconds how long it takes for the model to generate the first token.
 - T/S/U measures tokens per second per user. The T/S/U reported is the throughput of the first token generated after prefill, i.e. 1 / inter token latency.
 - T/S measures tokens per second, where T/S = T/S/U * batch.
@@ -74,12 +76,9 @@ The following models are undergoing development and optimizations to achieve per
 |-------|----------------------------------------------------------|-----------|-------|-----------------|--------|---------------------------------------------------|---------------------------------------------------------------------------------------------------|
 | 32     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 104       | 24.8  | 23              | 793.6   | [v0.59.0-rc52](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc52) | [f028da1](https://github.com/tenstorrent/vllm/tree/f028da11b5b8205272bf18a478de93bd2dd3e29e/tt_metal) |
 
-> **Last Update:** July 21, 2025
->
-> **Notes:**
->
-> - \* Blackhole software optimization is under active development.  Please join us in shaping the future of open source AI! <br> [\[Discord\]](https://discord.gg/tenstorrent) [\[Developer Hub\]](https://tenstorrent.com/developers)
-> - For more information regarding vLLM installation and environment creation visit the [Tenstorrent vLLM repository](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md).
+Blackhole software optimization is under active development.  Please join us in shaping the future of open source AI! <br> [\[Discord\]](https://discord.gg/tenstorrent) [\[Developer Hub\]](https://tenstorrent.com/developers)
+
+For more information regarding vLLM installation and environment creation visit the [Tenstorrent vLLM repository](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md).
 
 Visit [TT-Metalium and TT-NN models](https://github.com/tenstorrent/tt-metal/tree/main/models) in this repository, or visit the [Developer Hub](https://tenstorrent.com/developers) for a full list of models!
 
