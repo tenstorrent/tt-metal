@@ -117,6 +117,9 @@ struct MatmulFusedOpSignaler {
     CoreCoord privilaged_core;
     CoreCoord privilaged_core_physical;
 
+    /* Info for Llama All Gather*/
+    uint32_t cb_index_start = 0;
+
     bool initialized_all_gather = false;
     bool initialized_reduce_scatter = false;
     bool initialized_llama_reduce_scatter_part1 = false;
@@ -142,7 +145,8 @@ struct MatmulFusedOpSignaler {
         uint32_t start_ring_index,
         uint32_t tensor_slice_shape_width,
         uint32_t output_page_offset,
-        uint32_t weight_tensor_width);
+        uint32_t weight_tensor_width,
+        uint32_t cb_index_start);
 
     void init_reduce_scatter(
         const std::vector<CoreCoord>& fused_op_receiver_cores_noc,

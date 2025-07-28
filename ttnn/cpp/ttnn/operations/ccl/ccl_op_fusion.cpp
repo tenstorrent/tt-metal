@@ -152,13 +152,15 @@ void MatmulFusedOpSignaler::init_llama_all_gather(
     uint32_t start_ring_index,
     uint32_t tensor_slice_shape_width,
     uint32_t output_page_offset,
-    uint32_t weight_output_page_offset) {
+    uint32_t weight_output_page_offset,
+    uint32_t cb_index_start) {
     this->num_transfers = num_transfers;
     this->ring_size = ring_size;
     this->start_ring_index = start_ring_index;
     this->tensor_slice_shape_width = tensor_slice_shape_width;
     this->output_page_offset = output_page_offset;
     this->weight_output_page_offset = weight_output_page_offset;
+    this->cb_index_start = cb_index_start;
     initialized_llama_all_gather = true;
 }
 
