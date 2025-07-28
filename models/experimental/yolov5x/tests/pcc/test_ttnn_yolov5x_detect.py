@@ -3,16 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import torch
 import pytest
-from ultralytics import YOLO
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.yolov5x.reference.yolov5x import YOLOv5
 from models.experimental.yolov5x.tt.detect import TtnnDetect
 from models.experimental.yolov5x.tt.model_preprocessing import (
     create_yolov5x_input_tensors,
     create_yolov5x_model_parameters_detect,
 )
+from models.experimental.yolov5x.common import load_torch_model
 
 
 @pytest.mark.parametrize(
@@ -26,6 +24,7 @@ def test_yolov5x_Detect(
     device,
     reset_seeds,
     fwd_input_shape,
+    model_location_generator,
 ):
     torch_input_1, ttnn_input_1 = create_yolov5x_input_tensors(
         device,
@@ -51,20 +50,9 @@ def test_yolov5x_Detect(
 
     torch_input = [torch_input_1, torch_input_2, torch_input_3]
 
-    model = YOLO("yolov5xu.pt").eval()
-    model = model.get_submodule(f"model.model.{24}")
-    state_dict = model.state_dict()
-
-    torch_model = YOLOv5()
+    torch_model = load_torch_model(model_location_generator)
     torch_model = torch_model.model.model[24]
 
-    ds_state_dict = {k: v for k, v in state_dict.items()}
-    new_state_dict = {}
-    for (name1, parameter1), (name2, parameter2) in zip(state_dict.items(), ds_state_dict.items()):
-        if isinstance(parameter2, torch.FloatTensor):
-            new_state_dict[name1] = parameter2
-    torch_model.load_state_dict(new_state_dict)
-    torch_model.eval()
     parameters = create_yolov5x_model_parameters_detect(
         torch_model, torch_input[0], torch_input[1], torch_input[2], device=device
     )
