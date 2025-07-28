@@ -5,11 +5,10 @@
 import ttnn
 import torch
 import pytest
-from ultralytics import YOLO
 
 from models.utility_functions import run_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
+from models.experimental.yolov12x.common import load_torch_model
 from models.experimental.yolov12x.reference import yolov12x
 from models.experimental.yolov12x.tt.yolov12x import YoloV12x
 from models.experimental.yolov12x.tt.model_preprocessing import (
@@ -33,15 +32,16 @@ from models.experimental.yolov12x.tt.model_preprocessing import (
         "pretrained_weight_false",
     ],
 )
-def test_yolov12x(use_pretrained_weight, device, reset_seeds):
+def test_yolov12x(use_pretrained_weight, device, reset_seeds, model_location_generator):
     torch_input, ttnn_input = create_yolov12x_input_tensors(device)
     state_dict = None
 
-    if use_pretrained_weight:
-        torch_model = YOLO("yolo12x.pt")
-        state_dict = torch_model.state_dict()
-
     torch_model = yolov12x.YoloV12x()
+
+    if use_pretrained_weight:
+        torch_model = load_torch_model(model_location_generator)
+
+    state_dict = torch_model.state_dict()
 
     state_dict = torch_model.state_dict() if state_dict is None else state_dict
 
