@@ -34,6 +34,7 @@ void kernel_main() {
 
     // poll for msg. when there is a message pretend to process it and clear
     invalidate_l1_cache();
+    volatile uint32_t local_buffer_value = 0;
     while (true) {
         volatile uint32_t heartbeat = 0xabcd0000 | heartbeat_cnt;
         heartbeat_cnt++;
@@ -54,7 +55,20 @@ void kernel_main() {
             if (msg_status == 0xca110000) {
                 invalidate_l1_cache();
                 msg_count++;
+                local_buffer_value = buffer_ptr[i];
                 buffer_ptr[i] = 0xd0e50000 | msg_type;
+                if (buffer_ptr[i] != (0xd0e50000 | msg_type)) {
+                    debug_dump[1] = 0xfffffff2;
+                    debug_dump[2] = buffer_ptr[i];
+                    debug_dump[3] = msg_type;
+                    debug_dump[4] = msg_count;
+                    debug_dump[5] = arg_val;
+                    debug_dump[6]++;
+                    debug_dump[7] = local_buffer_value;
+                    while (true) {
+                        __asm__ volatile("nop");
+                    }
+                }
                 arg_ptr[0] = 0;
                 do_nothing(msg_type);
 
@@ -64,12 +78,13 @@ void kernel_main() {
                     debug_dump[3] = msg_type;
                     debug_dump[4] = msg_count;
                     debug_dump[5] = arg_val;
+                    debug_dump[6]++;
+                    debug_dump[7] = local_buffer_value;
                     // expect the correct message because this was the wrong one
                     msg_count--;
-                    // while (true) {
-                    //     __asm__ volatile("nop");
-                    // }
-                    debug_dump[6]++;
+                    while (true) {
+                        __asm__ volatile("nop");
+                    }
                 }
             } else if (msg_status == 0xdead0000) {
                 return;

@@ -443,6 +443,7 @@ TEST(Debugging, Test_Active_Eth) {
     }
     auto device = CreateDevice(0);
     constexpr uint32_t num_writes = 60000;
+    // NOTE: kernel ring buffer size = 16,384
     constexpr uint32_t total_size = num_writes * sizeof(uint32_t);
     uint32_t l1_base =
         MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
