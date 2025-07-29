@@ -8,6 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -156,7 +157,12 @@ def test_decoder_inference(
         logger.info(f"[Decoder] Generating token {i}")
 
         # input = torch.randn(1, 32, 4096)
-        pt_decode_input = (torch.rand(batch_size, seqlen, model_args.dim) * 2) - 1
+        pt_decode_input = (
+            torch.rand(
+                batch_size, seqlen, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
+            )
+            * 2
+        ) - 1
         tt_decode_input = pt_decode_input.clone()
 
         decode_input = model_args.prepare_residual_tensor_decode(

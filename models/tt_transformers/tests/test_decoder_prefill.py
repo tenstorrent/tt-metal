@@ -9,6 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.common import PagedAttentionConfig, get_prefill_rot_mat, get_rot_transformation_mat
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -141,7 +142,15 @@ def test_decoder_inference(
 
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
-        pt_decode_input = (torch.rand(batch_size, max_seq_len, model_args.dim) * 2) - 1
+        pt_decode_input = (
+            torch.rand(
+                batch_size,
+                max_seq_len,
+                model_args.dim,
+                dtype=get_ref_model_dype(reference_model, model_args.model_name),
+            )
+            * 2
+        ) - 1
         tt_decode_input = pt_decode_input.clone()
         decode_input = model_args.prepare_residual_tensor_prefill(
             tt_decode_input,
