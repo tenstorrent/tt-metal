@@ -13,6 +13,7 @@ from toolz.dicttoolz import merge
 def clean_and_parse_xml(filepath):
     """
     Clean corrupted XML content and parse it safely.
+    Needed due to https://github.com/tenstorrent/tt-metal/issues/25958 where the XML file is corrupted.
 
     Args:
         filepath: Path to the XML file
