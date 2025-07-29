@@ -40,6 +40,11 @@ pytest --disable-warnings models/experimental/efficientnetb0/tests/perf/test_e2e
 
 ## Model demo with trace
 - Use the following command to run the demo:
+**_Single-Device (BS-1):_**<br>
 ```sh
-pytest --disable-warnings models/experimental/efficientnetb0/demo/demo.py
+pytest --disable-warnings models/experimental/efficientnetb0/demo/demo.py::test_demo
+```
+**_Multi-Device (DP-2,N300):_**<br>
+```sh
+pytest --disable-warnings models/experimental/efficientnetb0/demo/demo.py::test_demo_dp
 ```

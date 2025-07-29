@@ -8,48 +8,25 @@ from pathlib import Path
 from models.experimental.efficientnetb0.reference import efficientnetb0
 from efficientnet_pytorch import EfficientNet
 from models.utility_functions import run_for_wormhole_b0
-from models.experimental.efficientnetb0.demo.demo_utils import preprocess, download_images, load_imagenet_labels
+from models.experimental.efficientnetb0.demo.demo_utils import get_data_loader, get_batch
 from models.experimental.efficientnetb0.runner.performant_runner import EfficientNetb0PerformantRunner
+from models.experimental.efficientnetb0.tt.model_preprocessing import get_mesh_mappers
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]
 
-import cv2
 import torch
 import ttnn
 from loguru import logger
 
 
-@run_for_wormhole_b0()
-@pytest.mark.parametrize(
-    "device_params",
-    [{"l1_small_size": 7 * 1024, "trace_region_size": 23887872, "num_command_queues": 2}],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "source",
-    [
-        "models/experimental/efficientnetb0/demo/input_image.jpg",
-    ],
-)
-@pytest.mark.parametrize(
-    "model_type",
-    [
-        # "torch_model", # Uncomment to run the demo with torch model
-        "tt_model",
-    ],
-)
-def test_demo(model_type, source, device, reset_seeds):
-    download_images(source)
-
-    categories = load_imagenet_labels("models/experimental/efficientnetb0/demo/imagenet_class_labels.txt")
-    transform = preprocess()
-
-    image = cv2.imread(str(source))
-    rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    input_tensor = transform(image)
-    input_tensor = input_tensor.unsqueeze(0)
-    batch_size = input_tensor.shape[0]
+def run_demo(
+    model_type, source, device, reset_seeds, batch_size_per_device, imagenet_label_dict, model_location_generator=None
+):
+    logger.info("ImageNet-1k validation Dataset")
+    input_loc = str(model_location_generator("ImageNet_data"))
+    data_loader = get_data_loader(input_loc, batch_size_per_device * (device.get_num_devices()), 1)
+    input_tensor, labels = get_batch(data_loader)
 
     if model_type == "torch_model":
         model = EfficientNet.from_pretrained("efficientnet-b0").eval()
@@ -67,48 +44,107 @@ def test_demo(model_type, source, device, reset_seeds):
         output = torch_model(input_tensor)
         logger.info("Inferencing [Torch] Model")
     else:
+        num_devices = device.get_num_devices()
+        batch_size = batch_size_per_device * num_devices
+        logger.info(f"Running with batch_size={batch_size} across {num_devices} devices")
+        inputs_mesh_mapper, weights_mesh_mapper, outputs_mesh_composer = get_mesh_mappers(device)
         performant_runner = EfficientNetb0PerformantRunner(
             device,
-            batch_size,
+            batch_size_per_device,
             ttnn.bfloat16,
             ttnn.bfloat16,
-            model_location_generator=None,
             resolution=(224, 224),
+            mesh_mapper=inputs_mesh_mapper,
+            weights_mesh_mapper=weights_mesh_mapper,
+            mesh_composer=outputs_mesh_composer,
         )
-        performant_runner._capture_efficientnetb0_trace_2cqs()
+
         output = performant_runner.run(torch_input_tensor=input_tensor)
-        output = ttnn.to_torch(output)
+        output = ttnn.to_torch(output, mesh_composer=outputs_mesh_composer)
+        performant_runner.release()
         logger.info("Inferencing [TTNN] Model")
     probabilities = torch.nn.functional.softmax(output[0], dim=0)
 
-    # Check the top 5 categories that are predicted.
-    top5_prob, top5_catid = torch.topk(probabilities, 3)
+    top_prob, predicted_id = torch.topk(probabilities, 3)
 
-    for i in range(top5_prob.size(0)):
-        cv2.putText(
-            image,
-            f"{top5_prob[i].item()*100:.3f}%",
-            (15, (i + 1) * 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA,
+    correct = 0
+    predictions = []
+    for i in range(batch_size_per_device):
+        predictions.append(imagenet_label_dict[predicted_id[i].item()])
+        logger.info(
+            f"Iter: {iter} Sample: {i} - Expected Label: {imagenet_label_dict[labels[i]]} -- Predicted Label: {predictions[-1]}"
         )
-        cv2.putText(
-            image,
-            f"{categories[top5_catid[i]]}",
-            (160, (i + 1) * 30),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            1,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA,
-        )
-        logger.info(categories[top5_catid[i]], top5_prob[i].item())
+        if imagenet_label_dict[labels[i]] == predictions[-1]:
+            correct += 1
 
-    out_dir = ROOT / model_type
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = str(out_dir / "output_image.jpg")
-    cv2.imwrite(out_path, image)
-    logger.info(f"Output image saved to {out_path}")
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 7 * 1024, "trace_region_size": 23887872, "num_command_queues": 2}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "source",
+    [
+        "models/experimental/efficientnetb0/demo/input_image.jpg",
+    ],
+)
+@pytest.mark.parametrize(
+    "batch_size_per_device",
+    [
+        1,
+    ],
+)
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        # "torch_model", # Uncomment to run the demo with torch model
+        "tt_model",
+    ],
+)
+def test_demo(
+    model_type, source, device, reset_seeds, batch_size_per_device, imagenet_label_dict, model_location_generator
+):
+    run_demo(
+        model_type, source, device, reset_seeds, batch_size_per_device, imagenet_label_dict, model_location_generator
+    )
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 7 * 1024, "trace_region_size": 23887872, "num_command_queues": 2}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "source",
+    [
+        "models/experimental/efficientnetb0/demo/input_image.jpg",
+    ],
+)
+@pytest.mark.parametrize(
+    "batch_size_per_device",
+    [
+        1,
+    ],
+)
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        # "torch_model", # Uncomment to run the demo with torch model
+        "tt_model",
+    ],
+)
+def test_demo_dp(
+    model_type, source, mesh_device, reset_seeds, batch_size_per_device, imagenet_label_dict, model_location_generator
+):
+    run_demo(
+        model_type,
+        source,
+        mesh_device,
+        reset_seeds,
+        batch_size_per_device,
+        imagenet_label_dict,
+        model_location_generator,
+    )
