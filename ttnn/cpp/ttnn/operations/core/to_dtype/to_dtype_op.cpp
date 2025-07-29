@@ -69,7 +69,6 @@ tt::tt_metal::Tensor transform_type(const tt::tt_metal::Tensor& input_tensor, co
     using namespace tt::tt_metal;
 
     TT_FATAL(is_cpu_tensor(input_tensor), "transform_type(...) function only supports host tensors!");
-    auto input_dtype = input_tensor.dtype();
     auto storage = preprocess_tensor<SrcType>(input_tensor);
 
     // For SrcType or DstType that are bfloat4_tag or bfloat8_tag, use 'float' as the

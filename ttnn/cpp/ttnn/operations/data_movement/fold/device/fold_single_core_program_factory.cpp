@@ -28,9 +28,7 @@ Fold::SingleCore::cached_program_t fold_single_core(
     // chunk consists of channel values of stride_w neighboring pixels along the W dimension
     uint32_t width = input.padded_shape()[2];
     uint32_t chunk_size = stride_w * pixel_size;
-    uint32_t row_size = width * pixel_size;
     uint32_t dst_pixel_size = stride_h * chunk_size;
-    uint32_t dst_row_size = stride_h * row_size;
     uint32_t num_dst_rows = num_pixels / (width * stride_h);
     uint32_t cb_pages_per_dst_row = stride_h * width;
 
