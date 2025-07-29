@@ -28,7 +28,7 @@ def comp_pcc(golden, calculated, pcc=0.99):
         logger.error("One tensor is all zero")
         return False, 0.0
 
-    # For now, mask all infs and nans so that we check the rest... TODO
+    # Mask all infs and nans so that we check the rest
     golden = golden.clone()
     golden[
         torch.logical_or(
