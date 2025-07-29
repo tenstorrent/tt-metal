@@ -1161,13 +1161,21 @@ uint32_t calculate_conv_dram_L1(
 
     // Output of padded slice is always BFloat16, so size is 2 bytes.
     uint32_t input_size = shard_shape[0] * shard_shape[1] * 2;
+    const float approx_halo_size_margin = 1.1;
+    float float_shard_height = ((float)shard_shape[0]) / input_width;
+    uint32_t approx_halo_size = approx_halo_size_margin * (float_shard_height + (dilation[0] * kernel_size[0] / 2)) *
+                                input_size / float_shard_height;
+    const float output_size_margin = 1.1;
     log_info(
         tt::LogOp,
-        "Conv DRAM L1 estimate Input {}, Output {}, CB {}",
+        "Conv DRAM L1 estimate Input {}, Approx Halo {}, Output {}, CB {}",
         input_size,
+        approx_halo_size,
         l1_usage.tensor_allocation_size,
         l1_usage.CB_allocation_size);
-    return input_size + l1_usage.tensor_allocation_size + l1_usage.CB_allocation_size;
+    return output_size_margin * std::max<uint32_t>(
+                                    approx_halo_size + l1_usage.tensor_allocation_size + l1_usage.CB_allocation_size,
+                                    input_size + approx_halo_size);
 }
 
 conv_op_l1_usage conv2d::calculate_L1_usage(
