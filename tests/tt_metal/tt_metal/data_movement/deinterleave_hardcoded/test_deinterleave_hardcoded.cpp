@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "../../common/dispatch_fixture.hpp"
+#include "../../common/multi_device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -11,8 +13,7 @@
 namespace tt::tt_metal {
 
 using namespace std;
-using namespace tt;
-using namespace tt::test_utils;
+using namespace test_utils;
 
 namespace unit_tests::dm::deinterleave_hardcoded {
 
@@ -21,9 +22,9 @@ constexpr uint32_t START_ID = 200;
 // Test config, i.e. test parameters
 struct DeinterleaveConfig {
     uint32_t test_id = 0;
-    std::vector<CoreRangeSet> dest_core_set;
-    std::vector<std::vector<uint32_t>> dest_core_compile_args;
-    std::vector<std::vector<uint32_t>> dest_core_runtime_args;
+    vector<CoreRangeSet> dest_core_set;
+    vector<vector<uint32_t>> dest_core_compile_args;
+    vector<vector<uint32_t>> dest_core_runtime_args;
     NOC noc_id = NOC::NOC_0;
 };
 
@@ -31,7 +32,8 @@ struct DeinterleaveConfig {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const DeinterleaveConfig& test_config, DispatchFixture* fixture) {
+bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const DeinterleaveConfig& test_config) {
+    IDevice* device = mesh_device->get_device(0);
     // Program
     Program program = CreateProgram();
 
@@ -51,35 +53,43 @@ bool run_dm(IDevice* device, const DeinterleaveConfig& test_config, DispatchFixt
     }
 
     // Assign unique id
-    log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Launch program
     MetalContext::instance().get_cluster().l1_barrier(device->id());
-    // Launch the program - Use dispatch-aware method
-    fixture->RunProgram(device, program);
+    // Launch the program - Use mesh device API
+    auto workload = distributed::CreateMeshWorkload();
+    vector<uint32_t> coord_data = {0, 0};
+    auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), target_devices);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+    Finish(mesh_device->mesh_command_queue(0));
 
     return true;
 }
 }  // namespace unit_tests::dm::deinterleave_hardcoded
 
-TEST_F(DispatchFixture, TensixDataMovementDeinterleaveSingleCore) {
-    if (arch_ != tt::ARCH::WORMHOLE_B0) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDeinterleaveSingleCore) {
+    auto mesh_device = get_mesh_device();
+    auto arch_ = mesh_device->get_device(0)->arch();
+
+    if (arch_ != ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
 
     // Parameters
     uint32_t test_id = unit_tests::dm::deinterleave_hardcoded::START_ID + 0;
     NOC noc_id = NOC::NOC_0;
-    std::vector<CoreRangeSet> send_dest_core_set;
-    std::vector<std::vector<uint32_t>> send_dest_core_compile_args;
-    std::vector<std::vector<uint32_t>> send_dest_core_runtime_args;
+    vector<CoreRangeSet> send_dest_core_set;
+    vector<vector<uint32_t>> send_dest_core_compile_args;
+    vector<vector<uint32_t>> send_dest_core_runtime_args;
 
     {
-        std::set<CoreRange> dest_core_set = {CoreRange(CoreCoord(0, 0))};
+        set<CoreRange> dest_core_set = {CoreRange(CoreCoord(0, 0))};
         CoreRangeSet wrapper_dest_core_set(dest_core_set);
-        std::vector<uint32_t> dest_core_compile_args;
-        std::vector<uint32_t> dest_core_runtime_args;
+        vector<uint32_t> dest_core_compile_args;
+        vector<uint32_t> dest_core_runtime_args;
 
         dest_core_compile_args.push_back(0);        // src_cb_id
         dest_core_compile_args.push_back(1);        // dst_cb_id
@@ -127,33 +137,34 @@ TEST_F(DispatchFixture, TensixDataMovementDeinterleaveSingleCore) {
             .noc_id = noc_id};
 
         // Run
-        for (unsigned int id = 0; id < NumDevices(); id++) {
-            EXPECT_TRUE(run_dm(devices_.at(id), test_config, this));
-        }
+        EXPECT_TRUE(run_dm(mesh_device, test_config));
     }
 }
 
-TEST_F(DispatchFixture, TensixDataMovementDeinterleaveMultiCore) {
-    if (arch_ != tt::ARCH::WORMHOLE_B0) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementDeinterleaveMultiCore) {
+    auto mesh_device = get_mesh_device();
+    auto arch_ = mesh_device->get_device(0)->arch();
+
+    if (arch_ != ARCH::WORMHOLE_B0) {
         GTEST_SKIP() << "Skipping test for non-WH architecture";
     }
 
     // Parameters
     uint32_t test_id = unit_tests::dm::deinterleave_hardcoded::START_ID + 1;
     NOC noc_id = NOC::NOC_0;
-    std::vector<CoreRangeSet> send_dest_core_set;
-    std::vector<std::vector<uint32_t>> send_dest_core_compile_args;
-    std::vector<std::vector<uint32_t>> send_dest_core_runtime_args;
+    vector<CoreRangeSet> send_dest_core_set;
+    vector<vector<uint32_t>> send_dest_core_compile_args;
+    vector<vector<uint32_t>> send_dest_core_runtime_args;
 
     uint32_t offset_y_part_count = 0;
     uint32_t offset_y_part2_count = 0;
 
     for (uint32_t x = 0; x < 8; x++) {
         for (uint32_t y = 0; y < 8; y++) {
-            std::set<CoreRange> dest_core_set = {CoreRange(CoreCoord(x, y))};
+            set<CoreRange> dest_core_set = {CoreRange(CoreCoord(x, y))};
             CoreRangeSet wrapper_dest_core_set(dest_core_set);
-            std::vector<uint32_t> dest_core_compile_args;
-            std::vector<uint32_t> dest_core_runtime_args;
+            vector<uint32_t> dest_core_compile_args;
+            vector<uint32_t> dest_core_runtime_args;
 
             if (x >= 4) {
                 if (y == 3) {
@@ -221,9 +232,7 @@ TEST_F(DispatchFixture, TensixDataMovementDeinterleaveMultiCore) {
             .noc_id = noc_id};
 
         // Run
-        for (unsigned int id = 0; id < NumDevices(); id++) {
-            EXPECT_TRUE(run_dm(devices_.at(id), test_config, this));
-        }
+        EXPECT_TRUE(run_dm(mesh_device, test_config));
     }
 }
 

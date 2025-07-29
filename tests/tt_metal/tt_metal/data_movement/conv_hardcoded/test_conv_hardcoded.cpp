@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "../../common/dispatch_fixture.hpp"
+#include "../../common/multi_device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -11,8 +13,7 @@
 namespace tt::tt_metal {
 
 using namespace std;
-using namespace tt;
-using namespace tt::test_utils;
+using namespace test_utils;
 
 namespace unit_tests::dm::conv_hardcoded {
 
@@ -22,17 +23,18 @@ constexpr uint32_t START_ID = 21;
 struct ConvConfig {
     uint32_t test_id = 0;
     CoreRangeSet dest_core_set;
-    std::vector<uint32_t> dest_core_compile_args;
-    std::vector<uint32_t> dest_core_runtime_args;
+    vector<uint32_t> dest_core_compile_args;
+    vector<uint32_t> dest_core_runtime_args;
     NOC noc_id = NOC::NOC_0;
-    std::string kernel_name = "";
+    string kernel_name = "";
 };
 
 /// @brief Does L1 Sender Core --> L1 Receiver Core
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const ConvConfig& test_config, DispatchFixture* fixture) {
+bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const ConvConfig& test_config) {
+    IDevice* device = mesh_device->get_device(0);
     // Program
     Program program = CreateProgram();
 
@@ -50,30 +52,38 @@ bool run_dm(IDevice* device, const ConvConfig& test_config, DispatchFixture* fix
     SetRuntimeArgs(program, receiver_kernel, test_config.dest_core_set, test_config.dest_core_runtime_args);
 
     // Assign unique id
-    log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Launch program
     MetalContext::instance().get_cluster().l1_barrier(device->id());
-    // Launch the program - Use dispatch-aware method
-    fixture->RunProgram(device, program);
+    // Launch the program - Use mesh device API
+    auto workload = distributed::CreateMeshWorkload();
+    vector<uint32_t> coord_data = {0, 0};
+    auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), target_devices);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
+    Finish(mesh_device->mesh_command_queue(0));
 
     return true;
 }
 }  // namespace unit_tests::dm::conv_hardcoded
 
-TEST_F(DispatchFixture, TensixDataMovementConvActHalo3x3) {
-    if (arch_ != tt::ARCH::BLACKHOLE) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementConvActHalo3x3) {
+    auto mesh_device = get_mesh_device();
+    auto arch_ = mesh_device->get_device(0)->arch();
+
+    if (arch_ != ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test for non-BH architecture";
     }
 
     // Parameters
     uint32_t test_id = unit_tests::dm::conv_hardcoded::START_ID + 0;
     NOC noc_id = NOC::NOC_0;
-    std::set<CoreRange> dest_core_set = {CoreRange(CoreCoord(0, 0)), CoreRange(CoreCoord(1, 0))};
+    set<CoreRange> dest_core_set = {CoreRange(CoreCoord(0, 0)), CoreRange(CoreCoord(1, 0))};
     CoreRangeSet wrapper_dest_core_set(dest_core_set);
-    std::vector<uint32_t> dest_core_compile_args;
-    std::vector<uint32_t> dest_core_runtime_args;
+    vector<uint32_t> dest_core_compile_args;
+    vector<uint32_t> dest_core_runtime_args;
 
     dest_core_compile_args.push_back(1);                // dilation_h
     dest_core_compile_args.push_back(1);                // dilation_w
@@ -128,23 +138,24 @@ TEST_F(DispatchFixture, TensixDataMovementConvActHalo3x3) {
     };
 
     // Run
-    for (unsigned int id = 0; id < NumDevices(); id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config, this));
-    }
+    EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
-TEST_F(DispatchFixture, TensixDataMovementConvActHalo3x3Smaller) {
-    if (arch_ != tt::ARCH::BLACKHOLE) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementConvActHalo3x3Smaller) {
+    auto mesh_device = get_mesh_device();
+    auto arch_ = mesh_device->get_device(0)->arch();
+
+    if (arch_ != ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test for non-BH architecture";
     }
 
     // Parameters
     uint32_t test_id = unit_tests::dm::conv_hardcoded::START_ID + 1;
     NOC noc_id = NOC::NOC_0;
-    std::set<CoreRange> dest_core_set = {CoreRange(CoreCoord(0, 0)), CoreRange(CoreCoord(1, 0))};
+    set<CoreRange> dest_core_set = {CoreRange(CoreCoord(0, 0)), CoreRange(CoreCoord(1, 0))};
     CoreRangeSet wrapper_dest_core_set(dest_core_set);
-    std::vector<uint32_t> dest_core_compile_args;
-    std::vector<uint32_t> dest_core_runtime_args;
+    vector<uint32_t> dest_core_compile_args;
+    vector<uint32_t> dest_core_runtime_args;
 
     dest_core_compile_args.push_back(2);                     // dilation_h
     dest_core_compile_args.push_back(2);                     // dilation_w
@@ -199,23 +210,24 @@ TEST_F(DispatchFixture, TensixDataMovementConvActHalo3x3Smaller) {
     };
 
     // Run
-    for (unsigned int id = 0; id < NumDevices(); id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config, this));
-    }
+    EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
-TEST_F(DispatchFixture, TensixDataMovementConvHaloGather) {
-    if (arch_ != tt::ARCH::BLACKHOLE) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementConvHaloGather) {
+    auto mesh_device = get_mesh_device();
+    auto arch_ = mesh_device->get_device(0)->arch();
+
+    if (arch_ != ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test for non-BH architecture";
     }
 
     // Parameters
     uint32_t test_id = unit_tests::dm::conv_hardcoded::START_ID + 2;
     NOC noc_id = NOC::NOC_0;
-    std::set<CoreRange> dest_core_set = {CoreRange(CoreCoord(0, 0))};
+    set<CoreRange> dest_core_set = {CoreRange(CoreCoord(0, 0))};
     CoreRangeSet wrapper_dest_core_set(dest_core_set);
-    std::vector<uint32_t> dest_core_compile_args;
-    std::vector<uint32_t> dest_core_runtime_args;
+    vector<uint32_t> dest_core_compile_args;
+    vector<uint32_t> dest_core_runtime_args;
 
     dest_core_compile_args.push_back(0);        // padding_config_cb_id
     dest_core_compile_args.push_back(7);        // gather_config_cb_id
@@ -263,9 +275,7 @@ TEST_F(DispatchFixture, TensixDataMovementConvHaloGather) {
     };
 
     // Run
-    for (unsigned int id = 0; id < NumDevices(); id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config, this));
-    }
+    EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
 }  // namespace tt::tt_metal
