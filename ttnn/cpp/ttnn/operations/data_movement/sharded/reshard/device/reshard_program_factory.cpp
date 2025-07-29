@@ -23,25 +23,83 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
     const auto& output_buffer_page_mapping = *output_buffer->get_buffer_page_mapping();
     const auto& input_buffer_page_mapping = *input_buffer->get_buffer_page_mapping();
 
-    std::vector<std::pair<CoreCoord, uint32_t>> host_page_to_input_core_mapping(input_buffer->num_pages());
+    // Find GCD of page sizes to use as the new base page size
+    uint32_t input_page_size = input_buffer->page_size();
+    uint32_t output_page_size = output_buffer->page_size();
+    uint32_t base_page_size = std::gcd(input_page_size, output_page_size);
+    printf("Input page size: %u\n", input_page_size);
+    printf("Output page size: %u\n", output_page_size);
+    printf("Base page size: %u\n", base_page_size);
+
+    // Calculate how many base pages make up an input/output page
+    uint32_t input_pages_per_original = input_page_size / base_page_size;
+    uint32_t output_pages_per_original = output_page_size / base_page_size;
+    printf("Input pages per original: %u\n", input_pages_per_original);
+    printf("Output pages per original: %u\n", output_pages_per_original);
+
+    // Map input pages to base units
+    std::vector<std::pair<CoreCoord, uint32_t>> host_page_to_input_core_mapping(
+        input_buffer->num_pages() * input_pages_per_original);
+
+    // Create input mapping
     for (auto mapped_page : input_buffer_page_mapping) {
         auto core = input_buffer_page_mapping.all_cores[mapped_page.core_id];
-        host_page_to_input_core_mapping[mapped_page.host_page] = {core, mapped_page.device_page};
+        uint32_t base_start_page = mapped_page.host_page * input_pages_per_original;
+        uint32_t device_base_start = mapped_page.device_page * input_pages_per_original;
+        for (uint32_t i = 0; i < input_pages_per_original; i++) {
+            host_page_to_input_core_mapping[base_start_page + i] = {core, device_base_start + i};
+        }
     }
 
+    // Create similar mapping for output pages to their cores
+    std::vector<std::pair<CoreCoord, uint32_t>> host_page_to_output_core_mapping(
+        output_buffer->num_pages() * output_pages_per_original);
+
+    for (auto mapped_page : output_buffer_page_mapping) {
+        auto core = output_buffer_page_mapping.all_cores[mapped_page.core_id];
+        uint32_t base_start_page = mapped_page.host_page * output_pages_per_original;
+        uint32_t device_base_start = mapped_page.device_page * output_pages_per_original;
+        for (uint32_t i = 0; i < output_pages_per_original; i++) {
+            host_page_to_output_core_mapping[base_start_page + i] = {core, device_base_start + i};
+        }
+    }
+
+    // Create final mapping of output cores to input pages they need
     auto output_cores = output_buffer_page_mapping.all_cores;
-    // First get output_core to vector< pair<input_core, input_page> (num_pages_in_output)
     std::vector<std::vector<std::optional<std::pair<CoreCoord, uint32_t>>>> output_core_to_vector_input_core_page(
         output_cores.size());
 
-    for (auto mapped_page : output_buffer_page_mapping) {
-        auto& cur_output_core_to_vector_input_core_page = output_core_to_vector_input_core_page[mapped_page.core_id];
-        auto [input_core, input_core_page] = host_page_to_input_core_mapping[mapped_page.host_page];
-        if (cur_output_core_to_vector_input_core_page.size() <= mapped_page.device_page) {
-            cur_output_core_to_vector_input_core_page.resize(mapped_page.device_page + 1);
+    // For each output core's base pages, find which input pages it needs
+    for (uint32_t core_id = 0; core_id < output_cores.size(); core_id++) {
+        auto& cur_output_core_pages = output_core_to_vector_input_core_page[core_id];
+
+        // Find all host pages that map to this output core
+        for (uint32_t host_page = 0; host_page < host_page_to_output_core_mapping.size(); host_page++) {
+            if (host_page_to_output_core_mapping[host_page].first == output_cores[core_id]) {
+                // This host page belongs to current output core
+                // Get corresponding input core and page
+                auto input_mapping = host_page_to_input_core_mapping[host_page];
+
+                // Add to vector if needed
+                uint32_t device_page = host_page_to_output_core_mapping[host_page].second;
+                if (cur_output_core_pages.size() <= device_page) {
+                    cur_output_core_pages.resize(device_page + 1);
+                }
+                cur_output_core_pages[device_page] = input_mapping;
+            }
         }
-        cur_output_core_to_vector_input_core_page[mapped_page.device_page] = {input_core, input_core_page};
     }
+
+    // Debug print
+    // for (uint32_t i = 0; i < output_core_to_vector_input_core_page.size(); i++) {
+    //    printf("Output core %u:\n", i);
+    //    for (const auto& page : output_core_to_vector_input_core_page[i]) {
+    //        if (page.has_value()) {
+    //            printf("  Input Core: (%zu, %zu), Input Page: %u\n",
+    //                   page->first.x, page->first.y, page->second);
+    //        }
+    //    }
+    //}
 
     // now compress to output_core to vector<pair<input_core, input_page_range> (num_page_ranges_in_output)
     std::unordered_map<CoreCoord, std::vector<PageStride>> ret_map;
@@ -529,9 +587,21 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
         unit_size = page_size;
         total_size = output_shard_spec.numel() / TILE_HW * unit_size;
     } else {
-        unit_size = output_shard_spec.shape[1] * output.element_size();
-        page_size = output.padded_shape()[-1] * output.element_size();
-        total_size = output_shard_shape[0] * unit_size;
+        // For ROW_MAJOR, use base page size from GCD calculation
+        uint32_t input_page_size = input.buffer()->page_size();
+        uint32_t output_page_size = output.buffer()->page_size();
+        uint32_t base_page_size = std::gcd(input_page_size, output_page_size);
+
+        unit_size = base_page_size;  // Use base page size as unit
+        page_size = base_page_size;  // Use same for page size
+        total_size = output_shard_shape[0] * output_shard_shape[1] * output.element_size();
+
+        printf(
+            "ROW_MAJOR sizes - base: %u, input_page: %u, output_page: %u, total: %u\n",
+            base_page_size,
+            input_page_size,
+            output_page_size,
+            total_size);
     }
     /*
     tt::tt_metal::KernelHandle kernel_id_0 = tt::tt_metal::CreateKernel(
@@ -549,7 +619,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     printf("total size: %u, page size: %u, unit size: %u\n", total_size, page_size, unit_size);
     tt::tt_metal::CircularBufferConfig cb_dst_config =
         tt::tt_metal::CircularBufferConfig(total_size, {{dst_cb_index, data_format}})
-            .set_page_size(dst_cb_index, unit_size)
+            .set_page_size(dst_cb_index, output.buffer()->page_size())
             .set_globally_allocated_address(*output.buffer());
     auto cb_dst0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);
 
@@ -594,6 +664,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
         // tt::tt_metal::SetRuntimeArgs(program, kernel_id_1, core, runtime_args_1);
     }
     // construct host tensor for runtime args
+    /*
     printf("RUNTIME ARGS MAP 0\n");
     for (const auto& [core, data] : rt_config_map_0) {
         printf("core: (%zu, %zu), data size: %zu\n", core.x, core.y, data.size());
@@ -610,6 +681,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
         }
         printf("\n");
     }
+    */
     auto runtime_args_tensor_0 = construct_per_core_host_tensor(rt_config_map_0);
     auto runtime_args_tensor_1 = construct_per_core_host_tensor(rt_config_map_1);
 
@@ -626,12 +698,8 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
         "device_runtime_args_shape: %u, %u\n",
         device_runtime_args_0.logical_shape()[0],
         device_runtime_args_0.logical_shape()[1]);
-    printf(
-        "circular buffer 1 size: %zu\n",
-        device_runtime_args_1.logical_shape()[0] * device_runtime_args_1.logical_shape()[1] * sizeof(uint32_t));
-    printf(
-        "circular bubber 0 size: %zu\n",
-        device_runtime_args_0.logical_shape()[0] * device_runtime_args_0.logical_shape()[1] * sizeof(uint32_t));
+    printf("circular buffer 1 size: %zu\n", device_runtime_args_1.logical_shape()[1] * sizeof(uint32_t));
+    printf("circular bubber 0 size: %zu\n", device_runtime_args_0.logical_shape()[1] * sizeof(uint32_t));
 
     // CB config for first runtime args tensor
     tt::tt_metal::CircularBufferConfig cb_rt_args_config_0 =
@@ -659,14 +727,14 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
         "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(
-            {dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size, rt_args_cb_index_0}));
+            {dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size, unit_size, rt_args_cb_index_0}));
 
     tt::tt_metal::KernelHandle kernel_id_1 = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(
-            {dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size, rt_args_cb_index_1}));
+            {dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size, unit_size, rt_args_cb_index_1}));
 
     auto override_runtime_arguments_callback = [kernel_id_0, kernel_id_1, cb_dst0, grid, cores](
                                                    const void* operation,
