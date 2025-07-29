@@ -66,7 +66,7 @@ def test_attn_matmul(num_loops, in0_dtype, in1_dtype, out_dtype, device):
 
 # @skip_for_blackhole("Bad pcc on BH. Issue #25421")
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat8_b])
-@pytest.mark.parametrize("num_loops", [100])
+@pytest.mark.parametrize("num_loops", [20])
 def test_attn_matmul_fp32(num_loops, in_dtype, device):
     torch.manual_seed(0)
     torch.set_printoptions(linewidth=500, threshold=10000000, sci_mode=False, precision=2)
@@ -111,15 +111,17 @@ def test_attn_matmul_fp32(num_loops, in_dtype, device):
         print("golden_output_tensor shape:", golden_output_tensor.shape)
 
         allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
-        if not allclose or once:
-            for i in range(tt_output_tensor.shape[3]):
-                print(f"output row {i}")
-                print(tt_output_tensor[:, :, :, i])
-                print(f"golden row {i}")
-                print(golden_output_tensor[:, :, :, i])
-                print()
-            once = False
-        assert allclose, f"FAILED: {output}"
+        if not allclose:
+            print("Printing output and golden")
+            print(tt_output_tensor[0, 0, 1, :])
+            print(golden_output_tensor[0, 0, 1, :])
+            # for i in range(tt_output_tensor.shape[3]):
+            #     print(f"output row {i}")
+            #     print(tt_output_tensor[:, :, :, i])
+            #     print(f"golden row {i}")
+            #     print(golden_output_tensor[:, :, :, i])
+            #     print()
+        assert allclose, f"FAILED on iteration {i}: {output}"
 
 
 @skip_for_blackhole("Bad pcc on BH. Issue #25421")

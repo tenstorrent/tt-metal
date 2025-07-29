@@ -4,7 +4,28 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "debug/dprint_pages.h"
 
+inline void cust_print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint16_t r = 0; r < 32; ++r) {
+        DPRINT << (uint)r << " : "
+               << TileSlice(
+                      cb_id,
+                      tile_id,
+                      SliceRange{
+                          .h0 = (uint8_t)r,
+                          .h1 = (uint8_t)(r + 1),
+                          .hs = (uint8_t)1,
+                          .w0 = (uint8_t)0,
+                          .w1 = (uint8_t)32,
+                          .ws = (uint8_t)1},
+                      true,
+                      untilize)
+               << ENDL();
+    }
+    DPRINT << "++++++" << ENDL();
+}
 void kernel_main() {
     // same arg indices as in reader_binary_diff_lenghts for compat
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
@@ -101,6 +122,9 @@ void kernel_main() {
                     cb_wait_front(cb_id_intermed1, 1);
                     noc_async_read(get_noc_addr(cb_intermed1_addr), cb_intermed2_addr, bfloat16_row_bytes);
                     noc_async_read_barrier();
+
+                    // The inf values are already here
+                    //  cust_print_full_tile(cb_id_intermed1, 0);
                     cb_pop_front(cb_id_intermed1, 1);
                     cb_intermed1_addr += bfloat16_row_bytes;
                     cb_intermed2_addr += bfloat16_row_bytes;

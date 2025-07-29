@@ -8,8 +8,8 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 
-#include "debug/dprint_pages.h"
-#include "dprint_tensix.h"
+// #include "debug/dprint_pages.h"
+// #include "dprint_tensix.h"
 using std::uint32_t;
 
 // matmul C=A*B using dims MK*KN = MN (row major order)
@@ -64,7 +64,6 @@ void MAIN {
                     pack_tile(0, cb_intermed0);
                     tile_regs_release();
                     cb_push_back(cb_intermed0, onetile);
-                    // UNPACK(tt::compute::common::print_full_tile(cb_intermed0, 0));
 
                     // untilize tile and write to CBIndex::c_25
                     reconfig_data_format_srca(cb_in1, cb_intermed0);
