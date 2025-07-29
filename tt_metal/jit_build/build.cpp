@@ -370,6 +370,7 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuil
     // clang-format on
 
     this->defines_ = env_.defines_;
+    this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
 
     uint32_t l1_cache_disable_mask = tt::tt_metal::MetalContext::instance().rtoptions().get_feature_riscv_mask(
         tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
@@ -446,7 +447,7 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
     if ((l1_cache_disable_mask & debug_compute_mask) == debug_compute_mask) {
         this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
     }
-
+    this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
     // clang-format off
     this->includes_ = env_.includes_ +
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " +
