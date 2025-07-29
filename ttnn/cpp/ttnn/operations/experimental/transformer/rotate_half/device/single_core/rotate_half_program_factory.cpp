@@ -92,7 +92,7 @@ operation::ProgramWithCallbacks rotate_half_single_core(const Tensor& input, Ten
         core,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::map<string, string> bcast_compute_defines = {
+    std::map<std::string, std::string> bcast_compute_defines = {
         {"BCAST_OP", "mul_tiles_bcast"},
         {"BCAST_LLKOP", "ELWMUL"},
         {"BCAST_DIM", "BroadcastType::SCALAR"},

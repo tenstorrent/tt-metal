@@ -105,6 +105,7 @@ jobs:
             hw-topology: blackhole_llmbox
             build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+            techdebt-install-ttt-reqs: true
     runs-on: tt-beta-ubuntu-2204-large
     steps:
       - uses: actions/checkout@v4
@@ -192,13 +193,14 @@ jobs:
       - name: Run image
         timeout-minutes: 30
         env:
-          HF_MODEL: /localdev/blackhole_demos/huggingface_data/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659
-        run: docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro -e HF_MODEL ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
+          HF_MODEL: meta-llama/Llama-3.1-8B-Instruct
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro -e HF_MODEL ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
   test-bh-image:
     needs:
       - get-image-tags
       - build-images
     strategy:
+      fail-fast: false
       matrix:
         bh-card:
           - P100

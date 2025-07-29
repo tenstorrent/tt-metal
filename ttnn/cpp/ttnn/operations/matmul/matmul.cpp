@@ -312,6 +312,127 @@ std::vector<Tensor> MatmulBatchedWeightsOperation::invoke(
         optional_output_tensor);
 }
 
+void AddmmOperation::validate(
+    const Tensor& input_tensor, const Tensor& mat1_tensor, const Tensor& mat2_tensor, float alpha, float beta) {
+    TT_FATAL(alpha != 0.0, "alpha parameter cannot be 0");
+
+    if (beta != 0.0) {
+        const auto& input_shape = input_tensor.logical_shape();
+        const auto& mat1_shape = mat1_tensor.logical_shape();
+        const auto& mat2_shape = mat2_tensor.logical_shape();
+
+        TT_FATAL(
+            input_shape[0] == mat1_shape[0] && input_shape[1] == mat2_shape[1],
+            "input_tensor must have shape matching one of result of mat1_tensor @ mat2_tensor");
+
+        auto idtype = input_tensor.dtype();
+        TT_FATAL(
+            idtype == DataType::BFLOAT16 || idtype == DataType::FLOAT32 || idtype == DataType::BFLOAT8_B,
+            "only ttnn.bfloat16, ttnn.float32 and ttnn.bfloat8_b types are supported for input_tensor");
+    }
+
+    auto m1type = mat1_tensor.dtype();
+    TT_FATAL(
+        m1type == DataType::BFLOAT16 || m1type == DataType::FLOAT32 || m1type == DataType::BFLOAT8_B,
+        "only ttnn.bfloat16, ttnn.float32 and ttnn.bfloat8_b types are supported for mat1_tensor");
+
+    auto m2type = mat2_tensor.dtype();
+    TT_FATAL(
+        m2type == DataType::BFLOAT16 || m2type == DataType::FLOAT32 || m2type == DataType::BFLOAT8_B,
+        "only ttnn.bfloat16, ttnn.float32 and ttnn.bfloat8_b types are supported for mat2_tensor");
+}
+
+Tensor AddmmOperation::invoke(
+    const Tensor& input_tensor,
+    const Tensor& mat1_tensor,
+    const Tensor& mat2_tensor,
+    float alpha,
+    float beta,
+    const std::optional<const MemoryConfig>& memory_config,
+    std::optional<const DataType> dtype,
+    const std::optional<const MatmulProgramConfig>& program_config,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    std::optional<const CoreGrid> core_grid,
+    const std::optional<const tt::tt_metal::Tile>& output_tile,
+    std::optional<Tensor> optional_output_tensor,
+    QueueId queue_id) {
+    TT_FATAL(!output_tile.has_value(), "output_tile must not be provided");
+
+    std::optional<CoreCoord> user_core_coord;
+    if (core_grid.has_value()) {
+        user_core_coord = CoreCoord(core_grid->x, core_grid->y);
+    }
+
+    validate(input_tensor, mat1_tensor, mat2_tensor, alpha, beta);
+
+    auto out_tensor = bound_matmul(
+        mat1_tensor,
+        mat2_tensor,
+        std::nullopt,
+        Matmul{
+            program_config,
+            std::nullopt,
+            memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
+            dtype,
+            compute_kernel_config,
+            /*untilize_out=*/false,
+            /*user_core_coord=*/user_core_coord,
+            /*user_fused_activation=*/std::nullopt,
+            /*user_run_batched=*/false,
+            /*transpose_a=*/false,
+            /*transpose_b=*/false,
+            output_tile,
+            /*global_cb=*/std::nullopt,
+            /*sub_device_id=*/std::nullopt},
+        /*queue_id=*/0,
+        optional_output_tensor);
+
+    if (alpha != 1.0) {
+        multiply_(queue_id, out_tensor, alpha);
+    }
+
+    if (beta != 0.0) {
+        auto add_tensor = beta != 1.0 ? multiply(input_tensor, beta) : input_tensor;
+        add_(out_tensor, add_tensor);
+    }
+
+    return out_tensor;
+}
+
+Tensor SparseMatmulOperation::invoke(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const Tensor& sparsity,
+    uint32_t nnz,
+    const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<const DataType> dtype,
+    const std::optional<const MatmulProgramConfig>& program_config,
+    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const CoreGrid> core_grid,
+    const std::optional<const tt::tt_metal::Tile>& output_tile,
+    std::optional<Tensor> optional_output_tensor,
+    const std::optional<const GlobalCircularBuffer>& global_cb,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    std::optional<CoreCoord> user_core_coord =
+        core_grid.has_value() ? std::make_optional(CoreCoord(core_grid->x, core_grid->y)) : std::nullopt;
+    return sparse_matmul(
+        input_tensor_a,
+        input_tensor_b,
+        sparsity,
+        SparseMatmul{
+            nnz,
+            program_config,
+            memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
+            dtype,
+            compute_kernel_config,
+            user_core_coord,
+            output_tile,
+            global_cb,
+            sub_device_id},
+        DefaultQueueId,
+        optional_output_tensor);
+}
+
 }  // namespace matmul
 }  // namespace operations
 }  // namespace ttnn

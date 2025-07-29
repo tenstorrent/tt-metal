@@ -10,13 +10,9 @@ from loguru import logger
 from sklearn.metrics.pairwise import cosine_similarity
 
 import ttnn
+from models.demos.sentence_bert.common import load_torch_model
 from models.demos.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
 from models.demos.sentence_bert.runner.performant_runner import SentenceBERTPerformantRunner
-
-
-def mean_pooling(token_embeddings, attention_mask):
-    input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-    return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
 
 
 @pytest.mark.parametrize(
@@ -40,8 +36,7 @@ def mean_pooling(token_embeddings, attention_mask):
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize("model_name, sequence_length", [("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", 384)])
-def test_sentence_bert_demo_inference(device, inputs, model_name, sequence_length):
-    transformers_model = transformers.AutoModel.from_pretrained(model_name).eval()
+def test_sentence_bert_demo_inference(device, inputs, model_name, sequence_length, model_location_generator):
     config = transformers.BertConfig.from_pretrained(model_name)
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
     encoded_input = tokenizer(
@@ -53,22 +48,28 @@ def test_sentence_bert_demo_inference(device, inputs, model_name, sequence_lengt
     token_type_ids = encoded_input["token_type_ids"]
     position_ids = torch.arange(0, input_ids.shape[-1], dtype=torch.int64).unsqueeze(dim=0)
     reference_module = BertModel(config).to(torch.bfloat16)
-    reference_module.load_state_dict(transformers_model.state_dict())
-    reference_out = reference_module(
-        input_ids, attention_mask=extended_mask, token_type_ids=token_type_ids, position_ids=position_ids
+    reference_module = load_torch_model(
+        reference_module, target_prefix="", model_location_generator=model_location_generator
     )
+    Reference_sentence_embeddings = reference_module(
+        input_ids,
+        extended_attention_mask=extended_mask,
+        token_type_ids=token_type_ids,
+        position_ids=position_ids,
+        attention_mask=attention_mask,
+    ).post_processed_output
     ttnn_module = SentenceBERTPerformantRunner(
         device=device,
+        model_location_generator=model_location_generator,
         input_ids=input_ids,
         extended_mask=extended_mask,
+        attention_mask=attention_mask,
         token_type_ids=token_type_ids,
         position_ids=position_ids,
     )
     ttnn_module._capture_sentencebert_trace_2cqs()
-    ttnn_out = ttnn_module.run(input_ids, token_type_ids, position_ids, extended_mask)
-    ttnn_out = ttnn.to_torch(ttnn_out).squeeze(dim=1)
-    Reference_sentence_embeddings = mean_pooling(reference_out[0], attention_mask)
-    ttnn_sentence_embeddings = mean_pooling(ttnn_out, attention_mask)
+    ttnn_out = ttnn_module.run(input_ids, token_type_ids, position_ids, extended_mask, attention_mask)
+    ttnn_sentence_embeddings = ttnn.to_torch(ttnn_out, dtype=torch.float32)
     cosine_sim_matrix1 = cosine_similarity(Reference_sentence_embeddings.detach().squeeze().cpu().numpy())
     upper_triangle1 = np.triu(cosine_sim_matrix1, k=1)
     similarities1 = upper_triangle1[upper_triangle1 != 0]

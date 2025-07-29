@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -67,7 +68,6 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
-    const auto single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
     const auto& input_grad_shape = input_grad.logical_shape();
     const uint32_t input_grad_rank = input_grad_shape.rank();
@@ -139,7 +139,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }

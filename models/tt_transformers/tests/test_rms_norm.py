@@ -44,7 +44,7 @@ def test_rms_norm_inference(
 ):
     dtype = ttnn.bfloat16
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
 
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
@@ -59,6 +59,7 @@ def test_rms_norm_inference(
         state_dict_prefix=state_dict_prefix,
         weight_key="attention_norm",
         weight_dtype=dtype,
+        add_unit_offset=model_args.rms_norm_add_unit_offset,
         is_distributed=model_args.is_distributed_norm,
         sharded_program_config=model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],
         sharded_output_config=model_args.get_model_config()["SHARDED_ATTN_INPUT_MEMCFG"],
@@ -99,7 +100,7 @@ def test_rms_norm_inference(
         ),
     )[:1, :, :, :]
 
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc=0.9999)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
@@ -109,4 +110,4 @@ def test_rms_norm_inference(
     else:
         logger.warning("rms_norm Failed!")
 
-    assert passing, f"rms_norm output does not meet PCC requirement {0.99}."
+    assert passing, f"rms_norm output does not meet PCC requirement {0.9999}."

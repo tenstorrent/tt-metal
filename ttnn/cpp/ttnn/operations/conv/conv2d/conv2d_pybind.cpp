@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <variant>
 #include <optional>
+#include <string>
 
 #include <pybind11/cast.h>
 #include <pybind11/pybind11.h>
@@ -415,7 +416,7 @@ void py_bind_conv2d(py::module& module) {
     py_conv_config.def(
         py::init<
             std::optional<DataType>,
-            string,
+            std::string,
             bool,
             bool,
             uint32_t,
@@ -426,6 +427,7 @@ void py_bind_conv2d(py::module& module) {
             std::optional<CoreRangeSet>,
             bool,
             Layout,
+            bool,
             bool,
             bool,
             bool,
@@ -447,6 +449,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("output_layout") = Layout::TILE,
         py::arg("enable_act_double_buffer") = false,
         py::arg("enable_weights_double_buffer") = false,
+        py::arg("full_inner_dim") = false,
         py::arg("enable_split_reader") = false,
         py::arg("enable_subblock_padding") = false,
         py::arg("in_place") = false,
@@ -530,6 +533,12 @@ void py_bind_conv2d(py::module& module) {
             Doubles the size of the Weights Circular Buffer to allow for double buffering, preventing stalls of the weights reader kernel.
             This improves performance, but increases the memory usage of the weights tensor.
         )doc");
+    py_conv_config.def_readwrite("full_inner_dim", &Conv2dConfig::full_inner_dim, R"doc(
+            Applies only to block sharded layout.
+            By default inner dim of activation matrix will be sliced by kernel_h.
+            If L1 constraints allowed it we can use full inner dim.
+            This will increase perf, but it will take more L1 space.
+        )doc");
     py_conv_config.def_readwrite("enable_split_reader", &Conv2dConfig::enable_split_reader, R"doc(
             This uses both the reader & writer cores to carry out the activation reader operation.
             This is useful when the input tensor is large, and the activation reader is a bottleneck.
@@ -554,15 +563,20 @@ void py_bind_conv2d(py::module& module) {
 
         * Input tensor (NHWC format):
           - From: (N, H, W, IC)
-          - To: (N, H/stride[0], W/stride[1], IC * kernel[0] * kernel[1])
+          - To: (N, H / stride[0], W / stride[1], IC * stride[0] * stride[1])
 
         * Weight tensor:
           - From: (OC, IC, kernel[0], kernel[1])
-          - To: (1, 1, IC * kernel[0] * kernel[1], OC)
+          - To: (1, 1, IC * (kernel[0] + pad_h) * (kernel[1] + pad_w), OC)
+          Note: The zero padding applied to the weight tensor is implicit and not passed by the user via the padding argument,
+          where pad_h = kernel[0] % stride[0] and pad_w = kernel[1] % stride[1].
 
         Note: This optimization is currently only applied when all of the following conditions are met:
-        1. The stride dimensions exactly match the kernel dimensions (stride[0] == kernel[0] and stride[1] == kernel[1])
-        2. The input tensor is stored in DRAM memory
+        1. The input tensor is stored in DRAM memory.
+        2. The input tensor's height and width are divisible by the stride dimensions.
+        3. Stride values are equal to or less than the kernel dimensions.
+        4. Input tensor's padding must be zero.
+        5. Input tensor data type is not BFLOAT8_B.
 
         ===============================================================
         )doc");

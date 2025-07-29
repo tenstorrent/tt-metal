@@ -8,7 +8,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
 #include <cstdlib>
 #include <ctime>
 #include <exception>
@@ -570,7 +569,7 @@ int main(int argc, char** argv) {
 
         std::vector<uint32_t> dispatch_compile_args = {};
 
-        std::map<string, string> dispatch_defines = {
+        std::map<std::string, std::string> dispatch_defines = {
             {"DISPATCH_CB_BASE", std::to_string(l1_buf_base)},
             {"DISPATCH_CB_LOG_PAGE_SIZE", std::to_string(log_dispatch_buffer_page_size_g)},
             {"DISPATCH_CB_PAGES", std::to_string(dispatch_buffer_size_g / dispatch_buffer_page_size_g)},
@@ -645,7 +644,7 @@ int main(int argc, char** argv) {
             prefetch_sync_sem,
         };
 
-        std::map<string, string> prefetch_defines = {
+        std::map<std::string, std::string> prefetch_defines = {
             {"MY_NOC_X", std::to_string(phys_spoof_prefetch_core.x)},
             {"MY_NOC_Y", std::to_string(phys_spoof_prefetch_core.y)},
             {"DISPATCH_NOC_X", std::to_string(phys_dispatch_core.x)},
@@ -653,7 +652,7 @@ int main(int argc, char** argv) {
             {"FD_CORE_TYPE", std::to_string(0)},  // todo, support dispatch on eth
         };
         if (fire_once_g) {
-            prefetch_defines.insert(std::pair<string, string>("FIRE_ONCE", std::to_string(1)));
+            prefetch_defines.insert(std::pair<std::string, std::string>("FIRE_ONCE", std::to_string(1)));
         }
 
         auto sp1 = tt_metal::CreateKernel(

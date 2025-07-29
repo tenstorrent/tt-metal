@@ -101,7 +101,7 @@ class TtBasicTransformerBlock(nn.Module):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         attn_hidden_states = self.attn2(attn_hidden_states, attention_mask, encoder_hidden_states)
-        hidden_states = ttnn.add(hidden_states, attn_hidden_states)
+        hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)
 
         attn_hidden_states = ttnn.layer_norm(
             hidden_states,
@@ -111,6 +111,6 @@ class TtBasicTransformerBlock(nn.Module):
             compute_kernel_config=self.ln_compute_kernel_config,
         )
         attn_hidden_states = self.ff(attn_hidden_states)
-        hidden_states = ttnn.add(hidden_states, attn_hidden_states)
+        hidden_states = ttnn.add(hidden_states, attn_hidden_states, use_legacy=False)
 
         return hidden_states

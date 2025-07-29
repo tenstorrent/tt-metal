@@ -2,58 +2,25 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import tempfile
-from pathlib import Path
 
 import pytest
 import torch
-from loguru import logger
 
 # Import from local reference files instead of HuggingFace
 from torch.nn import Embedding
-from transformers import AutoConfig
 
 import ttnn
 from models.demos.deepseek_v3.tt.embedding_1d import Embedding1D
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.utility_functions import comp_pcc
-
-
-@pytest.fixture
-def temp_dir():
-    """Create a temporary directory for test outputs."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
-
-
-@pytest.fixture
-def hf_config():
-    """Load DeepSeek config for testing."""
-    path = os.getenv("HF_MODEL", "/proj_sw/user_dev/deepseek-ai")
-    config = AutoConfig.from_pretrained(path, trust_remote_code=True)
-    return config
-
-
-@pytest.fixture
-def reference_model(hf_config):
-    """DeepSeek just uses the standard Embedding module."""
-    return Embedding(
-        hf_config.vocab_size,
-        hf_config.hidden_size,
-        hf_config.pad_token_id,
-    )
-
-
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), (1, ttnn.get_num_devices())
-        )
-    ],
-    indirect=True,
+from models.demos.deepseek_v3.utils.test_utils import (
+    assert_hidden_dim_pcc,
+    get_model_config,
+    load_reference_io_tensors_for_module,
+    load_state_dict,
+    run_module_forward,
 )
+
+
 @pytest.mark.parametrize(
     "mode,seq_len",
     [
@@ -64,77 +31,72 @@ def reference_model(hf_config):
         ("prefill", 2048),  # Long prefill
     ],
 )
+@pytest.mark.parametrize(
+    "generate_reference_io",
+    [True, False],
+)
 def test_embedding_forward_pass(
+    hf_config,
     mode,
     seq_len,
-    reference_model,
-    hf_config,
-    temp_dir,
-    mesh_device,
+    generate_reference_io,
+    tmp_path,
+    mesh_row,
+    model_path,
 ):
-    """Test embedding forward pass against reference model."""
-    # Setup: Convert weights and get weight_config
-    hf_state_dict = reference_model.state_dict()
-    weight_config = Embedding1D.convert_weights(hf_config, hf_state_dict, temp_dir, mesh_device)
+    module_path = "model.embed_tokens"
 
-    # Generate appropriate config
-    if mode == "prefill":
-        model_config = Embedding1D.prefill_model_config(hf_config, mesh_device)
+    if generate_reference_io:
+        reference_model = Embedding(
+            hf_config.vocab_size,
+            hf_config.hidden_size,
+            hf_config.pad_token_id,
+        ).eval()
+        state_dict = reference_model.state_dict()
+
+        torch_input = torch.randint(0, min(1000, hf_config.vocab_size), (1, 1, seq_len))
+        reference_output = reference_model(torch_input)
     else:
-        model_config = Embedding1D.decode_model_config(hf_config, mesh_device)
+        state_dict = load_state_dict(model_path, module_path)
+        torch_input, reference_output = load_reference_io_tensors_for_module(mode, module_path, seq_len)
+        torch_input.unsqueeze_(0)
+        reference_output.unsqueeze_(0)
 
-    # Create a new model state
-    model_state = Embedding1D.create_state(hf_config, mesh_device=mesh_device)
-
-    # Create RunConfig using both weight_config and model_config
+    # Generate module configs and state
+    weight_config = Embedding1D.convert_weights(hf_config, state_dict, tmp_path, mesh_row)
+    model_config = get_model_config(Embedding1D, mode, hf_config, mesh_row)
+    model_state = Embedding1D.create_state(hf_config, mesh_row)
     run_config = create_run_config(model_config, weight_config, model_state)
 
-    # Prepare input - in decode mode batch is placed into seq_len dimension anyway
-    torch_input_ids = torch.randint(0, min(1000, hf_config.vocab_size), (1, seq_len))
-
+    # Convert input to TTNN
     tt_input_ids = ttnn.from_torch(
-        torch_input_ids,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        torch_input,
+        device=mesh_row,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_row),
         dtype=ttnn.uint32,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
     # TTNN forward pass
-    if mode == "prefill":
-        tt_output = Embedding1D.forward_prefill(tt_input_ids, run_config)
-    else:
-        tt_output = Embedding1D.forward_decode(tt_input_ids, run_config)
+    tt_output = run_module_forward(Embedding1D, mode, tt_input_ids, run_config)
 
-    logger.info(tt_output)
+    # Convert output back to torch
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(
-            mesh_device,
+            mesh_row,
             dims=(-2, -1),
-            mesh_shape=tuple(mesh_device.shape),
+            mesh_shape=tuple(mesh_row.shape),
         ),
     )
 
-    # Reference forward pass
-    reference_output = reference_model(torch_input_ids)
-    print(reference_output.shape)
-
-    # Compare outputs
-    pcc_required = 0.99  # Embedding should be exact match (just lookup)
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
-
-    logger.info(f"Mode: {mode}, Seq len: {seq_len}")
-    logger.info(f"Reference shape: {reference_output.shape}")
-    logger.info(f"TTNN output shape: {tt_output_torch.shape}")
-    logger.info(f"PCC: {pcc_message}")
-
-    assert passing, f"Embedding output does not meet PCC requirement {pcc_required}: {pcc_message}"
-
     # Cleanup
-    ttnn.deallocate(tt_output)
     ttnn.deallocate(tt_input_ids)
+    ttnn.deallocate(tt_output)
+
+    # Check PCC
+    assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.98)
 
 
 if __name__ == "__main__":

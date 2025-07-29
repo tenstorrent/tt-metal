@@ -128,6 +128,10 @@ if(ENABLE_BUILD_TIME_TRACE)
     endif()
 endif()
 
+# Top-level target to build all generated files
+# Useful for eg: ensuring all files exist before linting
+add_custom_target(all_generated_files)
+
 include(CPM)
 if(CMAKE_VERSION VERSION_LESS 3.25)
     # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25
@@ -155,7 +159,7 @@ target_link_libraries(
 )
 
 add_compile_options(
-    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-mavx2>"
+    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=x86-64-v3>"
     -fPIC
     -fvisibility-inlines-hidden
     -Wall

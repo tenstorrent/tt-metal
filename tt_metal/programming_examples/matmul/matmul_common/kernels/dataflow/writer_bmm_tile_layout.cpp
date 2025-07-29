@@ -24,16 +24,13 @@ void kernel_main() {
     uint32_t MtNt = get_arg_val<uint32_t>(11);  // if 0
     uint32_t batch = get_arg_val<uint32_t>(12);
 
-    constexpr bool out_is_dram = get_compile_time_arg_val(0) == 1;
-
     constexpr uint32_t cb_id_out0 = 16;
 
     // single-tile
     const uint32_t single_tile_size_bytes = get_tile_size(cb_id_out0);
-    const DataFormat data_format = get_dataformat(cb_id_out0);
 
-    const InterleavedAddrGenFast<out_is_dram> s = {
-        .bank_base_address = out_tensor_addr, .page_size = single_tile_size_bytes, .data_format = data_format};
+    constexpr auto s_args = TensorAccessorArgs<0>();
+    const auto s = TensorAccessor(s_args, out_tensor_addr, single_tile_size_bytes);
 
     bool one_time_profile = true;
     for (uint32_t b = 0; b < batch; b++) {

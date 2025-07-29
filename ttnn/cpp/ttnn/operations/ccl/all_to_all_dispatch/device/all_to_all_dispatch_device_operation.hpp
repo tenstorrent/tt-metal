@@ -16,35 +16,25 @@
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
+#include <vector>
 
 namespace ttnn::operations::ccl {
 
-// !TODO these should go in a common library, drop `detail` namespace
 namespace detail {
 
-// pretty sure this one is used in a couple of ops
-std::string stringify_vector(const std::vector<uint32_t>& vec);
-
-std::string stringify_array(const std::array<bool, 4>& arr);
-
-tt::tt_metal::Shape2D get_physical_size(const ttnn::Tensor& tensor);
-
-std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbors(
-    const MeshDeviceView& mesh_view,
-    const MeshCoordinate& mesh_coordinate,
-    tt::tt_fabric::Topology topology,
+std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& indices_tensor,
+    const ttnn::Tensor& mapping_tensor,
     std::optional<uint32_t> axis);
-
-uint32_t select_link(
-    const MeshDeviceView& mesh_view,
-    const MeshCoordinate& src,
-    const MeshCoordinate& dst,
-    uint32_t num_links,
-    tt::tt_fabric::Topology topology);
 
 }  // namespace detail
 
 struct AllToAllDispatchDeviceOperation {
+    enum AllToAllTransferType {
+        FullPacket,  // All pages are sent to the intermediate buffer and then written to the output buffer later
+        PageByPage,  // Each page is sent directly to the output buffer to conserve L1 space via intermediates
+    };
     struct operation_attributes_t {
         const tt::tt_metal::SubDeviceId subdevice_id;
         const MemoryConfig output_mem_config;
@@ -52,6 +42,7 @@ struct AllToAllDispatchDeviceOperation {
         const uint32_t num_links;
         const tt::tt_fabric::Topology topology;
         const std::optional<GlobalSemaphore> cross_device_semaphore;
+        const AllToAllTransferType impl;
     };
     struct tensor_args_t {
         const Tensor input_tensor;
@@ -69,7 +60,7 @@ struct AllToAllDispatchDeviceOperation {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle ternary_reader_kernel_id;
             tt::tt_metal::KernelHandle binary_writer_kernel_id;
-            CoreCoord core;
+            std::vector<CoreCoord> cores;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -122,7 +113,8 @@ struct AllToAllDispatchDeviceOperation {
         tt::tt_fabric::Topology topology,
         const ttnn::MemoryConfig& memory_config,
         tt::tt_metal::SubDeviceId subdevice_id,
-        const std::optional<GlobalSemaphore>& global_semaphore);
+        const std::optional<GlobalSemaphore>& global_semaphore,
+        AllToAllTransferType impl);
 };
 }  // namespace ttnn::operations::ccl
 

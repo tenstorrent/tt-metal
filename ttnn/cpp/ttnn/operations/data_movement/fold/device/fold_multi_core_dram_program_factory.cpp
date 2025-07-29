@@ -36,7 +36,6 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     const uint32_t input_width = input_tensor.logical_shape()[2];
 
     // Get compute grid size and buffer pointers
-    auto compute_grid_size = device->compute_with_storage_grid_size();
     Buffer* src0_buffer = input_tensor.buffer();
     Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -81,14 +80,14 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         tt::tt_metal::CircularBufferConfig(
             num_input_tiles * single_tile_size * double_buffer, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig cb_src1_config =
         tt::tt_metal::CircularBufferConfig(
             num_input_tiles * single_tile_size * double_buffer, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, single_tile_size);
-    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     // Configure compile-time arguments for reader kernel
     std::vector<uint32_t> reader_compile_time_args = {
@@ -148,7 +147,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     log_debug(tt::LogOp, "compute_kernel_name: {}", compute_kernel_name);
 
     // Create main compute kernel
-    tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         compute_kernel_name,
         core_range,
@@ -159,7 +158,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
 
     // Create cliff compute kernel if needed (for handling edge cases)
     if (core_range_cliff.ranges().size() > 0) {
-        tt::tt_metal::KernelHandle compute_kernel_id_cliff = tt::tt_metal::CreateKernel(
+        tt::tt_metal::CreateKernel(
             program,
             compute_kernel_name,
             core_range_cliff,
@@ -241,10 +240,9 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
     // Calculate total input work
-    uint32_t total_input_work = batch_size * input_height * input_width;
+    uint32_t total_patches = (batch_size * input_height * input_width) / (stride_h * stride_w);
 
     // Get compute grid size and calculate work distribution
     auto compute_grid_size = device->compute_with_storage_grid_size();
@@ -256,17 +254,17 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     log_debug(tt::LogOp, "output_tensor_shape: {}", output.padded_shape());
 
     // Calculate work per core based on input dimensions
-    uint32_t work_per_core = (total_input_work + num_cores_total - 1) / num_cores_total;
+    uint32_t patches_per_core = tt::div_up(total_patches, num_cores_total);
 
     log_debug(
         tt::LogOp,
-        "total_input_work: {}, num_cores_total: {}, work_per_core: {}",
-        total_input_work,
+        "total_patches: {}, num_cores_total: {}, patches_per_core: {}",
+        total_patches,
         num_cores_total,
-        work_per_core);
+        patches_per_core);
 
     // Create core ranges
-    auto all_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+    CoreRange all_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, true);
 
     // Setup circular buffers
@@ -285,47 +283,71 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
         hal::get_dram_alignment());
 
     int double_buffer = 2;
-    // Create source circular buffer - sized for input work per core
-    auto src_cb_config = CircularBufferConfig(double_buffer * aligned_stick_nbytes, {{cb_src0_index, cb_data_format}})
-                             .set_page_size(cb_src0_index, aligned_stick_nbytes);
+    // Create source circular buffer
+    auto src_cb_config =
+        CircularBufferConfig(
+            double_buffer * aligned_stick_nbytes * stride_w * stride_h, {{cb_src0_index, cb_data_format}})
+            .set_page_size(cb_src0_index, aligned_stick_nbytes * stride_w * stride_h);
     auto cb_src0 = CreateCircularBuffer(program, all_cores, src_cb_config);
 
     bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_nbytes);
     uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_nbytes) : 0;
     // Create reader kernel
+    std::vector<uint32_t> compile_time_args(
+        {stick_nbytes,
+         cb_src0_index,
+         src_stick_size_is_power_of_two,
+         src_log2_stick_size,
+         aligned_stick_nbytes,
+         stride_h,
+         stride_w,
+         input_width,
+         patches_per_core});
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/reader_unary_stick_layout_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/reader_dram2cb_for_rm_input.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(
-            {cb_src0_index, 1, src_stick_size_is_power_of_two, src_log2_stick_size}));
+        tt::tt_metal::ReaderDataMovementConfig(compile_time_args));
     // Create writer kernel
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/writer_cb2dram_for_rm_input.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig(
-            {batch_size,
-             input_width,
-             input_height,
-             stride_h,
-             stride_w,
-             stick_nbytes,
-             cb_src0_index,
-             src_stick_size_is_power_of_two,
-             src_log2_stick_size}));
+        tt::tt_metal::WriterDataMovementConfig(compile_time_args));
 
     // Set runtime arguments for each core
+
+    const uint32_t output_height = input_height / stride_h;
+    const uint32_t output_width = input_width / stride_w;
+    const uint32_t patch_size = stride_h * stride_w;
+    const uint32_t output_hw = output_height * output_width;
+    uint32_t curr_patches = 0;
     std::vector<CoreCoord> cores_with_rtargs;
+    uint32_t src_idx, dst_idx, src_col_offset;
     for (uint32_t i = 0; i < cores.size(); i++) {
         CoreCoord core = cores[i];
-        uint32_t start_input_work = i * work_per_core;
-        uint32_t end_input_work = std::min(start_input_work + work_per_core, total_input_work);
+        std::vector<uint32_t> reader_runtime_args = {src0_buffer->address()};
+        std::vector<uint32_t> writer_runtime_args = {dst_buffer->address()};
 
-        std::vector<uint32_t> reader_runtime_args = {
-            src0_buffer->address(), stick_nbytes, end_input_work - start_input_work + 1, start_input_work};
-        std::vector<uint32_t> writer_runtime_args = {dst_buffer->address(), start_input_work, end_input_work};
+        if (curr_patches < total_patches) {
+            uint32_t output_offset = i * patches_per_core;
+            uint32_t batch_idx = output_offset / output_hw;
+            uint32_t batch_offset = output_offset % output_hw;
+            uint32_t out_height = batch_offset / output_width;
+            uint32_t out_width = batch_offset % output_width;
 
+            uint32_t src_batch_offset = batch_idx * output_height * output_width * patch_size;
+            uint32_t src_row_offset = out_height * stride_h * input_width;
+            src_col_offset = out_width * stride_w;
+
+            src_idx = src_batch_offset + src_row_offset + src_col_offset;
+            dst_idx = output_offset * patch_size;
+        }
+
+        curr_patches += patches_per_core;
+        reader_runtime_args.push_back(src_idx);
+        reader_runtime_args.push_back(src_col_offset);
+        writer_runtime_args.push_back(dst_idx);
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
         cores_with_rtargs.push_back(core);

@@ -41,7 +41,6 @@ public:
         return true;
     }
 
-public:
     TTNNFixtureBase() : TTNNFixtureBase(DEFAULT_TRACE_REGION_SIZE, DEFAULT_L1_SMALL_SIZE) { }
 
     TTNNFixtureBase(int trace_region_size, int l1_small_size) :

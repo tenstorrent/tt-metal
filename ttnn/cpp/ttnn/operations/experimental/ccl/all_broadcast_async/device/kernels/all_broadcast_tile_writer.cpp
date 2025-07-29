@@ -172,7 +172,7 @@ void kernel_main() {
 
     // 4. global semaphore reset
     if (reset_global_semaphore) {
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr) = 0;
+        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
     }
 
     if (fabric_connection.is_logically_connected()) {

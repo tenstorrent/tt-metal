@@ -211,7 +211,8 @@ Result conv_transpose2d(
         kernel_size[0],
         kernel_size[1],
         get_fp32_dest_acc_en(compute_config),
-        conv_config.enable_split_reader);
+        conv_config.enable_split_reader,
+        conv_config.full_inner_dim);
 
     bool weight_is_on_device = tt::tt_metal::is_device_tensor(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
@@ -291,6 +292,8 @@ Result conv_transpose2d(
         {batch_size, input_height, input_width, in_channels},
         compute_config,
         conv_config.enable_act_double_buffer,
+        conv_config.enable_weights_double_buffer,
+        conv_config.full_inner_dim,
         conv_config.enable_split_reader,
         conv_config.enable_subblock_padding);
     if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {

@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include <atomic>
+
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
 
@@ -144,25 +146,23 @@ struct kernel_config_msg_t {
     volatile uint16_t local_cb_offset;
     volatile uint16_t remote_cb_offset;
     rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
-    volatile uint8_t pad1[2];
-    volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
-
     volatile uint8_t mode;  // dispatch mode host/dev
+    volatile uint8_t pad1[1];
+    volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
+    volatile uint32_t local_cb_mask;
+
     volatile uint8_t brisc_noc_id;
     volatile uint8_t brisc_noc_mode;
-    volatile uint8_t max_local_cb_end_index;
     volatile uint8_t min_remote_cb_start_index;
     volatile uint8_t exit_erisc_kernel;
-    volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
-    volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
     // 32 bit program/launch_msg_id used by the performance profiler
     // [9:0]: physical device id
     // [30:10]: program id
     // [31:31]: 0 (specifies that this id corresponds to a program running on device)
     volatile uint32_t host_assigned_id;
+    volatile uint8_t sub_device_origin_x;  // Logical X coordinate of the sub device origin
+    volatile uint8_t sub_device_origin_y;  // Logical Y coordinate of the sub device origin
     volatile uint8_t enables;
-
-    volatile uint8_t pad2[2];
 
     volatile uint8_t preload;  // Must be at end, so it's only written when all other data is written.
 } __attribute__((packed));
@@ -175,6 +175,7 @@ static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t)
 static_assert(offsetof(kernel_config_msg_t, remote_cb_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, rta_offset) % sizeof(uint16_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, kernel_text_offset) % sizeof(uint32_t) == 0);
+static_assert(offsetof(kernel_config_msg_t, local_cb_mask) % sizeof(uint32_t) == 0);
 static_assert(offsetof(kernel_config_msg_t, host_assigned_id) % sizeof(uint32_t) == 0);
 
 struct go_msg_t {
@@ -244,6 +245,7 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeNocMixedVirtualandPhysical = 10,
     DebugSanitizeInlineWriteDramUnsupported = 11,
     DebugSanitizeNocAddrMailbox = 12,
+    DebugSanitizeNocLinkedTransactionViolation = 13,
 };
 
 struct debug_assert_msg_t {
@@ -308,6 +310,8 @@ struct watcher_msg_t {
     volatile uint32_t enable;
     struct debug_waypoint_msg_t debug_waypoint[MAX_RISCV_PER_CORE];
     struct debug_sanitize_noc_addr_msg_t sanitize_noc[MAX_NUM_NOCS_PER_CORE];
+    std::atomic<bool> noc_linked_status[MAX_NUM_NOCS_PER_CORE];
+    uint8_t pad_0[2];
     struct debug_assert_msg_t assert_status;
     struct debug_pause_msg_t pause_status;
     struct debug_stack_usage_t stack_usage;

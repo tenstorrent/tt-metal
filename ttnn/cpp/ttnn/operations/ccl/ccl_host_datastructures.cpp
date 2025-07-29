@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
@@ -54,6 +56,7 @@ uint32_t EriscDatamoverConfig::compute_buffer_size(
     return buffer_size;
 }
 
+// TODO: #24600
 CCLOpConfig::CCLOpConfig(
     std::vector<Tensor>& input_tensors, const std::vector<Tensor>& output_tensors, Topology topology) :
     input_tensors(&input_tensors),
@@ -87,8 +90,8 @@ Tensor const& CCLOpConfig::get_input_tensor(std::size_t i) const { return input_
 
 Tensor const& CCLOpConfig::get_output_tensor(std::size_t i) const { return output_tensors->at(i); }
 
-std::map<string, string> CCLOpConfig::emit_worker_defines() const {
-    std::map<string, string> worker_defines;
+std::map<std::string, std::string> CCLOpConfig::emit_worker_defines() const {
+    std::map<std::string, std::string> worker_defines;
     if (this->is_row_major) {
         worker_defines["ROW_MAJOR_LAYOUT"] = "1";
     } else {

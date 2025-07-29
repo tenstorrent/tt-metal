@@ -27,9 +27,6 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
     Program program{};
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_a.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    uint32_t single_tile_size_output = tt::tt_metal::detail::TileSize(cb_data_format_output);
 
     uint32_t num_tiles = input_a.physical_volume() / tt::constants::TILE_HW;
     const auto& a_shape_wo_padding = input_a.logical_shape();
@@ -78,7 +75,7 @@ MorehDotOperation::SingleCore::cached_program_t MorehDotOperation::SingleCore::c
     const auto writer_kernel_id = CreateWriteKernel(program, writer_kernel_file, core, writer_compile_time_args);
 
     std::vector<uint32_t> compute_kernel_args = {};
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 

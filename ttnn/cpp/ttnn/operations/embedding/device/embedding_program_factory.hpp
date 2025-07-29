@@ -236,7 +236,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         (std::uint32_t)num_tiles_per_block,
         (std::uint32_t)input_block_size_bytes};
 
-    std::map<string, string> embedding_defines = {
+    std::map<std::string, std::string> embedding_defines = {
         {magic_enum::enum_name(embeddings_type).data(), "1"},
         {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
 
@@ -523,7 +523,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
 
-    std::map<string, string> embedding_defines = {
+    std::map<std::string, std::string> embedding_defines = {
         {magic_enum::enum_name(embeddings_type).data(), "1"},
         {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
 
@@ -765,7 +765,7 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
         embeddings_index_type = EmbeddingsIndexType::UINT32;
     }
 
-    std::map<string, string> embedding_defines = {
+    std::map<std::string, std::string> embedding_defines = {
         {magic_enum::enum_name(embeddings_type).data(), "1"},
         {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
 
