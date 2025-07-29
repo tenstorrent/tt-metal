@@ -26,12 +26,6 @@ ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, int rank);
 
 ttnn::Tensor to_device(
     const ttnn::Tensor& tensor,
-    IDevice* device,
-    const std::optional<MemoryConfig>& memory_config,
-    ttnn::QueueId cq_id = ttnn::DefaultQueueId);
-
-ttnn::Tensor to_device(
-    const ttnn::Tensor& tensor,
     MeshDevice* mesh_device,
     const std::optional<MemoryConfig>& memory_config,
     ttnn::QueueId cq_id = ttnn::DefaultQueueId);

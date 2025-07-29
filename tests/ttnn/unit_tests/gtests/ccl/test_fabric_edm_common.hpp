@@ -1565,17 +1565,25 @@ inline bool TestMultiInputReaderKernel(
     std::vector<Tensor> output0_tensors_device;
     std::vector<Tensor> output1_tensors_device;
 
+    // Create per-device MeshDevice wrappers for tensor allocation
+    std::vector<std::shared_ptr<distributed::MeshDevice>> mesh_devices;
+    mesh_devices.reserve(devices.size());
+    for (auto* dev : devices) {
+        mesh_devices.push_back(distributed::MeshDevice::create_unit_mesh(dev->id()));
+    }
+
     // All this garbage is to make sure the test sets up buffer addresses correctly so we can safely
     // multicast to a consistent destination address
     for (size_t i = 0; i < devices.size(); i++) {
+        auto* mesh_dev = mesh_devices[i].get();
         input0_tensors_device.push_back(
-            input_tensor0.to_device(devices.at(i), input_tensor0_mem_config, ttnn::DefaultQueueId));
+            input_tensor0.to_device(mesh_dev, input_tensor0_mem_config, ttnn::DefaultQueueId));
         input1_tensors_device.push_back(
-            input_tensor1.to_device(devices.at(i), input_tensor1_mem_config, ttnn::DefaultQueueId));
+            input_tensor1.to_device(mesh_dev, input_tensor1_mem_config, ttnn::DefaultQueueId));
         output0_tensors_device.push_back(
-            output_tensor0.to_device(devices.at(i), output_tensor0_mem_config, ttnn::DefaultQueueId));
+            output_tensor0.to_device(mesh_dev, output_tensor0_mem_config, ttnn::DefaultQueueId));
         output1_tensors_device.push_back(
-            output_tensor1.to_device(devices.at(i), output_tensor1_mem_config, ttnn::DefaultQueueId));
+            output_tensor1.to_device(mesh_dev, output_tensor1_mem_config, ttnn::DefaultQueueId));
     }
     auto launch_ccl_command_interpreter_workers = [&](std::vector<Program>& _programs) {
         return RunLocalTestWithMultiInputReaders(
@@ -1809,6 +1817,7 @@ bool RunPipelinedWorkersTest(
     auto view = *(test_fixture.view_);
 
     IDevice* device = view.get_device(MeshCoordinate(0, 0));
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device->id());
 
     // General setup is as follows:
     // Worker 1 reads input tensor as a sequence of slices - it forwards to an output tensor and after each slice, it
@@ -1853,7 +1862,7 @@ bool RunPipelinedWorkersTest(
     }
     TT_FATAL(mem_configs.size() == num_tensors, "Must have a memory config for each tensor");
     for (size_t i = 0; i < num_tensors; i++) {
-        device_tensors.push_back(host_tensors[i].to_device(device, mem_configs[i]));
+        device_tensors.push_back(host_tensors[i].to_device(mesh_device.get(), mem_configs[i]));
         log_info(tt::LogTest, "Tensor[{}] allocated starting at address {}", i, device_tensors[i].buffer()->address());
     }
     TT_ASSERT(device_tensors.size() == num_tensors);

@@ -22,7 +22,7 @@ static Tensor manual_insertion(
     const Tensor& input_tensor,
     const ttnn::Shape& logical_shape,
     const ttnn::Shape& padded_shape,
-    IDevice* device,
+    tt::tt_metal::distributed::MeshDevice* device,
     const MemoryConfig& output_mem_config) {
     TT_ASSERT(input_tensor.layout() == Layout::ROW_MAJOR);
     TT_ASSERT(

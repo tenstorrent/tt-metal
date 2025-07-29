@@ -449,7 +449,7 @@ void create_and_cache_mesh_workload(
 
     auto program_factory = mesh_device_operation_t::select_program_factory(operation_attributes, tensor_args);
     auto program_factory_index = program_factory.index();
-    auto log_msg_func = []{
+    auto log_msg_func = [] {
         log_warning(
             tt::LogOp,
             "Tensors that are distributed across mesh device unevenly negatively affect Op dispatch performance.");
