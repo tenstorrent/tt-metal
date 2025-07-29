@@ -14,32 +14,8 @@ usage()
     echo "[--docker, -d]              Specialize execution for docker"
     echo "[--no-distributed]          Don't install distributed compute dependencies (OpenMPI)"
     echo "[--hugepages]               Install hugepages dependency"
-    echo "[--sfpi]                    Install only the SFPI package"
+    echo "[--sfpi]                    Install only SFPI package (minimal installation)"
     exit 1
-}
-
-check_packaging_system() {
-    if dpkg-query -f '${Version}' -W libc-bin >/dev/null 2>&1; then
-        PKG_SYSTEM="deb"
-    elif rpm -q --qf '%{VERSION}' glibc >/dev/null 2>&1; then
-        PKG_SYSTEM="rpm"
-    else
-        echo "[ERROR] Unknown packaging system. SFPI installation requires either dpkg or rpm."
-        exit 1
-    fi
-    echo "[INFO] Detected packaging system: $PKG_SYSTEM"
-}
-
-find_sfpi_version_file() {
-    local version_file=$(dirname $0)/tt_metal/sfpi-version.sh
-    if ! [[ -r $version_file ]]; then
-        version_file=$(dirname $0)/sfpi-version.sh
-        if ! [[ -r $version_file ]]; then
-            echo "[ERROR] sfpi-version.sh not found. Please ensure this script is run from the tt-metal repository root or that sfpi-version.sh is in the same directory."
-            exit 1
-        fi
-    fi
-    echo "$version_file"
 }
 
 detect_os() {
@@ -340,48 +316,70 @@ install_llvm() {
 }
 
 install_sfpi() {
-    echo "[INFO] Installing SFPI package..."
-
-    local version_file=$(find_sfpi_version_file)
-
-    # Source the version file to get SFPI variables
+    local version_file=$(dirname $0)/tt_metal/sfpi-version.sh
+    if ! [[ -r $version_file ]] ; then
+	version_file=$(dirname $0)/sfpi-version.sh
+	if ! [[ -r $version_file ]] ; then
+	    echo "[ERROR] sfpi-version.sh not found" >&2
+	    exit 1
+	fi
+    fi
+    # determine packaging system
+    local pkg
+    if dpkg-query -f '${Version}' -W libc-bin >/dev/null 2>&1 ; then
+	pkg=deb
+    elif rpm -q --qf '%{VERSION}' glibc >/dev/null 2>&1 ; then
+	pkg=rpm
+    else
+	echo "[ERROR] Unknown packaging system" >&2
+	exit 1
+    fi
     local $(grep -v '^#' $version_file)
-
     local sfpi_arch_os=$(uname -m)_$(uname -s)
-    local sfpi_pkg_md5=$(eval echo "\$sfpi_${sfpi_arch_os}_${PKG_SYSTEM}_md5")
-
-    # Check if SFPI package is available for this architecture/OS/packaging combination
-    if [ -z $(eval echo "$sfpi_${PKG_SYSTEM}_md5") ]; then
-        echo "[ERROR] SFPI $PKG_SYSTEM package for ${sfpi_arch_os} is not available"
-        exit 1
+    local sfpi_pkg_md5=$(eval echo "\$sfpi_${sfpi_arch_os}_${pkg}_md5")
+    if [ -z $(eval echo "$sfpi_${pkg}_md5") ] ; then
+	echo "[ERROR] SFPI $pkg package for ${sfpi_arch_os} is not available" >&2
+	exit 1
     fi
-
-    # Create temporary directory for download
     local TEMP_DIR=$(mktemp -d)
-    trap "rm -rf $TEMP_DIR" EXIT INT TERM
+    wget -P $TEMP_DIR "$sfpi_url/$sfpi_version/sfpi-${sfpi_arch_os}.${pkg}"
+    if [ $(md5sum -b "${TEMP_DIR}/sfpi-${sfpi_arch_os}.${pkg}" | cut -d' ' -f1) \
+	     != "$sfpi_pkg_md5" ] ; then
+	echo "[ERROR] SFPI sfpi-${sfpi_arch_os}.${pkg} md5 mismatch" >&2
+	rm -rf $TEMP_DIR
+	exit 1
+    fi
+    # we must select exactly this version
+    case "$pkg" in
+	deb)
+	    apt-get install -y --allow-downgrades $TEMP_DIR/sfpi-${sfpi_arch_os}.deb
+	    ;;
+	rpm)
+	    rpm --upgrade --force $TEMP_DIR/sfpi-${sfpi_arch_os}.rpm
+	    ;;
+    esac
+    rm -rf $TEMP_DIR
+}
 
-    echo "[INFO] Downloading SFPI package for ${sfpi_arch_os}..."
-    wget -P $TEMP_DIR "$sfpi_url/$sfpi_version/sfpi-${sfpi_arch_os}.${PKG_SYSTEM}"
+install_sfpi_only() {
+    echo "[INFO] Installing only SFPI package for $OS_ID..."
 
-    # Verify MD5 checksum
-    echo "[INFO] Verifying package integrity..."
-    if [ $(md5sum -b "${TEMP_DIR}/sfpi-${sfpi_arch_os}.${PKG_SYSTEM}" | cut -d' ' -f1) != "$sfpi_pkg_md5" ]; then
-        echo "[ERROR] SFPI sfpi-${sfpi_arch_os}.${PKG_SYSTEM} md5 mismatch"
+    # Check packaging system
+    local pkg
+    if dpkg-query -f '${Version}' -W libc-bin >/dev/null 2>&1; then
+        pkg=deb
+    elif rpm -q --qf '%{VERSION}' glibc >/dev/null 2>&1; then
+        pkg=rpm
+    else
+        echo "[ERROR] Unknown packaging system. SFPI installation requires either dpkg or rpm."
         exit 1
     fi
+    echo "[INFO] Detected packaging system: $pkg"
 
-    # Install the package based on packaging system
-    echo "[INFO] Installing SFPI package..."
-    case "$PKG_SYSTEM" in
-        deb)
-            apt-get install -y --allow-downgrades $TEMP_DIR/sfpi-${sfpi_arch_os}.deb
-            ;;
-        rpm)
-            rpm --upgrade --force $TEMP_DIR/sfpi-${sfpi_arch_os}.rpm
-            ;;
-    esac
+    # Install SFPI using existing function
+    install_sfpi
 
-    echo "[INFO] SFPI package installed successfully!"
+    echo "[INFO] SFPI installation completed successfully!"
 }
 
 install_mpi_ulfm() {
@@ -532,19 +530,20 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if [ "$validate" -eq 1 ]; then
-    init_packages
+init_packages
+
+if [ "$sfpi_only" -eq 1 ]; then
+    install_sfpi_only
+elif [ "$validate" -eq 1 ]; then
     validate_packages
-elif [ "$sfpi_only" -eq 1 ]; then
-    echo "[INFO] Installing only SFPI package..."
-    detect_os
-    check_packaging_system
-    install_sfpi
 else
-    init_packages
     install
 fi
 
 cleanup
 
-echo "[INFO] TT-Metalium dependencies installed successfully!"
+if [ "$sfpi_only" -eq 1 ]; then
+    echo "[INFO] SFPI installation completed successfully!"
+else
+    echo "[INFO] TT-Metalium dependencies installed successfully!"
+fi
