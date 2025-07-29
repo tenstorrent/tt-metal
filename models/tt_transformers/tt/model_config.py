@@ -1521,7 +1521,7 @@ class ModelArgs:
 
         # Meta-style config dicts don't specify model name or rope_scaling_factor so hard-code these
         # Set the model name based on the checkpoint directory being loaded
-        orig_context_len = 8192
+        self.orig_context_len = 8192
         if "3.2-1B" in checkpoint_dir:
             self.model_name = "Llama-3.2-1B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 32
@@ -1543,13 +1543,19 @@ class ModelArgs:
             self.rope_scaling_factor = 8
             self.is_90b = True
         else:
+            self.rope_scaling_factor = None
+            self.orig_context_len = None
             logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
-        self.rope_scaling = rope_scaling_model_factory(
-            {
-                "rope_type": "llama3",
-                "factor": self.rope_scaling_factor,
-                "original_max_position_embeddings": orig_context_len,
-            }
+        self.rope_scaling = (
+            rope_scaling_model_factory(
+                {
+                    "rope_type": "llama3",
+                    "factor": self.rope_scaling_factor,
+                    "original_max_position_embeddings": self.orig_context_len,
+                }
+            )
+            if self.rope_scaling_factor is not None
+            else None
         )
 
     def _set_hf_params(self, checkpoint_dir):
