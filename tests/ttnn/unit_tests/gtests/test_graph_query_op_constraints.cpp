@@ -210,7 +210,7 @@ TEST_P(EltwiseUnaryOpIfTest, UnaryRelu) {
 
     // Run the test
     {
-        tt::tt_metal::IDevice* device = device_;
+        distributed::MeshDevice* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
             ttnn::relu, device, input_spec, output_spec.tensor_layout().get_memory_config());
@@ -233,7 +233,7 @@ TEST_P(EltwiseUnaryOpIfTest, Sqrt) {
 
     // Run the test
     {
-        tt::tt_metal::IDevice* device = device_;
+        auto* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
             ttnn::sqrt, device, input_spec, output_spec.tensor_layout().get_memory_config());
@@ -256,7 +256,7 @@ TEST_P(EltwiseUnaryOpIfTest, Sigmoid) {
 
     // Run the test
     {
-        tt::tt_metal::IDevice* device = device_;
+        auto* device = device_;
         const auto& output_spec = input_spec;
         // Add default parameters
         int32_t vectorMode = static_cast<int32_t>(::ttnn::operations::unary::VecMode::RC);
@@ -287,7 +287,7 @@ TEST_P(EltwiseUnaryOpIfTest, ClampScalar) {
 
     // Run the test
     {
-        tt::tt_metal::IDevice* device = device_;
+        auto* device = device_;
         const auto& output_spec = input_spec;
 
         float minVal = 0.0f;
@@ -314,7 +314,7 @@ TEST_P(EltwiseUnaryOpIfTest, Reciprocal) {
 
     // Run the test
     {
-        tt::tt_metal::IDevice* device = device_;
+        auto* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
             ttnn::reciprocal, device, input_spec, output_spec.tensor_layout().get_memory_config());
@@ -337,7 +337,7 @@ TEST_P(EltwiseUnaryOpIfTest, Sin) {
 
     // Run the test
     {
-        tt::tt_metal::IDevice* device = device_;
+        auto* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
             ttnn::sin, device, input_spec, output_spec.tensor_layout().get_memory_config());
@@ -360,7 +360,7 @@ TEST_P(EltwiseUnaryOpIfTest, Cos) {
 
     // Run the test
     {
-        tt::tt_metal::IDevice* device = device_;
+        auto* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
             ttnn::cos, device, input_spec, output_spec.tensor_layout().get_memory_config());
@@ -414,7 +414,7 @@ TEST_P(SoftmaxOpIfTest, Softmax) {
 
     // Run the test
     {
-        tt::tt_metal::IDevice* device = device_;
+        tt::tt_metal::distributed::MeshDevice* device = device_;
         const auto& output_spec = input_spec;
         auto query = ttnn::graph::query_op_constraints(
             ttnn::softmax, device, input_spec, dim_arg, output_spec.tensor_layout().get_memory_config());
@@ -468,7 +468,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryAdd) {
 
     // Run the test
     {
-        tt::tt_metal::IDevice* device = device_;
+        tt::tt_metal::distributed::MeshDevice* device = device_;
         const auto& output_spec = input_spec_a;
         constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
 
@@ -502,7 +502,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinarySubtract) {
 
     // Run the test
     {
-        tt::tt_metal::IDevice* device = device_;
+        auto* device = device_;
         const auto& output_spec = input_spec_a;
         constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
 
@@ -536,7 +536,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMul) {
 
     // Run the test
     {
-        tt::tt_metal::IDevice* device = device_;
+        auto* device = device_;
         const auto& output_spec = input_spec_a;
         constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
 
@@ -570,7 +570,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMax) {
 
     // Run the test
     {
-        tt::tt_metal::IDevice* device = device_;
+        auto* device = device_;
         const auto& output_spec = input_spec_a;
         constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
 
@@ -604,7 +604,7 @@ TEST_P(EltwiseBinaryOpIfTest, BinaryMin) {
 
     // Run the test
     {
-        tt::tt_metal::IDevice* device = device_;
+        auto* device = device_;
         const auto& output_spec = input_spec_a;
         constexpr tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> none{};
 
@@ -695,7 +695,7 @@ TEST_P(MatmulOpIfTest, Matmul) {
 
     // Run the test
     {
-        tt::tt_metal::IDevice* device = device_;
+        tt::tt_metal::distributed::MeshDevice* device = device_;
 
         const auto output_spec = ttnn::TensorSpec(
             ttnn::Shape(tt::tt_metal::Array4D{
@@ -816,7 +816,7 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
 
     // Run the test
     {
-        tt::tt_metal::IDevice* device = device_;
+        tt::tt_metal::distributed::MeshDevice* device = device_;
         auto query = ttnn::graph::query_op_constraints(
             ttnn::conv2d,
             device,
