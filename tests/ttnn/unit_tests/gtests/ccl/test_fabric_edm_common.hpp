@@ -376,7 +376,7 @@ static SubdeviceInfo create_subdevices(const std::vector<IDevice*>& devices) {
             {device->id(), device->get_sub_device_ids().at(TEST_WORKERS_SUBDEVICE_INDEX)});
         subdevice_info.fabric_subdevice_id.insert(
             {device->id(), device->get_sub_device_ids().at(TEST_EDM_FABRIC_SUBDEVICE_INDEX)});
-        device->set_sub_device_stall_group({subdevice_info.worker_subdevice_id.at(device->id())});
+        device->set_sub_device_stall_group({{subdevice_info.worker_subdevice_id.at(device->id())}});
     }
 
     return subdevice_info;
@@ -393,7 +393,7 @@ static SubdeviceInfo create_worker_subdevices(const std::vector<IDevice*>& devic
         device->load_sub_device_manager(subdevice_info.sub_device_managers.at(device->id()));
         subdevice_info.worker_subdevice_id.insert(
             {device->id(), device->get_sub_device_ids().at(TEST_WORKERS_SUBDEVICE_INDEX)});
-        device->set_sub_device_stall_group({subdevice_info.worker_subdevice_id.at(device->id())});
+        device->set_sub_device_stall_group({{subdevice_info.worker_subdevice_id.at(device->id())}});
     }
 
     return subdevice_info;
@@ -1214,14 +1214,14 @@ void persistent_fabric_teardown_sequence(
     log_info(tt::LogTest, "Tearing down fabric");
 
     // Wait for workers to finish
-    tt_metal::Finish(devices[0]->command_queue(), {subdevice_managers->worker_subdevice_id.at(devices[0]->id())});
+    tt_metal::Finish(devices[0]->command_queue(), {{subdevice_managers->worker_subdevice_id.at(devices[0]->id())}});
 
     // Teardown the fabric
     line_fabric.teardown_from_host(termination_mode);
 
     // wait for fabric teardown to finish
     std::ranges::for_each(devices, [&](IDevice* d) {
-        tt_metal::Finish(d->command_queue(), {subdevice_managers->fabric_subdevice_id.at(d->id())});
+        tt_metal::Finish(d->command_queue(), {{subdevice_managers->fabric_subdevice_id.at(d->id())}});
     });
 }
 
@@ -1498,7 +1498,7 @@ int TestLoopbackEntrypoint(
         auto d0_fabric_subdevice = device_0->get_sub_device_ids()[TEST_EDM_FABRIC_SUBDEVICE_INDEX];
         auto d1_fabric_subdevice = device_1->get_sub_device_ids()[TEST_EDM_FABRIC_SUBDEVICE_INDEX];
         // Teardown the fabric
-        tt_metal::Finish(sender_device->command_queue(), {d0_worker_subdevice});
+        tt_metal::Finish(sender_device->command_queue(), {{d0_worker_subdevice}});
         // tt_metal::Finish(receiver_device->command_queue(), {d1_worker_subdevice});
 
         // Notify fabric of teardown
@@ -1506,8 +1506,8 @@ int TestLoopbackEntrypoint(
         chip_0_edm_builder.teardown_from_host(sender_device);
 
         // wait for fabric finish
-        tt_metal::Finish(sender_device->command_queue(), {d0_fabric_subdevice});
-        tt_metal::Finish(receiver_device->command_queue(), {d1_fabric_subdevice});
+        tt_metal::Finish(sender_device->command_queue(), {{d0_fabric_subdevice}});
+        tt_metal::Finish(receiver_device->command_queue(), {{d1_fabric_subdevice}});
     }
 
     test_fixture.TearDown();
@@ -2090,7 +2090,7 @@ static void wait_for_worker_program_completion(
     const std::vector<IDevice*>& devices, const std::optional<SubdeviceInfo>& subdevice_managers = std::nullopt) {
     if (subdevice_managers) {
         std::ranges::for_each(devices, [&](IDevice* d) {
-            tt_metal::Finish(d->command_queue(), {subdevice_managers->worker_subdevice_id.at(d->id())});
+            tt_metal::Finish(d->command_queue(), {{subdevice_managers->worker_subdevice_id.at(d->id())}});
         });
     } else {
         std::ranges::for_each(devices, [&](IDevice* d) { tt_metal::Finish(d->command_queue(), {}); });
@@ -2098,7 +2098,7 @@ static void wait_for_worker_program_completion(
 }
 
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
-void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_links, ttnn::Shape const& input_shape) {
+void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_links, const ttnn::Shape& input_shape) {
     log_info(tt::LogTest, "entering test");
     constexpr auto layout = Layout::TILE;
     // DEVICES setuip
