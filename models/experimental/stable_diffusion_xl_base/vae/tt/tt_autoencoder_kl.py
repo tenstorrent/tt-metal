@@ -41,6 +41,6 @@ class TtAutoencoderKL(nn.Module):
         ttnn.deallocate(pre_conv_hidden_states)
 
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
-        hidden_states = self.decoder(hidden_states, [B, C, H, W])
+        hidden_states, [C, H, W] = self.decoder(hidden_states, [B, C, H, W])
 
-        return hidden_states
+        return hidden_states, [C, H, W]
