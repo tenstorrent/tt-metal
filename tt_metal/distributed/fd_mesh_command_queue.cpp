@@ -772,7 +772,6 @@ void FDMeshCommandQueue::reset_worker_state(
     for (auto device : mesh_device_->get_devices()) {
         TT_FATAL(!device->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
     }
-    auto& sysmem_manager = this->reference_sysmem_manager();
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
     in_use_ = true;

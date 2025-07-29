@@ -366,7 +366,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::Command* comm
 }
 
 // Per API command handlers.
-// No longer supported due to trace API depreaction. See Issue #24955
+// No longer supported due to trace API deprecation. See Issue #24955
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceCommand* cmd) {
     log_debug(
         tt::LogMetalTrace,
@@ -379,7 +379,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::EnqueueTraceC
     // EnqueueTrace(cq, cmd->tid(), cmd->blocking());
 }
 
-// No longer supported due to trace API depreaction. See Issue #24955
+// No longer supported due to trace API deprecation. See Issue #24955
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReplayTraceCommand* cmd) {
     log_debug(
         tt::LogMetalTrace,
@@ -391,7 +391,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReplayTraceCo
     // ReplayTrace(this->device_, cmd->cq_id(), cmd->tid(), cmd->blocking());
 }
 
-// No longer supported due to trace API depreaction. See Issue #24955
+// No longer supported due to trace API deprecation. See Issue #24955
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::LoadTraceCommand* cmd) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(LoadTrace) cq_id: {} tid: {}", cmd->cq_id(), cmd->tid());
     TT_THROW("Light Metal Trace is no longer supported.");
@@ -400,7 +400,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::LoadTraceComm
     // LoadTrace(this->device_, cmd->cq_id(), cmd->tid(), trace_desc.value());
 }
 
-// No longer supported due to trace API depreaction. See Issue #24955
+// No longer supported due to trace API deprecation. See Issue #24955
 void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::ReleaseTraceCommand* cmd) {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(ReleaseTrace) tid: {}", cmd->tid());
     TT_THROW("Light Metal Trace is no longer supported.");
