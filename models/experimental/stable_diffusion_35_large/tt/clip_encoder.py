@@ -12,7 +12,7 @@ import ttnn
 from .linear import TtLinear, TtLinearParameters
 from .substate import indexed_substates, substate
 from .utils import from_torch_fast
-
+from .parallel_config import EncoderParallelManager
 import math
 
 
@@ -44,12 +44,52 @@ class TtCLIPAttentionParameters:
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
     ) -> TtCLIPAttentionParameters:
+        def column_parallel_linear(name):
+            my_state = substate(state, name)
+            weight = my_state["weight"]  # [num_heads * head_dim, input_dim]
+            bias = my_state.get("bias", None)  # [num_heads * head_dim]
+            weight = weight.T  # [input_dim, num_heads * head_dim]
+
+            weight = ttnn.from_torch(
+                weight,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(device, dim=-1),
+            )
+
+            if bias is not None:
+                bias = bias.unsqueeze(0)
+                bias = ttnn.from_torch(
+                    bias,
+                    dtype=dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensorToMesh(device, dim=-1),
+                )
+
+            return TtLinearParameters(weight=weight, bias=bias)
+
+        q_proj = column_parallel_linear("q_proj")
+        k_proj = column_parallel_linear("k_proj")
+        v_proj = column_parallel_linear("v_proj")
+        o_proj = column_parallel_linear("out_proj")
+
         return cls(
-            q_proj=TtLinearParameters.from_torch(substate(state, "q_proj"), dtype=dtype, device=device),
-            k_proj=TtLinearParameters.from_torch(substate(state, "k_proj"), dtype=dtype, device=device),
-            v_proj=TtLinearParameters.from_torch(substate(state, "v_proj"), dtype=dtype, device=device),
-            o_proj=TtLinearParameters.from_torch(substate(state, "out_proj"), dtype=dtype, device=device),
+            q_proj=q_proj,
+            k_proj=k_proj,
+            v_proj=v_proj,
+            o_proj=o_proj,
         )
+
+        # return cls(
+        #     q_proj=TtLinearParameters.from_torch(substate(state, "q_proj"), dtype=dtype, device=device),
+        #     k_proj=TtLinearParameters.from_torch(substate(state, "k_proj"), dtype=dtype, device=device),
+        #     v_proj=TtLinearParameters.from_torch(substate(state, "v_proj"), dtype=dtype, device=device),
+        #     o_proj=TtLinearParameters.from_torch(substate(state, "out_proj"), dtype=dtype, device=device),
+        # )
 
 
 class TtCLIPAttention:
@@ -69,19 +109,30 @@ class TtCLIPAttention:
         self._v_proj = TtLinear(parameters.v_proj)
         self._o_proj = TtLinear(parameters.o_proj)
 
-    def __call__(self, hidden_states: ttnn.Tensor, causal_mask: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(
+        self, hidden_states: ttnn.Tensor, causal_mask: ttnn.Tensor, parallel_manager: EncoderParallelManager = None
+    ) -> ttnn.Tensor:
+        """
+        input is replicated
+        Q, K, V are head-parallel
+        SDPA executes head-parallel
+        output is replicated
+        """
         batch_size, seq_length, _ = hidden_states.shape
 
-        q = self._q_proj(hidden_states)
-        k = self._k_proj(hidden_states)
-        v = self._v_proj(hidden_states)
+        q = self._q_proj(hidden_states)  # head_parallel
+        k = self._k_proj(hidden_states)  # head_parallel
+        v = self._v_proj(hidden_states)  # head_parallel
 
         q = q * self._scale
 
         # reshape for multihead attention
-        q = ttnn.reshape(q, (batch_size, seq_length, self._num_heads, self._head_dim))
-        k = ttnn.reshape(k, (batch_size, seq_length, self._num_heads, self._head_dim))
-        v = ttnn.reshape(v, (batch_size, seq_length, self._num_heads, self._head_dim))
+        num_devices = parallel_manager.tensor_parallel.factor
+        num_local_heads = self._num_heads // num_devices
+
+        q = ttnn.reshape(q, (batch_size, seq_length, num_local_heads, self._head_dim))
+        k = ttnn.reshape(k, (batch_size, seq_length, num_local_heads, self._head_dim))
+        v = ttnn.reshape(v, (batch_size, seq_length, num_local_heads, self._head_dim))
 
         # transpose to [batch_size, num_heads, seq_length, head_dim]
         q = ttnn.transpose(q, 1, 2)
@@ -98,13 +149,38 @@ class TtCLIPAttention:
         # TODO: replace with ttnn.dropout once it's supported
         # attn_weights = ttnn.experimental.dropout(attn_weights, self._attention_dropout)
 
-        attn_output = ttnn.matmul(attn_weights, v)
+        attn_output = ttnn.matmul(attn_weights, v)  # head_parallel
 
         # transpose back and reshape
         attn_output = ttnn.transpose(attn_output, 1, 2)
-        attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, self._embed_dim))
+        attn_output = ttnn.reshape(attn_output, (1, batch_size, seq_length, self._embed_dim // num_devices))
 
-        return self._o_proj(attn_output)
+        # all-gather
+        orig_shape = list(attn_output.shape)
+        attn_output = ttnn.experimental.all_gather_async(
+            attn_output,
+            dim=len(attn_output.shape) - 1,
+            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(),
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=parallel_manager.topology,
+        )
+
+        dense_out = self._o_proj(attn_output)
+
+        dense_out = ttnn.experimental.all_gather_async(
+            dense_out,
+            dim=len(dense_out.shape) - 1,
+            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(),
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=parallel_manager.topology,
+        )
+        dense_out_shape = list(dense_out.shape)
+        dense_out_shape[2] = orig_shape[2]
+        dense_out = ttnn.reshape(dense_out, tuple(dense_out_shape), dense_out.shape)
+
+        return ttnn.reshape(dense_out, tuple(dense_out.shape)[1:])
 
 
 @dataclass
@@ -204,13 +280,20 @@ class TtCLIPEncoderLayer:
         self._layer_norm2_bias = parameters.layer_norm2_bias
         self._layer_norm_eps = config.layer_norm_eps
 
-    def __call__(self, hidden_states: ttnn.Tensor, causal_attention_mask: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(
+        self,
+        hidden_states: ttnn.Tensor,
+        causal_attention_mask: ttnn.Tensor,
+        parallel_manager: EncoderParallelManager = None,
+    ) -> ttnn.Tensor:
         # self attention block
-        residual = hidden_states
+        residual = hidden_states  # replicated
         hidden_states = ttnn.layer_norm(
             hidden_states, weight=self._layer_norm1, bias=self._layer_norm1_bias, epsilon=self._layer_norm_eps
         )
-        attn_output = self._self_attn(hidden_states, causal_attention_mask)
+
+        # replicated
+        attn_output = self._self_attn(hidden_states, causal_attention_mask, parallel_manager=parallel_manager)
         hidden_states = residual + attn_output
 
         # mlp block
@@ -219,6 +302,7 @@ class TtCLIPEncoderLayer:
             hidden_states, weight=self._layer_norm2, bias=self._layer_norm2_bias, epsilon=self._layer_norm_eps
         )
         mlp_output = self._mlp(hidden_states)
+        # replicated
         hidden_states = residual + mlp_output
 
         return hidden_states
@@ -251,9 +335,15 @@ class TtCLIPTransformer:
         self._config = config
         self._layers = [TtCLIPEncoderLayer(layer_params, config) for layer_params in parameters.layers]
 
-    def __call__(self, hidden_states: ttnn.Tensor, causal_attention_mask: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(
+        self,
+        hidden_states: ttnn.Tensor,
+        causal_attention_mask: ttnn.Tensor,
+        parallel_manager: EncoderParallelManager = None,
+    ) -> ttnn.Tensor:
         for layer in self._layers:
-            hidden_states = layer(hidden_states, causal_attention_mask)
+            # hidden states replicated
+            hidden_states = layer(hidden_states, causal_attention_mask, parallel_manager=parallel_manager)
 
         return hidden_states
 
@@ -281,8 +371,13 @@ class TtCLIPEncoder:
     def __init__(self, parameters: TtCLIPEncoderParameters, config: TtCLIPConfig) -> None:
         self._text_model = TtCLIPTransformer(parameters.text_model, config)
 
-    def __call__(self, hidden_states: ttnn.Tensor, causal_attention_mask: ttnn.Tensor) -> ttnn.Tensor:
-        return self._text_model(hidden_states, causal_attention_mask)
+    def __call__(
+        self,
+        hidden_states: ttnn.Tensor,
+        causal_attention_mask: ttnn.Tensor,
+        parallel_manager: EncoderParallelManager = None,
+    ) -> ttnn.Tensor:
+        return self._text_model(hidden_states, causal_attention_mask, parallel_manager=parallel_manager)
 
 
 @dataclass
@@ -386,17 +481,28 @@ class TtCLIPTextTransformer:
         self._layer_norm_eps = config.layer_norm_eps
 
     def __call__(
-        self, input_ids: ttnn.Tensor, device: ttnn.Device, eos_token_id: int = None
+        self,
+        input_ids: ttnn.Tensor,
+        device: ttnn.Device,
+        eos_token_id: int = None,
+        parallel_manager: EncoderParallelManager = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """
+        input_ids: replicated across devices
+        returns:
+            sequence_embeddings: replicated across devices
+            pooled_output: replicated across devices
+        """
         batch_size, seq_length = input_ids.shape
 
+        # replicated input / output
         hidden_states = self._embeddings(input_ids, device)
 
         causal_attention_mask = _create_4d_causal_attention_mask(
             input_ids.shape, device, dtype=hidden_states.get_dtype()
         )
 
-        hidden_states = self._encoder(hidden_states, causal_attention_mask)
+        hidden_states = self._encoder(hidden_states, causal_attention_mask, parallel_manager=parallel_manager)
 
         sequence_embeddings = ttnn.layer_norm(
             hidden_states, weight=self._final_layer_norm, bias=self._final_layer_norm_bias, epsilon=self._layer_norm_eps
@@ -415,7 +521,7 @@ class TtCLIPTextTransformer:
     def _gather_eos(
         self, seq_emb: ttnn.Tensor, input_ids: ttnn.Tensor, eos_token_id: int, device: ttnn.Device
     ) -> ttnn.Tensor:
-        ids_t = ttnn.to_torch(input_ids)
+        ids_t = ttnn.to_torch(ttnn.get_device_tensors(input_ids)[0])
 
         # from HF: if self.eos_token_id == 2: use argmax, else: search for eos_token_id
         if eos_token_id == 2:
@@ -426,11 +532,17 @@ class TtCLIPTextTransformer:
             eos_mask = (ids_t.to(dtype=torch.int, device=ids_t.device) == eos_token_id).int()
             eos_idx = eos_mask.argmax(dim=-1)
 
-        seq_t = ttnn.to_torch(seq_emb)  # [B, S, H]
+        seq_t = ttnn.to_torch(ttnn.get_device_tensors(seq_emb)[0])  # [B, S, H]
         b = torch.arange(seq_t.size(0))
         pooled_t = seq_t[b, eos_idx]  # [B, H]
 
-        return ttnn.from_torch(pooled_t, dtype=seq_emb.get_dtype(), layout=ttnn.TILE_LAYOUT, device=device)
+        return ttnn.from_torch(
+            pooled_t,
+            dtype=seq_emb.get_dtype(),
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+        )
 
 
 # adapted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/clip/modeling_clip.py
