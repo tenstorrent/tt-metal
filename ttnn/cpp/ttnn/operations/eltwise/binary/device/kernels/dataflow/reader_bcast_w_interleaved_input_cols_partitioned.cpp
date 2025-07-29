@@ -23,8 +23,8 @@ void kernel_main() {
     uint32_t HtWt = get_arg_val<uint32_t>(14);  // HtWt of input tensor
     uint32_t Wt_skip = get_arg_val<uint32_t>(15);
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr auto src0_args = TensorAccessorArgs<0>();
+    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
@@ -32,9 +32,7 @@ void kernel_main() {
 
     // single-tile ublocks
     const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-    const DataFormat in0_data_format = get_dataformat(cb_id_in0);
     const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
-    const DataFormat in1_data_format = get_dataformat(cb_id_in1);
 
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;
@@ -43,11 +41,8 @@ void kernel_main() {
     uint32_t i = 0;
     uint32_t i_bcast = 0;
 
-    const InterleavedAddrGenFast<src0_is_dram> s0 = {
-        .bank_base_address = src0_addr, .page_size = in0_tile_bytes, .data_format = in0_data_format};
-
-    const InterleavedAddrGenFast<src1_is_dram> s1 = {
-        .bank_base_address = src1_addr, .page_size = in1_tile_bytes, .data_format = in1_data_format};
+    const auto s0 = TensorAccessor(src0_args, src0_addr, in0_tile_bytes);
+    const auto s1 = TensorAccessor(src1_args, src1_addr, in1_tile_bytes);
 
     uint32_t i_nc = 0;
     for (uint32_t nc = 0; nc < NC; nc++) {
