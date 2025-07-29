@@ -498,6 +498,8 @@ def test_demo_text(
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
     sampling_params = request.config.getoption("--sampling_params") or sampling_params
+
+    stop_at_eos = False # Default to False
     if request.config.getoption("--stop_at_eos") in [
         0,
         1,
@@ -530,7 +532,6 @@ def test_demo_text(
     os.chmod(output_directory, 0o755)
     output_filename = f"{output_directory}/demo_user_output_{timestamp}.txt"
 
-    stop_at_eos = False  # Default to False
     if not stop_at_eos:
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
 
