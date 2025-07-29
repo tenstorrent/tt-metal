@@ -11,6 +11,7 @@
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
 void kernel_main() {
+    return;
     DPRINT << "reader_bmm_tile_layout_in0_ring_all_gather" << ENDL();
     std::array<uint32_t, 4> fused_op_receiver_signal_semaphore_addr = {
         get_compile_time_arg_val(7),
