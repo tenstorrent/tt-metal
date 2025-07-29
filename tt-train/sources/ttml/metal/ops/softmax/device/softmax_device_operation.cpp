@@ -27,14 +27,14 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             tensor.device()->arch() == tt::ARCH::WORMHOLE_B0,
             "Softmax operation is only supported on Wormhole. Device arch: {}. Tensor name: {}",
-            magic_enum::enum_name(tensor.device()->arch()),
+            enchantum::to_string(tensor.device()->arch()),
             name);
 
         TT_FATAL(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
             "Softmax operation requires '{}' to be on DEVICE. Got storage type: '{}'",
             name,
-            magic_enum::enum_name(tensor.storage_type()));
+            enchantum::to_string(tensor.storage_type()));
 
         TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
 
@@ -42,21 +42,21 @@ void SoftmaxDeviceOperation::validate_on_program_cache_miss(
             tensor.layout() == required_layout,
             "Tensor '{}' must have layout '{}', but got '{}'",
             name,
-            magic_enum::enum_name(required_layout),
-            magic_enum::enum_name(tensor.layout()));
+            enchantum::to_string(required_layout),
+            enchantum::to_string(tensor.layout()));
 
         TT_FATAL(
             tensor.dtype() == required_dtype,
             "Tensor '{}' must have data type '{}', but got '{}'",
             name,
-            magic_enum::enum_name(required_dtype),
-            magic_enum::enum_name(tensor.dtype()));
+            enchantum::to_string(required_dtype),
+            enchantum::to_string(tensor.dtype()));
 
         TT_FATAL(
             tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
             "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
             name,
-            magic_enum::enum_name(tensor.memory_config().memory_layout()));
+            enchantum::to_string(tensor.memory_config().memory_layout()));
     };
 
     const auto& input_tensor = tensor_args.input;

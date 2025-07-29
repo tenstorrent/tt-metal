@@ -5,7 +5,7 @@
 #include "gelu_backward_device_operation.hpp"
 #include "gelu_backward_program_factory.hpp"
 
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/constants.hpp>
 #include "tt-metalium/host_api.hpp"
 

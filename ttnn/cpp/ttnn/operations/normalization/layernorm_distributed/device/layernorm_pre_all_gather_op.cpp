@@ -10,7 +10,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 
 #include <optional>
 

@@ -11,7 +11,7 @@
 #include <tt-metalium/constants.hpp>
 #include "tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/ternary_backward/ternary_backward.hpp"
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 
 namespace ttnn::operations::ternary_backward {
 

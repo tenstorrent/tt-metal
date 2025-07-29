@@ -106,7 +106,7 @@ static void configure_risc_settings(
             }
         }
     } else {
-        TT_THROW("Unsupported architecture for RISC configuration: {}", magic_enum::enum_name(arch));
+        TT_THROW("Unsupported architecture for RISC configuration: {}", enchantum::to_string(arch));
     }
 }
 
@@ -338,7 +338,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     } else if (arch == tt::ARCH::BLACKHOLE) {
         arch_index = 1;
     } else {
-        TT_THROW("Unsupported architecture: {}", magic_enum::enum_name(arch));
+        TT_THROW("Unsupported architecture: {}", enchantum::to_string(arch));
     }
 
     if (topology == Topology::Ring) {
@@ -979,7 +979,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         } else if (dispatch_core_type == CoreType::ETH) {
             return tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
         } else {
-            TT_THROW("Fabric Mux does not support core type {}", magic_enum::enum_name(dispatch_core_type));
+            TT_THROW("Fabric Mux does not support core type {}", enchantum::to_string(dispatch_core_type));
         }
     }();
 

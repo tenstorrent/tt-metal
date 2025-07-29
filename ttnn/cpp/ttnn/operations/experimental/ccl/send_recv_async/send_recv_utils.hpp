@@ -24,7 +24,7 @@ void validate(
         mesh_socket.get_socket_endpoint_type() == socket_type,
         "{} op requires a {} socket",
         op_name,
-        magic_enum::enum_name(socket_type));
+        enchantum::to_string(socket_type));
     const auto* socket_mesh_device = mesh_socket.get_config_buffer()->device();
     const auto& socket_connection_config = mesh_socket.get_config().socket_connection_config;
     TT_FATAL(

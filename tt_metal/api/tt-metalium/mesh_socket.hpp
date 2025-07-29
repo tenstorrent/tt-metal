@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/routing_table_generator.hpp>
@@ -102,7 +102,7 @@ private:
     SocketConfig config_;
     SocketEndpoint socket_endpoint_type_;
     std::
-        array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, magic_enum::enum_count<SocketEndpoint>()>
+        array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, enchantum::count<SocketEndpoint>>
             fabric_node_id_map_;
 };
 
