@@ -10,7 +10,6 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         magic_enum::magic_enum
         fmt::fmt-header-only
-        span
         small_vector
         Boost::algorithm
         Taskflow::Taskflow
