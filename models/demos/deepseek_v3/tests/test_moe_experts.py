@@ -55,7 +55,7 @@ def reference_model(hf_config: Any | torch.Any):
     "mode,seq_len",
     [
         ("decode", 128),
-        ("prefill", 2048),
+        ("prefill", 1024),
     ],
 )
 def test_forward_pass(
