@@ -12,8 +12,6 @@ namespace ttnn {
 namespace cluster {
 
 tt::tt_metal::ClusterType get_cluster_type();
-bool is_galaxy_cluster();
-std::size_t number_of_user_devices();
 std::string serialize_cluster_descriptor();
 
 }  // namespace cluster
