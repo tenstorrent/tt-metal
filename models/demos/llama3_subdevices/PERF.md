@@ -7,9 +7,9 @@ Please note that using more recent versions of the software stack (TT-Metal and 
 
 ## 25 July 2025
 
-TT-Metal: [633160e](https://github.com/tenstorrent/tt-metal/commit/633160efc176b71dc35b6d15be0e9421b986493d)
-vLLM: [0c0ee9e](https://github.com/tenstorrent/vllm/commit/0c0ee9e6d81bbb26d44229992ad2273e8ea1052b)
-TT-Inference-server: [3380ea0](https://github.com/tenstorrent/tt-inference-server/commit/3380ea073e53f20ea782626f42c406e5cf4260c8)
+- TT-Metal: [633160e](https://github.com/tenstorrent/tt-metal/commit/633160efc176b71dc35b6d15be0e9421b986493d)
+- vLLM: [0c0ee9e](https://github.com/tenstorrent/vllm/commit/0c0ee9e6d81bbb26d44229992ad2273e8ea1052b)
+- TT-Inference-server: [3380ea0](https://github.com/tenstorrent/tt-inference-server/commit/3380ea073e53f20ea782626f42c406e5cf4260c8)
 
 
 ### TT-Metal runs
