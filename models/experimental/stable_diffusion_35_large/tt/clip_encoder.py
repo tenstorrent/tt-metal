@@ -500,6 +500,7 @@ class TtCLIPTextTransformerParameters:
     encoder: TtCLIPEncoderParameters
     final_layer_norm_weight: ttnn.Tensor
     final_layer_norm_bias: ttnn.Tensor
+    text_projection_weight: ttnn.Tensor
 
     @classmethod
     def from_torch(
@@ -527,6 +528,9 @@ class TtCLIPTextTransformerParameters:
             final_layer_norm_bias=from_torch_fast(
                 text_model_state["final_layer_norm.bias"], dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT
             ),
+            text_projection_weight=from_torch_fast(
+                state["text_projection.weight"], dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT
+            ),
         )
 
 
@@ -542,6 +546,7 @@ class TtCLIPTextTransformer:
         self._final_layer_norm = parameters.final_layer_norm_weight
         self._final_layer_norm_bias = parameters.final_layer_norm_bias
         self._layer_norm_eps = config.layer_norm_eps
+        self._text_projection = parameters.text_projection_weight
 
     def __call__(
         self,
@@ -579,7 +584,12 @@ class TtCLIPTextTransformer:
 
         pooled_output = self._gather_eos(sequence_embeddings, input_ids, eos_token_id, device)
 
-        return sequence_embeddings, pooled_output
+        # final text proj
+        # text_proj: [hidden_size, proj_dim]. must transpose for matmul
+        text_projection_transposed = ttnn.transpose(self._text_projection, -2, -1)
+        projected_output = ttnn.matmul(pooled_output, text_projection_transposed)
+
+        return sequence_embeddings, projected_output
 
     def _gather_eos(
         self, seq_emb: ttnn.Tensor, input_ids: ttnn.Tensor, eos_token_id: int, device: ttnn.Device
