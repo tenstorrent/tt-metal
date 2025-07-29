@@ -30,8 +30,8 @@ Similarly, if you want to run a different input prompt file with different lengt
 
 | Input length | Output length | Batch  | TTFT (per user)   | Token/s/u (avg of all decoded tokens)                                        |
 |--------------|---------------|--------|-------------------|------------------------------------------------------------------------------|
-| 128          | 128           | 1, 32  | 59.64 ms          | 14.01 ms, 71.38 t/s/u (128th token=117 prefill + 11 decode) <br> 14.28 ms, 70.01 t/s/u |
-| 1K           | 128           | 1      | 160.86 ms         | 16.53 ms, 60.48 t/s/u                                                     |
+| 128          | 128           | 1, 32  | 59.64 ms          | 14.01 ms, 71.38 t/s/u (measured at 128th token=117 prefill + 11 decode) <br> 14.28 ms, 70.01 t/s/u (avg) |
+| 1K           | 128           | 1      | 160.86 ms         | 16.53 ms, 60.48 t/s/u                                                    |
 | 1K           | 128           | 32     | 161.66 ms         | 17.58 ms, 56.89 t/s/u                                                     |
 | 4K           | 128           | 1      | 625.08 ms         | 18.5 ms, 54.07 t/s/u                                                      |
 | 4K           | 128           | 32     | 626.85 ms         | 22.43 ms, 44.58 t/s/u                                                     |
