@@ -163,17 +163,18 @@ public:
     CoreCoord dram_grid_size() const override;
     CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const override;
 
-    std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>&logical_cores) const override;
-    std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const override;
+    std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const override;
+    std::vector<CoreCoord> ethernet_cores_from_logical_cores(
+        const std::vector<CoreCoord>& logical_cores) const override;
     std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
     CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const override;
     CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const override;
-    std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores=false) const override;
+    std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const override;
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const override;
-    bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores=false) const override;
+    bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores = false) const override;
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
@@ -243,10 +244,14 @@ public:
     HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const override;
+    uint8_t noc_data_start_index(
+        SubDeviceId sub_device_id, bool mcast_data = true, bool unicast_data = true) const override;
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
     SubDeviceManagerId get_default_sub_device_manager_id() const override;
-    SubDeviceManagerId create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+    SubDeviceManagerId create_sub_device_manager(
+        std::initializer_list<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+    SubDeviceManagerId create_sub_device_manager(
+        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void clear_loaded_sub_device_manager() override;
