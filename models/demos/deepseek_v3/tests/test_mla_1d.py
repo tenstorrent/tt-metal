@@ -110,6 +110,11 @@ def test_forward_pass(
     hf_config = hf_config_short
     mesh_shape = list(mesh_row.shape)
 
+    dp_factor = mesh_shape[1] if mode == "decode" else 1
+    paged_config = (
+        MLA1D.get_valid_paged_config(hf_config.max_seq_len, batch_size, dp_factor) if mode == "decode" else None
+    )
+
     reference_args, reference_model = reference
 
     if mode == "prefill":
@@ -130,7 +135,7 @@ def test_forward_pass(
         model_config = MLA1D.decode_model_config(hf_config, mesh_row, ccl)
 
     # Create a new model state
-    model_state = MLA1D.create_state(hf_config, mesh_device=mesh_row, use_dp_cache=(mode == "decode"))
+    model_state = MLA1D.create_state(hf_config, mesh_row, dp_factor, paged_config)
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state)
@@ -186,6 +191,7 @@ def test_forward_pass(
     position_idxs = (
         [start_pos] * batch_size if mode == "decode" else None
     )  # TODO: Only support same position for all users
+    tt_page_table, page_table = None, None
 
     if mode == "decode":
         position_idxs_tensor = ttnn.from_torch(
@@ -195,6 +201,13 @@ def test_forward_pass(
                 mesh_row, dims=(None, 0), mesh_shape=mesh_shape
             ),  # TODO: Shard on batch when DP
             dtype=ttnn.int32,
+        )
+
+        tt_page_table, page_table = MLA1D.create_page_table(
+            batch_size,
+            dp_factor=dp_factor,
+            config=paged_config,
+            mesh_device=mesh_row,
         )
 
     # RoPE stuff
@@ -233,9 +246,9 @@ def test_forward_pass(
     ############################
     logger.info("Running TTNN forward pass")
     if mode == "prefill":
-        tt_output = MLA1D.forward_prefill(tt_input, user_id, rope_tensors, run_config)
+        tt_output = MLA1D.forward_prefill(tt_input, run_config, user_id, rope_tensors)
     else:
-        tt_output = MLA1D.forward_decode(tt_input, position_idxs_tensor, rope_tensors, run_config)
+        tt_output = MLA1D.forward_decode(tt_input, run_config, position_idxs_tensor, rope_tensors, tt_page_table)
 
     tt_output_torch = ttnn.to_torch(
         tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_row, dims=(0, -1), mesh_shape=mesh_shape)
@@ -264,9 +277,17 @@ def test_forward_pass(
         pcc_required_kvpe = 0.999
         range_to_check = range(start_pos, start_pos + seq_len)
 
-        tt_cache = get_cache_on_host(run_config["kvpe_cache"], mesh_row)[: MLA1D.MAX_BATCH_SIZE, ...].squeeze(
-            1
-        )  # [bsz, max_seq_len, head_dim + rope_head_dim]
+        if mode == "decode":
+            tt_cache = get_cache_on_host(
+                run_config["kvpe_cache"], mesh_row
+            )  # [DP Factor * max_num_blocks, nh, block_size, head_dim + rope_head_dim]
+            tt_cache = MLA1D.from_paged_cache(tt_cache, page_table, dp_factor).squeeze(
+                1
+            )  # [bsz, max_seq_len, head_dim + rope_head_dim]
+        else:
+            tt_cache = get_cache_on_host(run_config["kvpe_cache"], mesh_row)[: MLA1D.MAX_BATCH_SIZE, ...].squeeze(
+                1
+            )  # [bsz, max_seq_len, head_dim + rope_head_dim]
         tt_cache_kv = tt_cache[:, range_to_check, : hf_config.kv_lora_rank]
         tt_cache_pe = tt_cache[:, range_to_check, hf_config.kv_lora_rank :]
 
