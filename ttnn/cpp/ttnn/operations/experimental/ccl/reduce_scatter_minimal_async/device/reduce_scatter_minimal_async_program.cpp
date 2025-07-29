@@ -618,6 +618,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
             const auto& output = output_tensors[1];
             const auto& intermed = output_tensors[0];
             auto barrier_semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->barrier_semaphore;
+            auto semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->semaphore;
 
             // update senders
             uint32_t core_idx = 0;
@@ -637,14 +638,18 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                         auto& worker_reader_sender_runtime_args = reader_runtime_args[core.x][core.y];
                         worker_reader_sender_runtime_args[0] = input.buffer()->address();
                         worker_reader_sender_runtime_args[1] = intermed.buffer()->address();
+                        worker_reader_sender_runtime_args[2] = semaphore.at(dir).address();
+                        worker_reader_sender_runtime_args[3] = semaphore.at(num_directions_per_link).address();
                         // sender writer
                         auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
                         worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
                         worker_writer_sender_runtime_args[1] = output.buffer()->address();
+                        worker_writer_sender_runtime_args[4] = semaphore.at(dir).address();
+                        worker_writer_sender_runtime_args[5] = semaphore.at(num_directions_per_link).address();
 
-			if (barrier_semaphore.has_value()) {
-			  worker_writer_sender_runtime_args[14] = barrier_semaphore.value().address();
-            }
+                        if (barrier_semaphore.has_value()) {
+                        worker_writer_sender_runtime_args[14] = barrier_semaphore.value().address();
+                        }
 
                         core_idx++;
                     }
@@ -1014,19 +1019,19 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     input_tensor.buffer()->address(),         // input_tensor_address
                     intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
                     output_tensor.buffer()->address(),        // output_tensor_address
-                    semaphore.at(0 + link * 3).address(),     // remote transfer sync semaphore
+                    semaphore.at(0).address(),                // remote transfer sync semaphore
                     link * num_workers_per_direction + worker,
                     num_links * num_workers_per_direction,
                     fwd_bwd_semaphore_address};
-		if (input_is_sharded) {
-		  shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
-		}
-		if (intermediate_is_sharded) {
-		  shard_builder::extend_sharding_run_time_args(intermediate_tensor, reader_rt_args);
-		}
-		if (output_is_sharded) {
-		  shard_builder::extend_sharding_run_time_args(output_tensor, reader_rt_args);
-		}
+                if (input_is_sharded) {
+                    shard_builder::extend_sharding_run_time_args(input_tensor, reader_rt_args);
+                }
+                if (intermediate_is_sharded) {
+                    shard_builder::extend_sharding_run_time_args(intermediate_tensor, reader_rt_args);
+                }
+                if (output_is_sharded) {
+                    shard_builder::extend_sharding_run_time_args(output_tensor, reader_rt_args);
+                }
                 if (fuse_op) {
                     fused_op_signaler->push_reduce_scatter_fused_op_rt_args(reader_rt_args);
                 }
@@ -1087,20 +1092,19 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     output_tensor.buffer()->address(),        // output_tensor_address
                     virtual_core.x,                           // out_ready_sem_noc0_x
                     virtual_core.y,                           // out_ready_sem_noc0_y
-                    semaphore.at(0 + link * 3).address(),     // remote transfer sync semaphore
-                    semaphore.at(1 + link * 3).address(),     // final reduction slot semaphore
-                    semaphore.at(2 + link * 3).address(),     // batch_ready_semaphore
+                    semaphore.at(0).address(),                // remote transfer sync semaphore
+                    semaphore.at(1).address(),                // final reduction slot semaphore
+                    semaphore.at(2).address(),                // batch_ready_semaphore
                     link * num_workers_per_direction + worker,
                     num_links * num_workers_per_direction,
                     fwd_bwd_semaphore_address,
                     opposite_core_coord.x,
                     opposite_core_coord.y,
-		    signal_on_barrier_sem,         // signal_on_barrier_sem
-		    wait_on_barrier_sem,           // wait_on_barrier_sem
-		    barrier_semaphore.has_value()  // synchronize barrier semaphore
-                    ? barrier_semaphore.value().address()
-                    : 0
-		};
+                    signal_on_barrier_sem,         // signal_on_barrier_sem
+                    wait_on_barrier_sem,           // wait_on_barrier_sem
+                    barrier_semaphore.has_value()  // synchronize barrier semaphore
+                        ? barrier_semaphore.value().address()
+                        : 0};
                 append_fabric_mux_connection_rt_args(
                     mux_connection_valid,
                     core,
@@ -1158,8 +1162,9 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[1];
             const auto& intermed = output_tensors[0];
-            auto barrier_semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->barrier_semaphore;
 
+            const auto& barrier_semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->barrier_semaphore;
+            const auto& semaphore = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->semaphore;
             // update senders
             uint32_t core_idx = 0;
             for (uint32_t link = 0; link < num_links; link++) {
@@ -1179,14 +1184,18 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                         worker_reader_sender_runtime_args[0] = input.buffer()->address();
                         worker_reader_sender_runtime_args[1] = intermed.buffer()->address();
                         worker_reader_sender_runtime_args[2] = output.buffer()->address();
+                        worker_reader_sender_runtime_args[3] = semaphore.at(0).address();
                         // sender writer
                         auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
                         worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
                         worker_writer_sender_runtime_args[1] = output.buffer()->address();
+                        worker_writer_sender_runtime_args[4] = semaphore.at(0).address();
+                        worker_writer_sender_runtime_args[5] = semaphore.at(1).address();
+                        worker_writer_sender_runtime_args[6] = semaphore.at(2).address();
 
-			if (barrier_semaphore.has_value()) {
-			  worker_writer_sender_runtime_args[14] = barrier_semaphore.value().address();
-            }
+                        if (barrier_semaphore.has_value()) {
+                        worker_writer_sender_runtime_args[14] = barrier_semaphore.value().address();
+                        }
 
                         core_idx++;
                     }
