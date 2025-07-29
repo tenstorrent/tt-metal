@@ -7,11 +7,13 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <variant>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/decorators.hpp"
@@ -48,6 +50,7 @@ void bind_conv2d(nb::module_& mod) {
         :param tuple[int, int] or tuple[int, int, int, int]) padding: Zero-padding added to both sides of the input. [pad_height, pad_width] or [pad_top, pad_bottom, pad_left, pad_right].
         :param tuple[int, int] dilation: Spacing between kernel elements.
         :param int groups:  Number of blocked connections from input channels to output channels.
+        :param ttnn.DataType, None dtype:  The data type of the output tensor. Default: None (inferred from input tensor).
         :param ttnn.Conv2dConfig, None conv_config: Configuration for convolution. Default: None
         :param ttnn.DeviceComputeKernelConfig, None compute_config: Configuration for compute kernel. Default: None
         :param ttnn.MemoryConfig, None memory_config: Output Tensor's Memory Configuration. Default: None
@@ -76,6 +79,7 @@ void bind_conv2d(nb::module_& mod) {
                std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
                std::array<uint32_t, 2> dilation,
                uint32_t groups,
+               const std::optional<const DataType>& dtype,
                std::optional<const ttnn::Tensor> bias_tensor,
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
@@ -99,6 +103,7 @@ void bind_conv2d(nb::module_& mod) {
                     padding,
                     dilation,
                     groups,
+                    dtype,
                     bias_tensor,
                     conv_config,
                     compute_config,
@@ -121,6 +126,7 @@ void bind_conv2d(nb::module_& mod) {
             nb::arg("padding") = std::array<uint32_t, 2>{0, 0},
             nb::arg("dilation") = std::array<uint32_t, 2>{1, 1},
             nb::arg("groups") = 1,
+            nb::arg("dtype") = std::nullopt,
             nb::arg("bias_tensor") = std::nullopt,
             nb::arg("conv_config") = std::nullopt,
             nb::arg("compute_config") = std::nullopt,
@@ -145,6 +151,7 @@ void bind_conv2d(nb::module_& mod) {
                std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
                std::array<uint32_t, 2> dilation,
                uint32_t groups,
+               const std::optional<const DataType>& dtype,
                std::optional<const ttnn::Tensor> bias_tensor,
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
@@ -168,6 +175,7 @@ void bind_conv2d(nb::module_& mod) {
                     padding,
                     dilation,
                     groups,
+                    dtype,
                     bias_tensor,
                     conv_config,
                     compute_config,
@@ -190,6 +198,7 @@ void bind_conv2d(nb::module_& mod) {
             nb::arg("padding") = std::array<uint32_t, 2>{0, 0},
             nb::arg("dilation") = std::array<uint32_t, 2>{1, 1},
             nb::arg("groups") = 1,
+            nb::arg("dtype") = std::nullopt,
             nb::arg("bias_tensor") = std::nullopt,
             nb::arg("conv_config") = std::nullopt,
             nb::arg("compute_config") = std::nullopt,
@@ -219,6 +228,8 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("has_bias"),
         nb::arg("groups"),
         nb::arg("device"),
+        nb::arg("input_dtype"),
+        nb::arg("output_dtype") = std::nullopt,
         nb::arg("conv_config") = std::nullopt,
         nb::arg("compute_config") = std::nullopt,
         nb::arg("slice_config") = std::nullopt);
@@ -243,6 +254,8 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("has_bias"),
         nb::arg("groups"),
         nb::arg("device"),
+        nb::arg("input_dtype"),
+        nb::arg("output_dtype") = std::nullopt,
         nb::arg("conv_config") = std::nullopt,
         nb::arg("compute_config") = std::nullopt,
         nb::arg("slice_config") = std::nullopt);
@@ -265,6 +278,8 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("dilation"),
         nb::arg("groups"),
         nb::arg("device"),
+        nb::arg("input_dtype"),
+        nb::arg("output_dtype") = std::nullopt,
         nb::arg("conv_config") = std::nullopt,
         nb::arg("compute_config") = std::nullopt);
 
@@ -286,6 +301,8 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("dilation"),
         nb::arg("groups"),
         nb::arg("device"),
+        nb::arg("input_dtype"),
+        nb::arg("output_dtype") = std::nullopt,
         nb::arg("conv_config") = std::nullopt,
         nb::arg("compute_config") = std::nullopt);
 
@@ -405,9 +422,8 @@ void bind_conv2d(nb::module_& mod) {
 
     py_conv_config.def(
         nb::init<
-            DataType,
             std::optional<DataType>,
-            string,
+            std::string,
             bool,
             bool,
             uint32_t,
@@ -423,11 +439,8 @@ void bind_conv2d(nb::module_& mod) {
             bool,
             bool,
             bool,
-            bool,
-            bool,
             bool>(),
         nb::kw_only(),
-        nb::arg("dtype") = DataType::BFLOAT16,
         nb::arg("weights_dtype") = std::nullopt,
         nb::arg("activation") = "",
         nb::arg("deallocate_activation") = false,
@@ -440,19 +453,12 @@ void bind_conv2d(nb::module_& mod) {
         nb::arg("core_grid") = std::nullopt,
         nb::arg("transpose_shards") = false,
         nb::arg("output_layout") = Layout::TILE,
-        nb::arg("preprocess_weights_on_device") = false,
-        nb::arg("always_preprocess_weights") = false,
         nb::arg("enable_act_double_buffer") = false,
         nb::arg("enable_weights_double_buffer") = false,
         nb::arg("enable_split_reader") = false,
         nb::arg("enable_subblock_padding") = false,
         nb::arg("in_place") = false,
         nb::arg("enable_kernel_stride_folding") = false);
-
-    py_conv_config.def_rw(
-        "dtype",
-        &Conv2dConfig::dtype,
-        R"doc(Specifies the data type of the output tensor. Supports ttnn.float32, ttnn.bfloat16 and ttnn.bfloat8_b. )doc");
 
     py_conv_config.def_rw("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
         Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
@@ -535,22 +541,6 @@ void bind_conv2d(nb::module_& mod) {
         If the input is in :class:`ttnn.Layout.TILE` format, the halo micro-op will convert it to :class:`ttnn.Layout.ROW_MAJOR` format.
         So if the next op is a conv op, it is recommended to set this to :class:`ttnn.Layout.ROW_MAJOR`.
         )doc");
-
-    py_conv_config.def_rw("preprocess_weights_on_device", &Conv2dConfig::preprocess_weights_on_device, R"doc(
-        Determines if the weights should be preprocessed on host or device.
-        For large weights, it is recommended to set this to true, as it would be faster.
-        )doc");
-
-    py_conv_config.def_rw("always_preprocess_weights", &Conv2dConfig::always_preprocess_weights, R"doc(
-        Used only when preprocess_weights_on_device is set to true.
-
-        The Conv2d op determines if the weights should be preprocessed or not, by examining the storage type.
-        If the weights are on device, then the op assumes that the weights are already preprocessed.
-
-        However, if this flag is set to true, the op will always preprocess the weights, even if they are on device.
-        This is useful when the weights are on device, but in the PyTorch format [out_channels, in_channels, kernel_height, kernel_width].
-        )doc");
-
     py_conv_config.def_rw("enable_act_double_buffer", &Conv2dConfig::enable_act_double_buffer, R"doc(
             Doubles the size of the Activation Circular Buffer to allow for double buffering, preventing stalls of the activation reader kernel.
             This improves performance, but increases memory usage.
@@ -587,15 +577,20 @@ void bind_conv2d(nb::module_& mod) {
 
         * Input tensor (NHWC format):
           - From: (N, H, W, IC)
-          - To: (N, H/stride[0], W/stride[1], IC * kernel[0] * kernel[1])
+          - To: (N, H / stride[0], W / stride[1], IC * stride[0] * stride[1])
 
         * Weight tensor:
           - From: (OC, IC, kernel[0], kernel[1])
-          - To: (1, 1, IC * kernel[0] * kernel[1], OC)
+          - To: (1, 1, IC * (kernel[0] + pad_h) * (kernel[1] + pad_w), OC)
+          Note: The zero padding applied to the weight tensor is implicit and not passed by the user via the padding argument,
+          where pad_h = kernel[0] % stride[0] and pad_w = kernel[1] % stride[1].
 
         Note: This optimization is currently only applied when all of the following conditions are met:
-        1. The stride dimensions exactly match the kernel dimensions (stride[0] == kernel[0] and stride[1] == kernel[1])
-        2. The input tensor is stored in DRAM memory
+        1. The input tensor is stored in DRAM memory.
+        2. The input tensor's height and width are divisible by the stride dimensions.
+        3. Stride values are equal to or less than the kernel dimensions.
+        4. Input tensor's padding must be zero.
+        5. Input tensor data type is not BFLOAT8_B.
 
         ===============================================================
         )doc");

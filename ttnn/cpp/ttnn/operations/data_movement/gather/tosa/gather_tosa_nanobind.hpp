@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@
 
 #include "ttnn-nanobind/nanobind_fwd.hpp"
 
-namespace ttnn::operations::experimental::tosa::gather::detail {
+namespace ttnn::operations::data_movement::detail {
 namespace nb = nanobind;
 void bind_gather_tosa_operation(nb::module_& mod);
-}  // namespace ttnn::operations::experimental::tosa::gather::detail
+}  // namespace ttnn::operations::data_movement::detail

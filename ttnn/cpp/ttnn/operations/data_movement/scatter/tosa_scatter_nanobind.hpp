@@ -6,9 +6,9 @@
 
 #include "ttnn-nanobind/nanobind_fwd.hpp"
 
-namespace ttnn::operations::experimental::tosa_scatter::detail {
+namespace ttnn::operations::data_movement::detail {
 
 namespace nb = nanobind;
-void bind_tosa_scatter_operation(nb::module_& mod);
+void bind_tosa_scatter(nb::module_& mod);
 
-}  // namespace ttnn::operations::experimental::tosa_scatter::detail
+}  // namespace ttnn::operations::data_movement::detail

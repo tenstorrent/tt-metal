@@ -6,7 +6,7 @@
 
 #include "ttnn-nanobind/nanobind_fwd.hpp"
 
-namespace ttnn::operations::experimental::scatter::detail {
+namespace ttnn::operations::data_movement::detail {
 namespace nb = nanobind;
-void bind_scatter_operation(nb::module_& mod);
-}  // namespace ttnn::operations::experimental::scatter::detail
+void bind_scatter(nb::module_& mod);
+}  // namespace ttnn::operations::data_movement::detail

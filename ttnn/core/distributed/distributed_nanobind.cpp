@@ -21,7 +21,9 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/system_mesh.hpp>
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -40,6 +42,20 @@ using namespace tt::tt_metal;
 
 namespace ttnn::distributed {
 
+class SystemMeshDescriptor {
+private:
+    MeshShape global_shape_;
+    MeshShape local_shape_;
+
+public:
+    SystemMeshDescriptor() :
+        global_shape_(tt::tt_metal::distributed::SystemMesh::instance().shape()),
+        local_shape_(tt::tt_metal::distributed::SystemMesh::instance().local_shape()) {}
+
+    const MeshShape& shape() const { return global_shape_; }
+    const MeshShape& local_shape() const { return local_shape_; }
+};
+
 void py_module_types(nb::module_& mod) {
     nb::class_<MeshToTensor>(mod, "CppMeshToTensor");
     nb::class_<TensorToMesh>(mod, "CppTensorToMesh");
@@ -50,10 +66,12 @@ void py_module_types(nb::module_& mod) {
     nb::class_<MeshMapperConfig::Shard>(mod, "PlacementShard");
 
     nb::class_<MeshDevice>(mod, "MeshDevice");
+    nb::class_<MeshDeviceView>(mod, "MeshDeviceView");
     nb::class_<MeshShape>(mod, "MeshShape", "Shape of a mesh device.");
     nb::class_<MeshCoordinate>(mod, "MeshCoordinate", "Coordinate within a mesh device.");
     nb::class_<MeshCoordinateRange>(mod, "MeshCoordinateRange", "Range of coordinates within a mesh device.");
     nb::class_<MeshCoordinateRangeSet>(mod, "MeshCoordinateRangeSet", "Set of coordinate ranges within a mesh device.");
+    nb::class_<SystemMeshDescriptor>(module, "SystemMeshDescriptor");
 }
 
 void py_module(nb::module_& mod) {
@@ -154,10 +172,15 @@ void py_module(nb::module_& mod) {
             return str.str();
         });
 
+    static_cast<nb::class_<SystemMeshDescriptor>>(mod.attr("SystemMeshDescriptor"))
+        .def(nb::init<>())
+        .def("shape", &SystemMeshDescriptor::shape)
+        .def("local_shape", &SystemMeshDescriptor::local_shape);
+
     auto nb_mesh_device = static_cast<nb::class_<MeshDevice>>(mod.attr("MeshDevice"));
     nb_mesh_device
         .def(
-            nb::new_([](const MeshShape& mesh_shape,
+            nb::new_([](const MeshShape& mesh_shape,  // TODO: double check this or placement new?
                         size_t l1_small_size,
                         size_t trace_region_size,
                         size_t num_command_queues,
@@ -250,6 +273,12 @@ void py_module(nb::module_& mod) {
                Enable program cache across all devices in the mesh.
            )doc")
         .def(
+            "clear_program_cache",
+            &MeshDevice::clear_program_cache,
+            R"doc(
+               Clear program cache across all devices in the mesh.
+           )doc")
+        .def(
             "disable_and_clear_program_cache",
             &MeshDevice::disable_and_clear_program_cache,
             R"doc(
@@ -300,6 +329,7 @@ void py_module(nb::module_& mod) {
                    1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
                    2. For Grid-to-Grid or Line-to-Grid reshaping: physical connectivity must be possible with current devices
            )doc")
+        .def("get_view", &MeshDevice::get_view, py::return_value_policy::reference_internal)
         .def("__repr__", &MeshDevice::to_string)
         .def(
             "create_sub_device_manager",
@@ -320,28 +350,6 @@ void py_module(nb::module_& mod) {
 
                Returns:
                    SubDeviceManagerId: The ID of the created sub-device manager.
-           )doc")
-        .def(
-            "create_sub_device_manager_with_fabric",
-            [](MeshDevice& self, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
-                return self.create_sub_device_manager_with_fabric(sub_devices, local_l1_size);
-            },
-            nb::arg("sub_devices"),
-            nb::arg("local_l1_size"),
-            R"doc(
-               Creates a sub-device manager for the given mesh device. This will automatically create a sub-device of ethernet cores for use with fabric.
-               Note that this is a temporary API until migration to actual fabric is complete.
-
-
-               Args:
-                   sub_devices (List[ttnn.SubDevice]): The sub-devices to include in the sub-device manager. No ethernet cores should be included in this list.
-                   This configuration will be used for each device in the MeshDevice.
-                   local_l1_size (int): The size of the local allocators of each sub-device. The global allocator will be shrunk by this amount.
-
-
-               Returns:
-                   SubDeviceManagerId: The ID of the created sub-device manager.
-                   SubDeviceId: The ID of the sub-device that will be used for fabric.
            )doc")
         .def(
             "load_sub_device_manager",
@@ -410,6 +418,12 @@ void py_module(nb::module_& mod) {
             [](MeshDevice* device) { return tt::tt_metal::hal::get_inf(); },
             R"doc(Returns Infinity value for current architecture.)doc");
 
+    auto py_mesh_device_view = static_cast<nb::class_<MeshDeviceView>>(mod.attr("MeshDeviceView"));
+    py_mesh_device_view.def("shape", &MeshDeviceView::shape, nb::rv_policy::ref_internal)
+        .def("num_devices", &MeshDeviceView::num_devices)
+        .def("fully_local", &MeshDeviceView::fully_local)
+        .def("is_local", &MeshDeviceView::is_local, py::arg("coord"));
+
     auto py_tensor_to_mesh = static_cast<nb::class_<TensorToMesh>>(mod.attr("CppTensorToMesh"));
 
     auto py_mesh_to_tensor = static_cast<nb::class_<MeshToTensor>>(mod.attr("CppMeshToTensor"));
@@ -429,11 +443,18 @@ void py_module(nb::module_& mod) {
     mod.def("close_mesh_device", &close_mesh_device, nb::kw_only(), nb::arg("mesh_device"));
 
     auto py_placement_shard = static_cast<nb::class_<MeshMapperConfig::Shard>>(mod.attr("PlacementShard"));
-    py_placement_shard.def(nb::init<int>());
+    py_placement_shard.def(nb::init<int>()).def("__repr__", [](const MeshMapperConfig::Shard& shard) {
+        std::ostringstream str;
+        str << shard;
+        return str.str();
+    });
 
     auto py_placement_replicate = static_cast<nb::class_<MeshMapperConfig::Replicate>>(mod.attr("PlacementReplicate"));
-    py_placement_replicate.def(nb::init<>());
-
+    py_placement_replicate.def(nb::init<>()).def("__repr__", [](const MeshMapperConfig::Replicate& replicate) {
+        std::ostringstream str;
+        str << replicate;
+        return str.str();
+    });
     auto py_mesh_mapper_config = static_cast<nb::class_<MeshMapperConfig>>(mod.attr("MeshMapperConfig"));
 
     py_mesh_mapper_config
@@ -657,18 +678,23 @@ void py_module(nb::module_& mod) {
                 Tensor: The aggregated tensor.
             )doc");
     mod.def(
-        "aggregate_as_tensor",
-        [](const std::vector<Tensor>& tensors) -> Tensor { return aggregate_as_tensor(tensors, AllGatherTensor{}); },
+        "from_host_shards",
+        [](const std::vector<Tensor>& tensors, const MeshShape& mesh_shape) -> Tensor {
+            return from_host_shards(tensors, mesh_shape);
+        },
         nb::kw_only(),
         nb::arg("tensors"),
+        nb::arg("mesh_shape"),
+        nb::kw_only(),
         R"doc(
-            Aggregates a set of shards into one tensor. Device shards will remain on device and be packed into a multidevice storage object.
+            Creates a multi-device host tensor from a set of individual host shards.
 
             Args:
-                tensor (Tensor): The tensor to aggregate.
+                tensors (List[Tensor]): The tensor shards to aggregate.
+                mesh_shape (MeshShape): The shape of the mesh to aggregate the shards over.
 
             Returns:
-                Tensor: The aggregated tensor.
+                Tensor: The multi-device host tensor.
             )doc");
     mod.def(
         "combine_device_tensors",

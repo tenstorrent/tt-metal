@@ -70,6 +70,7 @@ void bind_llama_reduce_scatter(nb::module_& mod) {
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                tt::tt_fabric::Topology topology,
+               bool use_noc1_only,
                QueueId queue_id) {
                 return self(
                     queue_id,
@@ -82,7 +83,8 @@ void bind_llama_reduce_scatter(nb::module_& mod) {
                     mesh_device,
                     num_links,
                     memory_config,
-                    topology);
+                    topology,
+                    use_noc1_only);
             },
             nb::arg("input_tensor").noconvert(),
             nb::arg("intermediate_packet_buffer").noconvert(),
@@ -95,9 +97,8 @@ void bind_llama_reduce_scatter(nb::module_& mod) {
             nb::arg("num_links") = 1,
             nb::arg("memory_config") = std::nullopt,
             nb::arg("topology") = tt::tt_fabric::Topology::Linear,
-            nb::arg("queue_id") = DefaultQueueId,
-
-        });
+            nb::arg("use_noc1_only") = false,
+            nb::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

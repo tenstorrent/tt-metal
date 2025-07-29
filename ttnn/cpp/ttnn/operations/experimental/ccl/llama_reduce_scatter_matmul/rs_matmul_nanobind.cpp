@@ -56,7 +56,6 @@ void bind_rs_matmul(nb::module_& mod) {
             [](const decltype(ttnn::experimental::llama_rs_matmul)& self,
                const ttnn::Tensor& input_tensor,               // mm0 used
                const ttnn::Tensor& weight_tensor,              // mm1 used
-               const ttnn::Tensor& rs_tensor,                  // rs1
                ttnn::Tensor& intermediate_packet_buffer,       // rs2
                int32_t dim,                                    // rs3
                const GlobalSemaphore& cross_device_semaphore,  // rs4
@@ -64,6 +63,8 @@ void bind_rs_matmul(nb::module_& mod) {
                const MeshDevice& mesh_device,                  // rs 6
                const uint32_t num_links,                       // rs 7 default 1
                const tt::tt_metal::SubDeviceId& subdevice_id,
+               const std::optional<const ttnn::Tensor>& second_weight_tensor,
+               const std::optional<const ttnn::Tensor>& rs_tensor,  // rs1
                tt::tt_fabric::Topology topology,
                const std::optional<ttnn::MemoryConfig>& memory_config_rs,  // rs 8 default std::nullopt
                const std::optional<ttnn::MemoryConfig>& memory_config_mm,  // mm4 used but default std::nullopt
@@ -78,6 +79,7 @@ void bind_rs_matmul(nb::module_& mod) {
                const std::optional<const std::string>& activation,                                  // mm7 set false
                const std::optional<const tt::tt_metal::Tile>& output_tile,                          // mm10 std::nullopt
                std::optional<Tensor>& optional_output_tensor,                                       // mm11 std::nullopt
+               bool use_noc1_only,
                QueueId queue_id  // rs 9 default DefaultQueueId
 
                ) -> std::vector<ttnn::Tensor> {
@@ -85,7 +87,6 @@ void bind_rs_matmul(nb::module_& mod) {
                     queue_id,
                     input_tensor,
                     weight_tensor,
-                    rs_tensor,
                     intermediate_packet_buffer,
                     dim,
                     cross_device_semaphore,
@@ -93,6 +94,8 @@ void bind_rs_matmul(nb::module_& mod) {
                     mesh_device,
                     num_links,
                     subdevice_id,
+                    second_weight_tensor,
+                    rs_tensor,
                     topology,
                     memory_config_rs,
                     memory_config_mm,
@@ -105,11 +108,11 @@ void bind_rs_matmul(nb::module_& mod) {
                     program_config,
                     activation,
                     output_tile,
-                    optional_output_tensor);
+                    optional_output_tensor,
+                    use_noc1_only);
             },
             nb::arg("input_tensor"),
             nb::arg("weight_tensor"),
-            nb::arg("rs_tensor"),
             nb::arg("intermediate_packet_buffer"),
             nb::arg("dim"),
             nb::arg("cross_device_semaphore"),
@@ -118,6 +121,8 @@ void bind_rs_matmul(nb::module_& mod) {
             nb::arg("num_links"),
             nb::arg("subdevice_id"),
             nb::kw_only(),
+            nb::arg("second_weight_tensor") = std::nullopt,
+            nb::arg("rs_tensor") = std::nullopt,
             nb::arg("topology") = tt::tt_fabric::Topology::Linear,
             nb::arg("memory_config_rs") = std::nullopt,
             nb::arg("memory_config_mm") = std::nullopt,
@@ -131,6 +136,7 @@ void bind_rs_matmul(nb::module_& mod) {
             nb::arg("activation") = std::nullopt,
             nb::arg("output_tile") = std::nullopt,
             nb::arg("optional_output_tensor") = std::nullopt,
+            nb::arg("use_noc1_only") = false,
             nb::arg("queue_id") = DefaultQueueId});
 }
 

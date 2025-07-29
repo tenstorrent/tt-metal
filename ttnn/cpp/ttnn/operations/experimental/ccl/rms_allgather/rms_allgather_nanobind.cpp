@@ -43,6 +43,7 @@ void bind_fused_rms_1_1_32_8192(nb::module_& mod) {
             // on post only
             nb::arg("epsilon") = 1e-12,  // constant 1e-12 on pre, value only affects post
             nb::arg("weight") = std::nullopt,
-            nb::arg("stats") = std::nullopt});
+            nb::arg("stats") = std::nullopt,
+            nb::arg("use_noc1_only") = false});
 }
 }  // namespace ttnn::operations::experimental::ccl

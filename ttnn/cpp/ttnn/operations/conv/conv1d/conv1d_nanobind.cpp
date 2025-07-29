@@ -42,6 +42,7 @@ void bind_conv1d(nb::module_& mod) {
         :param int or tuple[int, int]) padding: Zero-padding added to both sides of the input. pad_length or [pad_left, pad_right].
         :param int dilation: Spacing between kernel elements.
         :param int groups:  Number of blocked connections from input channels to output channels.
+        :param ttnn.DataType, None dtype: The data type of the input tensor. Default: None (will use the same dtype as input_tensor).
         :param ttnn.Conv2dConfig, None conv_config: Configuration for convolution. Default: None
         :param ttnn.DeviceComputeKernelConfig, None compute_config: Configuration for compute kernel. Default: None
         :param ttnn.MemoryConfig, None memory_config: Output Tensor's Memory Configuration. Default: None
@@ -69,6 +70,7 @@ void bind_conv1d(nb::module_& mod) {
                std::variant<std::array<uint32_t, 2>, uint32_t> padding,
                uint32_t dilation,
                uint32_t groups,
+               const std::optional<const DataType>& dtype,
                std::optional<const ttnn::Tensor> bias_tensor,
                const std::optional<const Conv1dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
@@ -90,6 +92,7 @@ void bind_conv1d(nb::module_& mod) {
                     padding,
                     dilation,
                     groups,
+                    dtype,
                     bias_tensor,
                     conv_config,
                     compute_config,
@@ -110,6 +113,7 @@ void bind_conv1d(nb::module_& mod) {
             nb::arg("padding") = 0,
             nb::arg("dilation") = 1,
             nb::arg("groups") = 1,
+            py::arg("dtype") = std::nullopt,
             nb::arg("bias_tensor") = std::nullopt,
             nb::arg("conv_config") = std::nullopt,
             nb::arg("compute_config") = std::nullopt,
@@ -132,6 +136,7 @@ void bind_conv1d(nb::module_& mod) {
                std::variant<std::array<uint32_t, 2>, uint32_t> padding,
                uint32_t dilation,
                uint32_t groups,
+               const std::optional<const DataType>& dtype,
                std::optional<const ttnn::Tensor> bias_tensor,
                const std::optional<const Conv1dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
@@ -153,6 +158,7 @@ void bind_conv1d(nb::module_& mod) {
                     padding,
                     dilation,
                     groups,
+                    dtype,
                     bias_tensor,
                     conv_config,
                     compute_config,
@@ -173,6 +179,7 @@ void bind_conv1d(nb::module_& mod) {
             nb::arg("padding") = 0,
             nb::arg("dilation") = 1,
             nb::arg("groups") = 1,
+            py::arg("dtype") = std::nullopt,
             nb::arg("bias_tensor") = std::nullopt,
             nb::arg("conv_config") = std::nullopt,
             nb::arg("compute_config") = std::nullopt,

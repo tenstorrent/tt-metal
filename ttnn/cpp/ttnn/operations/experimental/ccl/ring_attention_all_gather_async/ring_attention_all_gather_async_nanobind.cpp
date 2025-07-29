@@ -1,91 +1,76 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "all_gather_nanobind.hpp"
+#include "ring_attention_all_gather_async_nanobind.hpp"
 
-#include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/decorators.hpp"
-#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ring_attention_all_gather_async.hpp"
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/global_semaphore.hpp"
 
-namespace ttnn::operations::ccl {
+namespace ttnn::operations::experimental::ccl {
 
 namespace {
-
 template <typename ccl_operation_t>
-void bind_all_gather(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
+void bind_ring_attention_all_gather_async(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
+    // namespace py = nanobind;
     bind_registered_operation(
         mod,
         operation,
         doc,
         ttnn::nanobind_overload_t{
             [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
+               const std::vector<ttnn::Tensor>& input_tensor,
+               std::vector<ttnn::Tensor>& persistent_output_buffer,
                const int32_t dim,
+               const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
                const uint32_t num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<size_t> num_workers,
-               const std::optional<size_t> num_buffers_per_channel,
-               const ttnn::ccl::Topology topology) -> ttnn::Tensor {
-                return self(
-                    input_tensor, dim, num_links, memory_config, num_workers, num_buffers_per_channel, topology);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("dim"),
-            nb::kw_only(),
-            nb::arg("num_links") = 1,
-            nb::arg("memory_config") = std::nullopt,
-            nb::arg("num_workers") = std::nullopt,
-            nb::arg("num_buffers_per_channel") = std::nullopt,
-            nb::arg("topology") = ttnn::ccl::Topology::Ring},
-
-        ttnn::nanobind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               const int32_t dim,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
-               const uint32_t num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<size_t> num_workers,
-               const std::optional<size_t> num_buffers_per_channel,
-               const ttnn::ccl::Topology topology) -> ttnn::Tensor {
+               const std::optional<MemoryConfig>& memory_config,
+               const ttnn::ccl::Topology topology,
+               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> std::vector<ttnn::Tensor> {
                 return self(
                     input_tensor,
+                    persistent_output_buffer,
                     dim,
+                    multi_device_global_semaphore,
                     cluster_axis,
                     mesh_device,
+                    topology,
                     num_links,
                     memory_config,
-                    num_workers,
-                    num_buffers_per_channel,
-                    topology);
+                    subdevice_id);
             },
             nb::arg("input_tensor"),
+            nb::arg("persistent_output_buffer"),
             nb::arg("dim"),
+            nb::kw_only(),
+            nb::arg("multi_device_global_semaphore"),
+            nb::arg("num_links") = std::nullopt,
             nb::arg("cluster_axis"),
             nb::arg("mesh_device"),
-            nb::kw_only(),
-            nb::arg("num_links") = 1,
             nb::arg("memory_config") = std::nullopt,
-            nb::arg("num_workers") = std::nullopt,
-            nb::arg("num_buffers_per_channel") = std::nullopt,
-            nb::arg("topology") = ttnn::ccl::Topology::Ring});
+            nb::arg("topology"),
+            nb::arg("subdevice_id") = std::nullopt});
 }
 
 }  // namespace
 
-void bind_all_gather(nb::module_& mod) {
-    bind_all_gather(
+void bind_ring_attention_all_gather_async(nb::module_& mod) {
+    bind_ring_attention_all_gather_async(
         mod,
-        ttnn::all_gather,
+        ttnn::experimental::ring_attention_all_gather_async,
         R"doc(
 
         Performs an all-gather operation on multi-device :attr:`input_tensor` across all devices.
@@ -102,8 +87,6 @@ void bind_all_gather(nb::module_& mod) {
         Keyword Args:
             num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
-            num_workers (int, optional): Number of workers to use for the operation. Defaults to `None`.
-            num_buffers_per_channel (int, optional): Number of buffers per channel to use for the operation. Defaults to `None`.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
 
         Returns:
@@ -126,4 +109,4 @@ void bind_all_gather(nb::module_& mod) {
         )doc");
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn::operations::experimental::ccl

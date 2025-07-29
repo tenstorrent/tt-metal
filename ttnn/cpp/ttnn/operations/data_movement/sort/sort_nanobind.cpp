@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 #include "sort_nanobind.hpp"
@@ -14,9 +14,9 @@
 #include "ttnn-nanobind/decorators.hpp"
 #include "sort.hpp"
 
-namespace ttnn::operations::experimental::reduction::sort::detail {
+#include "ttnn-pybind/decorators.hpp"
 
-void bind_reduction_sort_operation(nb::module_& mod) {
+void bind_sort_operation(nb::module_& mod) {
     auto doc =
         R"doc(
             Sorts the elements of the input tensor along the specified dimension in ascending order by default.
@@ -28,15 +28,15 @@ void bind_reduction_sort_operation(nb::module_& mod) {
 
                 return torch.sort(input_tensor, dim=-1)
 
-            Parameters:
-                * `input_tensor` (Tensor): The input tensor to be sorted.
+            Args:
+                input_tensor (ttnn.Tensor): The input tensor to be sorted.
 
             Keyword Arguments:
-                * `dim` (int, optional): The dimension along which to sort. Defaults to -1 (last dimension).
-                * `descending` (bool, optional): If `True`, sorts in descending order. Defaults to `False`.
-                * `stable` (bool, optional): If `True`, ensures the original order of equal elements is preserved. Defaults to `False`.
-                * `memory_config` (MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
-                * `out` (tuple of Tensors, optional): Preallocated output tensors for the sorted values and indices. Defaults to `None`.
+                dim (int, optional): The dimension along which to sort. Defaults to `-1` (last dimension).
+                descending (bool, optional): If `True`, sorts in descending order. Defaults to `False`.
+                stable (bool, optional): If `True`, ensures the original order of equal elements is preserved. Defaults to `False`.
+                memory_config (ttnn.MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
+                out (tuple of ttnn.Tensor, optional): Preallocated output tensors for the sorted values and indices. Defaults to `None`. The index tensor must be of type uint16 or uint32.
 
             Additional info:
                 * For now the `stable` argument is not supported.
@@ -46,25 +46,30 @@ void bind_reduction_sort_operation(nb::module_& mod) {
             .. code-block:: python
 
                 import ttnn
+                import torch
 
                 # Create a tensor
-                input_tensor = ttnn.Tensor([3, 1, 2])
+                input_tensor = torch.Tensor([3, 1, 2])
+
+                # Convert tensor to ttnn format
+                input_tensor_ttnn = ttnn.from_torch(input_tensor, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
 
                 # Sort the tensor in ascending order
-                sorted_tensor, indices = ttnn.experimental.sort(input_tensor)
+                sorted_tensor, indices = ttnn.sort(input_tensor_ttnn)
 
                 # Sort the tensor in descending order
-                sorted_tensor_desc, indices_desc = ttnn.experimental.sort(input_tensor, descending=True)
+                sorted_tensor_desc, indices_desc = ttnn.sort(input_tensor_tnn, descending=True)
 
                 # Sort along a specific dimension
-                input_tensor_2d = ttnn.Tensor([[3, 1, 2], [6, 5, 4]])
-                sorted_tensor_dim, indices_dim = ttnn.experimental.sort(input_tensor_2d, dim=1)
+                input_tensor_2d = torch.Tensor([[3, 1, 2], [6, 5, 4]])
+                input_tensor_2d_ttnn = ttnn.from_torch(input_tensor_2d, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+                sorted_tensor_dim, indices_dim = ttnn.sort(input_tensor_2d_ttnn, dim=1)
         )doc";
 
-    using OperationType = decltype(ttnn::experimental::sort);
+    using OperationType = decltype(ttnn::sort);
     bind_registered_operation(
         mod,
-        ttnn::experimental::sort,
+        ttnn::sort,
         doc,
         ttnn::nanobind_overload_t{
             [](const OperationType& self,
@@ -87,4 +92,4 @@ void bind_reduction_sort_operation(nb::module_& mod) {
             nb::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace ttnn::operations::experimental::reduction::sort::detail
+}  // namespace ttnn::operations::data_movement::detail

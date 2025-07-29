@@ -16,9 +16,9 @@
 #include "scatter_enums.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::operations::experimental::scatter::detail {
+namespace ttnn::operations::data_movement::detail {
 
-void bind_scatter_operation(nb::module_& mod) {
+void bind_scatter(nb::module_& mod) {
     auto doc =
         R"doc(
             Scatters the source tensor's values along a given dimension according
@@ -55,13 +55,13 @@ void bind_scatter_operation(nb::module_& mod) {
                 source_ttnn = ttnn.from_torch(source_torch, dtype=ttnn.float32, device=device, layout=ttnn.Layout.TILE)
                 dim = -1
 
-                output = ttnn.experimental.scatter(input_ttnn, dim, index_ttnn, source_ttnn)
+                output = ttnn.scatter(input_ttnn, dim, index_ttnn, source_ttnn)
         )doc";
 
-    using OperationType = decltype(ttnn::experimental::scatter);
+    using OperationType = decltype(ttnn::scatter);
     bind_registered_operation(
-        mod,
-        ttnn::experimental::scatter,
+        module,
+        ttnn::scatter,
         doc,
         ttnn::nanobind_overload_t{
             [](const OperationType& self,
@@ -70,7 +70,7 @@ void bind_scatter_operation(nb::module_& mod) {
                const ttnn::Tensor& index_tensor,
                const ttnn::Tensor& source_tensor,
                const std::optional<tt::tt_metal::MemoryConfig>& opt_out_memory_config,
-               const std::optional<experimental::scatter::ScatterReductionType>& opt_reduction,
+               const std::optional<scatter::ScatterReductionType>& opt_reduction,
                const QueueId& queue_id = DefaultQueueId) -> Tensor {
                 return self(
                     queue_id, input_tensor, dim, index_tensor, source_tensor, opt_out_memory_config, opt_reduction);
@@ -80,9 +80,9 @@ void bind_scatter_operation(nb::module_& mod) {
             nb::arg("index").noconvert(),
             nb::arg("src").noconvert(),
             nb::kw_only(),
+            py::arg("memory_config") = std::nullopt,
             nb::arg("reduce") = std::nullopt,
-            nb::arg("memory_config") = std::nullopt,
             nb::arg("queue_id") = DefaultQueueId});
 }
 
-}  // namespace ttnn::operations::experimental::scatter::detail
+}  // namespace ttnn::operations::data_movement::detail

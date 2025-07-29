@@ -6,7 +6,9 @@
 
 #include "ttnn-nanobind/nanobind_fwd.hpp"
 
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::mesh_socket {
 namespace nb = nanobind;
-void bind_gather_operation(nb::module_& mod);
-}  // namespace ttnn::operations::data_movement::detail
+void py_module_types(nb::module_& mod);
+void py_module(nb::module_& mod);
+
+}  // namespace ttnn::mesh_socket

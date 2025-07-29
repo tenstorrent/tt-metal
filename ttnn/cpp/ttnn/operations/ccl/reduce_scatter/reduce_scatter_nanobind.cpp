@@ -17,14 +17,12 @@
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
-namespace nb = nanobind;
-
 namespace ttnn::operations::ccl {
 
 namespace {
 
 template <typename ccl_operation_t>
-void bind_operation_reduce_scatter(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
+void bind_reduce_scatter_op(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
     bind_registered_operation(
         mod,
         operation,
@@ -99,7 +97,7 @@ void bind_operation_reduce_scatter(nb::module_& mod, const ccl_operation_t& oper
 }  // namespace
 
 void bind_reduce_scatter(nb::module_& mod) {
-    bind_operation_reduce_scatter(
+    bind_reduce_scatter_op(
         mod,
         ttnn::reduce_scatter,
         R"doc(
@@ -113,7 +111,7 @@ void bind_reduce_scatter(nb::module_& mod) {
             mesh_device (MeshDevice): Device mesh to perform the line-reduce-scatter operation on.
         * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
 
-        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
+        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 
         Keyword Args:
             num_links (int, optional): Number of links to use for the reduce0scatter operation. Defaults to `1`.

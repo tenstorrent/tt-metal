@@ -72,6 +72,8 @@ void bind_llama_rs_create_heads(nb::module_& mod) {
                const uint32_t num_kv_heads,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::MemoryConfig>& qkv_memory_config,
+               const bool use_noc1_only,
+               const bool use_optimal_ccl_for_llama,
                QueueId queue_id) {
                 return self(
                     queue_id,
@@ -87,7 +89,9 @@ void bind_llama_rs_create_heads(nb::module_& mod) {
                     num_heads,
                     num_kv_heads,
                     memory_config,
-                    qkv_memory_config);
+                    qkv_memory_config,
+                    use_noc1_only,
+                    use_optimal_ccl_for_llama);
             },
             nb::arg("input_tensor").noconvert(),
             nb::arg("intermediate_packet_buffer").noconvert(),
@@ -103,6 +107,8 @@ void bind_llama_rs_create_heads(nb::module_& mod) {
             nb::arg("num_kv_heads"),
             nb::arg("memory_config") = std::nullopt,
             nb::arg("qkv_memory_config") = std::nullopt,
+            nb::arg("use_noc1_only") = false,
+            nb::arg("use_optimal_ccl_for_llama") = false,
             nb::arg("queue_id") = DefaultQueueId,
         });
 }

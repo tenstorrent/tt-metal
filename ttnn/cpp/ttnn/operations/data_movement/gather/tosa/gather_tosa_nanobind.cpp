@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@
 #include "gather_tosa.hpp"
 #include "ttnn-nanobind/decorators.hpp"
 
-namespace ttnn::operations::experimental::tosa::gather::detail {
+namespace ttnn::operations::data_movement::detail {
 
 void bind_gather_tosa_operation(nb::module_& mod) {
     auto doc =
@@ -61,15 +61,15 @@ void bind_gather_tosa_operation(nb::module_& mod) {
             index_tensor_ttnn = ttnn.from_torch(index_tensor, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
 
             # Perform the gather operation
-            gathered_tensor = ttnn.experimental.tosa_gather(input_tensor_ttnn, index_tensor_ttnn)
+            gathered_tensor = ttnn.tosa_gather(input_tensor_ttnn, index_tensor_ttnn)
 
             # Equivalent to PyTorch: gathered_tensor = torch.gather(input_tensor, dim=1, index=indices.unsqueeze(-1).expand(-1, -1, C))
     )doc";
 
-    using OperationType = decltype(ttnn::experimental::tosa::gather);
+    using OperationType = decltype(ttnn::tosa::gather);
     bind_registered_operation(
         mod,
-        ttnn::experimental::tosa::gather,
+        ttnn::tosa::gather,
         doc,
         ttnn::nanobind_overload_t{
             [](const OperationType& self,
@@ -83,4 +83,4 @@ void bind_gather_tosa_operation(nb::module_& mod) {
             nb::arg("memory_config") = std::nullopt,
             nb::arg("queue_id") = DefaultQueueId});
 }
-}  // namespace ttnn::operations::experimental::tosa::gather::detail
+}  // namespace ttnn::operations::data_movement::detail

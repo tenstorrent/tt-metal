@@ -18,6 +18,7 @@
 #include "ttnn-nanobind/decorators.hpp"
 #include "ttnn-nanobind/types.hpp"
 #include "ttnn/operations/creation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
 
 namespace ttnn::operations::creation {
 namespace {

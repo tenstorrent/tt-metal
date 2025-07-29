@@ -5,8 +5,8 @@
 #pragma once
 
 #include "ttnn-nanobind/nanobind_fwd.hpp"
-
-namespace ttnn::operations::data_movement::detail {
+namespace ttnn::operations::ccl {
 namespace nb = nanobind;
-void bind_gather_operation(nb::module_& mod);
-}  // namespace ttnn::operations::data_movement::detail
+void bind_mesh_partition(nb::module_& mod);
+
+}  // namespace ttnn::operations::ccl

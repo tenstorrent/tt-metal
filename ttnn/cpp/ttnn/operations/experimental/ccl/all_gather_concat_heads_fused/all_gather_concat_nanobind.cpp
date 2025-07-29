@@ -36,6 +36,7 @@ void bind_all_gather_concat(nb::module_& mod, const ccl_operation_t& operation, 
                const GlobalSemaphore& global_semaphore,
                const uint32_t num_heads,
                const ttnn::MemoryConfig& memory_config,
+               const bool use_noc1_only,
                const std::optional<uint32_t> num_links,
                const ttnn::ccl::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
@@ -50,6 +51,7 @@ void bind_all_gather_concat(nb::module_& mod, const ccl_operation_t& operation, 
                     global_semaphore,
                     num_heads,
                     memory_config,
+                    use_noc1_only,
                     num_links,
                     topology,
                     subdevice_id);
@@ -63,6 +65,7 @@ void bind_all_gather_concat(nb::module_& mod, const ccl_operation_t& operation, 
             nb::arg("num_heads").noconvert(),
             nb::arg("memory_config"),
             nb::kw_only(),
+            nb::arg("use_noc1_only") = false,
             nb::arg("num_links") = 1,
             nb::arg("topology") = ttnn::ccl::Topology::Linear,
             nb::arg("subdevice_id") = std::nullopt,
@@ -83,7 +86,7 @@ void bind_all_gather_concat(nb::module_& mod) {
             cluster_axis (int): Provided a MeshTensor, the axis corresponding to MeshDevice to perform the line-all-gather operation on.
             mesh_device (MeshDevice): Device mesh to perform the line-all-gather operation on.
         * cluster_axis and mesh_device parameters are applicable only for Linear Topology.
-        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
+        Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
         Keyword Args:
             num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
             num_heads (int): Number of heads for NLP concat heads
