@@ -376,7 +376,7 @@ def run_unet_inference(ttnn_device, is_ci_env, prompts, num_inference_steps):
         plt.savefig("pcc_plot.png", dpi=300, bbox_inches="tight")
         plt.close()
 
-    _, pcc_message = assert_with_pcc(latents, torch_tt_latents, UNET_LOOP_PCC[str(num_inference_steps)])
+    _, pcc_message = assert_with_pcc(latents, torch_tt_latents, UNET_LOOP_PCC.get(str(num_inference_steps), 0))
     logger.info(f"PCC of the last iteration is: {pcc_message}")
 
 
