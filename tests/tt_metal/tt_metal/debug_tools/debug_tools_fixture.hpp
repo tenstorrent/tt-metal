@@ -139,7 +139,6 @@ protected:
     bool watcher_previous_auto_unpause;
     bool watcher_previous_noinline;
     bool test_mode_previous;
-    bool reset_server = false;
     void SetUp() override {
         // Enable watcher for this test, save the previous state so we can restore it later.
         watcher_previous_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
