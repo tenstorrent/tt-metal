@@ -73,6 +73,10 @@ If CI fails, but local tests pass as expected, please consider changing ENABLE_C
 ### wandb support
 If you don't have an account to wandb (or don't want to use it), use `-w 0` argument or run `wandb offline` beforehand (creates `wandb/settings` file)
 
+
+# Profiler
+Use of profiler requires additional setup. Follow instructions [here](./docs/PROFILER.md).
+
 # Contributing
 * Create a new branch.
 * Make your changes and commit them.
