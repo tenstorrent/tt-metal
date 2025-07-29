@@ -173,63 +173,6 @@ protected:
         this->create_device(0 /* device_id */, trace_region_size);
     }
 };
-
-class MultiCommandQueueSingleDeviceEventFixture : public MultiCommandQueueSingleDeviceFixture {};
-
-class MultiCommandQueueSingleDeviceProgramFixture : public MultiCommandQueueSingleDeviceFixture {};
-
-// #22835: These Fixtures will be removed once tests are fully migrated, and replaced by
-// UnitMeshMultiCQMultiDeviceFixtures
-class MultiCommandQueueMultiDeviceFixture : public DispatchFixture {
-protected:
-    void SetUp() override {
-        this->slow_dispatch_ = false;
-        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
-            this->slow_dispatch_ = true;
-            GTEST_SKIP();
-        }
-
-        auto num_cqs = tt::tt_metal::MetalContext::instance().rtoptions().get_num_hw_cqs();
-        if (num_cqs != 2) {
-            log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
-            GTEST_SKIP();
-        }
-
-        const tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-
-        DispatchCoreType dispatch_core_type = DispatchCoreType::WORKER;
-        if (arch == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumAvailableDevices() != 1) {
-            if (!tt::tt_metal::IsGalaxyCluster()) {
-                log_warning(
-                    tt::LogTest, "Ethernet Dispatch not being explicitly used. Set this configuration in Setup()");
-                dispatch_core_type = DispatchCoreType::ETH;
-            }
-        }
-
-        std::vector<int> devices_to_open;
-        devices_to_open.reserve(tt::tt_metal::GetNumAvailableDevices());
-        for (int i = 0; i < tt::tt_metal::GetNumAvailableDevices(); ++i) {
-            devices_to_open.push_back(i);
-        }
-        reserved_devices_ = tt::tt_metal::detail::CreateDevices(
-            devices_to_open, num_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, dispatch_core_type);
-        for (const auto& [id, device] : reserved_devices_) {
-            devices_.push_back(device);
-        }
-    }
-
-    void TearDown() override {
-        if (!reserved_devices_.empty()) {
-            tt::tt_metal::detail::CloseDevices(reserved_devices_);
-        }
-    }
-
-    std::vector<tt::tt_metal::IDevice*> devices_;
-    std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
-};
-
 class UnitMeshMultiCQMultiDeviceFixture : public DispatchFixture {
 protected:
     void SetUp() override {
@@ -280,7 +223,8 @@ protected:
 
 class UnitMeshMultiCQMultiDeviceBufferFixture : public UnitMeshMultiCQMultiDeviceFixture {};
 
-class UnitMeshMultiCQMultDeviceEventFixture : public UnitMeshMultiCQMultiDeviceFixture {};
+class UnitMeshMultiCQMultiDeviceEventFixture : public UnitMeshMultiCQMultiDeviceFixture {};
+
 class DISABLED_MultiCQMultiDeviceOnFabricFixture : public UnitMeshMultiCQMultiDeviceFixture,
                                                    public ::testing::WithParamInterface<tt::tt_fabric::FabricConfig> {
 private:
