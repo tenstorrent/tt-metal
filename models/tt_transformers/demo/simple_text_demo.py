@@ -30,15 +30,14 @@ class TokenAccuracy:
     def __init__(self, model_name):
         self.gt_pos = -1
         self.store_predicted_tokens = []
-        file_list = [str(path) for path in Path("models/tt_transformers/tests/reference_outputs/").glob("*.refpt")]
-        reference_data_file = [f for f in file_list if model_name in f][0]
+        reference_data_file = os.path.join("models/tt_transformers/tests/reference_outputs/", model_name) + ".refpt"
         assert os.path.exists(reference_data_file)
         logger.info(f"Loading reference data from {reference_data_file}")
         reference_data = torch.load(reference_data_file)
         self.reference_tokens = reference_data["reference_tokens"]
-        split_point = self.reference_tokens.shape[-1] // 2  # + 1
+        split_point = self.reference_tokens.shape[-1] // 2
         self.input_prompt = self.reference_tokens[0, :split_point]
-        self.gt_tokens = self.reference_tokens[0, split_point:]
+        self.gt_tokens = reference_data["reference_tokens"][0, split_point:]
         self.top5_tokens = reference_data["top5_tokens"][split_point - 1 :, :]
         self.maxindex = len(self.gt_tokens) - 1
 
@@ -49,6 +48,7 @@ class TokenAccuracy:
     def collect_predicted_tokens(self, tokens):
         self.store_predicted_tokens.append(tokens)
         self.gt_pos += 1
+        print(self.gt_pos)
         return self.gt_tokens[min(self.gt_pos, self.maxindex)].unsqueeze(-1).unsqueeze(-1)
 
     def compute_accuracy(self):
@@ -56,7 +56,7 @@ class TokenAccuracy:
         count_t5 = 0
         matching_sz = min(len(self.gt_tokens), len(self.store_predicted_tokens))
         for i in range(matching_sz):
-            if self.gt_tokens[i].item() == self.store_predicted_tokens[i]:
+            if self.top5_tokens[i][0].item() == self.store_predicted_tokens[i]:
                 count += 1
             if self.store_predicted_tokens[i] in self.top5_tokens[i, :]:
                 count_t5 += 1
@@ -469,7 +469,7 @@ def prepare_generator_args(
             1,  # repeat_batches
             1024,  # max_seq_len
             1,  # batch_size
-            500,  # max_generated_tokens
+            511,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
@@ -654,7 +654,7 @@ def test_demo_text(
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     if token_accuracy:
-        input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)[18:]
+        input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)
         instruct = False
 
     repeat_batch_prompts = []
@@ -776,6 +776,7 @@ def test_demo_text(
             # Get the next token
             if device_sampling_params is not None:
                 out_tok = logits.unsqueeze(1)
+
             else:
                 # TODO Fix use case with temperature > 0
                 _, out_tok = sample_host(
