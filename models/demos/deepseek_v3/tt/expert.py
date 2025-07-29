@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import final
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -69,15 +70,24 @@ class Expert(MLP1D):  # The only difference with the regular Dequantized MLP is 
                 # Stack and permute, then add to the corresponding weight group
                 weight_groups[weight_key].append(torch.stack(weight_tensors, dim=0).permute(0, 2, 1))
 
-        # Convert weights for each expert group using compact loop
-        return {
-            experts_group: {
-                "input_tensor_b": save_and_get_path(
-                    output_path / f"{experts_group}.input_tensor_b",
+        def save_and_get_tensor_cache_path(tensor_cache_path, tensor):
+            if not tensor_cache_path.exists():
+                logger.info(f"Saving tensor to {tensor_cache_path}")
+                return save_and_get_path(
+                    tensor_cache_path,
                     cls._convert_weight(
-                        weight_groups[weight_key],
+                        tensor,
                         mesh_device,
                     ),
+                )
+            else:
+                logger.info(f"Using cached tensor at {tensor_cache_path}")
+                return str(tensor_cache_path)
+
+        return {
+            experts_group: {
+                "input_tensor_b": save_and_get_tensor_cache_path(
+                    output_path / f"{experts_group}.input_tensor_b", weight_groups[weight_key]
                 )
             }
             for weight_key, experts_group in weight_key_to_expert.items()
