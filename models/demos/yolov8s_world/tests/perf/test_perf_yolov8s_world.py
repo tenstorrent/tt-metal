@@ -88,7 +88,7 @@ def test_perf_yolov8s_world(
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 104.0],
+        [1, 106.2],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

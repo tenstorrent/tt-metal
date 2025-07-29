@@ -80,7 +80,7 @@ SubdeviceInfo create_subdevices(const std::vector<IDevice*>& devices) {
             {device->id(), device->get_sub_device_ids().at(TEST_WORKERS_SUBDEVICE_INDEX)});
         subdevice_info.fabric_subdevice_id.insert(
             {device->id(), device->get_sub_device_ids().at(TEST_EDM_FABRIC_SUBDEVICE_INDEX)});
-        device->set_sub_device_stall_group({subdevice_info.worker_subdevice_id.at(device->id())});
+        device->set_sub_device_stall_group({{subdevice_info.worker_subdevice_id.at(device->id())}});
     }
 
     return subdevice_info;
@@ -134,15 +134,14 @@ void persistent_fabric_teardown_sequence(
     log_info(tt::LogTest, "Tearing down fabric");
 
     // Wait for workers to finish
-    auto d0_worker_subdevice = devices[0]->get_sub_device_ids()[TEST_WORKERS_SUBDEVICE_INDEX];
-    tt_metal::Finish(devices[0]->command_queue(), {subdevice_managers->worker_subdevice_id.at(devices[0]->id())});
+    tt_metal::Finish(devices[0]->command_queue(), {{subdevice_managers->worker_subdevice_id.at(devices[0]->id())}});
 
     // Teardown the fabric
     line_fabric.teardown_from_host(termination_mode);
 
     // wait for fabric teardown to finish
     std::ranges::for_each(devices, [&](IDevice* d) {
-        tt_metal::Finish(d->command_queue(), {subdevice_managers->fabric_subdevice_id.at(d->id())});
+        tt_metal::Finish(d->command_queue(), {{subdevice_managers->fabric_subdevice_id.at(d->id())}});
     });
 }
 

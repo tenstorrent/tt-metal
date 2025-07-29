@@ -5,6 +5,7 @@
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "dataflow_api.h"
 
@@ -25,8 +26,6 @@ void kernel_main() {
     const size_t payload_size_bytes = get_arg_val<uint32_t>(arg_idx++);
     const size_t burst_size = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_bursts_to_send = get_arg_val<uint32_t>(arg_idx++);
-    const size_t packet_header_cb = get_arg_val<uint32_t>(arg_idx++);
-    const size_t packet_header_size_in_headers = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_hops_over_loopback_fabric_to_self = get_arg_val<uint32_t>(arg_idx++);
     const size_t congestion_writers_ready_semaphore = get_arg_val<uint32_t>(arg_idx++);
     const size_t num_congestion_writers = get_arg_val<uint32_t>(arg_idx++);
@@ -77,12 +76,8 @@ void kernel_main() {
 
     fabric_connection.open();
 
-    cb_reserve_back(packet_header_cb, packet_header_size_in_headers);
-    const auto packet_header_buffer_address = get_write_ptr(packet_header_cb);
-
-    auto* payload_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
-    auto* sem_inc_packet_header =
-        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
+    auto* payload_packet_header = PacketHeaderPool::allocate_header();
+    auto* sem_inc_packet_header = PacketHeaderPool::allocate_header();
 
     auto wait_for_semaphore_then_reset = [semaphore_address](size_t target_value) {
         noc_semaphore_wait_min(reinterpret_cast<volatile uint32_t*>(semaphore_address), target_value);

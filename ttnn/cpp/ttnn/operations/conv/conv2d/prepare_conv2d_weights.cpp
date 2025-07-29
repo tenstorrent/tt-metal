@@ -53,7 +53,10 @@ template <typename T, typename Fn>
 Tensor convert_tensor(const Tensor& input_tensor, const Fn& compute, const TensorSpec& output_spec) {
     TT_FATAL(is_cpu_tensor(input_tensor), "convert_tensor only supports cpu tensors");
     return Tensor(
-        input_tensor.host_storage().transform(compute), output_spec, input_tensor.distributed_tensor_config());
+        input_tensor.host_storage().transform(compute),
+        output_spec,
+        input_tensor.distributed_tensor_config(),
+        input_tensor.tensor_topology());
 }
 
 template <typename Func, typename... Args>
@@ -604,7 +607,8 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
             TensorSpec(
                 output_shape,
                 tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{})),
-            conv_weight_tensor.distributed_tensor_config());
+            conv_weight_tensor.distributed_tensor_config(),
+            conv_weight_tensor.tensor_topology());
     };
 
     const auto& storage = conv_weight_tensor.host_storage();
@@ -803,7 +807,8 @@ static OptimizedConvBlockConfig get_opt_block_config(
         kernel_size[0],
         kernel_size[1],
         get_fp32_dest_acc_en(compute_config),
-        conv_config.enable_split_reader);
+        conv_config.enable_split_reader,
+        conv_config.full_inner_dim);
 }
 
 static uint32_t calculate_out_channels_padded(uint32_t out_channels, const ParallelConfig& output_parallel_config) {
@@ -966,7 +971,6 @@ static ttnn::Tensor prepare_conv_weights_internal(
     const auto& original_weights_shape = weight_tensor_.logical_shape();
     uint32_t original_weights_out_channels = original_weights_shape[0];
     uint32_t original_weights_in_channels = original_weights_shape[1];
-    uint32_t original_weights_window_h = original_weights_shape[2];
     uint32_t original_weights_window_w = original_weights_shape[3];
 
     const bool is_conv1d = is_1d_conv(original_weights_window_w, params.input_width);

@@ -15,7 +15,7 @@ class RMSNormBase(AbstractModule):
     @classmethod
     def is_device_supported(cls, mesh_device: ttnn.Device) -> bool:
         """
-        The RMS norm is only run on a single galaxy row.
+        The RMS norm is only run on a 1D device.
 
         Args:
             mesh_device: The mesh device to check.
@@ -23,7 +23,7 @@ class RMSNormBase(AbstractModule):
         Returns:
             True if the device is supported, False otherwise.
         """
-        return tuple(mesh_device.shape) == (1, 8)
+        return tuple(mesh_device.shape)[0] == 1
 
     @classmethod
     @abstractmethod

@@ -14,6 +14,7 @@
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
+#include "umd/device/types/cluster_descriptor_types.h"
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -53,6 +54,7 @@ struct ParsedSenderConfig {
     DeviceIdentifier device = FabricNodeId(MeshId{0}, 0);
     std::optional<CoreCoord> core;
     std::vector<ParsedTrafficPatternConfig> patterns;
+    std::optional<uint32_t> link_id;  // Link ID for multi-link tests
 };
 
 // Resolved structures (after resolution) - use FabricNodeId
@@ -79,6 +81,7 @@ struct SenderConfig {
     FabricNodeId device = FabricNodeId(MeshId{0}, 0);
     std::optional<CoreCoord> core;
     std::vector<TrafficPatternConfig> patterns;
+    std::optional<uint32_t> link_id;  // Link ID for multi-link tests
 };
 
 enum class RoutingType {
@@ -98,6 +101,7 @@ enum class HighLevelTrafficPattern {
 struct TestFabricSetup {
     tt::tt_fabric::Topology topology;
     std::optional<RoutingType> routing_type;
+    uint32_t num_links;
 };
 
 struct HighLevelPatternConfig {
@@ -226,6 +230,16 @@ struct AllocatorPolicies {
             this->default_payload_chunk_size =
                 detail::DEFAULT_RECEIVER_L1_SIZE / this->receiver_config.max_configs_per_core;
         }
+    }
+};
+
+struct PhysicalMeshConfig {
+    std::string mesh_descriptor_path;
+    std::vector<std::vector<eth_coord_t>> eth_coord_mapping;
+
+    PhysicalMeshConfig() {
+        mesh_descriptor_path = "";  // Default path to the mesh descriptor.
+        eth_coord_mapping = {};
     }
 };
 

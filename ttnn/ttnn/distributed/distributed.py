@@ -38,6 +38,9 @@ def _get_rich_table(
         logger.error("Error getting device mesh shape: {}.", e)
         rows, cols = 0, 0
 
+    view = mesh_device.get_view()
+    fully_local = view.fully_local()
+
     mesh_table = Table(
         title=f"MeshDevice(rows={rows}, cols={cols}):",
         show_header=False,
@@ -56,18 +59,19 @@ def _get_rich_table(
         row_cells = []
         for col_idx in range(cols):
             try:
-                device_id = mesh_device.get_device_id(ttnn.MeshCoordinate(row_idx, col_idx))
-            except Exception as e:
-                logger.error("Error fetching device from MeshDevice at row {}, col {}: {}.", row_idx, col_idx, e)
-                device_id = None
-
-            try:
-                device_id = f"Dev. ID: {device_id}" if device_id is not None else "Empty"
-                coords = f"({row_idx}, {col_idx})"
+                coord = ttnn.MeshCoordinate(row_idx, col_idx)
+                locality = "Local\n" if view.is_local(coord) else "Remote\n"
+                locality = "" if fully_local else locality
+                device_id = (
+                    f"Dev. ID: {mesh_device.get_device_id(ttnn.MeshCoordinate(row_idx, col_idx))}\n"
+                    if view.is_local(coord)
+                    else "Unknown\n"
+                )
+                coords = f"({row_idx}, {col_idx})\n"
                 annotation = annotate_cell(device_id) if annotate_cell and device_id is not None else ""
 
-                cell_content = Text(f"{device_id}\n{coords}\n{annotation}", justify="center")
-                cell_content.truncate(CELL_SIZE * 3, overflow="ellipsis")  # 3 lines max
+                cell_content = Text(f"{locality}{device_id}{coords}{annotation}", justify="center")
+                cell_content.truncate(CELL_SIZE * 4, overflow="ellipsis")  # 4 lines max
             except AttributeError as e:
                 logger.error("Error formatting cell content at row {}, col {}: {}.", row_idx, col_idx, e)
                 cell_content = Text("Error", justify="center")
@@ -112,6 +116,26 @@ def visualize_mesh_device(mesh_device: "ttnn.MeshDevice", tensor: "ttnn.Tensor" 
 
     mesh_table = _get_rich_table(mesh_device, style_cell=style_cell, annotate_cell=annotate_cell)
     Console().print(mesh_table)
+
+
+def visualize_system_mesh():
+    """
+    Print SystemMesh global and local shapes.
+    """
+    from rich.console import Console
+    from loguru import logger
+
+    try:
+        system_mesh_desc = ttnn._ttnn.multi_device.SystemMeshDescriptor()
+        global_shape = system_mesh_desc.shape()
+        local_shape = system_mesh_desc.local_shape()
+    except Exception as e:
+        logger.error(f"Error accessing SystemMesh: {e}")
+        return
+
+    console = Console()
+    console.print(f"\n[bold blue]SystemMesh Global Shape: {global_shape}[/bold blue]")
+    console.print(f"\n[bold green]SystemMesh Local Shape: {local_shape}[/bold green]")
 
 
 def get_num_devices() -> List[int]:
