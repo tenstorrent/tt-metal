@@ -69,7 +69,7 @@ jobs:
 
           pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests/test_embedding_1d.py --timeout 10 || fail=1
-          pytest models/demos/deepseek_v3/tests/test_expert.py --timeout 15 || fail=1
+          pytest models/demos/deepseek_v3/tests/test_moe_experts.py --timeout 15 || fail=1
           pytest models/demos/deepseek_v3/tests/test_mla_1d.py --timeout 10 || fail=1
           pytest models/demos/deepseek_v3/tests/test_mlp_1d.py --timeout 5 || fail=1
           pytest models/demos/deepseek_v3/tests/test_rms_norm.py --timeout 5 || fail=1
