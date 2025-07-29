@@ -36,6 +36,7 @@ void kernel_main() {
         volatile uint32_t val = buffer_ptr[i];
         volatile uint32_t msg_status = val & 0xffff0000;
         volatile uint32_t msg_type = val & 0xffff;
+        debug_dump[1] = 0xbbbb;
         while (msg_status != 0xca110000) {
             invalidate_l1_cache();
             volatile uint32_t heartbeat = 0xabcd0000 | heartbeat_cnt;
@@ -45,13 +46,22 @@ void kernel_main() {
             val = buffer_ptr[i];
             msg_status = val & 0xffff0000;
             msg_type = val & 0xffff;
+            debug_dump[1] = 0xaaaa;
+            if (buffer_ptr[i] == 0) {
+                debug_dump[2] = 0xf0f0f0f0;
+            } else {
+                debug_dump[2] = val;
+            }
+            debug_dump[3] = buffer_ptr[i];
         }
 
+        debug_dump[1] = 0xcccc;
         // change it to done
         buffer_ptr[i] = 0xd0e50000 | msg_type;
-
+        debug_dump[1] = 0xdddd;
         // if the message type is not in sync then hang
         if (msg_type != i) {
+            debug_dump[1] = 0xeeee;
             while (true) {
                 __asm__ volatile("nop");
             }

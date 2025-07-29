@@ -463,8 +463,6 @@ void wait_for_heartbeat(chip_id_t device_id, const CoreCoord& virtual_core, int 
             }
         }
     }
-
-    std::cerr << "wait_for_heartbeat done" << std::endl;
 }
 
 uint32_t get_retrain_count(chip_id_t device_id, const CoreCoord& virtual_core) {

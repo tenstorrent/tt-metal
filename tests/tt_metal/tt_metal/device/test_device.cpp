@@ -384,8 +384,6 @@ void wait_for_heartbeat_custom(chip_id_t device_id, const CoreCoord& virtual_cor
             std::abort();
         }
     }
-
-    std::cerr << "wait_for_heartbeat done" << std::endl;
 }
 
 void do_debug_test(
@@ -417,38 +415,44 @@ void do_debug_test(
                   << dest_buffer_addr << std::endl;
 
         // Wait for kernel to process message
-        uint32_t mailbox_val =
-            llrt::read_hex_vec_from_core(device->id(), virtual_core, dest_buffer_addr, sizeof(uint32_t))[0];
-        uint32_t msg_status = mailbox_val & 0xffff0000;
-        {
-            const auto start = std::chrono::high_resolution_clock::now();
-            constexpr auto k_sleep_time = std::chrono::nanoseconds{10};
-            while (msg_status != 0xd0e50000) {
-                std::this_thread::sleep_for(std::chrono::nanoseconds(k_sleep_time));
-                mailbox_val =
-                    llrt::read_hex_vec_from_core(device->id(), virtual_core, dest_buffer_addr, sizeof(uint32_t))[0];
-                msg_status = mailbox_val & 0xffff0000;
+        // uint32_t mailbox_val =
+        //     llrt::read_hex_vec_from_core(device->id(), virtual_core, dest_buffer_addr, sizeof(uint32_t))[0];
+        // uint32_t msg_status = mailbox_val & 0xffff0000;
+        // {
+        //     const auto start = std::chrono::high_resolution_clock::now();
+        //     constexpr auto k_sleep_time = std::chrono::nanoseconds{10};
+        //     while (msg_status != 0xd0e50000) {
+        //         std::this_thread::sleep_for(std::chrono::nanoseconds(k_sleep_time));
+        //         mailbox_val =
+        //             llrt::read_hex_vec_from_core(device->id(), virtual_core, dest_buffer_addr, sizeof(uint32_t))[0];
+        //         msg_status = mailbox_val & 0xffff0000;
 
-                const auto now = std::chrono::high_resolution_clock::now();
-                const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
-                if (elapsed > 10000) {
-                    std::cerr << "timed out waiting" << std::endl;
-                    std::abort();
-                }
-            }
-        }
+        //         const auto now = std::chrono::high_resolution_clock::now();
+        //         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+        //         if (elapsed > 10000) {
+        //             std::cerr << "timed out waiting" << std::endl;
+        //             std::abort();
+        //         }
+        //     }
+        // }
 
-        // We didnt write what we wanted?
-        if ((mailbox_val & 0xffff) != msg_i) {
-            TT_THROW("Read msg i {} but expected {}", mailbox_val, msg_i);
-        }
+        // // We didnt write what we wanted?
+        // if ((mailbox_val & 0xffff) != msg_i) {
+        //     TT_THROW("Read msg i {} but expected {}", mailbox_val, msg_i);
+        // }
     }
 
-    std::cerr << "Check final value\n";
+    auto buffer_vals =
+        llrt::read_hex_vec_from_core(device->id(), virtual_core, buffer_base, sizeof(uint32_t) * num_writes);
+    for (int i = 1; i < num_writes; ++i) {
+        EXPECT_EQ(buffer_vals[i], 0xd0e50000 | (i & 0xffff));
+    }
+
+    // std::cerr << "Check final value\n";
     // Output the buffer values to see if we receive the final value on the core
-    auto buffer_val = llrt::read_hex_vec_from_core(device->id(), virtual_core, buffer_base, sizeof(uint32_t))[0];
-    auto arg_val = llrt::read_hex_vec_from_core(device->id(), virtual_core, arg_base, sizeof(uint32_t))[0];
-    EXPECT_EQ(buffer_val, 0xd0e50000 | ((num_writes - 1) & 0xffff));
+    // auto buffer_val = llrt::read_hex_vec_from_core(device->id(), virtual_core, buffer_base, sizeof(uint32_t))[0];
+    // auto arg_val = llrt::read_hex_vec_from_core(device->id(), virtual_core, arg_base + (num_writes *
+    // sizeof(uint32_t)), sizeof(uint32_t))[0]; EXPECT_EQ(buffer_val, 0xd0e50000 | ((num_writes - 1) & 0xffff));
 
     std::cerr << "Kernel done" << std::endl;
     llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{0xdead0000}, buffer_base);
