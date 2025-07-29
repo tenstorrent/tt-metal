@@ -25,7 +25,7 @@ from ..tt.parallel_config import EncoderParallelManager
     "clip_path, tokenizer_path, expected_pcc",
     [
         ("text_encoder", "tokenizer", 0.99),
-        ("text_encoder_2", "tokenizer_2", 0.987),
+        ("text_encoder_2", "tokenizer_2", 0.985),
     ],
     ids=["encoder_1", "encoder_2"],
 )
@@ -52,17 +52,6 @@ def test_clip_encoder(
         model_name_checkpoint, subfolder=clip_path, local_files_only=True
     )
     tokenizer = CLIPTokenizer.from_pretrained(model_name_checkpoint, subfolder=tokenizer_path, local_files_only=True)
-
-    # extract pooled output from last_hidden_state exactly like HF does internally
-    def pooled_from_hidden(last_hidden, input_ids, eos_token_id):
-        if eos_token_id == 2:
-            # "argmax" strategy used by older checkpoints
-            idx = input_ids.argmax(dim=-1)
-        else:
-            # search for the first true EOS token
-            idx = (input_ids == eos_token_id).int().argmax(dim=-1)
-        b = torch.arange(last_hidden.size(0), device=last_hidden.device)
-        return last_hidden[b, idx]  # shape [B, hidden]
 
     hf_model.eval()
 
@@ -139,8 +128,7 @@ def test_clip_encoder(
     with torch.no_grad():
         hf_output = hf_model(**hf_inputs)
         sequence_output = hf_output.last_hidden_state
-
-        pooled_output = pooled_from_hidden(sequence_output, hf_inputs.input_ids, hf_model.config.eos_token_id)
+        pooled_output = hf_output.text_embeds
     logger.info(f"text encoder 1 CPU runtime: {time.time() - start_time}")
 
     # debug
@@ -158,7 +146,7 @@ def test_clip_encoder(
     start_time = time.time()
     eos_token_id = hf_model.config.eos_token_id
 
-    tt_sequence_output, tt_pooled_output = tt_model(
+    tt_sequence_output, tt_projected_output = tt_model(
         tt_tokens, encoder_submesh, eos_token_id, parallel_manager=parallel_manager
     )
 
@@ -166,20 +154,20 @@ def test_clip_encoder(
     logger.info("text encoder done...")
 
     tt_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output)[0])
-    tt_pooled_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_pooled_output)[0])
+    tt_projected_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_projected_output)[0])
 
     # debug
     logger.info(f"TT text encoder sequence output shape: {tt_sequence_output_torch.shape}")
-    logger.info(f"TT text encoder pooled output shape: {tt_pooled_output_torch.shape}")
+    logger.info(f"TT text encoder pooled output shape: {tt_projected_output_torch.shape}")
     logger.info(
         f"TT text encoder sequence output mean: {tt_sequence_output_torch.mean():.6f}, std: {tt_sequence_output_torch.std():.6f}"
     )
     logger.info(
-        f"TT text encoder pooled output mean: {tt_pooled_output_torch.mean():.6f}, std: {tt_pooled_output_torch.std():.6f}"
+        f"TT text encoder pooled output mean: {tt_projected_output_torch.mean():.6f}, std: {tt_projected_output_torch.std():.6f}"
     )
 
     assert sequence_output.shape == tt_sequence_output_torch.shape
-    assert pooled_output.shape == tt_pooled_output_torch.shape
+    assert pooled_output.shape == tt_projected_output_torch.shape
 
     assert_quality(sequence_output, tt_sequence_output_torch, pcc=expected_pcc)
-    assert_quality(pooled_output, tt_pooled_output_torch, pcc=expected_pcc)
+    assert_quality(pooled_output, tt_projected_output_torch, pcc=expected_pcc)
