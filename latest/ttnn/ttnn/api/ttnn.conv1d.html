@@ -153,7 +153,7 @@
 <li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – The input tensor. This must be in the format [N, H, W, C]. It can be on host or device.</p></li>
 <li><p><strong>weight_tensor</strong> (<em>ttnn.Tensor</em>) – The weight tensor. The weights can be passed in the same format as PyTorch, [out_channels, in_channels, kernel_height, kernel_width]. The op w</p></li>
 <li><p><strong>bias_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>None</em>) – Optional bias tensor. Default: None</p></li>
-<li><p><strong>device</strong> (<em>ttnn.IDevice</em>) – The device to use.</p></li>
+<li><p><strong>device</strong> (<em>ttnn.MeshDevice</em>) – The device to use.</p></li>
 <li><p><strong>in_channels</strong> (<em>int</em>) – Number of input channels.</p></li>
 <li><p><strong>out_channels</strong> (<em>int</em>) – Number of output channels.</p></li>
 <li><p><strong>batch_size</strong> (<em>int</em>) – Batch size.</p></li>
