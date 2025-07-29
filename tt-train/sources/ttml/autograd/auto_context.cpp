@@ -89,4 +89,11 @@ void AutoContext::initialize_distributed_context(int argc, char** argv) {
     m_distributed_context = DistributedContext::get_current_world();
 }
 
+[[nodiscard]] core::distributed::CCLResources& AutoContext::get_ccl_resources() {
+    if (!m_ccl_resources) {
+        m_ccl_resources = std::make_unique<core::distributed::CCLResources>();
+    }
+    return *m_ccl_resources;
+}
+
 }  // namespace ttml::autograd
