@@ -166,12 +166,16 @@ It supports the following parameters:
 - **optimizations (str)**: Optimization level (performance, accuracy)
 
 
-### Mixing topologies in prefill ccl ops
+### Mixing topologies in prefill ccl ops [Debug-Only]
+Please note that using line topology on a galaxy system might affect model accuracy. This functionality is for debug purposes only!
+
 When running `text_demo.py` on a machine with torus, all ops will by default use ring topology. To use line implementation of ops you can set enviroment variables:
+
 - LINE_RS = 1: to use line for all ReduceScatter ops
 - LINE_AG = 1: use line for all AllGather ops
 
 To use line for only some of the AG ops, you can set USE_LINE_AG set in `llama_ccl.py`, for example to use line for all RS and just QKV AG, and ring for the rest of AG set:
+
 - LINE_RS = 1
 - LINE_AG = 0
 - USE_LINE_AG = {"QKV"}
