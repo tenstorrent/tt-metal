@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader, Dataset
 from transformers import AutoImageProcessor
 
 import ttnn
-from models.demos.segformer.common import load_config, load_torch_model
+from models.demos.segformer.common import download_and_unzip_dataset, load_config, load_torch_model
 from models.demos.segformer.reference.segformer_for_semantic_segmentation import (
     SegformerForSemanticSegmentationReference,
 )
@@ -53,6 +53,8 @@ def shift_gt_indices(gt_mask):
 )
 def test_demo_semantic_segmentation(device, model_location_generator):
     config = load_config("configs/segformer_semantic_config.json")
+    dataset_path = "segformer-segmentation"
+    dataset_name = "validation_data_ade20k"
     reference_model = SegformerForSemanticSegmentationReference(config=config)
 
     reference_model = load_torch_model(
@@ -60,12 +62,10 @@ def test_demo_semantic_segmentation(device, model_location_generator):
     )
     image_processor = AutoImageProcessor.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
 
-    if not os.path.exists("models/demos/segformer/demo/validation_data_ade20k"):
-        logger.info("downloading data")
-        os.system("bash models/demos/segformer/demo/data_download.sh")
+    weights_path = download_and_unzip_dataset(model_location_generator, dataset_path, dataset_name)
 
-    image_folder = "models/demos/segformer/demo/validation_data_ade20k/images"
-    mask_folder = "models/demos/segformer/demo/validation_data_ade20k/annotations"
+    image_folder = f"{weights_path}/images"
+    mask_folder = f"{weights_path}/annotations"
 
     dataset = SemanticSegmentationDataset(image_folder, mask_folder, image_processor)
     data_loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0)

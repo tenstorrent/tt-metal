@@ -72,7 +72,9 @@ def test_demo(device, source, model_type, res, use_pretrained_weights, model_loc
         model = load_torch_model(model_location_generator)
 
     if model_type == "tt_model":
-        performant_runner = YOLOv8sPerformantRunner(device, device_batch_size=1)
+        performant_runner = YOLOv8sPerformantRunner(
+            device, device_batch_size=1, model_location_generator=model_location_generator
+        )
 
     save_dir = "models/demos/yolov8s/demo/runs"
 

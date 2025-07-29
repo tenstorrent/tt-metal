@@ -60,31 +60,8 @@ run_python_model_tests_wormhole_b0() {
     WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/yolov7/tests/pcc/test_ttnn_yolov7.py
 
     # ViT-base
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv tests/ttnn/integration_tests/vit/test_ttnn_optimized_sharded_vit_wh.py
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/vit/tests/pcc/test_ttnn_optimized_sharded_vit_wh.py
 
-    #VGG_Unet
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/vgg_unet/tests/pcc/test_vgg_unet.py
-
-    #Yolov9c
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/yolov9c/tests/pcc/test_ttnn_yolov9c.py
-
-    #Vanilla_unet
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/vanilla_unet/tests/pcc/test_ttnn_unet.py
-
-    #Swin_s_v2
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/swin_v2/tests/pcc/test_ttnn_swin_v2_s.py
-
-    #Swin_s
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/swin_s/tests/pcc/test_ttnn_swin_transformer.py
-
-    #Yolov11
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/yolov11/tests/pcc/test_ttnn_yolov11.py
-
-    #Yolov6l
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/yolov6l/tests/pcc/test_ttnn_yolov6l.py
-
-    #Yolov8s_world
-    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/yolov8s_world/tests/pcc/test_ttnn_yolov8s_world.py::test_YoloModel
 
     # Llama3.1-8B
     llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/

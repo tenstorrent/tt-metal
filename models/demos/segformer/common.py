@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import zipfile
 from pathlib import Path
 
 import torch
@@ -27,11 +28,20 @@ def load_torch_model(reference_model, target_prefix, module="semantic_sub", mode
             torch_model = SegformerForSemanticSegmentation.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
         state_dict = torch_model.state_dict()
     else:
-        weights = (
-            model_location_generator("vision-models/segformer", model_subdir="", download_if_ci_v2=True)
-            / "segformer_b0_ade_512_512.pth"
-        )
-        # TODO CIv2 weight load for Image Classification. Issue - https://github.com/tenstorrent/tt-metal/issues/25888
+        if module == "image_classification":
+            weights = (
+                model_location_generator(
+                    "vision-models/segformer-classification", model_subdir="", download_if_ci_v2=True
+                )
+                / "pytorch_model.bin"
+            )
+        elif module == "semantic_sub":
+            weights = (
+                model_location_generator(
+                    "vision-models/segformer-segmentation", model_subdir="", download_if_ci_v2=True
+                )
+                / "segformer_b0_ade_512_512.pth"
+            )
         state_dict = torch.load(weights)
 
     new_state_dict = {}
@@ -49,3 +59,22 @@ def load_torch_model(reference_model, target_prefix, module="semantic_sub", mode
     reference_model.load_state_dict(new_state_dict)
     reference_model.eval()
     return reference_model
+
+
+def download_and_unzip_dataset(model_location_generator, dataset_path, dataset_name):
+    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
+        if not os.path.exists(f"models/demos/segformer/demo/{dataset_name}"):
+            os.system("bash models/demos/segformer/demo/data_download.sh")
+        return f"models/demos/segformer/demo/{dataset_name}"
+    else:
+        zip_path = (
+            model_location_generator(f"vision-models/{dataset_path}", model_subdir="", download_if_ci_v2=True)
+            / f"{dataset_name}.zip"
+        )
+        extract_dir = zip_path.parent / f"{dataset_name}"
+
+        if not extract_dir.exists():
+            with zipfile.ZipFile(zip_path, "r") as zip_ref:
+                zip_ref.extractall(extract_dir)
+        file_path = str(extract_dir / dataset_name)
+        return file_path
