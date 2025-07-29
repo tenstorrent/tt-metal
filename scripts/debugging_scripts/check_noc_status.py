@@ -41,16 +41,6 @@ from elftools.elf.elffile import ELFFile
 from docopt import docopt
 
 
-def get_symbols_from_elf(elf_path: str, context: Context) -> dict[str, int]:
-    """Gets symbols from symbol table from elf file"""
-    # Open elf file from given path
-    stream = open(elf_path, "rb")
-    # Read elf
-    elf = ELFFile(stream)
-    # Get symbols from elf
-    return decode_symbols(elf)
-
-
 def check_noc_status(fw_elf, context: Context, risc_name: str = "brisc", noc_id: int = 0) -> dict:
     """
     Checks for mismatches between variables and registers that store number of NOC transactions
@@ -76,7 +66,7 @@ def check_noc_status(fw_elf, context: Context, risc_name: str = "brisc", noc_id:
             passed = True
             error = False
 
-            loc_mem_reader = ELF.get_mem_reader(context, device_id, loc, risc_name)
+            loc_mem_reader = ELF.get_mem_reader(loc, risc_name)
 
             # Check if variables match with corresponding register
             for var in VAR_TO_REG_MAP:
