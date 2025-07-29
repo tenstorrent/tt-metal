@@ -12,6 +12,7 @@ from ...tt.fun_vae_decoder.fun_vae_decoder import sd_vae_decode, TtVaeDecoderPar
 from ...tt.utils import assert_quality, to_torch
 from models.utility_functions import comp_allclose, comp_pcc
 from ...tt.parallel_config import StableDiffusionParallelManager
+import tracy
 
 
 def print_stats(label, data: torch.Tensor, device=None):
@@ -27,7 +28,7 @@ def print_stats(label, data: torch.Tensor, device=None):
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, topology",
     [
-        [(1, 2), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear],
+        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear],
         # [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear],
     ],
     ids=[
@@ -53,6 +54,7 @@ def print_stats(label, data: torch.Tensor, device=None):
         "block_out_channels",
     ),
     [
+        (1, 16, 3, 2, 128, 128, 32, (128, 256, 512, 512)),  # slice 128, output blocks 32. Need to parametize
         (1, 16, 3, 2, 128, 128, 32, (128, 256, 512, 512)),  # slice 128, output blocks 32. Need to parametize
     ],
 )
@@ -104,6 +106,9 @@ def test_vae_decoder(
         norm_num_groups=norm_num_groups,
     )
 
+    # print(torch_model)
+    # logger.info(summary(torch_model, input_size=(batch, in_channels, height, width), depth=10))
+
     # sd_vae = AutoencoderKL.from_pretrained("stabilityai/stable-diffusion-3.5-large", subfolder="vae")
     # print(sd_vae.decoder)
     # torch_model = sd_vae.decoder
@@ -136,13 +141,27 @@ def test_vae_decoder(
     with torch.no_grad():
         out = torch_model(inp)
 
+    tracy.signpost("Compilation/Cache pass")
     tt_out = sd_vae_decode(tt_inp, parameters)
+
+    tracy.signpost("Performance pass")
+    start_time = time.time()
+    tt_out = sd_vae_decode(tt_inp, parameters)
+    end_time = time.time()
+
+    logger.info(f"vae_decode 1 time: {end_time-start_time}")
 
     start_time = time.time()
     tt_out = sd_vae_decode(tt_inp, parameters)
     end_time = time.time()
 
-    logger.info(f"vae_decode time{end_time-start_time}")
+    logger.info(f"vae_decode 2 time: {end_time-start_time}")
+
+    start_time = time.time()
+    tt_out = sd_vae_decode(tt_inp, parameters)
+    end_time = time.time()
+
+    logger.info(f"vae_decode 3 time: {end_time-start_time}")
 
     tt_out_torch = to_torch(tt_out).permute(0, 3, 1, 2)
 
