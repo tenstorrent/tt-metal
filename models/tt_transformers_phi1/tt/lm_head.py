@@ -107,15 +107,6 @@ class LMHead(LightweightModule):
                         cache_file_name=cache_file_name,
                     )
                 )
-                out_bias = ttnn.as_tensor(
-                        combined_split_bias,
-                        device=mesh_device,
-                        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
-                        layout=ttnn.TILE_LAYOUT,
-                        dtype=dtype,
-                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-
-                    )
                 self.output_bias.append(
                     ttnn.as_tensor(
                         combined_split_bias,
@@ -126,16 +117,7 @@ class LMHead(LightweightModule):
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
 
                     )
-                )
-
-                ttnn.set_printoptions(profile="full")
-                file_name_num = f"log_txt/phi-1/lm_head/out_bias.txt"
-                with open(file_name_num, "w", encoding="utf-8") as file:
-                    file.write(str(out_bias)) # 将数字转换为字符串再写入
-                torch.set_printoptions(threshold=1000000)
-                file_name_num = f"log_txt/phi-1/lm_head/combined_split_bias.txt"
-                with open(file_name_num, "w", encoding="utf-8") as file:
-                    file.write(str(combined_split_bias)) # 将数字转换为字符串再写入
+                )if tt_output_bias is not None else None
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -174,13 +156,16 @@ class LMHead(LightweightModule):
             output = ttnn.linear(
                 x,
                 weight,
-                bias=bias,
+                # bias=bias,
                 compute_kernel_config=self.compute_kernel_config,
                 program_config=pc,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 dtype=ttnn.bfloat8_b,
             )
-            outputs.append(ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG))
+            output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
+            bias = ttnn.sharded_to_interleaved(bias, memory_config=ttnn.L1_MEMORY_CONFIG) if len(self.output_bias) > 0 else None
+            output = output+bias if bias is not None else output
+            outputs.append(output)
 
         # Concatenate the outputs
         output = ttnn.concat(outputs, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -198,7 +183,5 @@ class LMHead(LightweightModule):
             use_composite=True,
         )
 
-        # if self.tt_output_bias is not None:
-        #     output = ttnn.add(output, self.tt_output_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         return output
