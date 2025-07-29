@@ -73,6 +73,8 @@ ALWI void untilize_block(uint32_t icb, uint32_t full_ct_dim, uint32_t ocb) {
 
         PACK((llk_packer_wait_for_math_done()));
 
+        DPRINT << "untilize_block: (intermed1)" << ENDL();
+
         // Datacopy
         for (uint32_t reg_id = 0; reg_id < block_ct_dim; reg_id++) {
             PACK((llk_pack<DST_ACCUM_MODE, false, false>(reg_id, ocb)));

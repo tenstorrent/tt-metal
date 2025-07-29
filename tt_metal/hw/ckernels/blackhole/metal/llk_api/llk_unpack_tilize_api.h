@@ -84,6 +84,7 @@ inline void llk_unpack_tilize(std::uint32_t operand, std::uint32_t tile_index, s
     std::uint32_t base_address =
         get_local_cb_interface(operand_id).fifo_rd_ptr - 1;  // Remove header size added by descriptor
 
+    DPRINT << "base_address: (intermed2)" << base_address << ENDL();
     WAYPOINT("UPTW");
     _llk_unpack_tilize_(
         base_address, tile_index, unpack_src_format[operand_id], block_ct_dim, face_r_dim, num_faces, narrow_tile);
