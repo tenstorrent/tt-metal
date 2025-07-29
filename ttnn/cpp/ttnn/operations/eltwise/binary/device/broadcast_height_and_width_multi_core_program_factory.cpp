@@ -141,10 +141,10 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
         dst_cb_data_format,
         cb_output_buffer);
 
-    auto src0_is_dram = static_cast<uint32_t>(src0_buffer->buffer_type() == tt_metal::BufferType::DRAM);
     auto dst_is_dram = static_cast<uint32_t>(dst_buffer->buffer_type() == tt_metal::BufferType::DRAM);
 
     std::map<std::string, std::string> reader_defines;
+    std::vector<uint32_t> reader_compile_time_args;
     std::map<std::string, std::string> bcast_compute_defines = bcast_op_utils::get_defines(BcastOpDim::HW, bcast_math);
     if (bnc1) {
         reader_defines["BCAST_SCALAR"] = "1";
@@ -152,13 +152,14 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
     }
     if (src0_sharded) {
         reader_defines["IN0_SHARDED"] = "1";
+    } else {
+        TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     }
 
     KernelHandle binary_reader_kernel_id{};
 
     if (src1_buffer != nullptr) {
-        std::vector<uint32_t> reader_compile_time_args;
-        TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+        TT_FATAL(src1_buffer->buffer_layout() == TensorMemoryLayout::INTERLEAVED, "src1_buffer must be interleaved");
         TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
         binary_reader_kernel_id = tt_metal::CreateKernel(
             program,
@@ -167,8 +168,6 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
             all_device_cores,
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     } else {
-        std::vector<uint32_t> reader_compile_time_args;
-        TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
         binary_reader_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/eltwise/binary/device/kernels/dataflow/"
