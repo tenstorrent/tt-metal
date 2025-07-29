@@ -283,9 +283,10 @@ struct EmptyLike {
         Layout layout_value = layout.value_or(tensor.layout());
         DataType dtype_value = dtype.value_or(tensor.dtype());
         MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
+        MeshDevice* device_ptr = device.has_value() ? &device->get() : tensor.mesh_device();
         return allocate_tensor_on_device(
             TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
-            device.has_value() ? &device->get() : tensor.mesh_device());
+            device_ptr);
     }
 };
 
