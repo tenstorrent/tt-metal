@@ -9,7 +9,7 @@ from loguru import logger
 
 from ...tt.fun_vae_decoder.fun_conv2d import vae_conv2d, TtConv2dParameters
 from ...tt.utils import assert_quality, to_torch
-from models.utility_functions import comp_allclose, comp_pcc
+from models.utility_functions import comp_pcc
 from ...tt.parallel_config import StableDiffusionParallelManager
 import time
 
@@ -18,16 +18,16 @@ def print_stats(label, data: torch.Tensor, device=None):
     if isinstance(data, torch.Tensor):
         data_ = data
     else:
-        data_ = ttnn.to_torch(
-            data, mesh_composer=ttnn.ConcatMesh2dToTensor(device, mesh_shape=tuple(device.shape), dims=(0, 1))
-        )
-    return f"{label}: mean:{data_.mean()} , std:{data_.std()} , range:[{data_.max()}, {data_.min()}]"
+        data_ = to_torch(data, mesh_composer=None)
+    return (
+        f"{label}: mean:{data_.mean()} , std:{data_.std()} , range:[{data_.min()}, {data_.max()}, shape:{data_.shape}]"
+    )
 
 
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, topology",
     [
-        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear],
+        [(1, 2), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear],
         # [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear],
     ],
     ids=[
@@ -46,16 +46,18 @@ def print_stats(label, data: torch.Tensor, device=None):
 @pytest.mark.parametrize(
     ("batch", "height", "width", "in_channels", "out_channels"),
     [
-        (1, 256, 256, 512, 512)
+        # (1, 256, 256, 512, 512)
         # (1, 128, 128, 16, 512), #slice -> 8
         # (1, 128, 128, 512, 512), #slice -> 4
         # (1, 256, 256, 512, 512), #slice -> 4, (8)
+        # (1, 512, 512, 512, 512), #(16) - 64. How does data Move affect?
         # (1, 512, 512, 512, 512), #(16) - 64. How does data Move affect?
         # (1, 512, 512, 512, 256), #16
         # (1, 512, 512, 256, 256), #(4),8
         # (1, 1024, 1024, 256, 256), #16 Need to try height activation override. Data will be significant to move
         # (1, 1024, 1024, 256, 128), #16
         # (1, 1024, 1024, 128, 128), #16. Verify this
+        (1, 1024, 1024, 128, 3),  # (8) 16
         # (1, 1024, 1024, 128, 3), #(8) 16
     ],
 )
@@ -94,7 +96,7 @@ def test_fun_conv2d(
     ttnn_dtype = ttnn.bfloat16
     torch.manual_seed(0)
     device = parallel_manager.vae_parallel_config.device  # mesh_device
-    logger.info(f"Device: {device}, {device.core_grid}")
+    logger.info(f"Device: {device}, {device.core_grid} , ids:[{list(device.get_device_ids())}]")
 
     # mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(2, 4))
 
@@ -129,15 +131,36 @@ def test_fun_conv2d(
         out = torch_model(inp)
 
     tt_out = vae_conv2d(tt_inp, parameters)
+    """
+    [tt_final_out, tt_out_] = vae_conv2d(tt_inp, parameters)
+    torch_final=None
+    for idx in range(4):
+        logger.info(f" Current index: {idx}..................................")
+        tt_out = ttnn.get_device_tensors(tt_out_)[idx]
 
-    tt_out_torch = to_torch(tt_out).permute(0, 3, 1, 2)
+        tt_out_torch = to_torch(tt_out).permute(0, 3, 1, 2)
+        start = 32*idx
+        torch_sharded = torch.nn.functional.conv2d(inp[:,start:start+32,:,:], torch_model.weight[:,start:start+32,:,:],torch_model.bias, stride=1, padding=1, dilation=1, groups=1)
+        if torch_final is None:
+            torch_final = tt_out_torch
+        else:
+            torch_final = torch_final + tt_out_torch
 
-    assert_quality(out, tt_out_torch, pcc=0.94, ccc=0.94)
-    logger.info(comp_allclose(out, tt_out_torch))
-    result, output = comp_pcc(out, tt_out_torch)
-    logger.info(f"Comparison result Pass:{result}, Output {output}, in: {torch.count_nonzero(tt_out_torch)}")
-    logger.info(print_stats("torch", out))
-    logger.info(print_stats("tt", tt_out_torch, device=device))
+        #logger.info(print_stats("torch", out))
+        #logger.info(print_stats("tt", tt_out_torch, device=device))
+        #logger.info(print_stats("t_sharded", torch_sharded, device=device))
+        #assert_quality(tt_out_torch, torch_sharded, pcc=0.94, ccc=0.94)
+        #logger.info(comp_allclose(out, tt_out_torch))
+        #result, output = comp_pcc(out, tt_out_torch)
+        #logger.info(f"Comparison result Pass:{result}, Output {output}, in: {torch.count_nonzero(tt_out_torch)}")
+
+    """
+
+    tt_final_out_torch = to_torch(tt_out).permute(0, 3, 1, 2)
+    result, output = comp_pcc(out, tt_final_out_torch)
+    logger.info(f"Comparison result Pass:{result}, Output {output}")
+    # assert_quality(torch_final, out, pcc=0.94, ccc=0.94)
+    assert_quality(tt_final_out_torch, out, pcc=0.94, ccc=0.94)
 
     total_time = 0
     num_itr = 10
