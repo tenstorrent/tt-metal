@@ -773,9 +773,10 @@ def create_module_if_not_exists(module_name):
 
 def register_cpp_operation(target_module: types.ModuleType, func_name: str, function: Callable):
     override_func = False
-    if func_name == "new_examples":
+    if hasattr(function, "operation_type") and function.operation_type == "ttnn_simplified":
         print("This is the part I care about")
         override_func = True
+
     operation_class = FastOperation if ttnn.CONFIG.enable_fast_runtime_mode else Operation
 
     operation = operation_class(

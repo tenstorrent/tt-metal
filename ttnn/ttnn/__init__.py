@@ -292,7 +292,7 @@ def auto_register_ttnn_cpp_operations(module):
     for attribute_name in dir(module):
         attribute = getattr(module, attribute_name)
 
-        if attribute_name == "new_examples":
+        if hasattr(attribute, "operation_type") and attribute.operation_type == "ttnn_simplified":
             print("This is the second part I care about")
             split_name = module.__name__.split(".")
             module_name = split_name[0]
