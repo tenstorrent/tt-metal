@@ -213,6 +213,7 @@ class TtFalconDecoderLayer:
 
         replicated_hidden_states = ttnn.experimental.all_gather_async(
             replicated_hidden_states,
+            persistent_output_buffer=None,
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
@@ -316,6 +317,7 @@ class TtFalconDecoderLayer:
 
         replicated_hidden_states = ttnn.experimental.all_gather_async(
             replicated_hidden_states,
+            persistent_output_buffer=None,
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],

@@ -273,6 +273,7 @@ class TtMixtralAttention(LightweightModule):
         # All gather
         dense_outputs_11BH = ttnn.experimental.all_gather_async(
             dense_out_11BH,
+            persistent_output_buffer=None,
             dim=2,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=1,
@@ -418,7 +419,8 @@ class TtMixtralAttention(LightweightModule):
         if seq_len > 2048:  # Reshape back to intended shape
             output_11SH = ttnn.reshape(output_11SH, (1, 1, seq_len, -1))
         output_11BH_gathered = ttnn.experimental.all_gather_async(
-            output_11BH_gathered,
+            output_11SH,
+            persistent_output_buffer=None,
             dim=1,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=1,

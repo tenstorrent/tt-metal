@@ -121,6 +121,7 @@ class TtFalconMLP:
 
         hidden_states = ttnn.experimental.reduce_scatter_minimal_async(
             hidden_states,
+            persistent_output_buffer=None,
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
@@ -193,6 +194,7 @@ class TtFalconMLP:
 
         return ttnn.experimental.reduce_scatter_minimal_async(
             self.output,
+            persistent_output_buffer=None,
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
