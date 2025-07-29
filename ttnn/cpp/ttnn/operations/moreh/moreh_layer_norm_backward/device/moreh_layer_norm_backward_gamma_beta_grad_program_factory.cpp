@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include <vector>
 
 #include "moreh_layer_norm_backward_gamma_beta_grad_device_operation.hpp"
@@ -32,7 +33,6 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     auto& mean = tensor_args.mean;
     auto& rstd = tensor_args.rstd;
 
-    auto& output_tensors = output_tensor;
     const std::optional<const Tensor>& gamma_grad = output_tensor.at(0);
     const std::optional<const Tensor>& beta_grad = output_tensor.at(1);
 
@@ -53,7 +53,6 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     const auto output_grad_shape = output_grad.padded_shape();
     const auto output_grad_shape_without_padding = output_grad.logical_shape();
-    const auto output_grad_rank = output_grad_shape.rank();
 
     const bool is_lastdim_layer_norm = normalized_dims == 1;
     const bool is_groupnorm = false;
@@ -151,7 +150,7 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
         static_cast<uint32_t>(gamma_grad_has_value),
         static_cast<uint32_t>(beta_grad_has_value)};
 
-    std::map<string, string> reader_defines{};
+    std::map<std::string, std::string> reader_defines{};
     std::map<std::string, std::string> compute_defines{};
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_COL";

@@ -27,6 +27,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "gtest/gtest.h"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
@@ -152,11 +153,17 @@ Program create_simple_datamovement_program(
     IDevice* device = input.device();
     constexpr CoreCoord core = {0, 0};
 
+    std::vector<uint32_t> compile_time_args;
+    TensorAccessorArgs(input).append_to(compile_time_args);
+    TensorAccessorArgs(output).append_to(compile_time_args);
     KernelHandle dram_copy_kernel_id = CreateKernel(
         program,
         "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = compile_time_args});
 
     // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
     const uint32_t input_bank_id = 0;
@@ -164,7 +171,7 @@ Program create_simple_datamovement_program(
 
     // Handle Runtime Args
     const std::vector<uint32_t> runtime_args = {
-        l1_buffer.address(), input.address(), input_bank_id, output.address(), output_bank_id, l1_buffer.size()};
+        l1_buffer.address(), input.address(), output.address(), input.num_pages()};
 
     // Very minimal testing/usage of other SetRuntimeArgs API that TTNN uses for ops here, j
     // just to see it go through the light-metal capture + replay flow.
@@ -295,12 +302,13 @@ TEST_F(LightMetalBasicTest, CreateBufferAndDeallocate) {
 }
 
 void SingleRISCDataMovement_test(tt::tt_metal::IDevice* device, bool rt_arg_per_core_vec) {
-    uint32_t size_bytes = 64;  // 16 elements.
+    uint32_t size_bytes = 32 * 32 * 2;
+    uint32_t page_size = 32 * 32 * 2;
 
     // For extra coverage, use Buffer::create (now support for light metal capture/replay)
-    auto input = Buffer::create(device, size_bytes, size_bytes, BufferType::DRAM);
-    auto output = Buffer::create(device, size_bytes, size_bytes, BufferType::DRAM);
-    auto l1_buffer = Buffer::create(device, size_bytes, size_bytes, BufferType::L1);
+    auto input = Buffer::create(device, size_bytes, page_size, BufferType::DRAM);
+    auto output = Buffer::create(device, size_bytes, page_size, BufferType::DRAM);
+    auto l1_buffer = Buffer::create(device, size_bytes, page_size, BufferType::L1);
 
     log_debug(
         tt::LogTest,

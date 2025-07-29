@@ -1,5 +1,6 @@
 Tests:
   - name: "SimpleUnicastWriteLinear"
+    sync: true
     fabric_setup:
       topology: Linear
 
@@ -14,6 +15,7 @@ Tests:
               device: [0, 1]
 
   - name: "TestNocSendTypesLinear"
+    sync: true
     fabric_setup:
       topology: Linear
 
@@ -29,7 +31,25 @@ Tests:
             destination:
               device: [0, 1]
 
+  - name: "TestPacketSizesLinear"
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            num_packets: 100
+            destination:
+              device: [0, 1]
+
   - name: "AllToAllUnicastWriteLinear"
+    sync: true
     fabric_setup:
       topology: Linear
 
@@ -43,6 +63,7 @@ Tests:
       - type: all_to_all_unicast
 
   - name: "AllToAllUnicastTestNocSendTypesLinear"
+    sync: true
     fabric_setup:
       topology: Linear
 
@@ -58,6 +79,7 @@ Tests:
       - type: all_to_all_unicast
 
   - name: "AllToAllMulticastLinear"
+    sync: true
     fabric_setup:
       topology: Linear
 
@@ -71,6 +93,7 @@ Tests:
       - type: all_to_all_multicast
 
   - name: "UnidirectionalMulticastLinear"
+    sync: true
     fabric_setup:
       topology: Linear
 
@@ -84,6 +107,7 @@ Tests:
       - type: unidirectional_linear_multicast
 
   - name: "FullDevicePairingLinear"
+    sync: true
     fabric_setup:
       topology: Linear
 
@@ -96,6 +120,23 @@ Tests:
     patterns:
       - type: full_device_random_pairing
         iterations: 5
+
+  - name: AllToAllTestPacketSizesLinear
+    sync: true
+    fabric_setup:
+      topology: Linear
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all_unicast
 
   - name: "SimpleUnicastMesh"
     fabric_setup:
@@ -245,3 +286,69 @@ Tests:
     patterns:
       - type: full_device_random_pairing
         iterations: 5
+
+  - name: TestPacketSizesMesh
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            num_packets: 100
+            destination:
+              device: [0, 1]
+
+  - name: AllToAllUnicastTestPacketSizesMesh
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all_unicast
+
+  - name: TestPacketSizesMeshDynamic
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    senders:
+      - device: [0, 0]
+        patterns:
+          - ftype: unicast
+            ntype: unicast_write
+            num_packets: 100
+            destination:
+              device: [0, 1]
+
+  - name: AllToAllUnicastTestPacketSizesMeshDynamic
+    fabric_setup:
+      topology: Mesh
+      routing_type: Dynamic
+
+    parametrization_params:
+      size: [1024, 2048, 4096]
+
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+
+    patterns:
+      - type: all_to_all_unicast

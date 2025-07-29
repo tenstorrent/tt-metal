@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "ttnn/tensor/tensor_accessor_args.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 
 using namespace tt::constants;
@@ -125,7 +127,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
 
     if (use_width_sharding) {
         std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index};
-        std::map<string, string> reader_defines;
+        std::map<std::string, std::string> reader_defines;
         reader_defines["REDUCE_SCALER"] = "1";
         reader_kernel_id = tt_metal::CreateKernel(
             program,
@@ -135,7 +137,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
     } else {
         std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, chunk_size, packed_scaler_value};
-        TensorAccessorArgs(*src0_buffer).append_args(reader_compile_time_args);
+        TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
         reader_kernel_id = tt_metal::CreateKernel(
             program,
@@ -159,7 +161,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             WriterDataMovementConfig(writer_ct_args));
     } else {
         std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-        TensorAccessorArgs(*dst_buffer).append_args(writer_compile_time_args);
+        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
         writer_kernel_id = tt_metal::CreateKernel(
             program,
@@ -167,7 +169,7 @@ operation::ProgramWithCallbacks reduce_multi_core_h(
             all_cores,
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
-    std::map<string, string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::H);
+    std::map<std::string, std::string> reduce_defines = reduce_op_utils::get_defines(reduce_op, ReduceOpDim::H);
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         Ht,                         // Ht
         num_cols_per_core_group_1,  // Wt

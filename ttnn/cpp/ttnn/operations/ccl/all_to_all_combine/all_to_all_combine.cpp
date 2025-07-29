@@ -20,6 +20,7 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
     const ttnn::Tensor& expert_mapping_tensor,
     const ttnn::Tensor& expert_metadata_tensor,
     const GlobalSemaphore& global_semaphore,
+    const bool locally_reduced,
     const uint32_t num_links,
     const tt::tt_fabric::Topology topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -36,7 +37,8 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
         global_semaphore,
         axis,
         subdevice_id,
-        optional_output_tensor);
+        optional_output_tensor,
+        locally_reduced);
 }
 
 }  // namespace ttnn::operations::ccl

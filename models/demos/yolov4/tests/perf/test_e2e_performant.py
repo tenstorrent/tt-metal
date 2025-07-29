@@ -32,7 +32,7 @@ def run_perf_e2e_yolov4(
         act_dtype,
         weight_dtype,
         resolution=resolution,
-        model_location_generator=None,
+        model_location_generator=model_location_generator,
         mesh_mapper=inputs_mesh_mapper,
         mesh_composer=output_mesh_composer,
     )
@@ -40,11 +40,8 @@ def run_perf_e2e_yolov4(
     num_devices = device.get_num_devices()
     batch_size = batch_size_per_device * num_devices
 
-    input_shape = (batch_size_per_device, 3, *resolution)
+    input_shape = (batch_size_per_device * num_devices, 3, *resolution)
     torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
-
-    for i in range(batch_size - 1):
-        torch_input_tensor = torch.cat([torch_input_tensor] * batch_size, dim=0)
 
     ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, mesh_mapper=inputs_mesh_mapper)
 
@@ -77,7 +74,9 @@ def run_perf_e2e_yolov4(
 @run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 40960, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": 11 * 1024, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "batch_size_per_device, act_dtype, weight_dtype",
@@ -110,7 +109,9 @@ def test_e2e_performant(
 @run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 40960, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": 11 * 1024, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "batch_size_per_device, act_dtype, weight_dtype",

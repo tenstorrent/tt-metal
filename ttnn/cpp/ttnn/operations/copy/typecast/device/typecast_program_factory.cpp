@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-
 #include "typecast_program_factory.hpp"
 
 #include <tt-metalium/work_split.hpp>
@@ -88,7 +86,7 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
 
     bool math_approx_mode = false;
 
-    std::map<string, string> unary_defines;
+    std::map<std::string, std::string> unary_defines;
     unary_defines["TYPECAST_LLK"] = fmt::format(
         "typecast_tile<{0}u, {1}u>",
         (uint32_t)datatype_to_dataformat_converter(input_dtype),
@@ -279,7 +277,7 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
 
     bool math_approx_mode = false;
 
-    std::map<string, string> unary_defines;
+    std::map<std::string, std::string> unary_defines;
     unary_defines["TYPECAST_LLK"] = fmt::format(
         "typecast_tile<{0}u, {1}u>",
         (uint32_t)datatype_to_dataformat_converter(input_dtype),

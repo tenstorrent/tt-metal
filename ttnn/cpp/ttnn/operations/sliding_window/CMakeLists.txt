@@ -10,15 +10,7 @@ set_target_properties(
             FALSE
 )
 
-target_sources(
-    ttnn_op_sliding_window
-    PRIVATE
-        halo/device/halo_device_operation.cpp
-        halo/device/untilize_with_halo_program_factory.cpp
-        halo/halo.cpp
-        sliding_window.cpp
-)
-
+# Globbing non-build files is acceptable for now because devs don't generate packages.
 file(GLOB_RECURSE kernels halo/device/kernels/*)
 target_sources(
     ttnn_op_sliding_window
@@ -27,6 +19,11 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
+    PRIVATE
+        halo/device/halo_device_operation.cpp
+        halo/device/untilize_with_halo_program_factory.cpp
+        halo/halo.cpp
+        sliding_window.cpp
 )
 
 target_include_directories(ttnn_op_sliding_window PRIVATE ${FixmeOpIncDirs})

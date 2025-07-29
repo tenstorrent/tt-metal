@@ -170,7 +170,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRdiv::invoke(
     const Tensor& grad,
     const Tensor& input,
     float scalar,
-    const std::optional<string>& round_mode,
+    const std::optional<std::string>& round_mode,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     TT_FATAL(
@@ -285,7 +285,6 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardExp::invoke(
     std::vector<std::optional<Tensor>> grad_tensor;
 
     input_grad = input_grad.value_or(ttnn::empty_like(input));
-    float t_inf = std::numeric_limits<float>::infinity();
     Tensor exp_result = ttnn::exp(queue_id, input, false, output_mem_config);
     Tensor result = ttnn::multiply(queue_id, grad, exp_result, std::nullopt, output_mem_config, input_grad);
     grad_tensor.emplace_back(input_grad);
@@ -1608,7 +1607,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardGelu::invoke(
     QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
-    const string& approximate,
+    const std::string& approximate,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;

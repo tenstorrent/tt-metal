@@ -9,11 +9,9 @@
 #include <tt-metalium/bfloat8.hpp>
 #include <bit>
 #include <functional>
-#include <initializer_list>
 #include <map>
 #include <memory>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -173,7 +171,7 @@ bool single_core_reconfig(tt_metal::IDevice* device, const ReconfigConfig& test_
     auto l1_output1_cb = tt_metal::CreateCircularBuffer(program, core, l1_output1_cb_config);
 
     vector<uint32_t> compute_kernel_args = {};
-    std::map<string, string> defines;
+    std::map<std::string, std::string> defines;
 
     defines["DST_ACCUM_MODE"] = "1";  // Needed always in order for reader kernel to load data from CB2
     defines["EXPLICIT_RECONFIG"] = test_config.explicit_reconfig ? "1" : "0";

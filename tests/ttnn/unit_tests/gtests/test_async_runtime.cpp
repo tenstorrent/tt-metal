@@ -77,8 +77,8 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     ASSERT_EQ(
         output_buf_size_datums * datum_size_bytes,
         tensor_layout.compute_packed_buffer_size_bytes(np_out.padded_shape()));
-    auto input_tensor = allocate_tensor_on_mesh(TensorSpec(input_shape, tensor_layout), device);
-    auto output_tensor = allocate_tensor_on_mesh(TensorSpec(np_out.logical_shape(), tensor_layout), device);
+    auto input_tensor = allocate_tensor_on_device(TensorSpec(input_shape, tensor_layout), device);
+    auto output_tensor = allocate_tensor_on_device(TensorSpec(np_out.logical_shape(), tensor_layout), device);
     // Populate input_tensor with data
     ttnn::write_buffer(io_cq, input_tensor, {host_data});
     // Record the completion of the write event
@@ -122,7 +122,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
 
             TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
             ASSERT_EQ(buf_size_datums * datum_size_bytes, tensor_layout.compute_packed_buffer_size_bytes(shape));
-            auto input_tensor = allocate_tensor_on_mesh(TensorSpec(shape, tensor_layout), device_);
+            auto input_tensor = allocate_tensor_on_device(TensorSpec(shape, tensor_layout), device_);
             ttnn::write_buffer(io_cq, input_tensor, {host_data});            // Write using cq 1
             auto write_event = ttnn::record_event(device_->mesh_command_queue(*io_cq));  // Record write on cq 1
             // Wait until cq 1 write is complete
@@ -157,8 +157,6 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeBufferDestructor) {
     // does not rely on stale buffer state, after the buffer has been destroyed on host
     MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
 
-    uint32_t buf_size_datums = 1024 * 1024;
-    uint32_t datum_size_bytes = 2;
     ttnn::Shape shape{1, 1, 1024, 1024};
     // Inside the loop, initialize a buffer with limited lifetime.
     // This will asynchronously allocate the buffer, wait for the allocation to complete (address to be assigned to the

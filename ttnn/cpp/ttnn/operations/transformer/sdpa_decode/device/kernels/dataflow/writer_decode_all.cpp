@@ -116,16 +116,18 @@ void kernel_main() {
     constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
 
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
-    constexpr uint32_t cb_scale_in = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
+    constexpr uint32_t cb_col_identity = tt::CBIndex::c_11;
 
     constexpr uint32_t cb_out_worker = tt::CBIndex::c_16;
     constexpr uint32_t cb_out_m = tt::CBIndex::c_17;
     constexpr uint32_t cb_out_l = tt::CBIndex::c_18;
 
     // generate and send scaler to compute
-    generate_bcast_unary_scalar(cb_scale_in, scale_val);
+    // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
+    generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+
     if (is_worker) {
         ASSERT(num_heads_per_core == 1);  // if there are workers, then head must be split across workers so there
                                           // should not be more than one head per core
@@ -153,6 +155,7 @@ void kernel_main() {
 
     // generate and send mask to compute if causal
     if constexpr (is_causal) {
+        // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
         generate_mask<cb_mask_in, PNHt>(k_num_chunks, Sk_chunk_t_dynamic, cur_pos);
     }
 

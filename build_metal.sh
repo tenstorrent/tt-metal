@@ -3,9 +3,16 @@
 set -eo pipefail
 
 FLAVOR=`grep '^ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
-VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
-MAJOR=${VERSION%.*}
 ARCH=`uname -m`
+
+# VERSION_ID and BUILD_ID are standard within /etc/os-release but both optional
+source /etc/os-release
+VERSION="unknown-version"
+if [[ -v "$VERSION_ID" ]]; then
+    VERSION="${VERSION_ID}"
+elif [[ -v "$BUILD_ID" ]]; then
+    VERSION="${BUILD_ID}"
+fi
 
 # Function to display help
 show_help() {
@@ -361,6 +368,9 @@ fi
 
 if [ "$with_python_bindings" = "ON" ]; then
     cmake_args+=("-DWITH_PYTHON_BINDINGS=ON")
+    cmake_args+=("-DPython3_EXECUTABLE=$(which python3)")
+    cmake_args+=("-DPython3_INCLUDE_DIR=$(python3 -c "from sysconfig import get_paths as gp; print(gp()['include'])")")
+    cmake_args+=("-DPython3_LIBRARY=$(python3 -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR') + '/libpython' + sysconfig.get_config_var('LDVERSION') + '.so')")")
 else
     cmake_args+=("-DWITH_PYTHON_BINDINGS=OFF")
 fi

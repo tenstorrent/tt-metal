@@ -1,19 +1,12 @@
 set(PERF_MICROBENCH_TESTS_SRCS
     dispatch/test_pgm_dispatch.cpp
+    dispatch/benchmark_rw_buffer.cpp
     ethernet/test_ethernet_read_and_send_data.cpp
     ethernet/test_workers_and_erisc_datamover_unidirectional.cpp
     ethernet/test_ethernet_bidirectional_bandwidth_no_edm.cpp
     ethernet/test_ethernet_link_ping_latency_no_edm.cpp
     ethernet/test_all_ethernet_links.cpp
     ethernet/test_ethernet_hop_latencies_no_edm.cpp
-    routing/test_tx_rx.cpp
-    routing/test_mux_demux.cpp
-    routing/test_vc_mux_demux.cpp
-    routing/test_mux_demux_2level.cpp
-    routing/test_vc_uni_tunnel.cpp
-    routing/test_vc_bi_tunnel_2ep.cpp
-    routing/test_vc_bi_tunnel_4ep.cpp
-    routing/test_vc_loopback_tunnel.cpp
     routing/test_tt_fabric_sanity.cpp
     routing/test_tt_fabric_mux_bandwidth.cpp
     routing/test_tt_fabric_multi_hop_sanity.cpp
@@ -65,9 +58,14 @@ foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
 
     add_executable(${TEST_TARGET} ${TEST_SRC})
     target_link_libraries(${TEST_TARGET} PRIVATE test_metal_common_libs)
+
     if(${TEST_SRC} STREQUAL "dispatch/test_pgm_dispatch.cpp")
         target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
     endif()
+    if(${TEST_SRC} STREQUAL "dispatch/benchmark_rw_buffer.cpp")
+        target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
+    endif()
+
     if(${TEST_SRC} STREQUAL "routing/test_tt_fabric.cpp")
         target_link_libraries(${TEST_TARGET} PRIVATE yaml-cpp::yaml-cpp)
     endif()

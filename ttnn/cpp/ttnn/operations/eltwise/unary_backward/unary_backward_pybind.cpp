@@ -726,7 +726,7 @@ void bind_unary_backward_rdiv(
     const std::string& parameter_a_doc,
     const std::string& parameter_name_b,
     const std::string& parameter_b_doc,
-    string parameter_b_value,
+    std::string parameter_b_value,
     const std::string_view description,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
@@ -789,7 +789,7 @@ void bind_unary_backward_rdiv(
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
                float parameter_a,
-               const std::optional<string> parameter_b,
+               const std::optional<std::string> parameter_b,
                const std::optional<MemoryConfig>& memory_config) {
                 return self(grad_tensor, input_tensor, parameter_a, parameter_b, memory_config);
             },
@@ -1164,7 +1164,7 @@ void bind_unary_backward_gelu(
     const unary_backward_operation_t& operation,
     const std::string& parameter_name_a,
     const std::string& parameter_a_doc,
-    string parameter_a_value,
+    std::string parameter_a_value,
     const std::string_view description,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
@@ -1223,7 +1223,7 @@ void bind_unary_backward_gelu(
             [](const unary_backward_operation_t& self,
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
-               string parameter_a,
+               std::string parameter_a,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
                QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {

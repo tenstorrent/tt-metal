@@ -81,6 +81,10 @@ public:
 
     tt::tt_fabric::FabricNodeId get_fabric_node_id(SocketEndpoint endpoint, const MeshCoordinate& coord) const;
 
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("config", "socket_endpoint_type", "fabric_node_id_map");
+    auto attribute_values() const { return std::forward_as_tuple(config_, socket_endpoint_type_, fabric_node_id_map_); }
+
 private:
     MeshSocket(
         std::shared_ptr<MeshBuffer> data_buffer,
@@ -103,3 +107,16 @@ private:
 };
 
 }  // namespace tt::tt_metal::distributed
+
+namespace std {
+
+template <>
+struct hash<tt::tt_metal::distributed::SocketConfig> {
+    size_t operator()(const tt::tt_metal::distributed::SocketConfig& config) const noexcept;
+};
+template <>
+struct hash<tt::tt_metal::distributed::MeshSocket> {
+    size_t operator()(const tt::tt_metal::distributed::MeshSocket& socket) const noexcept;
+};
+
+}  // namespace std

@@ -107,10 +107,10 @@ inline Tensor binary_impl(
         output_tensor = ttnn::lt_unary(queue_id, lhs, rhs, memory_config, output);
     } else if (binary_op_type == BinaryOpType::NE) {
         output_tensor = ttnn::ne_unary(queue_id, lhs, rhs, memory_config, output);
-    } else if (binary_op_type == BinaryOpType::GTE) {
-        output_tensor = ttnn::gez(queue_id, ttnn::sub_sfpu(queue_id, lhs, rhs, memory_config), memory_config, output);
-    } else if (binary_op_type == BinaryOpType::LTE) {
-        output_tensor = ttnn::lez(queue_id, ttnn::sub_sfpu(queue_id, lhs, rhs, memory_config), memory_config, output);
+    } else if (binary_op_type == BinaryOpType::GE) {
+        output_tensor = ttnn::ge_unary(queue_id, lhs, rhs, memory_config, output);
+    } else if (binary_op_type == BinaryOpType::LE) {
+        output_tensor = ttnn::le_unary(queue_id, lhs, rhs, memory_config, output);
     } else if (binary_op_type == BinaryOpType::EQ) {
         output_tensor = ttnn::eq_unary(queue_id, lhs, rhs, memory_config, output);
     } else {
@@ -130,10 +130,10 @@ inline Tensor binary_impl(
     const ttnn::Tensor& rhs,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt) {
-    if (binary_op_type == BinaryOpType::GTE) {
+    if (binary_op_type == BinaryOpType::GE) {
         return ttnn::gez(queue_id, ttnn::sub_sfpu(queue_id, lhs, rhs, memory_config), memory_config, output);
     }
-    if (binary_op_type == BinaryOpType::LTE) {
+    if (binary_op_type == BinaryOpType::LE) {
         return ttnn::lez(queue_id, ttnn::sub_sfpu(queue_id, lhs, rhs, memory_config), memory_config, output);
     }
     if (binary_op_type == BinaryOpType::EQ) {
@@ -177,9 +177,9 @@ inline auto preprocess_inputs(BinaryOpType binary_op_type, Tensor a, Tensor b) {
 }
 
 inline auto any_row_broadcasted(const Tensor& a, const auto& b) {
-    if constexpr (requires { b.get_logical_shape(); }) {
-        const auto& a_shape = a.get_logical_shape();
-        const auto& b_shape = b.get_logical_shape();
+    if constexpr (requires { b.logical_shape(); }) {
+        const auto& a_shape = a.logical_shape();
+        const auto& b_shape = b.logical_shape();
 
         return (a_shape[-2] == 1 and b_shape[-2] > 1) or (b_shape[-2] == 1 and a_shape[-2] > 1);
     }
@@ -187,12 +187,12 @@ inline auto any_row_broadcasted(const Tensor& a, const auto& b) {
     return false;
 }
 inline auto any_sharded_block_format(const Tensor& a, const auto& b) {
-    if (a.is_sharded() and is_block_format(a.get_dtype())) {
+    if (a.is_sharded() and is_block_format(a.dtype())) {
         return true;
     }
 
     if constexpr (requires { b.is_sharded(); }) {
-        if (b.is_sharded() and is_block_format(b.get_dtype())) {
+        if (b.is_sharded() and is_block_format(b.dtype())) {
             return true;
         }
     }
@@ -201,16 +201,16 @@ inline auto any_sharded_block_format(const Tensor& a, const auto& b) {
 }
 
 inline auto any_subtile_broadcasted_block_format(const Tensor& a, const auto& b) {
-    if constexpr (requires { b.get_logical_shape(); }) {
-        const auto& a_shape = a.get_logical_shape();
-        const auto& b_shape = b.get_logical_shape();
+    if constexpr (requires { b.logical_shape(); }) {
+        const auto& a_shape = a.logical_shape();
+        const auto& b_shape = b.logical_shape();
 
-        if (is_block_format(a.get_dtype()) and
+        if (is_block_format(a.dtype()) and
             (a_shape[-2] == 1 and b_shape[-2] > 1 or a_shape[-1] == 1 and b_shape[-1] > 1)) {
             return true;
         }
 
-        if (is_block_format(b.get_dtype()) and
+        if (is_block_format(b.dtype()) and
             (b_shape[-2] == 1 and a_shape[-2] > 1 or b_shape[-1] == 1 and a_shape[-1] > 1)) {
             return true;
         }
@@ -220,9 +220,9 @@ inline auto any_subtile_broadcasted_block_format(const Tensor& a, const auto& b)
 }
 
 inline auto is_w_bcast(const Tensor& a, const auto& b) {
-    if constexpr (requires { b.get_padded_shape(); }) {
-        const auto& shape_a = a.get_padded_shape();
-        const auto& shape_b = b.get_padded_shape();
+    if constexpr (requires { b.padded_shape(); }) {
+        const auto& shape_a = a.padded_shape();
+        const auto& shape_b = b.padded_shape();
         return (shape_a[-1] == 1 and shape_b[-1] > 1) or (shape_b[-1] == 1 and shape_a[-1] > 1);
     }
     return false;
@@ -253,7 +253,7 @@ inline auto is_uneven(const Tensor& t) {
         return false;
     }
 
-    const auto& shape = t.get_padded_shape();
+    const auto& shape = t.padded_shape();
     const auto& shard = t.shard_spec()->shape;
 
     return (shape[-4] * shape[-3] * shape[-2] % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
@@ -281,7 +281,7 @@ inline auto is_binary_ng_only(const Tensor& a, const auto& b, BinaryOpType binar
     if constexpr (requires {
                       b.dtype();
                       b.is_sharded();
-                      b.get_logical_shape();
+                      b.logical_shape();
                   }) {
         if (a.dtype() == DataType::INT32 or b.dtype() == DataType::INT32 or a.dtype() == DataType::UINT32 or
             b.dtype() == DataType::UINT32 or a.dtype() == DataType::UINT16 or b.dtype() == DataType::UINT16 or
@@ -295,20 +295,20 @@ inline auto is_binary_ng_only(const Tensor& a, const auto& b, BinaryOpType binar
             return true;
         }
 
-        if (a.get_logical_shape().rank() > 4 or b.get_logical_shape().rank() > 4) {
+        if (a.logical_shape().rank() > 4 or b.logical_shape().rank() > 4) {
             return true;
         }
 
-        if (a.get_logical_shape()[-2] == 1 && b.get_logical_shape()[-2] > 1 && a.get_logical_shape()[-1] > 1 &&
-            b.get_logical_shape()[-1] == 1) {
+        if (a.logical_shape()[-2] == 1 && b.logical_shape()[-2] > 1 && a.logical_shape()[-1] > 1 &&
+            b.logical_shape()[-1] == 1) {
             return true;
         }
-        if (b.get_logical_shape()[-2] == 1 && a.get_logical_shape()[-2] > 1 && b.get_logical_shape()[-1] > 1 &&
-            a.get_logical_shape()[-1] == 1) {
+        if (b.logical_shape()[-2] == 1 && a.logical_shape()[-2] > 1 && b.logical_shape()[-1] > 1 &&
+            a.logical_shape()[-1] == 1) {
             return true;
         }
 
-        if (any_row_broadcasted(a, b) and (is_block_format(a.get_dtype()) or is_block_format(b.get_dtype()))) {
+        if (any_row_broadcasted(a, b) and (is_block_format(a.dtype()) or is_block_format(b.dtype()))) {
             // TODO
             // return true;
         }
@@ -731,6 +731,32 @@ Tensor BinaryOperationSfpu<binary_op_type>::invoke(
         use_legacy);
 }
 
+template <BinaryOpType binary_op_type>
+Tensor BinaryOperationAddalpha<binary_op_type>::invoke(
+    QueueId queue_id,
+    const Tensor& lhs,
+    const Tensor& rhs,
+    float alpha,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    SmallVector<unary::UnaryWithParam> rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
+    return BinaryOperation<operations::binary::BinaryOpType::ADD>::invoke(
+        queue_id, lhs, rhs, std::nullopt, memory_config, output, {}, {}, rhs_activations, false);
+}
+
+template <BinaryOpType binary_op_type>
+Tensor BinaryOperationSubalpha<binary_op_type>::invoke(
+    QueueId queue_id,
+    const Tensor& lhs,
+    const Tensor& rhs,
+    float alpha,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output) {
+    SmallVector<unary::UnaryWithParam> rhs_activations{{unary::UnaryOpType::MUL_UNARY_SFPU, alpha}};
+    return BinaryOperation<operations::binary::BinaryOpType::SUB>::invoke(
+        queue_id, lhs, rhs, std::nullopt, memory_config, output, {}, {}, rhs_activations, false);
+}
+
 template struct BinaryOperation<BinaryOpType::ADD>;
 template struct InplaceBinaryOperation<BinaryOpType::ADD>;
 template struct BinaryOperation<BinaryOpType::SUB>;
@@ -759,18 +785,19 @@ template struct BinaryOperation<BinaryOpType::BITWISE_OR>;
 template struct BinaryOperation<BinaryOpType::BITWISE_XOR>;
 template struct BinaryOperation<BinaryOpType::LEFT_SHIFT>;
 template struct BinaryOperation<BinaryOpType::RIGHT_SHIFT>;
+template struct BinaryOperation<BinaryOpType::LOGICAL_RIGHT_SHIFT>;
 
 template struct RelationalBinary<BinaryOpType::EQ>;
 template struct RelationalBinary<BinaryOpType::NE>;
-template struct RelationalBinary<BinaryOpType::GTE>;
+template struct RelationalBinary<BinaryOpType::GE>;
 template struct RelationalBinary<BinaryOpType::GT>;
-template struct RelationalBinary<BinaryOpType::LTE>;
+template struct RelationalBinary<BinaryOpType::LE>;
 template struct RelationalBinary<BinaryOpType::LT>;
 
 template struct InplaceRelationalBinary<BinaryOpType::GT>;
 template struct InplaceRelationalBinary<BinaryOpType::LT>;
-template struct InplaceRelationalBinary<BinaryOpType::GTE>;
-template struct InplaceRelationalBinary<BinaryOpType::LTE>;
+template struct InplaceRelationalBinary<BinaryOpType::GE>;
+template struct InplaceRelationalBinary<BinaryOpType::LE>;
 template struct InplaceRelationalBinary<BinaryOpType::EQ>;
 template struct InplaceRelationalBinary<BinaryOpType::NE>;
 
@@ -784,9 +811,13 @@ template struct BinaryOperationSfpu<BinaryOpType::BITWISE_XOR>;
 template struct BinaryOperationSfpu<BinaryOpType::BITWISE_OR>;
 template struct BinaryOperationSfpu<BinaryOpType::LEFT_SHIFT>;
 template struct BinaryOperationSfpu<BinaryOpType::RIGHT_SHIFT>;
+template struct BinaryOperationSfpu<BinaryOpType::LOGICAL_RIGHT_SHIFT>;
 template struct BinaryOperationSfpu<BinaryOpType::MAXIMUM>;
 template struct BinaryOperationSfpu<BinaryOpType::MINIMUM>;
 template struct BinaryOperationSfpu<BinaryOpType::GCD>;
 template struct BinaryOperationSfpu<BinaryOpType::LCM>;
+
+template struct BinaryOperationAddalpha<BinaryOpType::ADDALPHA>;
+template struct BinaryOperationSubalpha<BinaryOpType::SUBALPHA>;
 
 }  // namespace ttnn::operations::binary

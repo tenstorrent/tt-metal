@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include "repeat_and_interleave_eltwise_mul_program_factory.hpp"
 
 #include "ttnn/common/queue_id.hpp"
@@ -21,8 +23,6 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
     CoreCoord compute_with_storage_grid_size) {
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
-
-    tt::tt_metal::IDevice* device = a.device();
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
     tt::tt_metal::Buffer* src1_buffer = b.buffer();
@@ -62,14 +62,14 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb0_tiles * in0_single_tile_size, {{src0_cb_index, in0_data_format}})
             .set_page_size(src0_cb_index, in0_single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     uint32_t cb1_tiles = ONE_TILE * 2;  // double buffer
     tt::tt_metal::CircularBufferConfig cb_src1_config =
         tt::tt_metal::CircularBufferConfig(cb1_tiles * in1_single_tile_size, {{src1_cb_index, in1_data_format}})
             .set_page_size(src1_cb_index, in1_single_tile_size);
-    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     uint32_t output_cb_index = 16;
     uint32_t output_cb_tiles = ONE_TILE * 2;  // double buffer
@@ -77,7 +77,7 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
         tt::tt_metal::CircularBufferConfig(
             output_cb_tiles * output_single_tile_size, {{output_cb_index, output_data_format}})
             .set_page_size(output_cb_index, output_single_tile_size);
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     uint32_t interm_num_tiles = ONE_TILE * 2;  // double buffer
     uint32_t interm_cb_size = interm_num_tiles * interm_single_tile_size;
@@ -85,25 +85,25 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
     tt::tt_metal::CircularBufferConfig cb_intermed0_config =
         tt::tt_metal::CircularBufferConfig(interm_cb_size, {{cb_intermed0_index, interm_data_format}})
             .set_page_size(cb_intermed0_index, interm_single_tile_size);
-    auto cb_intermed0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed0_config);
 
     uint32_t cb_intermed1_index = tt::CBIndex::c_25;  // cb_in1_transposed
     tt::tt_metal::CircularBufferConfig cb_intermed1_config =
         tt::tt_metal::CircularBufferConfig(interm_cb_size, {{cb_intermed1_index, interm_data_format}})
             .set_page_size(cb_intermed1_index, interm_single_tile_size);
-    auto cb_intermed1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
 
     uint32_t cb_intermed2_index = tt::CBIndex::c_26;  // cb_in1_bcast_row
     tt::tt_metal::CircularBufferConfig cb_intermed2_config =
         tt::tt_metal::CircularBufferConfig(interm_cb_size, {{cb_intermed2_index, interm_data_format}})
             .set_page_size(cb_intermed2_index, interm_single_tile_size);
-    auto cb_intermed2 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed2_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed2_config);
 
     uint32_t cb_intermed3_index = tt::CBIndex::c_27;  // cb_out_transposed
     tt::tt_metal::CircularBufferConfig cb_intermed3_config =
         tt::tt_metal::CircularBufferConfig(interm_cb_size, {{cb_intermed3_index, interm_data_format}})
             .set_page_size(cb_intermed3_index, interm_single_tile_size);
-    auto cb_intermed3 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed3_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed3_config);
 
     // Compile time args
     bool in0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
@@ -131,7 +131,7 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
         (std::uint32_t)cb_intermed3_index,
     };
 
-    std::map<string, string> ssm_eltwise_defines;
+    std::map<std::string, std::string> ssm_eltwise_defines;
     if (ashape[-1] == TILE_WIDTH) {
         ssm_eltwise_defines["REPEAT_IN0"] = "1";
     }
@@ -220,8 +220,6 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
         // Set runtime args
         uint32_t num_blocks_per_core;
         for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
-            const CoreCoord& core = cores.at(i);
-
             if (i < g1_numcores) {
                 num_blocks_per_core = num_blocks_per_core_group_1;
             } else {

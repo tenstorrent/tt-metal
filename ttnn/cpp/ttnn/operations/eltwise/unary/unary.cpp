@@ -4,6 +4,7 @@
 
 #include "unary.hpp"
 
+#include "common/unary_op_types.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "device/unary_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
@@ -79,6 +80,7 @@ template struct ExecuteUnary<UnaryOpType::ACOS>;
 template struct ExecuteUnary<UnaryOpType::ASIN>;
 template struct ExecuteUnary<UnaryOpType::ASINH>;
 template struct ExecuteUnary<UnaryOpType::ATAN>;
+template struct ExecuteUnary<UnaryOpType::ATANH>;
 template struct ExecuteUnary<UnaryOpType::COS>;
 template struct ExecuteUnary<UnaryOpType::ACOSH>;
 template struct ExecuteUnary<UnaryOpType::ERFINV>;
@@ -119,6 +121,8 @@ template struct ExecuteUnary<UnaryOpType::ALT_COMPLEX_ROTATE90>;
 template struct ExecuteUnary<UnaryOpType::CEIL>;
 template struct ExecuteUnary<UnaryOpType::FLOOR>;
 template struct ExecuteUnary<UnaryOpType::TRUNC>;
+template struct ExecuteUnary<UnaryOpType::FRAC>;
+template struct ExecuteUnary<UnaryOpType::HARDSIGMOID>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::invoke(
@@ -203,6 +207,8 @@ template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GT>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LT>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_NE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_EQ>;
+template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GE>;
+template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LE>;
 
 template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MINIMUM>::invoke<float>(
     QueueId, const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
@@ -312,7 +318,7 @@ Tensor Identity::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::IDENTITY;
-    DataType input_dtype = input_tensor.get_dtype();
+    DataType input_dtype = input_tensor.dtype();
 
     if (input_dtype != DataType::UINT8) {
         return detail::unary_impl(
@@ -355,6 +361,22 @@ Tensor Tanhshrink::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::TANHSHRINK;
     return detail::unary_impl(queue_id, input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
+}
+
+Tensor Hardshrink::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const float lambda,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    UnaryOpType op_type = UnaryOpType::HARDSHRINK;
+    TT_ASSERT(lambda >= 0);
+    return detail::unary_impl(
+        queue_id,
+        input_tensor,
+        {UnaryWithParam{op_type, static_cast<float>(lambda)}},
+        memory_config,
+        optional_output_tensor);
 }
 
 Tensor Deg2Rad::invoke(

@@ -47,7 +47,13 @@ void populate_cq_static_args(IDevice* device);
 
 // Fill out all settings for FD kernels on the given device, and add them to a Program and return it.
 // Prerequisites: Must call populate_cq_static_args
-std::unique_ptr<tt::tt_metal::Program> create_and_compile_cq_program(tt::tt_metal::IDevice* device);
+void create_cq_program(tt::tt_metal::IDevice* device);
+
+// Compile all command queue programs created by create_and_compile_cq_program()
+void compile_cq_programs();
+
+// Get the compiled command queue program for a given device
+std::unique_ptr<tt::tt_metal::Program> get_compiled_cq_program(tt::tt_metal::IDevice* device);
 
 // Perform additional configuration (writing to specific L1 addresses, etc.) for FD kernels on this device.
 void configure_dispatch_cores(tt::tt_metal::IDevice* device);

@@ -91,10 +91,30 @@ struct LinearOperation {
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 };
 
+struct AddmmOperation {
+    static void validate(
+        const Tensor& input_tensor, const Tensor& mat1_tensor, const Tensor& mat2_tensor, float alpha, float beta);
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        const Tensor& mat1_tensor,
+        const Tensor& mat2_tensor,
+        float alpha = 1.0f,
+        float beta = 1.0f,
+        const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+        std::optional<const DataType> dtype = std::nullopt,
+        const std::optional<const MatmulProgramConfig>& program_config = std::nullopt,
+        std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        std::optional<const CoreGrid> core_grid = std::nullopt,
+        const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt,
+        std::optional<Tensor> optional_output_tensor = std::nullopt,
+        QueueId queue_id = DefaultQueueId);
+};
+
 }  // namespace matmul
 }  // namespace operations
 constexpr auto matmul = ttnn::register_operation<"ttnn::matmul", operations::matmul::MatmulOperation>();
 constexpr auto linear = ttnn::register_operation<"ttnn::linear", operations::matmul::LinearOperation>();
 constexpr auto matmul_batched_weights =
     ttnn::register_operation<"ttnn::matmul_batched_weights", operations::matmul::MatmulBatchedWeightsOperation>();
+constexpr auto addmm = ttnn::register_operation<"ttnn::addmm", operations::matmul::AddmmOperation>();
 }  // namespace ttnn

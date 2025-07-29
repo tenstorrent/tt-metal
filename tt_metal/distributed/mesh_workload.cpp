@@ -37,6 +37,7 @@
 #include "util.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
+#include "tt_metal/impl/debug/inspector.hpp"
 
 enum class CoreType;
 namespace tt {
@@ -75,6 +76,11 @@ MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) {
     // encapsulated programs
     kernel_groups_.resize(MetalContext::instance().hal().get_programmable_core_type_count());
     kernels_.resize(MetalContext::instance().hal().get_programmable_core_type_count());
+    Inspector::mesh_workload_created(this);
+}
+
+MeshWorkloadImpl::~MeshWorkloadImpl() {
+    Inspector::mesh_workload_destroyed(this);
 }
 
 void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Program&& program) {
@@ -85,6 +91,7 @@ void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Prog
         "Program range {} overlaps with the previously added range {}",
         device_range,
         *potential_intersection);
+    Inspector::mesh_workload_add_program(this, device_range, program.impl().get_id());
     programs_[device_range] = std::move(program);
 }
 
@@ -180,7 +187,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
                 program.set_kernels_bin_buffer(buffer_view);
             }
         }
-        program_binary_status_[mesh_device->id()] = ProgramBinaryStatus::InFlight;
+        set_program_binary_status(mesh_device->id(), ProgramBinaryStatus::InFlight);
     }
 }
 
@@ -195,6 +202,7 @@ ProgramBinaryStatus MeshWorkloadImpl::get_program_binary_status(std::size_t mesh
 void MeshWorkloadImpl::set_program_binary_status(std::size_t mesh_id, ProgramBinaryStatus status) {
     ZoneScoped;
     program_binary_status_[mesh_id] = status;
+    Inspector::mesh_workload_set_program_binary_status(this, mesh_id, status);
 }
 
 void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
@@ -318,7 +326,6 @@ std::unordered_set<SubDeviceId> MeshWorkloadImpl::determine_sub_device_ids(MeshD
     // Get the sub device ids for all program across all devices in the Workload
     std::unordered_set<SubDeviceId> sub_devices_;
     for (auto& [device_range, program] : programs_) {
-        IDevice* device = mesh_device->get_device(device_range.start_coord());
         auto sub_devs_for_program = program.determine_sub_device_ids(mesh_device);
         for (auto& sub_dev : sub_devs_for_program) {
             sub_devices_.insert(sub_dev);

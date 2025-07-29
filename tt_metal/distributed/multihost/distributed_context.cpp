@@ -27,4 +27,12 @@ void DistributedContext::set_current_world(const ContextPtr& ctx) { ContextImpl:
 
 bool DistributedContext::is_initialized() { return ContextImpl::is_initialized(); }
 
+DistributedContextId DistributedContext::id() const { return id_; }
+
+/* -------------------- DistributedContext ID generation --------------------- */
+DistributedContextId DistributedContext::generate_unique_id() {
+    static std::size_t next_id = 0;
+    return DistributedContextId(next_id++);
+}
+
 }  // namespace tt::tt_metal::distributed::multihost

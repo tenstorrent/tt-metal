@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 import os
 
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
+from conftest import is_6u
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
@@ -336,7 +336,7 @@ def run_all_reduce_qkv_heads_fuse_perf_impl(
 
 
 # Test 1: test_all_reduce_create_qkv_heads_fuse
-@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U devices")
+@pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_iters, warmup_iters", [[1, 0]])
 @pytest.mark.parametrize("trace_mode", [False])
@@ -412,7 +412,7 @@ def test_all_reduce_qkv_heads_fuse(
 
 
 # Test 2: test_all_reduce_create_qkv_heads_fuse_perf
-@pytest.mark.skipif(is_RING_6U, reason="This test is not for 6U devices")
+@pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_iters, warmup_iters", [[30, 10]])
 @pytest.mark.parametrize("trace_mode", [True])
@@ -488,7 +488,7 @@ def test_all_reduce_qkv_heads_fuse_perf(
 
 
 # Test 2: test_all_reduce_create_qkv_heads_fuse_perf
-@pytest.mark.skipif(not is_RING_6U, reason="This test is only for 6U devices")
+@pytest.mark.skipif(not is_6u(), reason="This test is only for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize("num_iters, warmup_iters", [[30, 10]])
 @pytest.mark.parametrize("trace_mode", [True])
@@ -538,7 +538,6 @@ def test_all_reduce_qkv_heads_fuse_perf_6U(
     num_links,
     input_num_cores,
     output_num_cores,
-    use_program_cache,
     num_iters,
     warmup_iters,
     trace_mode,
@@ -556,7 +555,6 @@ def test_all_reduce_qkv_heads_fuse_perf_6U(
         num_links,
         input_num_cores,
         output_num_cores,
-        use_program_cache,
         num_iters=num_iters,
         warmup_iters=warmup_iters,
         trace_mode=trace_mode,

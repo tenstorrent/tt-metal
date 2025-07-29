@@ -17,7 +17,6 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -39,7 +38,6 @@
 #include <tt_stl/span.hpp>
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
-// #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
@@ -256,7 +254,7 @@ int main(int argc, char** argv) {
 
     CoreCoord gk_core = {gk_x, gk_y};
 
-    std::map<string, string> defines;
+    std::map<std::string, std::string> defines;
 
     try {
         const std::filesystem::path tg_mesh_graph_desc_path =

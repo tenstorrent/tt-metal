@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "ttnn/operations/normalization/groupnorm/device/groupnorm_op.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -539,8 +541,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     auto reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto reduce_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     // reader defines
-    std::map<string, string> reader_mcast_sender_defines;
-    std::map<string, string> reader_mcast_receiver_defines;
+    std::map<std::string, std::string> reader_mcast_sender_defines;
+    std::map<std::string, std::string> reader_mcast_receiver_defines;
     if (gamma.has_value()) {
         reader_mcast_sender_defines["FUSE_GAMMA"] = "1";
         reader_mcast_receiver_defines["FUSE_GAMMA"] = "1";
@@ -582,8 +584,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,
         (std::uint32_t)per_core_Mt,
         (std::uint32_t)TILE_HEIGHT};
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     // reader kernel
     auto reader_mcast_sender_kernels_id = CreateKernel(
         program,
@@ -610,7 +612,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     }
 
     // writer defines
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     // writer compile time args
     std::vector<uint32_t> writer_mcast_sender_compile_time_args = {
         1,
@@ -668,7 +670,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
             .compile_args = writer_mcast_sender_compile_time_args,
             .defines = writer_defines});
     // defines
-    std::map<string, string> eltwise_binary_defines;
+    std::map<std::string, std::string> eltwise_binary_defines;
     if (reader_repack_output) {
         eltwise_binary_defines["READER_REPACK"] = "1";
     }
@@ -1078,9 +1080,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
                                               const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                                               const std::vector<Tensor>& output_tensors) {
         auto src_buffer_a = input_tensors.at(0).buffer();
-        auto gamma_tensor = optional_input_tensors.at(0);
-        auto beta_tensor = optional_input_tensors.at(1);
-        auto mask_tensor = optional_input_tensors.at(2);
+        const auto& gamma_tensor = optional_input_tensors.at(0);
+        const auto& beta_tensor = optional_input_tensors.at(1);
+        const auto& mask_tensor = optional_input_tensors.at(2);
         auto dst_buffer = output_tensors.at(0).buffer();
 
         UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);
@@ -1601,8 +1603,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     auto reduce_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto reduce_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     // reader defines
-    std::map<string, string> reader_mcast_sender_defines;
-    std::map<string, string> reader_mcast_receiver_defines;
+    std::map<std::string, std::string> reader_mcast_sender_defines;
+    std::map<std::string, std::string> reader_mcast_receiver_defines;
     if (gamma.has_value()) {
         reader_mcast_sender_defines["FUSE_GAMMA"] = "1";
         reader_mcast_receiver_defines["FUSE_GAMMA"] = "1";
@@ -1716,8 +1718,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks};
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
 
     // reader kernel
     auto reader_mcast_sender_kernels_id_group_1 = CreateKernel(
@@ -1766,7 +1768,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     }
 
     // writer defines
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     // writer compile time args
     std::vector<uint32_t> writer_mcast_sender_compile_time_args_group_1 = {
         1,
@@ -1861,7 +1863,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             .compile_args = writer_mcast_sender_compile_time_args_group_2,
             .defines = writer_defines});
     // defines
-    std::map<string, string> eltwise_binary_defines;
+    std::map<std::string, std::string> eltwise_binary_defines;
     if (reader_repack_output) {
         eltwise_binary_defines["READER_REPACK"] = "1";
     }
@@ -2467,9 +2469,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             auto src_buffer_a = input_tensors.at(0).buffer()->address();
-            auto gamma_tensor = optional_input_tensors.at(0);
-            auto beta_tensor = optional_input_tensors.at(1);
-            auto mask_tensor = optional_input_tensors.at(2);
+            const auto& gamma_tensor = optional_input_tensors.at(0);
+            const auto& beta_tensor = optional_input_tensors.at(1);
+            const auto& mask_tensor = optional_input_tensors.at(2);
             auto dst_buffer = output_tensors.at(0).buffer()->address();
 
             // updatedynamiccircularbufferaddress(program, cb_in0, *src_buffer_a);
@@ -2494,7 +2496,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             uint32_t sender_index = 0;
             uint32_t receiver_index = 0;
             for (int i = 0; i < mcast_groups.size(); ++i) {
-                auto group = mcast_groups[i];
+                const auto& group = mcast_groups[i];
                 for (int j = 0; j < group.size(); ++j) {
                     CoreCoord core = group[j];
                     if (j == 0) {

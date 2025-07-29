@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 #include <optional>
+#include <string>
 
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
@@ -52,6 +53,9 @@ bool is_1d_deptwise_conv(
     uint32_t image_width,
     bool has_bias);
 
+bool is_singlecore_skip_mcast(
+    const OptimizedConvParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout);
+
 sliding_window::ParallelConfig determine_parallel_config(
     TensorMemoryLayout shard_layout,
     uint32_t batch_size,
@@ -93,7 +97,7 @@ ttnn::operations::matmul::MatmulProgramConfig determine_matmul_op_config_from_co
     OptimizedConvParallelizationConfig conv_parallelization_config,
     OptimizedConvBlockConfig conv_blocking_config,
     bool height_sharded,
-    const string& activation,
+    const std::string& activation,
     bool transpose_mcast,
     uint32_t grid_size_along_c);
 
@@ -107,7 +111,8 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     uint32_t window_h,
     uint32_t window_w,
     bool fp32_accum,
-    bool split_reader_enabled);
+    bool split_reader_enabled,
+    bool full_inner_dim);
 
 std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryConfig> get_conv_configs(
     const Conv2dConfig& conv_config,

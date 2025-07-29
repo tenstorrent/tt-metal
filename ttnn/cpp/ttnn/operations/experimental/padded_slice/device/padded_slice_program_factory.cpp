@@ -32,6 +32,24 @@ const uint32_t cb_output_index = 2;
 
 namespace ttnn::operations::experimental::detail {
 
+uint32_t get_num_cores_channels_from_sharded_tensor(const Tensor& tensor) {
+    auto shard_spec = tensor.shard_spec().value();
+    auto core_grid = shard_spec.grid;
+
+    bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+
+    uint32_t num_cores_channels = 1;
+    if (tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+        if (rm_orientation) {
+            num_cores_channels = core_grid.bounding_box().grid_size().x;
+        } else {
+            num_cores_channels = core_grid.bounding_box().grid_size().y;
+        }
+    } else if (tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+        num_cores_channels = core_grid.num_cores();
+    }
+    return num_cores_channels;
+}
 static std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>>
 get_padded_slice_runtime_args_rm_sharded_output(
     const Tensor& input_tensor,
@@ -52,15 +70,7 @@ get_padded_slice_runtime_args_rm_sharded_output(
 
     bool rm_orientation = output_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     bool is_block_sharded = output_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-    uint32_t num_cores_channels = 1;
-    auto total_cores = output_shard_spec.grid;
-    if (is_block_sharded) {
-        if (rm_orientation) {
-            num_cores_channels = total_cores.bounding_box().grid_size().x;
-        } else {
-            num_cores_channels = total_cores.bounding_box().grid_size().y;
-        }
-    }
+    uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output_tensor);
     uint32_t input_page_size = input_shape[-1] * input_tensor.element_size();
     uint32_t input_row_size_bytes = input_shape[-1] * input_tensor.element_size() / num_cores_channels;
 
@@ -212,14 +222,7 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
     std::vector<CoreCoord> iter_cores = corerange_to_cores(total_cores, std::nullopt, rm_orientation);
     uint32_t num_cores_total = total_cores.num_cores();
 
-    uint32_t num_cores_channels = 1;
-    if (is_block_sharded) {
-        if (rm_orientation) {
-            num_cores_channels = total_cores.bounding_box().grid_size().x;
-        } else {
-            num_cores_channels = total_cores.bounding_box().grid_size().y;
-        }
-    }
+    uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output);
 
     bool pad_output_row = false;
 
@@ -358,8 +361,8 @@ get_padded_slice_runtime_args_tile_sharded_output(
 
     auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
-    auto input_padded_shape = input_tensor.get_padded_shape();
-    auto input_shape = input_tensor.get_logical_shape();
+    auto input_padded_shape = input_tensor.padded_shape();
+    auto input_shape = input_tensor.logical_shape();
     auto output_shard_spec = output_tensor.shard_spec().value();
     auto output_shard_shape = output_shard_spec.shape;
 
@@ -377,9 +380,9 @@ get_padded_slice_runtime_args_tile_sharded_output(
         }
     }
 
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
     uint32_t output_row_size_bytes = output_shard_shape[1] * input_tensor.element_size();
@@ -625,18 +628,18 @@ get_padded_slice_runtime_args_tile_sharded_output(
 
 static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
     const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
-    const ttnn::Shape output_shape = output.get_logical_shape();
+    const ttnn::Shape output_shape = output.logical_shape();
     ttnn::Shape actual_output_shape = output_tensor_end;
     for (int i = 0; i < output_shape.rank(); i++) {
         actual_output_shape[i] = output_tensor_end[i] - output_tensor_start[i];
     }
 
-    const ttnn::Shape& input_padded_shape = a.get_padded_shape();
+    const ttnn::Shape& input_padded_shape = a.padded_shape();
     TT_FATAL(
         input_padded_shape.rank() == 4, "Input tensor must be rank 4 for padded_slice operation with tiled inputs");
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
+    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -665,23 +668,15 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
     std::vector<CoreCoord> iter_cores = corerange_to_cores(total_cores, std::nullopt, rm_orientation);
     uint32_t num_cores_total = total_cores.num_cores();
 
-    uint32_t num_cores_channels = 1;
-    if (is_block_sharded) {
-        if (rm_orientation) {
-            num_cores_channels = total_cores.bounding_box().grid_size().x;
-        } else {
-            num_cores_channels = total_cores.bounding_box().grid_size().y;
-        }
-        TT_FATAL(
-            num_tiles_per_channel % num_cores_channels == 0,
-            "Number of tiles in channel dimension {} must be divisible by num_cores_channels {} for padded_slice "
-            "operation with tiled inputs",
-            num_tiles_per_channel,
-            num_cores_channels);
-        num_tiles_per_channel = num_tiles_per_channel / num_cores_channels;
-    }
+    uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(output);
+    TT_FATAL(
+        num_tiles_per_channel % num_cores_channels == 0,
+        "Number of tiles in channel dimension {} must be divisible by num_cores_channels {} for padded_slice "
+        "operation with tiled inputs",
+        num_tiles_per_channel,
+        num_cores_channels);
+    num_tiles_per_channel = num_tiles_per_channel / num_cores_channels;
 
-    bool pad_output_row = false;
     uint32_t num_tiles_height_per_core = tt::div_up(output_shard_spec.shape[0], tt::constants::TILE_HEIGHT);
     uint32_t num_output_sticks_per_core = output_shard_spec.shape[0];
 

@@ -224,7 +224,9 @@ def split_conv2d(
                 dram_intermediate = ttnn.to_memory_config(intermediate, ttnn.DRAM_MEMORY_CONFIG)
                 intermediate.deallocate(True)
             else:
-                dram_intermediate = ttnn.add(dram_intermediate, intermediate, output_tensor=dram_intermediate)
+                dram_intermediate = ttnn.add(
+                    dram_intermediate, intermediate, output_tensor=dram_intermediate, use_legacy=False
+                )
                 intermediate.deallocate(True)
 
         if dram_intermediate.memory_config() != ttnn.DRAM_MEMORY_CONFIG:

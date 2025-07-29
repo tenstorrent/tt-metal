@@ -16,6 +16,7 @@
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn-pybind/types.hpp"
 #include "ttnn/operations/creation.hpp"
+#include "ttnn/tensor/enum_types.hpp"
 
 namespace ttnn::operations::creation {
 namespace {
@@ -269,7 +270,7 @@ template <typename creation_operation_t>
 void bind_arange_operation(py::module& module, const creation_operation_t& operation) {
     auto doc = fmt::format(
         R"doc(
-        Creates a tensor with values ranging from `start` (inclusive) to `end` (exclusive) with a specified `step` size. The data type, device, and memory configuration of the resulting tensor can be specified.
+        Creates a tensor with values ranging from `start` (inclusive) to `end` (exclusive) with a specified `step` size. The data type, device, layout and memory configuration of the resulting tensor can be specified.
 
         Args:
             start (int, optional): The start of the range. Defaults to 0.
@@ -278,6 +279,7 @@ void bind_arange_operation(py::module& module, const creation_operation_t& opera
             dtype (ttnn.DataType, optional): The data type of the tensor. Defaults to `ttnn.bfloat16`.
             device (ttnn.Device, optional): The device where the tensor will be allocated. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): The memory configuration for the tensor. Defaults to `ttnn.DRAM_MEMORY_CONFIG`.
+            layout (ttnn.Layout, optional): The tensor layout. Defaults to `ttnn.ROW_MAJOR`.
 
         Returns:
             ttnn.Tensor: A tensor containing evenly spaced values within the specified range.
@@ -300,15 +302,31 @@ void bind_arange_operation(py::module& module, const creation_operation_t& opera
                const int64_t step,
                const DataType dtype,
                const std::optional<std::reference_wrapper<MeshDevice>> device,
-               const MemoryConfig& memory_config) -> ttnn::Tensor {
-                return self(start, end, step, dtype, device, memory_config);
+               const MemoryConfig& memory_config,
+               const Layout layout) -> ttnn::Tensor {
+                return self(start, end, step, dtype, device, memory_config, layout);
             },
-            py::arg("start") = 0,
+            py::arg("start"),
             py::arg("end"),
             py::arg("step") = 1,
+            py::kw_only(),
             py::arg("dtype") = DataType::BFLOAT16,
             py::arg("device") = std::nullopt,
-            py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG});
+            py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,
+            py::arg("layout") = Layout::ROW_MAJOR},
+        ttnn::pybind_overload_t{
+            [](const creation_operation_t& self,
+               const int64_t end,
+               const DataType dtype,
+               const std::optional<std::reference_wrapper<MeshDevice>> device,
+               const MemoryConfig& memory_config,
+               const Layout layout) -> ttnn::Tensor { return self(end, dtype, device, memory_config, layout); },
+            py::arg("end"),
+            py::kw_only(),
+            py::arg("dtype") = DataType::BFLOAT16,
+            py::arg("device") = std::nullopt,
+            py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,
+            py::arg("layout") = Layout::ROW_MAJOR});
 }
 
 template <typename creation_operation_t>

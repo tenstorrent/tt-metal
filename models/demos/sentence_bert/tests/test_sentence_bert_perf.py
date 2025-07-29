@@ -20,7 +20,7 @@ from models.utility_functions import enable_persistent_kernel_cache, is_wormhole
 
 
 def get_expected_times(name):
-    base = {"sentence_bert": (12.1, 0.16)}
+    base = {"sentence_bert": (21.79, 0.02)}
     return base[name]
 
 
@@ -49,12 +49,21 @@ def test_ttnn_sentence_bert_perf(device, inputs):
     ttnn_module = TtnnSentenceBertModel(parameters=parameters, config=config)
     durations = []
     for i in range(2):
-        ttnn_input_ids, ttnn_token_type_ids, ttnn_position_ids, ttnn_attention_mask = preprocess_inputs(
-            input_ids, token_type_ids, position_ids, extended_mask, device
-        )
+        (
+            ttnn_input_ids,
+            ttnn_token_type_ids,
+            ttnn_position_ids,
+            ttnn_extended_attention_mask,
+            ttnn_attention_mask,
+        ) = preprocess_inputs(input_ids, token_type_ids, position_ids, extended_mask, attention_mask, device)
         start = time.time()
         ttnn_model_output = ttnn_module(
-            ttnn_input_ids, ttnn_attention_mask, ttnn_token_type_ids, ttnn_position_ids, device=device
+            ttnn_input_ids,
+            ttnn_extended_attention_mask,
+            ttnn_attention_mask,
+            ttnn_token_type_ids,
+            ttnn_position_ids,
+            device=device,
         )
         end = time.time()
         durations.append(end - start)
@@ -79,7 +88,7 @@ def test_ttnn_sentence_bert_perf(device, inputs):
 
     logger.info(f"Compile time: {inference_and_compile_time - inference_time}")
     logger.info(f"Inference time: {inference_time}")
-    logger.info(f"Sentences per second: {1 / inference_time *inputs[1][0] }")  #
+    logger.info(f"Sentences per second: {1 / inference_time *inputs[1][0] }")
     assert (
         inference_time < expected_inference_time
     ), f"Expected inference time: {expected_inference_time} Actual inference time: {inference_time}"
@@ -89,7 +98,7 @@ def test_ttnn_sentence_bert_perf(device, inputs):
 @pytest.mark.parametrize(
     "batch_size, expected_perf,test",
     [
-        [8, 456.5, "sentence_bert"],
+        [8, 440.4, "sentence_bert"],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

@@ -10,6 +10,7 @@
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <bmm_op.hpp>
 #include <tt-metalium/device.hpp>
 #include <fmt/core.h>
@@ -162,21 +163,20 @@ void matmul_multi_core(
     // diminishing returns are observed after several tiles.
     // input tiles count is = 2 so one tile can be read while the other is being processed
     const auto cb_data_format = tt::DataFormat::Float16_b;
-    uint32_t src0_cb_index = CBIndex::c_0;  // Circular buffer index for matrix A
     uint32_t num_input_tiles = 2;
-    auto cb_src0 = tt_metal::CreateCircularBuffer(
+    tt_metal::CreateCircularBuffer(
         program,
         all_cores,  // create on all cores
         CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_0, cb_data_format}})
             .set_page_size(CBIndex::c_0, single_tile_size));
 
-    auto cb_src1 = tt_metal::CreateCircularBuffer(
+    tt_metal::CreateCircularBuffer(
         program,
         all_cores,  // create on all cores
         CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_1, cb_data_format}})
             .set_page_size(CBIndex::c_1, single_tile_size));
 
-    auto cb_output = tt_metal::CreateCircularBuffer(
+    tt_metal::CreateCircularBuffer(
         program,
         all_cores,  // create on all cores
         CircularBufferConfig(num_input_tiles * single_tile_size, {{CBIndex::c_16, cb_data_format}})
@@ -188,19 +188,28 @@ void matmul_multi_core(
     // - Compute kernel: Performs the actual matrix multiplication computation
     // All kernels run across all cores to enable parallel execution
     MathFidelity math_fidelity = MathFidelity::HiFi4;  // High fidelity math for accurate results
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_multi_core/kernels/dataflow/reader_mm_output_tiles_partitioned.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = {}});
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = reader_compile_time_args});
 
+    std::vector<uint32_t> writer_compile_time_args;
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_multi_core/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = {}});
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = writer_compile_time_args});
 
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
@@ -265,10 +274,6 @@ void matmul_multi_core(
 int main() {
     bool pass = true;
 
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        TT_THROW("Test not supported w/ slow dispatch, exiting");
-    }
-
     try {
         constexpr int device_id = 0;
         IDevice* device = CreateDevice(device_id);
@@ -285,13 +290,10 @@ int main() {
 
         // Calculate matrix dimensions in tiles for the accelerator
         uint32_t Mt = M / TILE_HEIGHT;
-        uint32_t Kt = K / TILE_WIDTH;
         uint32_t Nt = N / TILE_WIDTH;
 
         // Calculate buffer sizes needed for each matrix in bytes
         constexpr uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;  // 2 * 32 * 32 = 2048 bytes
-        uint32_t dram_buffer_A_size = single_tile_size * Mt * Kt;  // num_tiles of FP16_B
-        uint32_t dram_buffer_B_size = single_tile_size * Nt * Kt;  // num_tiles of FP16_B
         uint32_t dram_buffer_C_size = single_tile_size * Mt * Nt;  // num_tiles of FP16_B
 
         // Create random input vectors for matrices A and B

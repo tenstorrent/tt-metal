@@ -27,26 +27,25 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
     using namespace tt::constants;
 
     TT_FATAL(
-        args.condition_tensor.get_dtype() == args.true_value_tensor.get_dtype(),
+        args.condition_tensor.dtype() == args.true_value_tensor.dtype(),
         "Mismatched data types: 'condition_tensor' and 'true_values_tensor' must have the same dtype.");
 
     TT_FATAL(
-        args.condition_tensor.get_dtype() == args.false_value_tensor.get_dtype(),
+        args.condition_tensor.dtype() == args.false_value_tensor.dtype(),
         "Mismatched data types: 'condition_tensor' and 'false_values_tensor' must have the same dtype.");
 
     TT_FATAL(
-        args.condition_tensor.get_dtype() == output.get_dtype(),
+        args.condition_tensor.dtype() == output.dtype(),
         "Mismatched data types: 'condition_tensor' and 'output' tensor must have the same dtype.");
 
     TT_FATAL(
-        args.condition_tensor.get_dtype() == DataType::BFLOAT16 ||
-            args.condition_tensor.get_dtype() == DataType::FLOAT32 ||
-            args.condition_tensor.get_dtype() == DataType::BFLOAT8_B,
+        args.condition_tensor.dtype() == DataType::BFLOAT16 || args.condition_tensor.dtype() == DataType::FLOAT32 ||
+            args.condition_tensor.dtype() == DataType::BFLOAT8_B,
         "Invalid data type: expected BFLOAT16 or FLOAT32 or BFLOAT8_B for 'condition_tensor'.");
 
     Program program{};
     const auto& all_device_cores = operation_attributes.worker_grid;
-    auto dtype = tt_metal::datatype_to_dataformat_converter(args.condition_tensor.get_dtype());
+    auto dtype = tt_metal::datatype_to_dataformat_converter(args.condition_tensor.dtype());
 
     auto createCircularBuffer = [&program, &all_device_cores, dtype = dtype](
                                     tt::CBIndex cb_idx, uint32_t tile_size, uint32_t num_input_tiles = 1) {
@@ -82,7 +81,7 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
         .is_false_tensor_in_dram = args.false_value_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM};
 
     /* Specify data movement kernels for reading/writing data to/from DRAM */
-    std::map<string, string> reader_defines;
+    std::map<std::string, std::string> reader_defines;
     KernelHandle reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/where/device/kernels/dataflow/elemwise_reader_kernel.cpp",
@@ -93,7 +92,7 @@ ElementWiseMultiCoreWhereProgram::cached_program_t ElementWiseMultiCoreWhereProg
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     CompileTimeWriterKernelArgs writer_compile_time_args = {
         .cb_dst = output_cb_index, .is_dst_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM};
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     KernelHandle writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/where/device/kernels/dataflow/elemwise_writer_kernel.cpp",

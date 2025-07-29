@@ -56,9 +56,9 @@ class TtUpsample2D(nn.Module):
     def forward(self, input_tensor):
         hidden_state_l1, input_shape = self.interpolate(input_tensor)
         B, C, H, W = input_shape
-        if input_tensor.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
-            ttnn.deallocate(input_tensor)
 
+        ttnn.deallocate(input_tensor)
+        if hidden_state_l1.memory_config() != ttnn.DRAM_MEMORY_CONFIG:
             hidden_states = ttnn.to_memory_config(hidden_state_l1, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(hidden_state_l1)
         else:

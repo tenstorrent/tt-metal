@@ -47,24 +47,6 @@ Tensor _xlogy(const Tensor& input_a, const Tensor& input_b, const std::optional<
     return result;
 }
 
-// subalpha(input,other,alpha)=input-alpha*other
-Tensor _subalpha(
-    const Tensor& input_a, const Tensor& input_b, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor result = ttnn::add(
-        ttnn::neg(ttnn::multiply(input_b, alpha, std::nullopt, output_mem_config), output_mem_config),
-        input_a,
-        std::nullopt,
-        output_mem_config);
-    return result;
-}
-
-// addalpha(input, other, alpha) = input + (alpha * other)
-Tensor _addalpha(
-    const Tensor& input_a, const Tensor& input_b, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::add(
-        ttnn::multiply(input_b, alpha, std::nullopt, output_mem_config), input_a, std::nullopt, output_mem_config);
-}
-
 // nextafter
 Tensor _nextafter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     const float eps = tt::tt_metal::hal::get_eps();
@@ -324,7 +306,6 @@ Tensor ExecuteDiv::invoke(
         (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
 
-    output_tensor = output_tensor.value_or(ttnn::empty_like(input_a));
     DataType input_dtype = input_a.dtype();
     const bool is_fp32 = input_dtype == DataType::FLOAT32 && input_b.dtype() == DataType::FLOAT32;
     Tensor result;
@@ -430,6 +411,8 @@ Tensor ExecutePrelu::invoke(
 
 Tensor run_remainder(
     const Tensor& input_a, const Tensor& input_b, float t_nan, const std::optional<MemoryConfig>& output_mem_config) {
+    using FusedActivations = tt::stl::Span<const unary::UnaryWithParam>;
+    // explicitly using binary_ng to avoid fallback to legacy because of row boradcast
     Tensor result = ttnn::subtract(
         input_a,
         ttnn::multiply(
@@ -438,7 +421,12 @@ Tensor run_remainder(
             std::nullopt,
             output_mem_config),
         std::nullopt,
-        output_mem_config);
+        output_mem_config,
+        std::nullopt,
+        FusedActivations{},
+        FusedActivations{},
+        FusedActivations{},
+        false);
     result = ttnn::where(ttnn::ge(result, input_b), ttnn::subtract(result, input_b), result);
     result = ttnn::where(ttnn::ltz(input_b), ttnn::add(result, input_b), result);
     result = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
@@ -532,21 +520,6 @@ Tensor _floor_div(const Tensor& input_a, const Tensor& input_b, const std::optio
                 ttnn::eq(temp, -std::numeric_limits<float>::infinity()))),
         temp,
         result);
-}
-
-Tensor _scatter(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
-    tt::tt_metal::Array4D start_index = {0, 0, 0, 0};
-    Tensor index_pad = ttnn::pad(
-        ttnn::DefaultQueueId,
-        ttnn::ones_like(input_a),
-        input_b.padded_shape().to_array_4D(),
-        start_index,
-        0,
-        false,
-        std::nullopt);
-    Tensor temp_a = ttnn::pad(
-        ttnn::DefaultQueueId, input_a, input_b.padded_shape().to_array_4D(), start_index, 0, false, std::nullopt);
-    return ttnn::where(index_pad, temp_a, input_b);
 }
 
 /**

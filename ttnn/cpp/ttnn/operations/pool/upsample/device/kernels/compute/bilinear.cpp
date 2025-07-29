@@ -27,7 +27,7 @@ inline void reduce_h_fused(const uint32_t in_cb_id, const uint32_t in_scalar_cb_
 
     tile_regs_wait();
     tile_regs_commit();
-    pack_untilize_dst<tiles_per_reduction>(out_cb_id, 1, 0, 1, 2); /* pack 1 row (1x32) */
+    pack_untilize_dest<tiles_per_reduction>(out_cb_id, 1, 0, 1, 2); /* pack 1 row (1x32) */
     tile_regs_release();
 
     cb_push_back(out_cb_id, tiles_per_reduction);
@@ -57,7 +57,7 @@ void MAIN {
 
     constexpr uint32_t num_output_tiles = out_ntiles_c;  //* nblocks;
     tilizeA_B_reduce_init<false, true>(in_cb_id1, in_scalar_cb_id1, max_tiles_per_iter, out_cb_id, 2, 4);
-    pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, 1, 2); /* pack 1 row (1x32) */
+    pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, 1, 2); /* pack 1 row (1x32) */
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; i++) {
         const uint32_t cb_id = (i % 2 == 0) ? in_cb_id1 : in_cb_id2;
         const uint32_t scalar_cb_id = (i % 2 == 0) ? in_scalar_cb_id1 : in_scalar_cb_id2;

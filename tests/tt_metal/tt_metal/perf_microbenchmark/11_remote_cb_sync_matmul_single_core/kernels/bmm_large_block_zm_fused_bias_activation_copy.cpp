@@ -72,7 +72,7 @@ void MAIN {
         cb_reserve_back(out_cb_id, out_block_num_tiles);
         tile_regs_wait();
         uint32_t start_dst_index = 0;
-        matmul_pack_tile(start_dst_index, out_cb_id, out_block_num_tiles);
+        pack_tile_block(start_dst_index, out_cb_id, out_block_num_tiles);
         tile_regs_release();
         cb_push_back(out_cb_id, out_block_num_tiles);
     }

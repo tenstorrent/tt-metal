@@ -98,7 +98,9 @@ class LlamaForCausalLM(Generator):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, n_layers=None, tt_data_parallel=1):
+    def initialize_vllm_model(
+        cls, hf_config, mesh_device, max_batch_size, max_seq_len=131072, n_layers=None, tt_data_parallel=1
+    ):
         # max_seq_len = 128
         # n_layers = 1
         tt_model, model_args = initialize_vllm_text_transformer(
@@ -106,7 +108,7 @@ class LlamaForCausalLM(Generator):
             tt_data_parallel,
             mesh_device,
             max_batch_size,
-            max_seq_len=131072,
+            max_seq_len=max_seq_len,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
             optimizations=LlamaOptimizations.performance,
