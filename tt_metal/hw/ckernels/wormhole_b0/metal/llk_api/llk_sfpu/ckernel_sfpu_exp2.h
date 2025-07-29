@@ -6,8 +6,7 @@
 
 #include "sfpu/ckernel_sfpu_exp2.h"
 
-namespace ckernel {
-namespace sfpu {
+namespace ckernel::sfpu {
 
 /**
  * This function implements binary exponentiation using a polynomial approximation algorithm
@@ -23,9 +22,13 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_21f_(sfpi::vFloat val) {
         sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Extract exponent
         sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa
 
-        sfpi::vFloat d1 = sfpi::vFloat(0.40196114e-7);
-        sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(0xf94ee7) + zif, 0);
-        sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(0x560) + zif, 0);
+        constexpr float CONST_D1 = 0.40196114e-7f;
+        constexpr int CONST_D2 = 0xf94ee7;
+        constexpr int CONST_D3 = 0x560;
+
+        sfpi::vFloat d1 = sfpi::vFloat(CONST_D1);
+        sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(CONST_D2) + zif, 0);
+        sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(CONST_D3) + zif, 0);
         d2 = d1 * d2;
         zif = sfpu::_float_to_int32_(d2 * d3);
 
@@ -43,11 +46,9 @@ inline void calculate_exp2() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat v = dst_reg[0];
-        vFloat exp = _sfpu_exp2_21f_(v);
-        dst_reg[0] = exp;
+        dst_reg[0] = _sfpu_exp2_21f_(v);
         dst_reg++;
     }
 }
 
-}  // namespace sfpu
-}  // namespace ckernel
+}  // namespace ckernel::sfpu
