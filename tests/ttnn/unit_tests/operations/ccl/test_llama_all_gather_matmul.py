@@ -421,7 +421,7 @@ def run_llama_all_gather_matmul_impl(
                 eq, output = comp_pcc(tt_output_tensor, output_tensor_)
             else:
                 eq, output = comp_pcc(tt_output_tensor, output_tensor_)
-            # assert eq, f"{i} FAILED: {output}"
+            assert eq, f"{i} FAILED: {output}"
         logger.info(f"PCC output is: {output}")
 
     if validate_all:
