@@ -41,7 +41,7 @@ TEST_F(ProfilerNoOpTest, ProfilerNoOpTest_Batch) {
     std::cout << "Input Logits:\n";
     input.print();
 
-    auto result = ttml::metal::profiler_no_op(input);
+    auto result = ttml::metal::profiler_no_op(input, "identifier");
     std::cout << "Profiler_no_op_test:\nResult:\n";
     result.print();
 
@@ -64,7 +64,7 @@ TEST_F(ProfilerNoOpTest, ProfilerNoOpTest_Huge_Batch) {
     std::cout << "Input Logits:\n";
     input.print();
 
-    auto result = ttml::metal::profiler_no_op(input);
+    auto result = ttml::metal::profiler_no_op(input, "identifier");
     std::cout << "Profiler_no_op_test:\nResult:\n";
     result.print();
 
