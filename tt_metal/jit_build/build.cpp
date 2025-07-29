@@ -365,7 +365,7 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuil
 
     // clang-format off
     this->includes_ = env_.includes_ +
-        "-I " + env_.root_ + "tt_metal/hw/firmware/src " +
+        "-I " + env_.root_ + "tt_metal/hw/firmware/src/tt-1xx " +
         "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " +
         "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io ";
     // clang-format on
@@ -455,7 +455,7 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api " +
         "-I" + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api/llk_sfpu " +
         "-I" + env_.gpp_include_dir_ + " " +
-        "-I" + env_.root_ + "tt_metal/hw/firmware/src " +
+        "-I" + env_.root_ + "tt_metal/hw/firmware/src/tt-1xx " +
         "-I" + env_.root_ + "tt_metal/third_party/tt_llk/tt_llk_" + env.arch_name_ + "/llk_lib ";
     // clang-format on
 
@@ -530,7 +530,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
                 "-DERISC "
                 "-DRISC_B0_HW ";
 
-            this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
+            this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src/tt-1xx ";
 
             if (this->is_fw_) {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/active_erisc.cc");
@@ -635,7 +635,7 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
                 "-DERISC "
                 "-DRISC_B0_HW ";  // do we need this for BH?
 
-            this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
+            this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src/tt-1xx ";
 
             if (this->is_fw_) {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/idle_erisc.cc");
@@ -660,7 +660,7 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
                 "-DCOMPILE_FOR_IDLE_ERISC=1 "
                 "-DERISC "
                 "-DRISC_B0_HW ";
-            this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
+            this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src/tt-1xx ";
             if (this->is_fw_) {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/tt-1xx/subordinate_idle_erisc.cc");
             } else {

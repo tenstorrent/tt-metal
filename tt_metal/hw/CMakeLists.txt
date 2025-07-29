@@ -211,7 +211,7 @@ foreach(ARCH IN LISTS ARCHS)
         -I${PROJECT_SOURCE_DIR}/tt_metal/include
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/debug
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tt-1xx
     )
 
     # Architecture specific include paths
