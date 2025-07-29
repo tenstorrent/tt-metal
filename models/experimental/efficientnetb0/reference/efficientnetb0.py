@@ -90,9 +90,6 @@ class Conv2dDynamicSamePadding(nn.Conv2d):
         self.stride = stride
         self.dilation = dilation
         self.groups = groups
-        # self.conv = nn.Conv2d(
-        #     in_channels, out_channels, kernel_size, stride=stride, dilation=dilation, groups=groups, bias=bias
-        # )
 
     def forward(self, x):
         ih, iw = x.size()[-2:]
