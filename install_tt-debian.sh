@@ -75,10 +75,8 @@ else
 fi
 
 # ----------------------------
-# STEP 5: Use Tiam's install_dependencies.sh
+# STEP 5: install_dependencies.sh
 # ----------------------------
-echo -e "${STEP} Fetching custom install_dependencies.sh..."
-curl -sSL https://raw.githubusercontent.com/tiamoesg/tt-metal/main/install_dependencies.sh -o install_dependencies.sh
 chmod +x install_dependencies.sh
 ./install_dependencies.sh
 echo -e "${CHECK} Dependencies installed.\n"
@@ -86,8 +84,6 @@ echo -e "${CHECK} Dependencies installed.\n"
 # ----------------------------
 # STEP 6: Create Python Virtual Environment
 # ----------------------------
-echo -e "${STEP} Fetching custom create_venv.sh..."
-curl -sSL https://raw.githubusercontent.com/tiamoesg/tt-metal/main/create_venv.sh -o create_venv.sh
 chmod +x create_venv.sh
 source create_venv.sh
 echo -e "${CHECK} Python venv created and activated.\n"
@@ -95,8 +91,6 @@ echo -e "${CHECK} Python venv created and activated.\n"
 # ----------------------------
 # STEP 7: Build TT-Metal
 # ----------------------------
-echo -e "${STEP} Fetching custom build_metal.sh..."
-curl -sSL https://raw.githubusercontent.com/tiamoesg/tt-metal/main/build_metal.sh -o build_metal.sh
 chmod +x build_metal.sh
 ./build_metal.sh --build-all
 echo -e "${CHECK} TT-Metal built successfully.\n"
