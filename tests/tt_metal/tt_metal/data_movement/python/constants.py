@@ -35,7 +35,7 @@ DEFAULT_COMMENT_HEIGHT_RATIO = 0.2
 # Kernel mapping
 RISC_TO_KERNEL_MAP = {
     ## TO-DO: Make this programmable since this isn't consistent for all tests
-    ## Maybe also put this in a yaml file
+    ## Maybe also put this in the yaml file
     "riscv_1": "Receiver",
     "riscv_0": "Sender",
 }
