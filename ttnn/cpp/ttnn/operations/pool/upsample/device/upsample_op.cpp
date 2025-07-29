@@ -92,9 +92,6 @@ operation::ProgramWithCallbacks UpSample::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const Tensor& input_tensor_0 = input_tensors.at(0);
     Tensor& output_tensor_0 = output_tensors.at(0);
-    if (input_tensor_0.layout() == Layout::TILE) {
-        return upsample_tiled_interleaved(input_tensor_0, output_tensor_0, scale_factor_h_, scale_factor_w_);
-    }
     if (mode_ == "bilinear") {
         // Bilinear is only supported for sharded inputs
         // In case of interleaved input, autosharding had previously been performed
@@ -104,7 +101,12 @@ operation::ProgramWithCallbacks UpSample::create_program(
         if (input_tensor_0.is_sharded()) {
             return upsample_multi_core_sharded(input_tensor_0, output_tensor_0, scale_factor_h_, scale_factor_w_);
         } else {
-            return upsample_multi_core_interleaved(input_tensor_0, output_tensor_0, scale_factor_h_, scale_factor_w_);
+            if (input_tensor_0.layout() == Layout::TILE) {
+                return upsample_tiled_interleaved(input_tensor_0, output_tensor_0, scale_factor_h_, scale_factor_w_);
+            } else {
+                return upsample_multi_core_interleaved(
+                    input_tensor_0, output_tensor_0, scale_factor_h_, scale_factor_w_);
+            }
         }
     } else {
         TT_THROW("Unsupported mode: only supported modes are nearest and bilinear");

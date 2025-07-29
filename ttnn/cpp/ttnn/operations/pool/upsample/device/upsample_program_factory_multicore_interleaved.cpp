@@ -83,13 +83,15 @@ operation::ProgramWithCallbacks upsample_multi_core_interleaved(
     writer_compile_time_args = {
         (std::uint32_t)output_cb_index,
         (std::uint32_t)dst_is_dram,
+        (std::uint32_t)input_unit_size,
         (std::uint32_t)dst_stick_size_is_power_of_two,
         (std::uint32_t)dst_log2_stick_size,
         (std::uint32_t)scale_factor_h,
         (std::uint32_t)scale_factor_w,
         (std::uint32_t)output_shape[1],
         (std::uint32_t)output_shape[2],
-    };
+        1,
+        1};
 
     std::map<std::string, std::string> kernel_defines;
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
@@ -115,7 +117,6 @@ operation::ProgramWithCallbacks upsample_multi_core_interleaved(
 
     std::vector<uint32_t> writer_rt_arguments{
         dst_buffer->address(),
-        input_unit_size,
         0,  // set in loop, num of sticks on core
         0   // set in loop, stard_id of stick on core
     };
@@ -134,8 +135,8 @@ operation::ProgramWithCallbacks upsample_multi_core_interleaved(
         reader_rt_arguments[2] = num_sticks_per_core;
         reader_rt_arguments[3] = num_sticks_written;
 
-        writer_rt_arguments[2] = num_sticks_per_core;
-        writer_rt_arguments[3] = num_sticks_written;
+        writer_rt_arguments[1] = num_sticks_per_core;
+        writer_rt_arguments[2] = num_sticks_written;
 
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_arguments);
 
