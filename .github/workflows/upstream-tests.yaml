@@ -111,12 +111,14 @@ jobs:
             hw-topology: blackhole_llmbox
             build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+            techdebt-install-ttt-reqs: true
           - image-tag: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
             hw-topology: blackhole_deskbox
             build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+            techdebt-install-ttt-reqs: true
           - image-tag: ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
@@ -199,12 +201,21 @@ jobs:
       - name: Run profiler image
         timeout-minutes: 10
         run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
-  test-bh-llmbox-image:
+  test-bh-multicard-image:
     needs:
       - get-image-tags
       - build-images
+    strategy:
+      matrix:
+        bh-config:
+          - runner-label: BH-LLMBox
+            image-name: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
+          - runner-label: BH-DeskBox
+            image-name: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
+          - runner-label: BH-RackBox
+            image-name: ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
     runs-on:
-      - BH-LLMBox
+      - ${{ matrix.bh-config.runner-label }}
       - in-service
       - cloud-virtual-machine
     steps:
@@ -212,35 +223,7 @@ jobs:
         timeout-minutes: 30
         env:
           LLAMA_DIR: ${{ contains(runner.name, 'tt-metal-ci-vm') && '/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct' || '/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct' }}
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
-  test-bh-deskbox-image:
-    needs:
-      - get-image-tags
-      - build-images
-    runs-on:
-      - BH-DeskBox
-      - in-service
-      - cloud-virtual-machine
-    steps:
-      - name: Run image
-        timeout-minutes: 30
-        env:
-          LLAMA_DIR: ${{ contains(runner.name, 'tt-metal-ci-vm') && '/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct' || '/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct' }}
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
-  test-bh-rackbox-image:
-    needs:
-      - get-image-tags
-      - build-images
-    runs-on:
-      - BH-RackBox
-      - in-service
-      - cloud-virtual-machine
-    steps:
-      - name: Run image
-        timeout-minutes: 30
-        env:
-          LLAMA_DIR: ${{ contains(runner.name, 'tt-metal-ci-vm') && '/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct' || '/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct' }}
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ matrix.bh-config.image-name }}
   test-bh-image:
     needs:
       - get-image-tags
@@ -288,6 +271,7 @@ jobs:
       - get-image-tags
       - test-wh-6u-image
       - test-bh-image
+      - test-bh-multicard-image
     permissions:
       packages: write
       contents: read
@@ -299,6 +283,8 @@ jobs:
           - image-tag: ${{ needs.get-image-tags.outputs.bh-image-tag }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
           - image-tag: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

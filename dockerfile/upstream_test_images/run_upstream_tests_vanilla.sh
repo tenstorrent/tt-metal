@@ -71,7 +71,7 @@ test_suite_bh_single_pcie_llama_demo_tests() {
     pytest models/tt_transformers/demo/simple_text_demo.py -k performance-batch-1
 }
 
-test_suite_bh_llmbox_metal_unit_tests() {
+test_suite_bh_multi_pcie_metal_unit_tests() {
     echo "[upstream-tests] Running BH LLMBox metal unit tests"
 
     ./build/test/tt_metal/tt_fabric/test_system_health
@@ -80,7 +80,7 @@ test_suite_bh_llmbox_metal_unit_tests() {
     ./build/test/tt_metal/unit_tests_eth
 }
 
-test_suite_bh_llmbox_llama_demo_tests() {
+test_suite_bh_multi_pcie_llama_demo_tests() {
     echo "[upstream-tests] Running BH LLMBox upstream Llama demo model tests"
     verify_llama_dir_
 
@@ -173,16 +173,16 @@ test_suite_bh_single_pcie_metal_unit_tests
 test_suite_bh_single_pcie_didt_tests"
 
 hw_topology_test_suites["blackhole_llmbox"]="
-test_suite_bh_llmbox_metal_unit_tests
-test_suite_bh_llmbox_llama_demo_tests"
+test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_deskbox"]="
-test_suite_bh_llmbox_metal_unit_tests
-test_suite_bh_llmbox_llama_demo_tests"
+test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_rackbox"]="
-test_suite_bh_llmbox_metal_unit_tests
-test_suite_bh_llmbox_llama_demo_tests"
+test_suite_bh_multi_pcie_metal_unit_tests
+test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["wh_6u"]="test_suite_wh_6u_model_unit_tests
 test_suite_wh_6u_llama_demo_tests
