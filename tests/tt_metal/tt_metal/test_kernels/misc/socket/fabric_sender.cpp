@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "dataflow_api.h"
 #include "socket_api.h"
 
@@ -17,7 +18,7 @@ void fabric_write_any_len(
         data_packet_header_addr->to_noc_unicast_write(NocUnicastCommandHeader{dst_addr}, FABRIC_MAX_PACKET_SIZE);
         fabric_connection.wait_for_empty_write_slot();
         fabric_connection.send_payload_without_header_non_blocking_from_address(src_addr, FABRIC_MAX_PACKET_SIZE);
-        fabric_connection.send_payload_blocking_from_address(
+        fabric_connection.send_payload_flush_blocking_from_address(
             (uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
         dst_addr += FABRIC_MAX_PACKET_SIZE;
         src_addr += FABRIC_MAX_PACKET_SIZE;
@@ -26,7 +27,8 @@ void fabric_write_any_len(
     data_packet_header_addr->to_noc_unicast_write(NocUnicastCommandHeader{dst_addr}, xfer_size);
     fabric_connection.wait_for_empty_write_slot();
     fabric_connection.send_payload_without_header_non_blocking_from_address(src_addr, xfer_size);
-    fabric_connection.send_payload_blocking_from_address((uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
+    fabric_connection.send_payload_flush_blocking_from_address(
+        (uint32_t)data_packet_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
 
 void kernel_main() {
@@ -44,11 +46,8 @@ void kernel_main() {
     //  - data_packet_header: Used for issuing writes to downstream data cores
     //  - socket_packet_header: Used by socket APIs for control flow
     constexpr uint32_t fabric_packet_header_cb_id = 0;
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
-            get_write_ptr(fabric_packet_header_cb_id) + sizeof(PACKET_HEADER_TYPE));
+    auto* data_packet_header_addr = PacketHeaderPool::allocate_header();
+    auto* socket_packet_header_addr = PacketHeaderPool::allocate_header();
     fabric_connection.open();
 
     // Create Socket Interface

@@ -16,9 +16,9 @@ void MAIN {
     constexpr uint32_t num_faces = get_compile_time_arg_val(2);
     constexpr uint32_t num_rows_per_face = get_compile_time_arg_val(3);
 
-    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
     copy_tile_to_dst_init_short(tt::CBIndex::c_0);
-    pack_untilize_dst_init_short<per_core_block_tile_cnt>(tt::CBIndex::c_16, num_rows_per_face, num_faces);
+    pack_untilize_dest_init<per_core_block_tile_cnt>(tt::CBIndex::c_16, num_rows_per_face, num_faces);
 
     for (uint32_t b = 0; b < per_core_block_cnt; ++b) {
         cb_wait_front(tt::CBIndex::c_0, per_core_block_tile_cnt);
@@ -31,7 +31,7 @@ void MAIN {
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_untilize_dst<per_core_block_tile_cnt>(tt::CBIndex::c_16, 1, 0, num_rows_per_face, num_faces);
+        pack_untilize_dest<per_core_block_tile_cnt>(tt::CBIndex::c_16, 1, 0, num_rows_per_face, num_faces);
         tile_regs_release();
 
         cb_push_back(tt::CBIndex::c_16, per_core_block_tile_cnt);

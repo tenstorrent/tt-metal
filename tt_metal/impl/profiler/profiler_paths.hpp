@@ -33,6 +33,7 @@ inline std::string get_profiler_logs_dir() {
 }
 
 inline std::string PROFILER_ZONE_SRC_LOCATIONS_LOG = get_profiler_logs_dir() + "zone_src_locations.log";
+inline std::string NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG = get_profiler_logs_dir() + "new_zone_src_locations.log";
 }  // namespace tt_metal
 
 }  // namespace tt

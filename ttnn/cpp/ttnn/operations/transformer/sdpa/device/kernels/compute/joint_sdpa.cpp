@@ -181,7 +181,7 @@ void MAIN {
                          * This is a bcast_cols since max_diff is a column vector and prev_sum is a partial
                          * reduction, containing the sum of tiles in dim=-1 of QK.
                          */
-                        mul_block_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+                        mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
                         /* cb_cur_sum += cb_prev_sum */
                         add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
 

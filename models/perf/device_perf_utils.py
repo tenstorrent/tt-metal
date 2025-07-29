@@ -19,7 +19,16 @@ from tt_metal.tools.profiler.process_model_log import (
 )
 
 
-def run_device_perf(command, subdir, num_iterations, cols, batch_size, op_name="", has_signposts=False):
+def run_device_perf(
+    command,
+    subdir,
+    num_iterations,
+    cols,
+    batch_size,
+    op_name="",
+    has_signposts=False,
+    device_analysis_types=["device_kernel_duration"],
+):
     duration_cols = [col + " DURATION [ns]" for col in cols]
     samples_cols = [col + " SAMPLES/S" for col in cols]
 
@@ -32,7 +41,7 @@ def run_device_perf(command, subdir, num_iterations, cols, batch_size, op_name="
         results[f"MAX {d_col}"] = -float("inf")
 
     for _ in range(num_iterations):
-        run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+        run_device_profiler(command, subdir, device_analysis_types)
         r = post_process_ops_log(subdir, duration_cols, op_name=op_name, has_signposts=has_signposts)
         for d_col in duration_cols:
             results[f"AVG {d_col}"] += r[d_col]
@@ -103,7 +112,9 @@ def post_process_ops_log_detailed(
     return results
 
 
-def run_device_perf_detailed(command, subdir, cols, op_name="", has_signposts=False, warmup_iters=0):
+def run_device_perf_detailed(
+    command, subdir, cols, op_name="", has_signposts=False, warmup_iters=0, device_analysis_types=None
+):
     duration_cols = [col + " DURATION [ns]" for col in cols]
 
     clear_profiler_runtime_artifacts()
@@ -115,7 +126,10 @@ def run_device_perf_detailed(command, subdir, cols, op_name="", has_signposts=Fa
         results[f"MAX {d_col}"] = -float("inf")
         results[f"STD {d_col}"] = 0
 
-    run_device_profiler(command, subdir, device_analysis_types=["device_kernel_duration"])
+    if device_analysis_types is None:
+        device_analysis_types = ["device_kernel_duration"]
+
+    run_device_profiler(command, subdir, device_analysis_types=device_analysis_types)
     r = post_process_ops_log_detailed(
         subdir, duration_cols, op_name=op_name, has_signposts=has_signposts, detailed=True, warmup_iters=warmup_iters
     )

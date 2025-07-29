@@ -19,16 +19,17 @@ template <
     bool SKIP_POSITIVE_CHECK = false,
     int ITERATIONS = 8>
 inline void llk_math_eltwise_unary_sfpu_exponential(
-    uint dst_index, int vector_mode = (int)VectorMode::RC, int param0 = ITERATIONS, int param1 = 0x3F80) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    uint dst_index,
+    int vector_mode = (int)VectorMode::RC,
+    int param0 = p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor*/) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_exponential<APPROXIMATE, FAST_APPROX, SCALE_EN, ITERATIONS, SKIP_POSITIVE_CHECK>,
         dst_index,
         vector_mode,
-        param0,
-        param1);
+        param0);
 }
 
-template <bool APPROXIMATE, bool FAST_APPROX, uint32_t scale = 0x3F800000>
+template <bool APPROXIMATE, bool FAST_APPROX, uint32_t scale = p_sfpu::kCONST_1_FP16B>
 inline void llk_math_eltwise_unary_sfpu_exponential_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::exponential, APPROXIMATE>(
         sfpu::exp_init<APPROXIMATE, FAST_APPROX, scale>);

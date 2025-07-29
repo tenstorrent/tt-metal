@@ -26,7 +26,6 @@ target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NA
 target_precompile_headers(ttnn_core REUSE_FROM TT::CommonPCH)
 
 set(TENSOR_FLATBUFFER_SCHEMAS
-    ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_coordinate.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_shape.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor_spec.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/tensor.fbs
@@ -34,7 +33,7 @@ set(TENSOR_FLATBUFFER_SCHEMAS
 
 set(TENSOR_FLATBUFFER_GENERATED_HEADERS)
 foreach(FBS_FILE ${TENSOR_FLATBUFFER_SCHEMAS})
-    GENERATE_FBS_HEADER(${FBS_FILE})
+    GENERATE_FBS_HEADER(${FBS_FILE} TARGET TTNN::Core)
     list(APPEND TENSOR_FLATBUFFER_GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
 endforeach()
 
@@ -50,7 +49,7 @@ target_sources(
         core/distributed/api.cpp
         core/distributed/distributed_tensor.cpp
         core/distributed/distributed_tensor_config.cpp
-        core/distributed/distributed_tensor_config.cpp
+        core/distributed/tensor_topology.cpp
         core/events.cpp
         core/global_circular_buffer.cpp
         core/global_semaphore.cpp
@@ -89,8 +88,9 @@ target_include_directories(
 target_include_directories(ttnn_core SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
 target_link_libraries(
     ttnn_core
-    PRIVATE
+    PUBLIC
         TT::Metalium
+    PRIVATE
         xtensor
         FlatBuffers::FlatBuffers
         Boost::algorithm
@@ -116,7 +116,6 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/concat/concat_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/copy/copy_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/chunk/chunk_${PY_BINDING}.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/data_movement_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/expand/expand_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/fill_pad/fill_pad_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/fill_rm/fill_rm_${PY_BINDING}.cpp
@@ -134,6 +133,8 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/reshape_on_device/reshape_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/roll/roll_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/stack/stack_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/scatter/scatter_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/scatter/tosa_scatter_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/sharded/reshard/reshard_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved_${PY_BINDING}.cpp
@@ -177,8 +178,6 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/paged_cache/paged_cache_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/plusone/plusone_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/argmax/argmax_${PY_BINDING}.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/cumprod/cumprod_${PY_BINDING}.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/cumsum/cumsum_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reshape/view_${PY_BINDING}.cpp
@@ -193,11 +192,13 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/create_qkv_heads_from_separate_tensors/create_qkv_heads_from_separate_tensors_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/nlp_concat_heads_decode_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_boltz/nlp_concat_heads_boltz_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/nlp_create_qkv_heads_decode_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/nlp_create_qkv_heads_segformer_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_vit/nlp_create_qkv_heads_vit_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_boltz/nlp_create_qkv_heads_boltz_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_${PY_BINDING}.cpp
@@ -264,6 +265,8 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/prefetcher/prefetcher_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/reduction_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/argmax/argmax_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/accumulation/cumprod/cumprod_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/accumulation/cumsum/cumsum_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/moe/moe_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/sampling/sampling_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/topk/topk_${PY_BINDING}.cpp
@@ -276,7 +279,11 @@ set(TTNN_SRC_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/transformer_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/uniform/uniform_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/where/where_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/rand/rand_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/sort/sort_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/gather/gather_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/gather/tosa/gather_tosa_${PY_BINDING}.cpp
 )
 
 set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
@@ -290,22 +297,23 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/ccl_experimental_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather_${PY_BINDING}.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/scatter/scatter_${PY_BINDING}.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/scatter/tosa_scatter_${PY_BINDING}.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/reduction/sort/sort_${PY_BINDING}.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/gather/gather_${PY_BINDING}.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/gather/tosa/gather_tosa_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter/llama_reduce_scatter_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/llama_reduce_scatter_create_heads/llama_reduce_scatter_create_heads_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_to_all_async/all_to_all_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/all_gather_matmul_async/all_gather_matmul_async_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/matmul_reduce_scatter_async_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/ring_attention_all_gather_async_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/send_recv_async/send_async/send_async_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async_${PY_BINDING}.cpp
 )
 
 set(CCL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/ccl_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_gather/all_gather_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_to_all_combine/all_to_all_combine_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_to_all_dispatch/all_to_all_dispatch_${PY_BINDING}.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/mesh_partition/mesh_partition_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/reduce_scatter/reduce_scatter_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/barrier/barrier_${PY_BINDING}.cpp
 )
@@ -324,6 +332,7 @@ list(
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/fabric.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/global_semaphore.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/mesh_socket.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/program_descriptors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/pytensor.cpp
@@ -361,6 +370,8 @@ TT_ENABLE_UNITY_BUILD(ttnncpp)
 set_target_properties(
     ttnncpp
     PROPERTIES
+        EXPORT_NAME
+            TTNN
         PREFIX
             "_"
         BUILD_RPATH
@@ -373,8 +384,14 @@ set_target_properties(
             "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_'${LIBRARY_NAME}'.so;${PROJECT_SOURCE_DIR}/ttnn/'${LIBRARY_NAME}'.egg-info" # FIXME: Confirm this is a relic of the past and can be deleted; No generated files should land in the source tree!
 )
 
+file(GLOB_RECURSE api api/*)
 target_sources(
     ttnncpp
+    PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_SOURCE_DIR}/cpp
+        FILES ${api} cpp/ttnn/operations/creation.hpp cpp/ttnn/operations/functions.hpp
     PRIVATE
         # FIXME: Move these out to appropriate sub targets
         cpp/ttnn/operations/compute_throttle_utils.cpp
@@ -390,10 +407,6 @@ target_sources(
         cpp/ttnn/operations/experimental/slice_write/device/slice_write_op.cpp
         cpp/ttnn/operations/experimental/slice_write/device/slice_write_program_factory.cpp
         cpp/ttnn/operations/experimental/slice_write/slice_write.cpp
-        cpp/ttnn/operations/experimental/gather/gather.cpp
-        cpp/ttnn/operations/experimental/gather/device/gather_device_operation.cpp
-        cpp/ttnn/operations/experimental/gather/device/gather_program_factory.cpp
-        cpp/ttnn/operations/experimental/gather/tosa/gather_tosa.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/device/rms_allgather_op.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.cpp
         cpp/ttnn/operations/experimental/ccl/rms_allgather/device/multi_core/rms_allgather_pf.cpp
@@ -411,15 +424,17 @@ target_sources(
 target_include_directories(
     ttnncpp
     PUBLIC
-        api
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>"
         # FIXME: decide what to do about this dir. Device includes complicate matters.
-        cpp
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/cpp>"
 )
 
 target_link_libraries(
     ttnncpp
-    PRIVATE
+    PUBLIC
         TT::Metalium
+        xtensor
+    PRIVATE
         TTNN::Core
         TTNN::Ops::Bernoulli
         TTNN::Ops::CCL
@@ -453,10 +468,10 @@ target_link_libraries(
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reduction
         TTNN::Ops::Experimental::Reshape
-        TTNN::Ops::Experimental::Scatter
         TTNN::Ops::Experimental::SSM
         TTNN::Ops::Experimental::Transformer
         TTNN::Ops::Experimental::UnaryBackward
+        TTNN::Ops::Experimental::Where
         TTNN::Ops::Full
         TTNN::Ops::FullLike
         TTNN::Ops::IndexFill
@@ -473,15 +488,18 @@ target_link_libraries(
         TTNN::Ops::Normalization
         TTNN::Ops::Rand
 )
-install(TARGETS ttnncpp LIBRARY COMPONENT ttnn-runtime)
+if(TT_INSTALL)
+    install(TARGETS ttnncpp LIBRARY COMPONENT ttnn-runtime)
 
-install(
-    TARGETS
-        ttnncpp
-    LIBRARY
-        DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT tar
-)
+    install(
+        TARGETS
+            ttnncpp
+        LIBRARY
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            COMPONENT tar
+    )
+    install(TARGETS ttnncpp EXPORT TT-NN LIBRARY COMPONENT ttnn-runtime FILE_SET api COMPONENT ttnn-dev)
+endif()
 
 if(WITH_PYTHON_BINDINGS)
     add_library(ttnn SHARED)
@@ -493,6 +511,8 @@ if(WITH_PYTHON_BINDINGS)
     set_target_properties(
         ttnn
         PROPERTIES
+            EXPORT_NAME
+                Python
             PREFIX
                 "_"
             BUILD_RPATH
@@ -516,20 +536,22 @@ if(WITH_PYTHON_BINDINGS)
     target_include_directories(
         ttnn
         PUBLIC
-            ${PROJECT_SOURCE_DIR}/ttnn
-            ${CMAKE_CURRENT_SOURCE_DIR}/cpp
+            "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>"
+            "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/cpp>"
     )
 
     target_link_libraries(
         ttnn
         PUBLIC
-            TTNN::CPP
+            "$<BUILD_INTERFACE:TTNN::CPP>"
         PRIVATE
             pybind11::module
             Boost::algorithm
             TT::Metalium
     )
-    install(TARGETS ttnn LIBRARY COMPONENT ttnn-runtime)
+    if(TT_INSTALL)
+        install(TARGETS ttnn EXPORT TT-NN LIBRARY COMPONENT ttnn-runtime)
+    endif()
 
     # Install .so into src files for pybinds implementation
     install(
@@ -551,11 +573,15 @@ if(WITH_PYTHON_BINDINGS)
             tt_pybinds
     )
 endif()
+if(TT_INSTALL)
+    install(EXPORT TT-NN NAMESPACE TTNN:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-nn COMPONENT ttnn-dev)
+endif()
 
 if(TTNN_BUILD_TESTS)
     add_subdirectory(test)
 endif()
 
+set(FixmeOpAPIDir ${CMAKE_CURRENT_SOURCE_DIR}/cpp)
 set(FixmeOpIncDirs
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
@@ -592,10 +618,10 @@ add_subdirectory(cpp/ttnn/operations/experimental/paged_cache)
 add_subdirectory(cpp/ttnn/operations/experimental/plusone)
 add_subdirectory(cpp/ttnn/operations/experimental/reduction)
 add_subdirectory(cpp/ttnn/operations/experimental/reshape)
-add_subdirectory(cpp/ttnn/operations/experimental/scatter)
 add_subdirectory(cpp/ttnn/operations/experimental/ssm)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)
 add_subdirectory(cpp/ttnn/operations/experimental/unary_backward)
+add_subdirectory(cpp/ttnn/operations/experimental/where)
 add_subdirectory(cpp/ttnn/operations/full)
 add_subdirectory(cpp/ttnn/operations/full_like)
 add_subdirectory(cpp/ttnn/operations/index_fill)
@@ -612,3 +638,5 @@ add_subdirectory(cpp/ttnn/operations/pool)
 add_subdirectory(cpp/ttnn/operations/normalization)
 add_subdirectory(cpp/ttnn/operations/rand)
 add_subdirectory(cpp/ttnn/deprecated)
+
+add_subdirectory(examples)

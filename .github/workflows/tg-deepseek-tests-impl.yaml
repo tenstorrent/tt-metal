@@ -1,0 +1,107 @@
+name: "[internal] TG DeepSeek tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      docker-image:
+        required: true
+        type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
+      topology:
+        required: false
+        type: string
+        default: "config-tg"
+
+jobs:
+  tg-deepseek-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { name: "Galaxy DeepSeek tests", arch: wormhole_b0, model: deepseek, timeout: 30, owner_id: U03HY7MK4BT}, # Mark O'Connor
+        ]
+    runs-on:
+      - arch-wormhole_b0
+      - ${{ inputs.topology }}
+      - bare-metal
+      - pipeline-functional
+      - ${{ inputs.extra-tag }}
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        LOGURU_LEVEL: INFO
+        ARCH_NAME: ${{ matrix.test-group.arch }}
+        HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf:ro
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Run DeepSeek tests
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          fail=0
+          echo "LOG_METAL: Running DeepSeek unit tests"
+          start_time=$(date +%s)
+
+          pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+          pytest models/demos/deepseek_v3/tests/test_embedding_1d.py --timeout 10 || fail=1
+          pytest models/demos/deepseek_v3/tests/test_expert.py --timeout 5 || fail=1
+          pytest models/demos/deepseek_v3/tests/test_mla_1d.py --timeout 10 || fail=1
+          pytest models/demos/deepseek_v3/tests/test_mlp_1d.py --timeout 5 || fail=1
+          pytest models/demos/deepseek_v3/tests/test_rms_norm.py --timeout 5 || fail=1
+
+          end_time=$(date +%s)
+          duration=$((end_time - start_time))
+          echo "LOG_METAL: DeepSeek unit tests took $duration seconds to complete"
+
+          if (( fail )); then
+            exit 1
+          fi
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}
+      # - name: Save environment data
+      #   if: ${{ (matrix.test-group.name == 'Galaxy Falcon7b demo tests' || matrix.test-group.name == 'Galaxy DeepSeek tests') && !cancelled() }}
+      #   run: |
+      #     python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py
+      # - name: Upload benchmark data
+      #   if: ${{ (matrix.test-group.name == 'Galaxy Falcon7b demo tests' || matrix.test-group.name == 'Galaxy DeepSeek tests') && !cancelled() }}
+      #   uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
+      #   with:
+      #     ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      #     sftp-batchfile: .github/actions/upload-data-via-sftp/benchmark_data_batchfile.txt
+      #     username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+      #     hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+      #     path: /work
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main

@@ -173,7 +173,6 @@ class resnet50Bottleneck:
                 "groups": 1,
                 "device": device,
                 "conv_config": ttnn.Conv2dConfig(
-                    dtype=self.model_config["ACTIVATIONS_DTYPE"],
                     weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                     shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
                     if height_sharding
@@ -192,12 +191,14 @@ class resnet50Bottleneck:
                     input_layout=x.get_layout(),
                     has_bias=True,
                     **conv_kwargs_1,
+                    input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 )
                 self.ds_conv_bias_tensor = ttnn.prepare_conv_bias(
                     bias_tensor=self.ds_conv_bias_tensor,
                     input_memory_config=x.memory_config(),
                     input_layout=x.get_layout(),
                     **conv_kwargs_1,
+                    input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 )
 
                 self.ds_conv_weight_tensor = ttnn.to_device(self.ds_conv_weight_tensor, device)
@@ -213,6 +214,7 @@ class resnet50Bottleneck:
                 ),
                 return_output_dim=False,
                 return_weights_and_bias=True,
+                dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
             ttnn.deallocate(x)
             ds_out = ttnn.reallocate(ds_out)
@@ -252,7 +254,6 @@ class resnet50Bottleneck:
             "groups": 1,
             "device": device,
             "conv_config": ttnn.Conv2dConfig(
-                dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
                 shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
@@ -270,12 +271,14 @@ class resnet50Bottleneck:
                 input_layout=x.get_layout(),
                 has_bias=True,
                 **conv_kwargs_2,
+                input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
             self.conv1_bias_tensor = ttnn.prepare_conv_bias(
                 bias_tensor=self.conv1_bias_tensor,
                 input_memory_config=x.memory_config(),
                 input_layout=x.get_layout(),
                 **conv_kwargs_2,
+                input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
             self.conv1_weight_tensor = ttnn.to_device(self.conv1_weight_tensor, device)
             self.conv1_bias_tensor = ttnn.to_device(self.conv1_bias_tensor, device)
@@ -290,6 +293,7 @@ class resnet50Bottleneck:
             ),
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
         if is_wormhole_b0():
@@ -382,7 +386,6 @@ class resnet50Bottleneck:
             "groups": 1,
             "device": device,
             "conv_config": ttnn.Conv2dConfig(
-                dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
                 deallocate_activation=True,
@@ -403,12 +406,14 @@ class resnet50Bottleneck:
                 input_layout=out.get_layout(),
                 has_bias=True,
                 **conv_kwargs_3,
+                input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
             self.conv2_bias_tensor = ttnn.prepare_conv_bias(
                 bias_tensor=self.conv2_bias_tensor,
                 input_memory_config=out.memory_config(),
                 input_layout=out.get_layout(),
                 **conv_kwargs_3,
+                input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
 
             self.conv2_weight_tensor = ttnn.to_device(self.conv2_weight_tensor, device)
@@ -424,6 +429,7 @@ class resnet50Bottleneck:
             ),
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
         # conv3 is 1x1 conv
@@ -441,7 +447,6 @@ class resnet50Bottleneck:
             "groups": 1,
             "device": device,
             "conv_config": ttnn.Conv2dConfig(
-                dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED
                 if height_sharding
@@ -457,12 +462,14 @@ class resnet50Bottleneck:
                 input_layout=out.get_layout(),
                 has_bias=True,
                 **conv_kwargs_4,
+                input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
             self.conv3_bias_tensor = ttnn.prepare_conv_bias(
                 bias_tensor=self.conv3_bias_tensor,
                 input_memory_config=out.memory_config(),
                 input_layout=out.get_layout(),
                 **conv_kwargs_4,
+                input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
 
             self.conv3_weight_tensor = ttnn.to_device(self.conv3_weight_tensor, device)
@@ -478,6 +485,7 @@ class resnet50Bottleneck:
             ),
             return_output_dim=False,
             return_weights_and_bias=True,
+            dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
         if not self.run_downsample_before_conv2:
@@ -688,7 +696,6 @@ class resnet50:
             "groups": 1,
             "device": device,
             "conv_config": ttnn.Conv2dConfig(
-                dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
                 deallocate_activation=True,
@@ -704,12 +711,14 @@ class resnet50:
                 input_layout=input_tensor.get_layout(),
                 has_bias=True,
                 **conv_kwargs,
+                input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
             self.conv1_bias_tensor = ttnn.prepare_conv_bias(
                 bias_tensor=self.conv1_bias_tensor,
                 input_memory_config=input_tensor.memory_config(),
                 input_layout=input_tensor.get_layout(),
                 **conv_kwargs,
+                input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
 
             self.conv1_weight_tensor = ttnn.to_device(self.conv1_weight_tensor, device)
@@ -725,6 +734,7 @@ class resnet50:
             ),
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
         # Relu is fused with conv1
 
@@ -1043,7 +1053,6 @@ class resnet50:
             "groups": 1,
             "device": device,
             "conv_config": ttnn.Conv2dConfig(
-                dtype=self.model_config["ACTIVATIONS_DTYPE"],
                 weights_dtype=self.model_config["WEIGHTS_DTYPE"],
                 activation="relu",
                 deallocate_activation=True,
@@ -1059,12 +1068,14 @@ class resnet50:
                 input_layout=input_tensor.get_layout(),
                 has_bias=True,
                 **conv_kwargs,
+                input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
             self.conv1_bias_tensor = ttnn.prepare_conv_bias(
                 bias_tensor=self.conv1_bias_tensor,
                 input_memory_config=input_tensor.memory_config(),
                 input_layout=input_tensor.get_layout(),
                 **conv_kwargs,
+                input_dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
 
             self.conv1_weight_tensor = ttnn.to_device(self.conv1_weight_tensor, device)
@@ -1080,6 +1091,7 @@ class resnet50:
             ),
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
         # Relu is fused with conv1
 

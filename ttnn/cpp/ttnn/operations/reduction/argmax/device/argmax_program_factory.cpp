@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include <algorithm>
+#include <string>
 
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -151,7 +151,7 @@ operation::ProgramWithCallbacks argmax_single_core(
         (uint32_t)(reduce_all),
     };
 
-    const std::map<string, string> kernel_defines;
+    const std::map<std::string, std::string> kernel_defines;
     const tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved.cpp",
@@ -432,7 +432,7 @@ operation::ProgramWithCallbacks argmax_multi_core(
         done_sem_idx,
     };
 
-    std::map<string, string> kernel_defines;
+    std::map<std::string, std::string> kernel_defines;
     tt::tt_metal::KernelHandle reader_kernel_id0 = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
@@ -442,15 +442,17 @@ operation::ProgramWithCallbacks argmax_multi_core(
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .compile_args = reader_compile_args});
 
-    tt::tt_metal::KernelHandle reader_kernel_id1 = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
-        cores1,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-            .noc = tt::tt_metal::NOC::RISCV_1_default,
-            .compile_args = reader_compile_args});
-
+    tt::tt_metal::KernelHandle reader_kernel_id1 = 0;
+    if (num_cores1 > 0) {
+        reader_kernel_id1 = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
+            cores1,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt::tt_metal::NOC::RISCV_1_default,
+                .compile_args = reader_compile_args});
+    }
     const auto cores_coords0 = corerange_to_cores(cores0, num_cores0, true);
     const auto cores_coords1 = corerange_to_cores(cores1, num_cores1, true);
 

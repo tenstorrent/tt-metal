@@ -6,6 +6,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 
 using namespace tt::tt_metal;
 
@@ -57,10 +58,8 @@ int main() {
         auto l1_buffer = CreateBuffer(l1_config);
 
         auto input_dram_buffer = CreateBuffer(dram_config);
-        const uint32_t input_dram_buffer_addr = input_dram_buffer->address();
 
         auto output_dram_buffer = CreateBuffer(dram_config);
-        const uint32_t output_dram_buffer_addr = output_dram_buffer->address();
 
         // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
         const uint32_t input_bank_id = 0;

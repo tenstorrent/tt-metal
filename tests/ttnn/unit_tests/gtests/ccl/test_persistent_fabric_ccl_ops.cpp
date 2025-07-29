@@ -26,6 +26,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include "tests/ttnn/unit_tests/gtests/ccl/test_fabric_edm_common.hpp"
 #include "ttnn/distributed/api.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
@@ -49,7 +50,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
         log_info(tt::LogTest, "Test must be run on WH");
         return;
     }
-    MeshFabric1DFixture test_fixture(tt::tt_metal::FabricConfig::FABRIC_1D);
+    MeshFabric1DFixture test_fixture(tt::tt_fabric::FabricConfig::FABRIC_1D);
     auto view = test_fixture.mesh_device_->get_view();
 
     // build a line of devices
@@ -70,18 +71,18 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
 
     // INPUT TENSOR setup
     size_t page_size = tile_size(DataFormat::Float16);
-    std::vector<Tensor> device_input_tensors;
-    for (size_t i = 0; i < num_devices; i++) {
-        // host_input_tensors.push_back(ttnn::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f) ,
-        // {input_shape[0],input_shape[1],input_shape[2],input_shape[3]}, layout).to_device(devices[i]));
-        auto t =
-            ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::BFLOAT16), input_shape).to_layout(layout);
-        device_input_tensors.push_back(t);
-    }
-    // Need to make it a mesh tensor for use with the op
-    const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{})
-                                         .to_device(test_fixture.mesh_device_.get());
 
+    // Replicate the tensor across (1, num_devices) submesh.
+    const Tensor input_mesh_tensor = ttnn::distributed::distribute_tensor(
+        ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::BFLOAT16), input_shape).to_layout(layout),
+        *ttnn::distributed::create_mesh_mapper(
+            *test_fixture.mesh_device_,
+            ttnn::distributed::MeshMapperConfig{
+                .placements =
+                    {ttnn::distributed::MeshMapperConfig::Replicate{},
+                     ttnn::distributed::MeshMapperConfig::Replicate{}},
+                .mesh_shape_override = MeshShape{1, num_devices}}),
+        *test_fixture.mesh_device_);
     std::optional<SubdeviceInfo> subdevice_managers = create_worker_subdevices(devices);
 
     GlobalSemaphore from_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore(

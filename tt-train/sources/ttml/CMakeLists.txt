@@ -34,6 +34,7 @@ set(METAL_OPS_FILES
     # Common
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/common/program_utils.hpp
     # RMSNorm
+    # RMSNorm Forward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/rmsnorm_fw.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation_types.hpp
@@ -41,6 +42,14 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_fw/device/rmsnorm_fw_program_factory.cpp
+    # RMSNorm Backward
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/rmsnorm_bw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/rmsnorm_bw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation_types.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_program_factory.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/rmsnorm_bw/device/rmsnorm_bw_program_factory.cpp
     # CrossEntropy
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/cross_entropy_fw/cross_entropy_fw.hpp
@@ -113,6 +122,7 @@ if(NOT TARGET Metalium::Metal)
     # Try to find the library
     find_library(TT_METAL_LIBRARY NAMES "tt_metal" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
     find_library(TTNN_LIBRARY NAMES "_ttnn.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
+    find_library(TTNNCPP_LIBRARY NAMES "_ttnncpp.so" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
     find_library(DEVICE_LIBRARY NAMES "device" PATHS "${METALIUM_LIB_PATH}" NO_DEFAULT_PATH)
 
     if(TT_METAL_LIBRARY)
@@ -149,6 +159,20 @@ if(NOT TARGET Metalium::Metal)
     else()
         message(FATAL_ERROR "_ttnn.so not found in ${METALIUM_LIB_PATH}")
     endif()
+    if(TTNNCPP_LIBRARY)
+        add_library(Metalium::TTNNCPP SHARED IMPORTED)
+        set_target_properties(
+            Metalium::TTNNCPP
+            PROPERTIES
+                IMPORTED_LOCATION
+                    "${TTNNCPP_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES
+                    "${METALIUM_INCLUDE_DIRS}"
+        )
+        message(STATUS "Successfully found _ttnncpp.so at ${TTNNCPP_LIBRARY}")
+    else()
+        message(FATAL_ERROR "_ttnncpp.so not found in ${METALIUM_LIB_PATH}")
+    endif()
 else()
     message(STATUS "Metalium targets already exists")
 endif()
@@ -172,6 +196,7 @@ target_link_libraries(
         atomic
         Metalium::Metal
         Metalium::TTNN
+        Metalium::TTNNCPP
         Python3::Python
         fmt::fmt-header-only
         magic_enum::magic_enum

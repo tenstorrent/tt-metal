@@ -71,6 +71,9 @@ class MLP(LightweightModule):
         self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
         self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
 
+        # Default activation is SILU
+        self.activation_type = self.args.mlp_activation_type
+
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
         w1 -> gate_proj
@@ -178,7 +181,7 @@ class MLP(LightweightModule):
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
-            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+            input_tensor_a_activations=[self.activation_type],
             dtype=activation_dtype or ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
         )

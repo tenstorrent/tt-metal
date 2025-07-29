@@ -28,7 +28,6 @@ class SubDeviceManagerTracker;
 // A physical PCIexpress Tenstorrent device
 class Device : public IDevice {
 public:
-    // friend void tt_gdb(IDevice* device, int chip_id, const vector<CoreCoord> cores, vector<string> ops);
     Device () = delete;
     Device(
         chip_id_t device_id,
@@ -72,7 +71,7 @@ public:
 
     std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const override;
     std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const override;
-    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment() override;
+    std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord &logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const override;
@@ -179,9 +178,6 @@ public:
     void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
     uint32_t num_sub_devices() const override;
-    // TODO #15944: Temporary api until migration to actual fabric is complete
-    std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
 
     bool is_mmio_capable() const override;
     // TODO #20966: Remove these APIs
@@ -203,14 +199,13 @@ private:
         size_t worker_l1_unreserved_start,
         tt::stl::Span<const std::uint32_t> l1_bank_remap);
 
-    void compile_command_queue_programs();
     void configure_command_queue_programs();
 
     void mark_allocations_unsafe();
     void mark_allocations_safe();
 
     CoreCoord physical_worker_core_from_logical_core(const CoreCoord &logical_core) const;
-    CoreCoord dram_core_from_dram_channel(uint32_t dram_channel) const;
+    CoreCoord dram_core_from_dram_channel(uint32_t dram_channel, NOC noc = NOC::NOC_0) const;
     CoreCoord virtual_core_from_physical_core(const CoreCoord& physical_coord) const;
 
     chip_id_t id_;

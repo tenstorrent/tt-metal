@@ -30,7 +30,6 @@
 #include <set>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -47,8 +46,6 @@
 #include "dev_msgs.h"
 #include "impl/context/metal_context.hpp"
 #include "dispatch_core_common.hpp"
-#include "dprint_server.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build.hpp"
 #include "jit_build/jit_build_options.hpp"
@@ -67,7 +64,6 @@
 #include <tt_stl/strong_type.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "sub_device_types.hpp"
-#include "dispatch/system_memory_manager.hpp"
 #include "tile.hpp"
 #include "tt_backend_api_types.hpp"
 #include "tt_memory.h"
@@ -113,6 +109,53 @@ size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable
     }
 }
 
+void validate_kernel_placement(IDevice* device, bool force_slow_dispatch, std::shared_ptr<Kernel> kernel) {
+    // Placement rules:
+    //  Slow dispatch:
+    //      - kernels cannot be on storage only cores
+    //  Fast dispatch (tensix):
+    //      - kernels cannot be on storage only cores an
+    //      - tensix kernels cannot be on dispatch cores
+    //  Fast dispatch (ethernet):
+    //      - kernels cannot be on storage only cores
+    //      - eth kernels cannot be on idle eth cores
+    bool slow_dispatch = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
+
+    const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
+    CoreType dispatch_core_type = dispatch_core_config.get_core_type();
+    const std::vector<CoreCoord>& storage_cores =
+        MetalContext::instance().get_dispatch_query_manager().get_logical_storage_cores_on_user_chips();
+    bool on_storage_only_core =
+        std::any_of(storage_cores.begin(), storage_cores.end(), [&kernel](const CoreCoord& storage_core) {
+            return kernel->is_on_logical_core(storage_core);
+        });
+    TT_FATAL(
+        not on_storage_only_core,
+        "Illegal kernel placement for {}. Kernels cannot be placed on storage only cores!",
+        kernel->name());
+
+    // Kernels used to implement fast dispatch can be placed on dispatch cores
+    if (not slow_dispatch and not force_slow_dispatch) {
+        const std::vector<CoreCoord>& dispatch_cores =
+            MetalContext::instance().get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
+        bool on_dispatch_core = std::any_of(
+            dispatch_cores.begin(),
+            dispatch_cores.end(),
+            [&kernel, &dispatch_core_type](const CoreCoord& dispatch_core) {
+                if (kernel->get_kernel_core_type() != dispatch_core_type) {
+                    return false;
+                }
+
+                return kernel->is_on_logical_core(dispatch_core);
+            });
+
+        TT_FATAL(
+            not on_dispatch_core,
+            "Illegal kernel placement for {}, Kernels cannot be placed on dispatch cores!",
+            kernel->name());
+    }
+};
+
 }  // namespace
 
 namespace tt::tt_metal {
@@ -144,7 +187,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
     // configuration (necessary for dispatch kernels).
     // Also account for watcher/dprint enabled in hash because they enable additional code to
     // be compiled into the kernel.
-    string compile_hash_str = fmt::format(
+    std::string compile_hash_str = fmt::format(
         "{}_{}_{}_{}",
         build_key,
         std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
@@ -372,7 +415,7 @@ KernelGroup::KernelGroup(
     uint32_t programmable_core_type_index,
     kernel_id_array_t kernel_ids,
     bool /*erisc_is_idle*/,
-    uint32_t max_local_cb_end_index,
+    uint32_t local_cb_mask,
     uint32_t min_remote_cb_start_index,
     const CoreRangeSet& new_ranges) :
     core_ranges(CoreRangeSet()) {
@@ -434,7 +477,7 @@ KernelGroup::KernelGroup(
     this->launch_msg.kernel_config.ncrisc_kernel_size16 = 0;
 
     this->launch_msg.kernel_config.exit_erisc_kernel = false;
-    this->launch_msg.kernel_config.max_local_cb_end_index = max_local_cb_end_index;
+    this->launch_msg.kernel_config.local_cb_mask = local_cb_mask;
     this->launch_msg.kernel_config.min_remote_cb_start_index = min_remote_cb_start_index;
     this->go_msg.signal = RUN_MSG_GO;
 }
@@ -554,6 +597,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
             // Start inclusive, max exclusive
             uint32_t max_local_cb_end_index = 0;
             uint32_t min_remote_cb_start_index = NUM_CIRCULAR_BUFFERS;
+            uint32_t local_cb_mask = 0;
 
             // Map from core X,Y back to the unique KernelGroup
             for (CoreRange range : kg_to_cores.second) {
@@ -569,6 +613,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                         auto local_val = per_core_local_cb_indices_.find(core);
                         if (local_val != per_core_local_cb_indices_.end() && local_val->second.any()) {
                             uint32_t used_cbs = local_val->second.to_ulong();
+                            local_cb_mask |= used_cbs;
                             max_local_cb_end_index = std::max(
                                 max_local_cb_end_index, NUM_CIRCULAR_BUFFERS - (uint32_t)__builtin_clz(used_cbs));
                             if (!logged_noncontiguous) {
@@ -643,16 +688,14 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 programmable_core_type_index,
                 max_local_cb_end_index,
                 min_remote_cb_start_index);
-            kernel_groups_[programmable_core_type_index].push_back(
-                std::make_shared<KernelGroup>(
-                    *this,
-                    programmable_core_type_index,
-                    kg_to_cores.first.kernel_ids,
-                    erisc_is_idle,
-                    max_local_cb_end_index,
-                    min_remote_cb_start_index,
-                    kg_to_cores.second)
-                );
+            kernel_groups_[programmable_core_type_index].push_back(std::make_shared<KernelGroup>(
+                *this,
+                programmable_core_type_index,
+                kg_to_cores.first.kernel_ids,
+                erisc_is_idle,
+                local_cb_mask,
+                min_remote_cb_start_index,
+                kg_to_cores.second));
             index++;
         }
     }
@@ -1087,7 +1130,6 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
             }
             const auto& binaries = KernelImpl::from(*kernel).binaries(
                 BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
-            const auto core_type = kernel->get_kernel_programmable_core_type();
             std::vector<uint32_t> dst_base_addrs;
             std::vector<uint32_t> page_offsets;
             std::vector<uint32_t> lengths;
@@ -1299,7 +1341,7 @@ void Program::generate_dispatch_commands(IDevice* device, bool use_prefetcher_ca
     auto& cached_program_command_sequences = this->get_cached_program_command_sequences();
     if (!cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
-        auto sub_device_id = this->determine_sub_device_ids(device)[0];
+        auto sub_device_id = this->determine_sub_device_ids(device).at(0);
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
@@ -1341,7 +1383,7 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
     auto& trace_cached_program_command_sequences = get_trace_cached_program_command_sequences();
     if (!trace_cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
-        auto sub_device_id = this->determine_sub_device_ids(device)[0];
+        auto sub_device_id = this->determine_sub_device_ids(device).at(0);
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
@@ -1387,56 +1429,11 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         "dependent on information that is set during device initialization.",
         this->get_id());
 
-    bool profile_kernel = getDeviceProfilerState();
     std::vector<std::shared_future<void>> events;
-    DprintServerSetProfilerState(profile_kernel);
 
-    auto sync_events = [&events] {
-        for (auto& event : events) {
-            event.get();
-        }
-    };
-
-    auto validate_kernel_placement = [&device, &force_slow_dispatch](std::shared_ptr<Kernel> kernel) {
-        // Placement rules:
-        //  Slow dispatch:
-        //      - kernels cannot be on storage only cores
-        //  Fast dispatch (tensix):
-        //      - kernels cannot be on storage only cores an
-        //      - tensix kernels cannot be on dispatch cores
-        //  Fast dispatch (ethernet):
-        //      - kernels cannot be on storage only cores
-        //      - eth kernels cannot be on idle eth cores
-        bool slow_dispatch = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
-
-        const auto& dispatch_core_config =
-            MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-        CoreType dispatch_core_type = dispatch_core_config.get_core_type();
-        const std::vector<CoreCoord>& storage_cores =
-            MetalContext::instance().get_dispatch_query_manager().get_logical_storage_cores_on_user_chips();
-        bool on_storage_only_core =  std::any_of(storage_cores.begin(), storage_cores.end(), [&kernel](const CoreCoord& storage_core) {
-            return kernel->is_on_logical_core(storage_core);
-        });
-        TT_FATAL(not on_storage_only_core, "Illegal kernel placement for {}. Kernels cannot be placed on storage only cores!", kernel->name());
-
-        // Kernels used to implement fast dispatch can be placed on dispatch cores
-        if (not slow_dispatch and not force_slow_dispatch) {
-            const std::vector<CoreCoord>& dispatch_cores =
-                MetalContext::instance().get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
-            bool on_dispatch_core = std::any_of(dispatch_cores.begin(), dispatch_cores.end(), [&kernel, &dispatch_core_type](const CoreCoord &dispatch_core) {
-                if (kernel->get_kernel_core_type() != dispatch_core_type) {
-                    return false;
-                }
-
-                return kernel->is_on_logical_core(dispatch_core);
-            });
-
-            TT_FATAL(not on_dispatch_core, "Illegal kernel placement for {}, Kernels cannot be placed on dispatch cores!", kernel->name());
-        }
-    };
     for (auto & kernels : kernels_) {
         for (auto &[id, kernel] : kernels) {
-            validate_kernel_placement(kernel);
+            validate_kernel_placement(device, force_slow_dispatch, kernel);
             launch_build_step(
                 [kernel, device, this, &build_env] {
                     JitBuildOptions build_options(
@@ -1468,22 +1465,21 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                         GenerateBinaries(device, build_options, kernel);
                         detail::HashLookup::inst().add_generated_bin(kernel_hash);
                     }
-                    while (not detail::HashLookup::inst().is_bin_generated(kernel_hash)) {
-                    }
+                    detail::HashLookup::inst().wait_for_bin_generated(kernel_hash);
 
                     Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
                 },
                 events);
         }
     }
-    sync_events();
+    sync_build_steps(events);
 
     for (auto &kernels : kernels_) {
         for (auto &[id, kernel] : kernels) {
             launch_build_step([kernel, device] { KernelImpl::from(*kernel).read_binaries(device); }, events);
         }
     }
-    sync_events();
+    sync_build_steps(events);
     if (detail::MemoryReporter::enabled()) {
         detail::MemoryReporter::inst().flush_program_memory_usage(get_id(), device);
     }
@@ -1820,6 +1816,42 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
 std::unordered_map<uint64_t, ProgramCommandSequence>&
 ProgramImpl::get_trace_cached_program_command_sequences() noexcept {
     return trace_cached_program_command_sequences_;
+}
+
+detail::ProgramCompileGroup::~ProgramCompileGroup() { program_device_map_.clear(); }
+
+void detail::ProgramCompileGroup::add_program(
+    tt::tt_metal::IDevice* device, std::unique_ptr<tt::tt_metal::Program> program) {
+    TT_FATAL(!program_device_map_.contains(device), "Program already exists in the compile group.");
+    program_device_map_[device] = std::move(program);
+}
+
+void detail::ProgramCompileGroup::compile_all(bool force_slow_dispatch) {
+    std::vector<std::shared_future<void>> events;
+    for (auto& [device, program] : program_device_map_) {
+        auto pgm = program.get();
+        launch_build_step([device, pgm, force_slow_dispatch]() { pgm->compile(device, force_slow_dispatch); }, events);
+    }
+    sync_build_steps(events);
+}
+
+void detail::ProgramCompileGroup::write_runtime_args(bool force_slow_dispatch) {
+    for (auto& [device, program] : program_device_map_) {
+        detail::WriteRuntimeArgsToDevice(device, *program, force_slow_dispatch);
+    }
+}
+
+std::unique_ptr<Program> detail::ProgramCompileGroup::remove_program(tt::tt_metal::IDevice* device) {
+    TT_FATAL(program_device_map_.contains(device), "Program not found in the compile group.");
+    std::unique_ptr<Program> program = std::move(program_device_map_[device]);
+    program_device_map_.erase(device);
+    return program;
+}
+
+void detail::ProgramCompileGroup::clear() { program_device_map_.clear(); }
+
+bool detail::ProgramCompileGroup::contains(tt::tt_metal::IDevice* device) {
+    return program_device_map_.contains(device);
 }
 
 }  // namespace tt::tt_metal

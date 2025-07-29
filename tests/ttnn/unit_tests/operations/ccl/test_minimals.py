@@ -8,7 +8,7 @@ from loguru import logger
 import ttnn
 import os
 
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
+from conftest import is_6u
 from models.demos.llama3_subdevices.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
@@ -165,13 +165,19 @@ def run_all_gather_impl(
     for i in range(num_iters):
         output_tensor = torch.rand(output_shape).bfloat16()
         output_tensor_goldens_list.append(output_tensor)
-        input_tensors = torch.chunk(output_tensor, num_devices, dim)
-        tt_input_tensors = []
-        for i, t in enumerate(input_tensors):
-            tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout))
-            logger.info(f"using device {mesh_device.get_device_ids()[i]}")
-
-        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, input_mem_config)
+        input_tensor_mesh = ttnn.from_torch(
+            output_tensor,
+            device=mesh_device,
+            layout=layout,
+            dtype=input_dtype,
+            memory_config=input_mem_config,
+            mesh_mapper=ttnn.create_mesh_mapper(
+                mesh_device,
+                ttnn.MeshMapperConfig(
+                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(dim)], ttnn.MeshShape(1, num_devices)
+                ),
+            ),
+        )
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
@@ -233,6 +239,7 @@ def run_all_gather_impl(
 
 
 # Enumerate the post-commit cases explicitly
+@pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
@@ -333,6 +340,7 @@ def test_all_gather_only(
 
 
 # Enumerate the post-commit cases explicitly
+@pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
@@ -407,6 +415,7 @@ def test_tg_trace_rms_fuse(
 
 
 # Enumerate the post-commit cases explicitly
+@pytest.mark.skipif(not is_6u(), reason="This test is only for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
@@ -452,7 +461,6 @@ def test_6u_trace_rms_fuse(
     num_links,
     num_iters,
     warmup_iters,
-    use_program_cache,
     function_level_defaults,
     input_shard_grid,
     output_shard_grid,
@@ -461,15 +469,12 @@ def test_6u_trace_rms_fuse(
     use_new_version,
     fused_add,
 ):
-    if not is_RING_6U:
-        pytest.skip("This test is only for 6U TG devices")
     profiler = BenchmarkProfiler()
     run_rms_trace(
         mesh_device,
         num_devices,
         elements_per_batch,
         num_links,
-        use_program_cache,
         function_level_defaults,
         input_shard_grid,
         output_shard_grid,
@@ -485,6 +490,7 @@ def test_6u_trace_rms_fuse(
 
 
 # Enumerate the post-commit cases explicitly
+@pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, elements_per_batch, input_shard_grid, output_shard_grid",
@@ -560,6 +566,7 @@ def test_rms_fuse(
     )
 
 
+@pytest.mark.skipif(is_6u(), reason="This test is not for 6U devices")
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
     "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
@@ -763,8 +770,6 @@ def test_concat_fuse_6u(
     tensor_mem_layout,
     trace_mode,
 ):
-    if not is_RING_6U:
-        pytest.skip("This test is only for 6U TG devices")
     profiler = BenchmarkProfiler()
     run_concat_fuse_impl(
         mesh_device,

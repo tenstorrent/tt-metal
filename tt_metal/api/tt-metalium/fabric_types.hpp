@@ -6,7 +6,7 @@
 
 #include <tt_stl/strong_type.hpp>
 
-namespace tt::tt_metal {
+namespace tt::tt_fabric {
 
 enum class FabricConfig : uint32_t {
     DISABLED = 0,

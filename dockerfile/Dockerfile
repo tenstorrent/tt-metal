@@ -11,13 +11,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Install runtime deps
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
-RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker --mode runtime
+RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker
 
 #############################################################
 
 FROM base AS ci-build
-
-RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker --mode build
 
 # Install ccache from upstream; Apt's version for 20.04 predates remote_storage support
 RUN mkdir -p /usr/local/bin && wget -O /tmp/ccache.tar.xz https://github.com/ccache/ccache/releases/download/v4.10.2/ccache-4.10.2-linux-x86_64.tar.xz && \
@@ -46,6 +44,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bc \
     libclang-17-dev \
     clang-tidy-17 \
+    clang-tidy-20 \
     curl \
     dialog \
     file \
@@ -138,6 +137,11 @@ RUN [ "$UBUNTU_VERSION" != "24.04" ] \
     && make -j$(nproc) \
     && make install \
     && rm -rf /tmp/gdb-build
+
+COPY /dockerfile/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 #############################################################
 

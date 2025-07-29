@@ -13,6 +13,7 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/util.hpp>
 #include <algorithm>
 #include <array>
@@ -408,6 +409,7 @@ create_programs(
     // in0 reader
     for (uint32_t i = 0; i < num_receivers; ++i) {
         std::vector<uint32_t> in0_reader_rt_args;
+        in0_reader_rt_args.reserve(num_layers);
         for (uint32_t i = 0; i < num_layers; ++i) {
             in0_reader_rt_args.push_back(num_blocks);
         }

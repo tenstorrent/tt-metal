@@ -207,12 +207,14 @@ MPIContext::MPIContext(MPI_Comm comm) : comm_(comm) {
     MPI_CHECK(MPI_Comm_group(comm_, &group_));
     MPI_CHECK(MPI_Comm_rank(comm_, &rank_));
     MPI_CHECK(MPI_Comm_size(comm_, &size_));
+    id_ = DistributedContext::generate_unique_id();
 }
 
 MPIContext::MPIContext(MPI_Comm comm, MPI_Group group) : comm_(comm), group_(group) {
     MPI_Comm_set_errhandler(comm_, MPI_ERRORS_RETURN);  // don't abort on error
     MPI_CHECK(MPI_Comm_rank(comm_, &rank_));
     MPI_CHECK(MPI_Comm_size(comm_, &size_));
+    id_ = DistributedContext::generate_unique_id();
 }
 
 Rank MPIContext::rank() const { return Rank(rank_); }
@@ -225,6 +227,11 @@ void MPIContext::barrier() const { MPI_CHECK(MPI_Barrier(comm_)); }
 void MPIContext::send(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
     check_size_fits_int(buf.size());
     MPI_CHECK(MPI_Send(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_));
+}
+
+void MPIContext::ssend(tt::stl::Span<std::byte> buf, Rank dest, Tag tag) const {
+    check_size_fits_int(buf.size());
+    MPI_CHECK(MPI_Ssend(buf.data(), static_cast<int>(buf.size()), MPI_CHAR, *dest, *tag, comm_));
 }
 
 void MPIContext::recv(tt::stl::Span<std::byte> buf, Rank src, Tag tag) const {
@@ -527,6 +534,14 @@ bool MPIContext::is_revoked() {
     MPI_Comm_test_inter(comm_, &flag);
     return flag != 0;
 #endif
+}
+
+std::size_t MPIContext::snoop_incoming_msg_size(Rank source, Tag tag) const {
+    int size_bytes = 0;
+    MPI_Status status;
+    MPI_CHECK(MPI_Probe(*source, *tag, comm_, &status));
+    MPI_CHECK(MPI_Get_count(&status, MPI_CHAR, &size_bytes));
+    return static_cast<std::size_t>(size_bytes);
 }
 
 MPIContext::~MPIContext() {

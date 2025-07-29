@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-
 #include "typecast_program_factory.hpp"
 
 #include <tt-metalium/work_split.hpp>
@@ -23,7 +21,6 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
     const auto& input = tensor_args.input;
     const auto& input_dtype = args.input_dtype;
     const auto& output_dtype = args.output_dtype;
-    const auto& sub_core_grids = args.sub_core_grids;
 
     tt::tt_metal::Program program{};
 
@@ -37,7 +34,6 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
     tt::tt_metal::IDevice* device = input.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
@@ -47,7 +43,7 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_2;
     uint32_t num_output_tiles = 2;
@@ -55,7 +51,7 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
         tt::tt_metal::CircularBufferConfig(
             num_output_tiles * single_tile_size_output, {{output_cb_index, cb_data_format_output}})
             .set_page_size(output_cb_index, single_tile_size_output);
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
@@ -90,7 +86,7 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
 
     bool math_approx_mode = false;
 
-    std::map<string, string> unary_defines;
+    std::map<std::string, std::string> unary_defines;
     unary_defines["TYPECAST_LLK"] = fmt::format(
         "typecast_tile<{0}u, {1}u>",
         (uint32_t)datatype_to_dataformat_converter(input_dtype),
@@ -98,7 +94,7 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
 
     auto path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
-    auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         path,
         core_group_1,
@@ -118,7 +114,7 @@ TypecastProgramFactory::cached_program_t TypecastProgramFactory::create(
             src0_cb_index,
             output_cb_index};
 
-        auto eltwise_unary_kernel_group_2_id = tt::tt_metal::CreateKernel(
+        tt::tt_metal::CreateKernel(
             program,
             path,
             core_group_2,
@@ -171,7 +167,7 @@ void TypecastProgramFactory::override_runtime_arguments(
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
 
-    for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
+    for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         {
@@ -206,8 +202,6 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
     tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t single_tile_size_output = tt::tt_metal::detail::TileSize(cb_data_format_output);
 
-    tt::tt_metal::IDevice* device = input.device();
-
     uint32_t ntiles = input.physical_volume() / tt::constants::TILE_HW;
     uint32_t ncores = sub_core_grids->num_cores();
 
@@ -240,7 +234,7 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_2;
     uint32_t num_output_tiles = ntiles_per_block * 2;
@@ -248,7 +242,7 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
         tt::tt_metal::CircularBufferConfig(
             num_output_tiles * single_tile_size_output, {{output_cb_index, cb_data_format_output}})
             .set_page_size(output_cb_index, single_tile_size_output);
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
@@ -283,7 +277,7 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
 
     bool math_approx_mode = false;
 
-    std::map<string, string> unary_defines;
+    std::map<std::string, std::string> unary_defines;
     unary_defines["TYPECAST_LLK"] = fmt::format(
         "typecast_tile<{0}u, {1}u>",
         (uint32_t)datatype_to_dataformat_converter(input_dtype),
@@ -291,7 +285,7 @@ TypecastSubgridProgramFactory::cached_program_t TypecastSubgridProgramFactory::c
 
     auto path = "ttnn/cpp/ttnn/operations/copy/typecast/device/kernels/compute/eltwise_typecast.cpp";
 
-    auto typecast_compute_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         path,
         all_cores,

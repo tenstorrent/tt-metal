@@ -10,8 +10,19 @@ set_target_properties(
             FALSE
 )
 
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(GLOB_RECURSE kernels moreh_dot/device/kernels/*)
 target_sources(
     ttnn_op_moreh
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            ${kernels}
+            moreh_sum/device/moreh_sum_w_impl_kernels/moreh_sum_w.cpp
+            moreh_sum/device/moreh_sum_w_impl_kernels/reader_moreh_sum_w.cpp
+            moreh_sum/device/moreh_sum_w_impl_kernels/writer_moreh_sum_w.cpp
     PRIVATE
         moreh_abs_pow/device/moreh_abs_pow_device_operation.cpp
         moreh_abs_pow/device/moreh_abs_pow_program_factory.cpp
@@ -27,8 +38,6 @@ target_sources(
         moreh_arange/moreh_arange.cpp
         moreh_bmm_backward/moreh_bmm_backward.cpp
         moreh_bmm/moreh_bmm.cpp
-        moreh_cumsum/device/moreh_cumsum_device_operation.cpp
-        moreh_cumsum/device/moreh_cumsum_program_factory.cpp
         moreh_cumsum/moreh_cumsum.cpp
         moreh_dot_backward/device/moreh_dot_backward_device_operation.cpp
         moreh_dot_backward/device/moreh_dot_backward_program_factory.cpp
@@ -141,19 +150,6 @@ target_sources(
         moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/moreh_clip_grad_norm_step3_device_operation.cpp
         moreh_clip_grad_norm/moreh_clip_grad_norm_step3/device/moreh_clip_grad_norm_step3_program_factory.cpp
         moreh_clip_grad_norm/moreh_clip_grad_norm.cpp
-)
-file(GLOB_RECURSE kernels moreh_dot/device/kernels/*)
-target_sources(
-    ttnn_op_moreh
-    PUBLIC
-        FILE_SET kernels
-        TYPE HEADERS
-        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES
-            ${kernels}
-            moreh_sum/device/moreh_sum_w_impl_kernels/moreh_sum_w.cpp
-            moreh_sum/device/moreh_sum_w_impl_kernels/reader_moreh_sum_w.cpp
-            moreh_sum/device/moreh_sum_w_impl_kernels/writer_moreh_sum_w.cpp
 )
 
 target_include_directories(ttnn_op_moreh PRIVATE ${FixmeOpIncDirs})

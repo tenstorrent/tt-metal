@@ -13,6 +13,17 @@ from safetensors.torch import load_file as safetensors_load_file
 from tqdm import tqdm
 
 
+def _get_known_prefixes_mapping():
+    return {
+        # Llama Vision
+        "text_model.": "",
+        "vision_model.": "",
+        # Gemma3
+        "model.language_model.": "model.",
+        "model.vision_tower.": "model.",
+    }
+
+
 # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
 def load_hf_state_dict(ckpt_dir):
     # First check if index file exists
@@ -43,19 +54,18 @@ def load_hf_state_dict(ckpt_dir):
 
 
 def standardize_hf_keys(state_dict):
-    if "model.embed_tokens.weight" in state_dict and "lm_head.weight" not in state_dict:
-        # Assume tied to the embeddings if not present
-        state_dict["lm_head.weight"] = state_dict["model.embed_tokens.weight"]
+    key_meta = "lm_head.weight"
+    key_hf = "model.embed_tokens.weight"
 
-    # Standardize keys used in vision parts of Qwen2.5-VL
-    replace_whole_name = lambda pattern, repl: lambda s: re.sub(rf"(^|\.)({pattern})($|\.)", rf"\1{repl}\3", s)
-    output = {}
-    for k, v in state_dict.items():
-        k = replace_whole_name("qkv", "qkv_proj")(k)
-        k = replace_whole_name("proj", "o_proj")(k)
-        k = replace_whole_name("attn", "self_attn")(k)
-        output[k] = v
-    return output
+    # Check if the key_meta exists with any known prefix
+    if not any(f"{prefix}{key_meta}" in state_dict for prefix in _get_known_prefixes_mapping().keys()):
+        # Assume tied to the embeddings if not present
+        for prefix in _get_known_prefixes_mapping().keys():
+            if f"{prefix}{key_hf}" in state_dict:
+                state_dict[f"{prefix}{key_meta}"] = state_dict[f"{prefix}{key_hf}"]
+                break
+
+    return state_dict
 
 
 def convert_hf_to_meta(state_dict, head_dim):
@@ -136,6 +146,10 @@ def map_hf_to_meta_keys(loaded_weights):
 
     meta_state_dict = {}
     for key, tensor in loaded_weights.items():
+        # Remove known prefix if present
+        prefix = next((p for p in _get_known_prefixes_mapping().keys() if key.startswith(p)), "")
+        key = key.replace(prefix, _get_known_prefixes_mapping().get(prefix, ""), 1)
+
         if key in hf_to_meta:
             # Direct match for top-level keys
             meta_state_dict[hf_to_meta[key]] = tensor
@@ -153,8 +167,9 @@ def map_hf_to_meta_keys(loaded_weights):
 def load_meta_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):
     checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
     assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
-    is_chunked = "layers_" in str(checkpoints[0])
+    is_chunked = any(ckpt.stem.startswith("layers_") for ckpt in checkpoints)
     if is_chunked:
+        checkpoints = [ckpt_name for ckpt_name in checkpoints if ckpt_name.stem.startswith("layers_")]
         checkpoint = load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx)
     else:
         checkpoint = load_sharded_checkpoints(checkpoints, n_layers)

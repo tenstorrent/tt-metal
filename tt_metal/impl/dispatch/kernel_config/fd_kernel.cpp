@@ -9,20 +9,13 @@
 #include <variant>
 
 #include "data_types.hpp"
-#include "demux.hpp"
 #include "device.hpp"
 #include "dispatch.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
-#include "dprint_server.hpp"
-#include "eth_router.hpp"
-#include "eth_tunneler.hpp"
-#include "fabric_types.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "kernel_types.hpp"
-#include "mux.hpp"
 #include "prefetch.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/tt_core_coordinates.h>
@@ -67,7 +60,7 @@ chip_id_t FDKernel::GetDownstreamDeviceId(chip_id_t device_id, int tunnel) {
             }
         }
     }
-    TT_ASSERT(false, "Could not find downstream device of Device {}", device_id);
+    TT_FATAL(false, "Could not find downstream device of Device {}", device_id);
     return device_id;
 }
 
@@ -108,16 +101,6 @@ FDKernel* FDKernel::Generate(
         case DISPATCH_D:
             return new DispatchKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false, true);
         case DISPATCH_S: return new DispatchSKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection);
-        case MUX_D: return new MuxKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection);
-        case DEMUX: return new DemuxKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection);
-        case US_TUNNELER_REMOTE:
-            return new EthTunnelerKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true);
-        case US_TUNNELER_LOCAL:
-            return new EthTunnelerKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
-        case PACKET_ROUTER_MUX:
-            return new EthRouterKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, true);
-        case PACKET_ROUTER_DEMUX:
-            return new EthRouterKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection, false);
         case FABRIC_MUX:
             return new tt::tt_metal::RelayMux(
                 node_id, device_id, servicing_device_id, cq_id, noc_selection, false, tunnel_index);
@@ -147,16 +130,16 @@ CoreCoord FDKernel::get_virtual_core_coord(const tt_cxy_pair& logical_cxy, const
 }
 
 KernelHandle FDKernel::configure_kernel_variant(
-    const string& path,
+    const std::string& path,
     const std::vector<uint32_t>& compile_args,
-    std::map<string, string> defines_in,
+    std::map<std::string, std::string> defines_in,
     bool is_active_eth_core,
     bool send_to_brisc,
     bool force_watcher_no_inline,
     KernelBuildOptLevel opt_level) {
     uint32_t programmable_core_type_index = get_programmable_core_type_index(GetCoreType(), is_active_eth_core);
 
-    std::map<string, string> defines = {
+    std::map<std::string, std::string> defines = {
         {"DISPATCH_KERNEL", "1"},
         {"FD_CORE_TYPE", std::to_string(programmable_core_type_index)},
     };
@@ -167,10 +150,16 @@ KernelHandle FDKernel::configure_kernel_variant(
     if (rt_options.watcher_dispatch_disabled()) {
         defines["FORCE_WATCHER_OFF"] = "1";
     }
-    if (!DPrintServerReadsDispatchCores(device_->id())) {
+    if (!(MetalContext::instance().dprint_server() and
+          MetalContext::instance().dprint_server()->reads_dispatch_cores(device_->id()))) {
         defines["FORCE_DPRINT_OFF"] = "1";
     }
     defines.insert(defines_in.begin(), defines_in.end());
+    if (MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+        // TG specific fabric routing
+        // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
+        defines["GALAXY_CLUSTER"] = "1";
+    }
 
     if (GetCoreType() == CoreType::WORKER) {
         return tt::tt_metal::CreateKernel(

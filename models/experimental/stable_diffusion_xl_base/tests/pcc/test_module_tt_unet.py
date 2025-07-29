@@ -75,24 +75,31 @@ def run_unet_model(
     encoder_shape,
     temb_shape,
     time_ids_shape,
-    conv_weights_dtype,
-    transformer_weights_dtype,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
     iterations=1,
 ):
+    model_location = model_location_generator(
+        "stable-diffusion-xl-base-1.0/unet", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
     unet = UNet2DConditionModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="unet"
+        "stabilityai/stable-diffusion-xl-base-1.0" if not is_ci_v2_env else model_location,
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        local_files_only=is_ci_env or is_ci_v2_env,
+        subfolder="unet" if not is_ci_v2_env else None,
     )
     unet.eval()
     state_dict = unet.state_dict()
 
     torch_unet = unet
 
-    model_config = ModelOptimisations(conv_w_dtype=conv_weights_dtype)
+    model_config = ModelOptimisations()
     tt_unet = TtUNet2DConditionModel(
         device,
         state_dict,
         "unet",
-        transformer_weights_dtype=transformer_weights_dtype,
         model_config=model_config,
     )
     torch_input_tensor = torch_random(input_shape, -0.1, 0.1, dtype=torch.float32)
@@ -142,7 +149,7 @@ def run_unet_model(
 
     ttnn.DumpDeviceProfiler(device)
 
-    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.995)
+    _, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
     logger.info(f"PCC of first iteration is: {pcc_message}")
 
     for _ in range(iterations - 1):
@@ -180,8 +187,6 @@ def run_unet_model(
         ((1, 4, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6)),
     ],
 )
-@pytest.mark.parametrize("conv_weights_dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("transformer_weights_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_unet(
     device,
@@ -190,8 +195,9 @@ def test_unet(
     encoder_shape,
     temb_shape,
     time_ids_shape,
-    conv_weights_dtype,
-    transformer_weights_dtype,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
     reset_seeds,
 ):
     run_unet_model(
@@ -201,6 +207,7 @@ def test_unet(
         encoder_shape,
         temb_shape,
         time_ids_shape,
-        conv_weights_dtype,
-        transformer_weights_dtype,
+        is_ci_env,
+        is_ci_v2_env,
+        model_location_generator,
     )

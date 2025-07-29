@@ -43,7 +43,10 @@ class IDevice;
 enum class DataMovementProcessor;
 class KernelImpl;
 
-constexpr uint32_t max_runtime_args = 256;
+// 341 = (4096/(3 * sizeof(uint32_t)), where
+// - 4096 - packet size in dispatch
+// - 3 - number of kernels per tensix
+constexpr uint32_t max_runtime_args = 341;
 
 using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
 struct KernelSource {
@@ -70,7 +73,7 @@ struct KernelSource {
 
 class Kernel {
 public:
-    virtual ~Kernel() {}
+    virtual ~Kernel() = default;
 
     std::string name() const;
 
@@ -109,7 +112,7 @@ public:
 
     std::string compute_hash() const;
 
-    virtual const string& get_full_kernel_name() const = 0;
+    virtual const std::string& get_full_kernel_name() const = 0;
 
     void validate_runtime_args_size(size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core);
     void set_runtime_args(const CoreCoord &logical_core, stl::Span<const uint32_t> runtime_args);
@@ -119,7 +122,7 @@ public:
 
     HalProgrammableCoreType get_kernel_programmable_core_type() const;
     CoreType get_kernel_core_type() const;
-    void set_full_name(const string& s) { kernel_full_name_ = s; }
+    void set_full_name(const std::string& s) { kernel_full_name_ = s; }
     void add_defines(const std::map<std::string, std::string>& defines);
     virtual uint32_t get_binary_packed_size(IDevice* device, int index) const = 0;
 

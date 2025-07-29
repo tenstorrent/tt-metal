@@ -61,6 +61,8 @@ import ttnn
         ttnn.logaddexp2,
         ttnn.squared_difference,
         ttnn.bias_gelu,
+        ttnn.addalpha,
+        ttnn.subalpha,
     ],
 )
 def test_ND_subtile_bcast(device, shapes, ttnn_fn):
@@ -73,9 +75,6 @@ def test_ND_subtile_bcast(device, shapes, ttnn_fn):
     else:
         torch_input_tensor_b = torch.rand(shapes[1], dtype=torch.bfloat16) * 100 - 50
 
-    golden_fn = ttnn.get_golden_function(ttnn_fn)
-    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
-
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
@@ -83,7 +82,16 @@ def test_ND_subtile_bcast(device, shapes, ttnn_fn):
         torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    output_tensor = ttnn_fn(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=False)
+    golden_fn = ttnn.get_golden_function(ttnn_fn)
+
+    if ttnn_fn in (ttnn.addalpha, ttnn.subalpha):
+        alpha = random.uniform(-10.0, 10.0)
+        torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b, alpha)
+        output_tensor = ttnn_fn(input_tensor_a, input_tensor_b, alpha, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    else:
+        torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
+        output_tensor = ttnn_fn(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None)
+
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
@@ -137,7 +145,7 @@ def test_ND_scalar_bcast(device, shapes, ttnn_fn):
     )
     input_tensor_b = torch_input_tensor_b
 
-    output_tensor = ttnn_fn(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=False)
+    output_tensor = ttnn_fn(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988

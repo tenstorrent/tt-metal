@@ -52,6 +52,33 @@ void tensor_mem_config_module_types(py::module& m_tensor) {
         .value("L1_SMALL", BufferType::L1_SMALL)
         .value("TRACE", BufferType::TRACE);
 
+    py::enum_<TensorSpec::ShardShapeAlignment>(m_tensor, "ShardShapeAlignment")
+        .value(
+            "NONE",
+            TensorSpec::ShardShapeAlignment::NONE,
+            "No shard shape alignment will be performed. If the shard shape is not following the alignment "
+            "requirements, an exception will be thrown.")
+        .value(
+            "REQUIRED",
+            TensorSpec::ShardShapeAlignment::REQUIRED,
+            "Shard shape will be automatically aligned to the minimum required alignment. The Required alignment may "
+            "cause higher memory usage and lower read/write performance for some use cases.")
+        .value(
+            "RECOMMENDED",
+            TensorSpec::ShardShapeAlignment::RECOMMENDED,
+            "Shard shape will be automatically aligned to the recommended alignment, trying to achieve optimal "
+            "performance and memory usage.");
+
+    py::enum_<ShardDistributionStrategy>(m_tensor, "ShardDistributionStrategy")
+        .value(
+            "ROUND_ROBIN_1D",
+            ShardDistributionStrategy::ROUND_ROBIN_1D,
+            "Distribute each shard to each of the cores in a linearized list in a round-robin manner.")
+        .value(
+            "GRID_2D",
+            ShardDistributionStrategy::GRID_2D,
+            "Distribute a 2D grid of shards to a 2D grid of cores with one to one mapping.");
+
     tt_serializable_class<tt::tt_metal::CoreCoord>(m_tensor, "CoreCoord", R"doc(
         Class defining core coordinate
     )doc");
@@ -136,9 +163,183 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def_readonly("transpose_of_faces", &Tile::transpose_of_faces);
 
     auto pyTensorSpec = static_cast<py::class_<TensorSpec>>(m_tensor.attr("TensorSpec"));
-    pyTensorSpec.def("shape", &TensorSpec::logical_shape, "Logical shape of a tensor")
-        .def("layout", &TensorSpec::layout, "Layout of a tensor")
-        .def("dtype", &TensorSpec::data_type, "Dtype of a tensor");
+    pyTensorSpec
+        .def(
+            py::init<>([](const ttnn::Shape& shape,
+                          DataType dtype,
+                          Layout layout,
+                          BufferType buffer_type,
+                          const std::optional<Tile>& tile) {
+                return TensorSpec(
+                    shape,
+                    TensorLayout(
+                        dtype, PageConfig(layout, tile), MemoryConfig(TensorMemoryLayout::INTERLEAVED, buffer_type)));
+            }),
+            py::arg("shape"),
+            py::arg("dtype"),
+            py::arg("layout"),
+            py::arg("buffer_type") = BufferType::DRAM,
+            py::arg("tile") = std::nullopt,
+            R"doc(
+                Create TensorSpec class.
+                This constructor is used to create TensorSpec for tensors that are not sharded.
+            )doc")
+        .def(
+            py::init<>([](const ttnn::Shape& shape,
+                          DataType dtype,
+                          Layout layout,
+                          TensorMemoryLayout memory_layout,
+                          const std::optional<ShardSpec>& shard_spec,
+                          BufferType buffer_type,
+                          const std::optional<Tile>& tile) {
+                return TensorSpec(
+                    shape,
+                    TensorLayout(
+                        dtype, PageConfig(layout, tile), MemoryConfig(memory_layout, buffer_type, shard_spec)));
+            }),
+            py::arg("shape"),
+            py::arg("dtype"),
+            py::arg("layout"),
+            py::arg("memory_layout"),
+            py::arg("shard_spec") = std::nullopt,
+            py::arg("buffer_type") = BufferType::DRAM,
+            py::arg("tile") = std::nullopt,
+            R"doc(
+                Create TensorSpec class.
+                This constructor is used to create TensorSpec for tensors that are sharded.
+            )doc")
+        .def(
+            py::init<>([](const ttnn::Shape& shape,
+                          DataType dtype,
+                          Layout layout,
+                          const NdShardSpec& nd_shard_spec,
+                          BufferType buffer_type,
+                          const std::optional<Tile>& tile) {
+                return TensorSpec(
+                    shape, TensorLayout(dtype, PageConfig(layout, tile), MemoryConfig(buffer_type, nd_shard_spec)));
+            }),
+            py::arg("shape"),
+            py::arg("dtype"),
+            py::arg("layout"),
+            py::arg("nd_shard_spec"),
+            py::arg("buffer_type") = BufferType::DRAM,
+            py::arg("tile") = std::nullopt,
+            R"doc(
+                Create TensorSpec class.
+                This constructor is used to create TensorSpec for ND sharded tensors.
+                Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
+            )doc")
+        .def(
+            "sharded_across_dims",
+            [](const TensorSpec& self,
+               const std::vector<int32_t>& dims,
+               CoreRangeSet grid,
+               ShardOrientation orientation) {
+                return self.sharded_across_dims(tt::stl::Span<const int32_t>(dims), std::move(grid), orientation);
+            },
+            py::arg("dims"),
+            py::arg("grid"),
+            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
+            R"doc(
+                Shards TensorSpec across the specified dimensions.
+                This would result in the shard shape to be minimal (typically 1 or tile size) in the sharded dimensions.
+                Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
+            )doc")
+        .def(
+            "sharded_across_dims_except",
+            [](const TensorSpec& self,
+               const std::vector<int32_t>& dims,
+               CoreRangeSet grid,
+               ShardOrientation orientation) {
+                return self.sharded_across_dims_except(
+                    tt::stl::Span<const int32_t>(dims), std::move(grid), orientation);
+            },
+            py::arg("dims"),
+            py::arg("grid"),
+            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
+            R"doc(
+                Shards TensorSpec across all dimensions except for the specified ones.
+                This would result in the shard shape to be minimal (typically 1 or tile size) in all dimensions except for the specified ones.
+                Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
+            )doc")
+        .def(
+            "height_sharded",
+            &TensorSpec::height_sharded,
+            py::arg("grid"),
+            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
+            R"doc(
+                Performs 2D height sharding for TensorSpec.
+                This flattens the tensor into a 2D shape and splits it along the height to achieve as close to equal distribution as possible, while maintaining just 1 shard per core.
+            )doc")
+        .def(
+            "width_sharded",
+            &TensorSpec::width_sharded,
+            py::arg("grid"),
+            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
+            R"doc(
+                Performs 2D width sharding for TensorSpec.
+                This flattens the tensor into a 2D shape and splits it along the width to achieve as close to equal distribution as possible, while maintaining just 1 shard per core.
+            )doc")
+        .def(
+            "block_sharded",
+            &TensorSpec::block_sharded,
+            py::arg("grid"),
+            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
+            R"doc(
+                Performs 2D block sharding for TensorSpec.
+                This flattens the tensor into a 2D shape and splits it into 2D contiguous blocks, putting each block onto the corresponding core in the 2D grid.
+            )doc")
+        .def(
+            "block_sharded",
+            [](const TensorSpec& self, const CoreRangeSet& grid, ShardOrientation orientation) {
+                TT_FATAL(grid.ranges().size() == 1, "Block sharding requires a single CoreRange");
+                return self.block_sharded(grid.ranges()[0], orientation);
+            },
+            py::arg("grid"),
+            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
+            R"doc(
+                Performs 2D block sharding for TensorSpec.
+                This flattens the tensor into a 2D shape and splits it into 2D contiguous blocks, putting each block onto the corresponding core in the 2D grid.
+            )doc")
+        .def(
+            "sharded",
+            [](const TensorSpec& self,
+               const Shape& shard_shape,
+               const CoreRangeSet& grid,
+               TensorSpec::ShardShapeAlignment shard_alignment,
+               ShardOrientation orientation,
+               ShardDistributionStrategy shard_distribution_strategy) {
+                return self.sharded(shard_shape, grid, shard_alignment, orientation, shard_distribution_strategy);
+            },
+            py::arg("shard_shape"),
+            py::arg("grid"),
+            py::arg("shard_alignment") = TensorSpec::ShardShapeAlignment::RECOMMENDED,
+            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
+            py::arg("shard_distribution_strategy") = ShardDistributionStrategy::ROUND_ROBIN_1D,
+            R"doc(
+                Performs arbitrary sharding for TensorSpec using the specified shard shape, grid, shard shape alignment, and other optional parameters.
+                Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
+            )doc")
+        .def(
+            "sharded",
+            [](const TensorSpec& self,
+               const NdShardSpec& nd_shard_spec,
+               TensorSpec::ShardShapeAlignment shard_alignment) {
+                return self.sharded(nd_shard_spec, shard_alignment);
+            },
+            py::arg("nd_shard_spec"),
+            py::arg("shard_alignment") = TensorSpec::ShardShapeAlignment::RECOMMENDED,
+            R"doc(
+                Performs arbitrary sharding for TensorSpec using the specified shard spec and shard shape alignment.
+                Currently, the support for ND sharding is experimental and may not work with all of the tensor operations.
+            )doc")
+        .def_property_readonly("shape", &TensorSpec::logical_shape, "Logical shape of a tensor")
+        .def_property_readonly("layout", &TensorSpec::layout, "Layout of a tensor")
+        .def_property_readonly("dtype", &TensorSpec::data_type, "Dtype of a tensor")
+        .def_property_readonly("tile", &TensorSpec::tile, "Tile of a tensor")
+        .def_property_readonly("memory_config", &TensorSpec::memory_config, "Memory config of a tensor")
+        .def(py::self == py::self)
+        .def(py::self != py::self);
 
     auto pyMemoryConfig = static_cast<py::class_<MemoryConfig>>(m_tensor.attr("MemoryConfig"));
     pyMemoryConfig
@@ -271,13 +472,19 @@ void tensor_mem_config_module(py::module& m_tensor) {
         .def(
             py::init<>([](const ttnn::Shape& shard_shape,
                           const CoreRangeSet& grid,
-                          const ShardOrientation& orientation) { return NdShardSpec(shard_shape, grid, orientation); }),
+                          const ShardOrientation& orientation,
+                          ShardDistributionStrategy shard_distribution_strategy) {
+                return NdShardSpec(shard_shape, grid, orientation, shard_distribution_strategy);
+            }),
             py::arg("shard_shape"),
             py::arg("grid"),
-            py::arg("orientation") = ShardOrientation::ROW_MAJOR)
+            py::arg("orientation") = ShardOrientation::ROW_MAJOR,
+            py::arg("shard_distribution_strategy") = ShardDistributionStrategy::ROUND_ROBIN_1D)
         .def_readwrite("shard_shape", &NdShardSpec::shard_shape, "Shape of shard.")
         .def_readwrite("grid", &NdShardSpec::grid, "Grid to layout shards.")
         .def_readwrite("orientation", &NdShardSpec::orientation, "Orientation of cores to distribute shards")
+        .def_readwrite(
+            "shard_distribution_strategy", &NdShardSpec::shard_distribution_strategy, "Strategy to distribute shards")
         .def(
             "num_cores", [](const NdShardSpec& self) { return self.grid.num_cores(); }, "Number of cores")
         .def(py::self == py::self)

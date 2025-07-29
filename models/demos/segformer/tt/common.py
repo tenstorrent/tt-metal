@@ -39,7 +39,6 @@ class Conv:
 
     def __call__(self, device, input_tensor):
         conv_config = ttnn.Conv2dConfig(
-            dtype=self.dtype,
             weights_dtype=ttnn.bfloat16,
             activation=self.activation,
             shard_layout=self.shard_layout,
@@ -83,12 +82,14 @@ class Conv:
                 input_layout=input_tensor.get_layout(),
                 has_bias=True,
                 **conv_kwargs,
+                input_dtype=self.dtype,
             )
             self.bias = ttnn.prepare_conv_bias(
                 bias_tensor=self.bias,
                 input_memory_config=input_tensor.memory_config(),
                 input_layout=input_tensor.get_layout(),
                 **conv_kwargs,
+                input_dtype=self.dtype,
             )
             self.weights = ttnn.to_device(self.weights, device)
             self.bias = ttnn.to_device(self.bias, device)
@@ -101,6 +102,7 @@ class Conv:
             compute_config=compute_config,
             return_output_dim=True,
             return_weights_and_bias=False,
+            dtype=self.dtype,
         )
 
         return output_tensor, _out_height, _out_width

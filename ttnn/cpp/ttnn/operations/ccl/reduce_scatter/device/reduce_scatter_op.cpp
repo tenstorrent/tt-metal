@@ -160,7 +160,7 @@ Tensor reduce_scatter_impl(
     TT_FATAL(
         topology == ttnn::ccl::Topology::Linear,
         "This all_gather API with cluster_axis is currently supported only for the Linear topology");
-    const auto mesh_view = mesh_device.get_view();
+    const auto& mesh_view = mesh_device.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     int16_t rank = input_tensor.logical_shape().rank();

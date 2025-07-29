@@ -29,6 +29,7 @@ class TtResnetBlock2D(nn.Module):
         super().__init__()
 
         self.device = device
+        self.module_path = module_path
         self.split_conv = split_in > 1 or split_out > 1
         self.split_in = split_in
         self.split_out = split_out
@@ -63,7 +64,7 @@ class TtResnetBlock2D(nn.Module):
             conv_weights_3 = state_dict[f"{module_path}.conv_shortcut.weight"].squeeze()
             conv_bias_3 = state_dict[f"{module_path}.conv_shortcut.bias"]
 
-        if split_in > 1:
+        if "up_blocks.2" in module_path:
             self.norm_1_blocks = 6 if "up_blocks.2.resnets.0" in module_path else 3
             core_x = core_y = 2 if "up_blocks.2.resnets.0" in module_path else 4
             self.norm_core_grid_1 = ttnn.CoreGrid(y=core_y, x=core_x)
@@ -74,7 +75,6 @@ class TtResnetBlock2D(nn.Module):
                 self.device, norm_weights_1.shape[0], self.norm_groups, self.norm_core_grid_1.y
             )
         else:
-            self.norm_1_blocks = 2
             self.norm_core_grid_1 = ttnn.CoreGrid(y=8, x=8)
             self.gamma_t_1, self.beta_t_1 = prepare_gn_beta_gamma(
                 device, norm_weights_1, norm_bias_1, self.norm_core_grid_1.y
@@ -90,6 +90,7 @@ class TtResnetBlock2D(nn.Module):
             self.device, norm_weights_2.shape[0], self.norm_groups, self.norm_core_grid_2.y
         )
 
+        self.conv_output_dtype = model_config.get_conv_output_dtype()
         self.conv1_config = model_config.get_conv_config(conv_path=f"{module_path}.conv1")
         if self.split_conv:
             (
@@ -199,6 +200,16 @@ class TtResnetBlock2D(nn.Module):
         if hidden_states.memory_config().memory_layout != self.conv1_config.shard_layout:
             hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
 
+        if C == 1920 and H == 32:
+            mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(204, 256),
+                core_grid=ttnn.CoreGrid(x=8, y=8),
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+
         if self.split_conv:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
             hidden_states, [C, H, W], [self.tt_conv1_weights, self.tt_conv1_bias] = split_conv2d(
@@ -212,6 +223,7 @@ class TtResnetBlock2D(nn.Module):
                 compute_config=self.compute1_config,
                 conv_config=self.conv1_config,
                 conv_params=self.conv1_params,
+                conv_dtype=self.conv_output_dtype,
                 stride=self.stride,
                 padding=self.padding,
                 dilation=self.dilation,
@@ -238,6 +250,7 @@ class TtResnetBlock2D(nn.Module):
                 memory_config=None,
                 return_output_dim=True,
                 return_weights_and_bias=True,
+                dtype=self.conv_output_dtype,
             )
             C = self.conv1_params["output_channels"]
 
@@ -252,7 +265,8 @@ class TtResnetBlock2D(nn.Module):
         )
 
         hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
-        hidden_states = ttnn.add(hidden_states, temb)
+        # Note: moving this add to NG has perf impact, to be investigated
+        hidden_states = ttnn.add(hidden_states, temb, use_legacy=True)
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
         grid_coord = ttnn.CoreCoord(self.norm_core_grid_2.x - 1, self.norm_core_grid_2.y - 1)
@@ -265,6 +279,8 @@ class TtResnetBlock2D(nn.Module):
 
         hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_config)
 
+        if "up_blocks.2" in self.module_path and not self.split_conv:
+            hidden_states = ttnn.move(hidden_states)
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
@@ -298,6 +314,7 @@ class TtResnetBlock2D(nn.Module):
             memory_config=None,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         C = self.conv2_params["output_channels"]
 
@@ -321,7 +338,8 @@ class TtResnetBlock2D(nn.Module):
                 input_tensor = ttnn.sharded_to_interleaved(input_tensor, ttnn.L1_MEMORY_CONFIG)
 
             hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
-        ttnn.add_(hidden_states, input_tensor)
+        # Note: Moving this to NG results in error caused by shard shape, to be investigated
+        ttnn.add_(hidden_states, input_tensor, use_legacy=True)
         hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
 
         return hidden_states, [C, H, W]

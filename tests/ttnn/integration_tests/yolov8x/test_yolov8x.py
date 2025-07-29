@@ -75,13 +75,17 @@ def test_yolov8x_640(device, input_tensor, use_weights_from_ultralytics):
     ttnn_model = TtYolov8xModel(device=device, parameters=parameters)
     parameters = custom_preprocessor(device, state_dict, inp_h=inp_h, inp_w=inp_w)
 
-    # pad input channels to 16 to avoid slow interleaved2sharded codepath for 3/8 channels
-    ttnn_input = torch.nn.functional.pad(input_tensor, (0, 0, 0, 0, 0, 13, 0, 0), value=0)
-    ttnn_input = ttnn_input.permute((0, 2, 3, 1))
-    ttnn_input = ttnn_input.reshape(
-        1, 1, ttnn_input.shape[0] * ttnn_input.shape[1] * ttnn_input.shape[2], ttnn_input.shape[3]
+    n, c, h, w = input_tensor.shape
+    if c == 3:
+        c = 16
+    input_mem_config = ttnn.create_sharded_memory_config(
+        [n, c, h, w],
+        ttnn.CoreGrid(x=8, y=8),
+        ttnn.ShardStrategy.HEIGHT,
     )
-    ttnn_input = ttnn.from_torch(ttnn_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    ttnn_input = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_input = ttnn_input.to(device, input_mem_config)
 
     with torch.inference_mode():
         ttnn_model_output = ttnn_model(ttnn_input)[0]

@@ -60,6 +60,8 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::UNARY_EQ:
         case UnaryOpType::UNARY_GT:
         case UnaryOpType::UNARY_LT:
+        case UnaryOpType::UNARY_GE:
+        case UnaryOpType::UNARY_LE:
         case UnaryOpType::TYPECAST:
         case UnaryOpType::BITWISE_XOR:
         case UnaryOpType::BITWISE_AND:
@@ -74,7 +76,8 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::FMOD:
         case UnaryOpType::MINIMUM:
         case UnaryOpType::MAXIMUM:
-        case UnaryOpType::LOG1P: return true;
+        case UnaryOpType::LOG1P:
+        case UnaryOpType::HARDSHRINK: return true;
         default: return false;
     }
     return false;
@@ -82,6 +85,7 @@ bool is_parametrized_type(T val) {
 
 void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string>& defines);
 
-std::string get_compute_kernel_path(UnaryOpType op_type, const std::string& compute_root);
+std::string get_compute_kernel_path(
+    UnaryOpType op_type, const std::string& compute_root, std::optional<DataType> input_dtype = std::nullopt);
 
 }  // namespace ttnn::operations::unary::utils

@@ -13,6 +13,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -254,8 +255,11 @@ uint32_t get_dram_bandwidth(tt::ARCH arch) {
 }
 
 void get_optimal_dram_bank_to_reader_assignment(
-    IDevice* device, std::vector<CoreCoord>& all_worker_cores_ordered, CoreRangeSet& all_worker_cores) {
-    all_worker_cores_ordered = device->get_optimal_dram_bank_to_logical_worker_assignment();
+    IDevice* device,
+    std::vector<CoreCoord>& all_worker_cores_ordered,
+    CoreRangeSet& all_worker_cores,
+    tt_metal::NOC noc) {
+    all_worker_cores_ordered = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
     std::set<CoreRange> all_cores_set;
     for (const auto& worker_core : all_worker_cores_ordered) {
         all_cores_set.insert(CoreRange(worker_core));
@@ -385,7 +389,7 @@ int main(int argc, char** argv) {
 
         CoreRangeSet all_cores;
         std::vector<CoreCoord> all_cores_list;
-        get_optimal_dram_bank_to_reader_assignment(device, all_cores_list, all_cores);
+        get_optimal_dram_bank_to_reader_assignment(device, all_cores_list, all_cores, tt_metal::NOC::NOC_0);
 
         uint32_t num_tiles_per_core = num_tiles / num_cores;
         uint32_t num_tiles_cb = num_tiles_per_core / num_blocks;

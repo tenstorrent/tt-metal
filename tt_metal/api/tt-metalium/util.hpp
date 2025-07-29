@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -34,7 +34,7 @@ inline DeviceAddr SizeBytesPerBank(
         size_bytes);
     DeviceAddr num_pages = page_size_bytes == 0 ? 0 : size_bytes / page_size_bytes;
     DeviceAddr num_equally_distributed_pages = num_pages == 0 ? 0 : 1 + ((num_pages - 1) / num_banks);
-    return num_equally_distributed_pages * round_up(page_size_bytes, alignment_bytes);
+    return num_equally_distributed_pages * round_up(page_size_bytes, static_cast<DeviceAddr>(alignment_bytes));
 }
 
 inline NOC GetPreferredNOCForDRAMRead(ARCH arch) {

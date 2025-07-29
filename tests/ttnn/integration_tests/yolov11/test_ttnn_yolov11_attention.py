@@ -6,13 +6,13 @@ import pytest
 import ttnn
 import torch
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.yolov11.tt.model_preprocessing import (
+from models.demos.yolov11.tt.model_preprocessing import (
     create_yolov11_input_tensors,
     create_yolov11_model_parameters,
 )
-from models.experimental.yolov11.reference.yolov11 import Attention as torch_attention
+from models.demos.yolov11.reference.yolov11 import Attention as torch_attention
 
-from models.experimental.yolov11.tt.ttnn_yolov11_attention import TtnnAttention as ttnn_attention
+from models.demos.yolov11.tt.ttnn_yolov11_attention import TtnnAttention as ttnn_attention
 
 
 @pytest.mark.parametrize(
@@ -24,7 +24,6 @@ from models.experimental.yolov11.tt.ttnn_yolov11_attention import TtnnAttention 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_yolo_v11_attention(
     device,
-    use_program_cache,
     reset_seeds,
     in_channel,
     out_channel,

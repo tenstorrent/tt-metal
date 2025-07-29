@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "cq_common.hpp"
+#include "fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -20,6 +21,10 @@
 
 #if !defined(FABRIC_2D)
 #define FABRIC_2D 0
+#endif
+
+#if !defined(FABRIC_2D_DYNAMIC)
+#define FABRIC_2D_DYNAMIC 0
 #endif
 
 template <uint32_t mux_num_buffers_per_channel, uint32_t mux_channel_buffer_size_bytes, uint32_t header_rb>
@@ -81,6 +86,24 @@ public:
         tt::tt_fabric::fabric_client_connect<mux_num_buffers_per_channel>(edm);
 
         if constexpr (FABRIC_2D) {
+#if (FABRIC_2D_DYNAMIC == 1)
+            tt::tt_fabric::fabric_set_unicast_route(
+                (tt::tt_fabric::MeshPacketHeader*)packet_header_addr,
+                (eth_chan_directions)edm.direction,
+                my_dev_id,
+                to_dev_id,
+                to_mesh_id,
+                ew_dim);
+#else
+#if defined(GALAXY_CLUSTER)
+            tt::tt_fabric::fabric_set_route(
+                (tt::tt_fabric::LowLatencyMeshPacketHeader*)packet_header_addr,
+                (eth_chan_directions)edm.direction,
+                0,  // branch forward
+                0,  // start hop
+                num_hops,
+                true);
+#else
             tt::tt_fabric::fabric_set_unicast_route(
                 (tt::tt_fabric::LowLatencyMeshPacketHeader*)packet_header_addr,
                 (eth_chan_directions)edm.direction,
@@ -88,8 +111,10 @@ public:
                 to_dev_id,
                 to_mesh_id,
                 ew_dim);
+#endif
+#endif
         } else {
-            auto header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_addr);
+            auto header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_addr);
             header->to_chip_unicast(num_hops);
         }
 #else
@@ -127,7 +152,7 @@ public:
     template <uint8_t noc_idx, bool count = true>
     FORCE_INLINE void write_inline(uint64_t dst, uint32_t val) {
 #if defined(FABRIC_RELAY)
-        auto packet_header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
+        auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
         packet_header->to_noc_unicast_inline_write(
             tt::tt_fabric::NocUnicastInlineWriteCommandHeader{.noc_address = dst, .value = val});
         // Use the fabric_atomic_inc helper to send the header
@@ -148,7 +173,7 @@ public:
         ASSERT(mux_channel_buffer_size_bytes > sizeof(PACKET_HEADER_TYPE));
         constexpr uint32_t k_FabricMaxBurstSize = mux_channel_buffer_size_bytes - sizeof(PACKET_HEADER_TYPE);
 
-        auto packet_header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
+        auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
         while (length > k_FabricMaxBurstSize) {
             packet_header->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_ptr}, k_FabricMaxBurstSize);
 
@@ -229,7 +254,7 @@ public:
         ASSERT(mux_channel_buffer_size_bytes > sizeof(PACKET_HEADER_TYPE));
         constexpr uint32_t k_FabricMaxBurstSize = mux_channel_buffer_size_bytes - sizeof(PACKET_HEADER_TYPE);
 
-        auto packet_header = reinterpret_cast<tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
+        auto packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(header_rb);
         while (length > k_FabricMaxBurstSize) {
             packet_header->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_ptr}, k_FabricMaxBurstSize);
 

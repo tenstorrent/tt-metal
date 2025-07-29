@@ -11,6 +11,8 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/eltwise_unary/exp.h"
 #include "compute_kernel_api/eltwise_unary/recip.h"
+#include "compute_kernel_api/eltwise_unary/softplus.h"
+#include "compute_kernel_api/eltwise_unary/negative.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
@@ -199,15 +201,48 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, boo
     }
 }
 
-template <uint32_t in0_cb, uint32_t in1_scalar_cb, uint32_t num_tiles>
-void mul_block_bcast_scalar_inplace() {
+template <uint32_t rows, uint32_t cols>
+void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb) {
+    // Precondition: in0_cb has rows*cols produced
+    // Precondition: in1_cb has rows produced
+    // Postcondition: in0_cb has rows*cols produced
+    // Postcondition: in1_cb has rows consumed
+
+    constexpr uint32_t num_tiles = rows * cols;
+    constexpr uint32_t dst_tiles = DHT_GRANULARITY;
+    constexpr uint32_t granularity = cols >> LOG2_DHT_GRANULARITY;
+    mul_bcast_cols_init_short(in0_cb, in1_cb);
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_cb, rows);
+    for (uint32_t i = 0; i < rows; ++i) {
+        for (uint32_t u = 0; u < granularity; ++u) {
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                mul_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
+            }
+            tile_regs_commit();
+            cb_pop_front(in0_cb, dst_tiles);
+            cb_reserve_back(in0_cb, dst_tiles);
+            tile_regs_wait();
+            for (uint32_t j = 0; j < dst_tiles; ++j) {
+                pack_tile(j, in0_cb);
+            }
+            cb_push_back(in0_cb, dst_tiles);
+            tile_regs_release();
+        }
+    }
+    cb_pop_front(in1_cb, rows);
+}
+
+template <uint32_t in1_scalar_cb, uint32_t num_tiles>
+void mul_block_bcast_scalar_inplace(uint32_t in0_cb) {
     // Precondition: in0_cb has num_tiles produced
     // Precondition: in1_scalar_cb has 1 produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_scalar_cb has 1 produced
 
-    constexpr uint32_t dst_tiles = MUL_BCAST_GRANULARITY;
-    constexpr uint32_t granularity = num_tiles >> LOG2_MUL_BCAST_GRANULARITY;
+    constexpr uint32_t dst_tiles = STATS_GRANULARITY;
+    constexpr uint32_t granularity = num_tiles >> LOG2_STATS_GRANULARITY;
     reconfig_data_format(in0_cb, in1_scalar_cb);
     mul_tiles_bcast_scalar_init_short(in0_cb, in1_scalar_cb);
     cb_wait_front(in0_cb, num_tiles);
@@ -250,7 +285,11 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     cb_push_back(in0_cb, num_tiles);
 }
 
-void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
+void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
+    /**
+     * Given in0_cb and in1_cb, multiply each tile of in0_cb by the corresponding tile of in1_cb
+     * and bcast cols of in1_cb.
+     */
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
@@ -315,6 +354,87 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
         release_dst();
     }
     cb_pop_front(in_cb, num_tiles);
+}
+
+void log_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
+    copy_tile_to_dst_init_short(in_cb);
+    log_tile_init();
+    cb_wait_front(in_cb, num_tiles);
+    cb_reserve_back(out_cb, num_tiles);
+
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        acquire_dst();
+        copy_tile(in_cb, i, 0 /*dst*/);
+        log_tile(0);
+        pack_tile(0, out_cb);
+        cb_push_back(out_cb, 1);
+        release_dst();
+    }
+}
+
+void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
+    // out_cb = sigmoid(in0_cb - in1_cb)
+
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_cb, num_tiles);
+    cb_reserve_back(out_cb, num_tiles);
+    sub_tiles_init(in0_cb, in1_cb);
+    sigmoid_tile_init();
+
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        acquire_dst();
+        sub_tiles(in0_cb, in1_cb, i, i, 0);
+        sigmoid_tile(0);
+        pack_tile(0, out_cb);
+        release_dst();
+    }
+    cb_push_back(out_cb, num_tiles);
+}
+
+void logsigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
+    // out_cb = logsigmoid(in0_cb - in1_cb)
+
+    // Implemented as softplus. logsigmoid(x) = -softplus(-x)
+
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_cb, num_tiles);
+    cb_reserve_back(out_cb, num_tiles);
+    sub_tiles_init(in0_cb, in1_cb);
+
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        acquire_dst();
+        // Remove negate by swapping inputs
+        sub_tiles(in1_cb, in0_cb, i, i, 0);
+        // negative_tile_init();
+        // negative_tile(0);
+        softplus_tile_init();
+        softplus_tile(0, 0x3F800000, 0x3F800000, 0x41A00000);  // beta, beta_reciprocal, threshold
+        negative_tile_init();
+        negative_tile(0);
+        // sigmoid_tile_init();
+        // sigmoid_tile(0);
+        // log_tile_init();
+        // log_tile(0);
+        pack_tile(0, out_cb);
+        release_dst();
+    }
+    cb_push_back(out_cb, num_tiles);
+}
+void sub_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
+    // out_cb = in0_cb - in1_cb
+
+    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in1_cb, num_tiles);
+    cb_reserve_back(out_cb, num_tiles);
+    sub_tiles_init(in0_cb, in1_cb);
+
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        acquire_dst();
+        sub_tiles(in0_cb, in1_cb, i, i, 0);
+        pack_tile(0, out_cb);
+        release_dst();
+    }
+    cb_push_back(out_cb, num_tiles);
 }
 
 void matmul_blocks(

@@ -68,7 +68,6 @@ def ttnn_conv1d(
     bias = ttnn.from_torch(bias.unsqueeze(0).unsqueeze(0).unsqueeze(0), dtype=ttnn.float32)
 
     conv_config = ttnn.Conv1dConfig(
-        dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,
         activation=activation,
         deallocate_activation=deallocate_activation,
@@ -100,6 +99,7 @@ def ttnn_conv1d(
         padding=0,
         batch_size=tt_input_tensor.shape[0],
         input_length=tt_input_tensor.shape[1],
+        dtype=ttnn.bfloat16,
         conv_config=conv_config,
         compute_config=compute_config,
         groups=groups,

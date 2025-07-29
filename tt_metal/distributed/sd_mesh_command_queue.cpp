@@ -10,8 +10,9 @@
 
 namespace tt::tt_metal::distributed {
 
-SDMeshCommandQueue::SDMeshCommandQueue(MeshDevice* mesh_device, uint32_t id) :
-    MeshCommandQueueBase(mesh_device, id, create_passthrough_thread_pool()) {}
+SDMeshCommandQueue::SDMeshCommandQueue(
+    MeshDevice* mesh_device, uint32_t id, std::function<std::lock_guard<std::mutex>()> lock_api_function) :
+    MeshCommandQueueBase(mesh_device, id, create_passthrough_thread_pool(), lock_api_function) {}
 
 void SDMeshCommandQueue::write_shard_to_device(
     const MeshBuffer& buffer,
@@ -50,6 +51,7 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t index)
 }
 
 void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
+    auto lock = lock_api_function_();
     if (!blocking) {
         log_warning(
             tt::LogMetal, "Using Slow Dispatch for {}. This leads to blocking workload exection.", __FUNCTION__);
@@ -76,6 +78,7 @@ MeshEvent SDMeshCommandQueue::enqueue_record_event_to_host(
 
 void SDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent&) {}
 void SDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId>) {}
+void SDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId>) {}
 
 void SDMeshCommandQueue::reset_worker_state(bool, uint32_t, const vector_aligned<uint32_t>&) {}
 

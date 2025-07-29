@@ -29,7 +29,7 @@ protected:
 TEST_F(UnaryOpsTest, GlobalMean) {
     std::vector<float> test_data = {1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F};
 
-    auto shape = core::create_shape({2, 1, 1, 4});
+    auto shape = ttnn::Shape({2, 1, 1, 4});
     auto tensor = core::from_vector(test_data, shape, &autograd::ctx().get_device());
 
     auto tensor_ptr = autograd::create_tensor(tensor);
@@ -51,7 +51,7 @@ TEST_F(UnaryOpsTest, GlobalMean) {
 TEST_F(UnaryOpsTest, LogSoftmax) {
     auto* device = &autograd::ctx().get_device();
     std::vector<float> test_data = {-0.1F, -0.2F, -0.3F, -0.4F, 0.F, -0.2F, -0.3F, -0.4F};
-    auto tensor = core::from_vector(test_data, core::create_shape({2, 1, 1, 4}), device);
+    auto tensor = core::from_vector(test_data, ttnn::Shape({2, 1, 1, 4}), device);
     auto tensor_ptr = autograd::create_tensor(tensor);
     auto result = log_softmax_moreh(tensor_ptr, 3);
     auto result_data = core::to_vector(result->get_value());

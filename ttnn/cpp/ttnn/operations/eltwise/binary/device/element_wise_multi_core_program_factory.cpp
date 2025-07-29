@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
+#include <string>
 
 #include "binary_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary/device/eltwise_multi_core_program_factory_common.hpp"
@@ -47,8 +47,6 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
 
     tt_metal::Buffer* src0_buffer = a.buffer();
     tt_metal::Buffer* src1_buffer = b->buffer();
-
-    tt_metal::IDevice* device = a.device();
 
     std::optional<ShardSpec> shard_spec = std::nullopt;
     bool src0_sharded = a.memory_config().is_sharded();
@@ -99,7 +97,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     }
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src1_config);
 
-    std::map<string, string> eltwise_defines = utils::get_defines(
+    std::map<std::string, std::string> eltwise_defines = utils::get_defines(
         op_type, a.dtype(), output.dtype(), fused_activations, operation_attributes.input_tensor_a_activation);
 
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN0_0") != eltwise_defines.end()) {
@@ -112,7 +110,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
             tt_metal::CircularBufferConfig(
                 max_block_size * interim0_single_tile_size, {{tt::CBIndex::c_3, interim_cb0_format}})
                 .set_page_size(tt::CBIndex::c_3, interim0_single_tile_size);
-        auto cb_interm = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm_config);
+        tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm_config);
     }
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN1_0") != eltwise_defines.end()) {
         if (op_type == BinaryOpType::LOGADDEXP || op_type == BinaryOpType::LDEXP ||
@@ -124,7 +122,7 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
             tt_metal::CircularBufferConfig(
                 max_block_size * interim1_single_tile_size, {{tt::CBIndex::c_4, interim_cb1_format}})
                 .set_page_size(tt::CBIndex::c_4, interim1_single_tile_size);
-        auto cb_interm2 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm2_config);
+        tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm2_config);
     }
 
     uint32_t output_cb_index = tt::CBIndex::c_2;
@@ -137,14 +135,14 @@ BinaryDeviceOperation::ElementWiseMultiCore::cached_program_t BinaryDeviceOperat
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_output_config);
 
-    std::map<string, string> reader_defines;
+    std::map<std::string, std::string> reader_defines;
     if (src0_sharded) {
         reader_defines["IN0_SHARDED"] = "1";
     }
     if (src1_sharded) {
         reader_defines["IN1_SHARDED"] = "1";
     }
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     if (out_sharded) {
         writer_defines["OUT_SHARDED"] = "1";
     }

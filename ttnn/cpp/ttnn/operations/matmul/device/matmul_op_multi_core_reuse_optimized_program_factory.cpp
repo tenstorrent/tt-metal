@@ -30,6 +30,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     uint32_t N,
     uint32_t K,
     bool bcast_batch,
+    ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t in0_block_w,
     uint32_t in0_last_ktile_w,
     uint32_t out_subblock_h,
@@ -169,8 +170,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     std::vector<uint32_t> reader_writer_compile_time_args = {// interleaved accessor args
                                                              (std::uint32_t)in1_is_dram,
                                                              (std::uint32_t)out_is_dram};
-    std::map<string, string> mm_kernel_in0_reader_defines;
-    std::map<string, string> mm_kernel_in1_reader_writer_defines;
+    std::map<std::string, std::string> mm_kernel_in0_reader_defines;
+    std::map<std::string, std::string> mm_kernel_in1_reader_writer_defines;
     if (in0_is_sharded) {
         mm_kernel_in0_reader_defines["IN0_SHARDED"] = "1";
     }
@@ -215,7 +216,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
 
         untilize_out};
 
-    std::map<string, string> mm_kernel_defines;
+    std::map<std::string, std::string> mm_kernel_defines;
     if (packer_l1_acc_en) {
         mm_kernel_defines["PACKER_L1_ACC"] = "1";
     }
@@ -228,7 +229,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
         device->arch(), num_cores, mm_kernel_defines);
-    ttnn::operations::compute_throttle_utils::throttle_mm_perf(device->arch(), num_cores, mm_kernel_defines);
+    ttnn::operations::compute_throttle_utils::throttle_mm_perf(
+        device->arch(), num_cores, mm_kernel_defines, throttle_level);
 
     // Create compute kernel
     auto mm_kernel_group_1_id = tt_metal::CreateKernel(
@@ -569,6 +571,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_optimized_
         Nt,
         Kt,
         bcast_batch,
+        ttnn::get_throttle_level(compute_kernel_config),
         in0_block_w,
         in0_last_ktile_w,
         out_subblock_h,

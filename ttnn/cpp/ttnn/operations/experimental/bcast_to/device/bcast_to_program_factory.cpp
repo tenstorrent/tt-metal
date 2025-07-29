@@ -139,15 +139,11 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
     auto input = tensor_args.input;
-    uint32_t data_size = input.element_size();
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
 
     auto output_shape = output.logical_shape();
-    auto output_data_format = datatype_to_dataformat_converter(output.dtype());
 
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_data_format);
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_data_format);
-    uint32_t num_output_tiles = output.physical_volume() / output.tensor_spec().tile().get_tile_hw();
 
     // Device Setup
     auto* device = input.device();
@@ -161,11 +157,9 @@ BcastToOperation::BcastToTileFactory::cached_program_t BcastToOperation::BcastTo
 
     // How many tiles to store per input CB (double buffer)
     constexpr uint32_t num_tiles_per_cb = 2;
-    auto [input_cb, input_cb_handle] = create_cb(
-        tt::CBIndex::c_0, program, all_device_cores, input_single_tile_size, num_tiles_per_cb, input_data_format);
+    create_cb(tt::CBIndex::c_0, program, all_device_cores, input_single_tile_size, num_tiles_per_cb, input_data_format);
 
-    auto [output_cb, output_cb_handle] = create_cb(
-        tt::CBIndex::c_1, program, all_device_cores, input_single_tile_size, num_tiles_per_cb, input_data_format);
+    create_cb(tt::CBIndex::c_1, program, all_device_cores, input_single_tile_size, num_tiles_per_cb, input_data_format);
 
     const auto src_is_dram = static_cast<const uint32_t>(input.buffer()->is_dram());
     const auto dst_is_dram = static_cast<const uint32_t>(output.buffer()->is_dram());

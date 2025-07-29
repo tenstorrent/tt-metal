@@ -376,7 +376,7 @@ inline bool DeviceData::validate_one_core(
         return false;
     }
 
-    string core_string;
+    std::string core_string;
     if (core_type == CoreType::WORKER) {
         core_string = "L1";
     } else if (core_type == CoreType::DRAM) {
@@ -532,8 +532,9 @@ void DeviceData::overflow_check(IDevice* device) {
 template <bool is_dram_variant, bool is_host_variant>
 void configure_kernel_variant(
     Program& program,
-    string path,
-    std::vector<uint32_t> compile_args,  // yes, copy
+    std::string path,
+    const std::map<std::string, std::string>& defines_in,
+    std::vector<uint32_t> compile_args,
     CoreCoord my_core,
     CoreCoord phys_my_core,
     CoreCoord phys_upstream_core,
@@ -546,7 +547,7 @@ void configure_kernel_variant(
     auto upstream_virtual_noc_coords = device->virtual_noc0_coordinate(upstream_noc_index, phys_upstream_core);
     auto downstream_virtual_noc_coords = device->virtual_noc0_coordinate(downstream_noc_index, phys_downstream_core);
 
-    std::map<string, string> defines = {
+    std::map<std::string, std::string> defines = {
         {"DISPATCH_KERNEL", "1"},
         {"MY_NOC_X", std::to_string(my_virtual_noc_coords.x)},
         {"MY_NOC_Y", std::to_string(my_virtual_noc_coords.y)},
@@ -557,10 +558,16 @@ void configure_kernel_variant(
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual_noc_coords.y)},
         {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(0xff)},
         {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(0xff)},  // todo, add dispatch_s testing
-        {"FD_CORE_TYPE", std::to_string(0)},               // todo, support dispatch on eth
+        {"FD_CORE_TYPE", std::to_string(0)},                     // todo, support dispatch on eth
+        {"IS_D_VARIANT", std::to_string(is_dram_variant)},
+        {"IS_H_VARIANT", std::to_string(is_host_variant)},
     };
+
     compile_args.push_back(is_dram_variant);
     compile_args.push_back(is_host_variant);
+
+    defines.insert(defines_in.begin(), defines_in.end());
+
     tt::tt_metal::CreateKernel(
         program,
         path,

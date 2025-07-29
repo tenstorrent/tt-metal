@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#include <string>
+
 #include "bernoulli_device_operation.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -25,7 +28,6 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
 
     IDevice* device = output.device();
     auto grid = device->compute_with_storage_grid_size();
-    auto core_h = grid.y;
 
     uint32_t units_to_divide = output.physical_volume() / constants::TILE_HW;
     auto [num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2] =
@@ -44,14 +46,14 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
     CircularBufferConfig cb_in_config =
         CircularBufferConfig(num_tiles * in_dtype_tile_size, {{in_cb_id, in_data_format}})
             .set_page_size(in_cb_id, in_dtype_tile_size);
-    CBHandle cb_input = tt_metal::CreateCircularBuffer(program, all_cores, cb_in_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_in_config);
 
     const uint32_t float32_tile_size = tile_size(tt::DataFormat::Float32);
     constexpr uint32_t intermed_cb_id = CBIndex::c_24;
     CircularBufferConfig cb_intermed_config =
         CircularBufferConfig(num_tiles * float32_tile_size, {{intermed_cb_id, tt::DataFormat::Float32}})
             .set_page_size(intermed_cb_id, float32_tile_size);
-    CBHandle cb_intermed = tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed_config);
 
     auto out_data_format = datatype_to_dataformat_converter(output.dtype());
     const uint32_t out_dtype_tile_size = tile_size(out_data_format);
@@ -59,7 +61,7 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
     CircularBufferConfig cb_intermed1_config =
         CircularBufferConfig(1 * out_dtype_tile_size, {{intermed1_cb_id, out_data_format}})
             .set_page_size(intermed1_cb_id, out_dtype_tile_size);
-    CBHandle cb_intermed1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
 
     const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/bernoulli/device/kernels/";
     const uint32_t input_is_dram = input.buffer()->buffer_type() == BufferType::DRAM ? 1 : 0;
@@ -71,7 +73,7 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
     const std::vector<uint32_t> writer_compile_time_args{in_cb_id, intermed_cb_id, intermed1_cb_id, output_is_dram};
     const std::string writer_file_path = kernels_dir_path + "writer_bernoulli.cpp";
 
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     switch (input.dtype()) {
         case DataType::BFLOAT16: writer_defines["INPUT_DTYPE_BFLOAT16"] = "1"; break;
         case DataType::FLOAT32: writer_defines["INPUT_DTYPE_FLOAT32"] = "1"; break;

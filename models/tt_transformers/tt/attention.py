@@ -53,6 +53,7 @@ class Attention(LightweightModule):
         self.num_all_gather_links = configuration.num_all_gather_links
         self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
         self.tile_size = configuration.tile_size
+        self.rms_norm_add_unit_offset = configuration.rms_norm_add_unit_offset
         self.num_device_groups = self.num_devices // self.n_kv_heads
         self.num_devices_per_group = self.n_kv_heads if self.TG else self.num_devices
         self.batch_size_per_device_group = (
@@ -303,6 +304,7 @@ class Attention(LightweightModule):
                 weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key=q_norm_str,
+                add_unit_offset=self.rms_norm_add_unit_offset,
                 is_distributed=False,
                 sharded_program_config=None,  # FIXME: add height-sharded support. self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=None,  # FIXME: add height-sharded support. self.model_config["CREATE_QKV_DECODE_SHARD"]
@@ -321,6 +323,7 @@ class Attention(LightweightModule):
                 weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
                 weight_key=k_norm_str,
+                add_unit_offset=self.rms_norm_add_unit_offset,
                 is_distributed=False,
                 sharded_program_config=None,  # FIXME: add height-sharded support. self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=None,  # FIXME: add height-sharded support. self.model_config["CREATE_QKV_DECODE_SHARD"],
@@ -409,7 +412,10 @@ class Attention(LightweightModule):
             # vLLM provides its own kv cache
             self.init_kv_cache(configuration, weight_cache_path)
 
-        self.scale = self.head_dim**-0.5
+        if configuration.query_pre_attn_scalar is not None:
+            self.scale = configuration.query_pre_attn_scalar**-0.5
+        else:
+            self.scale = self.head_dim**-0.5
 
     def init_kv_cache(self, configuration, weight_cache_path):
         """
@@ -694,7 +700,7 @@ class Attention(LightweightModule):
                 self.wo,
                 core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
                 program_config=self.model_config["ATTN_OUTPUT_PROGCFG"] if not self.TG else None,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if self.TG else attn_output_cat.memory_config(),
+                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 dtype=ttnn.bfloat8_b if self.TG else None,
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
             )
@@ -847,13 +853,22 @@ class Attention(LightweightModule):
         )
         ttnn.deallocate(k_heads_1KSD_pre_rot)
 
-        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(q_heads_1QSD)
-
-        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=self.kv_cache_dtype)
+        # Fill KV-Cache
+        if kv_cache:
+            keys_BKSD, values_BKSD = kv_cache[0], kv_cache[1]
+        else:
+            keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
+        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=keys_BKSD.dtype)
         ttnn.deallocate(k_heads_1KSD)
 
-        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
+        # sharding k_fill to deal with update_cache memory limitation
+        if seq_len >= self.min_kv_prefill_shard_seqlen and not self.TG and not page_table:
+            k_fill = ttnn.interleaved_to_sharded(k_heads_1KSD_8b, self.model_config["KV_PREFILL_MEM_CFG"](seq_len))
+        else:
+            k_fill = k_heads_1KSD_8b
+
+        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=values_BKSD.dtype)
+
         ttnn.deallocate(v_heads_1VSD)
 
         # Fill KV-Cache

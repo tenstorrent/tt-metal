@@ -14,7 +14,20 @@ from operator import ne, truth
 
 from loguru import logger
 
-from models.utility_functions import is_wormhole_b0, is_grayskull, is_blackhole
+
+def is_blackhole():
+    ARCH_NAME = os.getenv("ARCH_NAME")
+    return "blackhole" in ARCH_NAME
+
+
+def is_wormhole_b0():
+    ARCH_NAME = os.getenv("ARCH_NAME")
+    return "wormhole_b0" in ARCH_NAME
+
+
+def is_grayskull():
+    ARCH_NAME = os.getenv("ARCH_NAME")
+    return "grayskull" in ARCH_NAME
 
 
 class TestSuiteType(Enum):
