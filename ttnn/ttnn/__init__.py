@@ -216,6 +216,9 @@ from ttnn.types import (
     KernelDescriptor,
     SemaphoreDescriptor,
     ProgramDescriptor,
+    TensorAccessorArgs,
+    ArgsConfig,
+    ArgConfig,
 )
 
 from ttnn.device import (
