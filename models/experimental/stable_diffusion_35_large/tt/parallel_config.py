@@ -26,7 +26,9 @@ class DiTParallelConfig(NamedTuple):
 
 class VAEParallelConfig(NamedTuple):
     device: ttnn.MeshDevice  # Mesh device to use for VAE
-    ccl_global_semaphore: ttnn._ttnn.global_semaphore.global_sempahore  # Associated global semapho
+    gather_semaphore: ttnn._ttnn.global_semaphore.global_sempahore  # for gather
+    reduce_from_semaphore: ttnn._ttnn.global_semaphore.global_sempahore  # for reduce_from
+    reduce_to_semaphore: ttnn._ttnn.global_semaphore.global_sempahore  # for reduce_to
 
 
 def create_dit_parallel_config(
@@ -161,7 +163,9 @@ class StableDiffusionParallelManager:
 
         self.vae_parallel_config = VAEParallelConfig(
             device=self.submesh_devices[0],
-            ccl_global_semaphore=ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0),
+            gather_semaphore=ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0),
+            reduce_from_semaphore=ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0),
+            reduce_to_semaphore=ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0),
         )
 
     def _init_submeshes(self):

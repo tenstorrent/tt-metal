@@ -16,6 +16,7 @@ from ..parallel_config import VAEParallelConfig
 @dataclass
 class TtUpsample2DParameters:
     conv: TtConv2dParameters
+    parallel_config: VAEParallelConfig
 
     @classmethod
     def from_torch(
@@ -27,13 +28,16 @@ class TtUpsample2DParameters:
     ) -> TtUpsample2DParameters:
         return cls(
             conv=TtConv2dParameters.from_torch(torch_upsample.conv, dtype=dtype, parallel_config=parallel_config),
+            parallel_config=parallel_config,
         )
 
 
 def vae_upsample2d(x, parameters):
-    in_layout = x.layout
+    # in_layout = x.layout
     x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)  # Upsample requires row major.
     x = ttnn.upsample(x, scale_factor=2)
-    x = ttnn.to_layout(x, in_layout)
+    # ttnn.synchronize_device(parameters.parallel_config.device)
+    # x = ttnn.to_layout(x, in_layout)
     x = vae_conv2d(x, parameters.conv)
+    # ttnn.synchronize_device(parameters.parallel_config.device)
     return x

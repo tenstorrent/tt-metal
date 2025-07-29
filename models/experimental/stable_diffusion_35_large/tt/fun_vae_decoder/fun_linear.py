@@ -57,8 +57,9 @@ class TtLinearParameters:
 
 
 def vae_linear(x, parameters):
-    in_layout = x.layout
-    x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+    # in_layout = x.layout
+    # x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
     output_tensor = ttnn.linear(
         input_tensor_a=x,
         input_tensor_b=parameters.weight,
@@ -66,5 +67,5 @@ def vae_linear(x, parameters):
         core_grid=parameters.parallel_config.device.core_grid,
         compute_kernel_config=parameters.compute_config,
     )
-    output_tensor = ttnn.to_layout(output_tensor, in_layout)
+    # output_tensor = ttnn.to_layout(output_tensor, in_layout)
     return output_tensor

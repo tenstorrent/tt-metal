@@ -29,6 +29,7 @@ class TtVaeDecoderParameters:
     up_blocks: list[TtUpDecoderBlock2DParameters]
     conv_norm_out: TtGroupNormParameters
     conv_out: TtConv2dParameters
+    parallel_config: VAEParallelConfig
 
     @classmethod
     def from_torch(
@@ -55,19 +56,25 @@ class TtVaeDecoderParameters:
             conv_out=TtConv2dParameters.from_torch(
                 torch_vae_decoder.conv_out, dtype=dtype, parallel_config=parallel_config
             ),
+            parallel_config=parallel_config,
         )
 
 
 # TODO: Verify upscale_dtype from reference code
 def sd_vae_decode(x: ttnn.Tensor, parameters: TtVaeDecoderParameters) -> ttnn.Tensor:
     x = vae_conv2d(x, parameters.conv_in)
+    # ttnn.DumpDeviceProfiler(parameters.parallel_config.device)
     x = unet_mid_block(x, parameters.mid_block)
+    # ttnn.DumpDeviceProfiler(parameters.parallel_config.device)
 
-    for up_block_params in parameters.up_blocks[0:4]:
+    for up_block_params in parameters.up_blocks:
         x = updecoder_block(x, up_block_params)
+        # ttnn.DumpDeviceProfiler(parameters.parallel_config.device)
 
     x = vae_group_norm(x, parameters.conv_norm_out)
+    # ttnn.DumpDeviceProfiler(parameters.parallel_config.device)
     x = ttnn.silu(x)
+    # ttnn.DumpDeviceProfiler(parameters.parallel_config.device)
     x = vae_conv2d(x, parameters.conv_out)
 
     return x
