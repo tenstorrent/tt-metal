@@ -834,11 +834,6 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         tt::llrt::internal_::wait_until_cores_done(dev_id, RUN_MSG_GO, dispatch_cores, 0);
     }
 
-    for (const chip_id_t device_id : devices_to_close) {
-        IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
-        detail::DumpDeviceProfileResults(device, ProfilerDumpState::ONLY_DISPATCH_CORES);
-    }
-
     // Process registered termination signals from topology
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
@@ -870,6 +865,11 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
             tt_metal::detail::WriteToDeviceL1(
                 dev, master_router_logical_core, termination_signal_address, termination_signal, CoreType::ETH);
         }
+    }
+
+    for (const chip_id_t device_id : devices_to_close) {
+        IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
+        detail::DumpDeviceProfileResults(device, ProfilerDumpState::ONLY_DISPATCH_CORES);
     }
 
     detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);

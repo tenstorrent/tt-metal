@@ -67,17 +67,6 @@
       "dispatch_duration_relative_margin": 0.1
     },
     "Matmul_2": {
-      "op_name": "FF1_MM",
-      "kernel_duration": 8515.039583333333,
-      "op_to_op": 693.2888888888889,
-      "first_to_last_start": 1924.5111111111112,
-      "non-overlapped-dispatch-time": 4980.507936507936,
-      "kernel_duration_relative_margin": 0.05,
-      "op_to_op_duration_relative_margin": 0.2,
-      "first_to_last_start_relative_margin": 0.2,
-      "dispatch_duration_relative_margin": 0.1
-    },
-    "Matmul_3": {
       "op_name": "FF2_MM",
       "kernel_duration": 13973.23125,
       "op_to_op": 652.1777777777777,
@@ -123,12 +112,12 @@
     },
     "Matmul_RS_0": {
       "op_name": "Matmul_FF3_ReduceScatter_FF1",
-      "kernel_duration": 9292.354398148147,
-      "op_to_op": 980.7777777777778,
-      "first_to_last_start": 1914.9925925925927,
-      "non-overlapped-dispatch-time": 17432.341269841272,
+      "kernel_duration": 17497.70138888889,
+      "op_to_op": 723.4444444444445,
+      "first_to_last_start": 2007.5555555555557,
+      "non-overlapped-dispatch-time": 23457.444444444445,
       "kernel_duration_relative_margin": 0.05,
-      "op_to_op_duration_relative_margin": 0.3,
+      "op_to_op_duration_relative_margin": 0.2,
       "first_to_last_start_relative_margin": 0.2,
       "dispatch_duration_relative_margin": 0.3
     },
@@ -167,7 +156,7 @@
     },
     "ScaledDotProductAttentionDecode_0": {
       "op_name": "SDPA",
-      "kernel_duration": 10285.326388888889,
+      "kernel_duration": 9183.524305555555,
       "op_to_op": 625.3407407407408,
       "first_to_last_start": 2315.9037037037037,
       "non-overlapped-dispatch-time": 8528.468253968254,
