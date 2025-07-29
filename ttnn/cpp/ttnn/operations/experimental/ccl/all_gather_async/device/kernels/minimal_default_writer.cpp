@@ -172,8 +172,8 @@ void kernel_main() {
         uint64_t sync_sem_noc_addr_in_pkt = safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
         pkt_hdr_sem_inc->to_noc_unicast_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{sync_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
-	pkt_hdr_sem_inc->to_chip_unicast(1);
-	tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_sem_inc);
+        pkt_hdr_sem_inc->to_chip_unicast(1);
+        tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_sem_inc);
     }
     if (wait_on_barrier_semaphore) {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
@@ -285,7 +285,11 @@ void kernel_main() {
                     if (direction == 1) {
                         if (num_targets_backward_direction) {
                             write_for_fabric_write(
-                                remote_noc0_dest_noc_addr, pkt_hdr, *mux_connection_handle, l1_read_addr, output_page_size);
+                                remote_noc0_dest_noc_addr,
+                                pkt_hdr,
+                                *mux_connection_handle,
+                                l1_read_addr,
+                                output_page_size);
                         }
                         uint64_t local_noc0_dest_noc_addr = get_noc_addr(tile_id, output_addrgen);
                         noc_async_write(l1_read_addr, local_noc0_dest_noc_addr, output_page_size);
@@ -293,7 +297,11 @@ void kernel_main() {
                     } else {
                         if (num_targets_forward_direction) {
                             write_for_fabric_write(
-                                remote_noc0_dest_noc_addr, pkt_hdr, *mux_connection_handle, l1_read_addr, output_page_size);
+                                remote_noc0_dest_noc_addr,
+                                pkt_hdr,
+                                *mux_connection_handle,
+                                l1_read_addr,
+                                output_page_size);
                         }
                     }
                     tiles_read++;
@@ -424,7 +432,7 @@ void kernel_main() {
                             l1_read_addr,
                             output_page_size,
                             output_page_size);
-			tiles_read += 2;
+                        tiles_read += 2;
                         break;
                     }
 #endif
@@ -439,7 +447,7 @@ void kernel_main() {
 
                         uint64_t remote_noc0_dest_noc_addr =
                             get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-			write_for_fabric_write(
+                        write_for_fabric_write(
                             remote_noc0_dest_noc_addr, pkt_hdr, *mux_connection_handle, l1_read_addr, output_page_size);
                         tiles_read++;
                         break;

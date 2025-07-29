@@ -190,7 +190,7 @@ void kernel_main() {
         pkt_hdr_seminc->to_noc_unicast_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
         pkt_hdr_seminc->to_chip_unicast(1);
-	tt::tt_fabric::fabric_atomic_inc(mux_connection_handle, pkt_hdr_seminc);
+        tt::tt_fabric::fabric_atomic_inc(mux_connection_handle, pkt_hdr_seminc);
 
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
