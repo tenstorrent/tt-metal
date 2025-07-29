@@ -52,7 +52,7 @@ public:
 
     uint32_t get_completion_queue_limit(uint8_t cq_id) const;
 
-    uint32_t get_issue_queue_write_ptr(uint8_t cq_id) const;
+    SystemMemoryAddressWidth get_issue_queue_write_ptr(uint8_t cq_id) const;
 
     uint32_t get_completion_queue_read_ptr(uint8_t cq_id) const;
 

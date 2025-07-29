@@ -219,7 +219,7 @@ uint32_t SystemMemoryManager::get_completion_queue_limit(const uint8_t cq_id) co
     return this->cq_interfaces[cq_id].completion_fifo_limit << 4;
 }
 
-uint32_t SystemMemoryManager::get_issue_queue_write_ptr(const uint8_t cq_id) const {
+SystemMemoryAddressWidth SystemMemoryManager::get_issue_queue_write_ptr(const uint8_t cq_id) const {
     if (this->bypass_enable) {
         return this->bypass_buffer_write_offset;
     } else {
@@ -249,9 +249,9 @@ void* SystemMemoryManager::issue_queue_reserve(SystemMemoryAddressWidth cmd_size
         return (void*)((char*)this->bypass_buffer.data() + this->bypass_buffer_write_offset);
     }
 
-    uint32_t issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
+    SystemMemoryAddressWidth issue_q_write_ptr = this->get_issue_queue_write_ptr(cq_id);
 
-    const uint32_t command_issue_limit = this->get_issue_queue_limit(cq_id);
+    const SystemMemoryAddressWidth command_issue_limit = this->get_issue_queue_limit(cq_id);
     if (issue_q_write_ptr +
             align(
                 cmd_size_B,

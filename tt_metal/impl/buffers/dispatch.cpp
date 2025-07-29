@@ -39,7 +39,7 @@ namespace buffer_dispatch {
 
 // Dispatch constants required for writing buffer data
 struct BufferDispatchConstants {
-    uint32_t issue_queue_cmd_limit = 0;
+    SystemMemoryAddressWidth issue_queue_cmd_limit = 0;
     uint32_t max_prefetch_cmd_size = 0;
     uint32_t max_data_sizeB = 0;
 };
@@ -367,9 +367,9 @@ int32_t calculate_num_pages_available_in_cq(
     const BufferDispatchConstants& dispatch_constants,
     uint32_t byte_offset_in_cq) {
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
-    uint32_t space_availableB = std::min(
+    SystemMemoryAddressWidth space_availableB = std::min(
         dispatch_constants.issue_queue_cmd_limit - sysmem_manager.get_issue_queue_write_ptr(dispatch_params.cq_id),
-        dispatch_constants.max_prefetch_cmd_size);
+        (SystemMemoryAddressWidth)dispatch_constants.max_prefetch_cmd_size);
     int32_t num_pages_available =
         (int32_t(space_availableB) - int32_t(byte_offset_in_cq)) / int32_t(dispatch_params.page_size_to_write);
     return num_pages_available;
@@ -587,7 +587,7 @@ void issue_buffer_dispatch_command_sequence(
             calculator.add_dispatch_wait();
         }
     }
-    const SystemMemoryAddressWidth cmd_sequence_sizeB = calculator.write_offset_bytes();
+    const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     void* cmd_region = sysmem_manager.issue_queue_reserve(cmd_sequence_sizeB, dispatch_params.cq_id);
 
@@ -823,7 +823,7 @@ void issue_read_buffer_dispatch_command_sequence(
 
     bool flush_prefetch = false;
     command_sequence.add_dispatch_write_host(
-        flush_prefetch, dispatch_params.pages_per_txn * dispatch_params.padded_page_size, false);
+        flush_prefetch, (DeviceAddr)dispatch_params.pages_per_txn * dispatch_params.padded_page_size, false);
 
     // Buffer layout specific logic
     if constexpr (std::is_same_v<T, ShardedBufferReadDispatchParams>) {

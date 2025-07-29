@@ -235,7 +235,7 @@ void process_write_host_h(uint32_t& block_noc_writes_to_clear, uint32_t block_ne
     uint32_t completion_write_ptr;
     // We will send the cmd back in the first X bytes, this makes the logic of reserving/pushing completion queue
     // pages much simpler since we are always sending writing full pages (except for last page)
-    uint32_t length = cmd->write_linear_host.length;
+    uint64_t length = cmd->write_linear_host.length;
     DPRINT << "process_write_host_h: " << length << ENDL();
     uint32_t data_ptr = cmd_ptr;
 #if !defined(FABRIC_RELAY)
@@ -335,7 +335,7 @@ void process_exec_buf_end_h() {
 // This means the downstream buffers are always page aligned, simplifies wrap handling
 template <uint32_t preamble_size>
 void relay_to_next_cb(
-    uint32_t data_ptr, uint32_t length, uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
+    uint32_t data_ptr, uint64_t length, uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
     // TODO: Size for fabric
     static_assert(
         preamble_size == 0 || preamble_size == sizeof(tt::packet_queue::dispatch_packet_header_t),
@@ -440,7 +440,7 @@ void relay_to_next_cb(
 void process_write_host_d(uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
     volatile tt_l1_ptr CQDispatchCmd* cmd = (volatile tt_l1_ptr CQDispatchCmd*)cmd_ptr;
     // Remember: host transfer command includes the command in the payload, don't add it here
-    uint32_t length = cmd->write_linear_host.length;
+    uint64_t length = cmd->write_linear_host.length;
     uint32_t data_ptr = cmd_ptr;
 
     relay_to_next_cb<split_dispatch_page_preamble_size>(

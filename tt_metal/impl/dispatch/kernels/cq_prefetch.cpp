@@ -302,11 +302,12 @@ FORCE_INLINE uint32_t read_from_pcie(
 
     // Wrap pcie/hugepage
     if (pcie_read_ptr + size > pcie_base + pcie_size) {
+        DPRINT << "pcie_read_ptr wrapped around: " << pcie_read_ptr << " " << size << " " << pcie_base << " "
+               << pcie_size << ENDL();
         pcie_read_ptr = pcie_base;
     }
 
     uint64_t host_src_addr = pcie_noc_xy | pcie_read_ptr;
-    // DPRINT << "read_from_pcie: " << fence + preamble_size << " " << pcie_read_ptr << ENDL();
     noc_async_read(host_src_addr, fence + preamble_size, size);
     pending_read_size = size + preamble_size;
     pcie_read_ptr += size;
@@ -351,28 +352,31 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
     static uint32_t pending_read_size = 0;
     static volatile tt_l1_ptr prefetch_q_entry_type* prefetch_q_rd_ptr =
         (volatile tt_l1_ptr prefetch_q_entry_type*)prefetch_q_base;
-    constexpr uint32_t prefetch_q_msb_mask = 1u << (sizeof(prefetch_q_entry_type) * CHAR_BIT - 1);
+    constexpr uint32_t prefetch_q_msb_mask = 1u << (sizeof(prefetch_q_entry_type) * CHAR_BIT - 1);  // BIT(15)
 
     if (stall_state == STALLED) {
         ASSERT(pending_read_size == 0);  // Before stalling, fetch must have been completed.
         return;
     }
 
-    // DPRINT << "fetch_q_get_cmds: " << cmd_ptr << " " << fence << ENDL();
-    if (fence < cmd_ptr) {
+    if (fence < cmd_ptr) {  // fetchq wrapped around, reset cmd_ptr to fence
+        DPRINT << "fetch_q_get_cmds: fence < cmd_ptr, reset cmd_ptr to fence: " << fence << " " << cmd_ptr << ENDL();
         cmd_ptr = fence;
     }
 
-    bool cmd_ready = (cmd_ptr != fence);
+    bool cmd_ready = (cmd_ptr != fence);  // cmd_ptr < fence means there are commands in the cmddat_q
 
     uint32_t prefetch_q_rd_ptr_local = *prefetch_q_rd_ptr;
-    uint32_t fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask) << prefetch_q_log_minsize;
-    bool stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0;
+    uint32_t fetch_size = (prefetch_q_rd_ptr_local & ~prefetch_q_msb_mask)
+                          << prefetch_q_log_minsize;  // prefetch_q_rd_ptr_local & BITMASK(15) x 16
+    bool stall_flag = (prefetch_q_rd_ptr_local & prefetch_q_msb_mask) != 0;  // stall_flag = BIT(15)
     stall_state = static_cast<StallState>(stall_flag << 1);  // NOT_STALLED -> STALL_NEXT if stall_flag is set
 
     if (fetch_size != 0 && pending_read_size == 0) {
         pending_read_size = read_from_pcie<preamble_size>(
             prefetch_q_rd_ptr, fence, pcie_read_ptr, cmd_ptr, fetch_size);
+        // DPRINT << "read_from_pcie: fetch_size: " << fetch_size << " new pending_read_size: " << pending_read_size <<
+        // ENDL();
         if (stall_state == STALL_NEXT && pending_read_size != 0) {
             // No pending reads -> stall_state can be set to STALLED, since the read to the cmd
             // that initiated the stall has been issued.
@@ -380,6 +384,7 @@ void fetch_q_get_cmds(uint32_t& fence, uint32_t& cmd_ptr, uint32_t& pcie_read_pt
             // by preamble size. After ensuring that the exec_buf command has been read (barrier),
             // exit.
             barrier_and_stall(pending_read_size, fence, cmd_ptr);  // STALL_NEXT -> STALLED
+            DPRINT << "fetch_q_get_cmds: STALL_NEXT -> STALLED" << ENDL();
             return;
         }
     }
@@ -699,7 +704,7 @@ uint32_t process_relay_paged_cmd(uint32_t cmd_ptr, uint32_t& downstream__data_pt
     InterleavedAddrGen<is_dram> addr_gen{.bank_base_address = base_addr, .page_size = page_size};
 
     // First step - read into DB0
-    uint32_t read_length = pages * page_size;
+    uint64_t read_length = (uint64_t)pages * page_size;
     uint32_t scratch_read_addr = scratch_db_top[0];
     uint32_t amt_to_read = (scratch_db_half_size > read_length) ? read_length : scratch_db_half_size;
     uint32_t amt_read = 0;

@@ -5,8 +5,9 @@
 #pragma once
 
 #include <cstdint>
-
 namespace tt::tt_metal {
+
+using SystemMemoryAddressWidth = uint64_t;
 
 struct SystemMemoryCQInterface {
     // CQ is split into issue and completion regions
@@ -28,7 +29,7 @@ struct SystemMemoryCQInterface {
     uint32_t issue_fifo_size = 0;
     uint32_t issue_fifo_limit = 0;  // Last possible FIFO address
     const uint32_t offset;
-    uint32_t issue_fifo_wr_ptr = 0;
+    SystemMemoryAddressWidth issue_fifo_wr_ptr = 0;
     bool issue_fifo_wr_toggle = false;
 
     uint32_t completion_fifo_size = 0;

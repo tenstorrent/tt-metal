@@ -112,7 +112,7 @@ public:
         const void* data = nullptr);
 
     template <bool inline_data = false>
-    void add_dispatch_write_host(bool flush_prefetch, uint32_t data_sizeB, bool is_event, const void* data = nullptr);
+    void add_dispatch_write_host(bool flush_prefetch, uint64_t data_sizeB, bool is_event, const void* data = nullptr);
 
     void add_prefetch_exec_buf(uint32_t base_addr, uint32_t log_page_size, uint32_t pages);
 
