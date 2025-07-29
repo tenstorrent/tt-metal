@@ -39,16 +39,12 @@ operation::ProgramWithCallbacks nd_reshard_multicore_copy_shard(const Tensor& in
     auto compile_time_args_reader = input_accessor_args.get_compile_time_args();
     output_accessor_args.append_to(compile_time_args_reader);
     compile_time_args_reader.push_back(aligned_page_size);
-
-    // Choose kernel path based on is_reader flag
-    const char* kernel_path =
-        is_reader ? "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/nd_reshard_local_reader.cpp"
-                  : "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/nd_reshard_local_writer.cpp";
+    compile_time_args_reader.push_back(is_reader);
 
     // Create kernels
     KernelHandle brisc_kernel_id = CreateKernel(
         program,
-        kernel_path,
+        "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/nd_reshard_copy_shard.cpp",
         grid,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -58,7 +54,7 @@ operation::ProgramWithCallbacks nd_reshard_multicore_copy_shard(const Tensor& in
 
     KernelHandle ncrisc_kernel_id = CreateKernel(
         program,
-        kernel_path,
+        "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/nd_reshard_copy_shard.cpp",
         grid,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -121,6 +117,6 @@ operation::ProgramWithCallbacks nd_reshard_multicore_copy_shard(const Tensor& in
 }
 
 operation::ProgramWithCallbacks nd_reshard_multi_core(const Tensor& input, Tensor& output) {
-    return nd_reshard_multicore_copy_shard(input, output, true);
+    return nd_reshard_multicore_copy_shard(input, output, false);
 }
 }  // namespace ttnn::operations::data_movement::detail
