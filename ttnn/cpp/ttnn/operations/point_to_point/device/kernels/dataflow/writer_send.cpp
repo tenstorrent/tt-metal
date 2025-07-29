@@ -27,14 +27,13 @@ void kernel_main() {
     const auto payload_size_bytes = get_arg_val<uint32_t>(5);
     const auto max_pages_per_packet = get_arg_val<uint32_t>(6);
     const auto page_segments = get_arg_val<uint32_t>(7);
-    const auto semaphore_ptr = get_arg_val<volatile tt_l1_ptr uint32_t*>(8);
-    const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(9);
-    const bool dst_is_forward = get_arg_val<uint32_t>(10);
+    const uint32_t receive_semaphore_addr = get_arg_val<uint32_t>(8);
+    const bool dst_is_forward = get_arg_val<uint32_t>(9);
 
     const uint32_t aligned_page_size_bytes = round_up(page_size_bytes, alignment);
 
     // reusing the last arg for fabric setup, therefore index overlaps.
-    size_t conn_arg_idx = 10;
+    size_t conn_arg_idx = 9;
 
     auto fabric_connection = FabricConnectionManager::build_from_args<
         FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx);
@@ -60,7 +59,8 @@ void kernel_main() {
     uint32_t packet_idx = page_idx_start / max_pages_per_packet;
 
     // wait for receiver to signal it is ready
-    noc_semaphore_wait(semaphore_ptr, 1);
+    auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr);
+    noc_semaphore_wait(local_semaphore_ptr, 1);
 
     fabric_connection.open_finish();
     auto& connection_direction =
@@ -117,5 +117,5 @@ void kernel_main() {
     fabric_connection.close();
 
     // clean up semaphore
-    noc_semaphore_set(semaphore_ptr, 0);
+    noc_semaphore_set(local_semaphore_ptr, 0);
 }

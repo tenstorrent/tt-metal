@@ -15,18 +15,11 @@ ttnn::Tensor ExecutePointToPoint::invoke(
     const MeshCoordinate& send_coord,
     const MeshCoordinate& receive_coord,
     const ccl::Topology topology,
-    const GlobalSemaphore& sender_semaphore,
-    const GlobalSemaphore& receiver_semaphore,
+    const GlobalSemaphore& semaphore,
     const std::optional<ttnn::Tensor> optional_output_tensor) {
     // first output tensor in list is intermediate and is discarded
     return ttnn::prim::point_to_point(
-               input_tensor,
-               topology,
-               send_coord,
-               receive_coord,
-               sender_semaphore,
-               receiver_semaphore,
-               optional_output_tensor)
+               input_tensor, topology, send_coord, receive_coord, semaphore, optional_output_tensor)
         .at(1);
 }
 

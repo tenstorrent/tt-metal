@@ -123,11 +123,12 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
         mesh_device->get_view().contains(operation_attributes.receive_coord),
         "Mesh device must contain receiver coordinate device");
 
-    auto semaphore_device = dynamic_cast<MeshDevice*>(operation_attributes.receiver_semaphore.device());
+    auto semaphore_device = dynamic_cast<MeshDevice*>(operation_attributes.semaphore.device());
     TT_FATAL(semaphore_device != nullptr, "Point to point expected semaphore on mesh device");
     TT_FATAL(
-        semaphore_device->get_view().contains(operation_attributes.receive_coord),
-        "Semaphore must be on receiving device");
+        semaphore_device->get_view().contains(operation_attributes.receive_coord) &&
+            semaphore_device->get_view().contains(operation_attributes.send_coord),
+        "Semaphore must be on sending and receiving devices");
 
     const auto& optional_output_tensor = tensor_args.optional_output_tensor;
     if (optional_output_tensor.has_value()) {
@@ -263,6 +264,7 @@ void PointToPointOp::SendReceive::override_runtime_arguments(
 
             auto& writer_runtime_args = GetRuntimeArgs(program, send_unary_writer_kernel_id, core);
             writer_runtime_args.at(0) = tensor_return_value.at(0).mesh_buffer()->get_device_buffer(coord)->address();
+            writer_runtime_args.at(8) = operation_attributes.semaphore.address();
         }
 
         if (coord == receive_coord) {
@@ -274,7 +276,7 @@ void PointToPointOp::SendReceive::override_runtime_arguments(
 
             auto& reader_runtime_args = GetRuntimeArgs(program, receive_unary_reader_kernel_id, core);
             reader_runtime_args.at(3) = tensor_return_value.at(0).mesh_buffer()->get_device_buffer(coord)->address();
-            reader_runtime_args.at(7) = operation_attributes.receiver_semaphore.address();
+            reader_runtime_args.at(7) = operation_attributes.semaphore.address();
 
             auto& writer_runtime_args = GetRuntimeArgs(program, receive_unary_writer_kernel_id, core);
             writer_runtime_args.at(0) = tensor_return_value.at(1).mesh_buffer()->get_device_buffer(coord)->address();

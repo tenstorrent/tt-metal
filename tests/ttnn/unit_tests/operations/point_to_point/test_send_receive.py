@@ -85,16 +85,14 @@ def test_send_receive(mesh_device, shape_coords, layout, dtype):
     cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
-    send_semaphore = ttnn.create_global_semaphore(mesh_device, cores, 0)
-    receiver_semaphore = ttnn.create_global_semaphore(mesh_device, cores, 0)
+    semaphore = ttnn.create_global_semaphore(mesh_device, cores, 0)
 
     sent_tensor = ttnn.point_to_point(
         input_tensor,
         coord0,
         coord1,
         ttnn.Topology.Linear,
-        send_semaphore,
-        receiver_semaphore,
+        semaphore,
     )
     sent_tensor_torch = ttnn.to_torch(sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     assert_equal(input_tensor_torch[idx_start0:idx_end0, :, :, :], sent_tensor_torch[idx_start1:idx_end1, :, :, :])
@@ -111,8 +109,7 @@ def test_send_receive(mesh_device, shape_coords, layout, dtype):
         coord1,
         coord0,
         ttnn.Topology.Linear,
-        receiver_semaphore,
-        send_semaphore,
+        semaphore,
         optional_output_tensor=return_tensor,
     )
 

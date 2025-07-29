@@ -25,13 +25,12 @@ void kernel_main() {
     const auto packet_size_bytes = get_arg_val<uint32_t>(4);
     const auto page_size_bytes = get_arg_val<uint32_t>(5);
     const auto page_segments = get_arg_val<uint32_t>(6);
-    auto semaphore_ptr = get_arg_val<volatile tt_l1_ptr uint32_t*>(7);
+    const uint32_t sender_semaphore_addr = get_arg_val<uint32_t>(7);
     const uint8_t sender_num_hops = get_arg_val<uint32_t>(8);
-    const uint32_t sender_semaphore_addr = get_arg_val<uint32_t>(9);
-    const bool sender_is_forward = get_arg_val<uint32_t>(10);
+    const bool sender_is_forward = get_arg_val<uint32_t>(9);
 
     // reusing the last arg for fabric setup, therefore index overlaps.
-    size_t conn_arg_idx = 10;
+    size_t conn_arg_idx = 9;
 
     auto fabric_connection = FabricConnectionManager::build_from_args<
         FabricConnectionManager::BuildFromArgsMode::BUILD_AND_OPEN_CONNECTION_START_ONLY>(conn_arg_idx);
@@ -62,7 +61,8 @@ void kernel_main() {
     cb_reserve_back(packet_cb_id, 1);
     const uint64_t packet_l1_addr = get_write_ptr(packet_cb_id);
 
-    noc_semaphore_wait(semaphore_ptr, 1);
+    auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
+    noc_semaphore_wait(local_semaphore_ptr, 1);
 
     const uint32_t aligned_page_size_bytes = align(page_size_bytes, alignment);
     uint32_t curr_pages_per_packet = std::min(max_pages_per_packet, page_idx_end - page_idx_start);
@@ -96,5 +96,5 @@ void kernel_main() {
     cb_push_back(packet_cb_id, 1);
 
     // clean up semaphore in case it is reused
-    noc_semaphore_set(semaphore_ptr, 0);
+    noc_semaphore_set(local_semaphore_ptr, 0);
 }

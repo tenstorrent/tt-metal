@@ -23,8 +23,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     auto mesh_device = dynamic_cast<MeshDevice*>(tensor_args.input_tensor.device());
     const auto& topology = operation_attributes.topology;
     const auto& input_tensor = tensor_args.input_tensor;
-    const auto& sender_semaphore = operation_attributes.sender_semaphore;
-    const auto& receiver_semaphore = operation_attributes.receiver_semaphore;
+    const auto& semaphore = operation_attributes.semaphore;
 
     // basic accounting
     const uint32_t input_num_pages = data_movement::get_num_pages(input_tensor);
@@ -132,8 +131,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             packet_size_bytes,
             num_pages_per_packet,
             num_page_segments,
-            sender_semaphore.address(),
-            receiver_semaphore.address(),
+            semaphore.address(),
             dst_is_forward,
         };
 
