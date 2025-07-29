@@ -84,10 +84,20 @@ test_suite_bh_llmbox_llama_demo_tests() {
     echo "[upstream-tests] Running BH LLMBox upstream Llama demo model tests"
     verify_llama_dir_
 
-    echo "Using data_parallel = $NUM_DEVICES"
+    if [[ "$hw_topology" == "blackhole_deskbox" ]]; then
+        local data_parallel_devices="2"
+    elif [[ "$hw_topology" == "blackhole_llmbox" ]]; then
+        local data_parallel_devices="4"
+    elif [[ "$hw_topology" == "blackhole_rackbox" ]]; then
+        local data_parallel_devices="8"
+    else
+        echo "Your blackhole hw topology is not supported to run Llama demo model tests!"
+    fi
 
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel "$NUM_DEVICES"
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel "$NUM_DEVICES" --max_generated_tokens 220
+    echo "Using data_parallel = $data_parallel_devices for topology: $hw_topology"
+
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel "$data_parallel_devices"
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel "$data_parallel_devices" --max_generated_tokens 220
 }
 
 test_suite_bh_llmbox_llama_stress_tests() {
@@ -163,6 +173,14 @@ test_suite_bh_single_pcie_metal_unit_tests
 test_suite_bh_single_pcie_didt_tests"
 
 hw_topology_test_suites["blackhole_llmbox"]="
+test_suite_bh_llmbox_metal_unit_tests
+test_suite_bh_llmbox_llama_demo_tests"
+
+hw_topology_test_suites["blackhole_deskbox"]="
+test_suite_bh_llmbox_metal_unit_tests
+test_suite_bh_llmbox_llama_demo_tests"
+
+hw_topology_test_suites["blackhole_rackbox"]="
 test_suite_bh_llmbox_metal_unit_tests
 test_suite_bh_llmbox_llama_demo_tests"
 

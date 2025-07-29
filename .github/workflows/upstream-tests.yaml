@@ -18,6 +18,8 @@ env:
   BLACKHOLE_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh
   BLACKHOLE_PROFILER_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-profiler-tests-bh
   BLACKHOLE_LLMBOX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-llmbox
+  BLACKHOLE_DESKBOX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-deskbox
+  BLACKHOLE_RACKBOX_IMAGE_NAME: ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-rackbox
 
 jobs:
   build-artifact:
@@ -46,6 +48,8 @@ jobs:
       bh-image-tag: ${{ steps.set-image-tags.outputs.bh-image-tag }}
       bh-profiler-image-tag: ${{ steps.set-image-tags.outputs.bh-profiler-image-tag }}
       bh-llmbox-image-tag: ${{ steps.set-image-tags.outputs.bh-llmbox-image-tag }}
+      bh-deskbox-image-tag: ${{ steps.set-image-tags.outputs.bh-deskbox-image-tag }}
+      bh-rackbox-image-tag: ${{ steps.set-image-tags.outputs.bh-rackbox-image-tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -62,6 +66,8 @@ jobs:
           echo "bh-image-tag=${{ env.BLACKHOLE_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
           echo "bh-profiler-image-tag=${{ env.BLACKHOLE_PROFILER_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
           echo "bh-llmbox-image-tag=${{ env.BLACKHOLE_LLMBOX_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
+          echo "bh-deskbox-image-tag=${{ env.BLACKHOLE_DESKBOX_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
+          echo "bh-rackbox-image-tag=${{ env.BLACKHOLE_RACKBOX_IMAGE_NAME }}:${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}" >> "$GITHUB_OUTPUT"
   build-images:
     needs:
       - build-artifact
@@ -103,6 +109,18 @@ jobs:
             dockerfile: dockerfile/upstream_test_images/Dockerfile
             test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
             hw-topology: blackhole_llmbox
+            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
+            dockerfile: dockerfile/upstream_test_images/Dockerfile
+            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
+            hw-topology: blackhole_deskbox
+            build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+            wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+          - image-tag: ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
+            dockerfile: dockerfile/upstream_test_images/Dockerfile
+            test-command: dockerfile/upstream_test_images/run_upstream_tests_vanilla.sh
+            hw-topology: blackhole_rackbox
             build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
             wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
             techdebt-install-ttt-reqs: true
@@ -185,30 +203,44 @@ jobs:
     needs:
       - get-image-tags
       - build-images
-    strategy:
-      matrix:
-        bh_box:
-          - name: BH-LLMBox
-            num_devices: 4
-          - name: BH-DeskBox
-            num_devices: 2
-          # - name: BH-RackBox
-          #   num_devices: 8
     runs-on:
-      - ${{ matrix.bh_box.name }}
+      - BH-LLMBox
       - in-service
       - cloud-virtual-machine
     steps:
-      - name: Show box config
-        run: |
-          echo "Box: ${{ matrix.bh_box.name }}"
-          echo "NUM_DEVICES: ${{ matrix.bh_box.num_devices }}"
       - name: Run image
         timeout-minutes: 30
         env:
-          NUM_DEVICES: ${{ matrix.bh_box.num_devices }}
           LLAMA_DIR: ${{ contains(runner.name, 'tt-metal-ci-vm') && '/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct' || '/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct' }}
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR=$LLAMA_DIR -e NUM_DEVICES=$NUM_DEVICES ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
+  test-bh-deskbox-image:
+    needs:
+      - get-image-tags
+      - build-images
+    runs-on:
+      - BH-DeskBox
+      - in-service
+      - cloud-virtual-machine
+    steps:
+      - name: Run image
+        timeout-minutes: 30
+        env:
+          LLAMA_DIR: ${{ contains(runner.name, 'tt-metal-ci-vm') && '/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct' || '/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct' }}
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
+  test-bh-rackbox-image:
+    needs:
+      - get-image-tags
+      - build-images
+    runs-on:
+      - BH-RackBox
+      - in-service
+      - cloud-virtual-machine
+    steps:
+      - name: Run image
+        timeout-minutes: 30
+        env:
+          LLAMA_DIR: ${{ contains(runner.name, 'tt-metal-ci-vm') && '/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct' || '/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct' }}
+        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
   test-bh-image:
     needs:
       - get-image-tags
