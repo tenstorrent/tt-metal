@@ -39,8 +39,6 @@ PermuteDeviceOperation::program_factory_t PermuteDeviceOperation::select_program
 
 void PermuteDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    auto& dims = attributes.dims;
-    auto rank = tensor_args.input_tensor.logical_shape().rank();
     TT_FATAL(
         attributes.dims.size() == tensor_args.input_tensor.logical_shape().rank(),
         "Permute dimensions must match input tensor rank");

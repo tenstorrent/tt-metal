@@ -344,10 +344,6 @@ get_padded_slice_runtime_args_tile_sharded_output(
     const ttnn::Shape& actual_output_shape,
     const std::vector<CoreCoord>& cores,
     uint32_t max_read_size) {
-    tt::tt_metal::IDevice* device = input_tensor.device();
-
-    auto input_buffer = input_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
     auto input_padded_shape = input_tensor.padded_shape();
     auto input_shape = input_tensor.logical_shape();
     auto output_shard_spec = output_tensor.shard_spec().value();
@@ -366,14 +362,6 @@ get_padded_slice_runtime_args_tile_sharded_output(
             num_cores_channels = total_cores.bounding_box().grid_size().y;
         }
     }
-
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
-
-    uint32_t output_row_size_bytes = output_shard_shape[1] * input_tensor.element_size();
-    uint32_t output_row_size_elems = output_shard_shape[1];
 
     uint32_t num_tiles_per_channel = tt::div_up(input_padded_shape[3], tt::constants::TILE_WIDTH);
     num_tiles_per_channel = num_tiles_per_channel / num_cores_channels;
@@ -527,9 +515,8 @@ get_padded_slice_runtime_args_tile_sharded_output(
             input_tensor, ttnn::Shape(start_index_in_input_per_dim));
         uint32_t input_end_id = ttnn::operations::data_movement::get_tiled_start_offset(
             input_tensor, ttnn::Shape(end_index_in_input_per_dim), true);
-        uint32_t output_start_id = ttnn::operations::data_movement::get_tiled_start_offset(
-            actual_output_shape, ttnn::Shape(start_index_per_dim));
-        uint32_t output_end_id = ttnn::operations::data_movement::get_tiled_start_offset(
+        ttnn::operations::data_movement::get_tiled_start_offset(actual_output_shape, ttnn::Shape(start_index_per_dim));
+        ttnn::operations::data_movement::get_tiled_start_offset(
             actual_output_shape, ttnn::Shape(end_index_per_dim), true);
 
         int32_t num_full_rows = ((end_index_per_dim[0] - start_index_per_dim[0]) * actual_output_shape[1]) +

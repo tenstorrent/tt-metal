@@ -59,7 +59,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
         tt::tt_metal::CircularBufferConfig(
             num_input_units * aligned_input_unit_size, {{src0_cb_index, input_cb_data_format}})
             .set_page_size(src0_cb_index, aligned_input_unit_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t output_cb_index = src0_cb_index;  // same as input cb
     if (convert_dtype) {
@@ -70,7 +70,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
             tt::tt_metal::CircularBufferConfig(
                 num_output_units * aligned_output_unit_size, {{output_cb_index, output_cb_data_format}})
                 .set_page_size(output_cb_index, aligned_output_unit_size);
-        auto cb_output = tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
     }
 
     auto src_buffer = input.buffer();
@@ -129,7 +129,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
 
     if (convert_dtype) {
         std::vector<uint32_t> compute_kernel_args_group_1 = {num_units_per_core_group_1};
-        auto eltwise_unary_kernel_group_1 = tt::tt_metal::CreateKernel(
+        tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp",
             core_group_1,
@@ -137,7 +137,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
 
         if (!core_group_2.ranges().empty()) {
             std::vector<uint32_t> compute_kernel_args_group_2 = {num_units_per_core_group_2};
-            auto eltwise_unary_kernel_group_2 = tt::tt_metal::CreateKernel(
+            tt::tt_metal::CreateKernel(
                 program,
                 "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/eltwise_copy.cpp",
                 core_group_2,
@@ -151,7 +151,6 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
     }
 
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
 
     for (uint32_t i = 0; i < cores.size(); ++i) {

@@ -26,7 +26,6 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
     uint32_t num_tiles = a.physical_volume() / tt::constants::TILE_HW;
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::IDevice* device = a.device();
 
     auto output_shape = output.padded_shape();
 
@@ -38,7 +37,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     uint32_t alignment = src0_is_dram ? hal::get_dram_alignment() : hal::get_l1_alignment();
@@ -53,7 +52,7 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
         tt::tt_metal::CircularBufferConfig cb_src1_config =
             tt::tt_metal::CircularBufferConfig(alignment, {{src1_cb_index, cb_data_format}})
                 .set_page_size(src1_cb_index, alignment);
-        auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+        tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
     }
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -130,7 +129,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
 
     uint32_t max_read_size = 2048;
-    uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
     for (uint32_t i = 0, curr_sticks_read = 0, curr_sticks_write = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_new_sticks_per_core = 0, num_old_sticks_per_core = 0;
@@ -254,15 +252,12 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_pages * max_page_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, page_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     // Reader compile-time args
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool old_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(old_stick_size);
     uint32_t old_log2_stick_size = old_stick_size_is_power_of_two ? (std::uint32_t)std::log2(old_stick_size) : 0;
-    bool is_new_stick_larger = new_stick_size > old_stick_size;
-    uint32_t new_old_stick_size_ratio =
-        new_stick_size > old_stick_size ? new_stick_size / old_stick_size : old_stick_size / new_stick_size;
     std::vector<uint32_t> reader_ct_args = {
         (std::uint32_t)src0_is_dram,
         (std::uint32_t)old_stick_size,

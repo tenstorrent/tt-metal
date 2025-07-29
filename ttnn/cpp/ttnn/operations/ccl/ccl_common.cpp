@@ -114,7 +114,6 @@ SenderRecieverConfig get_device_sender_receiver_config_in_ring(
     TT_FATAL(
         mesh_view.is_mesh_2d(),
         "CLL operation invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-    const auto view_index = (cluster_axis == 0) ? mesh_coord[1] : mesh_coord[0];
     config.device_index = (cluster_axis == 0) ? mesh_coord[0] : mesh_coord[1];
 
     auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
@@ -301,7 +300,7 @@ void generate_edm_kernels_for_ring_or_linear_topology(
         if (is_clockwise_direction_edm_enabled) {
             auto eth_sender_core = topology_config.eth_sender_cores.at(i);
             log_trace(tt::LogOp, "EDM CLOCKWISE KERNEL RT ARGS: ");
-            auto eth_sender_kernel = generate_edm_kernel(
+            generate_edm_kernel(
                 program,
                 device,
                 clockwise_edm_builders.at(i),
@@ -321,7 +320,7 @@ void generate_edm_kernels_for_ring_or_linear_topology(
         if (is_counter_clockwise_direction_edm_enabled) {
             log_trace(tt::LogOp, "EDM COUNTER CLOCKWISE KERNEL RT ARGS: ");
             auto eth_receiver_core = topology_config.eth_receiver_cores.at(i);
-            auto eth_receiver_kernel = generate_edm_kernel(
+            generate_edm_kernel(
                 program,
                 device,
                 counter_clockwise_edm_builders.at(i),
@@ -506,7 +505,6 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
     // The `output_page_offset` will be the starting page offset for this slice index (corresponds to )
     // ring index). Each worker will operate out of that slice and then advance to the next slice for
     // for the next ring index/timestep
-    uint32_t slice_size_in_bytes = std::numeric_limits<uint32_t>::max();
     if (row_major) {
         if (slice_dim_is_width) {
             TT_THROW("Reduce scatter row-major interleaved does not yet support a width dim");
@@ -712,8 +710,6 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shape
     // Add padding for filler pages
 
     TT_ASSERT(max_slice_size_in_tiles > 0);
-    std::size_t max_width_in_tiles = std::min<std::size_t>(max_slice_size_in_tiles, tensor_slice_shape_in_tiles.x);
-    std::size_t max_height_in_tiles = std::min<std::size_t>(max_slice_size_in_tiles, tensor_slice_shape_in_tiles.y);
 
     uint32_t num_tiles_accounted_for = 0;  // for validation
     if (tensor_slice_shape_in_tiles.y >= num_workers) {
