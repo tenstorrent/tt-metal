@@ -86,7 +86,7 @@ def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, me
     input_tensor = ttnn.from_torch(tt_input, device=device, layout=memory_layout, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     if input_tensor.padded_shape != input_tensor.shape and memory_layout == ttnn.TILE_LAYOUT:
-        pytest.skip("Disabled until different logical and padded shapes are supported")
+        pytest.skip("Disabled until different logical and padded shapes are supported for TILE_LAYOUT")
 
     scale_factor = (scale_h, scale_w)
     torch_upsample = nn.Upsample(scale_factor=scale_factor, mode="nearest")
