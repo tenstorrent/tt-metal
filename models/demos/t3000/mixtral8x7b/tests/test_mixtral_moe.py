@@ -8,6 +8,7 @@ from loguru import logger
 import ttnn
 from models.demos.t3000.mixtral8x7b.reference.model import FeedForward
 from models.demos.t3000.mixtral8x7b.reference.moe import MoeLayer
+from models.demos.t3000.mixtral8x7b.tt.mixtral_ccl import TT_CCL
 from models.demos.t3000.mixtral8x7b.tt.mixtral_mlp import TtMixtralMLP
 from models.demos.t3000.mixtral8x7b.tt.mixtral_moe import TtMoeLayer
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
