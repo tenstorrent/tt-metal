@@ -116,7 +116,6 @@ tests/didt/ @rdjogoTT @ttmtrajkovic
 # TTNN
 ttnn/ @tenstorrent/metalium-developers-ttnn-core
 ttnn/tutorials/ @tenstorrent/metalium-developers-ttnn-core @aczajkowskiTT
-ttnn/ttnn/library_tweaks.py @ayerofieiev-tt @tenstorrent/metalium-developers-infra
 ttnn/ttnn/operations/moreh.py @razorback3 @dongjin-na @cfjchu @ayerofieiev-tt @dmakoviichuk-tt
 ttnn/ttnn/operations/conv2d.py @tenstorrent/metalium-developers-convolutions
 ttnn/ttnn/operations/pool.py @tenstorrent/metalium-developers-convolutions
