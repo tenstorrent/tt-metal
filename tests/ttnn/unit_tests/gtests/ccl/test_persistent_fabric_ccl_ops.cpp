@@ -113,7 +113,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     // wait for op completion
     log_info(tt::LogTest, "Waiting for Op finish");
     std::ranges::for_each(devices, [&](IDevice* d) {
-        tt_metal::Finish(d->command_queue(), {subdevice_managers->worker_subdevice_id.at(d->id())});
+        tt_metal::Finish(d->command_queue(), {{subdevice_managers->worker_subdevice_id.at(d->id())}});
     });
 
     log_info(tt::LogTest, "Finished");

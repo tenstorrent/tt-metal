@@ -28,7 +28,7 @@ void validate_and_setup_control_plane_config(Fixture* fixture) {
 
     auto chip_to_eth_coord_mapping = multihost_utils::get_physical_chip_mapping_from_eth_coords_mapping(
         fixture->get_eth_coord_mapping(), std::stoi(local_mesh_id));
-    tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(
+    tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
         fixture->get_path_to_mesh_graph_desc(), chip_to_eth_coord_mapping);
     TT_FATAL(
         tt::tt_metal::MetalContext::instance().get_control_plane().system_has_intermesh_links(),

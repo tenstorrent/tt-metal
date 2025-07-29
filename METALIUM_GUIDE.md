@@ -105,16 +105,11 @@ void kernel_main() {
 
     const uint32_t tile_size_bytes = get_tile_size(cb_in0);
 
-    const InterleavedAddrGenFast<true> a = {
-        .bank_base_address = a_addr,
-        .page_size = tile_size_bytes,
-        .data_format = DataFormat::Float16_b
-    };
-    const InterleavedAddrGenFast<true> b = {
-        .bank_base_address = b_addr,
-        .page_size = tile_size_bytes,
-        .data_format = DataFormat::Float16_b
-    };
+    constexpr auto args_a = TensorAccessorArgs<0>();
+    const auto a = TensorAccessor(args_a, a_addr, tile_size_bytes);
+
+    constexpr auto args_b = TensorAccessorArgs<args_a.next_compile_time_args_offset()>();
+    const auto b = TensorAccessor(args_b, b_addr, tile_size_bytes);
 
     // Read inputs from DRAM into circular buffers
     for (uint32_t i = 0; i < n_tiles; i++) {
@@ -193,11 +188,8 @@ void kernel_main() {
 
     const uint32_t tile_size_bytes = get_tile_size(cb_out);
 
-    const InterleavedAddrGenFast<true> c = {
-        .bank_base_address = c_addr,
-        .page_size = tile_size_bytes,
-        .data_format = DataFormat::Float16_b
-    };
+    constexpr auto args_c = TensorAccessorArgs<0>();
+    const auto c = TensorAccessor(args_c, c_addr, tile_size_bytes);
 
     // Read outputs from circular buffers into DRAM
     for (uint32_t i = 0; i < n_tiles; i++) {
@@ -376,16 +368,21 @@ CBHandle cb_out = CreateCircularBuffer(
 Then, we compile the kernels for data movement and computation. For simplicity, this example targets a single Tensix at coordinates (0, 0). Runtime arguments are then configured for each kernel to specify their operational parameters.
 
 ```c++
+std::vector<uint32_t> reader_args;
+TensorAccessorArgs(*a).append_to(reader_args);
+TensorAccessorArgs(*b).append_to(reader_args);
 auto reader = CreateKernel(
     program,
     "path/to/reader_kernel.cpp",
     core,
-    DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_args});
+std::vector<uint32_t> writer_args;
+TensorAccessorArgs(*c).append_to(writer_args);
 auto writer = CreateKernel(
     program,
     "path/to/writer_kernel.cpp",
     core,
-    DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = writer_args});
 auto compute = CreateKernel(
     program,
     "path/to/compute_kernel.cpp",
