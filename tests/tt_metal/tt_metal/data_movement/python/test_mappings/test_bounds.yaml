@@ -142,7 +142,7 @@
   blackhole:
     riscv_0:
       latency: 110000
-      bandwidth: 41
+      bandwidth: 39
 
 "Deinterleave Single Core":
   wormhole_b0:
