@@ -81,14 +81,10 @@ TEST_F(WatcherFixture, TestWatcherStackUsage0) {
     for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(RunTest<0>, device);
     }
-    // Trigger a watcher re-init, so that the stack usage is reset.
-    this->reset_server = true;
 }
 
 TEST_F(WatcherFixture, TestWatcherStackUsage16) {
     for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(RunTest<16>, device);
     }
-    // Trigger a watcher re-init, so that the stack usage is reset.
-    this->reset_server = true;
 }
