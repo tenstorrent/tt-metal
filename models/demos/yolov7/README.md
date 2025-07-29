@@ -35,6 +35,9 @@ pytest --disable-warnings models/demos/yolov7/tests/perf/test_e2e_performant.py:
 pytest --disable-warnings models/demos/yolov7/demo/demo.py
 ```
 
+### Web Demo
+- Try the interactive web demo at [yolov7/web_demo](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov7/web_demo/README.md)
+
 ## Testing
 ### Performant evaluation with Trace+2CQ
 ```

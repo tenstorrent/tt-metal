@@ -43,7 +43,7 @@ pytest models/experimental/yolo_eval/evaluate.py::test_yolov8x[res0-device_param
 Note: The model is evaluated with 500 samples.
 
 ### Web Demo
-- Try the interactive web demo [instructions](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov8x/README.md)
+- Try the interactive web demo at [yolov8x/web_demo](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov8x/web_demo/README.md)
 
 ## Details
 **Pre-trained weights:** The demo and tests can be run with randomly initialized weights and pre-trained real weights. To run only for the pre-trained weights, specify pretrained_weight_true when running them.
