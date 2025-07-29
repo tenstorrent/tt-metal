@@ -76,54 +76,56 @@ target_link_libraries(
 
 # unit_tests_ttnn_ccl
 
-set(UNIT_TESTS_TTNN_CCL_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_ccl_commands.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_ccl_helpers.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_ccl_reduce_scatter_host_helpers.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_ccl_tensor_slicers.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_erisc_data_mover_with_workers.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_fabric_erisc_data_mover_loopback_with_workers.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_sharded_address_generators.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_sharded_address_generators_new.cpp
+add_library(unit_tests_ttnn_ccl_lib OBJECT)
+add_library(TTNN::Test::CCL ALIAS unit_tests_ttnn_ccl_lib)
+target_sources(
+    unit_tests_ttnn_ccl_lib
+    PRIVATE
+        ccl/test_ccl_commands.cpp
+        ccl/test_ccl_helpers.cpp
+        ccl/test_ccl_reduce_scatter_host_helpers.cpp
+        ccl/test_ccl_tensor_slicers.cpp
+        ccl/test_erisc_data_mover_with_workers.cpp
+        ccl/test_fabric_erisc_data_mover_loopback_with_workers.cpp
+        ccl/test_sharded_address_generators.cpp
+        ccl/test_sharded_address_generators_new.cpp
+)
+target_include_directories(unit_tests_ttnn_ccl_lib PUBLIC ${PROJECT_SOURCE_DIR}/tests)
+target_link_libraries(
+    unit_tests_ttnn_ccl_lib
+    PUBLIC
+        test_common_libs
+        TTNN::CPP
 )
 
 add_executable(unit_tests_ttnn_ccl)
-target_sources(unit_tests_ttnn_ccl PRIVATE ${UNIT_TESTS_TTNN_CCL_SRC})
-target_include_directories(unit_tests_ttnn_ccl PRIVATE ${PROJECT_SOURCE_DIR}/tests)
-target_link_libraries(
-    unit_tests_ttnn_ccl
-    PRIVATE
-        test_common_libs
-        TTNN::CPP
-)
-
-add_library(unit_tests_ttnn_ccl_lib OBJECT)
-add_library(TTNN::Test::CCL ALIAS unit_tests_ttnn_ccl_lib)
-target_sources(unit_tests_ttnn_ccl_lib PRIVATE ${UNIT_TESTS_TTNN_CCL_SRC})
-target_include_directories(unit_tests_ttnn_ccl_lib PRIVATE ${PROJECT_SOURCE_DIR}/tests)
-target_link_libraries(
-    unit_tests_ttnn_ccl_lib
-    PRIVATE
-        test_common_libs
-        TTNN::CPP
-)
+target_link_libraries(unit_tests_ttnn_ccl PRIVATE TTNN::Test::CCL)
 
 # unit_tests_ttnn_ccl_ops
 
-set(UNIT_TESTS_TTNN_CCL_OPS_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_persistent_fabric_ccl_ops.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_send_recv_ops.cpp
+add_library(unit_tests_ttnn_ccl_ops_lib OBJECT)
+add_library(TTNN::Test::CCL::Ops ALIAS unit_tests_ttnn_ccl_ops_lib)
+target_sources(
+    unit_tests_ttnn_ccl_ops_lib
+    PRIVATE
+        ccl/test_persistent_fabric_ccl_ops.cpp
+        ccl/test_send_recv_ops.cpp
+)
+target_include_directories(
+    unit_tests_ttnn_ccl_ops_lib
+    PUBLIC
+        ${PROJECT_SOURCE_DIR}/tests
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(
+    unit_tests_ttnn_ccl_ops_lib
+    PUBLIC
+        test_common_libs
+        TTNN::CPP
 )
 
 add_executable(unit_tests_ttnn_ccl_ops)
-target_sources(unit_tests_ttnn_ccl_ops PRIVATE ${UNIT_TESTS_TTNN_CCL_OPS_SRC})
-setup_ttnn_test_target(unit_tests_ttnn_ccl_ops)
-
-add_library(unit_tests_ttnn_ccl_ops_lib OBJECT)
-add_library(TTNN::Test::CCL::Ops ALIAS unit_tests_ttnn_ccl_ops_lib)
-target_sources(unit_tests_ttnn_ccl_ops_lib PRIVATE ${UNIT_TESTS_TTNN_CCL_OPS_SRC})
-
-setup_ttnn_test_target(unit_tests_ttnn_ccl_ops_lib)
+target_link_libraries(unit_tests_ttnn_ccl_ops PRIVATE TTNN::Test::CCL::Ops)
 
 # unit_tests_ttnn_multihost_ccl_ops
 add_executable(unit_tests_ttnn_multihost_ccl_ops)
