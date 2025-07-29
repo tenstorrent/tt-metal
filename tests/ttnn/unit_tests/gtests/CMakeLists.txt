@@ -97,6 +97,16 @@ target_link_libraries(
         TTNN::CPP
 )
 
+add_library(unit_tests_ttnn_ccl_lib OBJECT)
+add_library(TTNN::Test::CCL ALIAS unit_tests_ttnn_ccl_lib)
+target_sources(unit_tests_ttnn_ccl_lib PRIVATE ${UNIT_TESTS_TTNN_CCL_SRC})
+target_link_libraries(
+    unit_tests_ttnn_ccl_lib
+    PRIVATE
+        test_common_libs
+        TTNN::CPP
+)
+
 # unit_tests_ttnn_ccl_ops
 
 set(UNIT_TESTS_TTNN_CCL_OPS_SRC
