@@ -17,10 +17,9 @@ DEFAULT_GOLDEN_FILE = os.path.join(
 
 BANDWIDTH_VAIRANCE_TOLERANCE_PCT = 5
 
+
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Compare performance benchmarks against golden values."
-    )
+    parser = argparse.ArgumentParser(description="Compare performance benchmarks against golden values.")
     parser.add_argument(
         "json",
         type=argparse.FileType("r"),
@@ -35,11 +34,13 @@ def parse_args():
     args = parser.parse_args()
     return args.golden, args.json
 
+
 def collect_benchmarks(benchmark_obj):
     result = {}
     for benchmark in benchmark_obj["benchmarks"]:
         result[benchmark["name"]] = float(benchmark["bytes_per_second"])
     return result
+
 
 def compare_benchmarks(golden_benchmarks, result_benchmarks):
     """
@@ -81,6 +82,7 @@ def compare_benchmarks(golden_benchmarks, result_benchmarks):
         else:
             print(f"PASSED | Benchmark {name}: {result_value:.2f} vs {golden_value:.2f} (diff: {pct_diff:.2f}%)")
     return success
+
 
 if __name__ == "__main__":
     golden_file, result_file = parse_args()
