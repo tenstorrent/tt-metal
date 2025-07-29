@@ -448,6 +448,14 @@ def test_nd_reshard(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
         (
+            [1, 1, 2048, 4096],
+            ttnn.TILE_LAYOUT,
+            (64, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            (32, 64),
+            ttnn.ShardOrientation.COL_MAJOR,
+        ),
+        (
             [1, 3, 1024, 1024],
             ttnn.TILE_LAYOUT,
             (1, 32, 32),
