@@ -193,10 +193,6 @@ class RunTimeOptions {
     // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
     bool force_context_reinit = false;
 
-    // Special case for watcher_dump testing, when we want to keep errors around. TODO: remove this when watcher_dump
-    // goes away.
-    bool watcher_keep_errors = false;
-
     // feature flag to enable 2-erisc mode with fabric on Blackhole, until it is enabled by default
     bool enable_2_erisc_mode_with_fabric = false;
 
@@ -455,8 +451,6 @@ public:
     inline void set_disable_dma_ops(bool disable) { disable_dma_ops = disable; }
 
     inline bool get_force_context_reinit() const { return force_context_reinit; }
-
-    inline bool get_watcher_keep_errors() const { return watcher_keep_errors; }
 
     // Feature flag to specify if fabric is enabled in 2-erisc mode or not.
     // if true, then the fabric router is parallelized across two eriscs in the Ethernet core

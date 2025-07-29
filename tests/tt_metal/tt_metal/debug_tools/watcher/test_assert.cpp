@@ -153,9 +153,7 @@ static void RunTest(
 
     // Run the kernel, don't expect an issue here.
     log_info(LogTest, "Running args that shouldn't assert...");
-    // TODO: #24887, ND issue with this test - remove the sleep below when issue is fixed
     fixture->RunProgram(device, program, true);
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
     log_info(LogTest, "Args did not assert!");
 
     // Write runtime args that should trip an assert.
