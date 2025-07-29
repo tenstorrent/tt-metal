@@ -50,11 +50,12 @@ class MLP1D(AbstractModule):
 
         dim: int
         hidden_dim: int
-        num_devices: int
+        tensor_parallel_factor: int
         core_grid_size: ttnn.CoreCoord
 
     DRAM_SHARD_GRID_WIDTH = 8
     PREFILL_ROWS = 8
+    TENSOR_PARALLEL_FACTOR = 8
 
     @classmethod
     def convert_weights(
@@ -112,15 +113,13 @@ class MLP1D(AbstractModule):
         if is_w2:
             assert torch_weight_tensor.shape == (hidden_dim, dim)
             per_device_in_features, per_device_out_features = (
-                even_int_div(hidden_dim, mesh_device.get_num_devices()),
+                even_int_div(hidden_dim, cls.TENSOR_PARALLEL_FACTOR),
                 dim,
             )
             mesh_sharded_dim = 0
         else:
             assert torch_weight_tensor.shape == (dim, hidden_dim)
-            per_device_in_features, per_device_out_features = dim, even_int_div(
-                hidden_dim, mesh_device.get_num_devices()
-            )
+            per_device_in_features, per_device_out_features = dim, even_int_div(hidden_dim, cls.TENSOR_PARALLEL_FACTOR)
             mesh_sharded_dim = 1
 
         return ttnn.from_torch(
@@ -133,13 +132,15 @@ class MLP1D(AbstractModule):
                 per_device_out_features,
                 mesh_device.dram_grid_size(),
             ),
-            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, mesh_sharded_dim),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, dims=(None, mesh_sharded_dim), mesh_shape=tuple(mesh_device.shape)
+            ),
         )
 
     @classmethod
     def is_device_supported(cls, mesh_device: ttnn.Device) -> bool:
         """
-        As we only support 1D tensor parallelism, we only support 1D mesh devices.
+        As now we only support 1D tensor parallelism.
 
         Args:
             mesh_device: The mesh device to check.
@@ -147,7 +148,7 @@ class MLP1D(AbstractModule):
         Returns:
             True if the device is supported, False otherwise.
         """
-        return tuple(mesh_device.shape)[0] == 1
+        return tuple(mesh_device.shape)[1] == 8
 
     @classmethod
     def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelPrefillConfig:
@@ -165,9 +166,6 @@ class MLP1D(AbstractModule):
             mesh_device.core_grid.y,
         )  # NOTE: we might modify this later during optimization stage
 
-        # Calculate device metrics
-        num_devices = mesh_device.get_num_devices()
-
         # Extract dimensions from HF config
         dim, hidden_dim = cls._get_model_dims_from_cfg(hf_config)
 
@@ -182,7 +180,10 @@ class MLP1D(AbstractModule):
         return {
             "max_rows": SEQ_LEN_CHUNK_SIZE,  # NOTE: should be 512 for blackhole (in case of future bring-up)
             "linear_pc_gen": MLP1D.MLPProgramConfigData(
-                dim=dim, hidden_dim=hidden_dim, num_devices=num_devices, core_grid_size=matmul_core_grid_size
+                dim=dim,
+                hidden_dim=hidden_dim,
+                tensor_parallel_factor=cls.TENSOR_PARALLEL_FACTOR,
+                core_grid_size=matmul_core_grid_size,
             ),
             "w1": linear_op_config,
             "w2": linear_op_config,
@@ -226,16 +227,19 @@ class MLP1D(AbstractModule):
         dim, hidden_dim = cls._get_model_dims_from_cfg(hf_config)
 
         # Calculate device metrics
-        num_devices = mesh_device.get_num_devices()
         max_num_cores = mesh_device.core_grid.x * mesh_device.core_grid.y
         input_num_cores = input_num_cores or max(
             get_activation_sharding_core_counts_for_dram_matmul(dim, max_num_cores)
         )
         inner_num_cores = max(
-            get_activation_sharding_core_counts_for_dram_matmul(even_int_div(hidden_dim, num_devices), max_num_cores)
+            get_activation_sharding_core_counts_for_dram_matmul(
+                even_int_div(hidden_dim, cls.TENSOR_PARALLEL_FACTOR), max_num_cores
+            )
         )
         output_num_cores = output_num_cores or max(
-            get_activation_sharding_core_counts_for_dram_matmul(even_int_div(dim, num_devices), max_num_cores)
+            get_activation_sharding_core_counts_for_dram_matmul(
+                even_int_div(dim, cls.TENSOR_PARALLEL_FACTOR), max_num_cores
+            )
         )
         assert (
             input_num_cores <= max_num_cores
@@ -245,13 +249,13 @@ class MLP1D(AbstractModule):
         ), "output_num_cores must be less than or equal to the maximum number of cores"
         assert dim % input_num_cores == 0, "input_num_cores must divide the input tensor width evenly"
         assert (
-            even_int_div(dim, num_devices) % output_num_cores == 0
+            even_int_div(dim, cls.TENSOR_PARALLEL_FACTOR) % output_num_cores == 0
         ), "output_num_cores must divide the output tensor width evenly"
 
         # Calculate input and output memory configurations
         input_memory_config = cls._get_decode_activation_memory_config(dim, input_num_cores, mesh_device)
         output_memory_config = cls._get_decode_activation_memory_config(
-            even_int_div(dim, num_devices), output_num_cores, mesh_device
+            even_int_div(dim, cls.TENSOR_PARALLEL_FACTOR), output_num_cores, mesh_device
         )
 
         # Construct the config
@@ -260,7 +264,11 @@ class MLP1D(AbstractModule):
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=get_dram_sharded_matmul_config(
-                    MAX_BATCH_SIZE, dim, even_int_div(hidden_dim, num_devices), input_num_cores, inner_num_cores
+                    MAX_BATCH_SIZE,
+                    dim,
+                    even_int_div(hidden_dim, cls.TENSOR_PARALLEL_FACTOR),
+                    input_num_cores,
+                    inner_num_cores,
                 ),
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
@@ -269,7 +277,7 @@ class MLP1D(AbstractModule):
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=get_dram_sharded_matmul_config(
                     MAX_BATCH_SIZE,
-                    even_int_div(hidden_dim, num_devices),
+                    even_int_div(hidden_dim, cls.TENSOR_PARALLEL_FACTOR),
                     dim,
                     inner_num_cores,
                     output_num_cores,
@@ -280,7 +288,11 @@ class MLP1D(AbstractModule):
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=get_dram_sharded_matmul_config(
-                    MAX_BATCH_SIZE, dim, even_int_div(hidden_dim, num_devices), input_num_cores, inner_num_cores
+                    MAX_BATCH_SIZE,
+                    dim,
+                    even_int_div(hidden_dim, cls.TENSOR_PARALLEL_FACTOR),
+                    input_num_cores,
+                    inner_num_cores,
                 ),
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
@@ -289,10 +301,12 @@ class MLP1D(AbstractModule):
                 input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             ),
             "reduce_scatter": ReduceScatterConfig(
+                mesh_device=mesh_device,
                 dim=-1,  # We are scattering across the feature dimension (last one)
                 math_op=ttnn.ReduceType.Sum,
                 memory_config=output_memory_config,
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
+                cluster_axis=1,
             ),
             "input_memory_config": input_memory_config,  # For asserting the input to the MLP
             "output_memory_config": output_memory_config,  # For asserting the output of the MLP
@@ -336,13 +350,19 @@ class MLP1D(AbstractModule):
 
     @classmethod
     def _get_prefill_pc(
-        cls, seq_len: int, dim: int, hidden_dim: int, num_devices: int, core_grid_size: ttnn.CoreCoord, is_w2: bool
+        cls,
+        seq_len: int,
+        dim: int,
+        hidden_dim: int,
+        tensor_parallel_factor: int,
+        core_grid_size: ttnn.CoreCoord,
+        is_w2: bool,
     ) -> Any:
         """Get the program config for linear layers in prefill mode based on sequence length."""
         if is_w2:
-            per_device_in_features, per_device_out_features = even_int_div(hidden_dim, num_devices), dim
+            per_device_in_features, per_device_out_features = even_int_div(hidden_dim, tensor_parallel_factor), dim
         else:
-            per_device_in_features, per_device_out_features = dim, even_int_div(hidden_dim, num_devices)
+            per_device_in_features, per_device_out_features = dim, even_int_div(hidden_dim, tensor_parallel_factor)
 
         per_core_M_tiles = ttnn.core.divup(seq_len, ttnn.TILE_SIZE * core_grid_size.y)
         K_tiles = ttnn.core.divup(per_device_in_features, ttnn.TILE_SIZE)

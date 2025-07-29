@@ -45,7 +45,7 @@ class DistributedRMSNorm(RMSNormBase):
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-1, -2), mesh_shape=tuple(mesh_device.shape)),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -2), mesh_shape=tuple(mesh_device.shape)),
         )
 
         # Save to disk with standard naming - "rmsnorm" must match the op name used in the model config

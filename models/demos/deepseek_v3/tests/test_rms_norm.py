@@ -50,7 +50,7 @@ def test_forward_pass(
     model_path,
     hf_config,
     tmp_path,
-    mesh_row,
+    mesh_device,
 ):
     # Get the hidden_size of the norm
     hidden_size = getattr(hf_config, hf_config_size_attr)
@@ -73,9 +73,9 @@ def test_forward_pass(
         reference_output.unsqueeze_(0)
 
     # Generate module configs and state
-    weight_config = RMSNormClass.convert_weights(hf_config, state_dict, tmp_path, mesh_row)
-    model_config = get_model_config(RMSNormClass, mode, hf_config, mesh_row)
-    model_state = RMSNormClass.create_state(hf_config, mesh_row)
+    weight_config = RMSNormClass.convert_weights(hf_config, state_dict, tmp_path, mesh_device)
+    model_config = get_model_config(RMSNormClass, mode, hf_config, mesh_device)
+    model_state = RMSNormClass.create_state(hf_config, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Convert the input to TTNN tensor
@@ -85,9 +85,9 @@ def test_forward_pass(
         shard_core_grid = ttnn.CoreGrid(x=4, y=7)
         memory_config = ttnn.create_sharded_memory_config(
             shape=(
-                ttnn.core.roundup(even_int_div(seq_len, tuple(mesh_row.shape)[0]), ttnn.TILE_SIZE),
+                ttnn.core.roundup(seq_len, ttnn.TILE_SIZE),
                 ttnn.core.roundup(
-                    even_int_div(hidden_size, shard_core_grid.num_cores * tuple(mesh_row.shape)[1]),
+                    even_int_div(hidden_size, shard_core_grid.num_cores * tuple(mesh_device.shape)[1]),
                     ttnn.TILE_SIZE,
                 ),
             ),
@@ -98,11 +98,11 @@ def test_forward_pass(
         )
     tt_input = ttnn.from_torch(
         torch_input,
-        device=mesh_row,
+        device=mesh_device,
         mesh_mapper=(
-            ttnn.ShardTensor2dMesh(mesh_row, dims=(-2, -1), mesh_shape=tuple(mesh_row.shape))
+            ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape))
             if RMSNormClass is DistributedRMSNorm
-            else ttnn.ReplicateTensorToMesh(mesh_row)
+            else ttnn.ReplicateTensorToMesh(mesh_device)
         ),
         dtype=ttnn.bfloat16,
         memory_config=memory_config,
@@ -116,7 +116,7 @@ def test_forward_pass(
     if RMSNormClass is DistributedRMSNorm:
         tt_output_torch = ttnn.to_torch(
             tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_row, dims=(-2, -1), mesh_shape=tuple(mesh_row.shape)),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
         )
     else:
         tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output)[0])

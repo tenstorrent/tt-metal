@@ -23,7 +23,7 @@ class RMSNormBase(AbstractModule):
         Returns:
             True if the device is supported, False otherwise.
         """
-        return tuple(mesh_device.shape)[0] == 1
+        return tuple(mesh_device.shape)[1] == 8
 
     @classmethod
     @abstractmethod

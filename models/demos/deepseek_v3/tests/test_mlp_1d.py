@@ -115,7 +115,7 @@ def test_forward_pass(
     seq_len,
     hf_config,
     tmp_path,
-    mesh_row,
+    mesh_device,
     model_path,
 ):
     # Get the reference IO
@@ -132,16 +132,16 @@ def test_forward_pass(
         reference_output.unsqueeze_(0)
 
     # Generate module configs and state
-    weight_config = MLPClass.convert_weights(hf_config, state_dict, tmp_path, mesh_row)
-    model_config = get_model_config(MLPClass, mode, hf_config, mesh_row)
-    model_state = MLPClass.create_state(hf_config, mesh_device=mesh_row)
+    weight_config = MLPClass.convert_weights(hf_config, state_dict, tmp_path, mesh_device)
+    model_config = get_model_config(MLPClass, mode, hf_config, mesh_device)
+    model_state = MLPClass.create_state(hf_config, mesh_device=mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Convert input to TTNN
     tt_input = ttnn.from_torch(
         torch_input,
-        device=mesh_row,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_row),
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         dtype=ttnn.bfloat16,
         memory_config=run_config["input_memory_config"],
         layout=ttnn.TILE_LAYOUT,
@@ -160,7 +160,7 @@ def test_forward_pass(
     # Convert output back to torch
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_row, dims=(-2, -1), mesh_shape=tuple(mesh_row.shape)),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
     )
 
     # Cleanup
