@@ -40,7 +40,6 @@ std::vector<std::pair<size_t, size_t>> compute_evenly_split_sizes(size_t size, s
 
     auto compute_slice_offset = [num_larger_slices_total, larger_slice_size, smaller_slice_size](int64_t slice_index) {
         int64_t num_larger_slices = std::min(slice_index, num_larger_slices_total);
-        int64_t num_smaller_slices = std::min(slice_index - num_larger_slices, 0L);
         return num_larger_slices * larger_slice_size + (slice_index - num_larger_slices) * smaller_slice_size;
     };
 
