@@ -80,10 +80,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
     const uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
-    const std::tuple<bool, bool>& skip_mcast =
-        conv_skip_mcast(parallelization_config, a.memory_config().memory_layout());
-    const bool skip_activation_mcast = std::get<0>(skip_mcast);
-    const bool skip_weights_mcast = std::get<1>(skip_mcast);
+    const SkipMcast& skip_mcast = conv_skip_mcast(parallelization_config, a.memory_config().memory_layout());
+    const bool skip_activation_mcast = skip_mcast.skip_activation_mcast;
+    const bool skip_weights_mcast = skip_mcast.skip_weights_mcast;
 
     const tt::DataFormat tilized_act_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
