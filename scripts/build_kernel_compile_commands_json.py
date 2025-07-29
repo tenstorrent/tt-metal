@@ -231,10 +231,10 @@ def process_compile_commands(json_path, search_dir, choose_first_kernel_file=Fal
 
 def main():
     parser = argparse.ArgumentParser(description="Process compile_commands.json for TT Metal kernels")
-    parser.add_argument("--input-command", required=True, help="The command to run with bear")
+    parser.add_argument("--input-command", required=True, help="The command to run with a bear")
     parser.add_argument("--output-dir", required=True, help="Directory to store the updated compile_commands.json")
     parser.add_argument(
-        "--choose-first-kernel-file", action="store_true", help="Automatically choose first kernel file found"
+        "--choose-first-kernel-file", action="store_true", help="Automatically choose the first kernel file found"
     )
     parser.add_argument(
         "--overwrite", action="store_true", help="Overwrite existing compile_commands.json without asking"
