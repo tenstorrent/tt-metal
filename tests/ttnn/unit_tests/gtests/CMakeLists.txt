@@ -100,6 +100,7 @@ target_link_libraries(
 add_library(unit_tests_ttnn_ccl_lib OBJECT)
 add_library(TTNN::Test::CCL ALIAS unit_tests_ttnn_ccl_lib)
 target_sources(unit_tests_ttnn_ccl_lib PRIVATE ${UNIT_TESTS_TTNN_CCL_SRC})
+target_include_directories(unit_tests_ttnn_ccl_lib PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(
     unit_tests_ttnn_ccl_lib
     PRIVATE
