@@ -151,11 +151,9 @@ protected:
 
 class UnitMeshMultiCQSingleDeviceProgramFixture : public UnitMeshMultiCQSingleDeviceFixture {};
 
-<<<<<<< HEAD
 class UnitMeshMultiCQSingleDeviceBufferFixture : public UnitMeshMultiCQSingleDeviceFixture {};
-=======
+
 class UnitMeshMultiCQSingleDeviceEventFixture : public UnitMeshMultiCQSingleDeviceFixture {};
->>>>>>> 0cbe6cec94 (changed SingleDevice fixture to properly have a single device)
 
 class UnitMeshMultiCQSingleDeviceTraceFixture : public UnitMeshMultiCQSingleDeviceFixture {
 protected:
