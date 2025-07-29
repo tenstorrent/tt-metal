@@ -34,6 +34,13 @@ struct InterleavedConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
+    log_info(
+        tt::LogTest,
+        "num transaction {}, num pages: {}, page size bytes: {}",
+        test_config.num_of_transactions,
+        test_config.num_pages,
+        test_config.page_size_bytes);
+
     // Program
     Program program = CreateProgram();
 
@@ -55,6 +62,7 @@ bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
     assert(test_config.read_kernel || test_config.write_kernel);  // At least one kernel must run
 
     // Input
+    // vector<uint32_t> packed_input = create_arange_vector_of_bfloat16(total_size_bytes, false);
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f, 100.0f, total_size_bytes / bfloat16::SIZEOF, chrono::system_clock::now().time_since_epoch().count());
 
@@ -172,9 +180,9 @@ bool run_dm(IDevice* device, const InterleavedConfig& test_config) {
     if (!pcc) {
         log_error(tt::LogTest, "PCC Check failed");
         log_info(tt::LogTest, "Golden vector");
-        print_vector<uint32_t>(packed_golden);
+        print_vector(unpack_vector<bfloat16, uint32_t>(packed_golden));
         log_info(tt::LogTest, "Output vector");
-        print_vector<uint32_t>(packed_output);
+        print_vector(unpack_vector<bfloat16, uint32_t>(packed_output));
     }
 
     return pcc;
@@ -192,16 +200,19 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPageNumbers) {
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
     uint32_t num_of_transactions = 1;
+    uint32_t num_pages;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 4) {
-        if (num_pages > 16) {
+    for (uint32_t pages = 1; pages <= max_num_pages; pages *= 4) {
+        if (pages > 16) {
             // avoid writing too large of a memory block at once, prefer to overwrite multiple times
-            num_of_transactions = num_pages / 16;
+            num_of_transactions = pages / 16;
             num_pages = 16;
+        } else {
+            num_pages = pages;
         }
         for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
             // Test config
@@ -261,16 +272,19 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPageReadNumbers) {
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
     uint32_t num_of_transactions = 1;
+    uint32_t num_pages;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 4) {
-        if (num_pages > 16) {
+    for (uint32_t pages = 1; pages <= max_num_pages; pages *= 4) {
+        if (pages > 16) {
             // avoid writing too large of a memory block at once, prefer to overwrite multiple times
-            num_of_transactions = num_pages / 16;
+            num_of_transactions = pages / 16;
             num_pages = 16;
+        } else {
+            num_pages = pages;
         }
         for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
             // Test config
@@ -302,16 +316,19 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPageWriteNumbers) {
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
     uint32_t num_of_transactions = 1;
+    uint32_t num_pages;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 4) {
-        if (num_pages > 16) {
+    for (uint32_t pages = 1; pages <= max_num_pages; pages *= 4) {
+        if (pages > 16) {
             // avoid writing too large of a memory block at once, prefer to overwrite multiple times
-            num_of_transactions = num_pages / 16;
+            num_of_transactions = pages / 16;
             num_pages = 16;
+        } else {
+            num_pages = pages;
         }
         for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
             // Test config
@@ -336,10 +353,13 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPageWriteNumbers) {
 
 /* ========== Directed Ideal Test Case; Test id = 65 ========== */
 TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPageDirectedIdeal) {
+    // Physical Constraints
+    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
     // Parameters
-    uint32_t page_size_bytes = 32 * 32 * 2;  // = tile
+    uint32_t page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t num_pages = 16;
-    uint32_t num_of_transactions = 64;
+    uint32_t num_of_transactions = 16;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -369,16 +389,19 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPageReadNocSwap) {
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
     uint32_t num_of_transactions = 1;
+    uint32_t num_pages;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 4) {
-        if (num_pages > 16) {
+    for (uint32_t pages = 1; pages <= max_num_pages; pages *= 4) {
+        if (pages > 16) {
             // avoid writing too large of a memory block at once, prefer to overwrite multiple times
-            num_of_transactions = num_pages / 16;
+            num_of_transactions = pages / 16;
             num_pages = 16;
+        } else {
+            num_pages = pages;
         }
         for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
             // Test config
@@ -411,16 +434,19 @@ TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPageWriteNocSwap) {
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
     uint32_t num_of_transactions = 1;
+    uint32_t num_pages;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 4) {
-        if (num_pages > 16) {
+    for (uint32_t pages = 1; pages <= max_num_pages; pages *= 4) {
+        if (pages > 16) {
             // avoid writing too large of a memory block at once, prefer to overwrite multiple times
-            num_of_transactions = num_pages / 16;
+            num_of_transactions = pages / 16;
             num_pages = 16;
+        } else {
+            num_pages = pages;
         }
         for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
             // Test config
@@ -455,16 +481,19 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedPageNumbers) {
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
     uint32_t num_of_transactions = 1;
+    uint32_t num_pages;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 4) {
-        if (num_pages > 16) {
+    for (uint32_t pages = 1; pages <= max_num_pages; pages *= 4) {
+        if (pages > 16) {
             // avoid writing too large of a memory block at once, prefer to overwrite multiple times
-            num_of_transactions = num_pages / 16;
+            num_of_transactions = pages / 16;
             num_pages = 16;
+        } else {
+            num_pages = pages;
         }
         for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
             // Test config
@@ -526,16 +555,19 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedPageReadNumbers) {
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
     uint32_t num_of_transactions = 1;
+    uint32_t num_pages;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 4) {
-        if (num_pages > 16) {
+    for (uint32_t pages = 1; pages <= max_num_pages; pages *= 4) {
+        if (pages > 16) {
             // avoid writing too large of a memory block at once, prefer to overwrite multiple times
-            num_of_transactions = num_pages / 16;
+            num_of_transactions = pages / 16;
             num_pages = 16;
+        } else {
+            num_pages = pages;
         }
         for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
             // Test config
@@ -566,16 +598,19 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedPageWriteNumbers) {
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
     uint32_t num_of_transactions = 1;
+    uint32_t num_pages;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 4) {
-        if (num_pages > 16) {
+    for (uint32_t pages = 1; pages <= max_num_pages; pages *= 4) {
+        if (pages > 16) {
             // avoid writing too large of a memory block at once, prefer to overwrite multiple times
-            num_of_transactions = num_pages / 16;
+            num_of_transactions = pages / 16;
             num_pages = 16;
+        } else {
+            num_pages = pages;
         }
         for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
             // Test config
@@ -600,10 +635,13 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedPageWriteNumbers) {
 
 /* ========== Directed Ideal Test Case; Test id = 71 ========== */
 TEST_F(DeviceFixture, TensixDataMovementL1InterleavedPageDirectedIdeal) {
+    // Physical Constraints
+    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
     // Parameters
-    uint32_t page_size_bytes = 32 * 32 * 2;  // = tile
+    uint32_t page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t num_pages = 16;
-    uint32_t num_of_transactions = 64;
+    uint32_t num_of_transactions = 16;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
@@ -634,16 +672,19 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedPageReadNocSwap) {
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
     uint32_t num_of_transactions = 1;
+    uint32_t num_pages;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 4) {
-        if (num_pages > 16) {
+    for (uint32_t pages = 1; pages <= max_num_pages; pages *= 4) {
+        if (pages > 16) {
             // avoid writing too large of a memory block at once, prefer to overwrite multiple times
-            num_of_transactions = num_pages / 16;
+            num_of_transactions = pages / 16;
             num_pages = 16;
+        } else {
+            num_pages = pages;
         }
         for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
             // Test config
@@ -675,16 +716,19 @@ TEST_F(DeviceFixture, TensixDataMovementL1InterleavedPageWriteNocSwap) {
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
     uint32_t max_num_pages = 256;
     uint32_t num_of_transactions = 1;
+    uint32_t num_pages;
 
     // Cores
     CoreRange core_range({0, 0}, {0, 0});
     CoreRangeSet core_range_set({core_range});
 
-    for (uint32_t num_pages = 1; num_pages <= max_num_pages; num_pages *= 4) {
-        if (num_pages > 16) {
+    for (uint32_t pages = 1; pages <= max_num_pages; pages *= 4) {
+        if (pages > 16) {
             // avoid writing too large of a memory block at once, prefer to overwrite multiple times
-            num_of_transactions = num_pages / 16;
+            num_of_transactions = pages / 16;
             num_pages = 16;
+        } else {
+            num_pages = pages;
         }
         for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
             // Test config

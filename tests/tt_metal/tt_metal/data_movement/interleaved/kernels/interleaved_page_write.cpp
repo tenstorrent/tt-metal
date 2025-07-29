@@ -11,7 +11,7 @@
 // #include "debug/dprint_pages.h"
 
 template <uint32_t num_of_transactions, uint32_t num_pages, uint32_t page_size_bytes, bool is_dram>
-FORCE_INLINE void noc_write_helper(const uint32_t l1_read_addr, const InterleavedAddrGenFast<is_dram>& s) {
+FORCE_INLINE void noc_write_helper(const uint32_t l1_read_addr, const InterleavedAddrGen<is_dram>& s) {
     for (uint32_t i = 0; i < num_of_transactions; i++) {
         for (uint32_t p = 0; p < num_pages; p++) {
             noc_async_write_page(p, s, l1_read_addr + p * page_size_bytes);
@@ -34,8 +34,7 @@ void kernel_main() {
     constexpr bool sync = get_compile_time_arg_val(6) == 1;
     constexpr bool default_noc = get_compile_time_arg_val(7) == 1;
 
-    const InterleavedAddrGenFast<is_dram> s = {
-        .bank_base_address = dst_addr, .page_size = page_size_bytes, .data_format = DataFormat::Float16_b};
+    const InterleavedAddrGen<is_dram> s = {.bank_base_address = dst_addr, .page_size = page_size_bytes};
 
     constexpr uint32_t transaction_size_bytes = page_size_bytes;
     DeviceTimestampedData("Number of transactions", num_of_transactions * num_pages);

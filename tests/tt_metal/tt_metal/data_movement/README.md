@@ -17,7 +17,7 @@ This test suite addresses the functionality and performance (i.e. bandwidth) of 
 | Conv Hardcoded              | 21-23        | Uses existing conv tests to analyse their bandwidth and latency.                     |
 | All to all                  | 60           | Write transactions from multiple cores to multiple cores.                            |
 | All from all                | 70           | Read transactions from multiple cores to multiple cores.                             |
-| Interleaved Tile Read/Write | 61-69, 71-75 | Reads and writes tiles at a time between interleaved buffers and a Tensix core.      |
+| Interleaved Page Read/Write | 61-69, 71-75 | Reads and writes pages between interleaved buffers and a Tensix core.                |
 | Deinterleave                | 200-201      | Tests deinterleaving                                                                 |
 
 ## Running Tests
