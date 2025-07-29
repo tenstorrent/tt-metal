@@ -20,7 +20,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
-    COMPUTE_KERNEL_CONFIG_SDPA,
     MAX_BATCH_SIZE,
     SEQ_LEN_CHUNK_SIZE,
     dram_sharded_weight_config,
@@ -161,7 +160,7 @@ class MLP1D(AbstractModule):
         Returns:
             ModelPrefillConfig containing operator configurations for prefill mode
         """
-        matmul_core_grid_size = ttnn.CoreCoord(  # Matmul expects the core grid size in (y, x) format
+        matmul_core_grid_size = ttnn.CoreCoord(
             mesh_device.core_grid.x,
             mesh_device.core_grid.y,
         )  # NOTE: we might modify this later during optimization stage
@@ -275,7 +274,7 @@ class MLP1D(AbstractModule):
                     inner_num_cores,
                     output_num_cores,
                 ),
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_SDPA,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
             ),
             "w3": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
@@ -366,6 +365,8 @@ class MLP1D(AbstractModule):
 
     @classmethod
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+        assert x.memory_config() == cfg["input_memory_config"]
+
         _, _, seq_len, _ = x.shape
 
         if seq_len > cfg["max_rows"]:  # For large sequence lengths, process the input in chunks
@@ -380,8 +381,6 @@ class MLP1D(AbstractModule):
             x, program_config=cls._get_prefill_pc(seq_len=seq_len, is_w2=False, **cfg["linear_pc_gen"]), **cfg["w3"]
         )
         ttnn.deallocate(x)
-
-        # add reduce-scatter here to gather intermediates
 
         # Apply activation and multiply
         activated = ttnn.mul(w1_out, w3_out, **cfg["mul"])
@@ -417,14 +416,16 @@ class MLP1D(AbstractModule):
 
         # Apply activation and multiply
         activated = ttnn.mul(w1_out, w3_out, **cfg["mul"])
+        ttnn.deallocate(w1_out)
+        ttnn.deallocate(w3_out)
 
         # Down projection
         w2_out = ttnn.linear(activated, **cfg["w2"])
-        # ttnn.deallocate(activated)
+        ttnn.deallocate(activated)
 
         # Add reduce-scatter
         output = ttnn.reduce_scatter(w2_out, **cfg["reduce_scatter"])
-        # ttnn.deallocate(w2_out)
+        ttnn.deallocate(w2_out)
 
         assert output.memory_config() == cfg["output_memory_config"]
         return output
