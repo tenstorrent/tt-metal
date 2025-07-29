@@ -12,7 +12,6 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
 
 #ifdef OUT_SHARDED
     cb_wait_front(cb_id_out, num_tiles);
@@ -21,25 +20,24 @@ void kernel_main() {
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
-    const DataFormat data_format = get_dataformat(cb_id_out);
 
 #ifdef SHARDED
     typedef ShardedInfo<
+        get_compile_time_arg_val(1),
         get_compile_time_arg_val(2),
         get_compile_time_arg_val(3),
         get_compile_time_arg_val(4),
         get_compile_time_arg_val(5),
         get_compile_time_arg_val(6),
-        get_compile_time_arg_val(7),
-        get_compile_time_arg_val(8)>
+        get_compile_time_arg_val(7)>
         tensor_shard_info;
 
     const auto [mapping_table, rt_increment] =
         experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(3));
     experimental::ShardedAddrGen<tensor_shard_info> s = {.bank_base_address = dst_addr, .shard_array = mapping_table};
 #else
-    const InterleavedAddrGenFast<dst_is_dram> s = {
-        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
+    constexpr auto dst_args = TensorAccessorArgs<1>();
+    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
 #endif
 
 #ifdef BACKWARDS
