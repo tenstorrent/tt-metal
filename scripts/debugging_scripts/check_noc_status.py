@@ -5,18 +5,14 @@
 
 """
 Usage:
-    scripts/debugging_scripts/check_noc_status.py <elf-file> [-v]
+    scripts/debugging_scripts/check_noc_status.py <elf-file>
 
 Arguments:
     <elf-file>  Path to risc firmware elf file
 
-Options:
-    -v  If true includes passed tests in optput. Default: False
-
 Description:
     This script checks if there are any mismatches between values of number of NOC transactions
-    stored in global variables from risc firmware and NOC status registers. Script looks for
-    these mismatches across all available devices and locations.
+    stored in global variables from risc firmware and NOC status registers.
 """
 
 from ttexalens.tt_exalens_lib import read_tensix_register, parse_elf
@@ -84,7 +80,6 @@ def run(args, context: Context):
     check_per_device.run_check(
         lambda device: check_noc_status(device, fw_elf_path, context, risc_name="brisc", noc_id=0)
     )
-    # check_per_device.run_check(lambda device: check_noc_status(device, fw_elf_path, context, risc_name="brisc", noc_id=1))
 
 
 if __name__ == "__main__":
