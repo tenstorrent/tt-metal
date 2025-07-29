@@ -119,9 +119,8 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             packet_size_bytes,
             output_page_size_bytes,
             num_page_segments,
-            operation_attributes.receiver_semaphore.address(),
+            operation_attributes.semaphore.address(),
             num_hops,
-            operation_attributes.sender_semaphore.address(),
             sender_is_forward};
 
         if (sender_is_forward) {

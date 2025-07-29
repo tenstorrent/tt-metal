@@ -25,7 +25,7 @@ void py_bind_point_to_point(py::module& module) {
                 send_coord (ttnn.MeshCoordinate): Coordinate of device containing input_tensor (shard).
                 receive_coord (ttnn.MeshCoordinate): Coordinate of device receiving input_tensor (shard).
                 topology (ttnn.Topology): Fabric topology.
-                receiver_semaphore (ttnn.GlobalSemaphore): Semaphore allocated on receiving device
+                semaphore (ttnn.GlobalSemaphore): Semaphore allocated on all devices
 
             Keyword Args:
                 queue_id (int, optional): command queue id. Defaults to `0`.
@@ -66,26 +66,17 @@ void py_bind_point_to_point(py::module& module) {
                const MeshCoordinate& send_coord,
                const MeshCoordinate& receive_coord,
                const ccl::Topology topology,
-               const GlobalSemaphore& sender_semaphore,
-               const GlobalSemaphore& receiver_semaphore,
+               const GlobalSemaphore& semaphore,
                const std::optional<ttnn::Tensor> optional_output_tensor,
                QueueId queue_id) {
                 return self(
-                    queue_id,
-                    input_tensor,
-                    send_coord,
-                    receive_coord,
-                    topology,
-                    sender_semaphore,
-                    receiver_semaphore,
-                    optional_output_tensor);
+                    queue_id, input_tensor, send_coord, receive_coord, topology, semaphore, optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("send_coord"),
             py::arg("receive_coord"),
             py::arg("topology"),
-            py::arg("sender_semaphore"),
-            py::arg("receiver_semaphore"),
+            py::arg("semaphore"),
             py::kw_only(),
             py::arg("optional_output_tensor") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId,

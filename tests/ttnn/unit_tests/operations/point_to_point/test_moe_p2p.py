@@ -15,7 +15,7 @@ def _linear_coord(coord, mesh_shape):
     return coord[0] * mesh_shape[1] + coord[1]
 
 
-def run_test_col_step(mesh_shape, col_dim_idx, data_tensor, semaphores):
+def run_test_col_step(mesh_shape, col_dim_idx, data_tensor, semaphore):
     for row_dim_idx in range(mesh_shape[1]):
         source_coord = (col_dim_idx, row_dim_idx)
         dest_coord = (col_dim_idx + 1, row_dim_idx)
@@ -26,8 +26,7 @@ def run_test_col_step(mesh_shape, col_dim_idx, data_tensor, semaphores):
             ttnn.MeshCoordinate(source_coord),
             ttnn.MeshCoordinate(dest_coord),
             ttnn.Topology.Linear,
-            semaphores[0],
-            semaphores[1],
+            semaphore,
             optional_output_tensor=data_tensor,
         )
 
@@ -71,15 +70,15 @@ def test_moe_p2p(mesh_device, batches_per_col_device, hidden_size, dtype):
     cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
-    semaphores = [ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(2)]
+    semaphore = ttnn.create_global_semaphore(mesh_device, cores, 0)
 
     # test transferring down each row of the columns
     for col_dim_idx in range(mesh_shape[0] - 1):
-        run_test_col_step(mesh_shape, col_dim_idx, data_tensor, semaphores)
+        run_test_col_step(mesh_shape, col_dim_idx, data_tensor, semaphore)
         compare_mesh_row(col_dim_idx, data_tensor_torch[: mesh_shape[1], :, :, :], data_tensor, mesh_device, mesh_shape)
 
 
-def _broadcast_through_column(source_col_dim_idx, row_dim_index, data_tensor, mesh_shape, semaphores):
+def _broadcast_through_column(source_col_dim_idx, row_dim_index, data_tensor, mesh_shape, semaphore):
     source_coord = ttnn.MeshCoordinate(source_col_dim_idx, row_dim_index)
     for col_dim_idx in range(mesh_shape[0]):
         if col_dim_idx == source_col_dim_idx:
@@ -91,8 +90,7 @@ def _broadcast_through_column(source_col_dim_idx, row_dim_index, data_tensor, me
             source_coord,
             dest_coord,
             ttnn.Topology.Linear,
-            semaphores[0],
-            semaphores[1],
+            semaphore,
             optional_output_tensor=data_tensor,
         )
 
@@ -141,9 +139,9 @@ def test_moe_p2p_broadcast(mesh_device, source_col_dim_idx, batches_per_col_devi
     cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
-    semaphores = [ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(2)]
+    semaphore = ttnn.create_global_semaphore(mesh_device, cores, 0)
 
     # loop over columns, broadcast through each and check results
     for row_dim_idx in range(mesh_shape[1]):
-        _broadcast_through_column(source_col_dim_idx, row_dim_idx, data_tensor, mesh_shape, semaphores)
+        _broadcast_through_column(source_col_dim_idx, row_dim_idx, data_tensor, mesh_shape, semaphore)
         _check_col(source_col_dim_idx, row_dim_idx, data_tensor, mesh_device, mesh_shape)

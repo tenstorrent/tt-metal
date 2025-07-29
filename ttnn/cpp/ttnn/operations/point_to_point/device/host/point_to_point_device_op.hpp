@@ -19,8 +19,7 @@ struct PointToPointOp {
         const MeshCoordinate& send_coord;
         const MeshCoordinate& receive_coord;
         const ::ttnn::ccl::Topology topology;
-        const tt::tt_metal::GlobalSemaphore sender_semaphore;
-        const tt::tt_metal::GlobalSemaphore receiver_semaphore;
+        const tt::tt_metal::GlobalSemaphore semaphore;
 
         // put this in here to hash on tensor spec
         const ttnn::TensorSpec _input_tensor_spec;
@@ -105,12 +104,10 @@ struct PointToPointOp {
         const ::ttnn::ccl::Topology& topology,
         const MeshCoordinate& send_coord,
         const MeshCoordinate& receive_coord,
-        const tt::tt_metal::GlobalSemaphore& sender_semaphore,
-        const tt::tt_metal::GlobalSemaphore& receiver_semaphore,
+        const tt::tt_metal::GlobalSemaphore& semaphore,
         const std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
         return std::make_tuple(
-            operation_attributes_t{
-                send_coord, receive_coord, topology, sender_semaphore, receiver_semaphore, input_tensor.tensor_spec()},
+            operation_attributes_t{send_coord, receive_coord, topology, semaphore, input_tensor.tensor_spec()},
             tensor_args_t{input_tensor, optional_output_tensor});
     };
 
