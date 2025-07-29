@@ -49,8 +49,7 @@ jobs:
           - name: other_magic_env
             model-list:
               - models/demos/yolov10x/tests/
-              # This is bad. This should be referencing .../tests directory
-              - models/demos/sentence_bert/tests/test_sentence_bert_e2e_performant.py
+              - models/demos/sentence_bert/tests/perf/
               # This is bad. This should be referencing .../tests directory
               - models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py
               # This is bad. This should be referencing .../tests directory

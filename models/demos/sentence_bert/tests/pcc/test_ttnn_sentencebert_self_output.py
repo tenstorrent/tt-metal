@@ -2,15 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
+import pytest
 import torch
 import transformers
-import pytest
 from ttnn.model_preprocessing import preprocess_model_parameters
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.demos.sentence_bert.ttnn.common import custom_preprocessor
+
+import ttnn
+from models.demos.sentence_bert.common import load_torch_model
 from models.demos.sentence_bert.reference.sentence_bert import BertSelfOutput
+from models.demos.sentence_bert.ttnn.common import custom_preprocessor
 from models.demos.sentence_bert.ttnn.ttnn_sentencebert_self_output import TtnnSentenceBertSelfOutput
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
@@ -20,13 +22,16 @@ from models.demos.sentence_bert.ttnn.ttnn_sentencebert_self_output import TtnnSe
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
-def test_ttnn_sentence_bert_self_output(device, inputs):
-    transformers_model = transformers.AutoModel.from_pretrained(inputs[0]).encoder.layer[0].attention.output.eval()
+def test_ttnn_sentence_bert_self_output(device, inputs, model_location_generator):
+    target_prefix = f"encoder.layer.{0}.attention.output."
+
     config = transformers.BertConfig.from_pretrained(inputs[0])
     hidden_states = torch.randn(inputs[1], dtype=torch.bfloat16)
     input_tensor = torch.randn(inputs[2], dtype=torch.bfloat16)
     reference_module = BertSelfOutput(config).to(torch.bfloat16)
-    reference_module.load_state_dict(transformers_model.state_dict())
+    reference_module = load_torch_model(
+        reference_module, target_prefix=target_prefix, model_location_generator=model_location_generator
+    )
     reference_out = reference_module(hidden_states, input_tensor)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: reference_module,
