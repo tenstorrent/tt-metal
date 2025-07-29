@@ -874,7 +874,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
  * | Argument                            | Description                                              | Data type | Valid range                                              | required |
  * |-------------------------------------|----------------------------------------------------------|-----------|----------------------------------------------------------|----------|
  * | noc                                 | NOC to use for the transaction                           | uint32_t  | 0 or 1                                                   | True     |
- * | cmd_buf                             | Xommand buffer to use for the transaction                | uint32_t  | 0 - 3                                                    | True     |
+ * | cmd_buf                             | Command buffer to use for the transaction                | uint32_t  | 0 - 3                                                    | True     |
  * | src_local_addr                      | Address in local L1 memory on source core                | uint32_t  | 0..1 MB                                                  | True     |
  * | dst_local_addr                      | Address in local L1 memory on destination core           | uint32_t  | 0..1 MB                                                  | True     |
  * | len_bytes                           | Size of transaction in bytes                             | uint32_t  | 0..1 MB                                                  | False    |
@@ -929,7 +929,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_with_state(
  * | Argument                            | Description                                              | Data type | Valid range                                              | required |
  * |-------------------------------------|----------------------------------------------------------|-----------|----------------------------------------------------------|----------|
  * | noc                                 | NOC to use for the transaction                           | uint32_t  | 0 or 1                                                   | True     |
- * | cmd_buf                             | Xommand buffer to use for the transaction                | uint32_t  | 0 - 3                                                    | True     |
+ * | cmd_buf                             | Command buffer to use for the transaction                | uint32_t  | 0 - 3                                                    | True     |
  * | src_local_addr                      | Address in local L1 memory on source core                | uint32_t  | 0..1 MB                                                  | True     |
  * | dst_local_addr                      | Address in local L1 memory on destination core           | uint32_t  | 0..1 MB                                                  | True     |
  * | len_bytes                           | Size of transaction in bytes                             | uint32_t  | 0..1 MB                                                  | True     |
