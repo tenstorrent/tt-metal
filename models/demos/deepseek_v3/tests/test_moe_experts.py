@@ -47,7 +47,8 @@ class DeepseekV3MoE_Experts(nn.Module):
 @pytest.fixture
 def reference_model(hf_config: Any | torch.Any):
     """Get the actual DeepSeek MLP model using local implementation."""
-    return DeepseekV3MoE_Experts(hf_config)
+    torch.manual_seed(0)
+    return DeepseekV3MoE_Experts(hf_config).eval()
 
 
 @pytest.mark.parametrize(
@@ -62,7 +63,7 @@ def test_forward_pass(
     seq_len: Literal[128] | Literal[256] | Literal[2048],
     reference_model: DeepseekV3MoE_Experts,
     hf_config: Any,
-    tmp_path: Path,
+    tensor_cache_path: Path,
     mesh_device: Any,
 ):
     """Test forward pass against reference model."""
@@ -74,7 +75,7 @@ def test_forward_pass(
     hf_state_dict = reference_model.state_dict()
 
     # Setup: Convert weights and get weight_config
-    weight_config = TTExpert.convert_weights(hf_config, hf_state_dict, tmp_path, mesh_device)
+    weight_config = TTExpert.convert_weights(hf_config, hf_state_dict, tensor_cache_path, mesh_device)
     # Generate appropriate config
 
     if mode == "prefill":
@@ -93,7 +94,8 @@ def test_forward_pass(
     torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
 
     # Reference forward pass
-    reference_output = reference_model(torch_input)
+    with torch.no_grad():
+        reference_output = reference_model(torch_input)
 
     # Convert input to TTNN
     tt_input = ttnn.from_torch(

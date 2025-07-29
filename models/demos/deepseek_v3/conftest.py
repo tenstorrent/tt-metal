@@ -66,6 +66,11 @@ def model_path():
     return Path(os.getenv("HF_MODEL", "models/demos/deepseek_v3/reference"))
 
 
+@pytest.fixture(scope="session")
+def tensor_cache_path():
+    return Path(os.getenv("DEEPSEEK_V3_CACHE", "/proj_sw/user_dev/deepseek-v3-cache/tensors_cache"))
+
+
 @pytest.fixture
 def reference_io(request):
     param = getattr(request, "param", None)
