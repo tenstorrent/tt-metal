@@ -44,6 +44,7 @@ def print_stats(label, data: torch.Tensor, device=None):
     ("batch", "in_channels", "out_channels", "height", "width"),
     [
         (1, 512, 512, 256, 256),
+        (1, 512, 512, 256, 256),
         # (512, 256, 256, 32),
         # (256, 512, 512, 32),
         # (512, 512, 512, 32),

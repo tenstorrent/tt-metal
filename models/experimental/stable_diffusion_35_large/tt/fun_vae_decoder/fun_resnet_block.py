@@ -14,6 +14,7 @@ from .fun_conv2d import vae_conv2d, TtConv2dParameters
 from .fun_group_norm import vae_group_norm, TtGroupNormParameters
 from .fun_linear import vae_linear, TtLinearParameters
 from ..parallel_config import VAEParallelConfig
+from loguru import logger
 
 if TYPE_CHECKING:
     import torch
@@ -62,4 +63,5 @@ def resnet_block(x_in: ttnn.Tensor, parameters: TtResnetBlock2DParameters) -> tt
         residual = vae_linear(residual, parameters.conv_shortcut)
     x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
     residual = ttnn.to_layout(residual, ttnn.TILE_LAYOUT)
+    logger.info(f" x.shape: {x.shape} , residual.shape:{residual.shape}")
     return x + residual
