@@ -245,12 +245,15 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
         writer_kernel_config);
 
     // Receiver
+
+    uint32_t semaphore_id_to_notify_to_start_mcast = CreateSemaphore(program, intermediate_tensor_cores, 0);
     auto receiver_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     receiver_kernel_config.compile_args = {
-        num_links,                  // sem_wait_val
-        inter_cb_index,             // intermediate cb index
-        op_config.get_page_size(),  // tensor0_page_size
-        ring_size,                  // ring_size
+        num_links,                              // sem_wait_val
+        inter_cb_index,                         // intermediate cb index
+        op_config.get_page_size(),              // tensor0_page_size
+        ring_size,                              // ring_size
+        semaphore_id_to_notify_to_start_mcast,  // semaphore id to notify to start mcast
     };
     auto worker_receiver_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -276,7 +279,10 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
          matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[1],
          matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[2],
          matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[3],
-         0});  // mm_core_offset
+         0,    // mm_core_offset
+         0,    // next_core_to_left to be notified to start mcast
+         0,    // next recev core_noc_x to notify to start mcast
+         0});  // next recev core_noc_y to notify to start mcast
     // Kernel Runtime Args
 
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
@@ -286,6 +292,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
     // Set runtime args for each core
     for (uint32_t i = 0; i < intermediate_cores_vec.size(); i++) {
         uint32_t mm_core_offset = (ring_index + ring_size - i) % ring_size;
+        uint32_t next_core_to_left = (i - 1 + ring_size) % ring_size;
 
         tt::tt_metal::SetRuntimeArgs(
             program,
@@ -305,7 +312,12 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
              matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[1],
              matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[2],
              matmul_fused_op_signaler->fused_op_receiver_signal_semaphores[3],
-             mm_core_offset});
+             mm_core_offset,
+             next_core_to_left,
+             static_cast<uint32_t>(
+                 mesh_device->worker_core_from_logical_core(intermediate_cores_vec[next_core_to_left]).x),
+             static_cast<uint32_t>(
+                 mesh_device->worker_core_from_logical_core(intermediate_cores_vec[next_core_to_left]).y)});
     }
     log_info(tt::LogOp, "LLONG FUSION: cores_per_device: {}", cores_per_device);
     uint32_t start_core_index_for_device = intermediate_cores_vec.size() / ring_size * ring_index;
