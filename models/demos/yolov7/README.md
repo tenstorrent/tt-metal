@@ -26,22 +26,17 @@ pytest --disable-warnings tests/ttnn/integration_tests/yolov7/test_ttnn_yolov7.p
 ```
 
 ### Performant Model With Trace+2CQ:
-- end-2-end perf is 89 FPS.
-Use the following command to run the performant Model with Trace+2CQ
 ```python
 pytest --disable-warnings models/demos/yolov7/tests/perf/test_e2e_performant.py::test_e2e_performant
  ```
 
 ### Performant Demo with Trace+2CQs:
-Use the following command to run the performant demo with Trace+2CQs:
 ```
 pytest --disable-warnings models/demos/yolov7/demo/demo.py
 ```
 
 ## Testing
-
 ### Performant evaluation with Trace+2CQ
-Use the following command to run the performant evaluation with Trace+2CQs:
 ```
 pytest models/experimental/yolo_eval/evaluate.py::test_yolov7[res0-device_params0-tt_model]
 ```
@@ -53,3 +48,4 @@ Note: The model is evaluated with 500 samples.
 - Batch Size: 1
 - Resolution: 640x640
 - Dataset used for evaluation - **coco-2017**
+- End-2-end perf is 89 FPS
