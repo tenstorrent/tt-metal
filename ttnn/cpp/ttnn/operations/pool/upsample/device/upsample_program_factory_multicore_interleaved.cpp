@@ -75,8 +75,11 @@ operation::ProgramWithCallbacks upsample_multi_core_interleaved(
     reader_compile_time_args = {
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src_is_dram,
+        (std::uint32_t)input_unit_size,
         (std::uint32_t)src_stick_size_is_power_of_two,
         (std::uint32_t)src_log2_stick_size};
+
+    uint32_t block_height = 1;
 
     bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_unit_size);
     uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (std::uint32_t)log2(output_unit_size) : 0;
@@ -103,14 +106,12 @@ operation::ProgramWithCallbacks upsample_multi_core_interleaved(
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/"
-        "writer_upsample_unary_stick_layout_interleaved_start_id.cpp",
+        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_interleaved.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
 
     std::vector<uint32_t> reader_rt_arguments{
         src_buffer->address(),
-        input_unit_size,
         0,  // set in loop, num of sticks on core
         0   // set in loop, start_id of stick in core
     };
@@ -132,8 +133,8 @@ operation::ProgramWithCallbacks upsample_multi_core_interleaved(
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        reader_rt_arguments[2] = num_sticks_per_core;
-        reader_rt_arguments[3] = num_sticks_written;
+        reader_rt_arguments[1] = num_sticks_per_core;
+        reader_rt_arguments[2] = num_sticks_written;
 
         writer_rt_arguments[1] = num_sticks_per_core;
         writer_rt_arguments[2] = num_sticks_written;

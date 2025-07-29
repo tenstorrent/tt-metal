@@ -103,6 +103,7 @@ operation::ProgramWithCallbacks upsample_tiled_interleaved(
     reader_compile_time_args = {
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src_is_dram,
+        (std::uint32_t)input_single_tile_size,
         (std::uint32_t)src_tile_size_is_power_of_two,
         (std::uint32_t)src_log2_tile_size};
 
@@ -134,7 +135,7 @@ operation::ProgramWithCallbacks upsample_tiled_interleaved(
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_interleaved_tiled.cpp",
+        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_interleaved.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
@@ -151,7 +152,6 @@ operation::ProgramWithCallbacks upsample_tiled_interleaved(
 
     std::vector<uint32_t> reader_rt_arguments{
         src_buffer->address(),
-        input_single_tile_size,
         0,  // set in loop, num of sticks on core
         0   // set in loop, start_id of stick in core
     };
@@ -177,8 +177,8 @@ operation::ProgramWithCallbacks upsample_tiled_interleaved(
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        reader_rt_arguments[2] = num_of_tile_rows_per_core * num_input_tiles_in_row;
-        reader_rt_arguments[3] = num_tiles_read * num_input_tiles_in_row;
+        reader_rt_arguments[1] = num_of_tile_rows_per_core * num_input_tiles_in_row;
+        reader_rt_arguments[2] = num_tiles_read * num_input_tiles_in_row;
 
         writer_rt_arguments[1] = num_of_tile_rows_per_core;
         writer_rt_arguments[2] = num_tiles_read;
