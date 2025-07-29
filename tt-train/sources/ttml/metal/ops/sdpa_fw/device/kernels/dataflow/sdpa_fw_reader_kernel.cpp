@@ -33,6 +33,11 @@ void kernel_main() {
     constexpr uint32_t cb_scaler = tt::CBIndex::c_4;
     constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_5;
 
+    // [Debug]: all next cb used for debug here
+    constexpr uint32_t cb_temp_accum = tt::CBIndex::c_7;
+    constexpr uint32_t cb_prev_max = tt::CBIndex::c_8;  // used to store previous max value
+    constexpr uint32_t cb_cur_max = tt::CBIndex::c_9;   // used to store current max value
+
     //[DEBUG] TODO: remove this
     constexpr uint32_t cb_transpose_key = tt::CBIndex::c_6;
 
@@ -136,6 +141,31 @@ void kernel_main() {
             }
             noc_async_read_barrier();
             cb_push_back(cb_value, kv_chunks_size);
+
+            // ----- [Debug] -----
+            if (h % 2 == 0) {
+                cb_wait_front(cb_temp_accum, onetile);
+                DPRINT << "h == " << h << ", cb_temp_accum: " << ENDL();
+                print_tile(cb_temp_accum, 0, false);
+
+                // cb_wait_front(cb_prev_max, onetile);
+                // DPRINT << "h == " << h << ", cb_prev_max: " << ENDL();
+                // print_tile(cb_prev_max, 0, false);
+
+                cb_wait_front(cb_cur_max, onetile);
+                DPRINT << "h == " << h << ", cb_cur_max: " << ENDL();
+                print_tile(cb_cur_max, 0, false);
+            } else {
+                cb_wait_front(cb_temp_accum, onetile);
+                DPRINT << "h == " << h << ", cb_temp_accum: " << ENDL();
+                print_tile(cb_temp_accum, 0, false);
+
+                cb_wait_front(cb_prev_max, onetile);
+                DPRINT << "h == " << h << ", cb_prev_max: " << ENDL();
+                print_tile(cb_prev_max, 0, false);
+            }
+
+            // ----- [Debug] -----
         }
     }
 }

@@ -37,10 +37,22 @@ constexpr auto kScalerCbIndex = tt::CBIndex::c_4;
 constexpr auto kReductionScalerCbIndex = tt::CBIndex::c_5;
 constexpr auto kTranspoxeKeyCbIndex = tt::CBIndex::c_6;  // used for transposing key tiles
 constexpr auto kTempAccumCbIndex = tt::CBIndex::c_7;     // used for accumulating results
-constexpr auto kOutputCbIndex = tt::CBIndex::c_8;
+
+constexpr auto kPrevMaxValueCbIndex = tt::CBIndex::c_8;  // used for holding max value during reduce
+constexpr auto kCurMaxValueCbIndex = tt::CBIndex::c_9;   // used for holding max value during reduce
+constexpr auto kExpSumDiffCbIndex = tt::CBIndex::c_10;   // used for holding exp sum diff during reduce
+constexpr auto kPrevSumExpCbIndex = tt::CBIndex::c_11;   // used for holding exp sum during reduce
+constexpr auto kCurSumExpCbIndex = tt::CBIndex::c_12;    // used for holding exp sum during reduce
+constexpr auto kPrevMmOutCbIndex = tt::CBIndex::c_13;    // used for holding previous matmul output
+constexpr auto kCurMmOutCbIndex = tt::CBIndex::c_14;     // used for holding current matmul output
+
+constexpr auto kOutputCbIndex = tt::CBIndex::c_15;
 
 constexpr uint32_t kNumScalerTiles = 1U;
 constexpr uint32_t kTempAccumTiles = 1U;  //[Debug] should be 2U
+constexpr uint32_t kMaxValueHolderTiles = 1U;
+constexpr uint32_t kExpSumDiffTiles = 1U;
+constexpr uint32_t kExpSumTiles = 1U;
 
 }  // namespace
 
@@ -290,6 +302,28 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     auto cb_temp_accum = create_circular_buffer(
         program, all_cores, kTempAccumCbIndex, data_format, bfloat16_single_tile_size_bytes, kTempAccumTiles);
+
+    auto cb_prev_max_value = create_circular_buffer(
+        program, all_cores, kPrevMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, kMaxValueHolderTiles);
+
+    auto cb_cur_max_value = create_circular_buffer(
+        program, all_cores, kCurMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, kMaxValueHolderTiles);
+
+    // lets try to use precise data format for holding exp sum/diff values
+    auto cb_exp_max_diff = create_circular_buffer(
+        program, all_cores, kExpSumDiffCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpSumDiffTiles);
+
+    auto cb_prev_exp_sum = create_circular_buffer(
+        program, all_cores, kPrevSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpSumTiles);
+
+    auto cb_cur_exp_sum = create_circular_buffer(
+        program, all_cores, kCurSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpSumTiles);
+
+    auto cb_prev_mm_out = create_circular_buffer(
+        program, all_cores, kPrevMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
+
+    auto cb_cur_mm_out = create_circular_buffer(
+        program, all_cores, kCurMmOutCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
 
     auto cb_output = create_circular_buffer(
         program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Wt);

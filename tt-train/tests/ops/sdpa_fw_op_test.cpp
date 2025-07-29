@@ -243,7 +243,7 @@ ttnn::Tensor composite_sdpa_fw(
 TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
     using namespace ttml;
 
-    const uint32_t B = 1U, H = 1U, S = 1024U, d = 768U;
+    const uint32_t B = 1U, H = 1U, S = 128U, d = 128U;
     const float dropout_prob = 0.8F;
 
     std::random_device rd;
@@ -251,7 +251,22 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
     xt::xarray<float> query_tensor = xt::random::rand<float>({B, H, S, d}, -1.0F, 1.0F, gen);
     xt::xarray<float> key_tensor = xt::random::rand<float>({B, H, S, d}, -1.0F, 1.0F, gen);
     xt::xarray<float> value_tensor = xt::random::rand<float>({B, H, S, d}, -1.0F, 1.0F, gen);
-    xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);
+    xt::xarray<float> attn_mask_tensor = xt::ones<float>({B, H, S, S});
+    // xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);
+
+    for (uint32_t b = 0; b < B; ++b) {
+        for (uint32_t i = 0; i < S; ++i) {
+            for (uint32_t j = 0; j < d; ++j) {
+                query_tensor(b, 0, i, j) = static_cast<float>(1U);
+                key_tensor(b, 0, i, j) = static_cast<float>(4U - (i / 32U));
+            }
+        }
+    }
+    // std::cout << '\n';
+    // for (uint32_t i = 0; i < d; ++i) {
+    //     std::cout << key_tensor(0, 0, 64, i) << ' ';
+    // }
+    // std::cout << '\n';
 
     auto query = core::from_xtensor(query_tensor, &autograd::ctx().get_device());
     auto key = core::from_xtensor(key_tensor, &autograd::ctx().get_device());

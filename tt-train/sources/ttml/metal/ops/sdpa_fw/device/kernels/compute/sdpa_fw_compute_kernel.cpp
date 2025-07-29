@@ -27,6 +27,7 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/transpose_wh.h"
+#include "debug/dprint.h"
 
 namespace NAMESPACE {
 
@@ -46,7 +47,16 @@ constexpr uint32_t cb_scaler = tt::CBIndex::c_4;
 constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_5;
 constexpr uint32_t cb_transpose_key = tt::CBIndex::c_6;  // isn't used right now, for debugging only
 constexpr uint32_t cb_temp_accum = tt::CBIndex::c_7;     // used for accumulating results
-constexpr uint32_t cb_output = tt::CBIndex::c_8;
+
+constexpr uint32_t cb_prev_max = tt::CBIndex::c_8;       // used to store previous max value
+constexpr uint32_t cb_cur_max = tt::CBIndex::c_9;        // used to store current max value
+constexpr uint32_t cb_exp_sum_diff = tt::CBIndex::c_10;  // used for holding exp sum diff during reduce
+constexpr uint32_t cb_prev_sum_exp = tt::CBIndex::c_11;  // used for holding exp sum during reduce
+constexpr uint32_t cb_cur_sum_exp = tt::CBIndex::c_12;   // used for holding exp sum during reduce
+constexpr uint32_t cb_prev_mm_out = tt::CBIndex::c_13;   // used for holding previous matmul output
+constexpr uint32_t cb_cur_mm_out = tt::CBIndex::c_14;    // used for holding current matmul output
+
+constexpr uint32_t cb_output = tt::CBIndex::c_15;
 
 const uint32_t onetile = 1U;
 
@@ -56,14 +66,64 @@ const uint32_t v_chunk_size = Wt;
 const uint32_t kv_chunks_size = Wt;
 const uint32_t kv_chunks_number = Ht;
 
+// TODO: maybe I can move this file to compute_common.hpp file where I have other helper functions for sdpa_fw
+template <PoolType pool_type, ReduceDim reduce_dim, uint32_t cb_qk_result, uint32_t cb_identity_scaler>
+void find_max_value(uint32_t cb_cur_max_value, uint32_t cb_prev_max_value, bool do_eltwise_max = false) {
+    cb_wait_front(cb_qk_result, onetile);
+    cb_reserve_back(cb_cur_max_value, onetile);
+
+    constexpr uint32_t reduce_dst_idx = 0;
+    constexpr uint32_t prev_max_dst_idx = 1U;
+    reduce_init<pool_type, reduce_dim>(cb_qk_result, cb_identity_scaler, cb_cur_max_value);
+    tile_regs_acquire();
+    reduce_tile<pool_type, reduce_dim>(
+        cb_qk_result, cb_identity_scaler, /* tile_idx */ 0, /* tile_idx */ 0, /* dst_reg_idx */ reduce_dst_idx);
+    reduce_uninit();
+
+    if (do_eltwise_max) {
+        DPRINT << "do eltwise max" << ENDL();
+        cb_wait_front(cb_prev_max_value, onetile);
+        copy_tile_init(cb_prev_max_value);
+        copy_tile(cb_prev_max_value, /* tile_idx */ 0, /* register idx */ prev_max_dst_idx);
+
+        // find max value between current max and previous max
+        max_tile_init();
+        max_tile(reduce_dst_idx, prev_max_dst_idx, static_cast<int>(VectorMode::C));
+        // max_tile(reduce_dst_idx, prev_max_dst_idx);
+    }
+    tile_regs_commit();
+
+    tile_regs_wait();
+    pack_reconfig_data_format(cb_cur_max_value);
+    pack_tile(reduce_dst_idx, cb_cur_max_value);
+    tile_regs_release();
+    cb_push_back(cb_cur_max_value, onetile);
+}
+
+// /* We process data by one tile, because we read only one row of K
+//  * Maybe we can read two rows of K and V and then process data by subblocks*/
+// template <uint32_t cb_qk_result, uint32_t cb_identity_scaler>
+// void find_cur_exp_sum(uint32_t cb_cur_max_value, uint32_t cb_cur_exp_sum) {
+//     cb_wait_front(cb_qk_result, onetile);
+//     cb_wait_front(cb_cur_max_value, onetile);
+//     cb_reserve_back(cb_cur_exp_sum, onetile);
+
+// }
+
 void MAIN {
     init_sfpu(cb_query, cb_output);
     binary_op_init_common(cb_query, cb_key, cb_value);
 
+    cb_wait_front(cb_reduction_scaler, onetile);
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         cb_wait_front(cb_query, q_chunk_size);
         cb_wait_front(cb_attn_mask, Ht);  // wait until reader kernel has written kv_chunks_size tiles to cb_attn_mask
         cb_reserve_back(cb_output, q_chunk_size);
+
+        // set up ping pong buffers
+        // we will swap these buffer after each row processing to avoid overwriting previous results
+        uint32_t alias_cb_prev_max = cb_prev_max;
+        uint32_t alias_cb_cur_max = cb_cur_max;
 
         const uint32_t matmul_accum_reg = 0;
         const uint32_t mask_register = 1U;                 // mask register should be next to data register
@@ -108,9 +168,9 @@ void MAIN {
             mask_tile(matmul_accum_reg, mask_register);
 
             binop_with_scalar_tile_init();
-            mul_unary_tile(matmul_accum_reg, scaler_bits);   // multiply by scaler factor
-            add_unary_tile(mask_register, minus_one_bits);   // subtract 1.0 from mask, so it becomes 0.0 and -1.0
-            mul_unary_tile(mask_register, custom_inf_bits);  // multiply by 1e9F to transform mask to 0.0 and -1e9F
+            // mul_unary_tile(matmul_accum_reg, scaler_bits);   // multiply by scaler factor
+            add_unary_tile(mask_register, minus_one_bits);  // subtract 1.0 from mask, so it becomes 0.0 and -1.0
+            // mul_unary_tile(mask_register, custom_inf_bits);  // multiply by 1e9F to transform mask to 0.0 and -1e9F
 
             // Add mask to scaled matmul result:
             // masked positions receive large negative values (will be 0.0 after softmax),
@@ -123,19 +183,22 @@ void MAIN {
             cb_reserve_back(cb_temp_accum, onetile);
             pack_reconfig_data_format(cb_temp_accum);
             pack_tile(matmul_accum_reg, cb_temp_accum);
-
-            // if (h == 0) {
-            //     cb_reserve_back(cb_scaler, onetile);
-            //     pack_reconfig_data_format(cb_scaler);
-            //     pack_tile(mask_register, cb_scaler);
-            // }
             tile_regs_release();
 
             cb_push_back(cb_temp_accum, onetile);
-            // cb_push_back(cb_scaler, onetile);
 
             // pop key data to make space for next key chunk
             cb_pop_front(cb_key, kv_chunks_size);
+
+            /**
+             * to find current max value we need to perform both reduce_max and eltwise max with previous result.
+             * if do_eltwise_max:
+             *  cur_max = eltwise_max(prev_max, max(qk, dim=-1))
+             * else:
+             *  cur_max = max(qk, dim=-1)
+             */
+            find_max_value<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_temp_accum, cb_reduction_scaler>(
+                alias_cb_cur_max, alias_cb_prev_max, /* if it first reduction in a row*/ h > 0);
 
             // wait for Q_chunk by K_chunk result to be ready
             cb_wait_front(cb_temp_accum, onetile);
@@ -169,6 +232,11 @@ void MAIN {
                 tile_regs_release();
                 PACK((llk_pack_reconfig_l1_acc(0)));
             }
+
+            if (h > 0) {
+                cb_pop_front(alias_cb_prev_max, onetile);  // pop previous max after processing  K and V row
+            }
+            std::swap(alias_cb_prev_max, alias_cb_cur_max);  // swap buffers for next iteration
 
             // pop data from circular buffers
             cb_pop_front(cb_temp_accum, onetile);
