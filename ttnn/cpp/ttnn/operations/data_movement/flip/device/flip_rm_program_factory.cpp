@@ -10,6 +10,7 @@
 namespace ttnn::operations::data_movement {
 
 namespace detail {
+
 static uint32_t num_pages(const ttnn::Tensor& input_tensor) {
     const auto& shape = input_tensor.logical_shape();
     return shape.volume() / shape[-1];
@@ -54,6 +55,8 @@ FlipDeviceOperation::MultiCoreRowMajor::cached_program_t FlipDeviceOperation::Mu
     uint32_t rank = input_tensor.logical_shape().rank();
     uint32_t element_size = input_tensor.element_size();
     uint32_t num_rows = input_tensor.physical_volume() / input_tensor.logical_shape()[-1];
+    const auto& input_shape = input_tensor.logical_shape();
+    std::vector<uint32_t> input_row_strides = detail::get_row_strides(input_shape);
 
     auto dims = operation_attributes.dims;
     std::vector<uint32_t> dims_to_flip(rank, 0);
@@ -97,7 +100,7 @@ FlipDeviceOperation::MultiCoreRowMajor::cached_program_t FlipDeviceOperation::Mu
     // ------------------------------------------------------------------------
     // 3) Set compile time arguments for kernels
     // ------------------------------------------------------------------------
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, input_page_size, input_row_width, rank};
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, input_page_size, rank};
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram, input_page_size};
 
     // ------------------------------------------------------------------------
@@ -123,6 +126,8 @@ FlipDeviceOperation::MultiCoreRowMajor::cached_program_t FlipDeviceOperation::Mu
     std::vector<uint32_t> reader_runtime_args = {input_tensor.buffer()->address(), 0, 0};
     std::vector<uint32_t> writer_runtime_args = {output_tensor.buffer()->address(), 0, 0};
 
+    reader_runtime_args.insert(reader_runtime_args.end(), input_shape.cbegin(), input_shape.cend());
+    reader_runtime_args.insert(reader_runtime_args.end(), input_row_strides.begin(), input_row_strides.end());
     reader_runtime_args.insert(reader_runtime_args.end(), dims_to_flip.begin(), dims_to_flip.end());
 
     uint32_t start_row = 0;
