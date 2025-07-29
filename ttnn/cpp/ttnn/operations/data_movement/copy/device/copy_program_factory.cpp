@@ -81,7 +81,7 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
 
     std::vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
     if (tilized) {
-        writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+        writer_compile_time_args = {(std::uint32_t)output_cb_index};
     } else {
         reader_compile_time_args = {(std::uint32_t)src0_cb_index, (std::uint32_t)input_unit_size};
         writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)output_unit_size};
