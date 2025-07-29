@@ -9,6 +9,21 @@
 
 namespace tt::tt_metal {
 
+/**
+ * @brief Represents different types of hardware clusters
+ *
+ * @warning SERIALIZATION NOTE: This enum is exposed to Python bindings and may be
+ * serialized in various contexts (Python pickle, JSON, configuration files, etc.).
+ * The explicit integer values assigned to each enum member are part of the stable
+ * API contract.
+ *
+ * ORDERING CONSTRAINTS:
+ * - DO NOT change existing enum values (breaks backward compatibility)
+ * - DO NOT reorder existing entries (breaks serialized data)
+ * - New enum values MUST be added at the end before the closing brace
+ * - Use the next sequential integer value for new entries
+ * - Mark deprecated entries with comments but DO NOT remove them
+ */
 enum class ClusterType : std::uint8_t {
     INVALID = 0,
     N150 = 1,                    // Production N150
