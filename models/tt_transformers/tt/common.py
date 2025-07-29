@@ -238,25 +238,31 @@ def compute_llama3_parameters(freqs: torch.Tensor, scale_factor: float, orig_con
     return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
 
 
+def compute_linear_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Linear scaling for rotary embeddings."""
+    freqs /= scale_factor
+    return freqs
+
+
 def compute_default_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
     """Default scaling for rotary embeddings."""
     return freqs
 
 
-def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int, rope_type="llama3"):
     # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
 
-    hf_model_env = os.getenv("HF_MODEL")
-
-    if hf_model_env == "google/gemma-3-1b-it":
+    if rope_type == "default":
         freqs = compute_default_parameters(freqs, scale_factor, orig_context_len)
-    elif "LLAMA_DIR" in os.environ or (hf_model_env and "llama" in hf_model_env.lower()):
+    elif rope_type == "linear":
+        freqs = compute_linear_parameters(freqs, scale_factor, orig_context_len)
+    elif rope_type == "llama3":
         freqs = compute_llama3_parameters(freqs, scale_factor, orig_context_len)
 
     return freqs
 
 
-def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
+def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len, rope_type="llama3"):
     """
     Precompute the frequency tensor for sine and cosine values with given dimensions.
 
@@ -271,7 +277,7 @@ def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end)
     if scale_factor is not None:
-        freqs = apply_scaling(freqs, scale_factor, orig_context_len)
+        freqs = apply_scaling(freqs, scale_factor, orig_context_len, rope_type=rope_type)
     freqs = torch.outer(t, freqs).float()
     return torch.cos(freqs), torch.sin(freqs)
 
