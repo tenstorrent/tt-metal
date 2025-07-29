@@ -121,7 +121,7 @@
       bandwidth: 31
   blackhole:
     riscv_0:
-      latency: 7500000
+      latency: 9000000
       bandwidth: 62
 
 "One to All Multicast Directed Ideal":
