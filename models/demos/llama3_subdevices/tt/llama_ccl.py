@@ -71,9 +71,9 @@ class TT_CCL:
 
                 if mode == "prefill":
                     if self.use_ring_rs_prefill:
-                        # current ring implementation of reduce scatter expects 3 semaphores per link (12 total), where AG and old RS use same addresses on all links
+                        # current ring implementation of reduce scatter expects 3 semaphores
                         self.reduce_semaphore_handles[i].append(
-                            [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(12)]
+                            [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)]
                         )
 
                     else:
@@ -881,14 +881,11 @@ class TT_CCL:
         )
         persistent_buffers_list = list(persistent_buffers.values()) if persistent_buffers else None
         num_links = 4
-        num_semaphores = 3 * num_links
         ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
             input_tensor=input_tensor_mesh,
             persistent_output_buffers=persistent_buffers_list,
             dim=dim,
-            multi_device_global_semaphore=self.reduce_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]][
-                :num_semaphores
-            ],
+            multi_device_global_semaphore=self.reduce_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
             num_links=num_links,
             memory_config=memory_config,
             topology=ttnn.Topology.Ring,
