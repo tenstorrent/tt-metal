@@ -37,89 +37,6 @@ def find_max_subblock(out_block_h, out_block_w):
     return best_h, best_w, max_product
 
 
-def format_tensor_as_string(tensor_list: list, precision: int = 4, max_width: int = 120) -> str:
-    def get_tensor_shape(nested_list):
-        if not isinstance(nested_list, list):
-            return []
-        if len(nested_list) == 0:
-            return [0]
-
-        shape = [len(nested_list)]
-        if isinstance(nested_list[0], list):
-            shape.extend(get_tensor_shape(nested_list[0]))
-        return shape
-
-    def format_number(num, width):
-        if isinstance(num, (int, float)):
-            if abs(num) < 1e-10:
-                formatted = "0.0"
-            else:
-                formatted = f"{num:.{precision}f}"
-        else:
-            formatted = str(num)
-        return formatted.rjust(width)
-
-    def get_all_values(nested_list):
-        values = []
-        if isinstance(nested_list, list):
-            for item in nested_list:
-                values.extend(get_all_values(item))
-        else:
-            values.append(nested_list)
-        return values
-
-    def calculate_col_width(nested_list):
-        all_values = get_all_values(nested_list)
-        formatted_values = []
-        for val in all_values:
-            if isinstance(val, (int, float)):
-                formatted_values.append(f"{val:.{precision}f}")
-            else:
-                formatted_values.append(str(val))
-
-        if not formatted_values:
-            return precision + 4
-
-        max_len = max(len(str(val)) for val in formatted_values)
-        return max(max_len + 2, precision + 4)
-
-    def format_recursive(nested_list, depth, col_width, is_last_at_level):
-        if not isinstance(nested_list, list):
-            return format_number(nested_list, col_width)
-
-        if len(nested_list) == 0:
-            return "[]"
-
-        if not isinstance(nested_list[0], list):
-            formatted_items = [format_number(item, col_width) for item in nested_list]
-            return "[ " + "   ".join(formatted_items) + " ]"
-
-        lines = []
-        indent = " " * depth
-
-        for i, item in enumerate(nested_list):
-            is_last = i == len(nested_list) - 1
-            formatted_item = format_recursive(item, depth + 1, col_width, is_last)
-
-            if i == 0:
-                lines.append("[" + formatted_item)
-            else:
-                lines.append(indent + " " + formatted_item)
-
-        if depth > 0:
-            lines[-1] += "]"
-        else:
-            lines[-1] += "]"
-
-        return "\n".join(lines)
-
-    if not isinstance(tensor_list, list) or len(tensor_list) == 0:
-        return "[]"
-
-    col_width = calculate_col_width(tensor_list)
-    return format_recursive(tensor_list, 0, col_width, True)
-
-
 @pytest.mark.parametrize("n", [2])
 @pytest.mark.parametrize("c", [5])
 @pytest.mark.parametrize("h", [3])
@@ -151,9 +68,9 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
     elif dtype == ttnn.bfloat4_b:
         expected_pcc = 0.989
 
-    logger.debug(f"torch_input_tensor:\n{format_tensor_as_string(torch_input_tensor.tolist())}")
-    logger.debug(f"input_tensor:\n{format_tensor_as_string(input_tensor.to_list())}")
-    logger.debug(f"output_tensor:\n{format_tensor_as_string(output_tensor.tolist())}")
+    # logger.debug(f"torch_input_tensor:\n{format_tensor_as_string(torch_input_tensor.tolist())}")
+    # logger.debug(f"input_tensor:\n{format_tensor_as_string(input_tensor.to_list())}")
+    # logger.debug(f"output_tensor:\n{format_tensor_as_string(output_tensor.tolist())}")
 
     assert_with_pcc(torch_input_tensor, output_tensor, expected_pcc)
 
@@ -757,7 +674,19 @@ def test_matmul_2d_multiple_output_blocks_per_core(
 
 
 def run_matmul_2d_tiny_tile(
-    device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, in1_dtype, transpose_tile
+    device,
+    m,
+    k,
+    n,
+    has_bias,
+    grid_size,
+    tile_h,
+    tile_w,
+    in0_sharded,
+    out_sharded,
+    in1_dtype,
+    transpose_tile,
+    extra_torch_entries=[0],
 ):
     in0_shape = [1, 1, m, k]
     in1_shape = [1, 1, k, n]
@@ -780,6 +709,8 @@ def run_matmul_2d_tiny_tile(
         )
     else:
         in0_memory_config = ttnn.L1_MEMORY_CONFIG
+
+    current_entries_count = device.num_program_cache_entries()
     in0_t = ttnn.from_torch(
         in0,
         tile=ttnn.Tile((tile_h, 32)),
@@ -796,11 +727,13 @@ def run_matmul_2d_tiny_tile(
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
 
     if has_bias:
         bias = torch.randn(bias_shape).bfloat16().float()
         bias_padded = bias.unsqueeze(2)
         bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, tile_h - bias_padded.size(2)), "constant", 0)
+        current_entries_count = device.num_program_cache_entries()
         bias_t = ttnn.from_torch(
             bias_padded,
             tile=ttnn.Tile((tile_h, tile_w)),
@@ -809,6 +742,7 @@ def run_matmul_2d_tiny_tile(
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
@@ -893,13 +827,27 @@ def test_matmul_2d_tiny_tile(
     in1_dtype,
     transpose_tile,
 ):
+    extra_torch_entries = [0]
     for _ in range(2):
         run_matmul_2d_tiny_tile(
-            device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, in1_dtype, transpose_tile
+            device,
+            m,
+            k,
+            n,
+            has_bias,
+            grid_size,
+            tile_h,
+            tile_w,
+            in0_sharded,
+            out_sharded,
+            in1_dtype,
+            transpose_tile,
+            extra_torch_entries=extra_torch_entries,
         )
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
+        current_entries_count = device.num_program_cache_entries()
         tt_dummy_tensor = ttnn.from_torch(
             py_dummy_tensor,
             dtype=ttnn.DataType.BFLOAT16,
@@ -907,11 +855,25 @@ def test_matmul_2d_tiny_tile(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 1
+        extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
+
+    assert device.num_program_cache_entries() - extra_torch_entries[0] == 1
 
 
 def run_matmul_1d_tiny_tile(
-    device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, in1_dtype, transpose_tile
+    device,
+    m,
+    k,
+    n,
+    has_bias,
+    grid_size,
+    tile_h,
+    tile_w,
+    in0_sharded,
+    out_sharded,
+    in1_dtype,
+    transpose_tile,
+    extra_torch_entries=[0],
 ):
     in0_shape = [1, 1, m, k]
     in1_shape = [1, 1, k, n]
@@ -936,6 +898,7 @@ def run_matmul_1d_tiny_tile(
         )
     else:
         in0_memory_config = ttnn.L1_MEMORY_CONFIG
+    current_entries_count = device.num_program_cache_entries()
     in0_t = ttnn.from_torch(
         in0,
         tile=ttnn.Tile((tile_h, 32)),
@@ -952,11 +915,13 @@ def run_matmul_1d_tiny_tile(
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
 
     if has_bias:
         bias = torch.randn(bias_shape).bfloat16().float()
         bias_padded = bias.unsqueeze(2)
         bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, tile_h - bias_padded.size(2)), "constant", 0)
+        current_entries_count = device.num_program_cache_entries()
         bias_t = ttnn.from_torch(
             bias_padded,
             tile=ttnn.Tile((tile_h, tile_w)),
@@ -965,6 +930,7 @@ def run_matmul_1d_tiny_tile(
             device=device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
 
     program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=grid_size,
@@ -1050,13 +1016,27 @@ def test_matmul_1d_tiny_tile(
     in1_dtype,
     transpose_tile,
 ):
+    extra_torch_entries = [0]
     for _ in range(2):
         run_matmul_1d_tiny_tile(
-            device, m, k, n, has_bias, grid_size, tile_h, tile_w, in0_sharded, out_sharded, in1_dtype, transpose_tile
+            device,
+            m,
+            k,
+            n,
+            has_bias,
+            grid_size,
+            tile_h,
+            tile_w,
+            in0_sharded,
+            out_sharded,
+            in1_dtype,
+            transpose_tile,
+            extra_torch_entries=extra_torch_entries,
         )
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
+        current_entries_count = device.num_program_cache_entries()
         tt_dummy_tensor = ttnn.from_torch(
             py_dummy_tensor,
             dtype=ttnn.DataType.BFLOAT16,
@@ -1064,7 +1044,9 @@ def test_matmul_1d_tiny_tile(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 1
+        extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
+
+    assert device.num_program_cache_entries() - extra_torch_entries[0] == 1
 
 
 def run_matmul_1d_multiple_output_blocks_per_core(

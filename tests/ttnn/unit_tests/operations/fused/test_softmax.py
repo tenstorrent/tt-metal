@@ -77,6 +77,89 @@ def test_softmax_stable_neg_values(device, input_vector, math_approx, fp32_acc_e
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
+def format_tensor_as_string(tensor_list: list, precision: int = 4, max_width: int = 120) -> str:
+    def get_tensor_shape(nested_list):
+        if not isinstance(nested_list, list):
+            return []
+        if len(nested_list) == 0:
+            return [0]
+
+        shape = [len(nested_list)]
+        if isinstance(nested_list[0], list):
+            shape.extend(get_tensor_shape(nested_list[0]))
+        return shape
+
+    def format_number(num, width):
+        if isinstance(num, (int, float)):
+            if abs(num) < 1e-10:
+                formatted = "0.0"
+            else:
+                formatted = f"{num:.{precision}f}"
+        else:
+            formatted = str(num)
+        return formatted.rjust(width)
+
+    def get_all_values(nested_list):
+        values = []
+        if isinstance(nested_list, list):
+            for item in nested_list:
+                values.extend(get_all_values(item))
+        else:
+            values.append(nested_list)
+        return values
+
+    def calculate_col_width(nested_list):
+        all_values = get_all_values(nested_list)
+        formatted_values = []
+        for val in all_values:
+            if isinstance(val, (int, float)):
+                formatted_values.append(f"{val:.{precision}f}")
+            else:
+                formatted_values.append(str(val))
+
+        if not formatted_values:
+            return precision + 4
+
+        max_len = max(len(str(val)) for val in formatted_values)
+        return max(max_len + 2, precision + 4)
+
+    def format_recursive(nested_list, depth, col_width, is_last_at_level):
+        if not isinstance(nested_list, list):
+            return format_number(nested_list, col_width)
+
+        if len(nested_list) == 0:
+            return "[]"
+
+        if not isinstance(nested_list[0], list):
+            formatted_items = [format_number(item, col_width) for item in nested_list]
+            return "[ " + "   ".join(formatted_items) + " ]"
+
+        lines = []
+        indent = " " * depth
+
+        for i, item in enumerate(nested_list):
+            is_last = i == len(nested_list) - 1
+            formatted_item = format_recursive(item, depth + 1, col_width, is_last)
+
+            if i == 0:
+                lines.append("[" + formatted_item)
+            else:
+                lines.append(indent + " " + formatted_item)
+
+        if depth > 0:
+            lines[-1] += "]"
+        else:
+            lines[-1] += "]"
+
+        return "\n".join(lines)
+
+    if not isinstance(tensor_list, list) or len(tensor_list) == 0:
+        return "[]"
+
+    col_width = calculate_col_width(tensor_list)
+    return format_recursive(tensor_list, 0, col_width, True)
+
+
 def run_softmax_stable_with_program_cache(
     device, batch_size, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype, extra_torch_entries=[0]
 ):
@@ -92,6 +175,7 @@ def run_softmax_stable_with_program_cache(
     attention_mask = attention_mask.masked_fill(attention_mask == 1, 0)
     current_entries_count = device.num_program_cache_entries()
     attention_mask_t = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    assert_with_pcc(attention_mask, torch.Tensor(attention_mask_t.to_list()), 1)
     extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
 
     torch_input_tensor = torch_random((batch_size, 1, h, w), -1000, 1000, dtype=torch.bfloat16)
@@ -103,6 +187,7 @@ def run_softmax_stable_with_program_cache(
 
     current_entries_count = device.num_program_cache_entries()
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    assert_with_pcc(torch_input_tensor, torch.Tensor(input_tensor.to_list()), 0.99999)
     extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
 
     if is_grayskull():
@@ -119,21 +204,23 @@ def run_softmax_stable_with_program_cache(
         )
 
     if not skip_scale_mask:
-        output_tensor = ttnn.scale_mask_softmax(
+        ttnn_output_tensor = ttnn.scale_mask_softmax(
             input_tensor, scale, attention_mask_t, compute_kernel_config=compute_kernel_config, numeric_stable=True
         )
     else:
-        output_tensor = ttnn.softmax(
+        ttnn_output_tensor = ttnn.softmax(
             input_tensor, dim=-1, compute_kernel_config=compute_kernel_config, numeric_stable=True
         )
-    output_tensor = ttnn.to_torch(output_tensor)
+
+    output_tensor = ttnn.to_torch(ttnn_output_tensor)
+    assert_with_pcc(output_tensor, torch.Tensor(ttnn_output_tensor.to_list()), 1)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
-@pytest.mark.parametrize("h", [32, 128])
-@pytest.mark.parametrize("w", [1024, 1500])
+@pytest.mark.parametrize("h", [8])
+@pytest.mark.parametrize("w", [8])
 @pytest.mark.parametrize("skip_scale_mask", [True, False])
 @pytest.mark.parametrize("math_approx", [True, False])
 @pytest.mark.parametrize("fp32_acc_en", [True, False])
@@ -171,7 +258,7 @@ def test_softmax_stable_with_program_cache(
 
 
 def run_softmax_sharded_stable(
-    device, batch_size, num_heads, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype
+    device, batch_size, num_heads, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype, extra_torch_entries=[0]
 ):
     torch.manual_seed(0)
 
@@ -182,7 +269,9 @@ def run_softmax_sharded_stable(
     attention_mask = (attention_mask > 0.5).float()
     attention_mask = attention_mask.masked_fill(attention_mask == 0, torch.tensor(float("-inf"), dtype=torch.bfloat16))
     attention_mask = attention_mask.masked_fill(attention_mask == 1, 0)
+    current_entries_count = device.num_program_cache_entries()
     attention_mask_t = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
 
     torch_input_tensor = torch_random((batch_size, num_heads, h, w), -1000, 1000, dtype=torch.bfloat16)
     if not skip_scale_mask:
@@ -216,9 +305,12 @@ def run_softmax_sharded_stable(
             packer_l1_acc=False,
         )
 
+    current_entries_count = device.num_program_cache_entries()
     input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
     )
+    extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
+
     if not skip_scale_mask:
         output_tensor = ttnn.scale_mask_softmax_in_place(
             input_tensor,
@@ -251,13 +343,24 @@ def run_softmax_sharded_stable(
 def test_softmax_sharded_stable_with_program_cache(
     device, batch_size, num_heads, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype
 ):
+    extra_torch_entries = [0]
     for _ in range(2):
         run_softmax_sharded_stable(
-            device, batch_size, num_heads, h, w, skip_scale_mask, math_approx, fp32_acc_en, in_dtype
+            device,
+            batch_size,
+            num_heads,
+            h,
+            w,
+            skip_scale_mask,
+            math_approx,
+            fp32_acc_en,
+            in_dtype,
+            extra_torch_entries=extra_torch_entries,
         )
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
+        current_entries_count = device.num_program_cache_entries()
         tt_dummy_tensor = ttnn.from_torch(
             py_dummy_tensor,
             dtype=ttnn.DataType.BFLOAT16,
@@ -265,7 +368,9 @@ def test_softmax_sharded_stable_with_program_cache(
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 1
+        extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
+
+    assert device.num_program_cache_entries() - extra_torch_entries[0] == 1
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])

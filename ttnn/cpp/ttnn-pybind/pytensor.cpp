@@ -114,6 +114,7 @@ void log_from_cpp(const char* file, int line, const char* func, Args&&... messag
 }
 #define py_log(...) log_from_cpp(__FILE__, __LINE__, __func__, "[" #__VA_ARGS__ "] =" __VA_OPT__(, ) __VA_ARGS__);
 // #define py_log(...)
+
 std::string format_tensor_as_string(pybind11::object tensor, int precision = 4) {
     pybind11::object tensor_list;
 
@@ -562,6 +563,8 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
     } else if (
         tensor.attr("dtype").equal(torch.attr("bfloat16")) && dtype.has_value() &&
         (dtype.value() == DataType::BFLOAT4_B || dtype.value() == DataType::BFLOAT8_B)) {
+        // Under certain conditions typecast of the bfloat16 to bfloat4b/bfloat8b leaves half of the tensor as zeroes.
+        // The test triggering this bug is test_matmul.py::test_tiny_tiles_bfloat
         py_log();
         do_host_conversion_through_fallback();
     } else if (tensor.attr("dtype").equal(torch.attr("uint8"))) {
@@ -753,8 +756,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         output.logical_shape(),
         output.padded_shape(),
         output.dtype(),
-        "\n",
-        format_tensor_as_string(pybind11::cast(output)));
+        "\n" + format_tensor_as_string(pybind11::cast(output)));
 
     if (memory_config.is_sharded()) {
         py_log("Sharded memory config");
@@ -771,7 +773,7 @@ Tensor convert_python_tensor_to_tt_tensor(
             if (device != nullptr && optional_layout.has_value() && output.layout() != optional_layout.value()) {
                 py_log("converting to final layout");
                 output = ttnn::to_layout(output, optional_layout.value(), std::nullopt, memory_config);
-                py_log("conversion to final layout result \n", format_tensor_as_string(pybind11::cast(output)));
+                py_log("conversion to final layout result \n" + format_tensor_as_string(pybind11::cast(output)));
             }
         } else {
             if (optional_data_type.has_value() && output.dtype() != optional_data_type.value()) {
@@ -781,7 +783,7 @@ Tensor convert_python_tensor_to_tt_tensor(
                     ZoneScopedN("pre-typecast layout conversion");
                     output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, memory_config);
                     py_log(
-                        "conversion to tile layout for type casting\n",
+                        "conversion to tile layout for type casting\n" +
                         format_tensor_as_string(pybind11::cast(output)));
                     py_log("done initial layout conversion");
                 }
@@ -794,14 +796,13 @@ Tensor convert_python_tensor_to_tt_tensor(
                     output.logical_shape(),
                     output.padded_shape(),
                     output.dtype(),
-                    "\n",
-                    format_tensor_as_string(pybind11::cast(output)));
+                    "\n" + format_tensor_as_string(pybind11::cast(output)));
 
                 py_log();
                 if (optional_layout.has_value() && output.layout() != optional_layout.value()) {
                     ZoneScopedN("post-typecast layout conversion");
                     output = ttnn::to_layout(output, optional_layout.value(), std::nullopt, memory_config);
-                    py_log("layout conversion after typecast\n", format_tensor_as_string(pybind11::cast(output)));
+                    py_log("layout conversion after typecast\n" + format_tensor_as_string(pybind11::cast(output)));
                 }
                 py_log();
             }

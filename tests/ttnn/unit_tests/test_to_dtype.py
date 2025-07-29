@@ -239,7 +239,7 @@ def format_tensor_as_string(tensor_list: list, precision: int = 4, max_width: in
 @pytest.mark.parametrize(
     "shape",
     [
-        (8, 4, 12),
+        (8, 1, 8, 8),
     ],
 )
 @pytest.mark.parametrize("ttnn_dtype_from", ALL_TYPES)
@@ -247,10 +247,6 @@ def format_tensor_as_string(tensor_list: list, precision: int = 4, max_width: in
 def test_typecast_accuracy(shape, device, ttnn_dtype_from, ttnn_dtype_to):
     if ttnn_dtype_from == ttnn.uint8 or ttnn_dtype_to == ttnn.uint8:
         pytest.skip("uint8 is not supported by the typecast directly")
-
-    float_types = [ttnn.float32, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b]
-    ttnn_from_is_float = ttnn_dtype_from in float_types
-    ttnn_to_is_float = ttnn_dtype_to in float_types
 
     conversion_pcc = None
 
@@ -266,7 +262,7 @@ def test_typecast_accuracy(shape, device, ttnn_dtype_from, ttnn_dtype_to):
     else:
         conversion_pcc = 0.9999
 
-    if ttnn_from_is_float:
+    if is_ttnn_float_type(ttnn_dtype_from):
         input_tensor = ttnn.rand(shape, device=device, dtype=ttnn_dtype_from) * 100
 
     else:
@@ -286,6 +282,54 @@ output_tensor {output_tensor.dtype} {output_tensor.shape} {output_tensor.padded_
     """
 
     print(format_message)
+
+    assert pcc_passed, format_message
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (8, 1, 8, 8),
+        (4, 4),
+        (32, 32),
+    ],
+)
+@pytest.mark.parametrize("ttnn_dtype", ALL_TYPES)
+@pytest.mark.parametrize("to_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("from_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_layout_conversion_accuracy(shape, device, ttnn_dtype, to_layout, from_layout):
+    type_requires_tile = ttnn_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b]
+    type_requires_row_major = ttnn_dtype not in [ttnn.bfloat16, ttnn.uint32, ttnn.float32, ttnn.int32]
+    if type_requires_tile and (to_layout == ttnn.ROW_MAJOR_LAYOUT or from_layout == ttnn.ROW_MAJOR_LAYOUT):
+        pytest.skip(f"{ttnn_dtype} requires tile layout")
+
+    elif ttnn_dtype == ttnn.uint8:
+        pytest.skip("uint8 is not supported for rand")
+
+    elif type_requires_row_major and (to_layout != ttnn.ROW_MAJOR_LAYOUT or from_layout != ttnn.ROW_MAJOR_LAYOUT):
+        pytest.skip(f"{ttnn_dtype} requires row-major layout")
+
+    elif ttnn_dtype == ttnn.float32 and from_layout == ttnn.TILE_LAYOUT and to_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.xfail("float32 loses precision when converting from tile to row major layout")
+
+    if is_ttnn_float_type(ttnn_dtype):
+        input_tensor = ttnn.rand(shape, device=device, dtype=ttnn_dtype, layout=from_layout) * 100
+
+    else:
+        input_tensor = ttnn.rand(shape, device=device, dtype=ttnn_dtype, low=0, high=100, layout=from_layout)
+
+    input_torch_tensor = torch.Tensor(input_tensor.to_list())
+    output_tensor = ttnn.to_layout(input_tensor, layout=to_layout)
+    output_torch_tensor = torch.Tensor(output_tensor.to_list())
+
+    pcc_passed, pcc_message = comp_pcc(input_torch_tensor, output_torch_tensor, 1)
+    format_message = f"""
+{pcc_message}
+input_tensor {input_tensor.dtype} {input_tensor.shape} {input_tensor.padded_shape}:
+{format_tensor_as_string(input_tensor.to_list())}
+output_tensor {output_tensor.dtype} {output_tensor.shape} {output_tensor.padded_shape}:
+{format_tensor_as_string(output_tensor.to_list())}
+    """
 
     assert pcc_passed, format_message
 
