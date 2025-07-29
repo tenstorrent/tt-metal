@@ -1380,7 +1380,9 @@ class ModelArgs:
 
     def _set_model_specific_params(self):
         # Gemma3 specific params
-        self.rms_norm_add_unit_offset = "gemma-3" in self.base_model_name.lower()
+        is_gemma3 = "gemma-3" in self.base_model_name.lower()
+        self.rms_norm_add_unit_offset = is_gemma3
+        self.embed_scale = self.dim**0.5 if is_gemma3 else None
 
     def _set_params_from_dict(self, config, is_hf=False):
         # Try to get text_config, if it doesn't exist everything is text config
