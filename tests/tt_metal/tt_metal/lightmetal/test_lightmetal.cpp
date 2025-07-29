@@ -418,7 +418,7 @@ TEST_F(LightMetalBasicTest, ThreeRISCDataMovementComputeDynamicCBDeallocEarly) {
 
 // Test simple compute test with metal trace, but no explicit trace replay (added automatically by light metal trace).
 // Test currently not supported due to Trace API deprecation. See Issue #24955
-TEST_F(LightMetalBasicTest, SingleProgramTraceCapture) {
+TEST_F(LightMetalBasicTest, DISABLED_SingleProgramTraceCapture) {
     CreateDeviceAndBeginCapture(4096);
 
     uint32_t size_bytes = 64;  // 16 elements. Was 2048 in original test.
@@ -460,7 +460,7 @@ TEST_F(LightMetalBasicTest, SingleProgramTraceCapture) {
 
 // Test simple compute test with metal trace, but no explicit trace replay (added automatically by light metal trace).
 // Test currently not supported due to Trace API deprecation. See Issue #24955
-TEST_F(LightMetalBasicTest, TwoProgramTraceCapture) {
+TEST_F(LightMetalBasicTest, DISABLED_TwoProgramTraceCapture) {
     CreateDeviceAndBeginCapture(4096);
 
     uint32_t size_bytes = 64;  // 16 elements. Was 2048 in original test.
