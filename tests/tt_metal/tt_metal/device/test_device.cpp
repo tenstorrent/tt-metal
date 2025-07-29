@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <umd/device/tt_core_coordinates.h>
 #include <chrono>
+#include <thread>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -403,22 +404,38 @@ void do_debug_test(
             wait_for_heartbeat_custom(device->id(), virtual_core, tensix_heartbeat_addr);
         }
         uint32_t msg_i = i & 0xffff;
-        std::cerr << "message i " << std::dec << i << " sent" << " " << std::hex << (0xca110000 | msg_i) << std::endl;
-        llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{msg_i}, arg_base);
-        std::this_thread::sleep_for(std::chrono::nanoseconds(50));
-        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
-        llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{0xca110000 | msg_i}, buffer_base);
+        // llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{msg_i}, arg_base);
+        // std::this_thread::sleep_for(std::chrono::nanoseconds(50));
+        // tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+        uint32_t dest_buffer_addr = buffer_base + (i * sizeof(uint32_t));
+        llrt::write_hex_vec_to_core(
+            device->id(), virtual_core, std::vector<uint32_t>{0xca110000 | msg_i}, dest_buffer_addr);
         std::this_thread::sleep_for(std::chrono::nanoseconds(50));
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
 
+        std::cerr << "message " << std::dec << i << " sent" << " " << std::hex << (0xca110000 | msg_i) << " to "
+                  << dest_buffer_addr << std::endl;
+
         // Wait for kernel to process message
         uint32_t mailbox_val =
-            llrt::read_hex_vec_from_core(device->id(), virtual_core, buffer_base, sizeof(uint32_t))[0];
+            llrt::read_hex_vec_from_core(device->id(), virtual_core, dest_buffer_addr, sizeof(uint32_t))[0];
         uint32_t msg_status = mailbox_val & 0xffff0000;
-        while (msg_status != 0xd0e50000) {
-            std::this_thread::sleep_for(std::chrono::nanoseconds(10));
-            mailbox_val = llrt::read_hex_vec_from_core(device->id(), virtual_core, buffer_base, sizeof(uint32_t))[0];
-            msg_status = mailbox_val & 0xffff0000;
+        {
+            const auto start = std::chrono::high_resolution_clock::now();
+            constexpr auto k_sleep_time = std::chrono::nanoseconds{10};
+            while (msg_status != 0xd0e50000) {
+                std::this_thread::sleep_for(std::chrono::nanoseconds(k_sleep_time));
+                mailbox_val =
+                    llrt::read_hex_vec_from_core(device->id(), virtual_core, dest_buffer_addr, sizeof(uint32_t))[0];
+                msg_status = mailbox_val & 0xffff0000;
+
+                const auto now = std::chrono::high_resolution_clock::now();
+                const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+                if (elapsed > 10000) {
+                    std::cerr << "timed out waiting" << std::endl;
+                    std::abort();
+                }
+            }
         }
 
         // We didnt write what we wanted?
@@ -466,7 +483,7 @@ TEST(Debugging, Test_Active_Eth) {
     tt_metal::Program program = tt_metal::CreateProgram();
     tt_metal::KernelHandle kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/device/test_kernel.cpp",
+        "tests/tt_metal/tt_metal/device/test_kernel_2.cpp",
         core,
         tt_metal::EthernetConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .compile_args = ct_args});
     tt_metal::detail::LaunchProgram(device, program, false);
@@ -504,12 +521,13 @@ TEST(Debugging, Test_Tensix) {
     const auto& virtual_core = device->virtual_core_from_logical_core(core, CoreType::WORKER);
     llrt::write_hex_vec_to_core(device->id(), virtual_core, zero_buffer, buffer_base);
     llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{0}, arg_base);
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+    // tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+    std::this_thread::sleep_for(std::chrono::seconds(2));
 
     tt_metal::Program program = tt_metal::CreateProgram();
     tt_metal::KernelHandle kernel = tt_metal::CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/device/test_kernel.cpp",
+        "tests/tt_metal/tt_metal/device/test_kernel_2.cpp",
         core,
         tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .compile_args = ct_args});
     tt_metal::detail::LaunchProgram(device, program, false);
