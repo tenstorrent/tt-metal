@@ -246,7 +246,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const MemoryConfig& out_mem_config,
     std::optional<int32_t> divisor_override,
     uint32_t memory_used) {
-    IDevice* device = input.device();
+    distributed::MeshDevice* device = input.device();
+
     const tt::tt_metal::DeviceStorage& reader_indices_storage = reader_indices.device_storage();
 
     // distributing out_hw across the grid

@@ -174,8 +174,6 @@ bool logical_matches_physical(const TensorSpec& tensor_spec);
 //                           Data reader, writer, and initializers
 // ======================================================================================
 
-std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec);
-
 std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
 
@@ -206,14 +204,6 @@ template <typename T>
 void copy_to_host_tensor(
     const Tensor& device_tensor, Tensor& host_tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
 
-template <typename T>
-Tensor to_device(
-    const Tensor& tensor,
-    IDevice* target_device,
-    const MemoryConfig& memory_config,
-    QueueId cq_id = ttnn::DefaultQueueId);
-
-// TODO: #17215 - This will eventually subsume `to_device`, when "mesh buffer" backed tensors become the default.
 template <typename T>
 Tensor to_device_mesh_tensor(
     const Tensor& tensor,
