@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include <enchantum/enchantum.hpp>
 #include <cstdint>
 #include <functional>
 #include <memory>

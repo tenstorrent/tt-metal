@@ -11,6 +11,9 @@
 #include "metal/ops/common/program_utils.hpp"
 #include "softmax_device_operation_types.hpp"
 
+#include <enchantum/enchantum.hpp>
+
+
 namespace {
 
 constexpr auto kReaderKernelPath =

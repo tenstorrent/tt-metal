@@ -4,7 +4,6 @@
 
 #include "typecast_device_op.hpp"
 
-#include <enchantum/enchantum.hpp>
 #include <tt-metalium/constants.hpp>
 
 using namespace tt::tt_metal;

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "sdpa_op.hpp"
+#include <enchantum/enchantum.hpp>
 
 #include "sdpa_program_factory.hpp"
 #include "ttnn/run_operation.hpp"

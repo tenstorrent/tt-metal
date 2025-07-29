@@ -6,7 +6,6 @@
 #include <functional>
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
-#include <enchantum/enchantum.hpp>
 #include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"

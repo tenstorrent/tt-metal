@@ -6,6 +6,8 @@
 
 #include "cross_entropy_fw_program_factory.hpp"
 
+#include <enchantum/enchantum.hpp>
+
 namespace ttml::metal::ops::cross_entropy_fw::device {
 
 CrossEntropyForwardDeviceOperation::program_factory_t CrossEntropyForwardDeviceOperation::select_program_factory(

@@ -5,7 +5,6 @@
 #pragma once
 
 #include <functional>
-#include <enchantum/enchantum.hpp>
 #include <optional>
 #include <variant>
 

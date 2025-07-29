@@ -6,7 +6,6 @@
 
 #include <fmt/core.h>
 #include <fmt/format.h>
-#include <enchantum/enchantum.hpp>
 
 template <>
 struct fmt::formatter<ttnn::operations::experimental::broadcast_to::Lowercase> : fmt::formatter<std::string_view> {

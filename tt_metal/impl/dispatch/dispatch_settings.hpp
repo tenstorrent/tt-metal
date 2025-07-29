@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <enchantum/enchantum.hpp>
 #include <umd/device/tt_core_coordinates.h>
 #include <array>
 #include <cstdint>

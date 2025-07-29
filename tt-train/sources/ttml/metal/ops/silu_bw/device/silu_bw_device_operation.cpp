@@ -6,6 +6,9 @@
 
 #include "silu_bw_program_factory.hpp"
 
+#include <enchantum/enchantum.hpp>
+
+
 namespace ttml::metal::ops::silu_bw::device {
 
 SiLUBackwardDeviceOperation::program_factory_t SiLUBackwardDeviceOperation::select_program_factory(

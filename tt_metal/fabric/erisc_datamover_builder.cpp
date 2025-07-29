@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <enchantum/enchantum.hpp>
+
 #include <stdint.h>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/control_plane.hpp>

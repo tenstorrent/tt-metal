@@ -7,7 +7,6 @@
 #include <functional>
 #include <optional>
 
-#include <enchantum/enchantum.hpp>
 #include <utility>
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"

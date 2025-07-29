@@ -10,6 +10,8 @@
 #include "metal/ops/common/program_utils.hpp"
 #include "rmsnorm_fw_device_operation_types.hpp"
 
+#include <enchantum/enchantum.hpp>
+
 namespace {
 
 constexpr auto kWriterKernelPath =

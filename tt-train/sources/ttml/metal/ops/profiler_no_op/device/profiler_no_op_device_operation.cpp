@@ -6,6 +6,8 @@
 
 #include "profiler_no_op_program_factory.hpp"
 
+#include <enchantum/enchantum.hpp>
+
 namespace ttml::metal::ops::profiler_no_op::device {
 
 ProfilerNoopOperation::program_factory_t ProfilerNoopOperation::select_program_factory(

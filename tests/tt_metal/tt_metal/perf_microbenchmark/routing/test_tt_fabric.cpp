@@ -15,7 +15,6 @@
 #include <iomanip>
 #include <sstream>
 #include <memory>
-#include <enchantum/enchantum.hpp>
 
 #include "tt_fabric_test_context.hpp"
 

@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <enchantum/enchantum.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/fabric_types.hpp>

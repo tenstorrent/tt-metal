@@ -6,6 +6,8 @@
 
 #include "rmsnorm_fw_program_factory.hpp"
 
+#include <enchantum/enchantum.hpp>
+
 namespace ttml::metal::ops::rmsnorm_fw::device {
 
 RMSNormForwardDeviceOperation::program_factory_t RMSNormForwardDeviceOperation::select_program_factory(

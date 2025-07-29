@@ -8,6 +8,8 @@
 
 #include "metal/ops/common/program_utils.hpp"
 
+#include <enchantum/enchantum.hpp>
+
 namespace {
 
 constexpr auto kWriterKernelPath =

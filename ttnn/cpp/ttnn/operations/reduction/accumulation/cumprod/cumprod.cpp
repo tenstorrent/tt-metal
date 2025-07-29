@@ -7,8 +7,6 @@
 #include "../device/accumulation_device_operation_types.hpp"
 #include "../device/accumulation_device_operation.hpp"
 
-#include <enchantum/enchantum.hpp>
-
 #include <ttnn/operations/data_movement/permute/permute.hpp>
 #include <ttnn/operations/data_movement/squeeze/squeeze.hpp>
 #include <ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp>

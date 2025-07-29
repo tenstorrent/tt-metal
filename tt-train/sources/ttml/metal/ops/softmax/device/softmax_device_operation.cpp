@@ -6,6 +6,9 @@
 
 #include "softmax_program_factory.hpp"
 
+#include <enchantum/enchantum.hpp>
+
+
 namespace ttml::metal::ops::softmax::device {
 
 SoftmaxDeviceOperation::program_factory_t SoftmaxDeviceOperation::select_program_factory(

@@ -12,6 +12,7 @@
 #include <vector>
 #include <utility>
 #include <nlohmann/json.hpp>
+#include <enchantum/enchantum.hpp>
 
 #include "fabric_types.hpp"
 #include "tt_cluster.hpp"
