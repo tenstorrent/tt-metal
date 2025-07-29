@@ -6,6 +6,7 @@ GREEN="\e[32m"
 YELLOW="\e[33m"
 PURPLE="\e[35m"
 CYAN="\e[36m"
+RED="\e[31m"
 RESET="\e[0m"
 
 # Check if the script is sourced
@@ -70,9 +71,6 @@ $PYTHON_ENV_DIR/bin/python3 -m pip install setuptools wheel==0.45.1
 
 echo -e "${CYAN}Installing dev dependencies${RESET}"
 $PYTHON_ENV_DIR/bin/python3 -m pip install -r $(pwd)/tt_metal/python_env/requirements-dev.txt
-
-echo -e "${CYAN}Installing tt-metal${RESET}"
-$PYTHON_ENV_DIR/bin/pip install -e .
 
 echo -e "${CYAN}Installing tt-metal${RESET}"
 $PYTHON_ENV_DIR/bin/pip install -e .
