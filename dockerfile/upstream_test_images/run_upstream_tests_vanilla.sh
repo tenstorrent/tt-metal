@@ -100,13 +100,23 @@ test_suite_bh_multi_pcie_llama_demo_tests() {
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel "$data_parallel_devices" --max_generated_tokens 220
 }
 
-test_suite_bh_llmbox_llama_stress_tests() {
+test_suite_bh_multi_pcie_llama_stress_tests() {
     echo "[upstream-tests] Running BH LLMBox upstream Llama stress model tests"
     verify_llama_dir_
 
-    echo "Using data_parallel = $NUM_DEVICES"
+    if [[ "$hw_topology" == "blackhole_deskbox" ]]; then
+        local data_parallel_devices="2"
+    elif [[ "$hw_topology" == "blackhole_llmbox" ]]; then
+        local data_parallel_devices="4"
+    elif [[ "$hw_topology" == "blackhole_rackbox" ]]; then
+        local data_parallel_devices="8"
+    else
+        echo "Your blackhole hw topology is not supported to run Llama demo stress tests!"
+    fi
 
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel "$NUM_DEVICES" --max_generated_tokens 22000
+    echo "Using data_parallel = $data_parallel_devices for topology: $hw_topology"
+
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel "$data_parallel_devices" --max_generated_tokens 22000
 }
 
 test_suite_wh_6u_metal_unit_tests() {
@@ -174,15 +184,19 @@ test_suite_bh_single_pcie_didt_tests"
 
 hw_topology_test_suites["blackhole_llmbox"]="
 test_suite_bh_multi_pcie_metal_unit_tests
-test_suite_bh_multi_pcie_llama_demo_tests"
+test_suite_bh_multi_pcie_llama_demo_tests
+test_suite_bh_multi_pcie_llama_stress_tests"
 
 hw_topology_test_suites["blackhole_deskbox"]="
 test_suite_bh_multi_pcie_metal_unit_tests
-test_suite_bh_multi_pcie_llama_demo_tests"
+test_suite_bh_multi_pcie_llama_demo_tests
+test_suite_bh_multi_pcie_llama_stress_tests"
 
 hw_topology_test_suites["blackhole_rackbox"]="
 test_suite_bh_multi_pcie_metal_unit_tests
-test_suite_bh_multi_pcie_llama_demo_tests"
+test_suite_bh_multi_pcie_llama_demo_tests
+test_suite_bh_multi_pcie_llama_stress_tests"
+
 
 hw_topology_test_suites["wh_6u"]="test_suite_wh_6u_model_unit_tests
 test_suite_wh_6u_llama_demo_tests
