@@ -45,7 +45,7 @@ class StatsReporter:
                     for attr, val in self.dm_stats[riscv_key]["attributes"][run_host_id].items():
                         if attr == "Test id":
                             test_name = self.test_id_to_name.get(val, "Unknown Test")
-                            logger.info(f'  {attr}: {val} ("{test_name}")')
+                            logger.info(f"  {attr}: {val} ({test_name})")
                         else:
                             logger.info(f"  {attr}: {val}")
 

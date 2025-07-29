@@ -107,7 +107,8 @@ def performance_check(dm_stats, arch="blackhole", verbose=False, test_bounds=Non
         # Print latency and bandwidth perf results
         if verbose:
             logger.info("")
-            logger.info(f"Perf results for test id: {test_id}")
+            test_name = test_id_to_name.get(test_id, "Unknown Test")
+            logger.info(f"Perf results for test id: {test_id} ({test_name})")
 
             logger.info(f"Latency")
             for riscv in bounds.keys():
