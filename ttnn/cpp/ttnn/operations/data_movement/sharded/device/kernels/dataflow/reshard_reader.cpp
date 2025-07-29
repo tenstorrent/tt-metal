@@ -10,16 +10,17 @@ void kernel_main() {
     constexpr uint32_t num_x_cores = get_compile_time_arg_val(1);
     constexpr uint32_t num_y_cores = get_compile_time_arg_val(2);
     constexpr uint32_t page_size = get_compile_time_arg_val(3);
-    constexpr uint32_t local_config_cb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t unit_size = get_compile_time_arg_val(4);
+    constexpr uint32_t local_config_cb_id = get_compile_time_arg_val(5);
 
     uint32_t y_offset = num_x_cores;
 
     const uint32_t local_config_data_l1_addr = get_read_ptr(local_config_cb_id);
     const tt_l1_ptr uint32_t* local_config_data =
         reinterpret_cast<const tt_l1_ptr uint32_t*>(local_config_data_l1_addr);
-    for (uint32_t i = 0; i < 23; i++) {
-        DPRINT << "RT ARG AT " << i << ": " << local_config_data[i] << "\n";
-    }
+    // for (uint32_t i = 0; i < 500; i++) {
+    //     DPRINT << "RT ARG AT " << i << ": " << local_config_data[i] << "\n";
+    // }
     uint32_t arg_index = num_x_cores + num_y_cores;
     const uint32_t input_shard_addr = local_config_data[arg_index++];
     const uint32_t num_output_pages = local_config_data[arg_index++];
@@ -45,10 +46,18 @@ void kernel_main() {
         const uint32_t num_strides = ((stride_size_num_strides_skip)&mask_short) >> 8;
         const bool skip = (((stride_size_num_strides_skip)&mask_byte) == 1);
 
-        const uint32_t stride_data = ((stride_data_offset >> 16)) * page_size;
-        const uint32_t offset = ((stride_data_offset)&mask_short) * page_size;
+        const uint32_t stride_data = ((stride_data_offset >> 16)) * unit_size;
+        const uint32_t offset = ((stride_data_offset)&mask_short) * unit_size;
         const uint32_t num_pages_per_stride = (stride_size_num_strides_skip >> 16);
-        const uint32_t stride_size = num_pages_per_stride * page_size;
+        const uint32_t stride_size = num_pages_per_stride * unit_size;
+
+        DPRINT << "Range " << (uint32_t)range_id << " info:\n";
+        DPRINT << "  stride_data: " << (uint32_t)stride_data << "\n";
+        DPRINT << "  offset: " << (uint32_t)offset << "\n";
+        DPRINT << "  num_pages_per_stride: " << (uint32_t)num_pages_per_stride << "\n";
+        DPRINT << "  stride_size: " << (uint32_t)stride_size << "\n";
+        DPRINT << "  unit_size: " << (uint32_t)unit_size << "\n";
+        DPRINT << "  page_size: " << (uint32_t)page_size << "\n";
 
         uint32_t addr_offset = offset;
         uint32_t core_id_x_index = start_x_index;
@@ -58,6 +67,11 @@ void kernel_main() {
             if (!skip) {
                 uint32_t core_id_x = local_config_data[core_id_x_index];
                 uint32_t core_id_y = local_config_data[y_offset + core_id_y_index];
+                DPRINT << "Reading from core: (" << (uint32_t)core_id_x << "," << (uint32_t)core_id_y << ")\n";
+                DPRINT << "Input addr:" << (uint32_t)(input_shard_addr + addr_offset) << "\n";
+                DPRINT << "L1 write addr:" << (uint32_t)l1_write_addr << "\n";
+                DPRINT << "Stride size: " << (uint32_t)stride_size << "\n";
+
                 uint64_t noc_address = get_noc_addr(core_id_x, core_id_y, input_shard_addr + addr_offset);
                 noc_async_read(noc_address, l1_write_addr, stride_size);
                 l1_write_addr += stride_size;
