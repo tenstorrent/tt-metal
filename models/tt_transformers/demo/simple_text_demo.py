@@ -1078,7 +1078,7 @@ def test_demo_text(
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better
-                "N150_Llama-3.2-1B": 58,
+                "N150_Llama-3.2-1B": 65,
                 "N150_Llama-3.2-3B": 35,
                 "N150_Llama-3.1-8B": 21,
                 "N150_Mistral-7B": 23,
