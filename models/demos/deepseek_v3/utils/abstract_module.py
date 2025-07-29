@@ -126,7 +126,6 @@ class AbstractModule(ABC):
 
         Args:
             hf_config: HuggingFace model configuration object
-            mesh_device: TTNN mesh device
 
         Returns:
             ModelPrefillConfig containing operator configurations for prefill mode
@@ -144,7 +143,6 @@ class AbstractModule(ABC):
 
         Args:
             hf_config: HuggingFace model configuration object
-            mesh_device: TTNN mesh device
 
         Returns:
             ModelDecodeConfig containing operator configurations for decode mode
