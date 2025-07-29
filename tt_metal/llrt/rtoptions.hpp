@@ -205,8 +205,9 @@ public:
     RunTimeOptions(const RunTimeOptions&) = delete;
     RunTimeOptions& operator=(const RunTimeOptions&) = delete;
 
-    inline bool is_root_dir_specified() const { return this->is_root_dir_env_var_set; }
+    bool is_root_dir_specified() const;
     const std::string& get_root_dir() const;
+    void set_root_dir(const std::string& root_dir);
 
     inline bool is_cache_dir_specified() const { return this->is_cache_dir_env_var_set; }
     const std::string& get_cache_dir() const;

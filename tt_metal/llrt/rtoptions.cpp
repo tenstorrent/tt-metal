@@ -31,7 +31,7 @@ const char* RunTimeDebugFeatureNames[RunTimeDebugFeatureCount] = {
 
 const char* RunTimeDebugClassNames[RunTimeDebugClassCount] = {"N/A", "worker", "dispatch", "all"};
 
-static const char* TT_METAL_HOME_ENV_VAR = "TT_METAL_HOME";
+constexpr auto TT_METAL_HOME_ENV_VAR = "TT_METAL_HOME";
 static const char* TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
 // Set this var to change the cache dir.
 static const char* TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
@@ -41,7 +41,7 @@ static const char* TT_METAL_VISIBLE_DEVICES_ENV_VAR = "TT_METAL_VISIBLE_DEVICES"
 
 RunTimeOptions::RunTimeOptions() {
     const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
-    if (root_dir_str != nullptr) {
+    if (root_dir_str) {
         this->is_root_dir_env_var_set = true;
         this->root_dir = std::string(root_dir_str) + "/";
     }
@@ -252,11 +252,24 @@ RunTimeOptions::RunTimeOptions() {
     }
 }
 
-const std::string& RunTimeOptions::get_root_dir() const {
-    if (!this->is_root_dir_specified()) {
-        TT_THROW("Env var {} is not set.", TT_METAL_HOME_ENV_VAR);
+void RunTimeOptions::set_root_dir(const std::string& root_dir) {
+    if (root_dir.empty()) {
+        TT_THROW("Root directory cannot be empty when setting the root directory");
     }
 
+    if (root_dir.back() == '/') {
+        this->root_dir = root_dir;
+    } else {
+        this->root_dir = root_dir + "/";
+    }
+}
+
+bool RunTimeOptions::is_root_dir_specified() const { return !this->root_dir.empty(); }
+
+const std::string& RunTimeOptions::get_root_dir() const {
+    if (!is_root_dir_specified()) {
+        TT_THROW("{} is unknown.", TT_METAL_HOME_ENV_VAR);
+    }
     return root_dir;
 }
 

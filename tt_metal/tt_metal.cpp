@@ -943,6 +943,10 @@ chip_id_t GetPCIeDeviceID(chip_id_t device_id) {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
 }
 
+void SetRootDir(const std::string& root_dir) {
+    tt::tt_metal::MetalContext::instance().rtoptions().set_root_dir(root_dir);
+}
+
 IDevice* CreateDevice(
     chip_id_t device_id,
     const uint8_t num_hw_cqs,
