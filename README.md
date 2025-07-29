@@ -81,7 +81,7 @@ Blackhole software optimization is under active development.  Please join us in 
 
 For more information regarding vLLM installation and environment creation visit the [Tenstorrent vLLM repository](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md).
 
-Visit [TT-Metalium and TT-NN models](https://github.com/tenstorrent/tt-metal/tree/main/models) in this repository, or visit the [Developer Hub](https://tenstorrent.com/developers) for a full list of models!
+See the [model matrix](https://github.com/tenstorrent/tt-metal/tree/main/models/README.md), or visit the [Developer Hub](https://tenstorrent.com/developers) for a full list of models.
 
 ## Model Updates
 
