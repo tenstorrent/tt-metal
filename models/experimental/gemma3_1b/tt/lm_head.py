@@ -1,4 +1,11 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+"""
+This is the implementation of lm_head of the Gemma-3-1b-it.
+
+We have re-used the lm_head implementation of the TT-Transformers library along with few modifications.
+This implementation has changes in Memory Configurations (DRAM Memory Config) and Data Type (bfloat16).
+"""
+
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -99,11 +106,12 @@ class LMHead(LightweightModule):
                 )
 
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
             packer_l1_acc=True,
+            dst_full_sync_en=False,
         )
+
         if args.is_galaxy:
             self.program_configs = [
                 (
@@ -138,12 +146,12 @@ class LMHead(LightweightModule):
                 compute_kernel_config=self.compute_kernel_config,
                 program_config=pc,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
             )
-            outputs.append(ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG))
+            outputs.append(ttnn.sharded_to_interleaved(output, memory_config=ttnn.DRAM_MEMORY_CONFIG))
 
         # Concatenate the outputs
-        output = ttnn.concat(outputs, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        output = ttnn.concat(outputs, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         output = tt_all_reduce(
             output,
