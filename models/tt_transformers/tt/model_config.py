@@ -2212,9 +2212,9 @@ class ModelArgs:
 
     def reference_embedding(self, reference_model=None):
         if self.checkpoint_type == CheckpointType.Meta:
-            from models.tt_transformers.tt.common import HostEmbedding
+            from models.tt_transformers.tt.common import HostEmbedding, HostScaledEmbedding
 
-            return HostEmbedding(self)
+            return HostEmbedding(self) if self.embed_scale is None else HostScaledEmbedding(self)
         else:
             if reference_model is None:
                 model = self.reference_transformer(wrap=False)
