@@ -29,12 +29,11 @@ void kernel_main() {
     auto accessor_dst = TensorAccessor(args_dst, bank_base_address_dst, page_size);
 
     for (uint32_t shard_id = first_shard_id; shard_id < num_shards; shard_id += shard_id_stride) {
-        iterate_pages_in_shard(accessor_src, shard_id, [&](uint32_t page_id) {
+        iterate_pages_in_shard(accessor_dst, shard_id, [&](uint32_t page_id) {
             // TODO: local noc_addr calculation can be optimized
-            ASSERT(accessor_src.is_local_page(page_id));
-            noc_async_write_page(page_id, accessor_dst, accessor_src.get_noc_addr(page_id));
-            noc_async_writes_flushed();
+            ASSERT(accessor_dst.is_local_page(page_id));
+            noc_async_read_page(page_id, accessor_src, accessor_dst.get_noc_addr(page_id));
         });
     }
-    noc_async_write_barrier();
+    noc_async_read_barrier();
 }
