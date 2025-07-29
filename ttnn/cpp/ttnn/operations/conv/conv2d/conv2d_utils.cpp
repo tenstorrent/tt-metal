@@ -563,9 +563,10 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
         if (!input_memory_config.is_sharded()) {
             needs_shard_or_reshard = true;
         } else {
-            const auto input_shard_scheme = input_memory_config.memory_layout();
-            const auto input_shard_orientation = input_memory_config.shard_spec().value().orientation;
-            const auto input_shard_grid = input_memory_config.shard_spec().value().grid;
+            const tt::tt_metal::TensorMemoryLayout input_shard_scheme = input_memory_config.memory_layout();
+            const tt::tt_metal::ShardSpec& input_shard_spec = input_memory_config.shard_spec().value();
+            const tt::tt_metal::ShardOrientation input_shard_orientation = input_shard_spec.orientation;
+            const CoreRangeSet input_shard_grid = input_shard_spec.grid;
             ParallelConfig pconfig = {
                 .grid = input_shard_grid,
                 .shard_scheme = input_shard_scheme,
@@ -575,11 +576,16 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
                 input_shard_orientation != ShardOrientation::ROW_MAJOR) {
                 needs_shard_or_reshard = true;
             }
-            if (input_shard_scheme != TensorMemoryLayout::HEIGHT_SHARDED &&
-                input_shard_scheme != TensorMemoryLayout::BLOCK_SHARDED &&
-                input_shard_scheme != TensorMemoryLayout::WIDTH_SHARDED) {
-                needs_shard_or_reshard = true;
+
+            {
+                // Check if input channels alignment is satisfied
+                const uint32_t input_channels_alignment = get_input_channels_alignment(
+                    input_shard_scheme, input_tensor_.layout(), is_mm_conv, input_memory_config);
+                if (input_shard_spec.shape[1] % input_channels_alignment != 0) {
+                    needs_shard_or_reshard = true;
+                }
             }
+
             if (conv_config.override_sharding_config) {
                 TT_FATAL(
                     conv_config.core_grid.has_value(),
