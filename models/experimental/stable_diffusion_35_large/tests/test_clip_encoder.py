@@ -29,7 +29,7 @@ from ..tt.parallel_config import EncoderParallelManager
     ],
     ids=["encoder_1", "encoder_2"],
 )
-@pytest.mark.parametrize("mesh_device", [(1, 4), (1, 2)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
     "device_params, topology",
     [[{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear]],
@@ -44,7 +44,9 @@ def test_clip_encoder(
     expected_pcc: float,
     topology: ttnn.Topology,
 ) -> None:
-    parallel_manager = EncoderParallelManager(mesh_device, topology, mesh_axis=1, num_links=1)
+    dummy_submeshes = mesh_device.create_submeshes(ttnn.MeshShape(2, 2))
+    encoder_submesh = mesh_device.create_submesh(ttnn.MeshShape(1, 4))
+    parallel_manager = EncoderParallelManager(encoder_submesh, topology, mesh_axis=1, num_links=1)
     model_name_checkpoint = f"stabilityai/stable-diffusion-3.5-{model_name}"
 
     hf_model = CLIPTextModelWithProjection.from_pretrained(
@@ -93,7 +95,7 @@ def test_clip_encoder(
     start_time = time.time()
     parameters = TtCLIPTextTransformerParameters.from_torch(
         hf_model.state_dict(),
-        device=mesh_device,
+        device=encoder_submesh,
         dtype=ttnn.bfloat16,
         parallel_manager=parallel_manager,
     )
@@ -130,8 +132,8 @@ def test_clip_encoder(
         hf_inputs.input_ids,
         dtype=ttnn.uint32,
         layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        device=encoder_submesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh),
     )
 
     start_time = time.time()
@@ -151,33 +153,35 @@ def test_clip_encoder(
     logger.info(f"HF text encoder 1 pooled output mean: {pooled_output.mean():.6f}, std: {pooled_output.std():.6f}")
 
     logger.info("compiling text encoder...")
-    tt_model(tt_tokens, mesh_device, parallel_manager=parallel_manager)
+    tt_model(tt_tokens, encoder_submesh, parallel_manager=parallel_manager)
 
     logger.info("executing text encoder...")
     start_time = time.time()
     eos_token_id = hf_model.config.eos_token_id
-    tt_sequence_output, tt_pooled_output = tt_model(
-        tt_tokens, mesh_device, eos_token_id, parallel_manager=parallel_manager
-    )
+    for i in range(1000):
+        print(f"running iteration {i}")
+        tt_sequence_output, tt_pooled_output = tt_model(
+            tt_tokens, encoder_submesh, eos_token_id, parallel_manager=parallel_manager
+        )
 
-    logger.info(f"text encoder TT-NN runtime: {time.time() - start_time}")
-    logger.info("text encoder done...")
+        logger.info(f"text encoder TT-NN runtime: {time.time() - start_time}")
+        logger.info("text encoder done...")
 
-    tt_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output)[0])
-    tt_pooled_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_pooled_output)[0])
+        tt_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output)[0])
+        tt_pooled_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_pooled_output)[0])
 
-    # debug
-    logger.info(f"TT text encoder sequence output shape: {tt_sequence_output_torch.shape}")
-    logger.info(f"TT text encoder pooled output shape: {tt_pooled_output_torch.shape}")
-    logger.info(
-        f"TT text encoder sequence output mean: {tt_sequence_output_torch.mean():.6f}, std: {tt_sequence_output_torch.std():.6f}"
-    )
-    logger.info(
-        f"TT text encoder pooled output mean: {tt_pooled_output_torch.mean():.6f}, std: {tt_pooled_output_torch.std():.6f}"
-    )
+        # debug
+        logger.info(f"TT text encoder sequence output shape: {tt_sequence_output_torch.shape}")
+        logger.info(f"TT text encoder pooled output shape: {tt_pooled_output_torch.shape}")
+        logger.info(
+            f"TT text encoder sequence output mean: {tt_sequence_output_torch.mean():.6f}, std: {tt_sequence_output_torch.std():.6f}"
+        )
+        logger.info(
+            f"TT text encoder pooled output mean: {tt_pooled_output_torch.mean():.6f}, std: {tt_pooled_output_torch.std():.6f}"
+        )
 
-    assert sequence_output.shape == tt_sequence_output_torch.shape
-    assert pooled_output.shape == tt_pooled_output_torch.shape
+        assert sequence_output.shape == tt_sequence_output_torch.shape
+        assert pooled_output.shape == tt_pooled_output_torch.shape
 
-    assert_quality(sequence_output, tt_sequence_output_torch, pcc=expected_pcc)
-    assert_quality(pooled_output, tt_pooled_output_torch, pcc=expected_pcc)
+        assert_quality(sequence_output, tt_sequence_output_torch, pcc=expected_pcc)
+        assert_quality(pooled_output, tt_pooled_output_torch, pcc=expected_pcc)

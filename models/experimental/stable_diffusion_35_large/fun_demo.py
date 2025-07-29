@@ -12,7 +12,7 @@ import pytest
 import ttnn
 
 from .tt.fun_pipeline import TtStableDiffusion3Pipeline
-from .tt.parallel_config import StableDiffusionParallelManager
+from .tt.parallel_config import StableDiffusionParallelManager, EncoderParallelManager
 
 
 @pytest.mark.parametrize(
@@ -29,10 +29,10 @@ from .tt.parallel_config import StableDiffusionParallelManager
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, cfg, sp, tp, topology, num_links",
+    "mesh_device, encoder_submesh_shape, cfg, sp, tp, topology, num_links",
     [
-        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
-        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 3],
+        [(2, 4), (1, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
+        [(4, 8), (1, 4), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 3],
     ],
     ids=[
         "t3k_cfg2_sp2_tp2",
@@ -49,6 +49,7 @@ from .tt.parallel_config import StableDiffusionParallelManager
 def test_sd3(
     *,
     mesh_device: ttnn.MeshDevice,
+    encoder_submesh_shape: tuple[int, int],
     model_name,
     image_w,
     image_h,
@@ -80,6 +81,25 @@ def test_sd3(
         num_links=num_links,
     )
 
+    """
+    Make a 1x4 submesh
+    Make an EncoderParallelManager
+    Pass into pipeline
+    Run encoders on device
+    """
+    # encoder_submesh = mesh_device.create_submesh(ttnn.MeshShape(*encoder_submesh_shape))
+
+    # HACK: reshape submesh device 0 from 2D to 1D
+    parallel_manager.submesh_devices[0].reshape(ttnn.MeshShape(1, 4))
+    encoder_parallel_manager = EncoderParallelManager(
+        parallel_manager.submesh_devices[0],
+        topology,
+        mesh_axis=1,  # 1x4 submesh, parallel on axis 1
+        num_links=num_links,
+    )
+    # HACK: reshape submesh device 0 from 1D to 2D
+    parallel_manager.submesh_devices[0].reshape(ttnn.MeshShape(2, 2))
+
     if guidance_scale > 1 and cfg_factor == 1:
         guidance_cond = 2
     else:
@@ -91,6 +111,7 @@ def test_sd3(
         enable_t5_text_encoder=False,  # submesh_devices[0].get_num_devices() >= 4,
         guidance_cond=guidance_cond,
         parallel_manager=parallel_manager,
+        encoder_parallel_manager=encoder_parallel_manager,
         height=image_h,
         width=image_w,
         model_location_generator=model_location_generator,
