@@ -3,8 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <math.h>
+#include <cstdint>
 #include <string>
 
+#include "hostdevcommon/kernel_structs.h"
+#include "tt-metalium/kernel_types.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "upsample_op.hpp"
 #include "ttnn/operations/cb_utils.hpp"
@@ -19,152 +22,259 @@
 #include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::upsample {
+
 tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
     const Tensor& input, Tensor& output, const uint32_t scale_factor_h, const uint32_t scale_factor_w) {
     tt::tt_metal::Program program{};
 
-    const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
-    const uint32_t input_unit_size = input.padded_shape()[-1] * input.element_size();
-    const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
-    const uint32_t output_unit_size = output.padded_shape()[-1] * output.element_size();
+    const bool is_tiled_layout = (input.layout() == tt::tt_metal::Layout::TILE);
 
-    const uint32_t output_num_units = output.physical_volume() / output.padded_shape()[-1];  // N*H*W for outout
-    const uint32_t input_num_units = input.physical_volume() / input.padded_shape()[-1];     // N*H*W for input
+    const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
     const auto& output_shape = output.padded_shape();
-    // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* const device = output.device();
 
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    const uint32_t num_cores_x = compute_with_storage_grid_size.x;
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
-    const auto
-        [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, input_num_units);
+    // Declare variables that will be set based on layout
+    uint32_t input_unit_size;
+    uint32_t output_unit_size;
+    uint32_t input_num_units;
+    uint32_t work_units_to_split;
+    uint32_t actual_input_unit_size;  // Size used for CB creation
 
-    // circular buffer for input
+    if (is_tiled_layout) {
+        // Tiled layout specific calculations
+        input_unit_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+        output_unit_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+        actual_input_unit_size = input_unit_size;
+
+        const uint32_t input_tensor_width = input.padded_shape()[-1];
+        const uint32_t input_tensor_height = input.physical_volume() / input_tensor_width;
+
+        const auto& tile_shape = input.tensor_spec().tile().get_tile_shape();
+        const uint32_t tile_height = tile_shape[0];
+        const uint32_t tile_width = tile_shape[1];
+
+        const uint32_t num_input_tiles_in_row = input_tensor_width / tile_width;
+        const uint32_t num_input_tiles_in_col = input_tensor_height / tile_height;
+
+        input_num_units = num_input_tiles_in_row;      // for CB sizing
+        work_units_to_split = num_input_tiles_in_col;  // for work splitting
+    } else {
+        // Row-major layout specific calculations
+        input_unit_size = input.padded_shape()[-1] * input.element_size();
+        output_unit_size = output.padded_shape()[-1] * output.element_size();
+        actual_input_unit_size = tt::round_up(input_unit_size, tt::tt_metal::hal::get_dram_alignment());
+
+        input_num_units = input.physical_volume() / input.padded_shape()[-1];  // N*H*W for input
+        work_units_to_split = input_num_units;                                 // for work splitting
+    }
+
+    const auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_group_1, work_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, work_units_to_split);
+
+    // Create circular buffers
     uint32_t next_cb_index = tt::CBIndex::c_0;
-    const uint32_t src0_cb_index = next_cb_index++;
-    const uint32_t num_input_units = 2;
-    const uint32_t aligned_input_unit_size = tt::round_up(input_unit_size, tt::tt_metal::hal::get_dram_alignment());
+    uint32_t num_pages_in_input_cb;
 
-    tt::tt_metal::create_cb(
-        src0_cb_index, program, all_cores, aligned_input_unit_size, num_input_units, input_cb_data_format);
+    if (is_tiled_layout) {
+        num_pages_in_input_cb = input_num_units;
+        if (work_per_core_group_1 != 1) {
+            // Double buffer if the core is processing 2+ blocks
+            num_pages_in_input_cb *= 2;
+        }
+    } else {
+        num_pages_in_input_cb = 2;  // For row-major
+    }
 
-    // circulat buffer same for input and output. No compute kernels.
-    const uint32_t output_cb_index = src0_cb_index;  // same as input cb
+    const auto [src0_cb_index, cb_src0] = tt::tt_metal::create_cb(
+        next_cb_index++, program, all_cores, actual_input_unit_size, num_pages_in_input_cb, input_cb_data_format);
+
+    uint32_t output_cb_index;
+    if (is_tiled_layout) {
+        // Separate output CB for tiled
+        uint32_t num_pages_in_output_cb = input_num_units;
+        if (work_per_core_group_1 != 1) {
+            num_pages_in_output_cb *= 2;
+        }
+        const auto [out_cb_index, cb_output] = create_cb(
+            next_cb_index++, program, all_cores, output_unit_size, num_pages_in_output_cb, output_cb_data_format);
+        output_cb_index = out_cb_index;
+    } else {
+        // Same CB for input and output for row-major
+        output_cb_index = src0_cb_index;
+    }
 
     const auto src_buffer = input.buffer();
     const auto dst_buffer = output.buffer();
     const bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     const bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    /*
-    The data layout is mapped in DRAM as follows:
-        number of channel = stick size
-        NHW is number of sticks
-    */
+    // Reader compile time arguments
+    const bool src_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(actual_input_unit_size);
+    const uint32_t src_log2_size = src_size_is_power_of_two ? (std::uint32_t)log2(actual_input_unit_size) : 0;
 
-    std::vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
-    const bool src_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(input_unit_size);
-    const uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)log2(input_unit_size) : 0;
-    reader_compile_time_args = {
+    const std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src_is_dram,
-        (std::uint32_t)input_unit_size,
-        (std::uint32_t)src_stick_size_is_power_of_two,
-        (std::uint32_t)src_log2_stick_size};
+        (std::uint32_t)actual_input_unit_size,
+        (std::uint32_t)src_size_is_power_of_two,
+        (std::uint32_t)src_log2_size};
 
-    const uint32_t block_height = 1;                // since input is row major, blocks are just one row tall
-    const uint32_t num_units_per_output_stick = 1;  // 1 page in out_cb is needed to get a whole output stick
-
-    const bool dst_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(output_unit_size);
-    const uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (std::uint32_t)log2(output_unit_size) : 0;
-    writer_compile_time_args = {
-        (std::uint32_t)output_cb_index,
-        (std::uint32_t)dst_is_dram,
-        (std::uint32_t)input_unit_size,
-        (std::uint32_t)dst_stick_size_is_power_of_two,
-        (std::uint32_t)dst_log2_stick_size,
-        (std::uint32_t)scale_factor_h,
-        (std::uint32_t)scale_factor_w,
-        (std::uint32_t)output_shape[1],
-        (std::uint32_t)output_shape[2],
-        (std::uint32_t)block_height,
-        num_units_per_output_stick};
-
-    const std::map<std::string, std::string> kernel_defines;
     const tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/"
         "reader_upsample_unary_stick_layout_interleaved_start_id.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
+    // Writer compile time arguments
+    uint32_t writer_unit_size;
+    bool dst_size_is_power_of_two;
+    uint32_t dst_log2_size;
+
+    if (is_tiled_layout) {
+        // For tiled layout, writer uses output stick size
+        writer_unit_size = output.padded_shape()[-1] * output.element_size();
+        dst_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(writer_unit_size);
+        dst_log2_size = dst_size_is_power_of_two ? (std::uint32_t)log2(writer_unit_size) : 0;
+    } else {
+        // For row-major layout, writer uses input unit size
+        writer_unit_size = input_unit_size;
+        dst_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(output_unit_size);
+        dst_log2_size = dst_size_is_power_of_two ? (std::uint32_t)log2(output_unit_size) : 0;
+    }
+
+    std::vector<uint32_t> writer_compile_time_args = {
+        (std::uint32_t)output_cb_index,
+        (std::uint32_t)dst_is_dram,
+        (std::uint32_t)writer_unit_size,
+        (std::uint32_t)dst_size_is_power_of_two,
+        (std::uint32_t)dst_log2_size,
+        (std::uint32_t)scale_factor_h,
+        (std::uint32_t)scale_factor_w,
+        (std::uint32_t)output_shape[1],
+        (std::uint32_t)output_shape[2]};
+
+    if (is_tiled_layout) {
+        const auto& tile_shape = input.tensor_spec().tile().get_tile_shape();
+        const uint32_t tile_height = tile_shape[0];
+        const uint32_t num_input_tiles_in_row = input.padded_shape()[-1] / tile_shape[1];
+
+        writer_compile_time_args.push_back((std::uint32_t)tile_height);
+        writer_compile_time_args.push_back((std::uint32_t)num_input_tiles_in_row);
+    } else {
+        const uint32_t block_height = 1;                // since input is row major, blocks are just one row tall
+        const uint32_t num_units_per_output_stick = 1;  // 1 page in out_cb is needed to get a whole output stick
+
+        writer_compile_time_args.push_back((std::uint32_t)block_height);
+        writer_compile_time_args.push_back(num_units_per_output_stick);
+    }
+
+    const std::map<std::string, std::string> kernel_defines;
     const tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_interleaved.cpp",
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
 
+    // Compute kernel (only for tiled layout)
+    tt::tt_metal::KernelHandle compute_kernel_id = 0;
+    if (is_tiled_layout) {
+        const uint32_t num_input_tiles_in_row =
+            input.padded_shape()[-1] / input.tensor_spec().tile().get_tile_shape()[1];
+        const std::vector<uint32_t> compute_compile_time_args = {
+            (uint32_t)num_input_tiles_in_row, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
+
+        compute_kernel_id = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/compute/untilize.cpp",
+            all_cores,
+            tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
+    }
+
+    // Set up runtime arguments
     std::vector<uint32_t> reader_rt_arguments{
         src_buffer->address(),
-        0,  // set in loop, num of sticks on core
-        0   // set in loop, start_id of stick in core
+        0,  // set in loop, num of units on core
+        0   // set in loop, start_id of unit in core
     };
 
     std::vector<uint32_t> writer_rt_arguments{
         dst_buffer->address(),
-        0,  // set in loop, num of sticks on core
-        0   // set in loop, stard_id of stick on core
+        0,  // set in loop, num of units on core
+        0   // set in loop, start_id of unit on core
     };
 
-    for (uint32_t i = 0, num_sticks_written = 0; i < num_cores; i++) {
+    std::vector<uint32_t> compute_rt_arguments;
+    if (is_tiled_layout) {
+        compute_rt_arguments = {0};  // set in loop, number of blocks per core
+    }
+
+    for (uint32_t i = 0, work_processed = 0; i < num_cores; i++) {
         const CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_sticks_per_core = 0;
+        uint32_t work_per_core = 0;
         if (core_group_1.contains(core)) {
-            num_sticks_per_core = num_sticks_per_core_group_1;
+            work_per_core = work_per_core_group_1;
         } else if (core_group_2.contains(core)) {
-            num_sticks_per_core = num_sticks_per_core_group_2;
+            work_per_core = work_per_core_group_2;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        reader_rt_arguments[1] = num_sticks_per_core;
-        reader_rt_arguments[2] = num_sticks_written;
+        if (is_tiled_layout) {
+            const uint32_t num_input_tiles_in_row =
+                input.padded_shape()[-1] / input.tensor_spec().tile().get_tile_shape()[1];
+            reader_rt_arguments[1] = work_per_core * num_input_tiles_in_row;
+            reader_rt_arguments[2] = work_processed * num_input_tiles_in_row;
 
-        writer_rt_arguments[1] = num_sticks_per_core;
-        writer_rt_arguments[2] = num_sticks_written;
+            writer_rt_arguments[1] = work_per_core;
+            writer_rt_arguments[2] = work_processed;
+
+            compute_rt_arguments[0] = work_per_core;
+        } else {
+            reader_rt_arguments[1] = work_per_core;
+            reader_rt_arguments[2] = work_processed;
+
+            writer_rt_arguments[1] = work_per_core;
+            writer_rt_arguments[2] = work_processed;
+        }
 
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_arguments);
-
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_arguments);
 
-        num_sticks_written += num_sticks_per_core;
+        if (is_tiled_layout) {
+            tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, compute_rt_arguments);
+        }
+
+        work_processed += work_per_core;
     }
 
-    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id, num_cores, num_cores_y](
-                                              const void* operation,
-                                              tt::tt_metal::Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        const auto src_buffer = input_tensors.at(0).buffer();
-        const auto dst_buffer = output_tensors.at(0).buffer();
+    auto override_runtime_args_callback =
+        [unary_reader_kernel_id, unary_writer_kernel_id, compute_kernel_id, num_cores, num_cores_y, is_tiled_layout](
+            const void* operation,
+            tt::tt_metal::Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>&,
+            const std::vector<Tensor>& output_tensors) {
+            const auto src_buffer = input_tensors.at(0).buffer();
+            const auto dst_buffer = output_tensors.at(0).buffer();
 
-        for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-            const CoreCoord core = {i / num_cores_y, i % num_cores_y};
-            {
-                auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, core);
-                runtime_args[0] = src_buffer->address();
+            for (uint32_t i = 0; i < num_cores; i++) {
+                const CoreCoord core = {i / num_cores_y, i % num_cores_y};
+                {
+                    auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, core);
+                    runtime_args[0] = src_buffer->address();
+                }
+                {
+                    auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
+                    runtime_args[0] = dst_buffer->address();
+                }
             }
-            {
-                auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
-                runtime_args[0] = dst_buffer->address();
-            }
-        }
-    };
+        };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
