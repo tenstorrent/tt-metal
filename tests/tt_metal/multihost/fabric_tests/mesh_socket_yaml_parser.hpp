@@ -47,6 +47,7 @@ struct MemoryConfig {
     uint32_t fifo_size;
     uint32_t page_size;
     uint32_t data_size;
+    uint32_t num_transactions;
 };
 
 struct EndpointConfig {

@@ -22,6 +22,7 @@ tests:
   #     fifo_size: 1024
   #     page_size: 256
   #     data_size: 4096
+  #     num_transactions: 20
   #   sockets:
   #     - sender_rank: 0
   #       receiver_rank: 1
@@ -48,6 +49,7 @@ tests:
       fifo_size: 2048
       page_size: 512
       data_size: 8192
+      num_transactions: 25
     sockets:
       - sender_rank: 0
         receiver_rank: 1
@@ -56,7 +58,7 @@ tests:
               mesh_coord: [0, 0]
               core_coord: [0, 0]
             receiver:
-              mesh_coord: [0, 1]
+              mesh_coord: [0, 0]
               core_coord: [0, 0]
           # - sender:
           #     mesh_coord: [1, 0]

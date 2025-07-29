@@ -337,6 +337,12 @@ MemoryConfig MeshSocketYamlParser::parse_memory_config(const YAML::Node& node) {
         memory.data_size = node["data_size"].as<uint32_t>();
     }
 
+    if (node["num_transactions"]) {
+        memory.num_transactions = node["num_transactions"].as<uint32_t>();
+    } else {
+        memory.num_transactions = 20;  // Default value
+    }
+
     return memory;
 }
 
