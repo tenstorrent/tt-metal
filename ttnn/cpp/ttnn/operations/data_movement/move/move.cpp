@@ -141,7 +141,6 @@ static inline Tensor move_sharded(
         return {input_tensor};
     }
     auto shard_spec = input_tensor.shard_spec().value();
-    auto shard_shape = shard_spec.shape;
     auto shard_grid = shard_spec.grid;
     auto input_dtype = input_tensor.dtype();
     auto input_layout = input_tensor.layout();
