@@ -15,7 +15,7 @@ DEFAULT_GOLDEN_FILE = os.path.join(
     "benchmark_rw_buffer_golden.json",
 )
 
-BANDWIDTH_VAIRANCE_TOLERANCE_PCT = 5
+DEFAULT_BANDWIDTH_VAIRANCE_TOLERANCE_PCT = 5
 
 
 def parse_args():
@@ -31,8 +31,14 @@ def parse_args():
         help="Path to the JSON file with golden benchmark values.",
         default=DEFAULT_GOLDEN_FILE,
     )
+    parser.add_argument(
+        "--tolerance",
+        type=float,
+        help="Tolerance for benchmark results.",
+        default=DEFAULT_BANDWIDTH_VAIRANCE_TOLERANCE_PCT,
+    )
     args = parser.parse_args()
-    return args.golden, args.json
+    return args.golden, args.json, args.tolerance
 
 
 def collect_benchmarks(benchmark_obj):
@@ -42,58 +48,64 @@ def collect_benchmarks(benchmark_obj):
     return result
 
 
-def compare_benchmarks(golden_benchmarks, result_benchmarks):
-    """
-    >>> BANDWIDTH_VAIRANCE_TOLERANCE_PCT = 5
-    >>> golden = {'bench1': 100.0, 'bench2': 200.0}
-    >>> result = {'bench1': 102.0, 'bench2': 212.0}
-    >>> compare_benchmarks(golden, result)
-    Benchmark bench1 passed: 102.0 vs 100.0 (diff: 2.00%)
-    Benchmark bench2 failed: 212.0 vs 200.0 (diff: 6.00%)
-    False
+def compare_benchmarks(golden_benchmarks, result_benchmarks, tolerance):
+    golden_benchmarks_names = set(golden_benchmarks.keys())
+    result_benchmarks_names = set(result_benchmarks.keys())
 
-    >>> BANDWIDTH_VAIRANCE_TOLERANCE_PCT = 10
-    >>> golden = {'bench1': 100.0}
-    >>> result = {'bench1': 105.0}
-    >>> compare_benchmarks(golden, result)
-    Benchmark bench1 passed: 105.0 vs 100.0 (diff: 5.00%)
-    True
+    successed_benchmarks = []
+    failed_benchmarks = []
 
-    >>> BANDWIDTH_VAIRANCE_TOLERANCE_PCT = 5
-    >>> golden = {'bench1': 100.0}
-    >>> result = {}
-    >>> compare_benchmarks(golden, result)
-    Benchmark bench1 failed: missing from results
-    False
-    """
-    success = True
-    for name, golden_value in golden_benchmarks.items():
-        if name not in result_benchmarks:
-            print(f"FAILED | Benchmark {name}: missing from results")
-            success = False
-            continue
-
+    for name in golden_benchmarks_names & result_benchmarks_names:
+        golden_value = golden_benchmarks[name]
         result_value = result_benchmarks[name]
-        pct_diff = abs((result_value - golden_value) / golden_value) * 100
 
-        if pct_diff > BANDWIDTH_VAIRANCE_TOLERANCE_PCT:
-            print(f"FAILED | Benchmark {name}: {result_value:.2f} vs {golden_value:.2f} (diff: {pct_diff:.2f}%)")
-            success = False
+        pct_diff = ((result_value - golden_value) / golden_value) * 100
+        if abs(pct_diff) > tolerance:
+            failed_benchmarks.append((name, result_value, golden_value, pct_diff))
         else:
-            print(f"PASSED | Benchmark {name}: {result_value:.2f} vs {golden_value:.2f} (diff: {pct_diff:.2f}%)")
+            successed_benchmarks.append((name, result_value, golden_value, pct_diff))
+
+    success = golden_benchmarks_names == result_benchmarks_names and not failed_benchmarks
+
+    print(f"Benchmark {'FAILED' if not success else 'PASSED'}:")
+    print("----------------------------------------------------")
+    print(f"Total failed benchmarks: {len(failed_benchmarks)}")
+    print(f"Total successed benchmarks: {len(successed_benchmarks)}")
+    print(f"Total benchmarks: {len(result_benchmarks_names)}")
+    print(f"Mismatched benchmarks: {len(golden_benchmarks_names ^ result_benchmarks_names)}")
+    print("----------------------------------------------------")
+
+    print("Missing benchmarks:")
+    for name in golden_benchmarks_names - result_benchmarks_names:
+        print(f"FAILED | Benchmark {name}: missing from results")
+    for name in result_benchmarks_names - golden_benchmarks_names:
+        print(f"FAILED | Benchmark {name}: excess from results")
+    print("----------------------------------------------------")
+
+    print("Failed benchmarks:")
+    for name, result_value, golden_value, pct_diff in sorted(failed_benchmarks, key=lambda x: x[3]):
+        print(f"FAILED | Benchmark {name}: {result_value:.2f} vs {golden_value:.2f} (diff: {pct_diff:+.2f}%)")
+    print("----------------------------------------------------")
+
+    print("Successed benchmarks:")
+    for name, result_value, golden_value, pct_diff in sorted(successed_benchmarks):
+        print(f"PASSED | Benchmark {name}: {result_value:.2f} vs {golden_value:.2f} (diff: {pct_diff:+.2f}%)")
+    print("----------------------------------------------------")
+
     return success
 
 
 if __name__ == "__main__":
-    golden_file, result_file = parse_args()
+    golden_file, result_file, tolerance = parse_args()
 
     golden_benchmarks = collect_benchmarks(json.load(golden_file))
     result_benchmarks = collect_benchmarks(json.load(result_file))
 
-    print("Comparing throughput benchmarks...")
+    print(f"Comparing throughput benchmarks ({golden_file} vs {result_file})...")
     print("Note: Benchmark name follows: Function/ Page Size/ Transfer Size/ Device ID")
-    print("Benchmark results are in bytes per second.")
+    print("Benchmark results are in bytes per second, higher is better. Result vs Golden.")
+    print(f"Tolerance is {tolerance}%.")
     print("----------------------------------------------------")
 
-    if not compare_benchmarks(golden_benchmarks, result_benchmarks):
+    if not compare_benchmarks(golden_benchmarks, result_benchmarks, tolerance):
         sys.exit("Some benchmarks did not meet the golden values. Please review the output above.")
