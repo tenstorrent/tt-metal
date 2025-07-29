@@ -61,6 +61,23 @@ void MetalContext::initialize(
     // Settings that affect FW build can also trigger a re-initialization
     auto fw_compile_hash = std::hash<std::string>{}(rtoptions_.get_compile_hash_string());
     validate_worker_l1_size(worker_l1_size, *hal_);
+
+    // if (initialized_ and
+    //     (dispatch_core_config_ != dispatch_core_config or num_hw_cqs != num_hw_cqs_ or
+    //      worker_l1_size_ != worker_l1_size or l1_bank_remap != l1_bank_remap_ or fw_compile_hash !=
+    //      fw_compile_hash_)) {
+    //     log_warning(tt::LogAlways, "Closing and re-initializing MetalContext with new parameters.");
+    //     teardown();
+    // } else if (force_reinit_) {
+    //     if (initialized_) {
+    //         log_warning(
+    //             tt::LogAlways,
+    //             "Closing and re-initializing MetalContext with same parameters due to force_reinit flag.");
+    //         teardown();
+    //     }
+    //     force_reinit_ = false;
+    // }
+
     if (initialized_) {
         if (dispatch_core_config_ != dispatch_core_config or num_hw_cqs != num_hw_cqs_ or
             worker_l1_size_ != worker_l1_size or l1_bank_remap != l1_bank_remap_ or
@@ -81,6 +98,7 @@ void MetalContext::initialize(
         }
     }
 
+    force_reinit_ = false;
     initialized_ = true;
     dispatch_core_config_ = dispatch_core_config;
     num_hw_cqs_ = num_hw_cqs;
