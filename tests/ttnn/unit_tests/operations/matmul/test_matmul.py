@@ -2377,3 +2377,50 @@ def test_matmul_padding(
 
     # Verify values match with high precision
     assert torch.allclose(golden_output, output, atol=1e-6)
+
+
+def test_matmul_hs_hang(device):
+    in0_shape = [1, 1, 128 * 128, 960]
+    in1_shape = [1, 1, 960, 320]
+
+    in0_torch = torch.randn(in0_shape).bfloat16().float()
+    in1_torch = torch.randn(in1_shape).bfloat16().float()
+
+    in0_tt = ttnn.from_torch(
+        in0_torch,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    in1_tt = ttnn.from_torch(
+        in1_torch,
+        dtype=ttnn.bfloat8_b,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    cfg = ttnn.create_sharded_memory_config(
+        in0_tt.shape,
+        core_grid=ttnn.CoreGrid(y=8, x=8),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    in0_tt = ttnn.to_memory_config(in0_tt, memory_config=cfg)
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    ttnn.synchronize_device(device)
+    out = ttnn.matmul(
+        in0_tt,
+        in1_tt,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        dtype=ttnn.bfloat16,
+        compute_kernel_config=compute_kernel_config,
+    )
+    ttnn.synchronize_device(device)
