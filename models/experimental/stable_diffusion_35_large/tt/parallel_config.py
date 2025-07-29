@@ -148,7 +148,7 @@ class StableDiffusionParallelManager:
         self._init_subdevice()
 
         # SD35-specific semaphores
-        semaphore_names = [("ping_pong", 4), ("ring_sdpa", 2), ("rs_ping_pong", 3 * 2 * num_links)]
+        semaphore_names = [("ping_pong", 4), ("ring_sdpa", 2), ("rs_ping_pong", 3 * 2)]
         self._init_semaphores(semaphore_names)
         self.ping_pong_idx = 0
         self.rs_ping_pong_idx = 0
@@ -288,7 +288,7 @@ class StableDiffusionParallelManager:
 
     def get_rs_ping_pong_semaphore(self, cfg_index):
         cur_idx = self.rs_ping_pong_idx
-        n_sems = 3 * self.num_links
+        n_sems = 3
         self.rs_ping_pong_idx = (cur_idx + 1) % 2
         return self.cfg_semaphores[cfg_index]["rs_ping_pong"][cur_idx * n_sems : (cur_idx + 1) * n_sems]
 
