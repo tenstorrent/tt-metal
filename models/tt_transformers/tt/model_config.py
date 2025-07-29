@@ -30,6 +30,7 @@ from models.tt_transformers.tt.load_checkpoints import (
     load_meta_state_dict,
     reverse_permute,
     standardize_hf_keys,
+    standardize_hf_keys_qwen25_vl,
 )
 from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 
@@ -1674,7 +1675,8 @@ class ModelArgs:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
                 # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-                if "Qwen2.5-VL" in self.model_name:
+                is_qwen25_vl = "Qwen2.5-VL" in self.model_name
+                if is_qwen25_vl:
                     from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
                         Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
                     )
@@ -1696,17 +1698,10 @@ class ModelArgs:
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
 
-            all_keys = tuple(state_dict.keys())
-            new_state_dict = {}
-            for k in all_keys:
-                if "model.visual." in k:
-                    new_state_dict[k.replace("model.visual.", "visual.")] = state_dict[k]
-                elif "model.language_model." in k:
-                    new_state_dict[k.replace("model.language_model.", "model.")] = state_dict[k]
-                else:
-                    new_state_dict[k] = state_dict[k]
-            state_dict = new_state_dict
-            state_dict = standardize_hf_keys(state_dict)
+            if is_qwen25_vl:
+                state_dict = standardize_hf_keys_qwen25_vl(state_dict)
+            else:
+                state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim)
 
         keys_dict = list(state_dict.keys())[:]

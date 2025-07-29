@@ -65,7 +65,22 @@ def standardize_hf_keys(state_dict):
                 state_dict[f"{prefix}{key_meta}"] = state_dict[f"{prefix}{key_hf}"]
                 break
 
+    return state_dict
+
+
+def standardize_hf_keys_qwen25_vl(state_dict):
+    all_keys = tuple(state_dict.keys())
+    new_state_dict = {}
+    for k in all_keys:
+        if "model.visual." in k:
+            new_state_dict[k.replace("model.visual.", "visual.")] = state_dict[k]
+        elif "model.language_model." in k:
+            new_state_dict[k.replace("model.language_model.", "model.")] = state_dict[k]
+        else:
+            new_state_dict[k] = state_dict[k]
+
     # Standardize keys used in vision parts of Qwen2.5-VL
+    state_dict = standardize_hf_keys(new_state_dict)
     replace_whole_name = lambda pattern, repl: lambda s: re.sub(rf"(^|\.)({pattern})($|\.)", rf"\1{repl}\3", s)
     output = {}
     for k, v in state_dict.items():
