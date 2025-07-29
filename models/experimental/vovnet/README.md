@@ -32,5 +32,5 @@ To obtain the perf reports through profiler, please build with following command
 Use the following command to run the model :
 
 ```
-pytest --disable-warnings models/experimental/functional_vovnet/tests/pcc/test_tt_vovnet.py
+pytest --disable-warnings models/experimental/vovnet/tests/pcc/test_tt_vovnet.py
 ```

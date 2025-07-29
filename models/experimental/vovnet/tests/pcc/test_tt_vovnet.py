@@ -3,13 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import timm
 import torch
 import ttnn
 import torch.nn.functional as F
-from models.experimental.functional_vovnet.tt.vovnet import TtVoVNet
-from models.experimental.functional_vovnet.tt.model_preprocessing import custom_preprocessor
+from models.experimental.vovnet.tt.vovnet import TtVoVNet
+from models.experimental.vovnet.tt.model_preprocessing import custom_preprocessor
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.experimental.vovnet.common import load_torch_model
 
 
 @pytest.mark.parametrize(
@@ -17,8 +17,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     (("hf_hub:timm/ese_vovnet19b_dw.ra_in1k"),),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_vovnet_model_inference(device, model_name, reset_seeds):
-    model = timm.create_model(model_name, pretrained=True).eval()
+def test_vovnet_model_inference(device, model_name, reset_seeds, model_location_generator):
+    model = load_torch_model(model_location_generator)
 
     parameters = custom_preprocessor(device, model.state_dict())
 
