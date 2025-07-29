@@ -84,13 +84,6 @@ class TtCLIPAttentionParameters:
             o_proj=o_proj,
         )
 
-        # return cls(
-        #     q_proj=TtLinearParameters.from_torch(substate(state, "q_proj"), dtype=dtype, device=device),
-        #     k_proj=TtLinearParameters.from_torch(substate(state, "k_proj"), dtype=dtype, device=device),
-        #     v_proj=TtLinearParameters.from_torch(substate(state, "v_proj"), dtype=dtype, device=device),
-        #     o_proj=TtLinearParameters.from_torch(substate(state, "out_proj"), dtype=dtype, device=device),
-        # )
-
 
 class TtCLIPAttention:
     def __init__(
@@ -195,10 +188,43 @@ class TtCLIPMLPParameters:
         *,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
+        parallel_manager: EncoderParallelManager = None,
     ) -> TtCLIPMLPParameters:
+        def parallel_weight_bias(name, dim):
+            assert dim in [-1, -2]
+            my_state = substate(state, name)
+            weight = my_state["weight"].transpose(0, 1)
+            bias = my_state.get("bias", None)
+
+            weight = ttnn.from_torch(
+                weight,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(device, dim=dim),
+            )
+            if bias is not None:
+                # Bias always sharded on last dimension. If row-parallel, extend
+                # bias with zeros.
+                bias = bias.unsqueeze(0)
+                if dim == -2:
+                    # row-parallel, only one device should apply bias
+                    zero_bias = torch.zeros_like(bias)
+                    bias = torch.cat([bias] + [zero_bias] * (parallel_manager.tensor_parallel.factor - 1), dim=-1)
+                bias = ttnn.from_torch(
+                    bias,
+                    dtype=dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensorToMesh(device, dim=-1),
+                )
+            return TtLinearParameters(weight=weight, bias=bias)
+
         return cls(
-            fc1=TtLinearParameters.from_torch(substate(state, "fc1"), dtype=dtype, device=device),
-            fc2=TtLinearParameters.from_torch(substate(state, "fc2"), dtype=dtype, device=device),
+            fc1=parallel_weight_bias("fc1", -1),
+            fc2=parallel_weight_bias("fc2", -2),
         )
 
 
@@ -208,7 +234,7 @@ class TtCLIPMLP:
         self._fc2 = TtLinear(parameters.fc2)
         self._hidden_act = config.hidden_act
 
-    def __call__(self, hidden_states: ttnn.Tensor) -> ttnn.Tensor:
+    def __call__(self, hidden_states: ttnn.Tensor, parallel_manager: EncoderParallelManager = None) -> ttnn.Tensor:
         hidden_states = self._fc1(hidden_states)
 
         if self._hidden_act == "gelu":
@@ -217,6 +243,28 @@ class TtCLIPMLP:
             hidden_states = hidden_states * ttnn.sigmoid(1.702 * hidden_states)
 
         hidden_states = self._fc2(hidden_states)
+        hidden_states_shape = list(hidden_states.shape)
+        hidden_states = ttnn.unsqueeze(hidden_states, 0)
+        # AllReduce output
+
+        hidden_states_scattered = ttnn.experimental.reduce_scatter_minimal_async(
+            hidden_states,
+            dim=3,
+            multi_device_global_semaphore=parallel_manager.get_rs_ping_pong_semaphore(),
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=parallel_manager.topology,
+            cluster_axis=parallel_manager.tensor_parallel.mesh_axis,
+        )
+        hidden_states = ttnn.experimental.all_gather_async(
+            hidden_states_scattered,
+            dim=3,
+            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(),
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=parallel_manager.topology,
+        )
+        hidden_states = ttnn.reshape(hidden_states, hidden_states_shape, hidden_states.shape)
         return hidden_states
 
 
@@ -247,10 +295,13 @@ class TtCLIPEncoderLayerParameters:
         *,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
+        parallel_manager: EncoderParallelManager = None,
     ) -> TtCLIPEncoderLayerParameters:
         return cls(
             self_attn=TtCLIPAttentionParameters.from_torch(substate(state, "self_attn"), dtype=dtype, device=device),
-            mlp=TtCLIPMLPParameters.from_torch(substate(state, "mlp"), dtype=dtype, device=device),
+            mlp=TtCLIPMLPParameters.from_torch(
+                substate(state, "mlp"), dtype=dtype, device=device, parallel_manager=parallel_manager
+            ),
             layer_norm1_weight=from_torch_fast(
                 state["layer_norm1.weight"], dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT
             ),
@@ -301,7 +352,7 @@ class TtCLIPEncoderLayer:
         hidden_states = ttnn.layer_norm(
             hidden_states, weight=self._layer_norm2, bias=self._layer_norm2_bias, epsilon=self._layer_norm_eps
         )
-        mlp_output = self._mlp(hidden_states)
+        mlp_output = self._mlp(hidden_states, parallel_manager=parallel_manager)
         # replicated
         hidden_states = residual + mlp_output
 
@@ -319,11 +370,16 @@ class TtCLIPTransformerParameters:
         *,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
+        parallel_manager: EncoderParallelManager = None,
     ) -> TtCLIPTransformerParameters:
         layers = []
         layer_states = indexed_substates(state, "layers")
         for layer_state in layer_states:
-            layers.append(TtCLIPEncoderLayerParameters.from_torch(layer_state, dtype=dtype, device=device))
+            layers.append(
+                TtCLIPEncoderLayerParameters.from_torch(
+                    layer_state, dtype=dtype, device=device, parallel_manager=parallel_manager
+                )
+            )
 
         return cls(
             layers=layers,
@@ -359,10 +415,14 @@ class TtCLIPEncoderParameters:
         *,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
+        parallel_manager: EncoderParallelManager = None,
     ) -> TtCLIPEncoderParameters:
         return cls(
             text_model=TtCLIPTransformerParameters.from_torch(
-                state, dtype=dtype, device=device  # state is already the encoder substate
+                state,
+                dtype=dtype,
+                device=device,
+                parallel_manager=parallel_manager,  # state is already the encoder substate
             )
         )
 
@@ -448,15 +508,18 @@ class TtCLIPTextTransformerParameters:
         *,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
+        parallel_manager: EncoderParallelManager = None,
     ) -> TtCLIPTextTransformerParameters:
         text_model_state = substate(state, "text_model")
 
         return cls(
             embeddings=TtCLIPEmbeddingParameters.from_torch(
-                substate(text_model_state, "embeddings"), dtype=dtype, device=device
+                substate(text_model_state, "embeddings"),
+                dtype=dtype,
+                device=device,
             ),
             encoder=TtCLIPEncoderParameters.from_torch(
-                substate(text_model_state, "encoder"), dtype=dtype, device=device
+                substate(text_model_state, "encoder"), dtype=dtype, device=device, parallel_manager=parallel_manager
             ),
             final_layer_norm_weight=from_torch_fast(
                 text_model_state["final_layer_norm.weight"], dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT

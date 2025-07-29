@@ -152,7 +152,6 @@ class StableDiffusionParallelManager:
         self._init_semaphores(semaphore_names)
         self.ping_pong_idx = 0
         self.rs_ping_pong_idx = 0
-
         self.persistent_buffers = [{} for _ in range(self.dit_parallel_config.cfg_parallel.factor)]
 
     def _init_submeshes(self):
@@ -353,10 +352,11 @@ class EncoderParallelManager:
         self._init_subdevice()
 
         # SD35-specific semaphores
-        semaphore_names = [("ping_pong", 2 * 2), ("rs_ping_pong", 3 * 2 * num_links)]
+        semaphore_names = [("ping_pong", 2 * 2), ("rs_ping_pong", 3 * 2 * num_links), ("ar_ping_pong", 3 * 2)]
         self._init_semaphores(semaphore_names)
         self.ping_pong_idx = 0
         self.rs_ping_pong_idx = 0
+        self.ar_ping_pong_idx = 0
 
     def _init_subdevice(self):
         compute_grid_size = self.mesh_device.compute_with_storage_grid_size()
@@ -391,6 +391,12 @@ class EncoderParallelManager:
         n_sems = 3 * self.num_links
         self.rs_ping_pong_idx = (cur_idx + 1) % 2
         return self.sems["rs_ping_pong"][cur_idx * n_sems : (cur_idx + 1) * n_sems]
+
+    def get_ar_ping_pong_semaphore(self):
+        cur_idx = self.ar_ping_pong_idx
+        n_sems = 3
+        self.ar_ping_pong_idx = (cur_idx + 1) % 2
+        return self.sems["ar_ping_pong"][cur_idx * n_sems : (cur_idx + 1) * n_sems]
 
     @property
     def is_tensor_parallel(self):

@@ -27,9 +27,9 @@ from ..tt.parallel_config import EncoderParallelManager
         ("text_encoder", "tokenizer", 0.99),
         ("text_encoder_2", "tokenizer_2", 0.987),
     ],
-    ids=["encoder", "encoder_2"],
+    ids=["encoder_1", "encoder_2"],
 )
-@pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(1, 4), (1, 2)], indirect=True)
 @pytest.mark.parametrize(
     "device_params, topology",
     [[{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear]],
@@ -95,6 +95,7 @@ def test_clip_encoder(
         hf_model.state_dict(),
         device=mesh_device,
         dtype=ttnn.bfloat16,
+        parallel_manager=parallel_manager,
     )
 
     config = TtCLIPConfig(
