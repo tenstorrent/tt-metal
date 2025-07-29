@@ -11,7 +11,14 @@
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
 void kernel_main() {
-    return;
+    DPRINT << "reader_bmm_tile_layout_in0_ring_all_gather" << ENDL();
+    std::array<uint32_t, 4> fused_op_receiver_signal_semaphore_addr = {
+        get_compile_time_arg_val(7),
+        get_compile_time_arg_val(8),
+        get_compile_time_arg_val(9),
+        get_compile_time_arg_val(10),
+    };
+
     // Compile time args
     constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(1);
@@ -20,6 +27,11 @@ void kernel_main() {
     // All Gather specific
     constexpr uint32_t ring_size = get_compile_time_arg_val(3);
     uint32_t signal_semaphore_addr = get_semaphore(get_compile_time_arg_val(4));
+    DPRINT << "signal_semaphore_addr: " << signal_semaphore_addr << ENDL();
+    DPRINT << "fused_op_receiver_signal_semaphore_addr[0]: " << fused_op_receiver_signal_semaphore_addr[0] << ENDL();
+    DPRINT << "fused_op_receiver_signal_semaphore_addr[1]: " << fused_op_receiver_signal_semaphore_addr[1] << ENDL();
+    DPRINT << "fused_op_receiver_signal_semaphore_addr[2]: " << fused_op_receiver_signal_semaphore_addr[2] << ENDL();
+    DPRINT << "fused_op_receiver_signal_semaphore_addr[3]: " << fused_op_receiver_signal_semaphore_addr[3] << ENDL();
 
     // Runtime args
     uint32_t rt_args_idx = 0;
@@ -47,6 +59,24 @@ void kernel_main() {
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
     constexpr uint32_t shard_size_in_tiles = shard_width_in_tiles * shard_height_in_tiles;
     constexpr uint32_t shard_size_bytes = shard_size_in_tiles * in0_single_tile_size_bytes;
+
+    DPRINT << "core_type: " << static_cast<uint32_t>(core_type) << ENDL();
+
+    volatile tt_l1_ptr uint32_t* fused_op_receiver_signal_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fused_op_receiver_signal_semaphore_addr[ring_idx]);
+    /*
+        DPRINT << "fused_op_receiver_signal_semaphore_addr_ptr value: " <<  *reinterpret_cast<volatile tt_l1_ptr
+       uint32_t*>(fused_op_receiver_signal_semaphore_addr_ptr[0]) << ENDL(); DPRINT <<
+       "fused_op_receiver_signal_semaphore_addr_ptr value: " <<  *reinterpret_cast<volatile tt_l1_ptr
+       uint32_t*>(fused_op_receiver_signal_semaphore_addr_ptr[1]) << ENDL(); DPRINT <<
+       "fused_op_receiver_signal_semaphore_addr_ptr value: " <<  *reinterpret_cast<volatile tt_l1_ptr
+       uint32_t*>(fused_op_receiver_signal_semaphore_addr_ptr[2]) << ENDL(); DPRINT <<
+       "fused_op_receiver_signal_semaphore_addr_ptr value: " <<  *reinterpret_cast<volatile tt_l1_ptr
+       uint32_t*>(fused_op_receiver_signal_semaphore_addr_ptr[3]) << ENDL();
+    */
+    noc_semaphore_wait_min(fused_op_receiver_signal_semaphore_addr_ptr, 5);
+
+    return;
 
     // Reserving/pushing the local shard is done in compute
     cb_reserve_back(cb_id_in2, (ring_size - 1) * shard_size_in_tiles);

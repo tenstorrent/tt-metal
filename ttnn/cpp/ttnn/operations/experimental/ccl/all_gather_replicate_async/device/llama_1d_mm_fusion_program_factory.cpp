@@ -1678,6 +1678,14 @@ process_gather_in0_program_and_create_override_variables(
     const uint32_t ring_size =
         fused_op_signaler->ring_size;  // use ccl ring size instead of num_cores = local core ring size for fused op
 
+    for (uint32_t idx = 0; idx < ring_size; idx++) {
+        log_info(
+            tt::LogOp,
+            "LLONG FUSION: fused_op_receiver_signal_semaphores[{}]: {}",
+            idx,
+            fused_op_signaler->fused_op_receiver_signal_semaphores[idx]);
+    }
+
     uint32_t num_hop_cores = hop_cores.num_cores();
     bool use_hop_cores = num_hop_cores > 0;
 
@@ -1790,6 +1798,7 @@ process_gather_in0_program_and_create_override_variables(
 
     /* semaphores */
     auto in0_signal_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    log_info(tt::LogOp, "LLONG FUSION: in0_signal_semaphore_id: {}", in0_signal_semaphore_id);
 
     uint32_t in0_num_subblocks = (per_core_M / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
@@ -1947,6 +1956,10 @@ process_gather_in0_program_and_create_override_variables(
         (std::uint32_t)in0_signal_semaphore_id,
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src2_cb_index,
+        (std::uint32_t)fused_op_signaler->fused_op_receiver_signal_semaphores[0],
+        (std::uint32_t)fused_op_signaler->fused_op_receiver_signal_semaphores[1],
+        (std::uint32_t)fused_op_signaler->fused_op_receiver_signal_semaphores[2],
+        (std::uint32_t)fused_op_signaler->fused_op_receiver_signal_semaphores[3],
     };
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
@@ -2166,7 +2179,7 @@ process_gather_in0_program_and_create_override_variables(
 
     uint32_t bank_id = 0;
     std::vector<uint32_t> bank_ids;
-    for (uint32_t i = 0; i < num_cores; ++i) {
+    for (uint32_t i = 0; i < num_cores; ++i) {  // runtime args for mm cores
         bool send_to_hop_core = i == 0 && use_hop_cores;
         const auto& core = worker_cores_vec[i];
         const auto& core_noc = device->worker_core_from_logical_core(core);
@@ -2185,15 +2198,19 @@ process_gather_in0_program_and_create_override_variables(
 
         std::vector<uint32_t> mm_in0_args = {
             (std::uint32_t)core_type,
-            i,                // ring_index
-            next_core_noc.x,  // next_core_noc_x
-            next_core_noc.y,  // next_core_noc_y
+            fused_op_signaler->start_ring_index,  // ring_index
+            next_core_noc.x,                      // next_core_noc_x
+            next_core_noc.y,                      // next_core_noc_y
             noc,
             (std::uint32_t)false,  // end_of_hop
         };
 
         mm_in0_args.insert(
             mm_in0_args.end(), unpadded_in0_shard_widths_in_tiles.begin(), unpadded_in0_shard_widths_in_tiles.end());
+        mm_in0_args.insert(
+            mm_in0_args.end(),
+            fused_op_signaler->fused_op_receiver_signal_semaphores.begin(),
+            fused_op_signaler->fused_op_receiver_signal_semaphores.end());
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_id, core, mm_in0_args);
 
         /* in1 */

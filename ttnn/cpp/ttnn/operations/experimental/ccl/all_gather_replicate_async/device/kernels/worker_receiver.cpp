@@ -56,6 +56,12 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fused_op_receiver_signal_semaphore_addr[core_id]);
     noc_semaphore_set(fused_op_receiver_signal_semaphore_addr_ptr, VALID);
 
+    DPRINT << "fused_op_receiver_signal_semaphore_addr: " << fused_op_receiver_signal_semaphore_addr[0] << ENDL();
+    DPRINT << "fused_op_receiver_signal_semaphore_addr: " << fused_op_receiver_signal_semaphore_addr[1] << ENDL();
+    DPRINT << "fused_op_receiver_signal_semaphore_addr: " << fused_op_receiver_signal_semaphore_addr[2] << ENDL();
+    DPRINT << "fused_op_receiver_signal_semaphore_addr: " << fused_op_receiver_signal_semaphore_addr[3] << ENDL();
+    DPRINT << "core_id: " << core_id << ENDL();
+
     // if (core_id != ring_index) {
     //     return;
     // }

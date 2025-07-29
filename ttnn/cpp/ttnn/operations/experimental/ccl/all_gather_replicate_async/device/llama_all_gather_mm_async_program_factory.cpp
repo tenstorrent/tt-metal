@@ -74,7 +74,8 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
     log_info(tt::LogOp, "LLONG FUSION: num_transfers: {}", num_transfers);
 
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> matmul_fused_op_signaler =
-        ttnn::experimental::ccl::MatmulFusedOpSignaler(ttnn::experimental::ccl::MatmulFusedOpSignalerType::ALL_GATHER);
+        ttnn::experimental::ccl::MatmulFusedOpSignaler(
+            ttnn::experimental::ccl::MatmulFusedOpSignalerType::LLAMA_ALL_GATHER);
     matmul_fused_op_signaler->init_llama_all_gather(
         num_transfers,
         ring_size,
@@ -90,7 +91,6 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
         sender_device,
         output_tensor.memory_config().shard_spec()->grid,
         ttnn::experimental::ccl::FusedOpSignalerMode::SINGLE);
-
     // Section end for fusion signaler initialization
 
     const bool enable_async_intermediate_tensor = false;
