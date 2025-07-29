@@ -27,8 +27,12 @@ class StatsReporter:
             logger.info(f"")
             logger.info(f"")
 
-            run_host_id = (riscv1_run if riscv1_run else riscv0_run)["duration_type"][0]["run_host_id"]
-            logger.info(f"Run host id: {run_host_id}")
+            riscv1_run_host_id = riscv1_run["duration_type"][0]["run_host_id"] if riscv1_run else None
+            riscv0_run_host_id = riscv0_run["duration_type"][0]["run_host_id"] if riscv0_run else None
+
+            logger.info(f"Run host id (riscv_1): {riscv1_run_host_id}")
+            if riscv0_run_host_id is not None and riscv0_run_host_id != riscv1_run_host_id:
+                logger.info(f"Run host id (riscv_0): {riscv0_run_host_id}")
 
             for riscv, run in [("RISCV 1", riscv1_run), ("RISCV 0", riscv0_run)]:
                 if run:
@@ -36,8 +40,14 @@ class StatsReporter:
                     logger.info(f'{riscv} duration: {run["duration_cycles"]}')
 
                     logger.info("Attributes:")
-                    for attr, val in self.dm_stats[riscv.lower().replace(" ", "_")]["attributes"][run_host_id].items():
-                        logger.info(f"  {attr}: {val}")
+                    riscv_key = riscv.lower().replace(" ", "_")
+                    run_host_id = run["duration_type"][0]["run_host_id"]
+                    for attr, val in self.dm_stats[riscv_key]["attributes"][run_host_id].items():
+                        if attr == "Test id":
+                            test_name = self.test_id_to_name.get(val, "Unknown Test")
+                            logger.info(f'  {attr}: {val} ("{test_name}")')
+                        else:
+                            logger.info(f"  {attr}: {val}")
 
         logger.info(f"")
         logger.info(f"")

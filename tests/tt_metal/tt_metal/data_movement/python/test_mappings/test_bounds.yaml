@@ -91,7 +91,7 @@
       bandwidth: 30
   blackhole:
     riscv_1:
-      latency: 18000
+      latency: 26000
       bandwidth: 60
 
 "One to One Directed Ideal":
@@ -101,7 +101,7 @@
       bandwidth: 29
   blackhole:
     riscv_0:
-      latency: 19000
+      latency: 25000
       bandwidth: 59
 
 "One from One Directed Ideal":
