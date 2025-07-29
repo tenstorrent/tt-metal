@@ -170,8 +170,8 @@ def sd_transformer(
             num_links=parallel_manager.num_links,
             topology=parallel_manager.dit_parallel_config.topology,
             cluster_axis=parallel_manager.dit_parallel_config.sequence_parallel.mesh_axis,
-            chunks_per_sync=16,
-            num_workers_per_link=3,
+            chunks_per_sync=10,
+            num_workers_per_link=2,
             num_buffers_per_channel=2,
         )
         spatial = spatial_B1NDt
