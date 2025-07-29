@@ -58,11 +58,11 @@ public:
     IDevice() = default;
     virtual ~IDevice() = default;
 
-    IDevice(const IDevice &other) = delete;
-    IDevice& operator=(const IDevice &other) = delete;
+    IDevice(const IDevice& other) = delete;
+    IDevice& operator=(const IDevice& other) = delete;
 
-    IDevice(IDevice &&other) = default;
-    IDevice& operator=(IDevice &&other) = default;
+    IDevice(IDevice&& other) = default;
+    IDevice& operator=(IDevice&& other) = default;
 
     virtual tt::ARCH arch() const = 0;
 
@@ -100,7 +100,7 @@ public:
         const CoreCoord& logical_coord, const CoreType& core_type) const = 0;
 
     // Convert a logical coordinate to a virtual coordinate for a worker coordinate
-    virtual CoreCoord worker_core_from_logical_core(const CoreCoord &logical_core) const = 0;
+    virtual CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const = 0;
 
     // Convert a logical coordinate to virtual coordinate for an ethernet coordinate
     virtual CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const = 0;
@@ -115,7 +115,7 @@ public:
     virtual std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const = 0;
 
     // Returns true if the ethernet core is active
-    virtual bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores=false) const = 0;
+    virtual bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores = false) const = 0;
     virtual std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const = 0;
     virtual std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const = 0;
     virtual bool is_inactive_ethernet_core(CoreCoord logical_core) const = 0;
@@ -135,13 +135,14 @@ public:
     virtual uint32_t dram_channel_from_virtual_core(const CoreCoord& virtual_core) const = 0;
 
     virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const = 0;
-    virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const = 0;
+    virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
+        tt::stl::Span<const SubDeviceId> sub_device_ids) const = 0;
 
     // Set of logical ethernet core coordinates
     // core.x represents connectivity to one other chip, i.e. cores with <x> all connect to same chip
     // core.y represents different channels along one <x>
-    virtual const std::set<CoreCoord> &ethernet_cores() const = 0;
-    virtual const std::set<CoreCoord> &storage_only_cores() const = 0;
+    virtual const std::set<CoreCoord>& ethernet_cores() const = 0;
+    virtual const std::set<CoreCoord>& storage_only_cores() const = 0;
 
     virtual uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const = 0;
     virtual uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const = 0;
@@ -201,17 +202,21 @@ public:
 
     virtual uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const = 0;
     virtual uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const = 0;
-    virtual uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const = 0;
+    virtual uint8_t noc_data_start_index(
+        SubDeviceId sub_device_id, bool mcast_data = true, bool unicast_data = true) const = 0;
 
     virtual SubDeviceManagerId get_active_sub_device_manager_id() const = 0;
     virtual SubDeviceManagerId get_default_sub_device_manager_id() const = 0;
-    virtual SubDeviceManagerId create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
+    virtual SubDeviceManagerId create_sub_device_manager(
+        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
+    virtual SubDeviceManagerId create_sub_device_manager(
+        std::initializer_list<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
     virtual void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) = 0;
     virtual void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) = 0;
     virtual void clear_loaded_sub_device_manager() = 0;
     virtual CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const = 0;
-    virtual const std::vector<SubDeviceId> &get_sub_device_ids() const = 0;
-    virtual const std::vector<SubDeviceId> &get_sub_device_stall_group() const = 0;
+    virtual const std::vector<SubDeviceId>& get_sub_device_ids() const = 0;
+    virtual const std::vector<SubDeviceId>& get_sub_device_stall_group() const = 0;
     virtual void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) = 0;
     virtual void reset_sub_device_stall_group() = 0;
     virtual uint32_t num_sub_devices() const = 0;

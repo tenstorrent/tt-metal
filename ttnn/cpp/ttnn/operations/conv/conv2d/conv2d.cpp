@@ -173,8 +173,6 @@ Result conv2d_DRAM(
     auto [output_height, output_width] =
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
-    const uint32_t input_sliced_dim =
-        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? input_height : input_width;
     const uint32_t output_sliced_dim =
         dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? output_height : output_width;
     TT_FATAL(dram_slice_config.num_slices > 1, " Number of slices should be greater than 1 for Conv2D DRAM Slicing");
@@ -552,9 +550,6 @@ Result conv2d_L1(
         auto_shard = true;
     }
 
-    ShardOrientation shard_orientation =
-        conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
-
     auto [input_tensor_post_tm, parallel_config, output_parallel_config] = shard_or_reshard_tensor_if_required(
         device,
         input_tensor,
@@ -733,6 +728,7 @@ Result conv2d_L1(
             compute_config,
             conv_config.enable_act_double_buffer,
             conv_config.enable_weights_double_buffer,
+            conv_config.full_inner_dim,
             enable_split_reader);
 
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
