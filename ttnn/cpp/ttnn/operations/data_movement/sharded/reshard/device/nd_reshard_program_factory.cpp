@@ -5,6 +5,7 @@
 #include "nd_reshard_program_factory.hpp"
 
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "tt-metalium/host_api.hpp"
 
 using namespace tt::tt_metal;
 
@@ -32,7 +33,8 @@ operation::ProgramWithCallbacks nd_reshard_multicore_local_reader(const Tensor& 
 
     auto num_shards = input_buffer->buffer_distribution_spec()->num_shards();
 
-    auto shard_id_stride = input_buffer->buffer_distribution_spec()->num_cores_with_data();
+    // num cores with data * 2 because we have two kernels
+    auto shard_id_stride = input_buffer->buffer_distribution_spec()->num_cores_with_data() * 2;
 
     // Prepare compile time arguments
     auto compile_time_args_reader = input_accessor_args.get_compile_time_args();
@@ -40,7 +42,7 @@ operation::ProgramWithCallbacks nd_reshard_multicore_local_reader(const Tensor& 
     compile_time_args_reader.push_back(aligned_page_size);
 
     // Create kernels
-    KernelHandle reader_kernel_id = CreateKernel(
+    KernelHandle brisc_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/nd_reshard_local_reader.cpp",
         grid,
@@ -50,16 +52,28 @@ operation::ProgramWithCallbacks nd_reshard_multicore_local_reader(const Tensor& 
             .compile_args = compile_time_args_reader,
         });
 
-    // That common and unique runtime arguments to 0, and call overrtime_runtime_arguments callback
-    SetCommonRuntimeArgs(
+    KernelHandle ncrisc_kernel_id = CreateKernel(
         program,
-        reader_kernel_id,
-        {input.buffer()->address(), output.buffer()->address(), num_shards, shard_id_stride});
+        "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/nd_reshard_local_reader.cpp",
+        grid,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = compile_time_args_reader,
+        });
+
+    std::vector<uint32_t> common_runtime_args = {
+        input.buffer()->address(), output.buffer()->address(), num_shards, shard_id_stride};
+    SetCommonRuntimeArgs(program, brisc_kernel_id, common_runtime_args);
+    SetCommonRuntimeArgs(program, ncrisc_kernel_id, common_runtime_args);
+
+    // That unique runtime arguments to 0, and call overrtime_runtime_arguments callback
     for (const auto& core : cores) {
-        SetRuntimeArgs(program, reader_kernel_id, core, {0});
+        SetRuntimeArgs(program, brisc_kernel_id, core, {0});
+        SetRuntimeArgs(program, ncrisc_kernel_id, core, {0});
     }
 
-    auto override_runtime_arguments_callback = [reader_kernel_id, grid, cores](
+    auto override_runtime_arguments_callback = [brisc_kernel_id, ncrisc_kernel_id, grid, cores](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
@@ -68,18 +82,27 @@ operation::ProgramWithCallbacks nd_reshard_multicore_local_reader(const Tensor& 
         const auto& input = input_tensors.at(0);
         const auto& output = output_tensors.at(0);
 
-        auto& common_runtime_args_reader = GetCommonRuntimeArgs(program, reader_kernel_id);
-        common_runtime_args_reader[0] = input.buffer()->address();
-        common_runtime_args_reader[1] = output.buffer()->address();
-        common_runtime_args_reader[2] = input.buffer()->buffer_distribution_spec()->num_shards();
-        common_runtime_args_reader[3] = input.buffer()->buffer_distribution_spec()->num_cores_with_data();
+        auto num_shards = input.buffer()->buffer_distribution_spec()->num_shards();
+        auto shard_id_stride = input.buffer()->buffer_distribution_spec()->num_cores_with_data() * 2;
+        std::vector<uint32_t> common_runtime_args = {
+            input.buffer()->address(), output.buffer()->address(), num_shards, shard_id_stride};
+        auto& common_runtime_args_brisc = GetCommonRuntimeArgs(program, brisc_kernel_id);
+        auto& common_runtime_args_ncrisc = GetCommonRuntimeArgs(program, ncrisc_kernel_id);
+        for (size_t i = 0; i < common_runtime_args.size(); i++) {
+            common_runtime_args_brisc[i] = common_runtime_args[i];
+            common_runtime_args_ncrisc[i] = common_runtime_args[i];
+        }
 
-        auto& runtime_args_by_core_reader = GetRuntimeArgs(program, reader_kernel_id);
+        auto& runtime_args_by_core_brisc = GetRuntimeArgs(program, brisc_kernel_id);
+        auto& runtime_args_by_core_ncrisc = GetRuntimeArgs(program, ncrisc_kernel_id);
 
         auto start_shard_id = 0;
 
+        // brisc processes shards [0, num_data_cores*2, num_data_cores*4, num_data_cores*6, ...]
+        // ncrisc processes shards [num_data_cores, num_data_cores*3, num_data_cores*5, num_data_cores*7, ...]
         for (const auto& core : cores) {
-            runtime_args_by_core_reader[core.x][core.y][0] = start_shard_id;
+            runtime_args_by_core_brisc[core.x][core.y][0] = start_shard_id;
+            runtime_args_by_core_ncrisc[core.x][core.y][0] = start_shard_id + shard_id_stride / 2;
             ++start_shard_id;
         }
     };
