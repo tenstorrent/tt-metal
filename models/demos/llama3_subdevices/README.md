@@ -36,8 +36,7 @@ Note: If you downloaded your weights directly from `huggingface`, they will be `
 
 ```
 export LLAMA_DIR=<path_to_Llama-3.3-70B-instruct>
-export TT_METAL_ENABLE_ERISC_IRAM=1
-export FAKE_DEVICE=TG
+export MESH_DEVICE=TG
 ```
 
 Note: if using HuggingFace weights (`.safetensors` format), please use `HF_MODEL=meta-llama/Llama-3.3-70B-Instruct` or `HF_MODEL=<PATH_TO_HF_WEIGHTS>` instead of `LLAMA_DIR`.

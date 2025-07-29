@@ -991,6 +991,8 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
+            print(self.n_kv_heads)
+            print(self.cluster_shape)
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
             self.model_config["XQKV_PREFILL_PROGCFG"] = (
                 lambda seq_len: self.matmul_1d_config(
