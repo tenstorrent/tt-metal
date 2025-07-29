@@ -65,7 +65,15 @@ def standardize_hf_keys(state_dict):
                 state_dict[f"{prefix}{key_meta}"] = state_dict[f"{prefix}{key_hf}"]
                 break
 
-    return state_dict
+    # Standardize keys used in vision parts of Qwen2.5-VL
+    replace_whole_name = lambda pattern, repl: lambda s: re.sub(rf"(^|\.)({pattern})($|\.)", rf"\1{repl}\3", s)
+    output = {}
+    for k, v in state_dict.items():
+        k = replace_whole_name("qkv", "qkv_proj")(k)
+        k = replace_whole_name("proj", "o_proj")(k)
+        k = replace_whole_name("attn", "self_attn")(k)
+        output[k] = v
+    return output
 
 
 def convert_hf_to_meta(state_dict, head_dim):
