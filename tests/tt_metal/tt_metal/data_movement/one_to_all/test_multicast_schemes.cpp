@@ -13,13 +13,14 @@ namespace tt::tt_metal {
 
 using namespace std;
 using namespace tt;
-using namespace tt::test_utils;
+using namespace test_utils;
 
 namespace unit_tests::dm::core_to_all::multicast_schemes {
 
-uint32_t determine_max_grid_dimension(std::vector<IDevice*>& devices_) {
-    uint32_t smaller_dimension = std::min(
-        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y);
+uint32_t determine_max_grid_dimension(shared_ptr<distributed::MeshDevice> mesh_device) {
+    uint32_t smaller_dimension =
+        min(mesh_device->get_device(0)->compute_with_storage_grid_size().x,
+            mesh_device->get_device(0)->compute_with_storage_grid_size().y);
     return (smaller_dimension - 1);
 }
 
@@ -40,7 +41,7 @@ enum class MulticastSchemeType {
 };
 
 // Helper function to determine coordinates based on multicast scheme type
-std::pair<CoreCoord, CoreCoord> get_coordinates(uint32_t sub_grid_dimension_size, MulticastSchemeType type) {
+pair<CoreCoord, CoreCoord> get_coordinates(uint32_t sub_grid_dimension_size, MulticastSchemeType type) {
     CoreCoord mst_core_coord;
     CoreCoord sub_start_core_coord;
 
@@ -89,20 +90,18 @@ std::pair<CoreCoord, CoreCoord> get_coordinates(uint32_t sub_grid_dimension_size
             sub_start_core_coord = {0, 0};
             break;
 
-        default: throw std::invalid_argument("Invalid multicast scheme type");
+        default: throw invalid_argument("Invalid multicast scheme type");
     }
 
     return {mst_core_coord, sub_start_core_coord};
 }
 
 void test(
-    tt::ARCH arch_,
-    std::vector<IDevice*>& devices_,
+    shared_ptr<distributed::MeshDevice> mesh_device,
     uint32_t test_case_id,
     uint32_t sub_grid_dimension_size,
     NOC noc_id,
     MulticastSchemeType multicast_scheme_type,
-    DispatchFixture* fixture,
     bool loopback = true,
     bool is_linked = true) {
     bool is_multicast = true;
@@ -112,9 +111,8 @@ void test(
     auto [mst_core_coord, sub_start_core_coord] = get_coordinates(sub_grid_dimension_size, multicast_scheme_type);
 
     // Run the directed ideal test
-    tt::tt_metal::unit_tests::dm::core_to_all::directed_ideal_test(
-        arch_,
-        devices_,
+    unit_tests::dm::core_to_all::directed_ideal_test(
+        mesh_device,
         test_case_id,
         is_multicast,
         is_linked,
@@ -123,19 +121,13 @@ void test(
         sub_grid_size,
         loopback,
         noc_id,
-        static_cast<uint32_t>(multicast_scheme_type),
-        fixture);
+        static_cast<uint32_t>(multicast_scheme_type));
 }
 
-void run_all_tests(
-    tt::ARCH arch_,
-    std::vector<IDevice*>& devices_,
-    uint32_t test_case_id,
-    DispatchFixture* fixture,
-    bool loopback = true) {
-    std::vector<NOC> noc_ids = {NOC::NOC_0, NOC::NOC_1};
+void run_all_tests(shared_ptr<distributed::MeshDevice> mesh_device, uint32_t test_case_id, bool loopback = true) {
+    vector<NOC> noc_ids = {NOC::NOC_0, NOC::NOC_1};
     uint32_t starting_sub_grid_dimension_size = 2;  // Minimum size for sub-grid dimension
-    uint32_t sub_grid_dimension_limit = determine_max_grid_dimension(devices_);
+    uint32_t sub_grid_dimension_limit = determine_max_grid_dimension(mesh_device);
 
     MulticastSchemeType starting_multicast_scheme_type = MulticastSchemeType::SenderInGridTopRight;
 
@@ -147,13 +139,11 @@ void run_all_tests(
                  multicast_scheme_type < static_cast<uint32_t>(MulticastSchemeType::End);
                  multicast_scheme_type++) {
                 test(
-                    arch_,
-                    devices_,
+                    mesh_device,
                     test_case_id,
                     sub_grid_dimension_size,
                     (noc_id),
                     static_cast<MulticastSchemeType>(multicast_scheme_type),
-                    fixture,
                     loopback);
             }
         }
@@ -166,24 +156,22 @@ void run_all_tests(
 /* =================== LOOP THROUGH SCHEMES ==================== */
 /* ============================================================= */
 
-TEST_F(DispatchFixture, TensixDataMovementOneToAllMulticastSchemesLoopback) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastSchemesLoopback) {
     GTEST_SKIP() << "Skipping test";
 
     uint32_t test_case_id = 100;
     bool loopback = true;
 
-    tt::tt_metal::unit_tests::dm::core_to_all::multicast_schemes::run_all_tests(
-        arch_, devices_, test_case_id, this, loopback);
+    unit_tests::dm::core_to_all::multicast_schemes::run_all_tests(get_mesh_device(), test_case_id, loopback);
 }
 
-TEST_F(DispatchFixture, TensixDataMovementOneToAllMulticastSchemesNoLoopback) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastSchemesNoLoopback) {
     GTEST_SKIP() << "Skipping test";
 
     uint32_t test_case_id = 101;
     bool loopback = false;
 
-    tt::tt_metal::unit_tests::dm::core_to_all::multicast_schemes::run_all_tests(
-        arch_, devices_, test_case_id, this, loopback);
+    unit_tests::dm::core_to_all::multicast_schemes::run_all_tests(get_mesh_device(), test_case_id, loopback);
 }
 
 /* ============================================================= */
@@ -207,10 +195,13 @@ TEST_F(DispatchFixture, TensixDataMovementOneToAllMulticastSchemesNoLoopback) {
         10. Sender out grid ending not row not column
 */
 
-TEST_F(DispatchFixture, TensixDataMovementOneToAllMulticastSchemeSingle) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastSchemeSingle) {
     GTEST_SKIP() << "Skipping test";
 
     uint32_t test_case_id = 110;
+
+    auto mesh_device = get_mesh_device();
+    auto arch_ = mesh_device->get_device(0)->arch();
 
     bool loopback = false;
     NOC noc_id = NOC::NOC_0;
@@ -218,8 +209,8 @@ TEST_F(DispatchFixture, TensixDataMovementOneToAllMulticastSchemeSingle) {
     unit_tests::dm::core_to_all::multicast_schemes::MulticastSchemeType multicast_scheme =
         unit_tests::dm::core_to_all::multicast_schemes::MulticastSchemeType::SenderInGridTopRight;
 
-    tt::tt_metal::unit_tests::dm::core_to_all::multicast_schemes::test(
-        arch_, devices_, test_case_id, sub_grid_dimension_size, noc_id, multicast_scheme, this, loopback);
+    unit_tests::dm::core_to_all::multicast_schemes::test(
+        mesh_device, test_case_id, sub_grid_dimension_size, noc_id, multicast_scheme, loopback);
 }
 
 }  // namespace tt::tt_metal
