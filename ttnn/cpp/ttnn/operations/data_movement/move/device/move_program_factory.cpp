@@ -81,7 +81,6 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
     auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_pages);
 
-    const auto num_dram_banks = device->allocator()->get_num_banks(BufferType::DRAM);
     const auto num_l1_banks = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
     uint32_t size_per_l1_bank = tt::tt_metal::detail::SizeBytesPerBank(
@@ -93,7 +92,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(size_per_l1_bank, {{cb_index, cb_data_format}})
             .set_page_size(cb_index, aligned_page_size);
-    auto cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
     auto semaphore_id = CreateSemaphore(program, all_cores, 0);
 
@@ -136,7 +135,6 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
     // if third multicast is not needed range_2_noc will be ignored
     bool do_third_multicast = (noc_multicast_regions.size() == 3);
 
-    uint32_t total_num_pages = 0;
     for (uint32_t i = 0, pages_handled_per_core = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         uint32_t num_pages_per_core = 0;

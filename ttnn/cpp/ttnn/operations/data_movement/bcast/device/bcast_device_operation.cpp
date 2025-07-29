@@ -234,10 +234,6 @@ BcastOpParallelizationStrategy EltwiseBinaryBroadcast::get_parallelization_strat
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
 
-    uint32_t num_tiles = input_tensor_a.physical_volume() / TILE_HW;
-    uint32_t Ht = input_tensor_a.padded_shape()[-2] / TILE_HEIGHT;
-    uint32_t Wt = input_tensor_a.padded_shape()[-1] / TILE_WIDTH;
-
     if (this->dim == BcastOpDim::H) {
         if (input_tensor_a.is_sharded()) {
             if (input_tensor_a.padded_shape()[0] == input_tensor_b.padded_shape()[0] ||

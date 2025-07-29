@@ -60,15 +60,12 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto src_physical_device_id = mesh_device->get_device(mesh_coordinate)->id();
 
     const auto fabric_node_id = get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
-    const uint32_t src_mesh_id = *fabric_node_id.mesh_id;
     const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
 
-    const auto& input_shape = input_tensor.tensor_spec().logical_shape();
     const auto& mapping_shape = mapping_tensor.tensor_spec().logical_shape();
     const auto& metadata_shape = metadata_tensor.tensor_spec().logical_shape();
 
     const uint32_t num_devices = mesh_view.num_devices();
-    const uint32_t hidden_size = input_shape[-1];
     const uint32_t batch_size = metadata_shape[1];
     const uint32_t seq_size = metadata_shape[2];
     const uint32_t selected_experts_k = metadata_shape[-1];
@@ -162,11 +159,11 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     auto sender_core = sender_cores.at(0);
 
     // create circular buffers
-    const auto input_cb_handle = CreateCircularBuffer(program, sender_core, cb_data_config);
-    const auto mapping_cb_handle = CreateCircularBuffer(program, sender_core, cb_mapping_tensor_config);
-    const auto local_experts_cb_handle = CreateCircularBuffer(program, sender_core, cb_local_experts_config);
-    const auto metadata_cb_handle = CreateCircularBuffer(program, sender_core, cb_metadata_config);
-    const auto client_interface_cb = CreateCircularBuffer(program, sender_core, client_interface_cb_config);
+    CreateCircularBuffer(program, sender_core, cb_data_config);
+    CreateCircularBuffer(program, sender_core, cb_mapping_tensor_config);
+    CreateCircularBuffer(program, sender_core, cb_local_experts_config);
+    CreateCircularBuffer(program, sender_core, cb_metadata_config);
+    CreateCircularBuffer(program, sender_core, client_interface_cb_config);
 
     const uint32_t flat_mesh_idx = mesh_coordinate[0] * mesh_view.num_cols() + mesh_coordinate[1];
 
@@ -200,7 +197,6 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
     const auto& axis = operation_attributes.axis;
 
-    const uint32_t batch_replicate_dim = axis.has_value() ? mesh_device->shape()[axis.value()] : 1;
     const auto fabric_max_packet_size_bytes = get_tt_fabric_channel_buffer_size_bytes();
     const uint32_t max_packet_size_bytes =
         input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;

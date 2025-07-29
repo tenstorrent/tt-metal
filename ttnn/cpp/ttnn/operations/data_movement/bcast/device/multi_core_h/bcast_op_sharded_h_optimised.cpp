@@ -19,10 +19,8 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(
     const Tensor& a, const Tensor& b, const Tensor& output, BcastOpMath bcast_math /*, BcastOpDim bcast_dim*/) {
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
-    uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1, C = ashape.rank() >= 3 ? ashape[-3] : 1, H = ashape[-2],
-             W = ashape[-1];
-    uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1, bC = bshape.rank() >= 3 ? bshape[-3] : 1, bH = bshape[-2],
-             bW = bshape[-1];
+    uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1, C = ashape.rank() >= 3 ? ashape[-3] : 1, H = ashape[-2];
+    uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
     uint32_t NC = N * C;
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -102,9 +100,8 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(
     tt::tt_metal::CircularBufferConfig src1_cb_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * input1_tile_size, {{src1_cb_index, b_df}})
             .set_page_size(src1_cb_index, input1_tile_size);
-    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
 
-    auto src0_buffer = a.buffer();
     auto src1_buffer = b.buffer();
     auto dst_buffer = output.buffer();
     bool src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
@@ -217,7 +214,7 @@ operation::ProgramWithCallbacks bcast_sharded_h_optimised(
         uint32_t ncores = shard_spec.num_cores();
         uint32_t Wt = 0, Ht = 0;
         const auto ashape = input_tensors.at(0).padded_shape();
-        uint32_t N = ashape[0], C = ashape[1], H = ashape[2], W = ashape[3];
+        uint32_t N = ashape[0], C = ashape[1];
         uint32_t bN = input_tensors.at(1).padded_shape()[0];
         uint32_t NC = N * C;
         if (a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {

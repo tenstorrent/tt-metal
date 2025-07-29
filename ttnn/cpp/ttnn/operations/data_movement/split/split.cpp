@@ -37,7 +37,7 @@ std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor& input_tensor, 
         return impl_split_last_dim_two_chunks_tiled(input_tensor, mem_config);
     }
 
-    const int W = 1, Z = shape[0] * shape[1], Y = shape[2], X = shape[3];
+    const int Y = shape[2], X = shape[3];
     const Tensor& reshaped_tensor =
         ttnn::reshape_on_device(input_tensor, ttnn::SmallVector<int32_t>{1, -1, Y, X}, mem_config);
 

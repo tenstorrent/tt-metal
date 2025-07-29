@@ -33,7 +33,7 @@ operation::ProgramWithCallbacks nd_reshard_multicore_generic_naive(const Tensor&
     CBHandle cb_in0_idx = tt::CBIndex::c_0;
     auto c_in0_config = CircularBufferConfig(aligned_page_size * num_tiles_in_cb, {{cb_in0_idx, data_format}})
                             .set_page_size(cb_in0_idx, aligned_page_size);
-    auto cb_in0_id = CreateCircularBuffer(program, grid, c_in0_config);
+    CreateCircularBuffer(program, grid, c_in0_config);
 
     // Prepare compile time arguments
     auto compile_time_args_reader = input_accessor_args.get_compile_time_args();

@@ -27,7 +27,6 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     tt_metal::Buffer* out_buffer = output.buffer();
 
     IDevice* device = grad_tensor.device();
-    auto dst_addr = out_buffer->address();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
@@ -39,7 +38,6 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     bool index_is_dram = index_tensor_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
-    uint32_t grad_element_size_bytes = grad_tensor.element_size();
     uint32_t index_element_size_bytes = index_tensor.element_size();
     constexpr uint32_t INPUT_SIZE = 32;
 

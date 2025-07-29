@@ -34,7 +34,6 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
     TT_ASSERT(batch_ids.padded_shape()[-1] == b);
 
     // parallelize across batch
-    uint32_t num_units = B;
     uint32_t cb_index = 0;
     uint32_t batch_cb_index = 1;
 
@@ -45,14 +44,13 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(2 * rounded_page_size, {{cb_index, cb_data_format}})
             .set_page_size(cb_index, rounded_page_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    tt::DataFormat batch_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(batch_ids.dtype());
     uint32_t batch_page_size = round_up_to_mul32(b * sizeof(uint32_t));
     tt::tt_metal::CircularBufferConfig batch_cb_config =
         tt::tt_metal::CircularBufferConfig(2 * batch_page_size, {{batch_cb_index, cb_data_format}})
             .set_page_size(batch_cb_index, batch_page_size);
-    auto batch_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, batch_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, batch_cb_config);
 
     bool in0_is_dram = input_a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool in1_is_dram = input_b.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
