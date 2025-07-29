@@ -45,7 +45,7 @@ class DeepseekV3MoE_Experts(nn.Module):
 
 
 @pytest.fixture
-def reference_model(hf_config: Any | torch.Any):
+def reference_model(hf_config: Any):
     """Get the actual DeepSeek MLP model using local implementation."""
     torch.manual_seed(0)
     return DeepseekV3MoE_Experts(hf_config).eval()
