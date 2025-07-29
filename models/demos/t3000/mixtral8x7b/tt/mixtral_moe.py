@@ -134,6 +134,7 @@ class TtMoeLayer(LightweightModule):
         if mode == "prefill":
             output_11BH_gathered = ttnn.experimental.all_gather_async(
                 results_11BH,
+                persistent_output_buffer=None,
                 dim=1,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
@@ -151,6 +152,7 @@ class TtMoeLayer(LightweightModule):
         else:  # Decode mode
             output_11BH_gathered = ttnn.experimental.all_gather_async(
                 results_11BH,
+                persistent_output_buffer=None,
                 dim=2,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,

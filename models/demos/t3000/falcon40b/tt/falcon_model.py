@@ -313,6 +313,7 @@ class TtFalconModelShared:
 
         layer_output = ttnn.experimental.all_gather_async(
             layer_output,
+            persistent_output_buffer=None,
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
@@ -375,6 +376,7 @@ class TtFalconModelShared:
         )
         layer_output = ttnn.experimental.all_gather_async(
             layer_output,
+            persistent_output_buffer=None,
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
