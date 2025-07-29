@@ -306,7 +306,7 @@ void LlamaAllGatherMatmulAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     const std::vector<std::optional<Tensor>>& output_tensors) const {
-    TT_FATAL(input_tensors.size() == 3, "Error, Input tensor size should be 3 but has {}", input_tensors.size());
+    TT_FATAL(input_tensors.size() == 4, "Error, Input tensor size should be 4 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].layout();
     const auto& dtype = input_tensors[0].dtype();
@@ -410,7 +410,7 @@ std::vector<ttnn::TensorSpec> LlamaAllGatherMatmulAsync::compute_output_specs(
 std::vector<Tensor> LlamaAllGatherMatmulAsync::create_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
     // All Gather output tensor
-    auto& all_gather_output_tensor = optional_output_tensors.at(0).value();
+    auto& all_gather_output_tensor = input_tensors.at(2);
 
     // Matmul output tensor
     ttnn::Tensor matmul_output_tensor =
@@ -481,8 +481,8 @@ tt::tt_metal::operation::ProgramWithCallbacks LlamaAllGatherMatmulAsync::create_
             return llama_all_gather_mm_async_sharded(
                 input_tensors[0],   // in0
                 input_tensors[1],   // in1
-                output_tensors[0],  // intermediate_tensor
-                input_tensors[2],   // aggregated_tensor
+                input_tensors[2],   // intermediate_tensor
+                input_tensors[3],   // aggregated_tensor
                 output_tensors[1],  // mm output tensor
                 target_device,
                 forward_device,
@@ -600,7 +600,8 @@ Tensor llama_all_gather_matmul_async_impl(
 
     std::vector<std::optional<const Tensor>> optional_input_tensors = {};
     optional_input_tensors.push_back(std::nullopt);
-    std::vector<std::optional<Tensor>> optional_output_tensors = {intermediate_tensor};
+    std::vector<std::optional<Tensor>> optional_output_tensors = {};
+    optional_output_tensors.push_back(intermediate_tensor);
     // return tt::tt_metal::operation::run(
     //            ttnn::AllGatherReplicateAsync{
     //                {},
@@ -652,7 +653,7 @@ Tensor llama_all_gather_matmul_async_impl(
     //     .at(0);
     return tt::tt_metal::operation::run(
                llama_all_gather_matmul_async_struct,
-               {input_tensor, input_tensor_b, aggregated_tensor},
+               {input_tensor, input_tensor_b, intermediate_tensor, aggregated_tensor},
                optional_input_tensors,
                optional_output_tensors)
         .at(1);
