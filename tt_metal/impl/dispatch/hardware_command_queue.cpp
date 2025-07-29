@@ -42,6 +42,7 @@
 #include "data_collection.hpp"
 #include "ringbuffer_cache.hpp"
 #include "program/dispatch.hpp"
+#include <tt-metalium/graph_tracking.hpp>
 
 namespace tt {
 namespace tt_metal {

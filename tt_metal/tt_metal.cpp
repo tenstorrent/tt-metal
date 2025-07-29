@@ -51,6 +51,7 @@
 #include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
 #include "fabric/hw/inc/fabric_routing_mode.h"
+#include <tt-metalium/graph_tracking.hpp>
 
 namespace tt {
 
@@ -498,6 +499,10 @@ DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uin
 }
 
 void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+    if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
+        return;
+    }
+
     size_t host_buffer_size_bytes = host_buffer.size();
     TT_FATAL(
         host_buffer_size_bytes <= buffer.size(),

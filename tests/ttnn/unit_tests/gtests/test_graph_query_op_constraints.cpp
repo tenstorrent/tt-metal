@@ -779,7 +779,6 @@ INSTANTIATE_TEST_SUITE_P(
 
 class Conv2dOpIfTest : public ttnn::TTNNFixtureWithDevice {};
 TEST_F(Conv2dOpIfTest, Conv2d) {
-    GTEST_SKIP();
     const auto input_spec = ttnn::TensorSpec(
         ttnn::Shape{1, 1, 50176, 3},
         tt::tt_metal::TensorLayout(
@@ -810,9 +809,6 @@ TEST_F(Conv2dOpIfTest, Conv2d) {
     const uint32_t groups = 1;
 
     const BoardType board_type = tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0);
-    if (board_type != BoardType::N300 && board_type != BoardType::E150) {
-        GTEST_SKIP();
-    }
 
     // Run the test
     {
