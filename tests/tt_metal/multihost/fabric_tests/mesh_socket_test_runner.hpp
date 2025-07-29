@@ -172,7 +172,6 @@ private:
     MeshShape mesh_shape_;
 
     // Default test parameters
-    static constexpr uint32_t DEFAULT_NUM_TRANSACTIONS = 20;
     static constexpr uint32_t DEFAULT_NUM_ITERATIONS = 1;
 };
 

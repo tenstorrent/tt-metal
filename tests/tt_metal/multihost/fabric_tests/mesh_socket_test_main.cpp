@@ -50,6 +50,5 @@ int main(int argc, char* argv[]) {
     runner.run_all_tests();
 
     // Cleanup is handled automatically by destructor
-    log_info(tt::LogTest, "All tests completed successfully!");
     return 0;
 }
