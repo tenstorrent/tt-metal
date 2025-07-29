@@ -37,7 +37,7 @@ class TokenAccuracy:
         self.reference_tokens = reference_data["reference_tokens"]
         split_point = self.reference_tokens.shape[-1] // 2
         self.input_prompt = self.reference_tokens[0, :split_point]
-        self.gt_tokens = reference_data["reference_tokens"][0, split_point:]
+        self.gt_tokens = self.reference_tokens[0, split_point:]
         self.top5_tokens = reference_data["top5_tokens"][split_point - 1 :, :]
         self.maxindex = len(self.gt_tokens) - 1
 
@@ -48,7 +48,6 @@ class TokenAccuracy:
     def collect_predicted_tokens(self, tokens):
         self.store_predicted_tokens.append(tokens)
         self.gt_pos += 1
-        print(self.gt_pos)
         return self.gt_tokens[min(self.gt_pos, self.maxindex)].unsqueeze(-1).unsqueeze(-1)
 
     def compute_accuracy(self):
