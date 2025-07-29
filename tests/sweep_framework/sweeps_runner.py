@@ -94,7 +94,11 @@ def run(test_module, input_queue, output_queue):
     try:
         while True:
             test_vector = input_queue.get(block=True, timeout=1)
-            test_vector = deserialize_vector(test_vector)
+            # Use appropriate deserialization based on database backend
+            if DATABASE_BACKEND == "postgres":
+                test_vector = deserialize_vector_for_postgres(test_vector)
+            else:  # DATABASE_BACKEND == "elastic"
+                test_vector = deserialize_vector(test_vector)
             try:
                 results = test_module.run(**test_vector, device=device)
                 if type(results) == list:
@@ -162,7 +166,13 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
         # Capture the original test vector data BEFORE any modifications
         original_vector_data = test_vector.copy()
 
-        if deserialize(test_vector["validity"]) == VectorValidity.INVALID:
+        # Use appropriate deserialization based on database backend
+        if DATABASE_BACKEND == "postgres":
+            validity = deserialize_for_postgres(test_vector["validity"])
+        else:  # DATABASE_BACKEND == "elastic"
+            validity = deserialize(test_vector["validity"])
+
+        if validity == VectorValidity.INVALID:
             result["status"] = TestStatus.NOT_RUN
             result["exception"] = "INVALID VECTOR: " + test_vector["invalid_reason"]
             result["e2e_perf"] = None
@@ -357,7 +367,7 @@ def export_test_results_json(header_info, results):
             if elem == "device_perf":
                 result[elem] = results[i][elem]
                 continue
-            result[elem] = serialize(results[i][elem])
+            result[elem] = serialize_for_postgres(results[i][elem])
         new_data.append(result)
 
     if EXPORT_PATH.exists():

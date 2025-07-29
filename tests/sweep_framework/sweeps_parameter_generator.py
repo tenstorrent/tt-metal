@@ -12,7 +12,7 @@ import hashlib
 import json
 
 from framework.permutations import *
-from framework.serialize import serialize
+from framework.serialize import serialize, serialize_for_postgres
 from framework.statuses import VectorValidity, VectorStatus
 from framework.sweeps_logger import sweeps_logger as logger
 
@@ -65,7 +65,7 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
     for i in range(len(vectors)):
         vector = dict()
         for elem in vectors[i].keys():
-            vector[elem] = serialize(vectors[i][elem], warnings)
+            vector[elem] = serialize_for_postgres(vectors[i][elem], warnings)
         input_hash = hashlib.sha224(str(vector).encode("utf-8")).hexdigest()
         vector["timestamp"] = current_time
         vector["input_hash"] = input_hash
