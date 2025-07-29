@@ -13,7 +13,6 @@ target_link_libraries(
         TT::Metalium::Test::Dispatch::Smoke
         TT::Metalium::Test::SFPI
         TT::Metalium::Test::STL::Smoke
-        TT::NN::Test::CCL::Ops
 )
 
 install(TARGETS tt-metalium-validation-smoke RUNTIME COMPONENT metalium-validation)

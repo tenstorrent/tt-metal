@@ -109,16 +109,10 @@ target_sources(unit_tests_ttnn_ccl_ops PRIVATE ${UNIT_TESTS_TTNN_CCL_OPS_SRC})
 setup_ttnn_test_target(unit_tests_ttnn_ccl_ops)
 
 add_library(unit_tests_ttnn_ccl_ops_lib OBJECT)
-add_library(TT::NN::Test::CCL::Ops ALIAS unit_tests_ttnn_ccl_ops_lib)
+add_library(TTNN::Test::CCL::Ops ALIAS unit_tests_ttnn_ccl_ops_lib)
 target_sources(unit_tests_ttnn_ccl_ops_lib PRIVATE ${UNIT_TESTS_TTNN_CCL_OPS_SRC})
 
-target_link_libraries(
-    unit_tests_ttnn_ccl_ops_lib
-    PRIVATE
-        tt_metal
-        test_common_libs
-        TTNN::CPP
-)
+setup_ttnn_test_target(unit_tests_ttnn_ccl_ops_lib)
 
 # unit_tests_ttnn_multihost_ccl_ops
 add_executable(unit_tests_ttnn_multihost_ccl_ops)
