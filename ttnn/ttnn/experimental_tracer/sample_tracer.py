@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import argparse
 from tracer_backend import trace_torch_model
 from generate_pytorch_unittest_graph import (
@@ -86,7 +90,7 @@ def main(args_dict):
         from ultralytics import YOLO
 
         torch_model = YOLO("yolo12n.pt").model
-         
+
     elif args.model == "yolov8s_world":
         from models.demos.yolov8s_world.reference.yolov8s_world import YOLOWorld
 

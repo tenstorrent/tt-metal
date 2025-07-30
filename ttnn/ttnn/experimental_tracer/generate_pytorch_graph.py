@@ -1,7 +1,12 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import networkx as nx
 from tracer_backend import OperationGraph
 import os
 from pytorch_graph_utils import format_file_with_black
+
 
 class PytorchGraph:
     def __init__(self, operation_graph: OperationGraph):
@@ -15,8 +20,6 @@ class PytorchGraph:
             if operation:
                 code_lines.append(operation.generate_code())
         return "\n".join(code_lines)
-
- 
 
     def dump_to_python_file(self, file_path: str, format_code: bool = False):
         """Dump the generated PyTorch code into a Python file."""
@@ -32,4 +35,3 @@ class PytorchGraph:
         # Run black on the generated file
         if format_code:
             format_file_with_black(file_path)
-  

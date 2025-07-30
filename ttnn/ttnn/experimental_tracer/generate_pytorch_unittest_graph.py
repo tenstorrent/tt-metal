@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import networkx as nx
 from tracer_backend import OperationGraph, Operation
 from tracer_backend_utils import ConvAttrs, PoolAttrs, AtenConvolution, AtenAddm, AtenMaxPool2dWithIndices
@@ -17,7 +21,6 @@ HEADER_IMPORTS = set(
 
 
 class UnitTestOperation:
-
     def generate_code(self, indent="") -> str:
         """Generate the code for this unit test operation."""
         raise NotImplementedError("Subclasses should implement this method.")
@@ -256,7 +259,7 @@ class AddmGroupUnittest(UnitTestOperation):
 def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_size, dtype):
     torch.manual_seed(0)
     if device.core_grid.y == 7:
-        pytest.skip("Issue #6984: Compute Grid size too small") 
+        pytest.skip("Issue #6984: Compute Grid size too small")
 
     torch_input_tensor_a = torch.randn((batch_size, channel_a, m_size, k_size), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.randn((batch_size, channel_b, k_size, n_size), dtype=torch.bfloat16)
@@ -278,7 +281,6 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
 
 
 class UnitTestOperationCombiner:
-
     @staticmethod
     def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
         """Combine a group unit test operations into one."""
@@ -286,7 +288,6 @@ class UnitTestOperationCombiner:
 
 
 class ConvolutionCombiner(UnitTestOperationCombiner):
-
     @staticmethod
     def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
         """Combine multiple convolution operations into a single one."""
@@ -299,7 +300,6 @@ class ConvolutionCombiner(UnitTestOperationCombiner):
 
 
 class AddmCombiner(UnitTestOperationCombiner):
-
     @staticmethod
     def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
         """Combine multiple addm operations into a single one."""
@@ -312,7 +312,6 @@ class AddmCombiner(UnitTestOperationCombiner):
 
 
 class Maxpool2dCombiner(UnitTestOperationCombiner):
-
     @staticmethod
     def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
         """Combine multiple maxpool2d operations into a single one."""

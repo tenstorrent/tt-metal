@@ -1,8 +1,13 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 
 def format_file_with_black(file_path: str):
     """Format the generated code using black."""
     try:
         import black
+
         with open(file_path, "r") as f:
             content = f.read()
         formatted_content = black.format_file_contents(content, fast=True, mode=black.FileMode())
