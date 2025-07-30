@@ -1,0 +1,1 @@
+../../../../models/demos/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py

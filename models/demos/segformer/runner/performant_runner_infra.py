@@ -8,21 +8,22 @@ import torch
 import torch.nn.functional as F
 from loguru import logger
 from PIL import Image
-from transformers import SegformerForSemanticSegmentation, SegformerImageProcessor
+from transformers import SegformerImageProcessor
 from ttnn.model_preprocessing import ParameterDict, ParameterList, preprocess_model_parameters
 
 import ttnn
+from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_for_semantic_segmentation import (
     SegformerForSemanticSegmentationReference,
 )
-from models.demos.segformer.tt.ttnn_segformer_for_semantic_segmentation import TtSegformerForSemanticSegmentation
-from models.utility_functions import divup, is_wormhole_b0
-from tests.ttnn.integration_tests.segformer.test_segformer_decode_head import (
+from models.demos.segformer.tests.pcc.test_segformer_decode_head import (
     create_custom_preprocessor as create_custom_preprocessor_decode_head,
 )
-from tests.ttnn.integration_tests.segformer.test_segformer_model import (
+from models.demos.segformer.tests.pcc.test_segformer_model import (
     create_custom_preprocessor as create_custom_preprocessor_model,
 )
+from models.demos.segformer.tt.ttnn_segformer_for_semantic_segmentation import TtSegformerForSemanticSegmentation
+from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -60,19 +61,11 @@ def move_to_device(object, device):
 
 
 def load_segformer_torch_model(device, model_location_generator=None):
-    torch_model = SegformerForSemanticSegmentation.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
-    config = torch_model.config
-    reference_model = SegformerForSemanticSegmentationReference(config=config)
-    state_dict = torch_model.state_dict()
-    new_state_dict = {}
-    keys = [name for name, parameter in reference_model.state_dict().items()]
-    values = [parameter for name, parameter in state_dict.items()]
-    for i in range(len(keys)):
-        new_state_dict[keys[i]] = values[i]
-
-    reference_model.load_state_dict(new_state_dict)
-    reference_model.eval()
-
+    config = load_config("configs/segformer_semantic_config.json")
+    reference_model = SegformerForSemanticSegmentationReference(config)
+    reference_model = load_torch_model(
+        reference_model, f"", module="semantic_sub", model_location_generator=model_location_generator
+    )
     parameters = preprocess_model_parameters(
         initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device), device=None
     )
@@ -101,7 +94,7 @@ class SegformerTestInfra:
         self.pcc_message = "Did you forget to call validate()?"
         self.device = device
         self.model_location_generator = model_location_generator
-        self.reference_model, config, self.parameters = load_segformer_torch_model(device)
+        self.reference_model, config, self.parameters = load_segformer_torch_model(device, model_location_generator)
         self.ttnn_segformer_model = TtSegformerForSemanticSegmentation(config, self.parameters)
 
         processor = SegformerImageProcessor.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")

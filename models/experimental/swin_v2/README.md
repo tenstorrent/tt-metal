@@ -30,5 +30,5 @@ To run the inference, make sure to build the project, activate the environment, 
 Command to run the inference pipeline with random weights and random tensor:
 
 ```
-pytest models/experimental/swin_v2/tests/test_ttnn_swin_v2_s.py
+pytest models/experimental/swin_v2/tests/pcc/test_ttnn_swin_v2_s.py
 ```

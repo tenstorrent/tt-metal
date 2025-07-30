@@ -13,11 +13,8 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
-def run_trace_2cq_model(device, batch_size=8):
-    test_infra = create_test_infra(
-        device,
-        batch_size,
-    )
+def run_trace_2cq_model(device, batch_size=8, model_location_generator=None):
+    test_infra = create_test_infra(device, batch_size, model_location_generator=model_location_generator)
 
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)

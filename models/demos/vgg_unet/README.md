@@ -30,20 +30,20 @@ For more information, refer to the [installation and build guide](https://docs.t
 Command to run the inference pipeline with random weights and random tensor:
 
 ```sh
-pytest tests/ttnn/integration_tests/vgg_unet/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_false]
+pytest models/demos/vgg_unet/tests/pcc/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_false]
 ```
 
 Command to run the inference pipeline with trained weights:
 
 ```sh
-pytest tests/ttnn/integration_tests/vgg_unet/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_true]
+pytest models/demos/vgg_unet/tests/pcc/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_true]
 ```
 
 ### Performant Model with Trace+2CQ
 
 Use the following command to run the e2e perf with trace 2cq:
 ```sh
-pytest models/demos/vgg_unet/tests/test_e2e_performant.py
+pytest models/demos/vgg_unet/tests/perf/test_e2e_performant.py
 ```
 - end-2-end perf with Trace+2CQs is 80 FPS
 

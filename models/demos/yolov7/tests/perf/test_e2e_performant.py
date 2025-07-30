@@ -34,7 +34,6 @@ sys.modules["models.yolo"] = yolov7_model
     ],
 )
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.models_performance_virtual_machine
 def test_e2e_performant(
     device,
     batch_size,
@@ -49,7 +48,7 @@ def test_e2e_performant(
         act_dtype,
         weight_dtype,
         resolution=resolution,
-        model_location_generator=None,
+        model_location_generator=model_location_generator,
     )
     performant_runner._capture_yolov7_trace_2cqs()
     input_shape = (1, 3, *resolution)

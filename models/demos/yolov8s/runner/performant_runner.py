@@ -14,10 +14,18 @@ except ModuleNotFoundError:
 
 
 class YOLOv8sPerformantRunner:
-    def __init__(self, device, device_batch_size, act_dtype=ttnn.bfloat16, weight_dtype=ttnn.bfloat16):
+    def __init__(
+        self,
+        device,
+        device_batch_size,
+        act_dtype=ttnn.bfloat16,
+        weight_dtype=ttnn.bfloat16,
+        model_location_generator=None,
+    ):
         self.runner_infra = YOLOv8sPerformanceRunnerInfra(
             device,
             device_batch_size,
+            model_location_generator=model_location_generator,
         )
         self.device = device
         (

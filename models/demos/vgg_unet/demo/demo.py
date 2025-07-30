@@ -7,11 +7,11 @@ from warnings import filterwarnings
 
 import kagglehub
 import pytest
-import torch
 
+from models.demos.vgg_unet.common import load_torch_model
 from models.demos.vgg_unet.demo.demo_utils import postprocess, prediction, preprocess, process_single_image
 from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
-from models.demos.vgg_unet.tests.vgg_unet_e2e_performant import VggUnetTrace2CQ
+from models.demos.vgg_unet.tests.perf.vgg_unet_e2e_performant import VggUnetTrace2CQ
 from models.utility_functions import disable_persistent_kernel_cache
 
 for dirname, _, filenames in os.walk("/kaggle/input"):
@@ -57,9 +57,7 @@ def test_demo(device, model_location_generator, reset_seeds, demo_type, model_ty
             print(os.path.join(dirname, filename))
     model_seg = UNetVGG19()
     if use_pretrained_weight:
-        if not os.path.exists("models/demos/vgg_unet/vgg_unet_torch.pth"):
-            os.system("bash models/demos/vgg_unet/weights_download.sh")
-        model_seg.load_state_dict(torch.load("models/demos/vgg_unet/vgg_unet_torch.pth"))
+        model_seg = load_torch_model(model_seg, model_location_generator)
     model_seg.eval()  # Set to evaluation mode
 
     if model_type == "ttnn_model":
