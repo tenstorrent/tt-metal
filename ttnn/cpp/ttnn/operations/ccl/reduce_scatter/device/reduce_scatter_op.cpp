@@ -51,9 +51,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatter::create_program_at(
     const MeshCoordinate& mesh_coord,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    uint32_t device_index = 0;
-    std::optional<chip_id_t> receiver_device_id;
-    std::optional<chip_id_t> sender_device_id;
     auto target_device = input_tensors.at(0).mesh_device() ? input_tensors.at(0).mesh_device()->get_device(mesh_coord)
                                                            : input_tensors.at(0).device();
     ccl::SenderRecieverConfig config =

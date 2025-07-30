@@ -62,7 +62,10 @@ class TtYOLOv7Conv2D:
             shard_layout=self.shard_layout,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             enable_split_reader=self.enable_split_reader,
-            enable_act_double_buffer=self.enable_act_double_buffer,
+            enable_act_double_buffer=True
+            if self.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            else self.enable_act_double_buffer,
+            enable_weights_double_buffer=True if self.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED else False,
             deallocate_activation=self.deallocate_activation,
         )
         compute_config = ttnn.init_device_compute_kernel_config(

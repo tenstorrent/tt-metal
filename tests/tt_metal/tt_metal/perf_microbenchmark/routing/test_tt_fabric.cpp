@@ -28,10 +28,10 @@ const std::unordered_map<std::pair<Topology, RoutingType>, FabricConfig, tt::tt_
 };
 
 int main(int argc, char** argv) {
+    log_info(tt::LogTest, "Starting Test");
     std::vector<std::string> input_args(argv, argv + argc);
 
     auto fixture = std::make_shared<TestFixture>();
-    fixture->init();
 
     // Parse command line and YAML configurations
     CmdlineParser cmdline_parser(input_args);
@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
 
     std::vector<ParsedTestConfig> raw_test_configs;
     tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies;
-
+    std::optional<tt::tt_fabric::fabric_tests::PhysicalMeshConfig> physical_mesh_config = std::nullopt;
     if (auto yaml_path = cmdline_parser.get_yaml_config_path()) {
         YamlConfigParser yaml_parser;
         auto parsed_yaml = yaml_parser.parse_file(yaml_path.value());
@@ -51,9 +51,14 @@ int main(int argc, char** argv) {
         if (parsed_yaml.allocation_policies.has_value()) {
             allocation_policies = parsed_yaml.allocation_policies.value();
         }
+        if (parsed_yaml.physical_mesh_config.has_value()) {
+            physical_mesh_config = parsed_yaml.physical_mesh_config;
+        }
     } else {
         raw_test_configs = cmdline_parser.generate_default_configs();
     }
+
+    fixture->init(physical_mesh_config);
 
     TestContext test_context;
     test_context.init(fixture, allocation_policies);
@@ -75,9 +80,9 @@ int main(int argc, char** argv) {
 
     std::optional<uint32_t> master_seed = cmdline_parser.get_master_seed();
     if (!master_seed.has_value()) {
-        master_seed = std::random_device()();
-        log_info(tt::LogTest, "No master seed provided. Using randomly generated seed: {}", master_seed.value());
+        master_seed = test_context.get_randomized_master_seed();
     }
+
     std::mt19937 gen(master_seed.value());
 
     // fixture is passed twice since it implements both interfaces
@@ -98,7 +103,12 @@ int main(int argc, char** argv) {
         std::filesystem::path dump_file_path = dump_file_dir / dump_file;
         output_stream.open(dump_file_path, std::ios::out | std::ios::trunc);
 
-        // dump allocation policies first
+        // dump physical mesh first
+        if (physical_mesh_config.has_value()) {
+            YamlTestConfigSerializer::dump(physical_mesh_config.value(), output_stream);
+        }
+
+        // dump allocation policies second
         YamlTestConfigSerializer::dump(allocation_policies, output_stream);
     }
 
@@ -138,7 +148,7 @@ int main(int argc, char** argv) {
             log_info(tt::LogTest, "Launching programs");
             test_context.launch_programs();
 
-            test_context.wait_for_prorgams();
+            test_context.wait_for_programs();
             log_info(tt::LogTest, "Test {} Finished.", built_test.name);
 
             test_context.validate_results();
@@ -147,7 +157,8 @@ int main(int argc, char** argv) {
             if (test_context.get_benchmark_mode()) {
                 test_context.profile_results(built_test);
             }
-
+            // Synchronize across all hosts after running the current test variant
+            fixture->barrier();
             test_context.reset_devices();
         }
     }

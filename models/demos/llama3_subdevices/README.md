@@ -8,6 +8,7 @@ This version of LLama-3.3-70B is tuned for inference performance, achieving comp
 
 Read more about this model at the huggingface page for [Llama-3.3-70B-Instruct](https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct).
 
+
 ### Key Features
 - **Paged Attention**: Efficient memory management for long-context inference
 - **Batch Inference**: Supports up to 32 users per batch
@@ -69,9 +70,13 @@ We also provide other input prompt files with longer sequence lengths. They can 
 #### Decode-only Demo
 We also provide a decode-only demo. This demo will run prefill as decode and is intended for developers actively working on the decode side of the model. It can be run with the command:
 
-```
-pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "full"
-```
+For convenience we also have some of this parametrized in the demo. These are the current pre-configs we have:
+- `performance-long-4k-b1`,  # 4k input prompt context for 1 user
+- `performance-long-8k-b1`,  # 8k input prompt context for 1 user
+- `performance-long-16k-b32`, # 16K input prompt context for 32 users
+- `performance-long-32k-b1`,  # 32k input prompt context for 1 user
+- `performance-long-64k-b1`,  # 64k input prompt context for 1 user
+- `performance-long-128k-b1`, # 64k input prompt context for 1 user
 
 It supports the following parameters:
 
@@ -109,7 +114,6 @@ Please note that when using line CCL implementations the maximum sequence length
 
 
 ## Details
-
 ### Demo parameters
 - All of the parametrized input prompt files will run prefill (up to their specified sequence lengths) and run 128 decode iterations.
 - We also support any arbitrary sequence input sequence length up to 128K tokens. You can test with your own input prompts. Check the next section for more information on the input prompt file format.
@@ -139,7 +143,6 @@ This would run the same test as 64K but with a 128K input prompt instead.
 - **print_outputs**: [Debug Flag] Prints each user's tokens at every decode iteration. Leave False for accurate e2e performance numbers.
 
 ### Input Prompts
-
 Input prompts should be provided as a JSON file, with each entry containing a prompt and optionally a context and max_length (equivalent to the number of characters in the prompt, not tokens!). Please refer to the ones already provided in `models/demos/llama3_subdevices/demo/sample_prompts/`.
 
 You can try and change the `max_length` parameter on the provided prompt files to test different input sequence lengths, as long as they don't surpass 128K tokens.
@@ -158,7 +161,6 @@ You can try and change the `max_length` parameter on the provided prompt files t
 ```
 
 ### vLLM Model Serving
-
 Ensure first you have a proper TT-Metal installation. (Optional check: `python -c "import tt_lib"`).
 
 vLLM can be install from the TT fork over at https://github.com/tenstorrent/vllm/tree/dev (make sure you're at `dev` branch).
@@ -167,7 +169,6 @@ Please follow the [README from vLLM](https://github.com/tenstorrent/vllm/blob/de
 
 
 #### Running the vLLM server
-
 To run a vLLM server on a Galaxy system with Llama-3.3-70B you can execute the following command:
 ```
 VLLM_RPC_TIMEOUT=900000 python examples/server_example_tt.py --model "meta-llama/Llama-3.3-70B-Instruct" --override_tt_config '{"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 95693824}' --num_scheduler_steps 30

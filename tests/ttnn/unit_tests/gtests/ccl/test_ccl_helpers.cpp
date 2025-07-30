@@ -220,7 +220,6 @@ TEST(CclHelper_AdvanceSliceRowMajor, InnerOffset_0_0__InnerShape_1_1__OuterShape
     ASSERT_EQ(result.y, expected.y);
 }
 TEST(CclHelper_AdvanceSliceRowMajor, InnerOffset_1_1__InnerShape_1_1__OuterShape_2_2__NumActiveSlices_3) {
-    const auto expected = ttnn::ccl::coord_t(1, 1);
     const auto outer_shape = ttnn::ccl::coord_t(2, 2);
     const auto inner_offset = ttnn::ccl::coord_t(1, 1);
     const auto inner_shape = ttnn::ccl::coord_t(1, 1);
@@ -346,7 +345,6 @@ TEST(CclHelper_AdvanceWrappedSliceRowMajor, InnerOffset_0_0__InnerShape_1_1__Out
     ASSERT_EQ(result.y, expected.y);
 }
 TEST(CclHelper_AdvanceWrappedSliceRowMajor, InnerOffset_1_1__InnerShape_1_1__OuterShape_2_2__NumActiveSlices_3) {
-    const auto expected = ttnn::ccl::coord_t(1, 1);
     const auto outer_shape = ttnn::ccl::coord_t(2, 2);
     const auto inner_offset = ttnn::ccl::coord_t(1, 1);
     const auto inner_shape = ttnn::ccl::coord_t(1, 1);

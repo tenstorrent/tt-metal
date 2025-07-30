@@ -79,6 +79,8 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::LEZ:
         case UnaryOpType::GEZ:
         case UnaryOpType::NEZ: return "SFPU_OP_UNARY_COMP_INCLUDE";
+        case UnaryOpType::HARDSIGMOID: return "SFPU_OP_ACTIVATIONS_INCLUDE";
+        case UnaryOpType::WHERE_TSS: return "SFPU_OP_WHERE_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -357,7 +359,18 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             }
             break;
         case UnaryOpType::HARDSHRINK: op_init_and_name = {}; break;
-
+        case UnaryOpType::WHERE_TSS: {
+            std::string where_call;
+            if (input_dtype == DataType::INT32) {
+                where_call = fmt::format("where_int32_tile({}, {}, {});", idst, 1, 2);
+            } else if (input_dtype == DataType::FLOAT32) {
+                where_call = fmt::format("where_fp32_tile({}, {}, {});", idst, 1, 2);
+            } else {
+                where_call = fmt::format("where_tile({}, {}, {});", idst, 1, 2);
+            }
+            op_init_and_name = std::make_pair("where_tile_init();", where_call);
+            break;
+        }
         default: TT_THROW("unexpected parameterized op type {}", op_type);
     };
     return op_init_and_name;
@@ -549,6 +562,9 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
         case UnaryOpType::ALT_COMPLEX_ROTATE90:
             op_init_and_name = {"alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
             break;
+        case UnaryOpType::HARDSIGMOID:
+            op_init_and_name = {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
+            break;
         case UnaryOpType::MISH: op_init_and_name = {}; break;
         case UnaryOpType::IDENTITY: op_init_and_name = {}; break;
         case UnaryOpType::TANHSHRINK: op_init_and_name = {}; break;
@@ -677,6 +693,7 @@ std::string get_compute_kernel_path(
         case UnaryOpType::MISH: return fmt::format("{}/{}", compute_root, "mish_kernel.cpp");
         case UnaryOpType::TANHSHRINK: return fmt::format("{}/{}", compute_root, "tanhshrink_kernel.cpp");
         case UnaryOpType::IDENTITY: return fmt::format("{}/{}", compute_root, "eltwise_identity_kernel.cpp");
+        case UnaryOpType::WHERE_TSS: return fmt::format("{}/{}", compute_root, "where_tss_kernel.cpp");
         case UnaryOpType::HARDSHRINK:
             if (input_dtype.has_value() && input_dtype.value() == DataType::FLOAT32) {
                 return fmt::format("{}/{}", compute_root, "hardshrink_kernel_sfpu.cpp");
@@ -685,6 +702,13 @@ std::string get_compute_kernel_path(
             }
         default: return fmt::format("{}/{}", compute_root, "eltwise_sfpu.cpp");
     }
+}
+
+uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype) {
+    if (dtype == DataType::INT32) {
+        return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
+    }
+    return std::bit_cast<uint32_t>(scalar);
 }
 
 }  // namespace ttnn::operations::unary::utils

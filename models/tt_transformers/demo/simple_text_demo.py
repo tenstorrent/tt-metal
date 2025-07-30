@@ -736,10 +736,8 @@ def test_demo_text(
 
         user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
 
-        # TODO Argmax on device is only supported for batch_size=1 (per submesh)
-        argmax_on_device = (
-            False if (global_batch_size // data_parallel > 1 or sampling_params["temperature"] != 0) else True
-        )
+        # Currently only supporting greedy decoding (temperature=0) on device
+        argmax_on_device = sampling_params["temperature"] == 0
         if argmax_on_device:
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
         else:
@@ -1080,7 +1078,7 @@ def test_demo_text(
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better
-                "N150_Llama-3.2-1B": 58,
+                "N150_Llama-3.2-1B": 65,
                 "N150_Llama-3.2-3B": 35,
                 "N150_Llama-3.1-8B": 21,
                 "N150_Mistral-7B": 23,
@@ -1089,7 +1087,7 @@ def test_demo_text(
                 # T3K targets
                 "T3K_Llama-3.1-70B": 14,
                 "T3K_Qwen2.5-72B": 13,
-                "T3K_Qwen2.5-Coder-32B": 19,
+                "T3K_Qwen2.5-Coder-32B": 21,
                 "T3K_Qwen3-32B": 20,
             }
 

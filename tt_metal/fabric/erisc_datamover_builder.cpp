@@ -153,13 +153,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     next_l1_addr += eth_channel_sync_size;
 
     // Ethernet txq IDs on WH are 0,1 and on BH are 0,1,2.
-    // if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
-    //     this->receiver_txq_id = 1;
-    // }
-    // Disabled for now
-    // TODO(Sean) to re-enable this with a follow up PR
-    this->num_riscv_cores = 1;
-    // tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
+    if (tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+        this->receiver_txq_id = 1;
+    }
+    this->num_riscv_cores = get_num_riscv_cores();
     for (uint32_t risc_id = 0; risc_id < this->num_riscv_cores; risc_id++) {
         this->risc_configs.emplace_back(risc_id);
     }
@@ -191,6 +188,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     this->edm_status_address = edm_local_sync_address + field_size;
 
     uint32_t buffer_address = edm_status_address + field_size;
+
     for (uint32_t i = 0; i < FabricEriscDatamoverConfig::num_receiver_channels; i++) {
         this->receiver_channels_counters_address[i] = buffer_address;
         buffer_address += receiver_channel_counters_size_bytes;
@@ -257,9 +255,6 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     std::array<size_t, num_receiver_channels>& num_receiver_buffer_slots,
     std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots,
     std::array<size_t, num_downstream_sender_channels>& num_downstream_sender_buffer_slots) {
-    static const std::vector<std::vector<std::pair<size_t, size_t>>> linear_buffer_slot_options = {
-        {{8, 16}}, {{8, 16}}};
-
     static const std::vector<std::vector<std::pair<size_t, size_t>>> ring_buffer_slot_options = {
         {{8, 8}, {4, 8}}, {{8, 8}, {4, 8}}};
 
@@ -273,6 +268,18 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     static const std::vector<std::vector<std::vector<std::pair<size_t, size_t>>>>
         ring_buffer_slot_options_dateline_upstream_adjcent = {
             {{{16, 8}, {8, 8}}, {{16, 8}, {8, 8}}}, {{{16, 8}, {8, 8}}, {{16, 8}, {8, 8}}}};
+
+    auto get_num_buffer_slots = [](Topology topology) -> const std::vector<std::pair<size_t, size_t>>& {
+        static tt::stl::Indestructible<std::vector<std::pair<size_t, size_t>>> mesh_slots(
+            std::vector<std::pair<size_t, size_t>>{{4, 8}});
+        static tt::stl::Indestructible<std::vector<std::pair<size_t, size_t>>> other_slots(
+            std::vector<std::pair<size_t, size_t>>{{8, 16}});
+        if (topology == Topology::Mesh) {
+            return mesh_slots.get();
+        } else {
+            return other_slots.get();
+        }
+    };
 
     auto get_optimal_num_slots = [this](
                                      auto& buffer_slot_options,
@@ -477,7 +484,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
         size_t default_num_sender_buffer_slots;
         size_t default_num_receiver_buffer_slots;
         get_optimal_num_slots(
-            linear_buffer_slot_options[arch_index],
+            get_num_buffer_slots(topology),
             this->num_used_sender_channels,
             this->num_used_receiver_channels,
             default_num_sender_buffer_slots,
@@ -809,9 +816,10 @@ void append_worker_to_fabric_edm_sender_rt_args(
     // copy "only" connections[eth_channel] to L1, not the whole tensix_fabric_connections_l1_info_t
     // because this function is called several times for same device which overwrites info written by previous calls
     tt::tt_fabric::tensix_fabric_connections_l1_info_t fabric_connections = {};
-    auto& connection_info = fabric_connections.connections[eth_channel];
+    auto& connection_info = fabric_connections.read_only[eth_channel];
     connection_info.edm_direction = connection.edm_direction;
-    connection_info.edm_noc_xy = tt::tt_fabric::WorkerXY(connection.edm_noc_x, connection.edm_noc_y).to_uint32();
+    connection_info.edm_noc_x = connection.edm_noc_x;
+    connection_info.edm_noc_y = connection.edm_noc_y;
     connection_info.edm_buffer_base_addr = connection.edm_buffer_base_addr;
     connection_info.num_buffers_per_channel = connection.num_buffers_per_channel;
     connection_info.edm_l1_sem_addr = connection.edm_l1_sem_addr;
@@ -824,7 +832,7 @@ void append_worker_to_fabric_edm_sender_rt_args(
     //       we want to reduce the number of write_core calls
     fabric_connections.valid_connections_mask |= (1u << eth_channel);
 
-    size_t connection_offset = offsetof(tt::tt_fabric::tensix_fabric_connections_l1_info_t, connections) +
+    size_t connection_offset = offsetof(tt::tt_fabric::tensix_fabric_connections_l1_info_t, read_only) +
                                eth_channel * sizeof(tt::tt_fabric::fabric_connection_info_t);
     // Write to Tensix cores
     std::vector<CoreCoord> worker_core_coords = corerange_to_cores(worker_cores, std::nullopt, true);

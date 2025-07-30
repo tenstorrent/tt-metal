@@ -59,8 +59,6 @@ Current best example can be found in the training framework here:
 All tests can be found under tests/ttnn
 
 #### What is the difference between each kind of test?
- * tests/ttnn/integration_tests
-     * Demonstrates the inference models built with ttnn
  * tests/ttnn/sweep_tests
      * Used to check coverage of what is and what is NOT supported
      * Tests can be added well before the actual implementation is finished

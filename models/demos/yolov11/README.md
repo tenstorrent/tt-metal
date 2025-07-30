@@ -23,12 +23,12 @@
 
 - Use the following command to run the model:
 ```
-pytest --disable-warnings tests/ttnn/integration_tests/yolov11/test_ttnn_yolov11.py::test_yolov11
+pytest --disable-warnings models/demos/yolov11/tests/pcc/test_ttnn_yolov11.py::test_yolov11
 ```
 
 ### Performant Model with Trace+2CQ
 ```
-pytest --disable-warnings models/demos/yolov11/tests/test_e2e_performant.py
+pytest --disable-warnings models/demos/yolov11/tests/perf/test_e2e_performant.py
 ```
 ### Performant Demo with Trace+2CQ
 ```

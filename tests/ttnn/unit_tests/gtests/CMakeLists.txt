@@ -23,11 +23,14 @@ TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_smoke)
 target_sources(
     unit_tests_ttnn_smoke
     PRIVATE
-        test_multiprod_queue.cpp
-        test_multi_cq_multi_dev.cpp
+        common_test_utils.cpp
         test_reflect.cpp
         test_to_and_from_json.cpp
         test_sliding_window_infra.cpp
+        test_async_runtime.cpp
+        test_conv2d.cpp
+        test_multi_cq_multi_dev.cpp
+        test_multiprod_queue.cpp
 )
 target_include_directories(unit_tests_ttnn_smoke PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(
@@ -43,7 +46,6 @@ TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_basic)
 target_sources(
     unit_tests_ttnn_basic
     PRIVATE
-        common_test_utils.cpp
         test_add.cpp
         test_broadcast_to.cpp
         test_generic_op.cpp
@@ -64,30 +66,12 @@ target_link_libraries(
         TTNN::CPP
 )
 
-add_library(unit_tests_ttnn_slow OBJECT)
-add_library(TTNN::Test::Slow ALIAS unit_tests_ttnn_slow)
-TT_ENABLE_UNITY_BUILD(unit_tests_ttnn_slow)
-target_sources(
-    unit_tests_ttnn_slow
-    PRIVATE
-        test_async_runtime.cpp # TODO: Fix memory leak (LSan) then shift-left
-        test_conv2d.cpp # TODO: Fix misaligned memory load (UBSan) then shift-left
-)
-target_include_directories(unit_tests_ttnn_slow PRIVATE ${PROJECT_SOURCE_DIR}/tests)
-target_link_libraries(
-    unit_tests_ttnn_slow
-    PRIVATE
-        test_common_libs
-        TTNN::CPP
-)
-
 add_executable(unit_tests_ttnn)
 target_link_libraries(
     unit_tests_ttnn
     PRIVATE
         TTNN::Test::Smoke
         TTNN::Test::Basic
-        TTNN::Test::Slow
 )
 
 # unit_tests_ttnn_ccl
@@ -123,6 +107,16 @@ target_sources(
         ccl/test_send_recv_ops.cpp
 )
 setup_ttnn_test_target(unit_tests_ttnn_ccl_ops)
+
+# unit_tests_ttnn_multihost_ccl_ops
+add_executable(unit_tests_ttnn_multihost_ccl_ops)
+target_sources(
+    unit_tests_ttnn_multihost_ccl_ops
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost/fabric_tests/intermesh_routing_test_utils.cpp
+        multihost_ccl/test_send_recv_ops.cpp
+)
+setup_ttnn_test_target(unit_tests_ttnn_multihost_ccl_ops)
 
 # unit_tests_ttnn_fabric_edm
 
@@ -167,6 +161,7 @@ target_sources(
         tensor/test_create_tensor_multi_device.cpp
         tensor/test_create_tensor_with_layout.cpp
         tensor/test_distributed_tensor.cpp
+        tensor/test_tensor_topology.cpp
         tensor/test_mesh_tensor.cpp
         tensor/test_partition.cpp
         tensor/test_tensor_layout.cpp

@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
 from loguru import logger
-import os
 import math
 import ttnn
 import json
@@ -43,7 +42,7 @@ MAX_TYPE = "max"
         (  # 10 layers for devive perf measurements
             "instruct",
             10,
-            "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -107,9 +106,9 @@ def test_llama_demo(
     if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
 
-    # TODO: Remove this once all batch sizes are supported on TG
-    if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
-        pytest.skip("TG only supports batch 1 and 32")
+    # TODO: Remove this once all batch sizes are supported on Galaxy
+    if batch_size not in [1, 32]:
+        pytest.skip("Galaxy only supports batch 1 and 32")
 
     if paged_attention:
         paged_attention_config = PagedAttentionConfig(
@@ -161,11 +160,7 @@ def merge_device_rows(df):
         missing_devices = []
         for device_id in device_ids:
             if not len(block_by_device[device_id]):
-                print(
-                    colored(
-                        f"Warning: Device {device_id} is missing operation {op_name} at index {global_index}", "yellow"
-                    )
-                )
+                logger.warning(f"Warning: Device {device_id} is missing operation {op_name} at index {global_index}")
                 continue
             if op_name is None:
                 op_name = block_by_device[device_id][0][0]
@@ -176,11 +171,8 @@ def merge_device_rows(df):
             blocks.append(block_by_device[device_id].pop(0))
 
         if missing_devices:
-            print(
-                colored(
-                    f"Warning: {op_name} at index {global_index} not present in CSV for {len(missing_devices)} devices {missing_devices} - do not trust data for this op or directly subsequent ops with the same name",
-                    "yellow",
-                )
+            logger.warning(
+                f"Warning: {op_name} at index {global_index} not present in CSV for {len(missing_devices)} devices {missing_devices} - do not trust data for this op or directly subsequent ops with the same name"
             )
 
         if not blocks:
@@ -215,7 +207,7 @@ def build_duration_dict(raw_dict, column_name):
     op_code_dict = {}
     for entry in raw_dict:
         if column_name not in entry:
-            print(f"Warning: {entry} does not have column {column_name}")
+            logger.warning(f"Warning: {entry} does not have column {column_name}")
         op_code = entry["OP CODE"]
         duration = entry[column_name]
         if op_code not in op_code_dict:
@@ -230,7 +222,7 @@ def build_duration_per_instance_dict(input_dict, num_layers):
         num_ops_with_op_code = len(input_dict[op_code])
         num_instances = num_ops_with_op_code // num_layers
         if num_ops_with_op_code % num_layers != 0:
-            print(f"Warning: {op_code} has {num_ops_with_op_code} ops, not a multiple of {num_layers} layers")
+            logger.warning(f"Warning: {op_code} has {num_ops_with_op_code} ops, not a multiple of {num_layers} layers")
             print_dict(input_dict, "input_dict")
             assert num_ops_with_op_code % num_layers == 0
         for iteration_id in range(num_layers):
@@ -272,10 +264,10 @@ def max_per_instance_dict(input_dict):
 
 def print_dict(input_dict, dict_name):
     # print dict as a readable python dict
-    print(f"\n{dict_name} = {{")
+    logger.info(f"\n{dict_name} = {{")
     for op_code_with_id in input_dict:
-        print(f'"{op_code_with_id}": {input_dict[op_code_with_id]},')
-    print("}")
+        logger.info(f'"{op_code_with_id}": {input_dict[op_code_with_id]},')
+    logger.info("}")
 
 
 def is_collective_op(op_code):
@@ -353,7 +345,7 @@ def verify_value_within_margin(value, target, margin, op_code_with_id, perf_type
 def add_benchmark_measurement(profiler, benchmark_data, step_name, op_name, value, prefix, measure_type, stats_type):
     name = f"{op_name}-{prefix}-{measure_type}-{stats_type}"
     benchmark_data.add_measurement(profiler, 0, step_name, name, value)
-    print(f"{name}: {value} ns")
+    logger.info(f"{name}: {value} ns")
 
 
 def load_perf_targets(galaxy_type):
@@ -381,7 +373,7 @@ def load_perf_targets(galaxy_type):
 @pytest.mark.timeout(900)
 @pytest.mark.models_device_performance_bare_metal
 # To update:
-# Run FAKE_DEVICE=TG pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device
+# Run pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device
 # Copy the printed kernel_duration_per_instance_averaged_dict and dispatch_duration_per_instance_averaged_dict dictionaries
 # Manually compare each entry between old-expected and the new average values
 # - Any perf regressions? Everything as expected?
@@ -521,7 +513,7 @@ def test_llama_TG_perf_device(
 
     all_passing = True
     # Verify decoder layer (mid layers)
-    print(f"Decoder layer")
+    logger.info(f"Decoder layer")
     for op_code_with_id in avg_kernel_duration_mid_layers_compilation.keys():
         if op_code_with_id in perf_targets["decoder"]:
             op_name = perf_targets["decoder"][op_code_with_id]["op_name"]
@@ -670,7 +662,7 @@ def test_llama_TG_perf_device(
             logger.info(f"Warning: {op_code_with_id} not found in perf_targets")
 
     # Verify model tail ops
-    print(f"Model tail ops")
+    logger.info(f"Model tail ops")
     for op_code_with_id in avg_kernel_duration_model_tail_compilation.keys():
         if op_code_with_id in perf_targets["model_tail"]:
             op_name = perf_targets["model_tail"][op_code_with_id]["op_name"]
@@ -766,9 +758,9 @@ def test_llama_TG_perf_device(
     # Estimated T/s/u is 1000000 / (80L-duration + ~2100 lmhead+sampling+embeddings + ~300 python-overhead
     tsu_estimate = 1000000 / ((e2e_estimate_80l + model_tail_e2e_estimate) / 1000 + 300)
 
-    print(f"80L e2e time estimate: {e2e_estimate_80l}")
-    print(f"Model tail e2e time estimate: {model_tail_e2e_estimate}")
-    print(f"80L T/s/u estimate: {tsu_estimate}")
+    logger.info(f"80L e2e time estimate: {e2e_estimate_80l}")
+    logger.info(f"Model tail e2e time estimate: {model_tail_e2e_estimate}")
+    logger.info(f"80L T/s/u estimate: {tsu_estimate}")
 
     benchmark_data.add_measurement(profiler, 0, step_name, "e2e_estimate_80l", e2e_estimate_80l)
     benchmark_data.add_measurement(profiler, 0, step_name, "tsu_estimate", tsu_estimate)
@@ -787,7 +779,7 @@ def test_llama_TG_perf_device(
 @pytest.mark.timeout(900)
 @pytest.mark.models_device_performance_bare_metal
 # To update:
-# Run FAKE_DEVICE=TG TT_METAL_KERNELS_EARLY_RETURN=1  pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch
+# Run TT_METAL_KERNELS_EARLY_RETURN=1  pytest models/demos/llama3_subdevices/tests/test_decoder_device_perf.py::test_llama_TG_perf_device_non_overlapped_dispatch
 # Copy the printed dispatch_duration_per_instance_averaged_dict dictionary
 # Manually compare each entry between old-expected and the new average values
 # - Any perf regressions? Everything as expected?
@@ -870,7 +862,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
         perf_targets["model_tail"]
     ), f"Expected {len(perf_targets['model_tail'])} operations in model tail, got {len(avg_dispatch_duration_model_tail)}. If the number or type of operations changed, expected times must be updated."
 
-    print("Decoder")
+    logger.info("Decoder")
     passing = True
     for op_code_with_id, avg_dispatch_duration in avg_dispatch_duration_mid_layers.items():
         if op_code_with_id in perf_targets["decoder"]:
@@ -919,7 +911,7 @@ def test_llama_TG_perf_device_non_overlapped_dispatch(
             passing = False
             logger.info(f"Warning: {op_code_with_id} not found in expected_times_dict")
 
-    print("Model tail")
+    logger.info("Model tail")
     all_passing = True
     for op_code_with_id, avg_dispatch_duration in avg_dispatch_duration_model_tail.items():
         if op_code_with_id in perf_targets["model_tail"]:

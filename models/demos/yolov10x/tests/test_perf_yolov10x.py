@@ -7,9 +7,9 @@ import time
 import pytest
 import torch
 from loguru import logger
-from ultralytics import YOLO
 
 import ttnn
+from models.demos.yolov10x.load_model_utils import load_torch_model
 from models.demos.yolov10x.reference.yolov10x import YOLOv10
 from models.demos.yolov10x.tt.model_preprocessing import create_yolov10x_input_tensors, create_yolov10x_model_parameters
 from models.demos.yolov10x.tt.yolov10x import TtnnYolov10
@@ -28,22 +28,21 @@ def get_expected_times(name):
 
 
 @run_for_wormhole_b0()
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
-    "use_weights_from_ultralytics",
+    "use_pretrained_weights",
     [
         "True",
     ],
 )
-def test_perf(device, use_weights_from_ultralytics):
+def test_perf(device, use_pretrained_weights, model_location_generator):
     disable_persistent_kernel_cache()
     torch_input, ttnn_input = create_yolov10x_input_tensors(device)
     batch_size = torch_input.shape[0]
     state_dict = None
 
-    if use_weights_from_ultralytics:
-        torch_model = YOLO("yolov10x.pt")
+    if use_pretrained_weights:
+        torch_model = load_torch_model(model_location_generator)
         state_dict = torch_model.state_dict()
 
     torch_model = YOLOv10()
@@ -100,16 +99,15 @@ def test_perf(device, use_weights_from_ultralytics):
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 44.5],
+        [1, 46.6],
     ],
 )
-@pytest.mark.models_device_performance_bare_metal
-def test_perf_device_bare_metal_yolov10x(batch_size, expected_perf):
+def test_perf_device_yolov10x(batch_size, expected_perf):
     subdir = "ttnn_yolov10"
     num_iterations = 1
     margin = 0.03
 
-    command = f"pytest tests/ttnn/integration_tests/yolov10x/test_ttnn_yolov10x.py::test_yolov10x"
+    command = f"pytest models/demos/yolov10x/tests/pcc/test_ttnn_yolov10x.py::test_yolov10x"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"

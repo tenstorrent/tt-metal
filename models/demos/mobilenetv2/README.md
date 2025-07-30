@@ -30,7 +30,7 @@ export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 #### For 224x224:
 - end-2-end perf is 2808 FPS
 ```bash
-pytest models/demos/mobilenetv2/tests/test_e2e_performant.py
+pytest models/demos/mobilenetv2/tests/perf/test_e2e_performant.py
 ```
 
 ### Demo on ImageNet:

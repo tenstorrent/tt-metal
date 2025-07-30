@@ -22,17 +22,17 @@ export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 
 ### Inference pipeline with random weights and random tensor:
 ```sh
-pytest tests/ttnn/integration_tests/vgg_unet/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_false]
+pytest models/demos/vgg_unet/tests/pcc/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_false]
 ```
 
 ### Inference pipeline with trained weights:
 ```sh
-pytest tests/ttnn/integration_tests/vgg_unet/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_true]
+pytest models/demos/vgg_unet/tests/pcc/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_true]
 ```
 
 ### Performant Model with Trace+2CQ
 ```sh
-pytest models/demos/vgg_unet/tests/test_e2e_performant.py
+pytest models/demos/vgg_unet/tests/perf/test_e2e_performant.py
 ```
 
 ### Performant Demo with Trace+2CQ

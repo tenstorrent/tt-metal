@@ -136,6 +136,9 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
             return fmt::format(compute, root, is_sfpu ? "eltwise_binary_sfpu.cpp" : "eltwise_binary.cpp");
         case KernelName::ComputeScalar:
             return fmt::format(compute, root, is_sfpu ? "eltwise_binary_sfpu_scalar.cpp" : "eltwise_binary_scalar.cpp");
+        case KernelName::ComputeRowBcastNg:
+            return fmt::format(
+                compute, root_ng, is_sfpu ? "eltwise_binary_sfpu_row_bcast.cpp" : "eltwise_binary_row_bcast.cpp");
         default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
     }
 }
@@ -178,6 +181,8 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
             postprocess = unary::UnaryOpType::GELU;
             break;
         case BinaryOpType::LOGICAL_AND:
+            process_lhs = unary::UnaryOpType::NEZ;
+            process_rhs = unary::UnaryOpType::NEZ;
             binary_op = EnumT::MUL;
             postprocess = unary::UnaryOpType::NEZ;
             break;
@@ -337,6 +342,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case MUL:
             if (dtype == DataType::UINT16) {
                 return {"mul_int_tile_init();", "mul_uint16_tile"};
+            } else if (dtype == DataType::INT32) {
+                return {"mul_int32_tile_init();", "mul_int32_tile"};
             } else {
                 return {"mul_binary_tile_init();", "mul_binary_tile"};
             }

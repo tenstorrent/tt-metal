@@ -48,13 +48,12 @@ class Transformer(LightweightModule):
         )
 
         self.rope_setup = RotarySetup(
-            mesh_device,
-            args.max_batch_size,
-            args.head_dim,
-            args.max_seq_len,
-            args.rope_theta,
-            args.rope_scaling_factor,
-            args.orig_context_len,
+            device=mesh_device,
+            batch_size=args.max_batch_size,
+            head_dim=args.head_dim,
+            max_seq_len=args.max_seq_len,
+            rope_theta=args.rope_theta,
+            rope_scaling=args.rope_scaling,
         )
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
@@ -232,33 +231,34 @@ class Transformer(LightweightModule):
         )
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
+    def concat_device_output(self, tt_out):
+        """
+        Concatenate the output of the devices into a single tensor.
+        """
+        torch_out_tensors = [ttnn.to_torch(x) for x in ttnn.get_device_tensors(tt_out.cpu())]
+        if self.args.is_galaxy:
+            row_dim, col_dim = (3, 1)
+        else:
+            row_dim, col_dim = (1, -1)
+
+        rows, cols = self.args.cluster_shape
+        mesh_shape = [torch_out_tensors[i : i + cols] for i in range(0, len(torch_out_tensors), cols)]
+        row_concatenated = [torch.cat(row, dim=col_dim) for row in mesh_shape]
+        return torch.cat(row_concatenated, dim=row_dim)
+
     def process_output_prefill(self, tt_out, last_token_idx):
         """
         Input is ttnn device tensor of logits. Output is torch logits tensor.
         NOTE: In this model, prefill always uses get_last_token
         """
-        logits = ttnn.to_torch(
-            tt_out,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                self.mesh_device, dims=(3, 1) if self.args.is_galaxy else (1, -1), mesh_shape=self.args.cluster_shape
-            ),
-        )[0, 0, last_token_idx, : self.vocab_size]
-        return logits
+        return self.concat_device_output(tt_out)[0, 0, last_token_idx, : self.vocab_size]
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False):
         """
         Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
         if is_tokens:
-            tt_out = ttnn.to_torch(
-                tt_out,  # tt_out.cpu(blocking=True, cq_id=1),
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    self.mesh_device,
-                    dims=(3, 1) if self.args.is_galaxy else (1, -1),
-                    mesh_shape=self.args.cluster_shape,
-                ),
-            )[0, 0, 0, :B]
-            return tt_out
+            return self.concat_device_output(tt_out)[0, 0, :B, 0]
 
         if self.args.num_devices > 1:
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
@@ -333,12 +333,7 @@ class Transformer(LightweightModule):
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
         if argmax_on_device:
-            tt_logits = ttnn.argmax(  # TODO Add multicore support to batch > 1
-                tt_logits,
-                dim=3,
-                keepdim=True,
-                use_multicore=False if self.args.max_batch_size > 1 else True,  # ,output_tensor=tokens
-            )
+            tt_logits = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
         else:
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
             if not self.args.is_galaxy:

@@ -104,6 +104,8 @@ enum class UnaryOpType {
     MINIMUM,
     TANHSHRINK,
     HARDSHRINK,
+    HARDSIGMOID,
+    WHERE_TSS,
 };
 
 enum class VecMode {

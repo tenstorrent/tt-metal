@@ -69,14 +69,15 @@ struct WorkerToFabricEdmSenderImpl {
     template <ProgrammableCoreType my_core_type>
     static WorkerToFabricEdmSenderImpl build_from_args(std::size_t& arg_idx) {
         constexpr bool is_persistent_fabric = true;
-        uint32_t direction;
-        WorkerXY edm_worker_xy(0, 0);
+        uint8_t direction;
+        uint8_t edm_worker_x;
+        uint8_t edm_worker_y;
         uint32_t edm_buffer_base_addr;
-        uint32_t num_buffers_per_channel;
+        uint8_t num_buffers_per_channel;
         uint32_t edm_l1_sem_id;
         uint32_t edm_connection_handshake_l1_addr;
         uint32_t edm_worker_location_info_addr;
-        uint32_t buffer_size_bytes;
+        uint16_t buffer_size_bytes;
         uint32_t edm_copy_of_wr_counter_addr;
         volatile uint32_t* writer_send_sem_addr;
 
@@ -86,9 +87,11 @@ struct WorkerToFabricEdmSenderImpl {
             tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
                 reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
             uint32_t eth_channel = get_arg_val<uint32_t>(arg_idx++);
-            const auto conn = &connection_info->connections[eth_channel];
+            const auto conn = &connection_info->read_only[eth_channel];
+            const auto aligned_conn = &connection_info->read_write[eth_channel];
             direction = conn->edm_direction;
-            edm_worker_xy = WorkerXY::from_uint32(conn->edm_noc_xy);
+            edm_worker_x = conn->edm_noc_x;
+            edm_worker_y = conn->edm_noc_y;
             edm_buffer_base_addr = conn->edm_buffer_base_addr;
             num_buffers_per_channel = conn->num_buffers_per_channel;
             edm_l1_sem_id = conn->edm_l1_sem_addr;
@@ -96,19 +99,21 @@ struct WorkerToFabricEdmSenderImpl {
             edm_worker_location_info_addr = conn->edm_worker_location_info_addr;
             buffer_size_bytes = conn->buffer_size_bytes;
             edm_copy_of_wr_counter_addr = conn->buffer_index_semaphore_id;
-            writer_send_sem_addr =
-                reinterpret_cast<volatile uint32_t*>(reinterpret_cast<uintptr_t>(&conn->worker_flow_control_semaphore));
+            writer_send_sem_addr = reinterpret_cast<volatile uint32_t*>(
+                reinterpret_cast<uintptr_t>(&aligned_conn->worker_flow_control_semaphore));
         } else {
             // TODO: will be deprecated. currently for ethernet dispatch case
             //       ethernet core need to have same memory mapping as worker
-            direction = get_arg_val<uint32_t>(arg_idx++);
-            edm_worker_xy = WorkerXY::from_uint32(get_arg_val<uint32_t>(arg_idx++));
+            direction = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
+            auto edm_worker_xy = WorkerXY::from_uint32(get_arg_val<uint32_t>(arg_idx++));
+            edm_worker_x = edm_worker_xy.x;
+            edm_worker_y = edm_worker_xy.y;
             edm_buffer_base_addr = get_arg_val<uint32_t>(arg_idx++);
-            num_buffers_per_channel = get_arg_val<uint32_t>(arg_idx++);
+            num_buffers_per_channel = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
             edm_l1_sem_id = get_arg_val<uint32_t>(arg_idx++);
             edm_connection_handshake_l1_addr = get_arg_val<uint32_t>(arg_idx++);
             edm_worker_location_info_addr = get_arg_val<uint32_t>(arg_idx++);
-            buffer_size_bytes = get_arg_val<uint32_t>(arg_idx++);
+            buffer_size_bytes = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
             edm_copy_of_wr_counter_addr = get_arg_val<uint32_t>(arg_idx++);
             auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);
             writer_send_sem_addr =
@@ -126,8 +131,8 @@ struct WorkerToFabricEdmSenderImpl {
         return WorkerToFabricEdmSenderImpl(
             is_persistent_fabric,
             direction,
-            edm_worker_xy.x,
-            edm_worker_xy.y,
+            edm_worker_x,
+            edm_worker_y,
             edm_buffer_base_addr,
             num_buffers_per_channel,
             edm_l1_sem_id,

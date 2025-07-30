@@ -147,11 +147,11 @@ Since each of these rows will be padded to match the size of the output tensor\'
 # Create data movement kernels
 
 ``` cpp
-bool src_is_dram = src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-bool pad_is_dram = pad_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-std::vector<uint32_t> reader_compile_time_args = {(uint32_t) src_is_dram, (uint32_t) pad_is_dram};
-std::vector<uint32_t> writer_compile_time_args = {(uint32_t) dst_is_dram};
+std::vector<uint32_t> reader_compile_time_args;
+TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+TensorAccessorArgs(*pad_buffer).append_to(reader_compile_time_args);
+std::vector<uint32_t> writer_compile_time_args;
+TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 ```
 
 We set the compile-time arguments of the respective kernel functions to be the buffer types, in order to generate the correct addresses for manipulating the data stored inside of the DRAM buffers.
@@ -220,14 +220,10 @@ Note that for this example, on the host side, we define the kernel arguments bas
 # Reader kernel function
 
 ``` cpp
-const InterleavedAddrGen<src_is_dram> s0 = {
-    .bank_base_address = src_addr,
-    .page_size = data_size_bytes
-};
-const InterleavedAddrGen<pad_is_dram> s1 = {
-    .bank_base_address = pad_addr,
-    .page_size = data_size_bytes
-};
+constexpr auto s0_args = TensorAccessorArgs<0>();
+const auto s0 = TensorAccessor(s0_args, src_addr, data_size_bytes);
+constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
+const auto s1 = TensorAccessor(s1_args, pad_addr, data_size_bytes);
 ```
 
 In the reader kernel, we specify the DRAM buffer address generators for the input tensor and the buffer containing the pad value.
@@ -262,10 +258,8 @@ Using the start and end index, the kernel reads the pad value into the circular 
 # Writer kernel function
 
 ``` cpp
-const InterleavedAddrGen<dst_is_dram> s1 = {
-    .bank_base_address = dst_addr,
-    .page_size = data_size_bytes
-};
+constexpr auto s1_args = TensorAccessorArgs<0>();
+const auto s1 = TensorAccessor(s1_args, dst_addr, data_size_bytes);
 
 uint32_t dst_stick_id = start_dst_stick_id;
 for (uint32_t row_idx = 0; row_idx < num_rows_per_core; row_idx++) {

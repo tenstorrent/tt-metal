@@ -602,14 +602,13 @@ def run_llama3_demo(
 # sampling_params (dict): Sampling parameters for decoding (temperature, top_p). If temperature is set to 0, argmax (greedy decode) is used.
 #
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
-# FAKE_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export FAKE_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
     "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos",
     [
         (  # full demo, batch 32
             "instruct",
             80,
-            "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -624,7 +623,7 @@ def run_llama3_demo(
         (  # quick 1L demo
             "random",
             1,
-            "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -639,7 +638,7 @@ def run_llama3_demo(
         (  # Stress test: 4*128k generation length
             "instruct",
             80,
-            "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -654,7 +653,7 @@ def run_llama3_demo(
         (  # mini stress test
             "instruct",
             80,
-            "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -669,7 +668,7 @@ def run_llama3_demo(
         (  # 10 layers for devive perf measurements
             "instruct",
             10,
-            "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -684,7 +683,7 @@ def run_llama3_demo(
         (  # ND hang test
             "instruct",
             80,
-            "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -756,11 +755,11 @@ def test_llama_demo(
     if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
 
-    # TODO: Remove this once all batch sizes are supported on TG
-    if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
-        pytest.skip("TG only supports batch 1 and 32")
+    # TODO: Remove this once all batch sizes are supported on Galaxy
+    if batch_size not in [1, 32]:
+        pytest.skip("Galaxy only supports batch 1 and 32")
     if galaxy_type != "6U" and galaxy_type != "4U":
-        raise Exception("Not running on TG nor on 6U, you must run on those systems for this test")
+        raise Exception("Not running on Galaxy 4U nor on 6U, you must run on those systems for this test")
 
     if paged_attention:
         paged_attention_config = PagedAttentionConfig(
