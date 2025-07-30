@@ -14,6 +14,9 @@ namespace sfpu {
 
 // These constants and function should ideally go to SFPI
 // Copied from ckernel_sfpu_int_sum.h to avoid dependency complications
+#ifndef SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
+#define SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
+
 #define BIT_MASK_32 0xFFFFFFFF
 #define SIGN 0x80000000
 #define MAGNITUDE 0x7FFFFFFF
@@ -27,6 +30,8 @@ sfpi_inline vInt sfpu_sign_mag_to_twos_comp(vInt value) {
     v_endif;
     return value;
 }
+
+#endif  // SFPU_SIGN_MAG_TO_TWOS_COMP_DEFINED
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp(uint exponent_size_8) {
