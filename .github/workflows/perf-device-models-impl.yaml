@@ -185,6 +185,15 @@ jobs:
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
+      - name: vanilla_unet tests
+        uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
+        with:
+          model_name: "functional_unet"
+          commands: |
+            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/vanilla_unet/test/ -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+
       - name: mamba tests
         uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
         with:
