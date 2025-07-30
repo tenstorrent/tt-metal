@@ -18,10 +18,18 @@ class YOLOv6lPerformantRunner:
         model_location_generator=None,
         resolution=(640, 640),
         torch_input_tensor=None,
+        mesh_mapper=None,
+        weights_mesh_mapper=None,
+        mesh_composer=None,
     ):
         self.device = device
         self.resolution = resolution
         self.torch_input_tensor = torch_input_tensor
+
+        self.mesh_mapper = mesh_mapper
+        self.weights_mesh_mapper = weights_mesh_mapper
+        self.mesh_composer = mesh_composer
+
         self.runner_infra = YOLOv6lPerformanceRunnerInfra(
             device,
             device_batch_size,
@@ -29,6 +37,9 @@ class YOLOv6lPerformantRunner:
             weight_dtype,
             model_location_generator,
             resolution=resolution,
+            mesh_mapper=mesh_mapper,
+            weights_mesh_mapper=weights_mesh_mapper,
+            mesh_composer=mesh_composer,
         )
 
         (
@@ -37,6 +48,7 @@ class YOLOv6lPerformantRunner:
             self.input_mem_config,
         ) = self.runner_infra.setup_dram_sharded_input(device)
         self.tt_image_res = self.tt_inputs_host.to(device, sharded_mem_config_DRAM)
+        self._capture_yolov6l_trace_2cqs()
 
     def _capture_yolov6l_trace_2cqs(self):
         # Initialize the op event so we can write
@@ -85,9 +97,7 @@ class YOLOv6lPerformantRunner:
         ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
-        # TODO: Add in place support to ttnn to_memory_config
-        if self.input_tensor.is_sharded():
-            self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
+        self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
         return self.runner_infra.output_tensor
