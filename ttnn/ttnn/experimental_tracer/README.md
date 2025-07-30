@@ -19,14 +19,14 @@
 1. **Python Environment**: Ensure you have Python 3.8 or later installed.
 2. **Dependencies**: Install the required Python libraries:
     > Note: While no additional TT libraries are required, some files from the `tt-metal/models/demos` directory are necessary for the script to function.
-   
+
    ```bash
    pip install torch torchvision transformers ultralytics torchinfo networkx xlsxwriter black
    ```
 
 ## Usage
 1. Clone the repository and navigate to the directory containing `sample_tracer.py`:
-   
+
    ```bash
    git clone git@github.com:tenstorrent/tt-metal.git
    export TT_METAL_HOME=$PWD/tt-metal/
@@ -52,11 +52,11 @@
    ```
 
 3. Run the script with the desired model and input configurations:
-   
+
    ```bash
    python sample_tracer.py --model yolov8s --input-shape 1 3 640 640
    ```
-   
+
    - Replace `yolov8s` with any supported model from the `allowed_modes` list (defined in `sample_tracer.py`).
    - Specify input shapes using the `--input-shape` argument (e.g., `1 3 640 640` for batch size 1, 3 channels, and 640x640 resolution).
 
@@ -96,7 +96,7 @@
    - Integrate with advanced visualization tools for real-time graph inspection.
 
 3. **Add Wrapped Operator Support**:
-   
+
    - [x] Convolution
    - [x] Addm (Matrix multiplication with bias addition)
    - [x] Maxpool with indices
@@ -111,6 +111,8 @@
      - [ ] Softmax
      - [ ] ...
    - [ ] ...
+
+
 
 ## How It Works
 
@@ -144,6 +146,6 @@ For custom models, ensure they are compatible with PyTorch and provide the neces
 
 ## Conclusion
 
-`sample_tracer.py` is a tool for tracing PyTorch models, generating computational graphs, and exporting them in multiple formats for debugging, testing, and analysis. With its support for a wide range of models and its extensible design, it is an useful utility for developers and researchers working with deep learning frameworks. 
+`sample_tracer.py` is a tool for tracing PyTorch models, generating computational graphs, and exporting them in multiple formats for debugging, testing, and analysis. With its support for a wide range of models and its extensible design, it is an useful utility for developers and researchers working with deep learning frameworks.
 
 We welcome contributions and feedback to improve this tool further. Happy tracing!
