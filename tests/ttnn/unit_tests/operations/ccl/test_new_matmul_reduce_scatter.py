@@ -13,7 +13,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
 
-def create_global_semaphores(mesh_device, num_devices, cores, initial_value):
+def create_global_semaphores(mesh_device, cores, initial_value):
     # create global semaphore handles
     ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(3)]
     return ccl_semaphore_handles
@@ -67,9 +67,7 @@ def run_reduce_scatter_impl(
     t3k_mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = [
-        create_global_semaphores(t3k_mesh_device, num_devices, ccl_sub_device_crs, 0) for _ in range(num_iters)
-    ]
+    ccl_semaphore_handles = [create_global_semaphores(t3k_mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
 
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
@@ -166,10 +164,20 @@ def run_reduce_scatter_impl(
         mm_input_tensor = torch.rand(mm_input_shape).bfloat16()
         input_tensors = torch.chunk(mm_input_tensor, num_devices, 3)
         torch_input_tensor_list.append(input_tensors)
-        tt_input_tensors = []
-        for j, t in enumerate(input_tensors):
-            tt_input_tensors.append(ttnn.Tensor(t, rs_input_dtype).to(layout))
-        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(t3k_mesh_device, mem_config_input)
+
+        input_tensor_mesh = ttnn.from_torch(
+            mm_input_tensor,
+            device=t3k_mesh_device,
+            layout=layout,
+            dtype=rs_input_dtype,
+            memory_config=mem_config_input,
+            mesh_mapper=ttnn.create_mesh_mapper(
+                t3k_mesh_device,
+                ttnn.MeshMapperConfig(
+                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(3)], ttnn.MeshShape(1, num_devices)
+                ),
+            ),
+        )
 
         tt_input_tensor_mesh_list.append(input_tensor_mesh)
 

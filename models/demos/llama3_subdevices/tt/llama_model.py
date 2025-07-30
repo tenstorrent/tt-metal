@@ -112,6 +112,7 @@ class TtTransformer(LightweightModule):
             args,
             args.is_galaxy,
             tt_ccl=self.tt_ccl,
+            ccl_topology=self.model_config["CCL_TOPOLOGY"],
         )
 
         self.lm_head = LMHead(
@@ -341,7 +342,7 @@ class TtTransformer(LightweightModule):
         tt_tokens = self.embd(tokens)
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
-    def process_output_prefill(self, tt_out, last_token_idx):
+    def process_output_prefill(self, tt_out, last_token_idx, tt_out_logits_saved=None):
         """
         Input is ttnn device tensor of logits. Output is torch logits tensor.
         NOTE: In this model, prefill always uses get_last_token
@@ -368,25 +369,28 @@ class TtTransformer(LightweightModule):
             ttnn.Shape([1, 1, 1, tt_logits.shape[-1]]),
             ttnn.Shape([1, 1, tt_logits.shape[-2], tt_logits.shape[-1]]),
         )
-
         tt_out = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
         if isinstance(tt_out, list):
             tt_out = tt_out[0]
 
-        logits = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()[0, 0, 0, :1]
-        return logits
+        toks = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()[0, 0, 0, :1]
 
-    def process_output_decode(self, tt_out, B, S=1):
+        if tt_out_logits_saved is not None:
+            # make sure tt_out_logits_saved is mutable
+            logits_saved = ttnn.to_torch(ttnn.get_device_tensors(tt_logits)[0]).float()[0, 0, :, :]
+            tt_out_logits_saved.copy_(logits_saved)
+
+        return toks
+
+    def process_output_decode(self, tt_out):
         """
         Input is ttnn device tensor of tokens. Output is the corresponding torch tensor.
         """
         if isinstance(tt_out, list):
             tt_out = tt_out[0]
-        tt_out_cpu = tt_out.cpu(blocking=True, cq_id=0)
 
-        tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out_cpu)[0])[0, 0, 0, :]
-
-        return tt_out
+        tt_out_cpu = tt_out.cpu(blocking=False, cq_id=0)
+        return tt_out_cpu, ttnn.record_event(self.mesh_device, 0)
 
     def ttnn_prefill_forward(
         self,
@@ -424,6 +428,7 @@ class TtTransformer(LightweightModule):
         rot_mat_idxs,
         page_table=None,
         kv_cache=None,
+        tt_out_logits_saved=None,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -441,7 +446,18 @@ class TtTransformer(LightweightModule):
         )
 
         # sampling
-        tt_logits = self.tt_sampling(tt_logits[0], tt_out_tok=x)
+        tt_toks = self.tt_sampling(tt_logits[0], tt_out_tok=x)
+
+        # Save otuput logits to global python object
+        if tt_out_logits_saved is not None:
+            tt_out_logits = ttnn.to_torch(
+                tt_logits[0],
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    self.mesh_device, dims=(3, 1), mesh_shape=self.args.cluster_shape
+                ),
+            )
+            tt_out_logits = tt_out_logits[0, 0, 0, :128256]
+            tt_out_logits_saved.copy_(tt_out_logits)
 
         ttnn.plus_one(
             current_pos,
@@ -451,7 +467,7 @@ class TtTransformer(LightweightModule):
             rot_mat_idxs,
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
-        return tt_logits
+        return tt_toks
 
     def switch_mode(self, mode):
         if mode == "decode":

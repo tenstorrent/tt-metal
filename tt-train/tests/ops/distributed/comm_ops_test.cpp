@@ -11,7 +11,6 @@
 #include <core/xtensor_utils.hpp>
 
 #include "autograd/auto_context.hpp"
-#include "core/distributed_mapping.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "init/cpu_initializers.hpp"
 
@@ -46,13 +45,14 @@ TEST_F(N300CommOpsTest, TestAllReduceNotFullyTiled) {
     std::iota(test_data_vec.begin(), test_data_vec.end(), 0.0F);
     xt::xarray<float> test_data = xt::adapt(test_data_vec);
     xt::xarray<float> xtensor = test_data.reshape({1U, 1U, 1U, size});
-    ttml::core::XTensorToMeshVariant<float> shard_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 3);
-    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, shard_composer);
+    auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
+    auto tt_tensor =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto all_reduce_tensor = ttml::ops::distributed::all_reduce(tensor);
 
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto all_reduce_xtensor = ttml::core::to_xtensor<float>(all_reduce_tensor->get_value(), identity_composer);
+    auto all_reduce_xtensor =
+        ttml::core::to_xtensor<float>(all_reduce_tensor->get_value(), ttml::core::IdentityComposer{});
 
     xt::xarray<float> all_reduce_expected =
         xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)) +
@@ -62,16 +62,16 @@ TEST_F(N300CommOpsTest, TestAllReduceNotFullyTiled) {
     EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-3));
 
     xt::xarray<float> grad_data = xt::random::rand(all_reduce_expected.shape(), 0.F, 1.F);
-    ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
+    mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tt_grad_tensor =
-        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, replicate_composer);
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, ttnn::Layout::TILE, mapper.get());
     all_reduce_tensor->set_grad(tt_grad_tensor);
     all_reduce_tensor->backward();
 
     auto result_tensor_grad = tensor->get_grad();
     EXPECT_TRUE(ttml::core::is_tensor_initialized(result_tensor_grad));
 
-    auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), identity_composer);
+    auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_EQ(grad_xtensor[0].shape(), grad_xtensor[1].shape());
     EXPECT_TRUE(xt::allclose(
         grad_data,
@@ -100,13 +100,14 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
     ttml::init::uniform_init(test_data_vec, {-1.F, 1.F});
     xt::xarray<float> test_data = xt::adapt(test_data_vec);
     xt::xarray<float> xtensor = test_data.reshape({batch, 1U, height, size});
-    ttml::core::XTensorToMeshVariant<float> shard_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 3);
-    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, shard_composer);
+    auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
+    auto tt_tensor =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto all_reduce_tensor = ttml::ops::distributed::all_reduce(tensor);
 
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto all_reduce_xtensor = ttml::core::to_xtensor<float>(all_reduce_tensor->get_value(), identity_composer);
+    auto all_reduce_xtensor =
+        ttml::core::to_xtensor<float>(all_reduce_tensor->get_value(), ttml::core::IdentityComposer{});
 
     xt::xarray<float> all_reduce_expected =
         xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)) +
@@ -116,16 +117,16 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
     EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[1], /* rtol */ 1e-3, /* atol */ 2e-2));
 
     xt::xarray<float> grad_data = xt::random::rand(all_reduce_expected.shape(), 0.F, 1.F);
-    ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
+    mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tt_grad_tensor =
-        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, replicate_composer);
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, ttnn::Layout::TILE, mapper.get());
     all_reduce_tensor->set_grad(tt_grad_tensor);
     all_reduce_tensor->backward();
 
     auto result_tensor_grad = tensor->get_grad();
     EXPECT_TRUE(ttml::core::is_tensor_initialized(result_tensor_grad));
 
-    auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), identity_composer);
+    auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_EQ(grad_xtensor[0].shape(), grad_xtensor[1].shape());
     EXPECT_TRUE(xt::allclose(
         grad_data,
@@ -149,13 +150,14 @@ TEST_F(N300CommOpsTest, TestAllReduceFullyTiled) {
     ttml::init::uniform_init(test_data_vec, {0.F, 0.001F});
     xt::xarray<float> test_data = xt::adapt(test_data_vec);
     xt::xarray<float> xtensor = test_data.reshape({1U, 1U, height, size});
-    ttml::core::XTensorToMeshVariant<float> shard_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 3);
-    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, shard_composer);
+    auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
+    auto tt_tensor =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto all_reduce_tensor = ttml::ops::distributed::all_reduce(tensor);
 
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto all_reduce_xtensor = ttml::core::to_xtensor<float>(all_reduce_tensor->get_value(), identity_composer);
+    auto all_reduce_xtensor =
+        ttml::core::to_xtensor<float>(all_reduce_tensor->get_value(), ttml::core::IdentityComposer{});
 
     xt::xarray<float> all_reduce_expected =
         xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)) +
@@ -165,16 +167,16 @@ TEST_F(N300CommOpsTest, TestAllReduceFullyTiled) {
     EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
     xt::xarray<float> grad_data = xt::random::rand(all_reduce_expected.shape(), 0.F, 1.F);
-    ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
+    mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tt_grad_tensor =
-        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, replicate_composer);
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, ttnn::Layout::TILE, mapper.get());
     all_reduce_tensor->set_grad(tt_grad_tensor);
     all_reduce_tensor->backward();
 
     auto result_tensor_grad = tensor->get_grad();
     EXPECT_TRUE(ttml::core::is_tensor_initialized(result_tensor_grad));
 
-    auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), identity_composer);
+    auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_EQ(grad_xtensor[0].shape(), grad_xtensor[1].shape());
     EXPECT_TRUE(xt::allclose(
         grad_data,
@@ -197,27 +199,27 @@ TEST_F(N300CommOpsTest, TestAllGatherNotFullyTiled) {
     std::iota(test_data_vec.begin(), test_data_vec.end(), 0.0F);
     xt::xarray<float> test_data = xt::adapt(test_data_vec);
     xt::xarray<float> xtensor = test_data.reshape({1U, 1U, 1U, size});
-    ttml::core::XTensorToMeshVariant<float> shard_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 3);
-    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, shard_composer);
+    auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
+    auto tt_tensor =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto gathered_tensor = ttml::ops::distributed::all_gather(tensor, 3);
 
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto gathered_xtensor = ttml::core::to_xtensor<float>(gathered_tensor->get_value(), identity_composer);
+    auto gathered_xtensor = ttml::core::to_xtensor<float>(gathered_tensor->get_value(), ttml::core::IdentityComposer{});
     EXPECT_TRUE(xt::allclose(xtensor, gathered_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(xtensor, gathered_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
     xt::xarray<float> grad_data = xt::random::rand(xtensor.shape(), 0.F, 1.F);
-    ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
+    mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tt_grad_tensor =
-        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, replicate_composer);
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, ttnn::Layout::TILE, mapper.get());
     gathered_tensor->set_grad(tt_grad_tensor);
     gathered_tensor->backward();
 
     auto result_tensor_grad = tensor->get_grad();
     EXPECT_TRUE(ttml::core::is_tensor_initialized(result_tensor_grad));
 
-    auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), identity_composer);
+    auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_EQ(grad_xtensor[0].shape(), grad_xtensor[1].shape());
     EXPECT_TRUE(xt::allclose(
         xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)),
@@ -242,27 +244,27 @@ TEST_F(N300CommOpsTest, TestAllGatherFullyTiled) {
     ttml::init::uniform_init(test_data_vec, {-1.F, 1.F});
     xt::xarray<float> test_data = xt::adapt(test_data_vec);
     xt::xarray<float> xtensor = test_data.reshape({batch, 1U, height, size});
-    ttml::core::XTensorToMeshVariant<float> shard_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 3);
-    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, shard_composer);
+    auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
+    auto tt_tensor =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto gathered_tensor = ttml::ops::distributed::all_gather(tensor, 3);
 
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto gathered_xtensor = ttml::core::to_xtensor<float>(gathered_tensor->get_value(), identity_composer);
+    auto gathered_xtensor = ttml::core::to_xtensor<float>(gathered_tensor->get_value(), ttml::core::IdentityComposer{});
     EXPECT_TRUE(xt::allclose(xtensor, gathered_xtensor[0], /* rtol */ 1e-3, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(xtensor, gathered_xtensor[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
     xt::xarray<float> grad_data = xt::random::rand(xtensor.shape(), 0.F, 1.F);
-    ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
+    mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tt_grad_tensor =
-        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, replicate_composer);
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, ttnn::Layout::TILE, mapper.get());
     gathered_tensor->set_grad(tt_grad_tensor);
     gathered_tensor->backward();
 
     auto result_tensor_grad = tensor->get_grad();
     EXPECT_TRUE(ttml::core::is_tensor_initialized(result_tensor_grad));
 
-    auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), identity_composer);
+    auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_EQ(grad_xtensor[0].shape(), grad_xtensor[1].shape());
     EXPECT_TRUE(xt::allclose(
         xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)),
@@ -285,14 +287,14 @@ TEST_F(N300CommOpsTest, TestScatterNotFullyTiled) {
     std::iota(test_data_vec.begin(), test_data_vec.end(), 0.0F);
     xt::xarray<float> test_data = xt::adapt(test_data_vec);
     xt::xarray<float> xtensor = test_data.reshape({1U, 1U, 1U, size});
-    ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, replicate_composer);
+    auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    auto tt_tensor =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto scattered_tensor = ttml::ops::distributed::scatter(tensor, 3);
 
     // check forward
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    auto xtensors_back = ttml::core::to_xtensor<float>(scattered_tensor->get_value(), identity_composer);
+    auto xtensors_back = ttml::core::to_xtensor<float>(scattered_tensor->get_value(), ttml::core::IdentityComposer{});
     EXPECT_TRUE(
         xt::allclose(xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)), xtensors_back[0]));
     EXPECT_TRUE(
@@ -300,15 +302,16 @@ TEST_F(N300CommOpsTest, TestScatterNotFullyTiled) {
 
     // check backward
     xt::xarray<float> grad_data = xt::random::rand(xtensor.shape(), 0.F, 1.F);
-    ttml::core::XTensorToMeshVariant<float> shard_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 3);
-    auto tt_grad_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, shard_composer);
+    mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
+    auto tt_grad_tensor =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, ttnn::Layout::TILE, mapper.get());
     scattered_tensor->set_grad(tt_grad_tensor);
     scattered_tensor->backward();
 
     auto result_tensor_grad = tensor->get_grad();
     EXPECT_TRUE(ttml::core::is_tensor_initialized(result_tensor_grad));
 
-    auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), identity_composer);
+    auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_TRUE(grad_data.shape() == grad_xtensor[0].shape());
     EXPECT_TRUE(grad_data.shape() == grad_xtensor[1].shape());
 
@@ -329,11 +332,11 @@ TEST_F(N300CommOpsTest, TestScatterFullyTiled) {
     xt::xarray<float> test_data = xt::adapt(test_data_vec);
     xt::xarray<float> xtensor = test_data.reshape({batch, 1U, height, size});
 
-    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
-    ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, replicate_composer);
+    auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
+    auto tt_tensor =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, ttnn::Layout::TILE, mapper.get());
 
-    auto xtensor_after_replication = ttml::core::to_xtensor<float>(tt_tensor, identity_composer);
+    auto xtensor_after_replication = ttml::core::to_xtensor<float>(tt_tensor, ttml::core::IdentityComposer{});
     EXPECT_TRUE(xt::allclose(xtensor, xtensor_after_replication[0], /* rtol */ 1e-3, /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(xtensor, xtensor_after_replication[1], /* rtol */ 1e-3, /* atol */ 1e-2));
 
@@ -341,7 +344,7 @@ TEST_F(N300CommOpsTest, TestScatterFullyTiled) {
     auto scattered_tensor = ttml::ops::distributed::scatter(tensor, 3);
 
     // check forward
-    auto xtensors_back = ttml::core::to_xtensor<float>(scattered_tensor->get_value(), identity_composer);
+    auto xtensors_back = ttml::core::to_xtensor<float>(scattered_tensor->get_value(), ttml::core::IdentityComposer{});
     EXPECT_TRUE(xt::allclose(
         xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)),
         xtensors_back[0],
@@ -355,15 +358,15 @@ TEST_F(N300CommOpsTest, TestScatterFullyTiled) {
 
     // check backward
     xt::xarray<float> grad_data = xt::random::rand(xtensor.shape(), -1.F, 1.F);
-    ttml::core::XTensorToMeshVariant<float> shard_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 3);
-    auto tt_grad_tensor = ttml::core::from_xtensor(grad_data, device, shard_composer);
+    mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 3);
+    auto tt_grad_tensor = ttml::core::from_xtensor(grad_data, device, ttnn::Layout::TILE, mapper.get());
     scattered_tensor->set_grad(tt_grad_tensor);
     scattered_tensor->backward();
 
     auto result_tensor_grad = tensor->get_grad();
     EXPECT_TRUE(ttml::core::is_tensor_initialized(result_tensor_grad));
 
-    auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), identity_composer);
+    auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_TRUE(grad_data.shape() == grad_xtensor[0].shape());
     EXPECT_TRUE(grad_data.shape() == grad_xtensor[1].shape());
 

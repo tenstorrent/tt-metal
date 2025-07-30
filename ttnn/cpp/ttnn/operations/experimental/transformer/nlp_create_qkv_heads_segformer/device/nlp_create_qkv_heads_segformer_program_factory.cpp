@@ -17,21 +17,17 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_se
     const Tensor& a, std::vector<Tensor>& output, CoreCoord compute_with_storage_grid_size) {
     const auto& ashape = a.padded_shape();
 
-    tt_metal::IDevice* device = a.device();
-
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
     uint32_t single_tile_size = tt_metal::detail::TileSize(cb_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     TT_ASSERT(in0_buffer->size() % single_tile_size == 0);
     // Dummy
-    tt_metal::Buffer* in1_buffer;
     uint32_t in1_buffer_addr = 0;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      TM Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    const uint32_t head_dim = 32;
     uint32_t per_tensor_tiles = ashape[3] / TILE_WIDTH;
     const uint32_t q_num_tiles_per_tensor = per_tensor_tiles;
     const uint32_t num_q_heads = q_num_tiles_per_tensor;  // hard-coding the head_dim = 32
@@ -45,7 +41,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_se
     uint32_t q_out_CHtWt = q_out_c * q_out_HtWt;
     uint32_t q_num_tiles = num_q_heads * q_out_w_tiles;
 
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     // Block is a unit of work; ie. num of per_tensor_tiles per core
     uint32_t num_blocks = ashape[0] * ashape[1] * ashape[2] / TILE_HEIGHT;
@@ -71,7 +66,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_se
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool out_is_dram = q_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool in1_is_dram = false;
@@ -92,9 +86,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_se
     };
 
     ///////////// K transpose ////////////////////
-    const bool transpose_k_heads = false;
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
 
     //////////////////////////////////////////////
     auto reader_kernel_id = tt_metal::CreateKernel(
@@ -117,7 +110,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_se
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(cb0_num_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -163,7 +156,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_se
 
         auto dst_dram_buffer_query = output_tensors.at(0).buffer();
 
-        for (uint32_t i = 0, num_blocks_written = 0; i < num_cores; i++) {
+        for (uint32_t i = 0; i < num_cores; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
             {

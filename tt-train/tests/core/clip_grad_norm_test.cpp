@@ -53,7 +53,7 @@ TEST_F(ClipGradNormTest, ClipGradNorm_GENEROUS_TOLERANCE) {
 
     // Create tensors and set their gradients
     for (uint32_t i = 0; i < num_tensors; i++) {
-        auto tensor = autograd::create_tensor(core::zeros(core::create_shape({1U, 1U, 1U, tensor_size}), device));
+        auto tensor = autograd::create_tensor(core::zeros(ttnn::Shape({1U, 1U, 1U, tensor_size}), device));
         auto grad_tensor = core::from_xtensor(expected_grads[i], device);
         tensor->set_grad(grad_tensor);
         tensors.push_back(tensor);

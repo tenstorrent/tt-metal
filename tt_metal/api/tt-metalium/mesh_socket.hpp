@@ -4,7 +4,10 @@
 
 #pragma once
 
+#include <magic_enum/magic_enum.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/routing_table_generator.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -12,6 +15,9 @@ namespace tt::tt_metal::distributed {
 struct MeshCoreCoord {
     MeshCoordinate device_coord;
     CoreCoord core_coord;
+    bool operator==(const MeshCoreCoord& other) const {
+        return device_coord == other.device_coord && core_coord == other.core_coord;
+    }
 };
 
 // Specifies how sender cores on a Virtual Mesh connect to receiver cores on the same or another Virtual Mesh.
@@ -41,7 +47,14 @@ struct SocketMemoryConfig {
 struct SocketConfig {
     std::vector<SocketConnection> socket_connection_config;
     SocketMemoryConfig socket_mem_config;
+    // Specifies the ranks of the sender and receiver hosts in a multi-host context.
+    // Used for inital handshaking and validation of the socket configs.
+    multihost::Rank sender_rank{0};
+    multihost::Rank receiver_rank{0};
+    std::shared_ptr<multihost::DistributedContext> distributed_context = nullptr;
 };
+
+enum class SocketEndpoint : uint8_t { SENDER, RECEIVER };
 
 // Socket Handle exposed to the user.
 // A user can use this object to allocate and open multiple connections between two different MeshDevices
@@ -50,8 +63,9 @@ struct SocketConfig {
 // through the socket_config object.
 class MeshSocket {
 public:
+    MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config);
     // Sockets can only be created in sender/receiver pairs.
-    static std::pair<MeshSocket, MeshSocket> create_sockets(
+    static std::pair<MeshSocket, MeshSocket> create_socket_pair(
         const std::shared_ptr<MeshDevice>& sender,
         const std::shared_ptr<MeshDevice>& receiver,
         const SocketConfig& config);
@@ -62,16 +76,47 @@ public:
     // Access the underlying configuration of the instantiated socket (connectivity of senders/receivers and the socket
     // memory config).
     const SocketConfig& get_config() const;
+    // Access the socket endpoint type (SENDER or RECEIVER).
+    SocketEndpoint get_socket_endpoint_type() const { return socket_endpoint_type_; }
+
+    tt::tt_fabric::FabricNodeId get_fabric_node_id(SocketEndpoint endpoint, const MeshCoordinate& coord) const;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("config", "socket_endpoint_type", "fabric_node_id_map");
+    auto attribute_values() const { return std::forward_as_tuple(config_, socket_endpoint_type_, fabric_node_id_map_); }
 
 private:
     MeshSocket(
         std::shared_ptr<MeshBuffer> data_buffer,
         std::shared_ptr<MeshBuffer> config_buffer,
-        const SocketConfig& config) :
-        data_buffer_(data_buffer), config_buffer_(config_buffer), config_(config) {}
+        const SocketConfig& config,
+        SocketEndpoint socket_endpoint_type) :
+        data_buffer_(data_buffer),
+        config_buffer_(config_buffer),
+        config_(config),
+        socket_endpoint_type_(socket_endpoint_type) {}
+    void connect_with_peer(std::shared_ptr<multihost::DistributedContext> context);
+
     std::shared_ptr<MeshBuffer> data_buffer_;
     std::shared_ptr<MeshBuffer> config_buffer_;
     SocketConfig config_;
+    SocketEndpoint socket_endpoint_type_;
+    std::
+        array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, magic_enum::enum_count<SocketEndpoint>()>
+            fabric_node_id_map_;
 };
 
 }  // namespace tt::tt_metal::distributed
+
+namespace std {
+
+template <>
+struct hash<tt::tt_metal::distributed::SocketConfig> {
+    size_t operator()(const tt::tt_metal::distributed::SocketConfig& config) const noexcept;
+};
+template <>
+struct hash<tt::tt_metal::distributed::MeshSocket> {
+    size_t operator()(const tt::tt_metal::distributed::MeshSocket& socket) const noexcept;
+};
+
+}  // namespace std

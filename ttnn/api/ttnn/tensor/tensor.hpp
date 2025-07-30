@@ -17,6 +17,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
+#include "ttnn/distributed/tensor_topology.hpp"
 #include <tt-metalium/host_buffer.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/storage.hpp"
@@ -61,8 +62,12 @@ public:
     Tensor& operator=(Tensor&& other) noexcept;
     ~Tensor();
 
-    // Constructs a tensor with `Storage` and `TensorSpec`.
-    [[nodiscard]] Tensor(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config);
+    // Constructs a tensor with `Storage`, `TensorSpec`, and `TensorTopology`.
+    [[nodiscard]] Tensor(
+        Storage storage,
+        TensorSpec tensor_spec,
+        DistributedTensorConfig distributed_tensor_config,
+        TensorTopology tensor_topology);
 
     // Constructors of `Tensor` that take physical data encoded in `HostBuffer`.
     // The encoded data type and physical size of the data must match the specified tensor physical shape and data type.
@@ -157,10 +162,8 @@ public:
     template <typename T>
     [[nodiscard]] std::vector<T> to_vector(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
-    [[nodiscard]] Tensor to_device(
-        IDevice* target_device,
-        const MemoryConfig& mem_config = MemoryConfig{},
-        ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
+    template <typename T>
+    [[nodiscard]] T item(ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
     [[nodiscard]] Tensor to_device(
         distributed::MeshDevice* mesh_device,
@@ -198,19 +201,6 @@ public:
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
-    // TODO: #22090 - Remove the following getters, after giving clients enough time to migrate.
-    [[deprecated("Use storage() instead")]] const Storage& get_storage() const;
-    [[deprecated("Use storage() instead")]] Storage& get_storage();
-    [[deprecated("Use dtype() instead")]] DataType get_dtype() const;
-    [[deprecated("Use layout() instead")]] Layout get_layout() const;
-    [[deprecated("Use logical_shape() instead")]] const ttnn::Shape& get_logical_shape() const;
-    [[deprecated("Use padded_shape() instead")]] const ttnn::Shape& get_padded_shape() const;
-    [[deprecated("Use tensor_spec() instead")]] const TensorSpec& get_tensor_spec() const;
-    [[deprecated("Use logical_volume() instead")]] uint64_t get_logical_volume() const;
-    [[deprecated("Use physical_volume() instead")]] uint32_t volume() const;
-    [[deprecated("Use distributed_tensor_config() instead")]] const DistributedTensorConfig&
-    get_distributed_tensor_config() const;
-
     const Storage& storage() const;
     Storage& storage();
     DataType dtype() const;
@@ -222,6 +212,9 @@ public:
     uint64_t physical_volume() const;
     const DistributedTensorConfig& distributed_tensor_config() const;
     const MemoryConfig& memory_config() const;
+
+    // Multi-device topology configuration - tracks how tensor is distributed across mesh devices
+    const TensorTopology& tensor_topology() const;
 
     // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
     const std::optional<ShardSpec>& shard_spec() const;
@@ -242,19 +235,26 @@ public:
     Buffer* buffer() const;
 
     // Returns device `Storage`.
-    // Throws if the tensor is not allocated on a device.
-    const DeviceStorage& device_storage() const;
+    // Throws if the tensor is not on device.
+    const DeviceStorage& device_storage() const&;
+    const DeviceStorage& device_storage() const&& = delete;  // prevents dangling reference to temporaries.
+
+    // Returns host `Storage`.
+    // Throws if the tensor is not on host.
+    const HostStorage& host_storage() const&;
+    const HostStorage& host_storage() const&& = delete;  // prevents dangling reference to temporaries.
 
     // Returns device `MeshBuffer`.
     // Throws if the tensor is not allocated on a device.
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer() const;
 
-    // TODO: #21099 - Remove the overload `mesh_device()`, and instead use `device()`.
-    distributed::MeshDevice* mesh_device() const;
-
     // Returns the device the tensor is allocated on.
     // Throws if the tensor is not allocated on a device.
-    IDevice* device() const;
+    distributed::MeshDevice* device() const;
+
+    // NOTE: Keeping this for backward compatibility.
+    // This is deprecated
+    distributed::MeshDevice* mesh_device() const { return device(); }
 
     bool is_sharded() const;
 
@@ -268,7 +268,11 @@ public:
     }
 
 private:
-    void init(Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config);
+    void init(
+        Storage storage,
+        TensorSpec tensor_spec,
+        DistributedTensorConfig distributed_tensor_config,
+        TensorTopology tensor_topology);
     void deallocate_impl(bool force);
 };
 
@@ -320,10 +324,15 @@ void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& reg
 
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region = std::nullopt);
 
-// Allocates a tensor on a mesh device through mesh buffer.
-Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
+// Allocates a tensor on device.
+Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
 
-void write_tensor(const Tensor& host_tensor, Tensor device_tensor, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+// Allocates a tensor on host. Uses `mesh_device` to allocate sufficient number of host buffers for each multi-device
+// shard.
+Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
+
+// Writes tensor from `src` to `dst`; supports only host-to-device and device-to-host transfers.
+void write_tensor(const Tensor& src, Tensor& dst, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
 Tensor set_tensor_id(const Tensor& tensor);
 

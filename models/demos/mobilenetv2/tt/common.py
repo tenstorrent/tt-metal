@@ -58,7 +58,6 @@ class TtMobileNetV2Conv2D:
 
     def _initialize_conv_config(self):
         conv_config = ttnn.Conv2dConfig(
-            dtype=self.activation_dtype,
             weights_dtype=ttnn.bfloat8_b,
             activation=self.activation_function if self.activation_function is not None else "",
             shard_layout=self.shard_layout,
@@ -118,6 +117,7 @@ class TtMobileNetV2Conv2D:
             groups=self.groups,
             return_weights_and_bias=True,
             return_output_dim=True,
+            dtype=self.activation_dtype,
         )
         return x, h, w
 
@@ -159,6 +159,7 @@ class TtInvertedResidual:
             block_shard=self.block_shard,
             deallocate_activation=True,
             activation_function="relu6",
+            enable_act_double_buffer=True if self.block_shard else False,
         )
         self.conv3 = TtMobileNetV2Conv2D(
             [1, 1, 0, out_channels],

@@ -39,7 +39,6 @@ NUM_VALIDATION_IMAGES_IMAGENET = 49920
 )
 def test_run_vit_trace_2cqs_inference(
     mesh_device,
-    use_program_cache,
     batch_size_per_device,
     iterations,
     imagenet_label_dict,
@@ -155,7 +154,6 @@ def test_run_vit_trace_2cqs_inference(
 )
 def test_run_vit_trace_2cqs_inference_with_random_inputs(
     mesh_device,
-    use_program_cache,
     batch_size_per_device,
     iterations,
     imagenet_label_dict=None,

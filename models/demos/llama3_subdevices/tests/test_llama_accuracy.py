@@ -16,8 +16,6 @@ from models.demos.llama3_subdevices.tt.model_config import TtModelArgs, LlamaOpt
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from tqdm import tqdm
 
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
-
 
 @torch.no_grad()
 @pytest.mark.parametrize(
@@ -35,9 +33,7 @@ is_RING_6U = os.environ.get("RING_6U", "0") == "1"
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
+        (8, 4),
     ],
     indirect=True,
 )
@@ -80,7 +76,7 @@ is_RING_6U = os.environ.get("RING_6U", "0") == "1"
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 23887872,
             "worker_l1_size": 1344544,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": True,
         }
     ],
     indirect=True,

@@ -32,6 +32,7 @@ enum class KernelName {
     ReaderColBcastNg,
     ReaderRowBColABcastNg,
     ReaderScalarBcastNg,
+    ComputeRowBcastNg,
 };
 
 struct BinaryNgKernelConfig {
@@ -60,6 +61,7 @@ struct OpConfig {
         LCM,
         LEFT_SHIFT,
         RIGHT_SHIFT,
+        LOGICAL_RIGHT_SHIFT,
         BITWISE_AND,
         BITWISE_OR,
         BITWISE_XOR,
@@ -67,7 +69,10 @@ struct OpConfig {
         REQUANT,
         DEQUANT,
         MAXIMUM,
-        MINIMUM
+        MINIMUM,
+        LOGICAL_AND,
+        LOGICAL_OR,
+        LOGICAL_XOR,
     };
 
     template <class EnumT>

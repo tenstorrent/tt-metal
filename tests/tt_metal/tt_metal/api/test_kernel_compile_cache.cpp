@@ -2,18 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <chrono>
 #include <gtest/gtest.h>
 #include <magic_enum/magic_enum.hpp>
 #include <stdint.h>
-#include <compare>
 #include <filesystem>
-#include <memory>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
 #include <variant>
-#include <vector>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -36,7 +32,7 @@
 using namespace tt::tt_metal;
 
 TEST_F(DeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
-    const string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
+    const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
 
     for (IDevice* device : this->devices_) {
         detail::ClearKernelCache();
@@ -58,14 +54,14 @@ TEST_F(DeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
             device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
 
         const auto& kernels = program.get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
-        const string full_kernel_name = KernelImpl::from(*kernels.at(kernel_handle)).get_full_kernel_name();
+        const std::string full_kernel_name = KernelImpl::from(*kernels.at(kernel_handle)).get_full_kernel_name();
 
-        const string successful_marker_path =
+        const std::string successful_marker_path =
             build_state.get_out_path() + full_kernel_name + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME;
 
         std::filesystem::remove(successful_marker_path);
 
-        const string elf_file_path = build_state.get_target_out_path(full_kernel_name);
+        const std::string elf_file_path = build_state.get_target_out_path(full_kernel_name);
         const auto t0 = std::filesystem::last_write_time(elf_file_path);
 
         detail::ClearKernelCache();
@@ -84,7 +80,7 @@ TEST_F(DeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
 }
 
 TEST_F(DeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentProcessors) {
-    const string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
+    const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
 
     for (IDevice* device : this->devices_) {
         detail::ClearKernelCache();
@@ -108,13 +104,13 @@ TEST_F(DeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentProces
             device->build_id(), tensix_core_type, dm_class_idx, riscv_1_id);
 
         const auto& kernels = program.get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
-        const string full_kernel_name_riscv_0 =
+        const std::string full_kernel_name_riscv_0 =
             KernelImpl::from(*kernels.at(kernel_handle_riscv_0)).get_full_kernel_name();
-        const string full_kernel_name_riscv_1 =
+        const std::string full_kernel_name_riscv_1 =
             KernelImpl::from(*kernels.at(kernel_handle_riscv_1)).get_full_kernel_name();
 
-        const string elf_file_path_riscv_0 = build_state_riscv_0.get_target_out_path(full_kernel_name_riscv_0);
-        const string elf_file_path_riscv_1 = build_state_riscv_1.get_target_out_path(full_kernel_name_riscv_1);
+        const std::string elf_file_path_riscv_0 = build_state_riscv_0.get_target_out_path(full_kernel_name_riscv_0);
+        const std::string elf_file_path_riscv_1 = build_state_riscv_1.get_target_out_path(full_kernel_name_riscv_1);
 
         EXPECT_TRUE(std::filesystem::exists(elf_file_path_riscv_0));
         EXPECT_TRUE(std::filesystem::exists(elf_file_path_riscv_1));

@@ -15,10 +15,10 @@ void llk_math_eltwise_binary_sfpu_copy_dest_values(
     constexpr bool APPROXIMATE = 0;
     // Note: this if is required due to the issue described in https://github.com/tenstorrent/tt-metal/issues/19442
     if (dst_index0 > dst_index1) {
-        llk_math_eltwise_binary_sfpu_params<APPROXIMATE>(
+        _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
             sfpu::copy_dest_value<APPROXIMATE, 1>, dst_index0, dst_index1, vector_mode);
     } else {
-        llk_math_eltwise_binary_sfpu_params<APPROXIMATE>(
+        _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
             sfpu::copy_dest_value<APPROXIMATE, 0>, dst_index0, dst_index1, vector_mode);
     }
 }

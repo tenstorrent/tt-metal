@@ -4,12 +4,11 @@
 
 
 import torch
-import torch.nn.functional as F
 from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.demos.yolov8s_world.demo.demo_utils import load_torch_model
+from models.demos.yolov8s_world.common import load_torch_model
 from models.demos.yolov8s_world.tt.ttnn_yolov8s_world import TtYOLOWorld
 from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import create_custom_preprocessor, move_to_device
 from models.utility_functions import divup, is_wormhole_b0
@@ -38,7 +37,8 @@ class YOLOv8sWorldPerformanceRunnerInfra:
         self.model_location_generator = model_location_generator
         self.torch_input_tensor = torch_input_tensor
 
-        self.torch_model = load_torch_model()
+        self.torch_model = load_torch_model(model_location_generator)
+        self.torch_model = self.torch_model.model
         self.torch_input_tensor = (
             torch.randn((1, 3, 640, 640), dtype=torch.float32)
             if self.torch_input_tensor is None
@@ -78,17 +78,14 @@ class YOLOv8sWorldPerformanceRunnerInfra:
 
         num_devices = device.get_num_devices()
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
-
         n, c, h, w = torch_input_tensor.shape
-
-        torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
-        torch_input_tensor = F.pad(torch_input_tensor, (0, 29))
+        ## Converting from image based channels (3) to min channels (16)
+        if c == 3:
+            c = 16
         input_mem_config = ttnn.create_sharded_memory_config(
-            [6400, 32],
-            core_grid=device.core_grid,
-            strategy=ttnn.ShardStrategy.HEIGHT,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
+            [n, c, h, w],
+            ttnn.CoreGrid(x=8, y=8),
+            ttnn.ShardStrategy.HEIGHT,
         )
         tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 

@@ -43,10 +43,10 @@ def image_to_tensor(image):
 
 
 def load_torch_model(model_location_generator, module=None):
-    if model_location_generator == None:
+    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
         model_path = "models"
     else:
-        model_path = model_location_generator("models", model_subdir="Yolo")
+        model_path = model_location_generator("vision-models/yolov4", model_subdir="", download_if_ci_v2=True)
 
     if model_path == "models":
         if not os.path.exists("models/demos/yolov4/tests/pcc/yolov4.pth"):  # check if yolov4.th is availble
@@ -55,7 +55,7 @@ def load_torch_model(model_location_generator, module=None):
             )  # execute the yolov4_weights_download.sh file
         weights_pth = "models/demos/yolov4/tests/pcc/yolov4.pth"
     else:
-        weights_pth = str(model_path / "yolov4.pth")
+        weights_pth = os.path.join(model_path, "yolov4.pth")
 
     torch_dict = torch.load(weights_pth)
     state_dict = torch_dict
@@ -93,9 +93,9 @@ def load_torch_model(model_location_generator, module=None):
     return torch_model
 
 
-def get_model_result(ttnn_output_tensor, resolution):
-    result_boxes_padded = ttnn.to_torch(ttnn_output_tensor[0])
-    result_confs = ttnn.to_torch(ttnn_output_tensor[1])
+def get_model_result(ttnn_output_tensor, resolution, mesh_composer=None):
+    result_boxes_padded = ttnn.to_torch(ttnn_output_tensor[0], mesh_composer=mesh_composer)
+    result_confs = ttnn.to_torch(ttnn_output_tensor[1], mesh_composer=mesh_composer)
 
     result_boxes_padded = result_boxes_padded.permute(0, 2, 1, 3)
     result_boxes_list = []
@@ -126,3 +126,15 @@ def get_model_result(ttnn_output_tensor, resolution):
     result_boxes = torch.cat(result_boxes_list, dim=1)
 
     return [result_boxes.to(torch.float16), result_confs.to(torch.float16)]
+
+
+def get_mesh_mappers(device):
+    if device.get_num_devices() > 1:
+        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+        weights_mesh_mapper = None
+        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+    else:
+        inputs_mesh_mapper = None
+        weights_mesh_mapper = None
+        output_mesh_composer = None
+    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer

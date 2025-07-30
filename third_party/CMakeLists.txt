@@ -49,13 +49,6 @@ ensureboosttarget(container)
 ensureboosttarget(smart_ptr)
 ensureboosttarget(interprocess)
 
-add_library(span INTERFACE)
-target_link_libraries(
-    span
-    INTERFACE
-        "$<BUILD_INTERFACE:Boost::core>" # FIXME: this is a hack so we do not need to package up Boost
-)
-
 add_library(small_vector INTERFACE)
 target_link_libraries(
     small_vector
@@ -307,7 +300,7 @@ set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME ${DEFAULT_COMPONENT_NAME})
 CPMAddPackage(
     NAME tt-logger
     GITHUB_REPOSITORY tenstorrent/tt-logger
-    VERSION 1.1.4
+    VERSION 1.1.5
     OPTIONS
         "TT_LOGGER_INSTALL ON"
         "TT_LOGGER_BUILD_TESTING OFF"

@@ -23,7 +23,7 @@ std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() con
     auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     auto mesh_ids = control_plane.get_user_physical_mesh_ids();
     for (const auto& mesh_id : mesh_ids) {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
             // skip wrapping around mesh for TG since the corner chips connected to the gateway will be
             // using that link to route dispatch or any other traffic
             wrap_around_mesh[mesh_id] = false;
@@ -43,15 +43,15 @@ std::unordered_map<MeshId, bool> FabricContext::check_for_wrap_around_mesh() con
     return wrap_around_mesh;
 }
 
-tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_metal::FabricConfig fabric_config) {
+tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::FabricConfig fabric_config) {
     switch (fabric_config) {
-        case tt::tt_metal::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
-        case tt::tt_metal::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
-        case tt::tt_metal::FabricConfig::FABRIC_2D: return tt::tt_fabric::Topology::Mesh;
-        case tt::tt_metal::FabricConfig::FABRIC_2D_TORUS: return tt::tt_fabric::Topology::Torus;
-        case tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC: return tt::tt_fabric::Topology::Mesh;
-        case tt::tt_metal::FabricConfig::DISABLED:
-        case tt::tt_metal::FabricConfig::CUSTOM:
+        case tt::tt_fabric::FabricConfig::FABRIC_1D: return tt::tt_fabric::Topology::Linear;
+        case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: return tt::tt_fabric::Topology::Ring;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D: return tt::tt_fabric::Topology::Mesh;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS: return tt::tt_fabric::Topology::Torus;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC: return tt::tt_fabric::Topology::Mesh;
+        case tt::tt_fabric::FabricConfig::DISABLED:
+        case tt::tt_fabric::FabricConfig::CUSTOM:
             TT_THROW("Unsupported fabric config: {}", magic_enum::enum_name(fabric_config));
     }
     return tt::tt_fabric::Topology::Linear;
@@ -59,7 +59,7 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_metal::Fa
 
 size_t FabricContext::get_packet_header_size_bytes() const {
     if (this->topology_ == Topology::Mesh) {
-        return (this->fabric_config_ == tt::tt_metal::FabricConfig::FABRIC_2D_DYNAMIC)
+        return (this->fabric_config_ == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC)
                    ? sizeof(tt::tt_fabric::MeshPacketHeader)
                    : sizeof(tt::tt_fabric::LowLatencyMeshPacketHeader);
     } else {
@@ -95,9 +95,9 @@ std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig> FabricContext::get_ed
         this->channel_buffer_size_bytes_, this->topology_, edm_options);
 }
 
-FabricContext::FabricContext(tt::tt_metal::FabricConfig fabric_config) {
+FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
     TT_FATAL(
-        fabric_config != tt::tt_metal::FabricConfig::DISABLED,
+        fabric_config != tt::tt_fabric::FabricConfig::DISABLED,
         "Trying to initialize fabric context for disabled fabric config");
 
     this->fabric_config_ = fabric_config;

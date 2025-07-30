@@ -15,17 +15,20 @@
 // clang-format on
 
 constexpr bool is_2d_fabric = get_compile_time_arg_val(0);
-constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(1);
-constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(2);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(3);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(4);
-constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(5);
-constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(6);
-constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(7);
-constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(8);
-constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(9);
-constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(10);
-constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(11);
+constexpr bool terminate_from_kernel = get_compile_time_arg_val(1);
+constexpr bool is_termination_master = get_compile_time_arg_val(2);
+constexpr uint8_t fabric_mux_x = get_compile_time_arg_val(3);
+constexpr uint8_t fabric_mux_y = get_compile_time_arg_val(4);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(5);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(6);
+constexpr size_t fabric_mux_channel_base_address = get_compile_time_arg_val(7);
+constexpr size_t fabric_mux_connection_info_address = get_compile_time_arg_val(8);
+constexpr size_t fabric_mux_connection_handshake_address = get_compile_time_arg_val(9);
+constexpr size_t fabric_mux_flow_control_address = get_compile_time_arg_val(10);
+constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(11);
+constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(12);
+constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(13);
+constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(14);
 
 void kernel_main() {
     uint32_t rt_args_idx = 0;
@@ -37,6 +40,7 @@ void kernel_main() {
     uint32_t return_credits_per_packet = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t test_results_size_bytes = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t test_results_address = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t termination_sync_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t local_fabric_mux_status_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t local_flow_control_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t local_teardown_address = get_arg_val<uint32_t>(rt_args_idx++);
@@ -48,6 +52,8 @@ void kernel_main() {
     uint32_t num_hops = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t sender_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t sender_noc_xy_encoding = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t num_mux_clients = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t termination_master_noc_xy_encoding = get_arg_val<uint32_t>(rt_args_idx++);
 
     eth_chan_directions outgoing_direction;
     uint32_t my_device_id, dst_device_id, dst_mesh_id, mesh_ew_dim;
@@ -173,4 +179,16 @@ void kernel_main() {
         test_results[TT_FABRIC_MISC_INDEX + 14] = expected_val;
     }
     test_results[TX_TEST_IDX_NPKT] = num_packets_processed;
+
+    if constexpr (terminate_from_kernel) {
+        if constexpr (is_termination_master) {
+            auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
+            noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+            tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
+        } else {
+            uint64_t dest_addr = get_noc_addr_helper(termination_master_noc_xy_encoding, termination_sync_address);
+            noc_semaphore_inc(dest_addr, 1);
+            noc_async_atomic_barrier();
+        }
+    }
 }

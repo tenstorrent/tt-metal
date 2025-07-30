@@ -60,18 +60,17 @@ void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) 
                 fabric_header_ptr->routing_fields.value);
             break;
         }
-#ifdef ARCH_WORMHOLE
         case tt::tt_fabric::NocSendType::NOC_UNICAST_SCATTER_WRITE: {
             const volatile auto& unicast_write_cmd = fabric_header_ptr->get_command_fields().unicast_scatter_write;
-            noc_event_profiler::recordFabricNocEvent(
+            noc_event_profiler::recordFabricScatterEvent(
                 KernelProfilerNocEventMetadata::NocEventType::FABRIC_UNICAST_SCATTER_WRITE,
                 routing_fields_type,
                 unicast_write_cmd.noc_address,
+                unicast_write_cmd.chunk_size,
                 NOC_SCATTER_WRITE_MAX_CHUNKS,
                 fabric_header_ptr->routing_fields.value);
             break;
         }
-#endif
         case tt::tt_fabric::NocSendType::NOC_MULTICAST_WRITE: {
             const volatile auto& mcast_write_cmd = fabric_header_ptr->get_command_fields().mcast_write;
             noc_event_profiler::recordFabricNocEventMulticast(

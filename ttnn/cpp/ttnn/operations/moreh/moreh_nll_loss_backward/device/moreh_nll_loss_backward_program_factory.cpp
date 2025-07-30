@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <optional>
+#include <string>
 
 #include <tt-metalium/constants.hpp>
 #include "moreh_nll_loss_backward_device_operation.hpp"
@@ -25,11 +26,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
     // input_grad: (N, C)
     auto input_grad_shape = input_grad.padded_shape();
-    auto N = input_grad_shape[0];
     auto channel_size = input_grad_shape[1];
-
-    auto W = input_grad_shape[-1];
-    auto Wt = W / tt::constants::TILE_WIDTH;
 
     const bool weight_has_value = weight.has_value();
     const bool divisor_has_value = divisor.has_value();
@@ -78,8 +75,8 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
     const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
     std::map<std::string, std::string> compute_defines{};
 
     if (weight_has_value) {
@@ -196,12 +193,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
     // input_grad: (N, C, W)
     auto input_grad_shape = input_grad.padded_shape();
-    auto N = input_grad_shape[0];
     auto channel_size = input_grad_shape[1];
-
-    auto W = input_grad_shape[-1];
-    auto Ct = channel_size / tt::constants::TILE_HEIGHT;
-    auto Wt = W / tt::constants::TILE_WIDTH;
 
     auto target_shape = target.padded_shape();
     auto num_inner_tile = target_shape[-1] / tt::constants::TILE_WIDTH;
@@ -253,8 +245,8 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
     const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
     std::map<std::string, std::string> compute_defines{};
 
     if (weight_has_value) {
@@ -426,8 +418,8 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
     const std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(input_grad))};
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
     std::map<std::string, std::string> compute_defines{};
 
     if (weight_has_value) {

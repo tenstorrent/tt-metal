@@ -54,6 +54,9 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
         eth_l1_mem::address_map::RETRAIN_COUNT_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] =
         eth_l1_mem::address_map::RETRAIN_FORCE_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CRC_ERR)] = eth_l1_mem::address_map::CRC_ERR_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORR_CW)] = eth_l1_mem::address_map::CORR_CW_HI_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNCORR_CW)] = eth_l1_mem::address_map::UNCORR_CW_HI_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE;
 
@@ -88,7 +91,7 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
         eth_l1_mem::address_map::ETH_LINK_REMOTE_INFO_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::INTERMESH_ETH_LINK_CONFIG)] =
         eth_l1_mem::address_map::INTERMESH_ETH_LINK_CONFIG_ADDR;
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::INTERMESH_ETH_LINK_STATUS)] =
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::INTERMESH_ETH_LINK_STATUS)] =
         eth_l1_mem::address_map::INTERMESH_ETH_LINK_STATUS_ADDR;
     // Base FW api not supported on WH
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);

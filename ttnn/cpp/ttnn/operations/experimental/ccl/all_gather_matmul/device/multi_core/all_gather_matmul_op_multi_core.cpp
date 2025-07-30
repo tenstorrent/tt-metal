@@ -131,7 +131,7 @@ DatacopyParams setup_datacopy(
     tt::tt_metal::CircularBufferConfig cb_in0_config =
         tt::tt_metal::CircularBufferConfig(page_size * datacopy_buffer_size, {{cb_id_in0, cb_data_format}})
             .set_page_size(cb_id_in0, page_size);
-    auto cb_input = tt::tt_metal::CreateCircularBuffer(program, datacopy_workers, cb_in0_config);
+    tt::tt_metal::CreateCircularBuffer(program, datacopy_workers, cb_in0_config);
 
     // Runtime args
     std::vector<uint32_t> datacopy_rt_args = {
@@ -147,7 +147,7 @@ DatacopyParams setup_datacopy(
         datacopy_rt_args.push_back(static_cast<uint32_t>(coord.y));
     }
 
-    std::map<string, string> kernel_defines = {{"TILED_LAYOUT", "1"}, {"INTERLEAVED_MEM_LAYOUT", "1"}};
+    std::map<std::string, std::string> kernel_defines = {{"TILED_LAYOUT", "1"}, {"INTERLEAVED_MEM_LAYOUT", "1"}};
 
     // Create the kernel
     tt::tt_metal::KernelHandle datacopy_kernel_id = tt::tt_metal::CreateKernel(

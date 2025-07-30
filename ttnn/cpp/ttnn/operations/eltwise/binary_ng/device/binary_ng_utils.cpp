@@ -136,6 +136,9 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
             return fmt::format(compute, root, is_sfpu ? "eltwise_binary_sfpu.cpp" : "eltwise_binary.cpp");
         case KernelName::ComputeScalar:
             return fmt::format(compute, root, is_sfpu ? "eltwise_binary_sfpu_scalar.cpp" : "eltwise_binary_scalar.cpp");
+        case KernelName::ComputeRowBcastNg:
+            return fmt::format(
+                compute, root_ng, is_sfpu ? "eltwise_binary_sfpu_row_bcast.cpp" : "eltwise_binary_row_bcast.cpp");
         default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
     }
 }
@@ -166,8 +169,8 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
             break;
         case BinaryOpType::GT: postprocess = unary::UnaryOpType::GTZ; break;
         case BinaryOpType::LT: postprocess = unary::UnaryOpType::LTZ; break;
-        case BinaryOpType::GTE: postprocess = unary::UnaryOpType::GEZ; break;
-        case BinaryOpType::LTE: postprocess = unary::UnaryOpType::LEZ; break;
+        case BinaryOpType::GE: postprocess = unary::UnaryOpType::GEZ; break;
+        case BinaryOpType::LE: postprocess = unary::UnaryOpType::LEZ; break;
         case BinaryOpType::EQ: postprocess = unary::UnaryOpType::EQZ; break;
         case BinaryOpType::NE: postprocess = unary::UnaryOpType::NEZ; break;
         // (a-b)**2
@@ -178,6 +181,8 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
             postprocess = unary::UnaryOpType::GELU;
             break;
         case BinaryOpType::LOGICAL_AND:
+            process_lhs = unary::UnaryOpType::NEZ;
+            process_rhs = unary::UnaryOpType::NEZ;
             binary_op = EnumT::MUL;
             postprocess = unary::UnaryOpType::NEZ;
             break;
@@ -242,6 +247,13 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
         case BinaryOpType::RIGHT_SHIFT:
             if (is_sfpu_op()) {
                 binary_op = SfpuBinaryOp::RIGHT_SHIFT;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
+        case BinaryOpType::LOGICAL_RIGHT_SHIFT:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::LOGICAL_RIGHT_SHIFT;
             } else {
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
@@ -330,6 +342,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case MUL:
             if (dtype == DataType::UINT16) {
                 return {"mul_int_tile_init();", "mul_uint16_tile"};
+            } else if (dtype == DataType::INT32) {
+                return {"mul_int32_tile_init();", "mul_int32_tile"};
             } else {
                 return {"mul_binary_tile_init();", "mul_binary_tile"};
             }
@@ -338,8 +352,30 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case RSUB: return {"rsub_binary_tile_init();", "rsub_binary_tile"};
         case GCD: return {"gcd_tile_init();", "gcd_tile"};
         case LCM: return {"lcm_tile_init();", "lcm_tile"};
-        case LEFT_SHIFT: return {"binary_shift_tile_init();", "binary_left_shift_tile"};
-        case RIGHT_SHIFT: return {"binary_shift_tile_init();", "binary_right_shift_tile"};
+        case LEFT_SHIFT:
+            if (dtype == DataType::UINT32) {
+                return {"binary_shift_tile_init();", "binary_left_shift_uint32_tile"};
+            } else if (dtype == DataType::INT32) {
+                return {"binary_shift_tile_init();", "binary_left_shift_int32_tile"};
+            } else {
+                return {"binary_shift_tile_init();", "binary_left_shift_tile"};
+            }
+        case RIGHT_SHIFT:
+            if (dtype == DataType::UINT32) {
+                return {"binary_shift_tile_init();", "binary_right_shift_uint32_tile"};
+            } else if (dtype == DataType::INT32) {
+                return {"binary_shift_tile_init();", "binary_right_shift_int32_tile"};
+            } else {
+                return {"binary_shift_tile_init();", "binary_right_shift_tile"};
+            }
+        case LOGICAL_RIGHT_SHIFT:
+            if (dtype == DataType::UINT32) {
+                return {"binary_shift_tile_init();", "binary_logical_right_shift_uint32_tile"};
+            } else if (dtype == DataType::INT32) {
+                return {"binary_shift_tile_init();", "binary_logical_right_shift_int32_tile"};
+            } else {
+                return {"binary_shift_tile_init();", "binary_logical_right_shift_tile"};
+            }
         case BITWISE_AND:
             if (dtype == DataType::UINT16) {
                 return {"binary_bitwise_tile_init();", "bitwise_and_uint16_binary_tile"};

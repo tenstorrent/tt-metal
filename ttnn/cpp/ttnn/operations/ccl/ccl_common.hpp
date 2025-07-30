@@ -392,7 +392,6 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
         TT_THROW("deprecated code path for ");
     }
 
-   public:
     std::vector<tt_xy_pair> get_worker_slice_shapes() const { return this->worker_slice_shapes; }
     uint32_t get_worker_slice_size_bytes(std::size_t worker_index) {
         TT_ASSERT(this->worker_slice_shapes.size() > worker_index, "Invalid worker index {} in `worker_slice_shapes` of size {}", worker_index, worker_slice_shapes.size());
@@ -705,6 +704,17 @@ private:
 };
 
 std::tuple<size_t, size_t, bool> get_forward_backward_configuration(size_t ring_size, size_t ring_index, Topology topology);
+
+// Forward/backward devices are assumed to be neighbors for 1D fabric for now
+std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backward_line_unicast_configuration(Topology topology, IDevice* src_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device);
+
+std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
+    size_t ring_size, size_t ring_index, Topology topology, bool static_alternate);
+
+// Forward/backward devices are assumed to be neighbors for 1D fabric for now
+std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backward_line_mcast_configuration(
+    Topology topology, IDevice* src_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device, uint32_t num_targets_forward, uint32_t num_targets_backward);
+
 
 }  // namespace ccl
 }  // namespace ttnn

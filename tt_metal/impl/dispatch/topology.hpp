@@ -47,7 +47,13 @@ void populate_cq_static_args(IDevice* device);
 
 // Fill out all settings for FD kernels on the given device, and add them to a Program and return it.
 // Prerequisites: Must call populate_cq_static_args
-std::unique_ptr<tt::tt_metal::Program> create_and_compile_cq_program(tt::tt_metal::IDevice* device);
+void create_cq_program(tt::tt_metal::IDevice* device);
+
+// Compile all command queue programs created by create_and_compile_cq_program()
+void compile_cq_programs();
+
+// Get the compiled command queue program for a given device
+std::unique_ptr<tt::tt_metal::Program> get_compiled_cq_program(tt::tt_metal::IDevice* device);
 
 // Perform additional configuration (writing to specific L1 addresses, etc.) for FD kernels on this device.
 void configure_dispatch_cores(tt::tt_metal::IDevice* device);
@@ -64,7 +70,10 @@ const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(chip_id_t dev_id
 // Return the virtual cores used for dispatch routing/tunneling on a given device
 const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(chip_id_t dev_id);
 
-// Return the list of termination targets that were registered for this device
-const std::vector<tt::tt_metal::TerminationInfo>& get_registered_termination_cores(chip_id_t dev_id);
+// Return the set of termination targets that were registered for this device
+const std::unordered_set<tt::tt_metal::TerminationInfo>& get_registered_termination_cores(chip_id_t dev_id);
+
+// Must be called at the end of the application to cleanup any static state allocated by this module.
+void reset_topology_state();
 
 }  // namespace tt::tt_metal

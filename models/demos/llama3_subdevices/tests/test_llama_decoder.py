@@ -4,7 +4,6 @@
 import torch
 import pytest
 from loguru import logger
-import os
 import ttnn
 from models.demos.llama3_subdevices.tt.llama_common import (
     precompute_freqs,
@@ -22,17 +21,13 @@ from models.utility_functions import skip_for_grayskull
 from models.demos.llama3_subdevices.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_subdevices.tt.llama_ccl import TT_CCL
 
-is_RING_6U = os.environ.get("RING_6U", "0") == "1"
-
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
+        (8, 4),
     ],
     indirect=True,
 )
@@ -65,7 +60,7 @@ is_RING_6U = os.environ.get("RING_6U", "0") == "1"
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 165136000,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING if is_RING_6U else ttnn.FabricConfig.FABRIC_1D,
+            "fabric_config": True,
         }
     ],
     indirect=True,

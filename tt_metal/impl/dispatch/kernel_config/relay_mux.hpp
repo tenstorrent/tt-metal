@@ -9,8 +9,8 @@
 #include "fabric_edm_packet_header.hpp"
 #include "fd_kernel.hpp"
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
-#include "tt_metal/fabric/fabric_mux_config.hpp"
 #include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/fabric.hpp>
 
 namespace tt::tt_metal {
 
@@ -73,6 +73,7 @@ public:
         bool d2h,
         int tunnel_index) :
         FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection), d2h_{d2h}, tunnel_id_{tunnel_index} {
+        TT_FATAL(tunnel_id_ >= 0, "Relay Mux Tunnel Index must be >= 0");
         kernel_type_ = FDKernelType::ROUTING;
     }
 

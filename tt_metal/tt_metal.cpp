@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,6 +6,7 @@
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
 #include "dev_msgs.h"
+#include <cstdint>
 #include <device_pool.hpp>
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
@@ -20,10 +21,7 @@
 #include <functional>
 #include <iostream>
 #include <optional>
-#include <string_view>
-#include <thread>
 #include <type_traits>
-#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <variant>
@@ -31,6 +29,10 @@
 #include "buffer_types.hpp"
 #include "circular_buffer_config.hpp"
 #include "data_types.hpp"
+#include "llrt/tt_cluster.hpp"
+#include <umd/device/cluster.h>
+#include <umd/device/tt_cluster_descriptor.h>
+#include <filesystem>
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "kernels/kernel_impl.hpp"
@@ -43,6 +45,7 @@
 #include "lightmetal_binary.hpp"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include "tt-metalium/program.hpp"
 #include "program/program_impl.hpp"
 #include "semaphore.hpp"
@@ -52,6 +55,7 @@
 #include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
 #include "fabric/hw/inc/fabric_routing_mode.h"
+#include <tt-metalium/graph_tracking.hpp>
 
 namespace tt {
 
@@ -170,7 +174,7 @@ void ConfigureKernelGroup(
     }
 }
 
-std::optional<uint32_t> get_semaphore_id(const Program &program, const CoreRange& core_range, CoreType core_type) {
+std::optional<uint32_t> get_semaphore_id(const Program& program, const CoreRange& core_range, CoreType core_type) {
     std::optional<uint32_t> semaphore_id = std::nullopt;
     std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -375,11 +379,6 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
     return true;
 }
 
-void SetFabricConfig(
-    FabricConfig fabric_config, FabricReliabilityMode reliability_mode, std::optional<uint8_t> num_routing_planes) {
-    tt::tt_metal::MetalContext::instance().set_fabric_config(fabric_config, reliability_mode, num_routing_planes);
-}
-
 std::map<chip_id_t, IDevice*> CreateDevices(
     const std::vector<chip_id_t>& device_ids,
     const uint8_t num_hw_cqs,
@@ -489,7 +488,7 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
     }
 }
 
-DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uint32_t bank_index, uint32_t page_index) {
+DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uint64_t bank_index, uint64_t page_index) {
     DeviceAddr addr = 0;
     if (buffer.is_dram()) {
         uint32_t num_banks = buffer.allocator()->get_num_banks(buffer.buffer_type());
@@ -504,23 +503,27 @@ DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uin
 }
 
 void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
-    uint32_t host_buffer_size_bytes = host_buffer.size();
+    if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
+        return;
+    }
+
+    size_t host_buffer_size_bytes = host_buffer.size();
     TT_FATAL(
         host_buffer_size_bytes <= buffer.size(),
         "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer",
         host_buffer_size_bytes,
         buffer.size());
 
-    uint32_t page_size = buffer.page_size();
-    uint32_t num_pages = buffer.num_pages();
+    size_t page_size = buffer.page_size();
+    size_t num_pages = buffer.num_pages();
 
     auto device = buffer.device();
-    auto num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
-    uint32_t bank_index = 0;
-    int data_index = 0;
+    size_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
+    size_t bank_index = 0;
+    size_t data_index = 0;
     std::vector<uint32_t> page;
     page.resize(page_size / sizeof(uint32_t));
-    for (int page_index = 0; page_index < num_pages; page_index++) {
+    for (size_t page_index = 0; page_index < num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
         std::memcpy(page.data(), host_buffer.data() + data_index, page_size);
         switch (buffer.buffer_type()) {
@@ -564,17 +567,17 @@ void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
 }
 
 void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buffer) {
-    uint32_t page_size = buffer.page_size();
-    uint32_t num_pages = buffer.num_pages();
+    size_t page_size = buffer.page_size();
+    size_t num_pages = buffer.num_pages();
 
     auto device = buffer.device();
-    auto num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
+    size_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
 
     size_t host_idx = 0;
-    uint32_t bank_index = 0;
+    size_t bank_index = 0;
     std::vector<uint32_t> page;
     page.resize(page_size / sizeof(uint32_t));
-    for (int page_index = 0; page_index < num_pages; page_index++) {
+    for (size_t page_index = 0; page_index < num_pages; page_index++) {
         const DeviceAddr address = CalculateAddressDeviceInterleavedContiguous(buffer, bank_index, page_index);
         page.clear();
         switch (buffer.buffer_type()) {
@@ -624,11 +627,8 @@ void read_pages_to_host_helper(
 }
 
 void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer) {
-    TensorMemoryLayout buffer_layout = buffer.buffer_layout();
-
     auto device = buffer.device();
 
-    auto total_pages = buffer.num_dev_pages();
     uint32_t page_size = buffer.page_size();
 
     const auto& buffer_page_mapping = *buffer.get_buffer_page_mapping();
@@ -952,6 +952,13 @@ chip_id_t GetPCIeDeviceID(chip_id_t device_id) {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
 }
 
+ClusterType GetClusterType() { return tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type(); }
+
+std::string SerializeClusterDescriptor() {
+    std::filesystem::path path = tt::umd::Cluster::create_cluster_descriptor()->serialize_to_file();
+    return path.string();
+}
+
 IDevice* CreateDevice(
     chip_id_t device_id,
     const uint8_t num_hw_cqs,
@@ -961,6 +968,16 @@ IDevice* CreateDevice(
     const std::vector<uint32_t>& l1_bank_remap,
     const size_t worker_l1_size) {
     ZoneScoped;
+
+    // MMIO devices do not support dispatch on galaxy cluster
+    // Suggest the user to use the CreateDevices API
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
+        TT_FATAL(
+            !(tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() &&
+              tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->is_chip_mmio_capable(device_id)),
+            "Galaxy cluster does not support dispatch on mmio devices. Please use CreateDevices API to open all "
+            "devices for dispatch.");
+    }
 
     tt::DevicePool::initialize(
         {device_id}, num_hw_cqs, l1_small_size, trace_region_size, dispatch_core_config, l1_bank_remap, worker_l1_size);
@@ -997,7 +1014,7 @@ KernelHandle CreateDataMovementKernel(
         data_movement_config_status.riscv0_in_use && data_movement_config_status.riscv1_in_use;
     const bool are_both_noc_in_use = data_movement_config_status.noc0_in_use && data_movement_config_status.noc1_in_use;
 
-    string kernel_name;
+    std::string kernel_name;
     if (kernel_src.source_type_ == KernelSource::FILE_PATH) {
         kernel_name = kernel_src.source_;
     } else {
@@ -1036,7 +1053,6 @@ KernelHandle CreateEthernetKernel(
     const KernelSource& kernel_src,
     const CoreRangeSet& core_range_set,
     const EthernetConfig& config) {
-    KernelHandle kernel_handle;
     HalProgrammableCoreType eth_core_type =
         config.eth_mode == Eth::IDLE ? HalProgrammableCoreType::IDLE_ETH : HalProgrammableCoreType::ACTIVE_ETH;
     const DataMovementConfigStatus& data_movement_config_status =
@@ -1264,6 +1280,17 @@ void SetRuntimeArgs(
 
 void SetRuntimeArgs(
     const Program& program,
+    KernelHandle kernel_id,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    std::initializer_list<const uint32_t> runtime_args) {
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32, program, kernel_id, core_spec, runtime_args);
+    ZoneScoped;
+    std::visit([&](auto&& core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
+}
+
+void SetRuntimeArgs(
+    const Program& program,
     KernelHandle kernel,
     const std::vector<CoreCoord>& core_spec,
     const std::vector<std::vector<uint32_t>>& runtime_args) {
@@ -1307,6 +1334,14 @@ void SetRuntimeArgs(
 }
 
 void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args) {
+    ZoneScoped;
+    if (runtime_args.size() != 0) {
+        detail::GetKernel(program, kernel_id)->set_common_runtime_args(runtime_args);
+    }
+}
+
+void SetCommonRuntimeArgs(
+    const Program& program, KernelHandle kernel_id, std::initializer_list<const uint32_t> runtime_args) {
     ZoneScoped;
     if (runtime_args.size() != 0) {
         detail::GetKernel(program, kernel_id)->set_common_runtime_args(runtime_args);
@@ -1383,7 +1418,7 @@ void LoadTrace(IDevice* device, const uint8_t cq_id, const uint32_t trace_id, co
 }
 
 void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         if (cq_id.has_value()) {
             Finish(device->command_queue(cq_id.value()), sub_device_ids);
         } else {

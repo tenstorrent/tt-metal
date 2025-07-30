@@ -12,6 +12,10 @@ on:
       docker-image:
         required: true
         type: string
+      extra-tag:
+        required: false
+        type: string
+        default: "in-service"
 
 jobs:
   models-perf:
@@ -21,10 +25,57 @@ jobs:
       fail-fast: false
       matrix:
         test-info: [
-          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal"},
+          {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
         ]
-        model-type: [llm_javelin, cnn_javelin, other]
-    name: "${{ matrix.model-type }} ${{ matrix.test-info.name }}"
+        model-group:
+          - name: llm_javelin
+            model-list:
+              - models/demos/falcon7b_common/tests
+              - models/demos/wormhole/mamba/tests
+
+          - name: cnn_javelin
+            model-list:
+              - models/experimental/functional_unet/tests
+              - models/demos/wormhole/stable_diffusion/tests
+
+          - name: other
+            model-list:
+              - models/demos/convnet_mnist/tests/
+              # This is bad. These should be referencing .../tests directories
+              - models/demos/bert_tiny/tests/test_performance.py
+              - models/demos/squeezebert/tests/test_performance.py
+              - models/demos/roberta/tests/test_performance.py
+
+          - name: other_magic_env
+            model-list:
+              - models/demos/yolov10x/tests/perf/
+              - models/demos/sentence_bert/tests/perf/
+              # This is bad. This should be referencing .../tests directory
+              - models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py
+              - models/demos/yolov11/tests/perf/
+              # This is bad. This should be referencing .../tests directory
+              - models/demos/wormhole/bert_tiny/tests/test_performance.py
+              - models/demos/yolov4/tests/perf/
+              - models/demos/yolov7/tests/perf/
+              # This is bad. This should be referencing .../tests directory
+              - models/demos/wormhole/distilbert/tests/test_perf_distilbert.py
+              - models/demos/segformer/tests/perf/
+              - models/demos/metal_BERT_large_11/tests/
+              - models/demos/yolov8s_world/tests/perf/
+              - models/demos/yolov8s/tests/perf/
+              - models/experimental/yolov6l/tests/perf/
+              - models/demos/mobilenetv2/tests/perf/
+              - models/demos/vgg_unet/tests/
+              - models/demos/yolov9c/tests/perf/
+              - models/experimental/vanilla_unet/tests/perf/
+              - models/demos/yolov8x/tests/perf/
+              # e2e performant test is present in .../vit/demo folder only
+              - models/demos/wormhole/vit/demo/
+
+          - name: tt_transformers
+            model-list:
+              - models/demos/qwen/tests
+    name: "${{ matrix.model-group.name }} ${{ matrix.test-info.name }}"
     defaults:
       run:
         shell: bash
@@ -49,7 +100,7 @@ jobs:
       - name: Enable Performance mode
         run: sudo cpupower frequency-set -g performance
       - name: Run performance regressions
-        timeout-minutes: 70
+        timeout-minutes: 35
         uses: ./.github/actions/docker-run
         env:
           LOGURU_LEVEL: INFO
@@ -64,7 +115,22 @@ jobs:
             -e GTEST_OUTPUT=xml:generated/test_reports/
             -e GITHUB_ACTIONS=true
           install_wheel: true
-          run_args: ./tests/scripts/run_tests.sh --tt-arch ${{ matrix.test-info.arch }} --pipeline-type ${{ matrix.model-type }}_models_performance_${{ matrix.test-info.machine-type }}
+          run_args: |
+            export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
+            export WH_ARCH_YAML=$MAGIC_ENV
+
+            if [[ "${{ matrix.model-group.name }}" == "other" ]]; then
+              unset WH_ARCH_YAML
+              echo "No environment variable engineering needed for other models"
+            elif [[ "${{ matrix.model-group.name }}" == "tt_transformers" ]]; then
+              export QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct
+              export FAKE_DEVICE=N150
+            fi
+
+            pytest -n auto ${{ join(matrix.model-group.model-list, ' ') }} -m models_performance_bare_metal ${{ matrix.model-group.name == 'cnn_javelin' && '--timeout=480' || '' }}
+
+            ## Merge all the generated reports
+            env python3 models/perf/merge_perf_results.py
       # TODO: Fix the pipeline before enabling notifications.
       #- uses: tenstorrent/tt-metal/.github/actions/slack-report@main
       #  if: ${{ failure() }}
@@ -83,7 +149,7 @@ jobs:
         uses: actions/upload-artifact@v4
         timeout-minutes: 10
         with:
-          name: perf-report-csv-${{ matrix.model-type }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
+          name: perf-report-csv-${{ matrix.model-group.name }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_filename }}"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

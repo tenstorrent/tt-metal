@@ -24,6 +24,8 @@ tt::tt_metal::operation::ProgramWithCallbacks sdpa_decode_multi_core(
     DeviceComputeKernelConfig compute_kernel_config,
     std::optional<SDPAProgramConfig> program_config,
     uint32_t k_chunk_size,
-    std::optional<bool> share_cache);
+    std::optional<bool> share_cache,
+    bool mla = false,
+    uint32_t head_dim_v = 0);
 
 }  // namespace ttnn::operations::transformer::detail

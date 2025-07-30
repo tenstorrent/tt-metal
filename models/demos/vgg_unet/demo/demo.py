@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -7,11 +7,11 @@ from warnings import filterwarnings
 
 import kagglehub
 import pytest
-import torch
 
+from models.demos.vgg_unet.common import load_torch_model
 from models.demos.vgg_unet.demo.demo_utils import postprocess, prediction, preprocess, process_single_image
 from models.demos.vgg_unet.reference.vgg_unet import UNetVGG19
-from models.demos.vgg_unet.tests.vgg_unet_e2e_performant import VggUnetTrace2CQ
+from models.demos.vgg_unet.tests.perf.vgg_unet_e2e_performant import VggUnetTrace2CQ
 from models.utility_functions import disable_persistent_kernel_cache
 
 for dirname, _, filenames in os.walk("/kaggle/input"):
@@ -37,20 +37,18 @@ filterwarnings("ignore")
 @pytest.mark.parametrize(
     "use_pretrained_weight",
     [
-        False,
-        # True,  # Requires downloading pretrained weights from Google Drive
+        True,
     ],
     ids=[
-        "pretrained_weight_false",
-        # "pretrained_weight_true",
+        "pretrained_weight_true",
     ],
 )
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
 def test_demo(device, model_location_generator, reset_seeds, demo_type, model_type, use_pretrained_weight):
-    # https://github.com/tenstorrent/tt-metal/issues/23270
-    device.disable_and_clear_program_cache()
+    # The below line is commented due to the issue https://github.com/tenstorrent/tt-metal/issues/23270
+    # device.disable_and_clear_program_cache()
     disable_persistent_kernel_cache()
     # Download latest version of the dataset
     path = kagglehub.dataset_download("mateuszbuda/lgg-mri-segmentation")
@@ -59,7 +57,7 @@ def test_demo(device, model_location_generator, reset_seeds, demo_type, model_ty
             print(os.path.join(dirname, filename))
     model_seg = UNetVGG19()
     if use_pretrained_weight:
-        model_seg.load_state_dict(torch.load("models/demos/vgg_unet/vgg_unet_torch.pth"))
+        model_seg = load_torch_model(model_seg, model_location_generator)
     model_seg.eval()  # Set to evaluation mode
 
     if model_type == "ttnn_model":
@@ -68,6 +66,7 @@ def test_demo(device, model_location_generator, reset_seeds, demo_type, model_ty
         vgg_unet_trace_2cq.initialize_vgg_unet_trace_2cqs_inference(
             device,
             model_location_generator,
+            use_pretrained_weight=use_pretrained_weight,
         )
 
     if demo_type == "multi":

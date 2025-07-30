@@ -18,6 +18,7 @@
 #include <tt-metalium/fabric_edm_packet_header.hpp>
 
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
@@ -30,6 +31,7 @@
 
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/tile.hpp>
@@ -83,6 +85,8 @@ protected:
     MeshShape GetDeterminedMeshShape() const {
         if (num_devices_ == TG_NUM_DEVICES || num_devices_ == GALAXY_6U_NUM_DEVICES) {
             return MeshShape{8, 4};
+        } else if (num_devices_ == 4) {
+            return MeshShape{1, 4};
         } else {
             return MeshShape{2, 4};
         }
@@ -98,24 +102,36 @@ protected:
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
 
-        if (!(num_devices_ >= 8 &&
-              (tt::tt_metal::GetNumPCIeDevices() == 4 || tt::tt_metal::GetNumPCIeDevices() == GALAXY_6U_NUM_DEVICES))) {
-            TT_THROW("This suite can only be run on T3000 or TG Wormhole devices");
-        }
+        switch (arch_) {
+            case tt::ARCH::WORMHOLE_B0:
+                if (!(num_devices_ >= 8 && (tt::tt_metal::GetNumPCIeDevices() == 4 ||
+                                            tt::tt_metal::GetNumPCIeDevices() == GALAXY_6U_NUM_DEVICES))) {
+                    TT_THROW("This suite can only be run on T3000 or TG Wormhole devices");
+                }
+                break;
+
+            case tt::ARCH::BLACKHOLE:
+                if (num_devices_ != 4) {
+                    TT_THROW("This suite can only be run on LLMBox");
+                }
+                break;
+
+            default: TT_THROW("Only Wormhole or Blackhole devices are supported in this test suite");
+        };
     }
 
 public:
     BaseFabricFixture() : device_open(false) {}
 
     BaseFabricFixture(
-        tt::tt_metal::FabricConfig fabric_config,
-        tt::tt_metal::FabricReliabilityMode reliability_mode =
-            tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
+        tt::tt_fabric::FabricConfig fabric_config,
+        tt::tt_fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
         device_open(false) {
-        tt::tt_metal::detail::SetFabricConfig(fabric_config, reliability_mode);
+        tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode);
     }
 
-    virtual ~BaseFabricFixture() { tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED); }
+    virtual ~BaseFabricFixture() { tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED); }
 
     virtual void SetupDevices() = 0;
     virtual void TearDown() = 0;
@@ -130,17 +146,20 @@ public:
         ValidateEnvironment();
 
         const MeshShape cluster_shape = GetDeterminedMeshShape();
-        const auto& physical_device_ids = SystemMesh::instance().get_mapped_physical_device_ids(cluster_shape);
+
+        auto mapped_devices = SystemMesh::instance().get_mapped_devices(cluster_shape);
+
+        const std::vector<int> physical_device_ids = extract_locals(mapped_devices.device_ids);
+        TT_FATAL(physical_device_ids.size() == cluster_shape.mesh_size(), "Some of the devices are remote");
         physical_devices_ = tt::tt_metal::detail::CreateDevices(physical_device_ids);
 
-        std::vector<IDevice*> devices = {};
+        std::vector<IDevice*> devices;
         devices.reserve(physical_device_ids.size());
         for (auto device_id : physical_device_ids) {
             devices.push_back(physical_devices_.at(device_id));
         }
 
-        MeshContainer<IDevice*> device_container(cluster_shape, devices);
-        view_ = std::make_shared<MeshDeviceView>(device_container);
+        view_ = std::make_shared<MeshDeviceView>(cluster_shape, devices, mapped_devices.fabric_node_ids);
         device_open = true;
     }
 
@@ -154,9 +173,9 @@ public:
     Fabric1DFixture() : BaseFabricFixture() { this->SetupDevices(); }
 
     Fabric1DFixture(
-        tt::tt_metal::FabricConfig fabric_config,
-        tt::tt_metal::FabricReliabilityMode reliability_mode =
-            tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
+        tt::tt_fabric::FabricConfig fabric_config,
+        tt::tt_fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
         BaseFabricFixture(fabric_config, reliability_mode) {
         this->SetupDevices();
     }
@@ -177,7 +196,7 @@ public:
     std::shared_ptr<MeshDevice> mesh_device_;
 
     // Gets the appropriate mesh shape based on device configuration
-    MeshShape GetDeterminedMeshShape() const { return SystemMesh::instance().get_shape(); }
+    MeshShape GetDeterminedMeshShape() const { return SystemMesh::instance().shape(); }
 
     // Validates environment and hardware for tests
     void ValidateEnvironment() {
@@ -199,7 +218,6 @@ public:
         ValidateEnvironment();
 
         const MeshShape cluster_shape = GetDeterminedMeshShape();
-        const auto& physical_device_ids = SystemMesh::instance().get_mapped_physical_device_ids(cluster_shape);
 
         mesh_device_ = MeshDevice::create(MeshDeviceConfig(cluster_shape));
         device_open = true;
@@ -215,17 +233,17 @@ public:
     Fabric1DDeviceInitFixture() : device_open(false) { this->SetupDevices(); }
 
     Fabric1DDeviceInitFixture(
-        tt::tt_metal::FabricConfig fabric_config,
-        tt::tt_metal::FabricReliabilityMode reliability_mode =
-            tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
+        tt::tt_fabric::FabricConfig fabric_config,
+        tt::tt_fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
         device_open(false) {
-        tt::tt_metal::detail::SetFabricConfig(fabric_config, reliability_mode);
+        tt::tt_fabric::SetFabricConfig(fabric_config, reliability_mode);
         this->SetupDevices();
     }
 
     ~Fabric1DDeviceInitFixture() {
         TearDown();
-        tt::tt_metal::detail::SetFabricConfig(tt::tt_metal::FabricConfig::DISABLED);
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
     }
 };
 
@@ -249,9 +267,9 @@ public:
     MeshFabric1DFixture() : BaseFabricFixture() { this->SetupDevices(); }
 
     MeshFabric1DFixture(
-        tt::tt_metal::FabricConfig fabric_config,
-        tt::tt_metal::FabricReliabilityMode reliability_mode =
-            tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
+        tt::tt_fabric::FabricConfig fabric_config,
+        tt::tt_fabric::FabricReliabilityMode reliability_mode =
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) :
         BaseFabricFixture(fabric_config, reliability_mode) {
         this->SetupDevices();
     }
@@ -265,36 +283,36 @@ public:
 
 class Fabric1DLineDeviceInitFixture : public Fabric1DFixture {
 public:
-    Fabric1DLineDeviceInitFixture() : Fabric1DFixture(tt::tt_metal::FabricConfig::FABRIC_1D) {}
+    Fabric1DLineDeviceInitFixture() : Fabric1DFixture(tt::tt_fabric::FabricConfig::FABRIC_1D) {}
 };
 
 class Fabric1DRingDeviceInitFixture : public Fabric1DFixture {
 public:
-    Fabric1DRingDeviceInitFixture() : Fabric1DFixture(tt::tt_metal::FabricConfig::FABRIC_1D_RING) {}
+    Fabric1DRingDeviceInitFixture() : Fabric1DFixture(tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {}
 };
 class Fabric1DRingStrictDeviceInitFixture : public Fabric1DDeviceInitFixture {
 public:
     Fabric1DRingStrictDeviceInitFixture() :
         Fabric1DDeviceInitFixture(
-            tt::tt_metal::FabricConfig::FABRIC_1D_RING,
-            tt::tt_metal::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {}
+            tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE) {}
 };
 class Fabric1DRingRelaxedDeviceInitFixture : public Fabric1DDeviceInitFixture {
 public:
     Fabric1DRingRelaxedDeviceInitFixture() :
         Fabric1DDeviceInitFixture(
-            tt::tt_metal::FabricConfig::FABRIC_1D_RING,
-            tt::tt_metal::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE) {}
+            tt::tt_fabric::FabricConfig::FABRIC_1D_RING,
+            tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE) {}
 };
 
 class MeshFabric1DLineDeviceInitFixture : public MeshFabric1DFixture {
 public:
-    MeshFabric1DLineDeviceInitFixture() : MeshFabric1DFixture(tt::tt_metal::FabricConfig::FABRIC_1D) {}
+    MeshFabric1DLineDeviceInitFixture() : MeshFabric1DFixture(tt::tt_fabric::FabricConfig::FABRIC_1D) {}
 };
 
 class MeshFabric1DRingDeviceInitFixture : public MeshFabric1DFixture {
 public:
-    MeshFabric1DRingDeviceInitFixture() : MeshFabric1DFixture(tt::tt_metal::FabricConfig::FABRIC_1D_RING) {}
+    MeshFabric1DRingDeviceInitFixture() : MeshFabric1DFixture(tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {}
 };
 
 struct BankedConfig {
@@ -358,7 +376,7 @@ static SubdeviceInfo create_subdevices(const std::vector<IDevice*>& devices) {
             {device->id(), device->get_sub_device_ids().at(TEST_WORKERS_SUBDEVICE_INDEX)});
         subdevice_info.fabric_subdevice_id.insert(
             {device->id(), device->get_sub_device_ids().at(TEST_EDM_FABRIC_SUBDEVICE_INDEX)});
-        device->set_sub_device_stall_group({subdevice_info.worker_subdevice_id.at(device->id())});
+        device->set_sub_device_stall_group({{subdevice_info.worker_subdevice_id.at(device->id())}});
     }
 
     return subdevice_info;
@@ -375,7 +393,7 @@ static SubdeviceInfo create_worker_subdevices(const std::vector<IDevice*>& devic
         device->load_sub_device_manager(subdevice_info.sub_device_managers.at(device->id()));
         subdevice_info.worker_subdevice_id.insert(
             {device->id(), device->get_sub_device_ids().at(TEST_WORKERS_SUBDEVICE_INDEX)});
-        device->set_sub_device_stall_group({subdevice_info.worker_subdevice_id.at(device->id())});
+        device->set_sub_device_stall_group({{subdevice_info.worker_subdevice_id.at(device->id())}});
     }
 
     return subdevice_info;
@@ -385,7 +403,6 @@ Correctness run_output_check(
     const std::vector<uint32_t>& all_zeros,
     const std::vector<uint32_t>& inputs,
     std::shared_ptr<Buffer>& output_buffer) {
-    constexpr bool debug_mode = true;
     std::vector<uint32_t> readback_data_vec(all_zeros.size(), 0);  // init to 0 data for easier debug
 
     tt_metal::detail::ReadFromBuffer(output_buffer, readback_data_vec);
@@ -513,7 +530,6 @@ void generate_sender_worker_kernels(
     uint32_t dram_output_buffer_base_addr,
     bool dest_is_dram,
     uint32_t worker_buffer_index_semaphore_id,
-    uint32_t packet_header_buffer_cb_id,
     bool scatter_write) {
     const auto& edm_noc_core = CoreCoord(worker_fabric_connection.edm_noc_x, worker_fabric_connection.edm_noc_y);
     std::vector<uint32_t> sender_worker_reader_compile_args{
@@ -561,8 +577,7 @@ void generate_sender_worker_kernels(
         dram_output_buffer_base_addr,
         local_worker_last_message_semaphore_id,
         worker_buffer_index_semaphore_id,
-        worker_fabric_connection.buffer_index_semaphore_id,
-        packet_header_buffer_cb_id};
+        worker_fabric_connection.buffer_index_semaphore_id};
 
     if (std::holds_alternative<mcast_send>(mode)) {
         sender_worker_writer_runtime_args.push_back(std::get<mcast_send>(mode).distance);
@@ -588,7 +603,7 @@ void generate_sender_worker_kernels(
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_size, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, page_size);
-    CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_core, cb_src0_config);
+    CreateCircularBuffer(program, worker_core, cb_src0_config);
     auto sender_worker_reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/ttnn/unit_tests/gtests/ccl/kernels/fabric_erisc_datamover_sender_worker_reader.cpp",
@@ -653,15 +668,6 @@ bool RunLoopbackTest(
     auto local_output_buffer = CreateBuffer(InterleavedBufferConfig{
         sender_device, test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type});
 
-    uint32_t packet_header_buffer_cb_id = tt::CBIndex::c_1;
-    // allocate a circular buffer of size 8k
-    constexpr size_t packet_header_buffer_size = 8192;
-    tt_metal::CircularBufferConfig packet_header_buffer_config =
-        tt_metal::CircularBufferConfig(
-            packet_header_buffer_size, {{packet_header_buffer_cb_id, tt::DataFormat::Float16}})
-            .set_page_size(packet_header_buffer_cb_id, page_size);
-    auto packet_header_buffer =
-        tt_metal::CreateCircularBuffer(sender_program, worker_cores.at(0), packet_header_buffer_config);
     tt_metal::detail::WriteToBuffer(local_output_buffer, all_zeros);
 
     auto local_input_buffer_address = local_input_buffer->address();
@@ -701,7 +707,6 @@ bool RunLoopbackTest(
         local_output_buffer_address,
         dest_is_dram,
         worker_buffer_index_semaphore_id,
-        packet_header_buffer_cb_id,
         scatter_write);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -865,13 +870,13 @@ void generate_multi_input_test_worker_kernels_for_local_tensor_write(
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_size, {{first_cb_index, df}})
                 .set_page_size(first_cb_index, page_size);
-        CBHandle cb0 = CreateCircularBuffer(program, worker_core, cb_src0_config);
+        CreateCircularBuffer(program, worker_core, cb_src0_config);
     }
     {
         tt_metal::CircularBufferConfig cb_src1_config =
             tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_size, {{second_cb_index, df}})
                 .set_page_size(second_cb_index, page_size);
-        CBHandle cb1 = CreateCircularBuffer(program, worker_core, cb_src1_config);
+        CreateCircularBuffer(program, worker_core, cb_src1_config);
     }
 
     generate_multi_input_test_worker_reader_kernel(
@@ -974,8 +979,6 @@ bool RunLocalTestWithMultiInputReaders(
     auto output_tensor_dest_device = devices.at(output_tensor_dest_device_index);
     TT_ASSERT(input_tensor0.logical_shape()[-2] != 1);
 
-    bool is_fabric_mcast = std::holds_alternative<ttnn::ccl::cmd::MulticastCommandDestArgs>(dest_args);
-
     auto input_tensor0_device = input0_tensors.at(0);
     auto input_tensor1_device = input1_tensors.at(0);
     auto output_tensor0_device = output0_tensors.at(output_tensor_dest_device_index);
@@ -1001,7 +1004,7 @@ bool RunLocalTestWithMultiInputReaders(
 
     const size_t num_pages_per_edm_buffer = 2;
 
-    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> chip0_worker_forward_fabric_connection =
+    auto chip0_worker_forward_fabric_connection =
         fabric_enabled ? line_fabric->uniquely_connect_worker(devices[0], ttnn::ccl::EdmLineFabricOpInterface::FORWARD)
                        : std::optional<tt::tt_fabric::SenderWorkerAdapterSpec>{std::nullopt};
 
@@ -1097,8 +1100,6 @@ bool RunLineFabricTest(
 
     const std::size_t edm_buffer_size_no_header =
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
-    const size_t local_chip_id = 0;
-    const size_t remote_chip_id = 1;
     auto program_ptrs = std::vector<Program*>(devices.size());
     std::transform(programs.begin(), programs.end(), program_ptrs.begin(), [](auto& program) { return &program; });
 
@@ -1141,16 +1142,6 @@ bool RunLineFabricTest(
     });
     TT_ASSERT(all_same_addr, "All output buffers must have the same address");
 
-    uint32_t packet_header_buffer_cb_id = tt::CBIndex::c_1;
-    // allocate a circular buffer of size 8k
-    constexpr size_t packet_header_buffer_size = 8192;
-    tt_metal::CircularBufferConfig packet_header_buffer_config =
-        tt_metal::CircularBufferConfig(
-            packet_header_buffer_size, {{packet_header_buffer_cb_id, tt::DataFormat::Float16}})
-            .set_page_size(packet_header_buffer_cb_id, page_size);
-    auto packet_header_buffer =
-        tt_metal::CreateCircularBuffer(programs[0], worker_cores.at(0), packet_header_buffer_config);
-
     ////////////////////////////////////////////////////////////////////////////
     //   Setup Semaphores and Builders
     ////////////////////////////////////////////////////////////////////////////
@@ -1188,7 +1179,6 @@ bool RunLineFabricTest(
         local_output_buffer_address,
         dest_is_dram,
         worker_buffer_index_semaphore_id,
-        packet_header_buffer_cb_id,
         scatter_write);
 
     ////////////////////////////////////////////////////////////////////////////
@@ -1224,15 +1214,14 @@ void persistent_fabric_teardown_sequence(
     log_info(tt::LogTest, "Tearing down fabric");
 
     // Wait for workers to finish
-    auto d0_worker_subdevice = devices[0]->get_sub_device_ids()[TEST_WORKERS_SUBDEVICE_INDEX];
-    tt_metal::Finish(devices[0]->command_queue(), {subdevice_managers->worker_subdevice_id.at(devices[0]->id())});
+    tt_metal::Finish(devices[0]->command_queue(), {{subdevice_managers->worker_subdevice_id.at(devices[0]->id())}});
 
     // Teardown the fabric
     line_fabric.teardown_from_host(termination_mode);
 
     // wait for fabric teardown to finish
     std::ranges::for_each(devices, [&](IDevice* d) {
-        tt_metal::Finish(d->command_queue(), {subdevice_managers->fabric_subdevice_id.at(d->id())});
+        tt_metal::Finish(d->command_queue(), {{subdevice_managers->fabric_subdevice_id.at(d->id())}});
     });
 }
 
@@ -1242,6 +1231,7 @@ void setup_test_with_persistent_fabric(
     std::optional<std::vector<Program>>& fabric_programs,
     std::vector<Program*>& fabric_program_ptrs,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& line_fabric,
+    bool credit_address_fixed = true,
     std::optional<size_t> num_links = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
     size_t switch_interval = 0,
@@ -1259,6 +1249,18 @@ void setup_test_with_persistent_fabric(
     line_fabric = ttnn::ccl::EdmLineFabricOpInterface(
         devices, fabric_program_ptrs, num_links.value_or(1), false, topology, is_galaxy, edm_buffer_config);
     line_fabric->set_firmware_context_switch_interval(switch_interval);
+    if (!credit_address_fixed) {
+        for (auto& edm_builder : line_fabric->edm_builders_forward_direction) {
+            for (auto& builder : edm_builder.second) {
+                builder.my_eth_channel = tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
+            }
+        }
+        for (auto& edm_builder : line_fabric->edm_builders_backward_direction) {
+            for (auto& builder : edm_builder.second) {
+                builder.my_eth_channel = tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
+            }
+        }
+    }
     if (loopback_on_last_device) {
         for (auto& edm_builder : line_fabric->edm_builders_backward_direction.at(devices.back()->id())) {
             log_trace(
@@ -1312,7 +1314,8 @@ int TestLineFabricEntrypoint(
     std::optional<std::vector<Program>> fabric_programs;
     std::vector<Program*> fabric_program_ptrs;
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> line_fabric;
-    setup_test_with_persistent_fabric(devices, subdevice_managers, fabric_programs, fabric_program_ptrs, line_fabric);
+    setup_test_with_persistent_fabric(
+        devices, subdevice_managers, fabric_programs, fabric_program_ptrs, line_fabric, false);
 
     auto launch_workers = [&](std::vector<Program>& _programs) -> bool {
         bool success = false;
@@ -1381,7 +1384,6 @@ int TestLoopbackEntrypoint(
     auto eth_sender_core_iter_end = active_eth_cores.end();
     chip_id_t device_id = std::numeric_limits<chip_id_t>::max();
     tt_xy_pair eth_receiver_core;
-    bool initialized = false;
     tt_xy_pair eth_sender_core;
     do {
         TT_FATAL(eth_sender_core_iter != eth_sender_core_iter_end, "Error");
@@ -1394,7 +1396,6 @@ int TestLoopbackEntrypoint(
 
     std::vector<Program> programs(1);
     std::optional<std::vector<Program>> fabric_programs;
-    auto& sender_program = programs.at(0);
 
     log_info(tt::LogTest, "Enabling persistent fabric");
     fabric_programs = std::vector<Program>(2);
@@ -1415,19 +1416,21 @@ int TestLoopbackEntrypoint(
     auto chip_0_edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
         sender_device, fabric_sender_program, eth_sender_core, local_chip_id, remote_chip_id, edm_config);
     chip_0_edm_builder.set_firmware_context_switch_interval(0);
+    chip_0_edm_builder.my_eth_channel = tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
     auto chip_1_edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
         receiver_device, fabric_receiver_program, eth_receiver_core, remote_chip_id, local_chip_id, edm_config);
     chip_1_edm_builder.set_firmware_context_switch_interval(0);
+    chip_1_edm_builder.my_eth_channel = tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
     // Create the loopback connection on the second device
     chip_1_edm_builder.connect_to_downstream_edm(chip_1_edm_builder);
-    auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
+    ttnn::ccl::generate_edm_kernel(
         fabric_sender_program,
         sender_device,
         chip_0_edm_builder,
         eth_sender_core,
         DataMovementProcessor::RISCV_0,
         NOC::NOC_0);
-    auto remote_edm_kernel = ttnn::ccl::generate_edm_kernel(
+    ttnn::ccl::generate_edm_kernel(
         fabric_receiver_program,
         receiver_device,
         chip_1_edm_builder,
@@ -1491,11 +1494,10 @@ int TestLoopbackEntrypoint(
         // Wait for worker programs to finish
 
         auto d0_worker_subdevice = device_0->get_sub_device_ids()[TEST_WORKERS_SUBDEVICE_INDEX];
-        auto d1_worker_subdevice = device_1->get_sub_device_ids()[TEST_WORKERS_SUBDEVICE_INDEX];
         auto d0_fabric_subdevice = device_0->get_sub_device_ids()[TEST_EDM_FABRIC_SUBDEVICE_INDEX];
         auto d1_fabric_subdevice = device_1->get_sub_device_ids()[TEST_EDM_FABRIC_SUBDEVICE_INDEX];
         // Teardown the fabric
-        tt_metal::Finish(sender_device->command_queue(), {d0_worker_subdevice});
+        tt_metal::Finish(sender_device->command_queue(), {{d0_worker_subdevice}});
         // tt_metal::Finish(receiver_device->command_queue(), {d1_worker_subdevice});
 
         // Notify fabric of teardown
@@ -1503,8 +1505,8 @@ int TestLoopbackEntrypoint(
         chip_0_edm_builder.teardown_from_host(sender_device);
 
         // wait for fabric finish
-        tt_metal::Finish(sender_device->command_queue(), {d0_fabric_subdevice});
-        tt_metal::Finish(receiver_device->command_queue(), {d1_fabric_subdevice});
+        tt_metal::Finish(sender_device->command_queue(), {{d0_fabric_subdevice}});
+        tt_metal::Finish(receiver_device->command_queue(), {{d1_fabric_subdevice}});
     }
 
     test_fixture.TearDown();
@@ -1563,17 +1565,25 @@ inline bool TestMultiInputReaderKernel(
     std::vector<Tensor> output0_tensors_device;
     std::vector<Tensor> output1_tensors_device;
 
+    // Create per-device MeshDevice wrappers for tensor allocation
+    std::vector<std::shared_ptr<distributed::MeshDevice>> mesh_devices;
+    mesh_devices.reserve(devices.size());
+    for (auto* dev : devices) {
+        mesh_devices.push_back(distributed::MeshDevice::create_unit_mesh(dev->id()));
+    }
+
     // All this garbage is to make sure the test sets up buffer addresses correctly so we can safely
     // multicast to a consistent destination address
     for (size_t i = 0; i < devices.size(); i++) {
+        auto* mesh_dev = mesh_devices[i].get();
         input0_tensors_device.push_back(
-            input_tensor0.to_device(devices.at(i), input_tensor0_mem_config, ttnn::DefaultQueueId));
+            input_tensor0.to_device(mesh_dev, input_tensor0_mem_config, ttnn::DefaultQueueId));
         input1_tensors_device.push_back(
-            input_tensor1.to_device(devices.at(i), input_tensor1_mem_config, ttnn::DefaultQueueId));
+            input_tensor1.to_device(mesh_dev, input_tensor1_mem_config, ttnn::DefaultQueueId));
         output0_tensors_device.push_back(
-            output_tensor0.to_device(devices.at(i), output_tensor0_mem_config, ttnn::DefaultQueueId));
+            output_tensor0.to_device(mesh_dev, output_tensor0_mem_config, ttnn::DefaultQueueId));
         output1_tensors_device.push_back(
-            output_tensor1.to_device(devices.at(i), output_tensor1_mem_config, ttnn::DefaultQueueId));
+            output_tensor1.to_device(mesh_dev, output_tensor1_mem_config, ttnn::DefaultQueueId));
     }
     auto launch_ccl_command_interpreter_workers = [&](std::vector<Program>& _programs) {
         return RunLocalTestWithMultiInputReaders(
@@ -1807,6 +1817,7 @@ bool RunPipelinedWorkersTest(
     auto view = *(test_fixture.view_);
 
     IDevice* device = view.get_device(MeshCoordinate(0, 0));
+    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device->id());
 
     // General setup is as follows:
     // Worker 1 reads input tensor as a sequence of slices - it forwards to an output tensor and after each slice, it
@@ -1851,7 +1862,7 @@ bool RunPipelinedWorkersTest(
     }
     TT_FATAL(mem_configs.size() == num_tensors, "Must have a memory config for each tensor");
     for (size_t i = 0; i < num_tensors; i++) {
-        device_tensors.push_back(host_tensors[i].to_device(device, mem_configs[i]));
+        device_tensors.push_back(host_tensors[i].to_device(mesh_device.get(), mem_configs[i]));
         log_info(tt::LogTest, "Tensor[{}] allocated starting at address {}", i, device_tensors[i].buffer()->address());
     }
     TT_ASSERT(device_tensors.size() == num_tensors);
@@ -1862,6 +1873,7 @@ bool RunPipelinedWorkersTest(
     // Initial setup like worker core assignment, chunk read order, etc.
 
     std::vector<CoreRangeSet> pipeline_stage_worker_cores = {};
+    pipeline_stage_worker_cores.reserve(num_stages);
     for (size_t i = 0; i < num_stages; ++i) {
         pipeline_stage_worker_cores.push_back(
             CoreRangeSet(CoreRange(CoreCoord(0, i), CoreCoord(num_workers_per_stage[i] - 1, i))));
@@ -1878,7 +1890,7 @@ bool RunPipelinedWorkersTest(
             tt_metal::CircularBufferConfig(
                 cb_packet_size_in_pages * num_packets_per_cb * page_size_bytes, {{cb_index, data_format}})
                 .set_page_size(cb_index, page_size_bytes);
-        CBHandle sender_workers_cb = CreateCircularBuffer(program, pipeline_stage_worker_cores[stage], cb_config);
+        CreateCircularBuffer(program, pipeline_stage_worker_cores[stage], cb_config);
     }
 
     // Generate the reader semaphores
@@ -2077,7 +2089,7 @@ static void wait_for_worker_program_completion(
     const std::vector<IDevice*>& devices, const std::optional<SubdeviceInfo>& subdevice_managers = std::nullopt) {
     if (subdevice_managers) {
         std::ranges::for_each(devices, [&](IDevice* d) {
-            tt_metal::Finish(d->command_queue(), {subdevice_managers->worker_subdevice_id.at(d->id())});
+            tt_metal::Finish(d->command_queue(), {{subdevice_managers->worker_subdevice_id.at(d->id())}});
         });
     } else {
         std::ranges::for_each(devices, [&](IDevice* d) { tt_metal::Finish(d->command_queue(), {}); });
@@ -2085,7 +2097,7 @@ static void wait_for_worker_program_completion(
 }
 
 #include "ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
-void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_links, ttnn::Shape const& input_shape) {
+void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_links, const ttnn::Shape& input_shape) {
     log_info(tt::LogTest, "entering test");
     constexpr auto layout = Layout::TILE;
     // DEVICES setuip
@@ -2096,7 +2108,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     }
 
     // Initialize MeshDevice with 1D Fabric
-    MeshFabric1DFixture test_fixture(tt::tt_metal::FabricConfig::FABRIC_1D);
+    MeshFabric1DFixture test_fixture(tt::tt_fabric::FabricConfig::FABRIC_1D);
     auto view = test_fixture.mesh_device_->get_view();
 
     // build a line of devices
@@ -2116,16 +2128,18 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
 
     // INPUT TENSOR setup
     log_info(tt::LogTest, "setting up input tensors");
-    size_t page_size = tile_size(DataFormat::Float16);
-    std::vector<Tensor> device_input_tensors;
-    for (size_t i = 0; i < num_devices; i++) {
-        auto t = ttnn::experimental::view(ttnn::arange(0, num_elems, 1), input_shape).to_layout(layout);
 
-        device_input_tensors.push_back(t);
-    }
-    // Need to make it a mesh tensor for use with the op
-    const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{})
-                                         .to_device(test_fixture.mesh_device_.get());
+    // Replicate the tensor across (1, num_devices) submesh.
+    const Tensor input_mesh_tensor = ttnn::distributed::distribute_tensor(
+        ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::BFLOAT16), input_shape).to_layout(layout),
+        *ttnn::distributed::create_mesh_mapper(
+            *test_fixture.mesh_device_,
+            ttnn::distributed::MeshMapperConfig{
+                .placements =
+                    {ttnn::distributed::MeshMapperConfig::Replicate{},
+                     ttnn::distributed::MeshMapperConfig::Replicate{}},
+                .mesh_shape_override = MeshShape{1, num_devices}}),
+        *test_fixture.mesh_device_);
     std::optional<SubdeviceInfo> subdevice_managers = create_worker_subdevices(devices);
 
     log_info(tt::LogTest, "launching op");
@@ -2163,7 +2177,7 @@ void run_ring_all_gather_with_persistent_fabric(
     }
 
     // Initialize MeshDevice with 1D Fabric
-    MeshFabric1DFixture test_fixture(tt::tt_metal::FabricConfig::FABRIC_1D_RING);
+    MeshFabric1DFixture test_fixture(tt::tt_fabric::FabricConfig::FABRIC_1D_RING);
     test_fixture.mesh_device_->reshape(MeshShape(1, 8));
     auto view = test_fixture.mesh_device_->get_view();
 
@@ -2180,16 +2194,18 @@ void run_ring_all_gather_with_persistent_fabric(
 
     // INPUT TENSOR setup
     log_info(tt::LogTest, "setting up input tensors");
-    size_t page_size = tile_size(DataFormat::Float16);
-    std::vector<Tensor> device_input_tensors;
-    for (size_t i = 0; i < num_devices; i++) {
-        auto t = ttnn::experimental::view(ttnn::arange(0, num_elems, 1), input_shape).to_layout(layout);
 
-        device_input_tensors.push_back(t);
-    }
-    // Need to make it a mesh tensor for use with the op
-    const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{})
-                                         .to_device(test_fixture.mesh_device_.get());
+    // Replicate the tensor across (1, num_devices) submesh.
+    const Tensor input_mesh_tensor = ttnn::distributed::distribute_tensor(
+        ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::BFLOAT16), input_shape).to_layout(layout),
+        *ttnn::distributed::create_mesh_mapper(
+            *test_fixture.mesh_device_,
+            ttnn::distributed::MeshMapperConfig{
+                .placements =
+                    {ttnn::distributed::MeshMapperConfig::Replicate{},
+                     ttnn::distributed::MeshMapperConfig::Replicate{}},
+                .mesh_shape_override = MeshShape{1, num_devices}}),
+        *test_fixture.mesh_device_);
 
     std::optional<SubdeviceInfo> subdevice_managers = create_worker_subdevices(devices);
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring;
@@ -2456,13 +2472,13 @@ void create_fabric_fixture(std::unique_ptr<Fabric1DFixture>& test_fixture, bool 
         auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
         return (
             // prev not Fabric1D, now Fabric1D
-            (fabric_config != tt::tt_metal::FabricConfig::DISABLED &&
+            (fabric_config != tt::tt_fabric::FabricConfig::DISABLED &&
              std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DFixture>) ||
             // prev not Fabric1DLine, now Fabric1DLine
-            (fabric_config != tt::tt_metal::FabricConfig::FABRIC_1D &&
+            (fabric_config != tt::tt_fabric::FabricConfig::FABRIC_1D &&
              std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DLineDeviceInitFixture>) ||
             // prev not Fabric1DRing, now Fabric1DRing
-            (fabric_config != tt::tt_metal::FabricConfig::FABRIC_1D_RING &&
+            (fabric_config != tt::tt_fabric::FabricConfig::FABRIC_1D_RING &&
              std::is_same_v<FABRIC_DEVICE_FIXTURE, Fabric1DRingDeviceInitFixture>));
     }();
 
@@ -2587,11 +2603,11 @@ Fabric1DWorkerConfig get_fabric_1d_worker_config(
 }
 
 tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_wormhole(
-    tt::ClusterType cluster_type, FabricTestMode fabric_mode, size_t line_size) {
+    tt::tt_metal::ClusterType cluster_type, FabricTestMode fabric_mode, size_t line_size) {
     tt::tt_fabric::FabricRouterBufferConfig buffer_config{};
     switch (cluster_type) {
-        case tt::ClusterType::TG:
-        case tt::ClusterType::GALAXY:
+        case tt::tt_metal::ClusterType::TG:
+        case tt::tt_metal::ClusterType::GALAXY:
             // long axis, more buffering.
             if (line_size >= tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
                 if (fabric_mode == FabricTestMode::HalfRing) {
@@ -2617,7 +2633,7 @@ tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_wormhole(
                 }
             }
             break;
-        case tt::ClusterType::T3K:
+        case tt::tt_metal::ClusterType::T3K:
             // Need more tunning on T3K, for now keep the long/short axis the same.
             if (line_size >= tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
                 if (fabric_mode == FabricTestMode::HalfRing) {
@@ -2649,11 +2665,11 @@ tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_wormhole(
 }
 
 tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_blackhole(
-    tt::ClusterType cluster_type, FabricTestMode fabric_mode, size_t line_size) {
+    tt::tt_metal::ClusterType cluster_type, FabricTestMode fabric_mode, size_t line_size) {
     tt::tt_fabric::FabricRouterBufferConfig buffer_config{};
     switch (cluster_type) {
         // For now just copy the galaxy config to BH since we don't have any data points.
-        case tt::ClusterType::P150_X4:
+        case tt::tt_metal::ClusterType::P150_X4:
             if (line_size >= tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
                 if (fabric_mode == FabricTestMode::HalfRing) {
                     buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
@@ -2750,12 +2766,8 @@ void Run1DFabricPacketSendTest(
 
     const auto edm_buffer_config = get_edm_buffer_config_helper(fabric_mode, line_size);
 
-    auto worker_core_logical = [](size_t link) { return CoreCoord(link, 0); };
-
     // static constexpr size_t source_l1_buffer_address = 1000000;
-    static constexpr uint32_t packet_header_cb_index = tt::CB::c_in0;
-    static constexpr uint32_t source_payload_cb_index = tt::CB::c_in1;
-    static constexpr size_t packet_header_cb_size_in_headers = 5;
+    static constexpr uint32_t source_payload_cb_index = tt::CB::c_in0;
     auto max_packet_payload_size_bytes =
         std::max_element(test_specs.begin(), test_specs.end(), [](const auto& a, const auto& b) {
             return a.packet_payload_size_bytes < b.packet_payload_size_bytes;
@@ -2786,6 +2798,7 @@ void Run1DFabricPacketSendTest(
             fabric_programs,
             fabric_program_ptrs,
             fabric_handle,
+            true,
             params.num_links,
             topology,
             fabric_context_switch_interval,
@@ -2911,17 +2924,10 @@ void Run1DFabricPacketSendTest(
                         topology);
             }
 
-            // reserve CB
-            constexpr size_t packet_header_buffer_size = 8192;
-            tt_metal::CircularBufferConfig cb_src0_config =
-                tt_metal::CircularBufferConfig(packet_header_buffer_size, {{packet_header_cb_index, cb_df}})
-                    .set_page_size(packet_header_cb_index, packet_header_buffer_size);
-            CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_cores, cb_src0_config);
-
             tt_metal::CircularBufferConfig cb_src1_config =
                 tt_metal::CircularBufferConfig(max_packet_payload_size_bytes, {{source_payload_cb_index, cb_df}})
                     .set_page_size(source_payload_cb_index, max_packet_payload_size_bytes);
-            CBHandle sender_workers_payload_cb = CreateCircularBuffer(program, worker_cores, cb_src1_config);
+            CreateCircularBuffer(program, worker_cores, cb_src1_config);
 
             std::vector<uint32_t> worker_ct_args = {params.line_sync, params.line_sync};
 
@@ -2971,7 +2977,7 @@ void Run1DFabricPacketSendTest(
                     } else {
                         const auto connection = local_device_fabric_handle->uniquely_connect_worker(device, direction);
                         const auto new_rt_args = ttnn::ccl::worker_detail::generate_edm_connection_rt_args(
-                            connection, program, {worker_core});
+                            connection, device->id(), program, {worker_core});
                         log_info(
                             tt::LogTest,
                             "On device: {}, connecting to EDM fabric in {} direction. EDM noc_x: {}, noc_y: {}",
@@ -2986,8 +2992,6 @@ void Run1DFabricPacketSendTest(
 
             for (size_t l = 0; l < params.num_links; l++) {
                 auto worker_core = worker_cores_vec[l];
-                const size_t dest_noc_x = device->worker_core_from_logical_core(dest_core_coord[l]).x;
-                const size_t dest_noc_y = device->worker_core_from_logical_core(dest_core_coord[l]).y;
 
                 // RT ARGS
                 bool disable_sends_for_worker =
@@ -3047,8 +3051,6 @@ void Run1DFabricPacketSendTest(
                 std::copy(flush_send.begin(), flush_send.end(), std::back_inserter(rt_args));
 
                 rt_args.push_back(source_payload_cb_index);
-                rt_args.push_back(packet_header_cb_index);
-                rt_args.push_back(packet_header_cb_size_in_headers);
 
                 build_connection_args(
                     worker_core,
@@ -3201,7 +3203,6 @@ void validate_fabric_packet_send_test_params(const FullMeshTestParams& full_mesh
 void validate_fabric_packet_send_test_params(
     const std::variant<WriteThroughputStabilityTestWithPersistentFabricParams, FullMeshTestParams>& params) {
     if (std::holds_alternative<WriteThroughputStabilityTestWithPersistentFabricParams>(params)) {
-        const auto& write_throughput_params = std::get<WriteThroughputStabilityTestWithPersistentFabricParams>(params);
         TT_THROW("Not commonized yet");
     } else {
         const auto& full_mesh_params = std::get<FullMeshTestParams>(params);
@@ -3394,8 +3395,6 @@ void generate_1d_fabric_on_full_mesh_worker_rt_args(
     size_t dest_bank_addr,
     const std::vector<CoreCoord>& dest_core_coord,
     size_t source_payload_cb_index,
-    size_t packet_header_cb_index,
-    size_t packet_header_cb_size_in_headers,
     const CoreCoord& sync_noc_core_coord,
     size_t sync_count,
     Program& program,
@@ -3476,8 +3475,6 @@ void generate_1d_fabric_on_full_mesh_worker_rt_args(
         std::copy(flush_send.begin(), flush_send.end(), std::back_inserter(rt_args));
 
         rt_args.push_back(source_payload_cb_index);
-        rt_args.push_back(packet_header_cb_index);
-        rt_args.push_back(packet_header_cb_size_in_headers);
 
         build_connection_args(
             worker_core,
@@ -3542,8 +3539,6 @@ void Run1DFullMeshFabricPacketSendTest(
         tt::tt_fabric::FabricEriscDatamoverBuilder::default_firmware_context_switch_interval) {
     log_info(tt::LogTest, "Running 1D Full Mesh Fabric Packet Send Test");
     using namespace ttnn::ccl;
-    static constexpr size_t packet_header_cb_size_in_headers = 5;
-    static constexpr bool enable_persistent_fabric_mode = true;
     static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
     constexpr size_t MAX_NUM_AXES = FullMeshTestParams::MAX_NUM_AXES;
 
@@ -3566,7 +3561,6 @@ void Run1DFullMeshFabricPacketSendTest(
 
     const bool use_galaxy = num_devices == 32;
     const bool use_tg = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 4;
-    const bool is_6u_galaxy = use_galaxy && tt::tt_metal::GetNumPCIeDevices() == 32;
 
     create_fabric_fixture<FABRIC_DEVICE_FIXTURE>(test_fixture_, use_galaxy);
     auto view = *(test_fixture_->view_);
@@ -3580,9 +3574,6 @@ void Run1DFullMeshFabricPacketSendTest(
         fabrics_under_test_devices_per_axis[axis] = generate_line_fabrics_under_test(
             use_galaxy, use_tg, params.line_size[axis], topologies[axis], view, num_fabric_rows, num_fabric_cols);
     }
-
-    size_t packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    TT_FATAL(packet_header_size_bytes != 0, "Error in initializing local variable `packet_header_size_bytes`");
 
     // Big boiler plate setup loop
     CoreCoord sync_core_coord = worker_core_logical(0, 0);
@@ -3645,20 +3636,13 @@ void Run1DFullMeshFabricPacketSendTest(
             params, fabrics_under_test_devices_per_axis, topologies, fabric_modes);
 
     for (size_t axis = 0; axis < MAX_NUM_AXES; axis++) {
-        const uint32_t packet_header_cb_index = axis == 0 ? tt::CB::c_in0 : tt::CB::c_in2;
         const uint32_t source_payload_cb_index = axis == 0 ? tt::CB::c_in1 : tt::CB::c_in3;
         auto line_size = params.line_size[axis];
-        auto fabric_mode = fabric_modes[axis];
-        auto topology = topologies[axis];
         auto& dest_core_coord = dest_core_coord_per_axis[axis];
         auto num_devices_with_workers = params.num_devices_with_workers[axis];
         if (num_devices_with_workers == 0) {
             num_devices_with_workers = line_size;
         }
-        auto num_links = params.num_links[axis];
-        auto first_link_offset = params.first_link_offset[axis];
-        auto num_op_invocations = params.num_op_invocations;
-        auto senders_are_unidirectional = params.senders_are_unidirectional[axis];
         size_t num_messages = (test_specs.num_messages * line_size) / max_line_size;
 
         for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices_per_axis[axis].size(); fabric_index++) {
@@ -3678,18 +3662,10 @@ void Run1DFullMeshFabricPacketSendTest(
                     worker_cores_per_device,
                     worker_cores_vec_per_axis_per_device);
 
-                // reserve CB
-                tt_metal::CircularBufferConfig cb_src0_config =
-                    tt_metal::CircularBufferConfig(
-                        packet_header_cb_size_in_headers * packet_header_size_bytes, {{packet_header_cb_index, cb_df}})
-                        .set_page_size(packet_header_cb_index, packet_header_size_bytes);
-                CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_cores_per_axis[axis], cb_src0_config);
-
                 tt_metal::CircularBufferConfig cb_src1_config =
                     tt_metal::CircularBufferConfig(max_packet_payload_size_bytes, {{source_payload_cb_index, cb_df}})
                         .set_page_size(source_payload_cb_index, max_packet_payload_size_bytes);
-                CBHandle sender_workers_payload_cb =
-                    CreateCircularBuffer(program, worker_cores_per_axis[axis], cb_src1_config);
+                CreateCircularBuffer(program, worker_cores_per_axis[axis], cb_src1_config);
 
                 auto worker_kernel_id = tt_metal::CreateKernel(
                     program,
@@ -3720,8 +3696,6 @@ void Run1DFullMeshFabricPacketSendTest(
                     dest_bank_addr,
                     dest_core_coord,
                     source_payload_cb_index,
-                    packet_header_cb_index,
-                    packet_header_cb_size_in_headers,
                     device->worker_core_from_logical_core(sync_core_coord),
                     sync_count,
                     program,
@@ -3863,8 +3837,6 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     bool has_backward_connection,
     size_t packet_payload_size_bytes = tt::tt_fabric::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes,
     std::optional<size_t> row_or_col = std::nullopt) {
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-
     auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
     switch (cluster_type) {
         case ClusterType::T3K:
@@ -3883,18 +3855,12 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     }
 
     using namespace ttnn::ccl;
-    auto topology = ttnn::ccl::Topology::Ring;
-    constexpr size_t num_unicasts = 0;
     size_t line_size = num_devices;
     size_t num_devices_with_workers = line_size;
     constexpr bool line_sync = false;
 
-    auto worker_core_logical = [](size_t link) { return CoreCoord(link, 0); };
-
     // static constexpr size_t source_l1_buffer_address = 1000000;
-    static constexpr uint32_t packet_header_cb_index = tt::CB::c_in0;
-    static constexpr uint32_t source_payload_cb_index = tt::CB::c_in1;
-    static constexpr size_t packet_header_cb_size_in_headers = 5;
+    static constexpr uint32_t source_payload_cb_index = tt::CB::c_in0;
     size_t dest_buffer_size = packet_payload_size_bytes * 4;
     static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
 
@@ -3955,6 +3921,7 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     }
 
     std::vector<IDevice*> worker_devices;
+    worker_devices.reserve(num_devices_with_workers);
     for (size_t i = 0; i < num_devices_with_workers; i++) {
         worker_devices.push_back(devices[i]);
     }
@@ -3971,7 +3938,6 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
     uint32_t num_dirs = (uint32_t)has_forward_connection + (uint32_t)has_backward_connection;
     log_debug(tt::LogTest, "Initializing worker programs");
     for (size_t i = 0; i < num_devices_with_workers; i++) {
-        const size_t line_index = i;
         auto& program = programs[i];
         auto* device = devices[i];
         const size_t sync_core_noc_x = device->worker_core_from_logical_core(sync_core_coord).x;
@@ -3989,17 +3955,10 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
         mcast_fwd_hops = has_forward_connection ? line_size - 1 : 0;
         mcast_bwd_hops = has_backward_connection ? line_size - 1 : 0;
 
-        // reserve CB
-        constexpr size_t packet_header_buffer_size = 8192;
-        tt_metal::CircularBufferConfig cb_src0_config =
-            tt_metal::CircularBufferConfig(packet_header_buffer_size, {{packet_header_cb_index, cb_df}})
-                .set_page_size(packet_header_cb_index, packet_header_buffer_size);
-        CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_cores, cb_src0_config);
-
         tt_metal::CircularBufferConfig cb_src1_config =
             tt_metal::CircularBufferConfig(packet_payload_size_bytes, {{source_payload_cb_index, cb_df}})
                 .set_page_size(source_payload_cb_index, packet_payload_size_bytes);
-        CBHandle sender_workers_payload_cb = CreateCircularBuffer(program, worker_cores, cb_src1_config);
+        CreateCircularBuffer(program, worker_cores, cb_src1_config);
 
         std::vector<uint32_t> worker_ct_args = {line_sync, line_sync};
 
@@ -4013,24 +3972,20 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
             auto worker_core = worker_cores_vec[l];
             const size_t dest_noc_x = device->worker_core_from_logical_core(dest_core_coord[l]).x;
             const size_t dest_noc_y = device->worker_core_from_logical_core(dest_core_coord[l]).y;
-            auto build_connection_args =
-                [device, &program, &worker_core, l](
-                    bool is_connected_in_direction, IDevice* connected_device, std::vector<uint32_t>& rt_args_out) {
-                    rt_args_out.push_back(is_connected_in_direction);
-                    if (is_connected_in_direction) {
-                        const auto& device_fabric_node_id =
-                            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
-                        const auto& connected_device_fabric_node_id =
-                            tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(connected_device->id());
-                        tt::tt_fabric::append_fabric_connection_rt_args(
-                            device_fabric_node_id,
-                            connected_device_fabric_node_id,
-                            l,
-                            program,
-                            {worker_core},
-                            rt_args_out);
-                    }
-                };
+            auto build_connection_args = [device, &program, &worker_core, l](
+                                             bool is_connected_in_direction,
+                                             IDevice* connected_device,
+                                             std::vector<uint32_t>& rt_args_out) {
+                rt_args_out.push_back(is_connected_in_direction);
+                if (is_connected_in_direction) {
+                    const auto& device_fabric_node_id =
+                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device->id());
+                    const auto& connected_device_fabric_node_id =
+                        tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(connected_device->id());
+                    tt::tt_fabric::append_fabric_connection_rt_args(
+                        device_fabric_node_id, connected_device_fabric_node_id, l, program, {worker_core}, rt_args_out);
+                }
+            };
 
             // Define the send type parameters
             // There is no atomic in
@@ -4077,8 +4032,6 @@ void RunRingDeadlockStabilityTestWithPersistentFabric(
 
             // Add CB indices
             rt_args.push_back(source_payload_cb_index);
-            rt_args.push_back(packet_header_cb_index);
-            rt_args.push_back(packet_header_cb_size_in_headers);
 
             // Add fabric connection args
             build_connection_args(has_forward_connection, forward_device, rt_args);

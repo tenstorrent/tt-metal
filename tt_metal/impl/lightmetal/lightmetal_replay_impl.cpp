@@ -240,7 +240,6 @@ void LightMetalReplayImpl::setup_devices() {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(setup_devices) - Using hardcoded CreateDevices() as temp hack.");
     TT_FATAL(!device_, "Device already setup in LightMetalReplay, no need to call setup_devices()");
     const size_t trace_region_size = 4096;  // Default is 0
-    const int device_id = 0;
     const auto dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
     const chip_id_t mmio_device_id = 0;
     auto devices_map = tt::tt_metal::detail::CreateDevices(
@@ -412,6 +411,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
 
     // Handle optionals
     const auto shard_parameters = from_flatbuffer(cmd->shard_parameters());
+    const auto dist_spec = from_flatbuffer(cmd->buffer_distribution_spec());
     auto buffer_layout = static_cast<TensorMemoryLayout>(cmd->buffer_layout());
     const auto bottom_up = cmd->bottom_up() ? std::optional<bool>{cmd->bottom_up()->value()} : std::nullopt;
     const auto sub_device_id =
@@ -425,7 +425,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
             cmd->size(),
             cmd->page_size(),
             from_flatbuffer(cmd->buffer_type()),
-            BufferShardingArgs(shard_parameters, buffer_layout),
+            BufferShardingArgs(dist_spec, shard_parameters, buffer_layout),
             bottom_up,
             sub_device_id);
         add_buffer_to_map(cmd->global_id(), buffer);
@@ -436,7 +436,7 @@ void LightMetalReplayImpl::execute(const tt::tt_metal::flatbuffer::BufferCreateC
             cmd->size(),
             cmd->page_size(),
             from_flatbuffer(cmd->buffer_type()),
-            BufferShardingArgs(shard_parameters, buffer_layout),
+            BufferShardingArgs(dist_spec, shard_parameters, buffer_layout),
             bottom_up,
             sub_device_id);
         add_buffer_to_map(cmd->global_id(), buffer);

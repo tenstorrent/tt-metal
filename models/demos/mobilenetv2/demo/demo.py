@@ -9,7 +9,7 @@ from tqdm import tqdm
 from transformers import AutoImageProcessor
 
 import ttnn
-from models.demos.mobilenetv2.tests.mobilenetv2_e2e_performant import MobileNetV2Trace2CQ
+from models.demos.mobilenetv2.tests.perf.mobilenetv2_e2e_performant import MobileNetV2Trace2CQ
 from models.demos.ttnn_resnet.tests.demo_utils import get_batch, get_data_loader
 from models.utility_functions import profiler, run_for_wormhole_b0
 
@@ -47,10 +47,7 @@ def test_mobilenetv2_imagenet_demo(
 
         profiler.start(f"compile")
         mobilenetv2_trace_2cq.initialize_mobilenetv2_trace_2cqs_inference(
-            device,
-            batch_size_per_device,
-            act_dtype,
-            weight_dtype,
+            device, batch_size_per_device, act_dtype, weight_dtype, model_location_generator=model_location_generator
         )
         profiler.end(f"compile")
         model_version = "microsoft/resnet-50"
@@ -76,18 +73,7 @@ def test_mobilenetv2_imagenet_demo(
             labels = input_labels_all[iter]
             profiler.start(f"run")
 
-            core_grid = ttnn.CoreGrid(y=8, x=8)
             n, c, h, w = torch_input_tensor.shape
-            # sharded mem config for fold input
-            num_cores = core_grid.x * core_grid.y
-            shard_h = (n * w * h + num_cores - 1) // num_cores
-            grid_size = core_grid
-            grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
-            shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-            shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, 16), ttnn.ShardOrientation.ROW_MAJOR)
-            input_mem_config = ttnn.MemoryConfig(
-                ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
-            )
             torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
             torch_input_tensor = torch_input_tensor.reshape(1, 1, h * w * n, c)
             tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -108,7 +94,7 @@ def test_mobilenetv2_imagenet_demo(
         mobilenetv2_trace_2cq.release_mobilenetv2_trace_2cqs_inference()
         accuracy = correct / (batch_size * iterations)
         logger.info(f"=============")
-        logger.info(f"Accuracy for {batch_size}x{iterations} inputs: {accuracy}")
+        logger.info(f"Accuracy for  batch size: {batch_size} over {iterations} iterations is: {accuracy}")
         if entire_imagenet_dataset:
             assert (
                 accuracy < expected_accuracy
@@ -118,7 +104,3 @@ def test_mobilenetv2_imagenet_demo(
         inference_time_avg = total_inference_time / (iterations)
 
         compile_time = first_iter_time - 2 * inference_time_avg
-    logger.info(
-        f"ttnn_{model_version}_batch_size{batch_size} tests inference time (avg): {inference_time_avg}, FPS: {batch_size/inference_time_avg}"
-    )
-    logger.info(f"ttnn_{model_version}_batch_size{batch_size} compile time: {compile_time}")

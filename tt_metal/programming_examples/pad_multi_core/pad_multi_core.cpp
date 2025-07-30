@@ -9,6 +9,7 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -92,14 +93,14 @@ int main() {
     CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(dst_N * packed_data_size * 2, {{cb_id, cb_data_format}})
             .set_page_size(cb_id, packed_data_size);
-    auto cb_src = tt::tt_metal::CreateCircularBuffer(program, cores, cb_config);
+    tt_metal::CreateCircularBuffer(program, cores, cb_config);
 
     // specify compile time args
-    bool src_is_dram = src_buffer->buffer_type() == BufferType::DRAM;
-    bool pad_is_dram = pad_buffer->buffer_type() == BufferType::DRAM;
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram, (uint32_t)pad_is_dram};
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*pad_buffer).append_to(reader_compile_time_args);
+    std::vector<uint32_t> writer_compile_time_args;
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // create kernels
     KernelHandle reader_id = CreateKernel(

@@ -268,7 +268,8 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         per_core_M,
         per_core_N,
         /*transpose_mcast=*/false,
-        /*fused_activation=*/std::nullopt};
+        /*fused_activation=*/std::nullopt,
+        /*fuse_batch=*/true};
 
     const ttnn::DeviceComputeKernelConfig compute_kernel_config = ttnn::init_device_compute_kernel_config(
         device_->arch(),
@@ -277,7 +278,8 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         /*default_approx_mode=*/true,
         /*default_fp32_acc=*/false,
         /*default_l1_acc=*/true,
-        /*default_dst_full_sync_en=*/false);
+        /*default_dst_full_sync_en=*/false,
+        /*default_throttle_level=*/ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE);
 
     const ttnn::MemoryConfig out_mem_config =
         out_sharded ? ttnn::MemoryConfig{ttnn::TensorMemoryLayout::BLOCK_SHARDED, ttnn::BufferType::L1}

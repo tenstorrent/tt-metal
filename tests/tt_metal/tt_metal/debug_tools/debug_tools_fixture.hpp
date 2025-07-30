@@ -5,11 +5,7 @@
 #pragma once
 
 #include <gtest/gtest.h>
-#include "debug/watcher_server.hpp"
-#include "dispatch_fixture.hpp"
 #include "tt_metal/tt_metal/common/dispatch_fixture.hpp"
-
-#include "dprint_server.hpp"
 
 namespace tt::tt_metal {
 
@@ -31,14 +27,14 @@ class DebugToolsFixture : public DispatchFixture {
 // A version of DispatchFixture with DPrint enabled on all cores.
 class DPrintFixture : public DebugToolsFixture {
 public:
-    inline static const string dprint_file_name = "gtest_dprint_log.txt";
+    inline static const std::string dprint_file_name = "gtest_dprint_log.txt";
 
     // A function to run a program, according to which dispatch mode is set.
     void RunProgram(IDevice* device, Program& program) {
         // Only difference is that we need to wait for the print server to catch
         // up after running a test.
         DebugToolsFixture::RunProgram(device, program);
-        DprintServerAwait();
+        MetalContext::instance().dprint_server()->await();
     }
 
 protected:
@@ -73,12 +69,6 @@ protected:
         DebugToolsFixture::TearDown();
         ExtraTearDown();
 
-        // If test induced a watcher error, re-initialize the context.
-        if (DPrintServerHangDetected()) {
-            MetalContext::instance().reinitialize();
-        }
-
-
         // Reset DPrint settings
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(tt::llrt::RunTimeDebugFeatureDprint, {});
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, false);
@@ -99,8 +89,8 @@ protected:
         IDevice* device
     ) {
         DebugToolsFixture::RunTestOnDevice(run_function, device);
-        DPrintServerClearLogFile();
-        DPrintServerClearSignals();
+        MetalContext::instance().dprint_server()->clear_log_file();
+        MetalContext::instance().dprint_server()->clear_signals();
     }
 
     // Override this function in child classes for additional setup commands between DPRINT setup
@@ -125,7 +115,7 @@ protected:
 // A version of DispatchFixture with watcher enabled
 class WatcherFixture : public DebugToolsFixture {
 public:
-    inline static const string log_file_name = "generated/watcher/watcher.log";
+    inline static const std::string log_file_name = "generated/watcher/watcher.log";
     inline static const int interval_ms = 250;
 
     // A function to run a program, according to which dispatch mode is set.
@@ -137,8 +127,8 @@ public:
         // Wait for watcher to run a full dump before finishing, need to wait for dump count to
         // increase because we'll likely check in the middle of a dump.
         if (wait_for_dump) {
-            int curr_count = tt::watcher_get_dump_count();
-            while (tt::watcher_get_dump_count() < curr_count + 2) {;}
+            int curr_count = MetalContext::instance().watcher_server()->dump_count();
+            while (MetalContext::instance().watcher_server()->dump_count() < curr_count + 2) {;}
         }
     }
 
@@ -149,7 +139,6 @@ protected:
     bool watcher_previous_auto_unpause;
     bool watcher_previous_noinline;
     bool test_mode_previous;
-    bool reset_server = false;
     void SetUp() override {
         // Enable watcher for this test, save the previous state so we can restore it later.
         watcher_previous_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
@@ -166,25 +155,16 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_auto_unpause(true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noinline(true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
-        tt::watcher_clear_log();
+        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noc_sanitize_linked_transaction(true);
 
         // Parent class initializes devices and any necessary flags
         DebugToolsFixture::SetUp();
+        MetalContext::instance().watcher_server()->clear_log();
     }
 
     void TearDown() override {
         // Parent class tears down devices
         DebugToolsFixture::TearDown();
-
-        // If test induced a watcher error, re-initialize the context.
-        if (watcher_server_killed_due_to_error() or reset_server) {
-            // Special case for watcher_dump testing, keep the error for watcher dump to look at later. TODO: remove
-            // when watcher_dump is removed.
-            if (getenv("TT_METAL_WATCHER_KEEP_ERRORS") == nullptr) {
-                MetalContext::instance().reinitialize();
-                reset_server = false;
-            }
-        }
 
         // Reset watcher settings to their previous values
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_interval(watcher_previous_interval);
@@ -194,7 +174,6 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noinline(watcher_previous_noinline);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(test_mode_previous);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(watcher_previous_enabled);
-        tt::watcher_server_set_error_flag(false);
     }
 
     void RunTestOnDevice(
@@ -204,7 +183,7 @@ protected:
         DebugToolsFixture::RunTestOnDevice(run_function, device);
         // Wait for a final watcher poll and then clear the log.
         std::this_thread::sleep_for(std::chrono::milliseconds(interval_ms));
-        tt::watcher_clear_log();
+        MetalContext::instance().watcher_server()->clear_log();
     }
 };
 

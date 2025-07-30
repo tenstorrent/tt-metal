@@ -102,7 +102,7 @@ from ttnn._ttnn.multi_device import (
     MeshMapperConfig,
     MeshComposerConfig,
     get_device_tensors,
-    aggregate_as_tensor,
+    from_host_shards,
     combine_device_tensors,
     replicate_tensor_to_mesh_mapper,
     shard_tensor_to_mesh_mapper,
@@ -135,10 +135,22 @@ from ttnn._ttnn.global_circular_buffer import (
 
 from ttnn._ttnn.fabric import FabricConfig, FabricReliabilityMode, set_fabric_config
 
+# Import cluster functions and types
+from ttnn._ttnn import cluster
+
 from ttnn._ttnn.global_semaphore import (
     create_global_semaphore,
     get_global_semaphore_address,
     reset_global_semaphore_value,
+)
+
+from ttnn._ttnn.mesh_socket import (
+    create_socket_pair,
+    MeshSocket,
+    SocketConfig,
+    SocketMemoryConfig,
+    SocketConnection,
+    MeshCoreCoord,
 )
 
 from ttnn.types import (
@@ -156,6 +168,8 @@ from ttnn.types import (
     MemoryConfig,
     BufferType,
     TensorMemoryLayout,
+    ShardShapeAlignment,
+    ShardDistributionStrategy,
     DRAM_MEMORY_CONFIG,
     L1_MEMORY_CONFIG,
     L1_BLOCK_SHARDED_MEMORY_CONFIG,
@@ -178,7 +192,9 @@ from ttnn.types import (
     CoreGrid,
     CoreRange,
     Shape,
+    TensorSpec,
     Tensor,
+    ThrottleLevel,
     DeviceComputeKernelConfig,
     WormholeComputeKernelConfig,
     GrayskullComputeKernelConfig,

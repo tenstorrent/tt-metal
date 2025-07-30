@@ -8,17 +8,13 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.yolov9c.demo.demo_utils import (
-    load_coco_class_names,
-    load_torch_model,
-    postprocess,
-    save_seg_predictions_by_model,
-)
+from models.demos.yolov9c.common import load_torch_model
+from models.demos.yolov9c.demo.demo_utils import load_coco_class_names, postprocess, save_seg_predictions_by_model
 from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
-from models.experimental.yolo_evaluation.yolo_common_evaluation import save_yolo_predictions_by_model
-from models.experimental.yolo_evaluation.yolo_evaluation_utils import LoadImages
-from models.experimental.yolo_evaluation.yolo_evaluation_utils import postprocess as obj_postprocess
-from models.experimental.yolo_evaluation.yolo_evaluation_utils import preprocess
+from models.experimental.yolo_eval.evaluate import save_yolo_predictions_by_model
+from models.experimental.yolo_eval.utils import LoadImages
+from models.experimental.yolo_eval.utils import postprocess as obj_postprocess
+from models.experimental.yolo_eval.utils import preprocess
 from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 
 
@@ -34,7 +30,7 @@ from models.utility_functions import disable_persistent_kernel_cache, run_for_wo
     ],
 )
 @pytest.mark.parametrize(
-    "use_weights_from_ultralytics",
+    "use_pretrained_weights",
     [
         "True",  # To run the demo with pre-trained weights
         # "False", # Uncomment to the run demo with random weights
@@ -57,10 +53,11 @@ from models.utility_functions import disable_persistent_kernel_cache, run_for_wo
 def test_demo(
     device,
     source,
-    use_weights_from_ultralytics,
+    use_pretrained_weights,
     model_type,
     model_task,
     reset_seeds,
+    model_location_generator,
 ):
     disable_persistent_kernel_cache()
 
@@ -74,7 +71,7 @@ def test_demo(
         im = preprocess(im0s, res=(640, 640))
 
         if model_type == "torch_model":
-            model = load_torch_model(use_weights_from_ultralytics=use_weights_from_ultralytics, model_task=model_task)
+            model = load_torch_model(model_task=model_task, model_location_generator=model_location_generator)
             logger.info("Inferencing [Torch] Model")
             preds = model(im)
             if enable_segment:
@@ -92,13 +89,13 @@ def test_demo(
                 ttnn.bfloat8_b,
                 model_task=model_task,
                 resolution=(640, 640),
-                model_location_generator=None,
+                model_location_generator=model_location_generator,
                 torch_input_tensor=im,
             )
             performant_runner._capture_yolov9_trace_2cqs()
             logger.info("Inferencing [TTNN] Model")
 
-            preds = performant_runner.run(torch_input_tensor=im.permute(0, 2, 3, 1))
+            preds = performant_runner.run(torch_input_tensor=im)
             preds[0] = ttnn.to_torch(preds[0], dtype=torch.float32)
             if enable_segment:
                 detect1_out, detect2_out, detect3_out = [

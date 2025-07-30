@@ -29,7 +29,6 @@
 #include "dispatch_settings.hpp"
 #include "impl/context/metal_context.hpp"
 #include "dispatch/host_runtime_commands.hpp"
-#include "dprint_server.hpp"
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -37,13 +36,13 @@
 #include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
 #include "trace/trace_node.hpp"
-#include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include "data_collection.hpp"
 #include "ringbuffer_cache.hpp"
 #include "program/dispatch.hpp"
+#include <tt-metalium/graph_tracking.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -284,20 +283,16 @@ void HWCommandQueue::enqueue_read_buffer(
     } else {
         // Forward data from device to the completion queue.
         // Then have the completion queue reader thread copy this data to user space.
-        buffer_dispatch::BufferReadDispatchParamsVariant dispatch_params_variant =
+        buffer_dispatch::BufferReadDispatchParams dispatch_params =
             buffer_dispatch::initialize_interleaved_buf_read_dispatch_params(
                 *buffer_obj, this->id_, this->expected_num_workers_completed_);
 
-        buffer_dispatch::BufferReadDispatchParams* dispatch_params = std::visit(
-            [](auto& val) { return static_cast<buffer_dispatch::BufferReadDispatchParams*>(&val); },
-            dispatch_params_variant);
-
         buffer_dispatch::copy_interleaved_buffer_to_completion_queue(
-            *dispatch_params,
+            dispatch_params,
             *buffer_obj,
             sub_device_ids,
             MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type());
-        if (dispatch_params->pages_per_txn > 0) {
+        if (dispatch_params.pages_per_txn > 0) {
             this->issued_completion_q_reads_.push(
                 buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, *buffer_obj));
             this->increment_num_entries_in_completion_q();
@@ -722,11 +717,12 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     this->enqueue_record_event(event, sub_device_ids);
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_test_mode_enabled()) {
         while (this->num_entries_in_completion_q_ > this->num_completed_completion_q_reads_) {
-            if (DPrintServerHangDetected()) {
+            if (MetalContext::instance().dprint_server() and
+                MetalContext::instance().dprint_server()->hang_detected()) {
                 // DPrint Server hang, early exit. We're in test mode, so main thread will assert.
                 this->set_exit_condition();
                 return;
-            } else if (tt::watcher_server_killed_due_to_error()) {
+            } else if (MetalContext::instance().watcher_server()->killed_due_to_error()) {
                 // Illegal NOC txn killed watcher, early exit. We're in test mode, so main thread will assert.
                 this->set_exit_condition();
                 return;
@@ -926,7 +922,6 @@ void HWCommandQueue::record_end() {
     // separately
     this->trace_ctx_->sub_device_ids.reserve(this->trace_ctx_->descriptors.size());
     for (const auto& [id, _] : this->trace_ctx_->descriptors) {
-        auto index = *id;
         this->trace_ctx_->sub_device_ids.push_back(id);
     }
     this->tid_ = std::nullopt;
