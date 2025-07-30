@@ -56,7 +56,7 @@ In a tiled tensor, pages are represented as 2D tiles, with the default tile size
 
 
 #### 3.2.1 Tile Shapes
-The hardware architecture supports tile shapes of `32x32` , `16x32` , `4x32`, `2x32`, `1x32`. **However currently TT-Metalium only supports `32x32`, and other tile shapes will be supported in Q4'2024**
+The hardware architecture supports tile shapes of `32x32` , `16x32` , `4x32`, `2x32`, `1x32`. **However currently TT-Metalium only supports 32x32, with limited functionality for 16x32 in some ops such as matmul**
 
 #### 3.2.2 Faces
 Data inside the tile isn't contiguous. Each tile is split into faces ("sub-tiles"). By default, tile size is 32x32, and face size is 16x16 -- 4 faces per tile and each tile lies one after another contiguously in memory in row-major fashion (i.e., face0->face1->face2->face3 on the picture below)
