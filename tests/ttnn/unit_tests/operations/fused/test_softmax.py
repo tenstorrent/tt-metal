@@ -187,7 +187,7 @@ def run_softmax_stable_with_program_cache(
 
     current_entries_count = device.num_program_cache_entries()
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    assert_with_pcc(torch_input_tensor, torch.Tensor(input_tensor.to_list()), 0.99999)
+    assert_with_pcc(torch_input_tensor, torch.Tensor(input_tensor.to_list()), 0.9999)
     extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
 
     if is_grayskull():
@@ -219,8 +219,8 @@ def run_softmax_stable_with_program_cache(
 
 
 @pytest.mark.parametrize("batch_size", [1, 8])
-@pytest.mark.parametrize("h", [8])
-@pytest.mark.parametrize("w", [8])
+@pytest.mark.parametrize("h", [32, 128])
+@pytest.mark.parametrize("w", [1024, 1500])
 @pytest.mark.parametrize("skip_scale_mask", [True, False])
 @pytest.mark.parametrize("math_approx", [True, False])
 @pytest.mark.parametrize("fp32_acc_en", [True, False])

@@ -112,11 +112,16 @@ void log_from_cpp(const char* file, int line, const char* func, Args&&... messag
     // Handle the record
     logger.attr("handle")(log_record);
 }
+
 #define py_log(...) log_from_cpp(__FILE__, __LINE__, __func__, "[" #__VA_ARGS__ "] =" __VA_OPT__(, ) __VA_ARGS__);
 // #define py_log(...)
 
 std::string format_tensor_as_string(pybind11::object tensor, int precision = 4) {
     pybind11::object tensor_list;
+
+    if (1024 < tensor.attr("volume")().cast<int>()) {
+        return "1024 < volume";
+    }
 
     if (pybind11::hasattr(tensor, "tolist")) {
         tensor_list = tensor.attr("tolist")();
@@ -517,7 +522,7 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
         }
     };
 
-    py_log(dtype, tensor.attr("dtype"));
+    py_log(dtype, tensor.attr("dtype"), layout, tensor.attr("min")(), tensor.attr("max")());
 
     if (tensor.attr("dtype").equal(torch.attr("int64"))) {
         py_log();
@@ -565,6 +570,14 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
         (dtype.value() == DataType::BFLOAT4_B || dtype.value() == DataType::BFLOAT8_B)) {
         // Under certain conditions typecast of the bfloat16 to bfloat4b/bfloat8b leaves half of the tensor as zeroes.
         // The test triggering this bug is test_matmul.py::test_tiny_tiles_bfloat
+        py_log();
+        do_host_conversion_through_fallback();
+    } else if (
+        dtype.has_value() && dtype.value() == DataType::INT32 &&
+        (tensor.attr("dtype").equal(torch.attr("int32")) && layout.has_value() && layout != Layout::ROW_MAJOR)) {
+        // Convert tensor on host, as int32 tensors above certain size loose precision.
+        // One instance of this is reported in https://github.com/tenstorrent/tt-metal/issues/23407
+        // but the size is not, stable `(32, 32, 64, 64)` can also trigger this.
         py_log();
         do_host_conversion_through_fallback();
     } else if (tensor.attr("dtype").equal(torch.attr("uint8"))) {
@@ -619,16 +632,26 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
     if ((tensor.attr("numel")().cast<int>() == 0) || (tensor.attr("dim")().cast<int>() == 0)) {
         // to tile the tensor it must have non-zero volume or a sufficient rank -- if this fails
         // the tensor must be constructed on host.
+        py_log();
         res.host_side_conversion = true;
         res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
         res.construct_with_data_type = dtype;
     } else if (memory_config.is_sharded()) {
+        py_log();
         res.host_side_conversion = true;
         res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
         res.construct_with_data_type = dtype;
     } else if (
+        dtype.has_value() && dtype.value() == DataType::INT32 &&
+        (tensor.attr("dtype").equal(torch.attr("int32")) && layout.has_value() && layout != Layout::ROW_MAJOR)) {
+        py_log();
+        res.host_side_conversion = true;
+        res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
+        res.construct_with_data_type = DataType::INT32;
+    } else if (
         optional_tile.has_value() && (((optional_tile->get_tile_shape()[0] % tt::constants::TILE_WIDTH) != 0) ||
                                       ((optional_tile->get_tile_shape()[1] % tt::constants::TILE_HEIGHT) != 0))) {
+        py_log();
         res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
         res.construct_with_data_type = dtype;
     } else {
