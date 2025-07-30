@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <string>
 
-#include "hostdevcommon/kernel_structs.h"
 #include "tt-metalium/kernel_types.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "upsample_op.hpp"
@@ -18,8 +17,6 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
-
-#include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::upsample {
 
@@ -43,13 +40,13 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
     uint32_t output_unit_size;
     uint32_t input_cb_required_pages;
     uint32_t work_units_to_split;
-    uint32_t actual_input_unit_size;  // Size used for CB creation
+    uint32_t aligned_input_unit_size;  // Size used for CB creation
 
     if (is_tiled_layout) {
         // Tiled layout specific calculations
         input_unit_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
         output_unit_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
-        actual_input_unit_size = input_unit_size;
+        aligned_input_unit_size = input_unit_size;
 
         const uint32_t input_tensor_width = input.padded_shape()[-1];
         const uint32_t input_tensor_height = input.physical_volume() / input_tensor_width;
@@ -71,7 +68,7 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
         // Row-major layout specific calculations
         input_unit_size = input.padded_shape()[-1] * input.element_size();
         output_unit_size = output.padded_shape()[-1] * output.element_size();
-        actual_input_unit_size = tt::round_up(input_unit_size, tt::tt_metal::hal::get_dram_alignment());
+        aligned_input_unit_size = tt::round_up(input_unit_size, tt::tt_metal::hal::get_dram_alignment());
 
         /*
         For Row-major layout, a unit of work is one row (stick) of the input tensor
@@ -95,15 +92,12 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
     }
 
     const auto [src0_cb_index, cb_src0] = tt::tt_metal::create_cb(
-        next_cb_index++, program, all_cores, actual_input_unit_size, num_pages_in_input_cb, input_cb_data_format);
+        next_cb_index++, program, all_cores, aligned_input_unit_size, num_pages_in_input_cb, input_cb_data_format);
 
-    uint32_t output_cb_index;
+    uint32_t output_cb_index = 0;
     if (is_tiled_layout) {
         // Separate output CB for tiled
-        uint32_t num_pages_in_output_cb = input_cb_required_pages;
-        if (work_per_core_group_1 != 1) {
-            num_pages_in_output_cb *= 2;
-        }
+        uint32_t num_pages_in_output_cb = num_pages_in_input_cb;
         const auto [out_cb_index, cb_output] = create_cb(
             next_cb_index++, program, all_cores, output_unit_size, num_pages_in_output_cb, output_cb_data_format);
         output_cb_index = out_cb_index;
@@ -118,13 +112,13 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
     const bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     // Reader compile time arguments
-    const bool src_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(actual_input_unit_size);
-    const uint32_t src_log2_size = src_size_is_power_of_two ? (std::uint32_t)log2(actual_input_unit_size) : 0;
+    const bool src_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(aligned_input_unit_size);
+    const uint32_t src_log2_size = src_size_is_power_of_two ? (std::uint32_t)log2(aligned_input_unit_size) : 0;
 
     const std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src_is_dram,
-        (std::uint32_t)actual_input_unit_size,
+        (std::uint32_t)aligned_input_unit_size,
         (std::uint32_t)src_size_is_power_of_two,
         (std::uint32_t)src_log2_size};
 
@@ -200,8 +194,8 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
                 tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args_group1});
         }
 
-        // Create compute kernel for core group 2 if it has cores and different block count
-        if (core_group_2.num_cores() > 0 && work_per_core_group_2 != work_per_core_group_1) {
+        // Create compute kernel for core group 2 if it has cores
+        if (core_group_2.num_cores() > 0) {
             const std::vector<uint32_t> compute_compile_time_args_group2 = {
                 (uint32_t)work_per_core_group_2,   // per_core_block_cnt (compile-time)
                 (uint32_t)num_input_tiles_in_row,  // per_block_ntiles
