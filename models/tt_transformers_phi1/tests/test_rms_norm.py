@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.rmsnorm import RMSNorm as RMSNorm
+from models.common.layernorm import LayerNorm as LayerNorm
 from models.tt_transformers_phi1.tt.distributed_norm import DistributedNorm
 from models.tt_transformers_phi1.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
@@ -48,11 +48,14 @@ def test_rms_norm_inference(
 
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
+    state_dict_ref = model_args.load_state_dict_ref()
     state_dict_prefix = model_args.get_state_dict_prefix("", 0)
-    first_layer_prefix = state_dict_prefix + "attention_norm."
+    state_dict_prefix_ref = model_args.get_ref_state_dict_prefix("", 0)
+    # first_layer_prefix = state_dict_prefix + "attention_norm." 
+    first_layer_prefix = state_dict_prefix_ref + "input_layernorm."
 
     # Create the inner RMSNormxw
-    tt_inner_norm = RMSNorm(
+    tt_inner_norm = LayerNorm(
         device=mesh_device,
         dim=model_args.dim,
         state_dict=state_dict,
@@ -69,7 +72,7 @@ def test_rms_norm_inference(
 
     # Create reference model (unchanged)
     partial_state_dict = {
-        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+        k[len(first_layer_prefix) :]: v for k, v in state_dict_ref.items() if (k.startswith(first_layer_prefix))
     }
     reference_model = model_args.reference_rms_norm()
     reference_model.load_state_dict(partial_state_dict)

@@ -1474,6 +1474,7 @@ class ModelArgs:
             "relu": ttnn.UnaryOpType.RELU,
             "silu": ttnn.UnaryOpType.SILU,
             "swish": ttnn.UnaryOpType.SILU,
+            "gelu_new": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0),
         }
 
         hidden_activation = config.get("hidden_act") or config.get("hidden_activation")
