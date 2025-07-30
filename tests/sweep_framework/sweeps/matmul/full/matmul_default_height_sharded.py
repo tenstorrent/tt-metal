@@ -80,6 +80,7 @@ def run_matmul(
     output_dtype,
     input_layout,
     compute_kernel_config,
+    program_config=None,
 ) -> list:
     batch_sizes, m_size, per_core_height, num_cores_height = height_sharded_specs
 
@@ -130,6 +131,7 @@ def run_matmul(
         memory_config=output_memory_config,
         dtype=output_dtype,
         compute_kernel_config=compute_kernel_config,
+        program_config=program_config,
     )
     output_tensor = ttnn.to_torch(op_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
@@ -138,6 +140,59 @@ def run_matmul(
     tensors = [input_tensor_a, input_tensor_b, op_output_tensor]
     flop_counts = list(batch_sizes) + [m_size, n_size, 2, k_size]
     return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf, flop_counts)
+
+
+@pytest.mark.parametrize("in0_block_width", [1, 3, 9])
+def test_matmul_in0_block_width(device, in0_block_width):
+    """
+    Test that having multiple (or 1) in0 blocks across
+    the shard width works
+    """
+    height_sharded_specs = ((1,), 5440, 544, 10)
+    k_size = n_size = 288
+    batch_matrix_multiply = False
+    input_a_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+    input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    output_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+    input_a_dtype = ttnn.bfloat8_b
+    input_b_dtype = ttnn.bfloat16
+    output_dtype = ttnn.bfloat8_b
+    input_layout = ttnn.TILE_LAYOUT
+    compute_kernel_config = None
+
+    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        in0_block_w=in0_block_width,
+        out_subblock_h=1,
+        out_subblock_w=3,
+        out_block_h=17,
+        out_block_w=9,
+        per_core_M=17,
+        per_core_N=9,
+        mcast_in0=False,
+        fuse_batch=True,
+        fused_activation=None,
+    )
+
+    (result, msg), e2e_perf = run_matmul(
+        device,
+        height_sharded_specs,
+        k_size,
+        n_size,
+        batch_matrix_multiply,
+        input_a_memory_config,
+        input_b_memory_config,
+        output_memory_config,
+        input_a_dtype,
+        input_b_dtype,
+        output_dtype,
+        input_layout,
+        compute_kernel_config,
+        program_config,
+    )
+    assert result, msg
+    if e2e_perf:
+        logger.info(f"e2e_perf: {e2e_perf}")
 
 
 @pytest.mark.parametrize(**gen_pytest_parametrize_args(parameters))
@@ -172,7 +227,8 @@ def test_matmul(
         compute_kernel_config,
     )
     assert result, msg
-    logger.info(f"e2e_perf: {e2e_perf}")
+    if e2e_perf:
+        logger.info(f"e2e_perf: {e2e_perf}")
 
 
 def run(
