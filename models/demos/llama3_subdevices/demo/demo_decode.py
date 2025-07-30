@@ -755,11 +755,11 @@ def test_llama_demo(
     if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
 
-    # TODO: Remove this once all batch sizes are supported on TG
-    if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
-        pytest.skip("TG only supports batch 1 and 32")
+    # TODO: Remove this once all batch sizes are supported on Galaxy
+    if batch_size not in [1, 32]:
+        pytest.skip("Galaxy only supports batch 1 and 32")
     if galaxy_type != "6U" and galaxy_type != "4U":
-        raise Exception("Not running on TG nor on 6U, you must run on those systems for this test")
+        raise Exception("Not running on Galaxy 4U nor on 6U, you must run on those systems for this test")
 
     if paged_attention:
         paged_attention_config = PagedAttentionConfig(
