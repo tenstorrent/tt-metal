@@ -21,7 +21,7 @@
 #include <kernel_includes.hpp>
 #include <stdint.h>
 
-extern "C" void wzerorange(uint32_t *start, uint32_t *end);
+extern "C" void wzerorange(uint32_t* start, uint32_t* end);
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS];
 
