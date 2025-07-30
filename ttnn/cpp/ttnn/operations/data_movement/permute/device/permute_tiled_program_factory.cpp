@@ -102,12 +102,7 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_page_size = detail::tile_size(input_tensor);
 
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    uint32_t output_page_size = detail::tile_size(tensor_return_value);
-
     uint32_t num_tiles = detail::num_tiles(tensor_return_value);
-
-    tt::tt_metal::IDevice* device = input_tensor.device();
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_pages_to_read = 2;
@@ -122,7 +117,7 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_pages_to_read * input_page_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, input_page_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t output_cb_index = src0_cb_index;
     if (swap_hw) {
@@ -131,7 +126,7 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
             tt::tt_metal::CircularBufferConfig(
                 num_input_pages_to_read * input_page_size, {{src1_cb_index, cb_data_format}})
                 .set_page_size(src1_cb_index, input_page_size);
-        auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
         output_cb_index = src1_cb_index;
     }
 
@@ -296,13 +291,8 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t input_page_size = detail::tile_size(input_tensor);
 
-    tt::DataFormat cb_data_format_output = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    uint32_t output_page_size = detail::tile_size(tensor_return_value);
-
     uint32_t num_tiles = detail::num_tiles(input_tensor);
     uint32_t num_output_tiles = detail::num_tiles(tensor_return_value);
-
-    tt::tt_metal::IDevice* device = input_tensor.device();
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t padding_cb_index = tt::CBIndex::c_1;
@@ -330,7 +320,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_pages_to_read * input_page_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, input_page_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
@@ -343,7 +333,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
         tt::tt_metal::CircularBufferConfig cb_src1_config =
             tt::tt_metal::CircularBufferConfig(face_shape[1] * element_size, {{padding_cb_index, cb_data_format}})
                 .set_page_size(padding_cb_index, face_shape[1] * element_size);
-        auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
     }
     if (swap_hw) {
         uint32_t src2_cb_index = tt::CBIndex::c_16;
@@ -351,7 +341,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
             tt::tt_metal::CircularBufferConfig(
                 num_input_pages_to_read * input_page_size, {{src2_cb_index, cb_data_format}})
                 .set_page_size(src2_cb_index, input_page_size);
-        auto cb_src2 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
         output_cb_index = src2_cb_index;
     }
     uint32_t padding_val_packed = 0;
@@ -564,7 +554,6 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     uint32_t rank = dims.size();
     auto& output_tensor = tensor_return_value;
     auto& output_shape = output_tensor.logical_shape();
-    auto& padded_output_shape = output_tensor.padded_shape();
     const auto& tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     const auto& face_shape = input_tensor.tensor_spec().tile().get_face_shape();
 
@@ -608,7 +597,6 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     uint32_t x_blocks = X_p / x_block_size;
 
     uint32_t num_faces_w = tile_shape[1] / face_shape[1];
-    uint32_t num_faces_h = tile_shape[0] / face_shape[0];
 
     uint32_t padded_xw_volume = X_p * W_p;
     for (uint32_t i = 0; i < rank - 1; i++) {
@@ -658,16 +646,11 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
             ? num_faces_w
             : (final_tile_real_x == 0 ? num_faces_w : ((final_tile_real_x + face_shape[1] - 1) / face_shape[1]));
 
-    uint32_t num_tiles = detail::num_tiles(input_tensor);
     uint32_t num_output_tiles = detail::num_tiles(tensor_return_value);
-
-    tt::tt_metal::IDevice* device = input_tensor.device();
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     uint32_t src2_cb_index = tt::CBIndex::c_2;
-
-    uint32_t output_cb_index = src0_cb_index;
 
     uint32_t num_input_pages_to_read = 2;
 
@@ -695,23 +678,23 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_pages_to_read * input_page_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, input_page_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     tt::tt_metal::CircularBufferConfig cb_src1_config =
         tt::tt_metal::CircularBufferConfig(num_input_pages_to_read * input_page_size, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, input_page_size);
-    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     tt::tt_metal::CircularBufferConfig cb_src2_config =
         tt::tt_metal::CircularBufferConfig(num_input_pages_to_read * input_page_size, {{src2_cb_index, cb_data_format}})
             .set_page_size(src2_cb_index, input_page_size);
-    auto cb_src2 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
 
     if (needs_y_padding) {
         tt::tt_metal::CircularBufferConfig cb_padding_cfg =
             tt::tt_metal::CircularBufferConfig(face_shape[1] * element_size, {{padding_cb_index, cb_data_format}})
                 .set_page_size(padding_cb_index, face_shape[1] * element_size);
-        auto cb_padding = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_padding_cfg);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_padding_cfg);
     }
 
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;

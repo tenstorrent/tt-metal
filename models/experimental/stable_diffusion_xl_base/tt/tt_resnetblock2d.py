@@ -200,16 +200,6 @@ class TtResnetBlock2D(nn.Module):
         if hidden_states.memory_config().memory_layout != self.conv1_config.shard_layout:
             hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
 
-        if C == 1920 and H == 32:
-            mem_cfg = ttnn.create_sharded_memory_config(
-                shape=(204, 256),
-                core_grid=ttnn.CoreGrid(x=8, y=8),
-                strategy=ttnn.ShardStrategy.BLOCK,
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
-
         if self.split_conv:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
             hidden_states, [C, H, W], [self.tt_conv1_weights, self.tt_conv1_bias] = split_conv2d(
@@ -230,6 +220,20 @@ class TtResnetBlock2D(nn.Module):
                 groups=self.groups,
             )
         else:
+            # Workaround for #25898
+            # Conv calls to_mem_cfg, which doesn't call reshard but calls s2i -> i2s with dram mem config.
+            # Do that here, as s2i -> i2s with L1 mem config is faster than dram mem config.
+            if (
+                self.conv1_config.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+                and hidden_states.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            ):
+                if hidden_states.memory_config().shard_spec.shape[1] % 32 != 0 or (
+                    H == 64
+                    and W == 64
+                    and self.conv1_params["input_channels"] == 1280
+                    and self.conv1_params["output_channels"] == 640
+                ):
+                    hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
             [hidden_states, [H, W], [self.tt_conv1_weights, self.tt_conv1_bias]] = ttnn.conv2d(
                 input_tensor=hidden_states,
                 weight_tensor=self.tt_conv1_weights,
@@ -294,6 +298,15 @@ class TtResnetBlock2D(nn.Module):
 
         hidden_states = ttnn.silu(hidden_states)
 
+        # Workaround for #25898
+        # Conv calls to_mem_cfg, which doesn't call reshard but calls s2i -> i2s with dram mem config.
+        # Do that here, as s2i -> i2s with L1 mem config is faster than dram mem config.
+        if (
+            self.conv2_config.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            and hidden_states.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        ):
+            if hidden_states.memory_config().shard_spec.shape[1] % 32 != 0:
+                hidden_states = ttnn.sharded_to_interleaved(hidden_states, ttnn.L1_MEMORY_CONFIG)
         [hidden_states, [H, W], [self.tt_conv2_weights, self.tt_conv2_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv2_weights,
