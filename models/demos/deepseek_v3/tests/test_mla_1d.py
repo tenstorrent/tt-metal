@@ -196,12 +196,12 @@ def test_forward_pass(
     # Generate appropriate configs
     ccl = CCL1D(hf_config, mesh_device)
     if mode == "prefill":
-        model_config = MLA1D.prefill_model_config(hf_config, mesh_device, ccl)
+        model_config = MLA1D.prefill_model_config(hf_config, mesh_device)
     else:
-        model_config = MLA1D.decode_model_config(hf_config, mesh_device, ccl)
+        model_config = MLA1D.decode_model_config(hf_config, mesh_device)
 
     # Create a new model state
-    model_state = MLA1D.create_state(hf_config, mesh_device, dp_factor, paged_config)
+    model_state = MLA1D.create_state(hf_config, mesh_device, dp_factor, paged_config, ccl)
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state)
