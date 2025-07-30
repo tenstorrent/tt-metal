@@ -907,8 +907,6 @@ def _get_clip_prompt_embeds(
             "The following part of your input was truncated because CLIP can only handle sequences up to"
             f" {tokenizer_max_length} tokens: {removed_text}"
         )
-    prompt_embeds = text_encoder(text_input_ids.to(device), output_hidden_states=True)
-    pooled_prompt_embeds = prompt_embeds[0]
 
     tt_text_input_ids = ttnn.from_torch(
         text_input_ids,

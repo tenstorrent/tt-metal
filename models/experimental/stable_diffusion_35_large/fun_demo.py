@@ -29,10 +29,10 @@ from .tt.parallel_config import StableDiffusionParallelManager, EncoderParallelM
     ],
 )
 @pytest.mark.parametrize(
-    "mesh_device, encoder_submesh_shape, cfg, sp, tp, topology, num_links",
+    "mesh_device, cfg, sp, tp, topology, num_links",
     [
-        [(2, 4), (1, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
-        [(4, 8), (1, 4), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 3],
+        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
+        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 3],
     ],
     ids=[
         "t3k_cfg2_sp2_tp2",
@@ -49,7 +49,6 @@ from .tt.parallel_config import StableDiffusionParallelManager, EncoderParallelM
 def test_sd3(
     *,
     mesh_device: ttnn.MeshDevice,
-    encoder_submesh_shape: tuple[int, int],
     model_name,
     image_w,
     image_h,
