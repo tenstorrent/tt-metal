@@ -93,6 +93,9 @@ class Attention(LightweightModule):
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
 
         self.transformation_mats = transformation_mats
+        self.is_sliding = (
+            configuration.layer_types[layer_num] == "sliding_window" if configuration.layer_types else False
+        )
 
         self.model_config = configuration.get_model_config()
         self.ccl_topology = configuration.ccl_topology()
@@ -866,6 +869,9 @@ class Attention(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
     ):
+        if isinstance(rot_mats, dict) and "local" in rot_mats and "global" in rot_mats:
+            rot_mats = rot_mats["local"] if self.is_sliding else rot_mats["global"]
+
         if mode == "prefill":
             return self.forward_prefill(
                 x,
