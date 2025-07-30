@@ -8,9 +8,7 @@
 
 namespace ttml::metal::ops::profiler_no_op::device {
 
-struct operation_attributes_t {
-    std::string identifier = "profiler_no_op";
-};
+struct operation_attributes_t {};
 
 struct tensor_args_t {
     const ttnn::Tensor& input;
