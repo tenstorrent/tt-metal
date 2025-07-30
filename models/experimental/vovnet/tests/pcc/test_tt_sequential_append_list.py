@@ -4,24 +4,24 @@
 
 import torch
 import pytest
-import timm
 
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-from models.experimental.functional_vovnet.tt.sequential_append_list import TtSequentialAppendList
-from models.experimental.functional_vovnet.tt.model_preprocessing import custom_preprocessor
+from models.experimental.vovnet.tt.sequential_append_list import TtSequentialAppendList
+from models.experimental.vovnet.tt.model_preprocessing import custom_preprocessor
+from models.experimental.vovnet.common import load_torch_model
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_sequential_append_list_inference(device, reset_seeds):
+def test_sequential_append_list_inference(device, reset_seeds, model_location_generator):
     STAGE_INDEX = 0
     BLOCK_INDEX = 0
 
     base_address = f"stages.{STAGE_INDEX}.blocks.{BLOCK_INDEX}"
 
-    model = timm.create_model("hf_hub:timm/ese_vovnet19b_dw.ra_in1k", pretrained=True).eval()
+    model = load_torch_model(model_location_generator)
 
     torch_model = model.stages[STAGE_INDEX].blocks[BLOCK_INDEX].conv_mid
     parameters = custom_preprocessor(device, model.state_dict())

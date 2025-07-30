@@ -4,18 +4,18 @@
 
 import torch
 import pytest
-import timm
 
 import ttnn
-from models.experimental.functional_vovnet.tt.classifier_head import TtClassifierHead
-from models.experimental.functional_vovnet.tt.model_preprocessing import custom_preprocessor
+from models.experimental.vovnet.tt.classifier_head import TtClassifierHead
+from models.experimental.vovnet.tt.model_preprocessing import custom_preprocessor
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.experimental.vovnet.common import load_torch_model
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_classifier_head_inference(device, reset_seeds):
+def test_classifier_head_inference(device, reset_seeds, model_location_generator):
     base_address = f"head"
-    model = timm.create_model("hf_hub:timm/ese_vovnet19b_dw.ra_in1k", pretrained=True).eval()
+    model = load_torch_model(model_location_generator)
 
     torch_model = model.head
     parameters = custom_preprocessor(device, model.state_dict())
