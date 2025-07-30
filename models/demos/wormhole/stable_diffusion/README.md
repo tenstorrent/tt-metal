@@ -1,7 +1,7 @@
 # Stable_diffusion
 
 ## Platforms:
-    Wormhole (n150)
+    Wormhole (n150, n300)
 
 > [!CAUTION]
 >
@@ -15,10 +15,10 @@ Stable Diffusion is a latent text-to-image diffusion model capable of generating
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
 ## How to Run
-- If you are using Wormhole, set the `WH_ARCH_YAML` environment variable.
-```sh
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-```
+- On n300, make sure to set the following environment variable in the terminal:
+  ```
+  export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+  ```
 
 - Run the demo:
 ```sh

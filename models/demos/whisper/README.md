@@ -1,7 +1,7 @@
 # Whisper
 
 ## Platforms:
-    Wormhole (n150, n300), Blackhole
+    Wormhole (n150, n300), Blackhole (p100, p150)
 
 ## Introduction
 

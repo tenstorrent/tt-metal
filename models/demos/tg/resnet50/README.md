@@ -19,13 +19,13 @@ Read more about it at:
 ## Demo
 + To run the demo use:
 ```python
-WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/tg/resnet50/demo/demo.py::test_demo_sample
+pytest --disable-warnings models/demos/tg/resnet50/demo/demo.py::test_demo_sample
 ```
 Where 16 is the batch size per device, and `models/demos/ttnn_resnet/demo/images/` is where the images are located.
 
 + Our second demo is designed to run ImageNet dataset, run it with:
 ```python
-WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/tg/resnet50/demo/demo.py::test_demo_imagenet
+pytest --disable-warnings models/demos/tg/resnet50/demo/demo.py::test_demo_imagenet
 ```
 The 16 refers to batch size per device here and 100 is the number of iterations(batches), hence the model will process 100 batches of size 512, total of 51200 images per device.
 
