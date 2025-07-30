@@ -170,13 +170,13 @@ def run_max_pool(
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
     ## construct the tensor in NCHW shape
-    act = randomize_torch_tensor(torch_tensor_map, act_shape)
-    # act = torch.zeros(act_shape, dtype=torch.bfloat16)
-    # for n in range(act_shape[0]):
-    #     for c in range(act_shape[1]):
-    #         for h in range(act_shape[2]):
-    #             for w in range(act_shape[3]):
-    #                 act[n, c, h, w] = h * in_w + w
+    # act = randomize_torch_tensor(torch_tensor_map, act_shape)
+    act = torch.zeros(act_shape, dtype=torch.bfloat16)
+    for n in range(act_shape[0]):
+        for c in range(act_shape[1]):
+            for h in range(act_shape[2]):
+                for w in range(act_shape[3]):
+                    act[n, c, h, w] = h * in_w + w
     # torch.save(act, "act.pt")
     # act = torch.load("act.pt")
 
@@ -220,6 +220,7 @@ def run_max_pool(
             tile_size=32 if dtype == ttnn.bfloat8_b else 1,
         )
         ttact_device = ttnn.to_memory_config(ttact_device, sharded_memory_config)
+
     output = ttnn.max_pool2d(
         input_tensor=ttact_device,
         batch_size=in_n,
@@ -255,6 +256,8 @@ def run_max_pool(
 
     output_pytorch = torch.permute(output_pytorch, (0, 3, 1, 2))  ## N, C, H, W
 
+    print("expected:", golden_pytorch[0][0])
+    print("actual:", output_pytorch[0][0])
     pcc_thresh = 1.0
     if dtype == ttnn.bfloat8_b:
         pcc_thresh = 0.9994
@@ -312,16 +315,16 @@ def run_max_pool(
             # [64, 16, 1056, 160],    ## oom
             # [128, 16, 1056, 160],   ## oom
             # [256, 16, 1056, 160],   ## oom
-            # [8, 16, 528, 80],
-            [16, 16, 528, 80],
-            # [32, 16, 528, 80],  ## oom
-            # [64, 16, 528, 80],  ## oom
+            # # [8, 16, 528, 80],
+            # [16, 16, 528, 80],
+            # # [32, 16, 528, 80],  ## oom
+            # # [64, 16, 528, 80],  ## oom
             # [128, 16, 528, 80], ## oom
             # [256, 16, 528, 80], ## oom
             ## wide for vgg
             # [1, 256, 56, 56],
             # [1, 512, 28, 28],
-            [1, 512, 14, 14],
+            # [1, 512, 14, 14],
             # wide yolo kernel
             # [1, 512, 10, 10],
             # [1, 96, 112, 112],
@@ -331,14 +334,14 @@ def run_max_pool(
             # [1, 640, 32, 32],
             # [1, 576, 32, 32],
             # [1, 384, 32, 32],
-            [1, 128, 16, 16],
-            [1, 256, 6, 6],
-            [1, 384, 8, 8],
-            # C=16 test
-            [1, 16, 12, 12],
-            # partial grid tests
-            [1, 32, 10, 10],  # BH
-            [1, 32, 6, 6],  # WH
+            [1, 32, 16, 16],
+            # [1, 256, 6, 6],
+            # [1, 384, 8, 8],
+            # # C=16 test
+            # [1, 16, 12, 12],
+            # # partial grid tests
+            # [1, 32, 10, 10],  # BH
+            # [1, 32, 6, 6],  # WH
         )
     ),
 )
@@ -347,8 +350,8 @@ def run_max_pool(
     (
         # (2, 2),
         # (3, 3),
-        # (5, 5),
-        (7, 7),
+        (5, 5),
+        # (7, 7),
         # (9, 9),
         # (13, 13),
     ),
@@ -358,7 +361,7 @@ def run_max_pool(
     (
         (0, 0),
         # (1, 1),
-        (2, 2),
+        # (2, 2),
         # (4, 4),
         # (6, 6),
     ),

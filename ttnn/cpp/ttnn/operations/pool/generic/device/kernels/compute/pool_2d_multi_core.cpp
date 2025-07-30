@@ -28,12 +28,11 @@ inline void reduce_h_fused(
     const uint32_t in_cb_id_1,
     const uint32_t in_scalar_cb_id,
     const uint32_t in_stick_index,
-    const uint32_t out_cb_id,
     const uint32_t tmp_cb_id,
     const uint32_t is_out_tiled) {
     constexpr uint32_t num_out_rows = 1;
     constexpr uint32_t num_output_faces = (is_partial_tile ? 1 : 2);
-    cb_reserve_back(out_cb_id, num_output_tiles);
+    cb_reserve_back(tmp_cb_id, num_output_tiles);
     const uint32_t curr_in_cb_id = (split_reader && (in_stick_index & 0x1)) ? in_cb_id_1 : in_cb_id_0;
     cb_wait_front(curr_in_cb_id, 1);
 
@@ -47,12 +46,8 @@ inline void reduce_h_fused(
     tile_regs_wait();
     tile_regs_commit();
     pack_untilize_dst<num_output_tiles>(
-        out_cb_id, 1 /*out_subblock_h*/, 0, num_out_rows, num_output_faces); /* pack 1 row (1x16 or 1x32) */
+        tmp_cb_id, 1 /*out_subblock_h*/, 0, num_out_rows, num_output_faces); /* pack 1 row (1x16 or 1x32) */
     tile_regs_release();
-    tilize_block(out_cb_id, num_output_tiles, tmp_cb_id);
-    if (is_out_tiled) {
-        tilize_block(out_cb_id, num_output_tiles, tmp_cb_id);
-    }
     cb_push_back(tmp_cb_id, num_output_tiles);
 }
 
@@ -78,8 +73,8 @@ void MAIN {
     constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(13);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(14);
     constexpr bool one_scalar_per_core = get_compile_time_arg_val(17);
-    constexpr uint32_t tmp_cb_id = get_compile_time_arg_val(20);
-    constexpr uint32_t is_out_tiled = get_compile_time_arg_val(21);
+    constexpr uint32_t is_out_tiled = get_compile_time_arg_val(20);
+    constexpr uint32_t tmp_cb_id = get_compile_time_arg_val(21);
 
     constexpr bool is_partial_tile = in_c < 32;
     static_assert((!is_partial_tile || (in_c == 16)), "Partial tile must have c_dim 16");
@@ -104,12 +99,22 @@ void MAIN {
     // in datums which are not used.
     constexpr uint32_t face_r_dim = window_size_hw > 16 ? 16 : window_size_hw;
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
-        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_tile, face_r_dim);
-    pack_untilize_dst_init_short<max_tiles_per_iter>(out_cb_id, num_out_rows, num_faces_in_tile);
+        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, tmp_cb_id, num_faces_in_tile, face_r_dim);
+    pack_untilize_dst_init_short<max_tiles_per_iter>(tmp_cb_id, num_out_rows, num_faces_in_tile);
 
     // tilize reconfiguration is needed if we have more than one block and the number of tiles
     // is not a multiple of MAX_TILES_PER_REDUCTION
     constexpr bool tilize_reconfig_needed = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0;
+
+    DPRINT << "cin_ntiles_hw:" << in_ntiles_hw << ENDL();
+    DPRINT << "cin_ntiles_c:" << in_ntiles_c << ENDL();
+    DPRINT << "cwindow_size_hw:" << window_size_hw << ENDL();
+    DPRINT << "cout_h:" << out_h << ENDL();
+    DPRINT << "cout_w:" << out_w << ENDL();
+    DPRINT << "nsticks_per_core:" << nsticks_per_core << ENDL();
+    DPRINT << "out_cbid:" << out_cb_id << ENDL();
+    DPRINT << "tmp_cb_id:" << tmp_cb_id << ENDL();
+
     if (one_scalar_per_core) {
         cb_wait_front(in_scalar_cb_id_0, 1);
     }
@@ -126,7 +131,6 @@ void MAIN {
                 in_cb_id_0, curr_scalar_cb_id, max_tiles_per_iter, num_faces_in_tile, face_r_dim, 1)));
         }
 
-        constexpr uint32_t writen_id = is_out_tiled ? out_cb_id : tmp_cb_id;
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; ++b_i) {
             reduce_h_fused<
                 max_tiles_per_iter,
@@ -135,7 +139,7 @@ void MAIN {
                 face_r_dim,
                 num_faces_in_tile,
                 neginf_srca_maxpool,
-                zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, writen_id, tmp_cb_id);
+                zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, tmp_cb_id, is_out_tiled);
         }
 
         if constexpr (tilize_reconfig_needed) {
@@ -143,7 +147,6 @@ void MAIN {
                 in_cb_id_0, curr_scalar_cb_id, partial_iter_output_tiles, num_faces_in_tile, face_r_dim, 1)));
         }
         // perform the reduction over the either whole or partial chunk N
-        constexpr uint32_t writen_id = is_out_tiled ? out_cb_id : tmp_cb_id;
         reduce_h_fused<
             partial_iter_output_tiles,
             is_partial_tile,
@@ -151,8 +154,28 @@ void MAIN {
             face_r_dim,
             num_faces_in_tile,
             neginf_srca_maxpool,
-            zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, writen_id, tmp_cb_id);
-        if constexpr (!one_scalar_per_core) {
+            zero_srca_avgpool>(in_cb_id_0, in_cb_id_1, curr_scalar_cb_id, i, tmp_cb_id, is_out_tiled);
+
+        if constexpr (is_out_tiled) {  // TODO: make sure 32 rows and then tilize. go into the loop. ^
+            if (i == 31) {
+                // DPRINT << "ci:"<<i<<"/"<<nsticks_per_core << ENDL();
+                tilize_init_short(tmp_cb_id, partial_iter_output_tiles * TILE_HEIGHT, out_cb_id);
+                DPRINT << "end1" << ENDL();
+                cb_wait_front(tmp_cb_id, partial_iter_output_tiles * TILE_HEIGHT);
+                cb_reserve_back(out_cb_id, partial_iter_output_tiles * TILE_HEIGHT);
+                DPRINT << "end2" << ENDL();
+                tilize_block(
+                    tmp_cb_id,
+                    partial_iter_output_tiles * TILE_HEIGHT,
+                    out_cb_id);  // nsticks_per_core -> tile_height (32)
+                DPRINT << "end3" << ENDL();
+                cb_push_back(out_cb_id, partial_iter_output_tiles * TILE_HEIGHT);
+                tilize_uninit(tmp_cb_id, out_cb_id);  // TODO: verify output is a multiple of 32, output to out cb.
+            }
+        }
+        cb_pop_front(tmp_cb_id, partial_iter_output_tiles * nsticks_per_core);
+
+        if constexpr (!one_scalar_per_core) {  // TODO: knows how many rows output
             cb_pop_front(curr_scalar_cb_id, 1);
         }
     }

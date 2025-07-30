@@ -157,6 +157,14 @@ void MAIN {
     constexpr uint32_t interm_reduction_chunks =
         remaining_elems ? window_size_hw / max_rows_for_reduction + 1 : window_size_hw / max_rows_for_reduction;
 
+    // DPRINT << "cin_ntiles_hw:" << in_ntiles_hw << ENDL();
+    // DPRINT << "cin_ntiles_c:" << in_ntiles_c << ENDL();
+    // DPRINT << "cwindow_size_hw:" << window_size_hw << ENDL();
+    // DPRINT << "cout_h:" << out_h << ENDL();
+    // DPRINT << "cout_w:" << out_w << ENDL();
+    // DPRINT << "cnsticks_per_core_by_nblocks:" << nsticks_per_core_by_nblocks << ENDL();
+    // DPRINT << "cmax_rows_for_reduction:" << max_rows_for_reduction << ENDL();
+
     // wait for initialization to complete
     cb_wait_front(sync_cb_id1, 2);
     if constexpr (split_reader) {
@@ -164,12 +172,14 @@ void MAIN {
     }
 
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; ++i) {
+        DPRINT << "ci:" << i << ENDL();
         const uint32_t curr_scalar_cb_id =
             (split_reader && (i & 0x1) && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
         if constexpr (!one_scalar_per_core) {
             cb_wait_front(curr_scalar_cb_id, 1);
         }
         for (uint32_t b_i = 0; b_i < in_nblocks_c - 1; b_i++) {
+            DPRINT << "cb_i:" << b_i << ENDL();
             // perform the intermediate reductions over the first N - 1 whole chunks
             pack_untilize_uninit(interm_cb_id);
             pack_untilize_dst_init_short<max_tiles_per_iter>(interm_cb_id, num_out_rows, num_faces_in_output_tile);
@@ -178,6 +188,7 @@ void MAIN {
             // twice, and both results are written to interm_cb_id. interm_cb_id will be the input to the
             // next level of reduction.
             for (uint32_t h = 0; h < interm_reduction_chunks; h++) {
+                DPRINT << "ch:" << h << ENDL();
                 reduce_h_fused_interm<
                     max_tiles_per_iter,
                     is_partial_tile,
@@ -213,6 +224,7 @@ void MAIN {
         pack_untilize_dst_init_short<max_tiles_per_iter>(interm_cb_id, num_out_rows, num_faces_in_output_tile);
         cb_reserve_back(interm_cb_id, 1);
         for (uint32_t h = 0; h < interm_reduction_chunks; h++) {
+            // DPRINT << "ch2:" << h << ENDL();
             reduce_h_fused_interm<
                 max_tiles_per_iter,
                 is_partial_tile,
@@ -228,6 +240,7 @@ void MAIN {
         pack_untilize_uninit(out_cb_id);
         pack_untilize_dst_init_short<partial_iter_output_tiles>(out_cb_id, num_out_rows, num_faces_in_output_tile);
         constexpr uint32_t writen_id = is_out_tiled ? out_cb_id : tmp_cb_id;
+        DPRINT << "rbeg:" << ENDL();
         reduce_h_fused<
             partial_iter_output_tiles,
             is_partial_tile,
@@ -240,10 +253,12 @@ void MAIN {
             writen_id,
             tmp_cb_id,
             is_out_tiled);
+        DPRINT << "rend:" << ENDL();
         if constexpr (!one_scalar_per_core) {
             cb_pop_front(curr_scalar_cb_id, 1);
         }
     }
+    DPRINT << "end:" << ENDL();
     if constexpr (one_scalar_per_core) {
         cb_pop_front(in_scalar_cb_id_0, 1);
     }

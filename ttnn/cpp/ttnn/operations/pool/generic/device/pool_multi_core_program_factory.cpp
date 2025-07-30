@@ -458,9 +458,14 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     // modified 1: create tmp_out_cb
     auto tmp_out_cb_id = next_cb_index++;
-    tt::tt_metal::create_cb(tmp_out_cb_id, program, all_cores, in_cb_pagesize, in_cb_npages, out_df);
-    // tt::tt_metal::create_cb(tmp_out_cb_id, program, all_cores, out_cb_pagesize, out_cb_npages, out_df);
+    // tt::tt_metal::create_cb(tmp_out_cb_id, program, all_cores, in_cb_pagesize, in_cb_npages, out_df);
+    tt::tt_metal::create_cb(tmp_out_cb_id, program, all_cores, out_cb_pagesize, out_cb_npages, out_df);
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", tmp_out_cb_id, out_cb_pagesize, out_cb_npages);
+
+    // auto tmp_out_cb_id2 = next_cb_index++;
+    // tt::tt_metal::create_cb(tmp_out_cb_id2, program, all_cores, in_cb_pagesize, in_cb_npages, out_df);
+    // tt::tt_metal::create_cb(tmp_out_cb_id2, program, all_cores, out_cb_pagesize, out_cb_npages, out_df);
+    // log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", tmp_out_cb_id2, out_cb_pagesize, out_cb_npages);
 
     // Invalid index for circular buffer, will report error if not assigned with valid value before creation
     uint32_t max_pool_partials_cb_id = 32;
@@ -624,8 +629,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         one_scalar_per_core,
         sync_cb_id1,
         sync_cb_id2,
-        tmp_out_cb_id,
-        op_attr.is_out_tiled_};
+        op_attr.is_out_tiled_,
+        tmp_out_cb_id};
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
@@ -668,7 +673,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
         .noc = tt::tt_metal::NOC::RISCV_1_default,
         .compile_args = cb_copy_args};
-    CreateKernel(program, cb_coppy_kernel_fname, all_cores, cb_copy_config);
+    // CreateKernel(program, cb_coppy_kernel_fname, all_cores, cb_copy_config);
 
     // uint32_t temporary_size = program.get_cb_memory_size();
     // uint32_t post_allocate_size =
