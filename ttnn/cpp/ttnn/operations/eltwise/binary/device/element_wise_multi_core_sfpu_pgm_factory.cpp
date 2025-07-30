@@ -13,6 +13,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::binary {
 
@@ -50,8 +51,6 @@ BinaryDeviceOperation::ElementWiseMultiCoreSfpu::create(
 
     tt_metal::Buffer* src0_buffer = a.buffer();
     tt_metal::Buffer* src1_buffer = b->buffer();
-
-    tt_metal::IDevice* device = a.device();
 
     std::optional<ShardSpec> shard_spec = std::nullopt;
     bool src0_sharded = a.memory_config().is_sharded();
@@ -112,7 +111,7 @@ BinaryDeviceOperation::ElementWiseMultiCoreSfpu::create(
             tt_metal::CircularBufferConfig(
                 max_block_size * interim0_single_tile_size, {{tt::CBIndex::c_3, interim_cb0_format}})
                 .set_page_size(tt::CBIndex::c_3, interim0_single_tile_size);
-        auto cb_interm = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm_config);
+        tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm_config);
     }
     uint32_t src1interim_cb_index = tt::CBIndex::c_4;
     if (eltwise_defines.find("SFPU_OP_INIT_PRE_IN1_0") != eltwise_defines.end()) {
@@ -121,7 +120,7 @@ BinaryDeviceOperation::ElementWiseMultiCoreSfpu::create(
             tt_metal::CircularBufferConfig(
                 max_block_size * interim1_single_tile_size, {{tt::CBIndex::c_4, interim_cb1_format}})
                 .set_page_size(tt::CBIndex::c_4, interim1_single_tile_size);
-        auto cb_interm2 = tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm2_config);
+        tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm2_config);
     }
 
     uint32_t output_cb_index = tt::CBIndex::c_2;
@@ -146,10 +145,9 @@ BinaryDeviceOperation::ElementWiseMultiCoreSfpu::create(
         writer_defines["OUT_SHARDED"] = "1";
     }
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)src0_is_dram, (std::uint32_t)src1_is_dram, (std::uint32_t)block_or_width_sharded};
+    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_or_width_sharded};
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};

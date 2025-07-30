@@ -22,7 +22,6 @@ namespace tt::tt_fabric {
 
 class FabricNodeId;
 bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
-bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
 
 uint32_t get_sender_channel_count(tt::tt_fabric::Topology topology);
 uint32_t get_downstream_edm_count(tt::tt_fabric::Topology topology);

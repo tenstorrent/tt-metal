@@ -15,7 +15,7 @@ MESH_DEVICE_STATE_DICT_KEY = "mesh_device"
 WeightConfig = dict[str, "WeightConfig | str"]
 
 _PRIMITIVE_COPYABLE_TYPES = bool | int | float | complex | str | bytes | None | Enum
-# In general, we require ModelConfig to be deepcopyable
+# In general, we require ModelConfig to be serializable (NOTE: mesh device and classes that hold references to the objects on it are NOT serializable).
 ModelPrefillConfig = dict[str, "ModelPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"] | OpConfigBase
 ModelDecodeConfig = dict[str, "ModelDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"] | OpConfigBase
 
@@ -120,8 +120,10 @@ def _merge_config_containers(
     if isinstance(cfg_a, (list, tuple, NoneType)) and isinstance(cfg_b, (list, tuple, NoneType)):
         if cfg_a is None or cfg_b is None or (len(cfg_a) == len(cfg_b) and type(cfg_a) == type(cfg_b)):
             container = type(cfg_a) if cfg_a is not None else type(cfg_b)
-            cfg_a = cfg_a or (container([None]) * len(cfg_b))
-            cfg_b = cfg_b or (container([None]) * len(cfg_a))
+            if cfg_a is None:
+                cfg_a = container([None]) * len(cfg_b)
+            if cfg_b is None:
+                cfg_b = container([None]) * len(cfg_a)
             return container(
                 _merge_config_containers(a, b, merge_config_specific_items, search_for_mesh_device, mb_mesh_device)
                 for a, b in zip(cfg_a, cfg_b, strict=True)

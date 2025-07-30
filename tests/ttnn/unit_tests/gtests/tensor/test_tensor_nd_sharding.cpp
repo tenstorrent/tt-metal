@@ -132,7 +132,6 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
 
     auto& storage = std::get<DeviceStorage>(tensor.storage());
     auto buffer = storage.get_buffer();
-    auto page_size = buffer->page_size();
     auto device = buffer->device();
 
     size_t region_size = buffer->page_size();

@@ -156,7 +156,7 @@
     },
     "ScaledDotProductAttentionDecode_0": {
       "op_name": "SDPA",
-      "kernel_duration": 10285.326388888889,
+      "kernel_duration": 9183.524305555555,
       "op_to_op": 625.3407407407408,
       "first_to_last_start": 2315.9037037037037,
       "non-overlapped-dispatch-time": 8528.468253968254,
@@ -175,6 +175,7 @@
       "op_to_op_duration_relative_margin": 0.2,
       "first_to_last_start_relative_margin": 0.2,
       "dispatch_duration_relative_margin": 0.2
+
     }
   },
   "model_tail": {
@@ -270,7 +271,7 @@
     },
     "TopK_0": {
       "op_name": "TopK_0",
-      "kernel_duration": 554450.3270833333,
+      "kernel_duration": 288709.40625,
       "op_to_op": 671.0,
       "non-overlapped-dispatch-time": 4614.0,
       "kernel_duration_relative_margin": 0.2,
