@@ -333,7 +333,7 @@ void MAIN {
             // cb_x at this point is (x-E[x])
             index_h_offset = 0;
             mul_tiles_init(cb_x, cb_x);
-            cb_reserve_back(cb_xmm, block_hw);
+            // cb_reserve_back(cb_xmm, block_hw);
             cb_wait_front(cb_x, block_hw);
             /*
             for (uint32_t i = 0; i < block_h; i++) {
@@ -365,55 +365,32 @@ void MAIN {
                 index_h_offset += block_w;
             }
             */
-            // tile_regs_acquire();
-            // for (uint32_t i = 0; i < block_h; i++) {
-            //     index_subblock_w_offset = 0;
-            //     for (uint32_t j = 0; j < num_subblocks_w; j++) {
-            //         // tile_regs_acquire();
-            //         for (uint32_t w = 0; w < subblock_w; w++) {
-            //             uint32_t index = w + index_subblock_w_offset + index_h_offset;
-            //             //w = 0; // always sum in first tile
-            //             uint32_t w_index = 0;
-            //             mul_tiles(cb_x, cb_x, index, index, w_index);
-            //             if (num_tiles_printed < 5) {
-            //                 DPRINT << "Print index is: " << num_tiles_printed << " Dest index is: " << w_index <<
-            //                 ENDL(); num_tiles_printed++; dprint_tensix_dest_reg(w_index);
-            //             }
-            //             if (g == 0 && i == 0 && j == 0 && w == 0) {
-
-            //             }
-            //         }
-            //         // tile_regs_commit();
-            //         // tile_regs_wait();
-            //         // for (uint32_t i = 0; i < subblock_w; i++) {
-            //         //     pack_tile(i, cb_xmm);
-            //         // }
-            //         //tile_regs_release();
-            //         index_subblock_w_offset += subblock_w;
-            //     }
-            //     index_h_offset += block_w;
-            // }
-            // tile_regs_commit();
-            // tile_regs_wait();
-            // for (uint32_t i = 0; i < subblock_w; i++) {
-            //     pack_tile(i, cb_xmm);
-            // }
-            // tile_regs_release();
-            // cb_xmm is full
-            // cb_x is empty
-            cb_push_back(cb_xmm, block_hw);
-
-            // Partial-Var(x)
-            index_h_offset = 0;
-            reduce_init(cb_xmm, cb_scaler, cb_ex_partial);
-            cb_reserve_back(cb_ex_partial, 1);
             tile_regs_acquire();
-            cb_wait_front(cb_xmm, block_hw);
-            cb_wait_front(cb_scaler, 1);
-            for (uint32_t h = 0; h < block_h; ++h) {
-                for (uint32_t w = 0; w < block_w; ++w) {
-                    uint32_t index = index_h_offset + w;
-                    reduce_tile(cb_xmm, cb_scaler, index, scaler0, dst0);
+            cb_reserve_back(cb_ex_partial, 1);
+            for (uint32_t i = 0; i < block_h; i++) {
+                index_subblock_w_offset = 0;
+                for (uint32_t j = 0; j < num_subblocks_w; j++) {
+                    // tile_regs_acquire();
+                    for (uint32_t w = 0; w < subblock_w; w++) {
+                        uint32_t index = w + index_subblock_w_offset + index_h_offset;
+                        // w = 0; // always sum in first tile as tensix is auto accumulating
+                        //  uint32_t w_index = 0;
+                        mul_tiles(cb_x, cb_x, index, index, dst0);
+                        // if (num_tiles_printed < 5) {
+                        //     DPRINT << "Print index is: " << num_tiles_printed << " Dest index is: " << w_index <<
+                        //     ENDL(); num_tiles_printed++; dprint_tensix_dest_reg(w_index);
+                        // }
+                        // if (g == 0 && i == 0 && j == 0 && w == 0) {
+
+                        // }
+                    }
+                    // tile_regs_commit();
+                    // tile_regs_wait();
+                    // for (uint32_t i = 0; i < subblock_w; i++) {
+                    //     pack_tile(i, cb_xmm);
+                    // }
+                    // tile_regs_release();
+                    index_subblock_w_offset += subblock_w;
                 }
                 index_h_offset += block_w;
             }
@@ -422,8 +399,33 @@ void MAIN {
             pack_tile(dst0, cb_ex_partial);
             tile_regs_release();
             cb_push_back(cb_ex_partial, 1);
-            cb_pop_front(cb_xmm, block_hw);
-            reduce_uninit();
+
+            // cb_xmm is full
+            // cb_x is empty
+            // cb_push_back(cb_xmm, block_hw);
+
+            // Partial-Var(x)
+            // index_h_offset = 0;
+            // reduce_init(cb_xmm, cb_scaler, cb_ex_partial);
+            // cb_reserve_back(cb_ex_partial, 1);
+            // tile_regs_acquire();
+            // cb_wait_front(cb_xmm, block_hw);
+            // cb_wait_front(cb_scaler, 1);
+            // for (uint32_t h = 0; h < block_h; ++h) {
+            //     for (uint32_t w = 0; w < block_w; ++w) {
+            //         uint32_t index = index_h_offset + w;
+            //         reduce_tile(cb_xmm, cb_scaler, index, scaler0, dst0);
+            //     }
+            //     index_h_offset += block_w;
+            // }
+            // tile should be ready here
+            // tile_regs_commit();
+            // tile_regs_wait();
+            // pack_tile(dst0, cb_ex_partial);
+            // tile_regs_release();
+            // cb_push_back(cb_ex_partial, 1);
+            // cb_pop_front(cb_xmm, block_hw);
+            // reduce_uninit();
 
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
                 reduce_init(cb_ex_external, cb_scaler_global, cb_ex_global);
