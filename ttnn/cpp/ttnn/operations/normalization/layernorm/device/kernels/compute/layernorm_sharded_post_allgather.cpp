@@ -183,8 +183,8 @@ void MAIN {
             tile_regs_acquire();
             add_tiles(cb_var, cb_eps, 0, 0, dst0);
             tile_regs_wait();
-            rsqrt_tile_init();
-            rsqrt_tile(dst0);
+            rsqrt_tile_init<true>();
+            rsqrt_tile<true>(dst0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_stats_reduced);
