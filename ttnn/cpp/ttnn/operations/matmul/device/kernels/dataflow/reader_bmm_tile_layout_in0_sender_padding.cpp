@@ -205,8 +205,6 @@ void kernel_main() {
                         noc_async_read_barrier();
 #else
                         if constexpr (extract_shard_sub_blocks) {
-                            // Operand 0
-                            cb_reserve_back(cb_id_in0, in0_block_num_tiles);
                             uint32_t l1_write_addr_in0 = get_write_ptr(cb_id_in0);
 
 #ifndef SKIP_MCAST
