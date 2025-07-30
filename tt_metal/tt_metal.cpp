@@ -944,7 +944,7 @@ chip_id_t GetPCIeDeviceID(chip_id_t device_id) {
 }
 
 void SetRootDir(const std::string& root_dir) {
-    tt::tt_metal::MetalContext::instance().rtoptions().set_root_dir(root_dir);
+    tt::tt_metal::MetalContext::instance(root_dir).rtoptions().set_root_dir(root_dir);
 }
 
 IDevice* CreateDevice(

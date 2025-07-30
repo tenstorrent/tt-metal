@@ -39,11 +39,13 @@ static const char* TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
 static const char* TT_METAL_FD_FABRIC_DEMO = "TT_METAL_FD_FABRIC";
 static const char* TT_METAL_VISIBLE_DEVICES_ENV_VAR = "TT_METAL_VISIBLE_DEVICES";
 
-RunTimeOptions::RunTimeOptions() {
+RunTimeOptions::RunTimeOptions(const std::string& root_dir_param) {
     const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
     if (root_dir_str) {
         this->is_root_dir_env_var_set = true;
         this->root_dir = std::string(root_dir_str) + "/";
+    } else {
+        this->set_root_dir(root_dir_param);
     }
 
     // Check if user has specified a cache path.

@@ -201,7 +201,7 @@ class RunTimeOptions {
     bool enable_2_erisc_mode_with_fabric = false;
 
 public:
-    RunTimeOptions();
+    RunTimeOptions(const std::string& root_dir);
     RunTimeOptions(const RunTimeOptions&) = delete;
     RunTimeOptions& operator=(const RunTimeOptions&) = delete;
 
