@@ -12,8 +12,8 @@ void kernel_main() {
     uint32_t batch_id_size = get_arg_val<uint32_t>(1);
     uint32_t input_addr_a = get_arg_val<uint32_t>(2);
     uint32_t input_addr_b = get_arg_val<uint32_t>(3);
-    uint32_t batch_size_in_sticks = get_arg_val<uint32_t>(5);
-    uint32_t my_batch_id = get_arg_val<uint32_t>(6);
+    uint32_t batch_size_in_sticks = get_arg_val<uint32_t>(4);
+    uint32_t my_batch_id = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t batch_cb_id = get_compile_time_arg_val(1);
