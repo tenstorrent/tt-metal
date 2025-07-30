@@ -176,23 +176,47 @@ inline auto preprocess_inputs(BinaryOpType binary_op_type, Tensor a, Tensor b) {
     return std::make_tuple(a, b);
 }
 
-inline auto any_row_broadcasted(const Tensor& a, const auto& b) {
-    if constexpr (requires { b.get_logical_shape(); }) {
-        const auto& a_shape = a.get_logical_shape();
-        const auto& b_shape = b.get_logical_shape();
+inline auto any_non_llk_row_broadcasted(const Tensor& a, const auto& b) {
+    if constexpr (requires {
+                      b.logical_shape();
+                      b.dtype();
+                  }) {
+        const auto& a_shape = a.logical_shape();
+        const auto& b_shape = b.logical_shape();
+        const auto& a_dtype = a.dtype();
+        const auto& b_dtype = b.dtype();
 
-        return (a_shape[-2] == 1 and b_shape[-2] > 1) or (b_shape[-2] == 1 and a_shape[-2] > 1);
+        if ((a_shape[-2] == 1 and b_shape[-2] > 1 and a_shape[-1] > 1) or
+            (b_shape[-2] == 1 and a_shape[-2] > 1 and b_shape[-1] > 1)) {
+            if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16) {
+                return false;
+            }
+            return true;
+        }
     }
 
     return false;
 }
+
+inline auto any_scalar_broadcasted(const Tensor& a, const auto& b) {
+    if constexpr (requires { b.logical_shape(); }) {
+        const auto& a_shape = a.logical_shape();
+        const auto& b_shape = b.logical_shape();
+
+        return (a_shape[-2] == 1 and a_shape[-1] == 1 and b_shape[-2] > 1 and b_shape[-1] > 1) or
+               (b_shape[-2] == 1 and b_shape[-1] == 1 and a_shape[-2] > 1 and a_shape[-1] > 1);
+    }
+
+    return false;
+}
+
 inline auto any_sharded_block_format(const Tensor& a, const auto& b) {
-    if (a.is_sharded() and is_block_format(a.get_dtype())) {
+    if (a.is_sharded() and is_block_format(a.dtype())) {
         return true;
     }
 
     if constexpr (requires { b.is_sharded(); }) {
-        if (b.is_sharded() and is_block_format(b.get_dtype())) {
+        if (b.is_sharded() and is_block_format(b.dtype())) {
             return true;
         }
     }
@@ -201,16 +225,16 @@ inline auto any_sharded_block_format(const Tensor& a, const auto& b) {
 }
 
 inline auto any_subtile_broadcasted_block_format(const Tensor& a, const auto& b) {
-    if constexpr (requires { b.get_logical_shape(); }) {
-        const auto& a_shape = a.get_logical_shape();
-        const auto& b_shape = b.get_logical_shape();
+    if constexpr (requires { b.logical_shape(); }) {
+        const auto& a_shape = a.logical_shape();
+        const auto& b_shape = b.logical_shape();
 
-        if (is_block_format(a.get_dtype()) and
+        if (is_block_format(a.dtype()) and
             (a_shape[-2] == 1 and b_shape[-2] > 1 or a_shape[-1] == 1 and b_shape[-1] > 1)) {
             return true;
         }
 
-        if (is_block_format(b.get_dtype()) and
+        if (is_block_format(b.dtype()) and
             (b_shape[-2] == 1 and a_shape[-2] > 1 or b_shape[-1] == 1 and a_shape[-1] > 1)) {
             return true;
         }
@@ -220,9 +244,9 @@ inline auto any_subtile_broadcasted_block_format(const Tensor& a, const auto& b)
 }
 
 inline auto is_w_bcast(const Tensor& a, const auto& b) {
-    if constexpr (requires { b.get_padded_shape(); }) {
-        const auto& shape_a = a.get_padded_shape();
-        const auto& shape_b = b.get_padded_shape();
+    if constexpr (requires { b.padded_shape(); }) {
+        const auto& shape_a = a.padded_shape();
+        const auto& shape_b = b.padded_shape();
         return (shape_a[-1] == 1 and shape_b[-1] > 1) or (shape_b[-1] == 1 and shape_a[-1] > 1);
     }
     return false;
@@ -253,7 +277,7 @@ inline auto is_uneven(const Tensor& t) {
         return false;
     }
 
-    const auto& shape = t.get_padded_shape();
+    const auto& shape = t.padded_shape();
     const auto& shard = t.shard_spec()->shape;
 
     return (shape[-4] * shape[-3] * shape[-2] % shard[0]) != 0 or (shape[-1] % shard[1]) != 0;
@@ -281,7 +305,7 @@ inline auto is_binary_ng_only(const Tensor& a, const auto& b, BinaryOpType binar
     if constexpr (requires {
                       b.dtype();
                       b.is_sharded();
-                      b.get_logical_shape();
+                      b.logical_shape();
                   }) {
         if (a.dtype() == DataType::INT32 or b.dtype() == DataType::INT32 or a.dtype() == DataType::UINT32 or
             b.dtype() == DataType::UINT32 or a.dtype() == DataType::UINT16 or b.dtype() == DataType::UINT16 or
@@ -289,26 +313,26 @@ inline auto is_binary_ng_only(const Tensor& a, const auto& b, BinaryOpType binar
             return true;
         }
 
-        if (any_row_broadcasted(a, b) and
+        if ((any_non_llk_row_broadcasted(a, b) or any_scalar_broadcasted(a, b)) and
             (binary_op_type != BinaryOpType::ADD and binary_op_type != BinaryOpType::SUB and
              binary_op_type != BinaryOpType::MUL)) {
             return true;
         }
 
-        if (a.get_logical_shape().rank() > 4 or b.get_logical_shape().rank() > 4) {
+        if (a.logical_shape().rank() > 4 or b.logical_shape().rank() > 4) {
             return true;
         }
 
-        if (a.get_logical_shape()[-2] == 1 && b.get_logical_shape()[-2] > 1 && a.get_logical_shape()[-1] > 1 &&
-            b.get_logical_shape()[-1] == 1) {
+        if (a.logical_shape()[-2] == 1 && b.logical_shape()[-2] > 1 && a.logical_shape()[-1] > 1 &&
+            b.logical_shape()[-1] == 1) {
             return true;
         }
-        if (b.get_logical_shape()[-2] == 1 && a.get_logical_shape()[-2] > 1 && b.get_logical_shape()[-1] > 1 &&
-            a.get_logical_shape()[-1] == 1) {
+        if (b.logical_shape()[-2] == 1 && a.logical_shape()[-2] > 1 && b.logical_shape()[-1] > 1 &&
+            a.logical_shape()[-1] == 1) {
             return true;
         }
 
-        if (any_row_broadcasted(a, b) and (is_block_format(a.get_dtype()) or is_block_format(b.get_dtype()))) {
+        if (any_non_llk_row_broadcasted(a, b) and (is_block_format(a.dtype()) or is_block_format(b.dtype()))) {
             // TODO
             // return true;
         }
@@ -327,8 +351,8 @@ bool is_legacy_only(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations) {
     const auto& output_mem_cfg = memory_config.value_or(output ? output->memory_config() : MemoryConfig{});
 
-    if (detail::any_row_broadcasted(lhs, rhs) or detail::any_sharded_block_format(lhs, rhs) or
-        detail::any_subtile_broadcasted_block_format(lhs, rhs) or
+    if (detail::any_scalar_broadcasted(lhs, rhs) or detail::any_non_llk_row_broadcasted(lhs, rhs) or
+        detail::any_sharded_block_format(lhs, rhs) or detail::any_subtile_broadcasted_block_format(lhs, rhs) or
         detail::any_non_height_sharded_w_bcast(lhs, rhs, output_mem_cfg) or detail::any_uneven(lhs, rhs, output)) {
         TT_FATAL(
             lhs_activations.size() <= 1,

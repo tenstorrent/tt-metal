@@ -174,6 +174,12 @@ public:
     // by SPI-ROM firmware)
     uint64_t get_asic_id(chip_id_t chip_id) const;
 
+    // Check if the provided mesh is local to this host
+    bool is_local_mesh(MeshId mesh_id) const;
+
+    // Get the mesh graph from the routing table
+    const MeshGraph& get_mesh_graph() const;
+
 private:
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
     // TODO: remove this from local node control plane. Can get it from the global control plane
@@ -260,9 +266,6 @@ private:
     // Check if intermesh links are available by reading SPI ROM config from first chip
     bool is_intermesh_enabled() const;
 
-    // Check if the provided mesh is local to this host
-    bool is_local_mesh(MeshId mesh_id) const;
-
     void assign_direction_to_fabric_eth_core(
         const FabricNodeId& fabric_node_id, const CoreCoord& eth_core, RoutingDirection direction);
 
@@ -276,23 +279,6 @@ private:
 
     std::unique_ptr<FabricContext> fabric_context_;
     LocalMeshBinding local_mesh_binding_;
-};
-
-class GlobalControlPlane {
-public:
-    explicit GlobalControlPlane(const std::string& mesh_graph_desc_yaml_file);
-    explicit GlobalControlPlane(
-        const std::string& mesh_graph_desc_yaml_file,
-        const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping);
-    ~GlobalControlPlane();
-
-    tt::tt_fabric::ControlPlane& get_local_node_control_plane() { return *control_plane_; }
-
-private:
-    std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
-    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
-
-    std::string mesh_graph_desc_file_;
 };
 
 }  // namespace tt::tt_fabric

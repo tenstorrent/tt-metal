@@ -25,6 +25,7 @@ target_sources(
         batch_norm/device/batch_norm_program_factory.cpp
         batch_norm/device/running_statistics_device_operation.cpp
         batch_norm/device/running_statistics_program_factory.cpp
+        batch_norm/device/batch_norm_utils.cpp
         groupnorm/device/groupnorm_op.cpp
         groupnorm/device/multi_core/groupnorm_op_multi_core.cpp
         groupnorm/groupnorm.cpp

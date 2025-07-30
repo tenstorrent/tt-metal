@@ -16,8 +16,6 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 2, "Error, Input tensor size should be 2 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& buffer_tensor = input_tensors[1];
-    const auto& layout = input_tensors[0].layout();
-    const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
     TT_FATAL(
@@ -116,8 +114,6 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
     }
 
     auto input_tensor_shape = input_tensors[0].padded_shape();
-    auto input_tensor_buffer_layout = input_tensors[0].buffer()->buffer_layout();
-    auto input_tensor_page_layout = input_tensors[0].layout();
 
     auto input_tensor_memory_config = input_tensors[0].memory_config();
     auto output_tensor_memory_config = output_tensors[0].memory_config();
@@ -193,7 +189,7 @@ Tensor all_reduce_async_impl(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama) {
-    const auto mesh_view = mesh_device.get_view();
+    const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(), "all-reduce invoked with cluster_axis API on >2D mesh, which is currently unsupported");
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();

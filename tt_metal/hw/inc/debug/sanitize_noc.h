@@ -166,7 +166,7 @@ inline uint16_t debug_valid_worker_addr(uint64_t addr, uint64_t len, bool write)
     }
 
 #if !defined(DISPATCH_KERNEL) || (DISPATCH_KERNEL == 0)
-    if (write && (addr < MEM_MAP_END)) {
+    if (write && (addr < MEM_MAP_READ_ONLY_END)) {
         return DebugSanitizeNocAddrMailbox;
     }
 #endif
@@ -227,7 +227,7 @@ inline uint16_t debug_valid_eth_addr(uint64_t addr, uint64_t len, bool write) {
 // Note:
 //  - this isn't racy w/ the host so long as invalid is written last
 //  - this isn't racy between riscvs so long as each gets their own noc_index
-inline void debug_sanitize_post_noc_addr_and_hang(
+void __attribute__((noinline)) debug_sanitize_post_noc_addr_and_hang(
     uint8_t noc_id,
     uint64_t noc_addr,
     uint32_t l1_addr,

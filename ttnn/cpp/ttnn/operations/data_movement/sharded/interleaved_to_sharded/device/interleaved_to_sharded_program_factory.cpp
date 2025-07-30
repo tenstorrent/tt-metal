@@ -29,7 +29,6 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_per_shard_height_last,
         num_units_per_shard_width_last, padded_offset_bytes;
 
-    tt::tt_metal::IDevice* device = input.device();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -103,7 +102,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         tt::tt_metal::CircularBufferConfig input_cb_out_config =
             tt::tt_metal::CircularBufferConfig(num_input_units * input_page_size, {{input_cb_index, input_cb_data_format}})
                 .set_page_size(input_cb_index, input_page_size);
-        auto cb_input = tt::tt_metal::CreateCircularBuffer(program, all_cores, input_cb_out_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, input_cb_out_config);
     }
     tt::tt_metal::CircularBufferConfig output_cb_out_config =
         tt::tt_metal::CircularBufferConfig(num_input_units * output_page_size, {{out_cb_index, output_cb_data_format}})
@@ -125,7 +124,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         tt::tt_metal::CircularBufferConfig scratch_cb_out_config =
             tt::tt_metal::CircularBufferConfig(4 * scratch_cb_page_size, {{scratch_cb_index, input_cb_data_format}})
                 .set_page_size(scratch_cb_index, scratch_cb_page_size);
-        auto cb_scratch = tt::tt_metal::CreateCircularBuffer(program, all_cores, scratch_cb_out_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, scratch_cb_out_config);
     }
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id;
@@ -159,7 +158,7 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     std::string writer_kernel;
     std::vector<uint32_t> writer_compile_time_args = {out_cb_index};
     if (dst_is_dram) {
-        if (input.get_layout() == Layout::TILE) {
+        if (input.layout() == Layout::TILE) {
             writer_kernel = std::string("ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded_blocks_start_id.cpp");
         } else {
             writer_kernel = std::string("ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded_stick_layout_start_id.cpp");

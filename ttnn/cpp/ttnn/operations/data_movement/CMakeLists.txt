@@ -22,6 +22,16 @@ file(
 target_sources(
     ttnn_op_data_movement
     PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
+            sharded/reshard/device/reshard_op.hpp
+            sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
+            sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp
+            copy/device/copy_device_operation.hpp
+            reshape_view/reshape.hpp
+            reshape_view/reshape_common.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -90,6 +100,10 @@ target_sources(
         reshape_view/device/reshape_device_operation.cpp
         reshape_view/reshape.cpp
         roll/roll.cpp
+        scatter/scatter.cpp
+        scatter/tosa_scatter.cpp
+        scatter/device/scatter_device_operation.cpp
+        scatter/device/scatter_program_factory.cpp
         sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.cpp
         sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.cpp
         sharded/interleaved_to_sharded/interleaved_to_sharded.cpp
@@ -150,6 +164,9 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_data_movement
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
     FILE_SET
     kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/data_movement

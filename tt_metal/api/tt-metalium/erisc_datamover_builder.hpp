@@ -278,12 +278,14 @@ struct FabricRiscConfig {
     };
     bool is_sender_channel_serviced(int id) const { return is_sender_channel_serviced_[id]; };
     bool is_receiver_channel_serviced(int id) const { return is_receiver_channel_serviced_[id]; };
+    tt::tt_metal::NOC get_configured_noc() const { return noc_; };
 
 private:
+    tt::tt_metal::NOC noc_ = tt::tt_metal::NOC::NOC_0;
+    size_t iterations_between_ctx_switch_and_teardown_checks_ = 0;
     bool enable_handshake_ = false;
     bool enable_context_switch_ = false;
     bool enable_interrupts_ = false;
-    size_t iterations_between_ctx_switch_and_teardown_checks_ = 0;
     std::array<bool, FabricEriscDatamoverConfig::num_sender_channels> is_sender_channel_serviced_;
     std::array<bool, FabricEriscDatamoverConfig::num_receiver_channels> is_receiver_channel_serviced_;
 };
@@ -319,7 +321,6 @@ void append_worker_to_fabric_edm_sender_rt_args(
 
 void append_worker_to_fabric_edm_sender_rt_args(
     tt::tt_fabric::chan_id_t eth_channel,
-    size_t sender_worker_flow_control_semaphore_id,
     size_t sender_worker_teardown_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out);
@@ -329,7 +330,6 @@ void append_worker_to_fabric_edm_sender_rt_args(
     const SenderWorkerAdapterSpec& connection,
     chip_id_t chip_id,
     const CoreRangeSet& worker_cores,
-    size_t sender_worker_flow_control_semaphore_id,
     size_t sender_worker_teardown_semaphore_id,
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out);
@@ -341,7 +341,7 @@ public:
     static constexpr auto default_firmware_context_switch_type = FabricEriscDatamoverContextSwitchType::WAIT_FOR_IDLE;
     // payload only, no header
     static constexpr size_t default_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
-    static constexpr size_t default_mesh_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 2;
+    static constexpr size_t default_mesh_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
 
     FabricEriscDatamoverBuilder(
         const CoreCoord& my_eth_core_logical,
@@ -418,6 +418,7 @@ public:
     //    protected:
     friend class EdmLineFabricOpInterface;
     CoreCoord my_eth_core_logical;
+    chan_id_t my_eth_channel;
     size_t my_noc_x = 0;
     size_t my_noc_y = 0;
 

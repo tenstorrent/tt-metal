@@ -15,7 +15,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/fabric.hpp>
-#include <ttnn/tensor/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 
@@ -71,7 +71,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
     uint32_t cb_num_pages = 2;
     uint32_t cb_page_size = fabric_max_payload_size;
 
-    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
 
     auto src0_cb_index = tt::CBIndex::c_0;
 
@@ -79,7 +79,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
         tt::tt_metal::CircularBufferConfig(cb_num_pages * cb_page_size, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, cb_page_size);
 
-    tt::tt_metal::CBHandle cb_src0_worker = CreateCircularBuffer(program, sender_core_coord, cb_src0_config);
+    CreateCircularBuffer(program, sender_core_coord, cb_src0_config);
 
     uint32_t packet_header_cb_num_pages = 2;  // One for data, one for sync
     uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
@@ -91,8 +91,7 @@ tt::tt_metal::operation::ProgramWithCallbacks send_async_multicore(
             packet_header_cb_num_pages * packet_header_cb_page_size, {{packet_header_cb_index, tt::DataFormat::UInt32}})
             .set_page_size(packet_header_cb_index, packet_header_cb_page_size);
 
-    tt::tt_metal::CBHandle cb_packet_header_worker =
-        CreateCircularBuffer(program, sender_core_coord, cb_packet_header_config);
+    CreateCircularBuffer(program, sender_core_coord, cb_packet_header_config);
 
     bool socket_storage_in_dram =
         mesh_socket.get_config().socket_mem_config.socket_storage_type == tt::tt_metal::BufferType::DRAM;

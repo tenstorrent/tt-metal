@@ -28,6 +28,9 @@ def test_unet(
     temb_shape,
     time_ids_shape,
     iterations,
+    is_ci_env,
+    is_ci_v2_env,
+    model_location_generator,
     reset_seeds,
 ):
     run_unet_model(
@@ -37,13 +40,16 @@ def test_unet(
         encoder_shape,
         temb_shape,
         time_ids_shape,
+        is_ci_env,
+        is_ci_v2_env,
+        model_location_generator,
         iterations=iterations,
     )
 
 
 @pytest.mark.models_device_performance_bare_metal
 def test_sdxl_unet_perf_device():
-    expected_device_perf_cycles_per_iteration = 259_207_833
+    expected_device_perf_cycles_per_iteration = 245_115_735
 
     command = f"pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py::test_unet"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

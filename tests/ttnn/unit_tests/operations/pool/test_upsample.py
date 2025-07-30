@@ -69,12 +69,11 @@ def get_shard_grid_from_num_cores(device, ncores: Union[int, Tuple[int, int]]) -
         [1, 512, 14, 14],
     ],
 )
-@pytest.mark.parametrize("scale_h", [2])
-@pytest.mark.parametrize("scale_w", [2])
-@pytest.mark.parametrize("mode", ["nearest"])
+@pytest.mark.parametrize("scale_h", [2, 3])
+@pytest.mark.parametrize("scale_w", [2, 3])
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("math_approx_mode", [True, False])
-def test_upsample_single_core(device, input_shapes, mode, scale_h, scale_w, math_fidelity, math_approx_mode):
+def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, math_fidelity, math_approx_mode):
     batch_size, num_channels, height, width = input_shapes
     torch.manual_seed(0)
 
@@ -82,7 +81,7 @@ def test_upsample_single_core(device, input_shapes, mode, scale_h, scale_w, math
     tt_input = input.permute(0, 2, 3, 1)
     input_tensor = ttnn.from_torch(tt_input, device=device)
     scale_factor = (scale_h, scale_w)
-    torch_upsample = nn.Upsample(scale_factor=scale_factor, mode=mode)
+    torch_upsample = nn.Upsample(scale_factor=scale_factor, mode="nearest")
     torch_result = torch_upsample(input)
 
     scale_factor = (scale_h, scale_w)
@@ -344,6 +343,9 @@ def test_upsample_multicore_corerange(
         (1, 1024, 8, 8, 2, 2),
         (1, 256, 28, 28, 2, 2),
         (1, 512, 14, 14, 2, 2),
+        (2, 32, 16, 16, 2, 2),
+        (4, 64, 48, 48, 3, 3),
+        (64, 32, 4, 4, 2, 2),
     ),
 )
 @pytest.mark.parametrize("shard_strategy", [ttnn.ShardStrategy.HEIGHT])

@@ -85,9 +85,9 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorDifferentDataTypes) {
     }
 }
 
-using TensorSerializationFlatbufferT3000Test = T3000MeshDeviceFixture;
+using TensorSerializationFlatbuffer2x4Test = MeshDevice2x4Fixture;
 
-TEST_F(TensorSerializationFlatbufferT3000Test, Shard1DTensorRoundtrip) {
+TEST_F(TensorSerializationFlatbuffer2x4Test, Shard1DTensorRoundtrip) {
     TemporaryFile test_file("shard1d_flatbuffer.bin");
     const int num_devices = mesh_device_->num_devices();
     constexpr int kNumElements = 1024;
@@ -125,7 +125,7 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard1DTensorRoundtrip) {
     }
 }
 
-TEST_F(TensorSerializationFlatbufferT3000Test, Shard2DTensorRoundtrip) {
+TEST_F(TensorSerializationFlatbuffer2x4Test, Shard2DTensorRoundtrip) {
     TemporaryFile test_file("shard2d_flatbuffer.bin");
     constexpr int kNumRows = 2;
     constexpr int kNumCols = 4;
@@ -173,7 +173,7 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard2DTensorRoundtrip) {
     }
 }
 
-TEST_F(TensorSerializationFlatbufferT3000Test, Shard1DFewerShardsThanDevicesRoundtrip) {
+TEST_F(TensorSerializationFlatbuffer2x4Test, Shard1DFewerShardsThanDevicesRoundtrip) {
     TemporaryFile test_file("shard1d_fewer_flatbuffer.bin");
     const int num_devices = mesh_device_->num_devices();
     constexpr int kNumElements = 1024;
@@ -212,7 +212,7 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard1DFewerShardsThanDevicesRoun
     }
 }
 
-TEST_F(TensorSerializationFlatbufferT3000Test, Shard2x3SubmeshRoundtrip) {
+TEST_F(TensorSerializationFlatbuffer2x4Test, Shard2x3SubmeshRoundtrip) {
     TemporaryFile test_file("shard2x3_flatbuffer.bin");
     constexpr int kNumRows = 2;
     constexpr int kNumCols = 3;
@@ -261,7 +261,7 @@ TEST_F(TensorSerializationFlatbufferT3000Test, Shard2x3SubmeshRoundtrip) {
     }
 }
 
-TEST_F(TensorSerializationFlatbufferT3000Test, PartiallyReplicatedRoundtrip) {
+TEST_F(TensorSerializationFlatbuffer2x4Test, PartiallyReplicatedRoundtrip) {
     TemporaryFile test_file("partially_replicated_flatbuffer.bin");
     constexpr int kNumRows = 2;
     constexpr int kNumCols = 4;

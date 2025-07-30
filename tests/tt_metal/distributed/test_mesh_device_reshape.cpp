@@ -85,11 +85,11 @@ TEST_P(MeshConfigurationTest, MeshConfigurations) {
     mesh->close();
 }
 
-TEST_P(MeshConfigurationTest, GetPhysicalDeviceIds) {
+TEST_P(MeshConfigurationTest, GetMappedDevices) {
     const auto& shape = GetParam();
 
     auto& system_mesh = SystemMesh::instance();
-    EXPECT_THAT(system_mesh.get_mapped_physical_device_ids(shape), SizeIs(shape.mesh_size()));
+    EXPECT_THAT(system_mesh.get_mapped_devices(shape).device_ids, SizeIs(shape.mesh_size()));
 }
 
 // Test all possible mesh configurations on T3000
@@ -148,18 +148,18 @@ TEST_F(MeshDeviceReshapeTest, InvalidRequestedShape) {
     auto& system_mesh = tt::tt_metal::distributed::SystemMesh::instance();
 
     // Shape too big.
-    EXPECT_ANY_THROW(system_mesh.get_mapped_physical_device_ids(MeshShape(9)));
-    EXPECT_ANY_THROW(system_mesh.get_mapped_physical_device_ids(MeshShape(2, 5)));
+    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(9)));
+    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(2, 5)));
 
     // Invalid offset.
-    EXPECT_ANY_THROW(system_mesh.get_mapped_physical_device_ids(MeshShape(1, 8), /*offset=*/MeshCoordinate(0, 1)));
-    EXPECT_ANY_THROW(system_mesh.get_mapped_physical_device_ids(MeshShape(2, 3), /*offset=*/MeshCoordinate(1, 1)));
+    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(1, 8), /*offset=*/MeshCoordinate(0, 1)));
+    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(2, 3), /*offset=*/MeshCoordinate(1, 1)));
 
     // Offset dimensionality mismatch.
-    EXPECT_ANY_THROW(system_mesh.get_mapped_physical_device_ids(MeshShape(2, 3), /*offset=*/MeshCoordinate(1)));
+    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(2, 3), /*offset=*/MeshCoordinate(1)));
 
     // Mismatch system mesh shape.
-    EXPECT_ANY_THROW(system_mesh.get_mapped_physical_device_ids(MeshShape(8), /*offset=*/MeshCoordinate(1)));
+    EXPECT_ANY_THROW(system_mesh.get_mapped_devices(MeshShape(8), /*offset=*/MeshCoordinate(1)));
 }
 
 TEST_F(MeshDeviceReshapeTest, InvalidReshapeDimensions) {
@@ -242,7 +242,11 @@ TEST_F(MeshDeviceReshapeTest, From1x4To2x2Valid) {
     auto& system_mesh = tt::tt_metal::distributed::SystemMesh::instance();
 
     // Fetch the device ids for a physically connected 2x2 mesh.
-    auto physical_device_ids = system_mesh.get_mapped_physical_device_ids(MeshShape(2, 2));
+    std::vector<chip_id_t> physical_device_ids;
+    for (const auto device_id : system_mesh.get_mapped_devices(MeshShape(2, 2)).device_ids) {
+        TT_FATAL(device_id.is_local(), "Device is not local");
+        physical_device_ids.push_back(*device_id);
+    }
 
     // Supply the physical device ids to the mesh constructor that we know we know is 2x2 physically connected.
     // We will create a 1x4 mesh and then reshape it to 2x2.

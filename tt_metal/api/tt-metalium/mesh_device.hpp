@@ -71,8 +71,8 @@ private:
     // Resource management class / RAII wrapper for *physical devices* of the mesh
     class ScopedDevices {
     private:
-        std::map<chip_id_t, IDevice*> opened_devices_;
-        std::vector<IDevice*> devices_;
+        std::vector<MaybeRemote<IDevice*>> devices_;
+        std::map<chip_id_t, IDevice*> opened_local_devices_;
 
     public:
         // Constructor acquires physical resources
@@ -84,7 +84,7 @@ private:
             const DispatchCoreConfig& dispatch_core_config,
             const MeshDeviceConfig& config);
         ScopedDevices(
-            const std::vector<int>& device_ids,
+            const std::vector<MaybeRemote<int>>& device_ids,
             size_t l1_small_size,
             size_t trace_region_size,
             size_t num_command_queues,
@@ -97,8 +97,15 @@ private:
         ScopedDevices& operator=(const ScopedDevices&) = delete;
 
         // Returns the list of devices opened by the root mesh device (i.e. not submeshes).
-        const std::vector<IDevice*>& root_devices() const;
+        const std::vector<IDevice*>& local_root_devices() const;
+
+        const std::vector<MaybeRemote<IDevice*>>& root_devices() const;
     };
+
+    // THREAD SAFETY: Enqueueing work on the device should be thread safe. Operations that modify state should be
+    // protected by api_mutex_. Operations that reconfigure global state (e.g. setting subdevices or enabling tracing)
+    // on the device may not be thread safe.
+    std::mutex api_mutex_;
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
@@ -124,6 +131,8 @@ private:
     std::vector<IDevice*> get_row_major_devices(const MeshShape& new_shape) const;
 
     std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
+
+    std::lock_guard<std::mutex> lock_api() { return std::lock_guard<std::mutex>(api_mutex_); }
 
 public:
     MeshDevice(
@@ -154,17 +163,18 @@ public:
     CoreCoord dram_grid_size() const override;
     CoreCoord virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const override;
 
-    std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>&logical_cores) const override;
-    std::vector<CoreCoord> ethernet_cores_from_logical_cores(const std::vector<CoreCoord> &logical_cores) const override;
+    std::vector<CoreCoord> worker_cores_from_logical_cores(const std::vector<CoreCoord>& logical_cores) const override;
+    std::vector<CoreCoord> ethernet_cores_from_logical_cores(
+        const std::vector<CoreCoord>& logical_cores) const override;
     std::vector<CoreCoord> get_optimal_dram_bank_to_logical_worker_assignment(NOC noc) override;
 
     CoreCoord virtual_core_from_logical_core(const CoreCoord& logical_coord, const CoreType& core_type) const override;
     CoreCoord worker_core_from_logical_core(const CoreCoord& logical_core) const override;
     CoreCoord ethernet_core_from_logical_core(const CoreCoord& logical_core) const override;
     CoreCoord logical_core_from_ethernet_core(const CoreCoord& ethernet_core) const override;
-    std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores=false) const override;
+    std::unordered_set<CoreCoord> get_active_ethernet_cores(bool skip_reserved_tunnel_cores = false) const override;
     std::unordered_set<CoreCoord> get_inactive_ethernet_cores() const override;
-    bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores=false) const override;
+    bool is_active_ethernet_core(CoreCoord logical_core, bool skip_reserved_tunnel_cores = false) const override;
     std::tuple<chip_id_t, CoreCoord> get_connected_ethernet_core(CoreCoord eth_core) const override;
     std::vector<CoreCoord> get_ethernet_sockets(chip_id_t connected_chip_id) const override;
     bool is_inactive_ethernet_core(CoreCoord logical_core) const override;
@@ -234,10 +244,14 @@ public:
     HalMemType get_mem_type_of_core(CoreCoord virtual_core) const override;
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
-    uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const override;
+    uint8_t noc_data_start_index(
+        SubDeviceId sub_device_id, bool mcast_data = true, bool unicast_data = true) const override;
     SubDeviceManagerId get_active_sub_device_manager_id() const override;
     SubDeviceManagerId get_default_sub_device_manager_id() const override;
-    SubDeviceManagerId create_sub_device_manager(tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+    SubDeviceManagerId create_sub_device_manager(
+        std::initializer_list<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
+    SubDeviceManagerId create_sub_device_manager(
+        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
     void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) override;
     void clear_loaded_sub_device_manager() override;
@@ -268,6 +282,10 @@ public:
     size_t num_rows() const;
     size_t num_cols() const;
     IDevice* get_device(size_t row_idx, size_t col_idx) const;
+
+    // Returns true if the coordinate is local to this mesh device.
+    // Throws if the coordinate is out of bounds of this mesh device.
+    bool is_local(const MeshCoordinate& coord) const;
 
     const MeshShape& shape() const;
 
@@ -330,18 +348,6 @@ public:
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
-
-    // Returns the offset of this host's portion of the mesh within the global distributed mesh.
-    // For single-host meshes, this returns (0, 0).
-    MeshCoordinate local_offset() const;
-
-    // Returns the shape of the mesh portion managed by this host.
-    // For single-host meshes, this equals the global mesh shape.
-    MeshShape local_shape() const;
-
-    // Checks if a global coordinate is managed by this host.
-    // Returns true if the coordinate falls within this host's local mesh bounds.
-    bool is_local_coordinate(const MeshCoordinate& coord) const;
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device);

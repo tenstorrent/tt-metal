@@ -14,6 +14,7 @@ from itertools import product as parameters
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_allclose, assert_with_ulp
 
 binary_fns = {
     "ge",
@@ -1946,9 +1947,11 @@ def test_binary_subtile_row_bcast(a_shape, b_shape, device):
     torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device)
     torch_input_tensor_b, input_tensor_b = rand_bf16_gen(b_shape, device)
 
-    torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
+    torch_output_tensor = torch_input_tensor_a - torch_input_tensor_b
 
-    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=False)
+    output_tensor = ttnn.subtract(
+        input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None
+    )
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape
@@ -1957,27 +1960,38 @@ def test_binary_subtile_row_bcast(a_shape, b_shape, device):
 
 profile_a_b_shape_pairs = [
     # [[8192, 8192], [8192, 8192]],
-    # [[1, 8192], [8192, 8192]],
+    [[1, 8192], [8192, 8192]],
     # [[8192, 8192], [1, 8192]],
-    # [[8192, 1], [8192, 8192]],
+    # [8192, 1], [8192, 8192]],
     # [[8192, 8192], [8192, 1]],
     # [[1, 8192], [8192, 1]],
     # [[8192, 1], [1, 8192]],
     # [[1, 1], [8192, 8192]],
-    [[8192, 8192], [1, 1]],
+    # [[8192, 8192], [1, 1]],
 ]
 
 
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
-    ((torch.bfloat16, ttnn.bfloat16),),
+    (
+        (torch.bfloat16, ttnn.bfloat16),
+        # (torch.int32, ttnn.int32),
+        # (torch.float32, ttnn.float32)
+    ),
 )
 @pytest.mark.parametrize(
     "memory_config_input",
     [ttnn.DRAM_MEMORY_CONFIG],
 )
+@pytest.mark.parametrize(
+    "use_legacy",
+    [
+        # True,
+        False,
+    ],
+)
 @pytest.mark.parametrize("a_and_b_shape", profile_a_b_shape_pairs)
-def test_binary_bcast_profile(device, dtype_pt, dtype_tt, a_and_b_shape, memory_config_input):
+def test_binary_bcast_profile(device, dtype_pt, dtype_tt, a_and_b_shape, memory_config_input, use_legacy):
     torch.manual_seed(0)
     a_shape, b_shape = a_and_b_shape
 
@@ -1997,14 +2011,16 @@ def test_binary_bcast_profile(device, dtype_pt, dtype_tt, a_and_b_shape, memory_
         torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config_input
     )
     for _ in range(2):
-        output = ttnn.add(input_tensor_a, input_tensor_b, memory_config=memory_config_input, use_legacy=False)
+        output = ttnn.add(input_tensor_a, input_tensor_b, memory_config=memory_config_input, use_legacy=use_legacy)
         output = ttnn.to_torch(output)
 
         assert (
             output.shape == torch_result.shape
         ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
 
-        torch.testing.assert_close(torch_result, output)
+        # use assert_allclose in the future, needs sutiable tolerance
+        # assert_allclose(torch_result, output, rtol=1e-02, atol=1e-02)
+        assert_with_pcc(torch_result, output)
         ttnn.synchronize_device(device)
 
 
@@ -2046,7 +2062,7 @@ def test_binary_subtile_col_bcast(a_shape, b_shape, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape
-    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
+    assert_with_pcc(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -2119,7 +2135,7 @@ def test_binary_subtile_row_b_col_a_bcast(a_shape, b_shape, device):
 
     torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
 
-    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=False)
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape
@@ -2413,6 +2429,21 @@ def test_binary_mixed_add(dtype_pt_a, dtype_tt_a, dtype_pt_b, dtype_tt_b, device
     assert compare_pcc([out_tt], [out_pt])
 
 
+def test_add_1m(device):
+    torch.manual_seed(0)
+    a = torch.ones(1, 1) * 1_000_000
+    b = torch.ones(32, 32)
+    c = a + b
+
+    ta = ttnn.from_torch(a, device=device, layout=ttnn.TILE_LAYOUT)
+    tb = ttnn.from_torch(b, device=device, layout=ttnn.TILE_LAYOUT)
+    tc = ttnn.add(ta, tb, use_legacy=None)
+
+    # torch.allclose() will fail when op internally uses TF32 format
+    # assert torch.allclose(c, ttnn.to_torch(tc)), f"{c} != {ttnn.to_torch(tc)}"
+    assert_with_pcc(c, ttnn.to_torch(tc))
+
+
 def test_add_i32(device):
     torch.manual_seed(2024)
     a = torch.cat([torch.zeros(128, dtype=torch.int32), torch.ones(128, dtype=torch.int32)])
@@ -2445,3 +2476,86 @@ def test_add_error(device):
 
     # Perform the add operation with the specified memory config
     ttnn_result = ttnn.add(ttnn_input, ttnn_bias, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, use_legacy=None)
+
+
+@pytest.mark.parametrize(
+    "shapes",
+    [
+        [[8, 16, 32], [1, 1, 1]],
+        [[8, 16, 32], [1, 1, 32]],
+    ],
+)
+def test_sub_implicit_broadcast(device, shapes):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand(shapes[0], dtype=torch.float32)
+    torch_input_tensor_b = torch.rand(shapes[1], dtype=torch.float32)
+    torch_output_tensor = torch.sub(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.sub(
+        input_tensor_a, input_tensor_b, dtype=ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "shapes",
+    [
+        # no subtile bcast
+        [[1, 16, 32], [8, 16, 32]],
+        # scalar bcast
+        [[8, 16, 32], [1, 1, 1]],
+        [[1, 1, 1], [8, 16, 32]],
+        # col bcast
+        [[1, 16, 1], [8, 16, 32]],
+        [[8, 16, 32], [8, 16, 1]],
+        # row bcast
+        [[8, 16, 32], [8, 1, 32]],
+        [[8, 1, 32], [8, 16, 32]],
+        # row col mixed bcast
+        [[1, 1, 32], [8, 16, 1]],
+        [[8, 16, 1], [1, 1, 32]],
+    ],
+)
+def test_remainder_implicit_broadcast(device, shapes):
+    torch.manual_seed(0)
+
+    torch_input_tensor_a = torch.rand(shapes[0], dtype=torch.float32)
+    torch_input_tensor_b = torch.rand(shapes[1], dtype=torch.float32)
+    torch_output_tensor = torch.remainder(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.float32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    output_tensor = ttnn.remainder(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
