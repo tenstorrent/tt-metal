@@ -45,16 +45,17 @@ Tensor _addcdiv(
     Tensor result = ttnn::add(input_a, t_factor, std::nullopt, output_mem_config);
     float t_inf = std::numeric_limits<float>::infinity();
     Tensor t_nan = ttnn::full_like(input_a, std::nanf(""));
-    return ttnn::where(
-        ttnn::eqz(input_c, output_mem_config),
-        (value == 0)
-            ? t_nan
-            : ttnn::where(
-                  ttnn::eqz(input_b, output_mem_config),
-                  t_nan,
-                  ttnn::multiply(ttnn::sign(input_b, output_mem_config), t_inf, std::nullopt, output_mem_config)),
-        result,
-        output_mem_config);
+    return result;
+    // return ttnn::where(
+    //     ttnn::eqz(input_c, output_mem_config),
+    //     (value == 0)
+    //         ? t_nan
+    //         : ttnn::where(
+    //               ttnn::eqz(input_b, output_mem_config),
+    //               t_nan,
+    //               ttnn::multiply(ttnn::sign(input_b, output_mem_config), t_inf, std::nullopt, output_mem_config)),
+    //     result,
+    //     output_mem_config);
 }
 
 // lerp(input, end, weight) = start   weight * (end - start)
