@@ -61,6 +61,7 @@ env:
   CI_TEST_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-ci-test-${{ inputs.architecture }}
   DEV_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-dev-${{ inputs.architecture }}
   BASIC_DEV_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-basic-dev-${{ inputs.architecture }}
+  BASIC_TTNN_RUNTIME_IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-basic-ttnn-runtime-${{ inputs.architecture }}
   MANYLINUX_IMAGE_NAME: manylinux-${{ inputs.architecture }}
 
 jobs:
@@ -108,7 +109,7 @@ jobs:
             install_dependencies.sh \
             tt_metal/sfpi-version.sh \
             | sha1sum | cut -d' ' -f1)
-          echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/basic-ttnn-runtime:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
+          echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_TTNN_RUNTIME_IMAGE_NAME }}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
 
           MANYLINUX_HASH=$(cat \
             .github/workflows/build-docker-artifact.yaml \
