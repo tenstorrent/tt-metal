@@ -13,9 +13,10 @@ import torch.nn.functional as F
 from loguru import logger
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
-from transformers import AutoImageProcessor, SegformerForSemanticSegmentation
+from transformers import AutoImageProcessor
 
 import ttnn
+from models.demos.segformer.common import download_and_unzip_dataset, load_config, load_torch_model
 from models.demos.segformer.reference.segformer_for_semantic_segmentation import (
     SegformerForSemanticSegmentationReference,
 )
@@ -51,18 +52,20 @@ def shift_gt_indices(gt_mask):
     "device_params", [{"l1_small_size": 79104, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
 def test_demo_semantic_segmentation(device, model_location_generator):
-    torch_model = SegformerForSemanticSegmentation.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
-    reference_model = SegformerForSemanticSegmentationReference(config=torch_model.config)
-    reference_model.load_state_dict(torch_model.state_dict())
-    reference_model.eval()
+    config = load_config("configs/segformer_semantic_config.json")
+    dataset_path = "segformer-segmentation"
+    dataset_name = "validation_data_ade20k"
+    reference_model = SegformerForSemanticSegmentationReference(config=config)
+
+    reference_model = load_torch_model(
+        reference_model, f"", module="semantic_sub", model_location_generator=model_location_generator
+    )
     image_processor = AutoImageProcessor.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
 
-    if not os.path.exists("models/demos/segformer/demo/validation_data_ade20k"):
-        logger.info("downloading data")
-        os.system("bash models/demos/segformer/demo/data_download.sh")
+    weights_path = download_and_unzip_dataset(model_location_generator, dataset_path, dataset_name)
 
-    image_folder = "models/demos/segformer/demo/validation_data_ade20k/images"
-    mask_folder = "models/demos/segformer/demo/validation_data_ade20k/annotations"
+    image_folder = f"{weights_path}/images"
+    mask_folder = f"{weights_path}/annotations"
 
     dataset = SemanticSegmentationDataset(image_folder, mask_folder, image_processor)
     data_loader = DataLoader(dataset, batch_size=1, shuffle=False, num_workers=0)
