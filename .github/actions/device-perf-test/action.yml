@@ -15,6 +15,14 @@ runs:
 
         ${{ inputs.commands }}
 
+        export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ inputs.model_name }}_$(date +%Y_%m_%d).csv
+        python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME REPORT
+        head -n 3 Models_Device_Perf_${{ inputs.model_name }}_$(date +%Y_%m_%d).csv > tmp_${{ inputs.model_name }}.csv
+        grep ${{ inputs.model_name }} Models_Device_Perf_${{ inputs.model_name }}_$(date +%Y_%m_%d).csv >> tmp_${{ inputs.model_name }}.csv
+        export DEVICE_PERF_REPORT_FILENAME=tmp_${{ inputs.model_name }}.csv
+        cat tmp_${{ inputs.model_name }}.csv
+        python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME CHECK
+        echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
       shell: bash
       env:
         TRACY_NO_INVARIANT_CHECK: 1
