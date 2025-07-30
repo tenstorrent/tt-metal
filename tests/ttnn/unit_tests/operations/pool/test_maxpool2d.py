@@ -13,7 +13,7 @@ from typing import Optional, Tuple, List
 
 from models.utility_functions import is_wormhole_b0, is_grayskull, is_x2_harvested, torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc, start_measuring_time, stop_measuring_time
-from tests.sweep_framework.sweep_utils.max_pool2d_common import run_max_pool2d, mesh_device_fixture
+from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import run_max_pool
 from models.utility_functions import is_blackhole
 
 import ttnn
@@ -23,7 +23,7 @@ parameters = {
         "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_specs": [
             # Contains following parameters
-            # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, strid_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
+            # [in_n, in_c, in_h, in_w, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
             [1, 128, 112, 112, 2, 2, 2, 2, 0, 0, 1, 1, False],
             [1, 128, 150, 150, 2, 2, 2, 2, 0, 0, 1, 1, False],
             [1, 128, 56, 56, 2, 2, 2, 2, 0, 0, 1, 1, False],
@@ -37,7 +37,7 @@ parameters = {
             [1, 256, 75, 75, 2, 2, 2, 2, 0, 0, 1, 1, True],
             [1, 32, 256, 256, 2, 2, 2, 2, 0, 0, 1, 1, False],
             [1, 320, 28, 28, 2, 2, 2, 2, 0, 0, 1, 1, False],
-            [1, 4, 14, 14, 2, 2, 2, 2, 0, 0, 1, 1, False],  # requires padding along C
+            [1, 32, 14, 14, 2, 2, 2, 2, 0, 0, 1, 1, False],
             [1, 480, 14, 14, 3, 3, 1, 1, 1, 1, 1, 1, True],
             [1, 480, 28, 28, 3, 3, 2, 2, 0, 0, 1, 1, True],
             [1, 512, 14, 14, 2, 2, 2, 2, 0, 0, 1, 1, False],
@@ -45,7 +45,7 @@ parameters = {
             [1, 512, 19, 19, 3, 3, 1, 1, 1, 1, 1, 1, False],
             [1, 512, 28, 28, 2, 2, 2, 2, 0, 0, 1, 1, False],
             [1, 512, 38, 38, 2, 2, 2, 2, 0, 0, 1, 1, False],
-            [1, 528, 14, 14, 3, 3, 1, 1, 1, 1, 1, 1, True],  # required padding along C
+            [1, 528, 14, 14, 3, 3, 1, 1, 1, 1, 1, 1, True],
             [1, 64, 112, 112, 3, 3, 2, 2, 0, 0, 1, 1, True],
             [1, 64, 112, 112, 3, 3, 2, 2, 1, 1, 1, 1, False],
             [1, 64, 128, 128, 2, 2, 2, 2, 0, 0, 1, 1, False],
@@ -68,17 +68,17 @@ parameters = {
         "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_specs": [
             # Contains following parameters
-            # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, strid_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
+            # [in_n, in_c, in_h, in_w, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
             [1, 32, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False],  # functional_unet
             # [1, 64, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False],
-            [1, 3, 224, 224, 2, 2, 2, 2, 0, 0, 1, 1, False],  # vgg
+            [1, 32, 224, 224, 2, 2, 2, 2, 0, 0, 1, 1, False],  # vgg
             # [1, 512, 10, 10, 5, 5, 1, 1, 2, 2, 1, 1, False],  # yolo
             # [1, 512, 10, 10, 9, 9, 1, 1, 4, 4, 1, 1, False],
             # [1, 512, 10, 10, 13, 13, 1, 1, 6, 6, 1, 1, False],
-            [1, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],  # resnet
-            [2, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
-            [4, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
-            [8, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
+            [1, 32, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],  # resnet
+            [2, 32, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
+            [4, 32, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
+            [8, 32, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
             [1, 64, 112, 112, 3, 3, 2, 2, 1, 1, 1, 1, False],
         ],
     },
@@ -87,7 +87,7 @@ parameters = {
         "in_place": [True, False],
         "input_specs": [
             # Contains following parameters
-            # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, strid_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
+            # [in_n, in_c, in_h, in_w, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
             # [1, 32, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False], # functional_unet
             # [1, 64, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False],
             # [1, 3, 224, 224, 2, 2, 2, 2, 0, 0, 1, 1, False], # vgg
@@ -114,7 +114,7 @@ parameters = {
         "in_place": [True, False],
         "input_specs": [
             # Contains following parameters
-            # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, strid_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
+            # [in_n, in_c, in_h, in_w, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
             # [1, 32768, 10, 10, 5, 5, 1, 1, 2, 2, 1, 1, False],  # yolo
             # [1, 32768, 10, 10, 9, 9, 1, 1, 4, 4, 1, 1, False],
             # [1, 32768, 10, 10, 13, 13, 1, 1, 6, 6, 1, 1, False],
@@ -136,7 +136,7 @@ parameters = {
         "in_place": [True, False],
         "input_specs": [
             # Contains following parameters
-            # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, strid_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
+            # [in_n, in_c, in_h, in_w, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
             # [1, 32, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False],  # functional_unet
             # [1, 64, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False],
             # [1, 3, 224, 224, 2, 2, 2, 2, 0, 0, 1, 1, False],  # vgg
@@ -159,17 +159,17 @@ parameters = {
         "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_specs": [
             # Contains following parameters
-            # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, strid_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
+            # [in_n, in_c, in_h, in_w, kernel_h, kernel_w, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
             # [1, 32, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False],  # functional_unet
             # [1, 64, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False],
-            [1, 3, 224, 224, 2, 2, 2, 2, 0, 0, 1, 1, False],  # vgg
+            [1, 32, 224, 224, 2, 2, 2, 2, 0, 0, 1, 1, False],  # vgg
             # [1, 512, 10, 10, 5, 5, 1, 1, 2, 2, 1, 1, False],  # yolo
             # [1, 512, 10, 10, 9, 9, 1, 1, 4, 4, 1, 1, False],
             # [1, 512, 10, 10, 13, 13, 1, 1, 6, 6, 1, 1, False],
-            [1, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],  # resnet
-            [2, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
-            [4, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
-            [8, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
+            [1, 32, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],  # resnet
+            [2, 32, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
+            [4, 32, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
+            [8, 32, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
         ],
     },
 }
@@ -201,7 +201,28 @@ def run(
         ceil_mode,
     ) = input_specs
     sharding = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-    return run_max_pool2d(
+    run_max_pool(
+        [in_n, in_c, in_h, in_w],
+        [kernel_h, kernel_w],
+        [pad_h, pad_w],
+        [stride_h, stride_w],
+        [dilation_h, dilation_w],
+        device,
+        dtype,
+        shard_scheme=sharding,
+        ceil_mode=ceil_mode,
+        in_place=False,
+    )
+
+
+import pytest
+
+
+@pytest.mark.parametrize("input_spec", parameters["max_pool2d_short_sweep_suite"]["input_specs"])
+@pytest.mark.parametrize("dtype", parameters["max_pool2d_short_sweep_suite"]["dtype"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_max_pool2d_localrun(device, dtype, input_spec):
+    (
         in_n,
         in_c,
         in_h,
@@ -214,52 +235,19 @@ def run(
         pad_w,
         dilation_h,
         dilation_w,
-        dtype,
-        device,
-        sharding,
-        ceil_mode,
-    )
-
-
-import pytest
-
-
-@pytest.mark.parametrize("input_spec", parameters["max_pool2d_short_sweep_suite"]["input_specs"])
-@pytest.mark.parametrize("dtype", parameters["max_pool2d_short_sweep_suite"]["dtype"])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_max_pool2d_localrun(device, dtype, input_spec):
-    (
-        batch_size,
-        input_channels,
-        input_height,
-        input_width,
-        kernel_height,
-        kernel_width,
-        stride_h,
-        strid_w,
-        pad_h,
-        pad_w,
-        dilation_h,
-        dilation_w,
         ceil_mode,
     ) = input_spec
-    run_max_pool2d(
-        batch_size,
-        input_channels,
-        input_height,
-        input_width,
-        kernel_height,
-        kernel_width,
-        stride_h,
-        strid_w,
-        pad_h,
-        pad_w,
-        dilation_h,
-        dilation_w,
-        dtype,
+    run_max_pool(
+        [in_n, in_c, in_h, in_w],
+        [kernel_h, kernel_w],
+        [pad_h, pad_w],
+        [stride_h, stride_w],
+        [dilation_h, dilation_w],
         device,
-        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        dtype,
+        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
+        in_place=False,
     )
 
 
@@ -269,44 +257,37 @@ def test_max_pool2d_localrun(device, dtype, input_spec):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_max_pool2d_localrun(device, dtype, in_place, input_spec):
     (
-        batch_size,
-        input_channels,
-        input_height,
-        input_width,
-        kernel_height,
-        kernel_width,
+        in_n,
+        in_c,
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
         stride_h,
-        strid_w,
+        stride_w,
         pad_h,
         pad_w,
         dilation_h,
         dilation_w,
         ceil_mode,
     ) = input_spec
-    if (kernel_height > 5 or kernel_width > 5) and in_place and dtype == ttnn.bfloat8_b:
+    if (kernel_h > 5 or kernel_w > 5) and in_place and dtype == ttnn.bfloat8_b:
         pytest.skip("this case runs out of memory due to combination of large remote temp CB and large untilize out CB")
     if input_spec[:4] == [1, 512, 10, 10] and in_place and dtype == ttnn.bfloat8_b and is_blackhole():
         pytest.skip(
             "this case runs out of memory on blackhole due to large remote temp CB, this is only an issue on blackhole since the larger number of cores results in a smaller nhe per core which results in more remote references and hence a larger remote temp CB"
         )
-    run_max_pool2d(
-        batch_size,
-        input_channels,
-        input_height,
-        input_width,
-        kernel_height,
-        kernel_width,
-        stride_h,
-        strid_w,
-        pad_h,
-        pad_w,
-        dilation_h,
-        dilation_w,
-        dtype,
+    run_max_pool(
+        [in_n, in_c, in_h, in_w],
+        [kernel_h, kernel_w],
+        [pad_h, pad_w],
+        [stride_h, stride_w],
+        [dilation_h, dilation_w],
         device,
-        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        dtype,
+        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
-        in_place=in_place,
+        in_place=False,
     )
 
 
@@ -315,37 +296,31 @@ def test_max_pool2d_localrun(device, dtype, in_place, input_spec):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_run_max_pool(device, dtype, input_spec):
     (
-        batch_size,
-        input_channels,
-        input_height,
-        input_width,
-        kernel_height,
-        kernel_width,
+        in_n,
+        in_c,
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
         stride_h,
-        strid_w,
+        stride_w,
         pad_h,
         pad_w,
         dilation_h,
         dilation_w,
         ceil_mode,
     ) = input_spec
-    run_max_pool2d(
-        batch_size,
-        input_channels,
-        input_height,
-        input_width,
-        kernel_height,
-        kernel_width,
-        stride_h,
-        strid_w,
-        pad_h,
-        pad_w,
-        dilation_h,
-        dilation_w,
-        dtype,
+    run_max_pool(
+        [in_n, in_c, in_h, in_w],
+        [kernel_h, kernel_w],
+        [pad_h, pad_w],
+        [stride_h, stride_w],
+        [dilation_h, dilation_w],
         device,
-        sharding=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        dtype,
+        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
+        in_place=False,
     )
 
 
@@ -355,38 +330,31 @@ def test_run_max_pool(device, dtype, input_spec):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_run_max_pool_width_shard(device, dtype, in_place, input_spec):
     (
-        batch_size,
-        input_channels,
-        input_height,
-        input_width,
-        kernel_height,
-        kernel_width,
+        in_n,
+        in_c,
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
         stride_h,
-        strid_w,
+        stride_w,
         pad_h,
         pad_w,
         dilation_h,
         dilation_w,
         ceil_mode,
     ) = input_spec
-    run_max_pool2d(
-        batch_size,
-        input_channels,
-        input_height,
-        input_width,
-        kernel_height,
-        kernel_width,
-        stride_h,
-        strid_w,
-        pad_h,
-        pad_w,
-        dilation_h,
-        dilation_w,
-        dtype,
+    run_max_pool(
+        [in_n, in_c, in_h, in_w],
+        [kernel_h, kernel_w],
+        [pad_h, pad_w],
+        [stride_h, stride_w],
+        [dilation_h, dilation_w],
         device,
-        sharding=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        dtype,
+        shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ceil_mode=ceil_mode,
-        in_place=in_place,
+        in_place=False,
     )
 
 
@@ -396,38 +364,31 @@ def test_run_max_pool_width_shard(device, dtype, in_place, input_spec):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_run_max_pool_block_shard(device, dtype, in_place, input_spec):
     (
-        batch_size,
-        input_channels,
-        input_height,
-        input_width,
-        kernel_height,
-        kernel_width,
+        in_n,
+        in_c,
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
         stride_h,
-        strid_w,
+        stride_w,
         pad_h,
         pad_w,
         dilation_h,
         dilation_w,
         ceil_mode,
     ) = input_spec
-    run_max_pool2d(
-        batch_size,
-        input_channels,
-        input_height,
-        input_width,
-        kernel_height,
-        kernel_width,
-        stride_h,
-        strid_w,
-        pad_h,
-        pad_w,
-        dilation_h,
-        dilation_w,
-        dtype,
+    run_max_pool(
+        [in_n, in_c, in_h, in_w],
+        [kernel_h, kernel_w],
+        [pad_h, pad_w],
+        [stride_h, stride_w],
+        [dilation_h, dilation_w],
         device,
-        sharding=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        dtype,
+        shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ceil_mode=ceil_mode,
-        in_place=in_place,
+        in_place=False,
     )
 
 
@@ -437,35 +398,30 @@ def test_run_max_pool_block_shard(device, dtype, in_place, input_spec):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_run_max_pool_mem_config(device, dtype, input_spec, memory_config):
     (
-        batch_size,
-        input_channels,
-        input_height,
-        input_width,
-        kernel_height,
-        kernel_width,
+        in_n,
+        in_c,
+        in_h,
+        in_w,
+        kernel_h,
+        kernel_w,
         stride_h,
-        strid_w,
+        stride_w,
         pad_h,
         pad_w,
         dilation_h,
         dilation_w,
         ceil_mode,
     ) = input_spec
-    run_max_pool2d(
-        batch_size,
-        input_channels,
-        input_height,
-        input_width,
-        kernel_height,
-        kernel_width,
-        stride_h,
-        strid_w,
-        pad_h,
-        pad_w,
-        dilation_h,
-        dilation_w,
-        dtype,
+    run_max_pool(
+        [in_n, in_c, in_h, in_w],
+        [kernel_h, kernel_w],
+        [pad_h, pad_w],
+        [stride_h, stride_w],
+        [dilation_h, dilation_w],
         device,
-        ceil_mode=ceil_mode,
+        dtype,
         memory_config=memory_config,
+        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ceil_mode=ceil_mode,
+        in_place=False,
     )

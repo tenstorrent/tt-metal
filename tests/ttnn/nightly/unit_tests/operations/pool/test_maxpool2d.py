@@ -8,29 +8,10 @@ import torch
 import pytest
 import math
 
-from models.utility_functions import is_wormhole_b0, is_grayskull, is_x2_harvested
+from models.utility_functions import is_wormhole_b0, is_x2_harvested
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 import ttnn
-
-
-# Cache map used for torch tensor reuse - the tensor will not be generated if a tensor of the same dimensions has already been generated
-@pytest.fixture(scope="module")
-def torch_tensor_map(request):
-    torch_tensor_map = {}
-
-    return torch_tensor_map
-
-
-def randomize_torch_tensor(torch_tensor_map, tensor_shape):
-    tensor_shape = tuple(tensor_shape)
-    if tensor_shape in torch_tensor_map.keys():
-        torch_tensor = torch_tensor_map[tensor_shape]
-    else:
-        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
-        torch_tensor_map[tensor_shape] = torch_tensor
-
-    return torch_tensor
 
 
 def run_max_pool(
@@ -40,57 +21,46 @@ def run_max_pool(
     stride,
     dilation,
     device,
-    torch_tensor_map,
     dtype,
     memory_config=None,
     shard_scheme=None,
     ceil_mode=False,
+    in_place=False,
 ):
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size
-    pad_h, pad_w = padding
+
+    # handle both 2D and 4D padding
+    if len(padding) == 2:
+        pad_h = int(padding[0] * 2)
+        pad_w = int(padding[1] * 2)
+        pad_t = pad_b = padding[0]
+        pad_l = pad_r = padding[1]
+    elif len(padding) == 4:
+        pad_t, pad_b, pad_l, pad_r = padding
+        pad_h = pad_t + pad_b
+        pad_w = pad_l + pad_r
+    else:
+        raise ValueError(f"Padding must be 2D or 4D tuple, got {len(padding)}D")
+
     stride_h, stride_w = stride
     dilation_h, dilation_w = dilation
 
-    if shard_scheme != ttnn.TensorMemoryLayout.WIDTH_SHARDED:
-        if 2 * pad_h > kernel_h or 2 * pad_w > kernel_w:
-            pytest.skip("Invalid case")
-
-    if pad_h > (kernel_h / 2):
-        pytest.skip("kernel size and padding combination not supported")
+    if pad_t > kernel_h / 2 or pad_b > kernel_h / 2 or pad_l > kernel_w / 2 or pad_r > kernel_w / 2:
+        pytest.skip("padding is too large for the kernel size")
 
     if (in_h + pad_h) < kernel_h or (in_w + pad_w) < kernel_w:
         pytest.skip("kernel is too large for the padded tensor")
 
     if ceil_mode:
-        out_h = math.ceil((in_h + 2 * pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
-        out_w = math.ceil((in_w + 2 * pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
+        out_h = math.ceil((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
+        out_w = math.ceil((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
     else:
-        out_h = math.floor((in_h + 2 * pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
-        out_w = math.floor((in_w + 2 * pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
+        out_h = math.floor((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
+        out_w = math.floor((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
     cores_x = device.core_grid.x
     cores_y = device.core_grid.y
     max_cores = cores_x * cores_y
-
-    # Skip tests for BF8 and ceil_mode in HEIGHT/WIDTH/BLOCK shardings
-    if shard_scheme in (
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-    ):
-        if dtype == ttnn.bfloat8_b:
-            if stride == (2, 2):
-                pytest.skip("Skip for stride (2, 2) for BF8!")
-            if kernel_size == (9, 9):
-                pytest.skip("Skip for kernel size (9, 9) for BF8!")
-            if ceil_mode:
-                pytest.skip("Skip for ceil mode for BF8!")
-
-        if ceil_mode:
-            if stride == (1, 1):
-                pytest.skip("Skip for stride (1, 1) for ceil mode!")
-            if kernel_size == (9, 9):
-                pytest.skip("Skip for kernel size (9, 9) for ceil mode!")
 
     if shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED or shard_scheme is None:
         if in_c % 16 != 0:
@@ -105,29 +75,9 @@ def run_max_pool(
             and is_wormhole_b0()
         ):
             pytest.skip("This case runs out of memory on Wormhole b0")
-        if ceil_mode and act_shape == [16, 64, 112, 112] and kernel_size == (13, 13):
-            pytest.skip("This case runs out of memory on Wormhole b0")
-        if stride == (1, 1) and act_shape == [8, 16, 528, 80] and is_grayskull():
-            pytest.skip("This case runs out of memory on Grayskull")
-        if kernel_h > 3 and kernel_w > 3 and act_shape == [16, 64, 112, 112] and is_grayskull():
-            pytest.skip("This case runs out of memory on Grayskull")
-        if (
-            stride == (2, 2)
-            and kernel_size == (13, 13)
-            and act_shape == [1, 800, 32, 32]
-            and not is_x2_harvested(device)
-            and not is_grayskull()
-        ):
-            pytest.skip("This case runs out of memory on Wormhole b0")
-        if kernel_size == (13, 13) and (act_shape == [128, 32, 132, 20] or in_c > 512) and is_grayskull():
-            pytest.skip("This case runs out of memory on Grayskull")
-        if kernel_size == (13, 13) and in_c > 768 and is_x2_harvested(device):
-            pytest.skip("This case runs out of memory on Wormhole X2")
         if kernel_h > 5 and kernel_w > 5 and act_shape == [16, 64, 112, 112] and is_x2_harvested(device):
             pytest.skip("This case runs out of memory on Wormhole X2")
         if stride == (1, 1) and act_shape == [128, 32, 132, 20] and is_x2_harvested(device):
-            pytest.skip("This case runs out of memory on Wormhole X2")
-        if stride == (1, 1) and kernel_size == (13, 13) and act_shape == [32, 32, 264, 40] and is_x2_harvested(device):
             pytest.skip("This case runs out of memory on Wormhole X2")
         if (
             dtype == ttnn.bfloat8_b
@@ -142,12 +92,6 @@ def run_max_pool(
         if in_c / max_cores < 16:
             pytest.skip("Width sharding requires large enough channels to shard (at least 16 per core)")
         if (
-            kernel_size == (13, 13)
-            and (act_shape == [8, 4096, 10, 16] or act_shape == [1, 32768, 10, 10])
-            and is_grayskull()
-        ):
-            pytest.skip("This case runs out of memory on Grayskull")
-        if (
             stride == (1, 1)
             and kernel_h > 5
             and kernel_w > 5
@@ -156,8 +100,6 @@ def run_max_pool(
         ):
             pytest.skip("This case runs out of memory on Wormhole X2")
         if kernel_h > 5 and kernel_w > 5 and act_shape == [8, 4096, 10, 16] and is_x2_harvested(device):
-            pytest.skip("This case runs out of memory on Wormhole X2")
-        if kernel_size == (13, 13) and in_c >= 32768 and is_x2_harvested(device):
             pytest.skip("This case runs out of memory on Wormhole X2")
 
     if shard_scheme == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
@@ -169,8 +111,8 @@ def run_max_pool(
     torch.manual_seed(0)
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
-    ## construct the tensor in NCHW shape
-    act = randomize_torch_tensor(torch_tensor_map, act_shape)
+    # construct the tensor in NCHW shape
+    act = torch.randn(act_shape, dtype=torch.bfloat16)
     # act = torch.zeros(act_shape, dtype=torch.bfloat16)
     # for n in range(act_shape[0]):
     #     for c in range(act_shape[1]):
@@ -180,8 +122,7 @@ def run_max_pool(
     # torch.save(act, "act.pt")
     # act = torch.load("act.pt")
 
-    ## this op expects input tensor as { N, 1, H * W, C }, so rearrange and reshape tensor
-    ## but before that, make sure in_c is multiple of tile width
+    # this op expects input tensor as { N, 1, H * W, C }
     act_shape = (1, 1, in_n * in_h * in_w, in_c)
     act_permuted = torch.permute(act, (0, 2, 3, 1))
     act_reshaped = act_permuted.reshape(act_shape)
@@ -214,6 +155,7 @@ def run_max_pool(
             tile_size=32 if dtype == ttnn.bfloat8_b else 1,
         )
         ttact_device = ttnn.to_memory_config(ttact_device, sharded_memory_config)
+    # run ttnn maxpool2d
     output = ttnn.max_pool2d(
         input_tensor=ttact_device,
         batch_size=in_n,
@@ -222,28 +164,36 @@ def run_max_pool(
         channels=in_c,
         kernel_size=[kernel_h, kernel_w],
         stride=[stride_h, stride_w],
-        padding=[pad_h, pad_w],
+        padding=[pad_t, pad_b, pad_l, pad_r],  # ttnn is padding in the order (top, bottom, left, right)
         dilation=[dilation_h, dilation_w],
         memory_config=memory_config,
         applied_shard_scheme=shard_scheme,
         ceil_mode=ceil_mode,
+        in_place_halo=in_place,
     )
 
     output_host = output.cpu()
     output_pytorch_padded = torch.Tensor(ttnn.to_torch(output_host))
     output_pytorch = output_pytorch_padded[:, :, :, :in_c]
 
-    ## reference
+    # apply padding manually to torch tensor since torch doesn't support asymmetric padding
+    act_padded = torch.nn.functional.pad(
+        act,
+        (pad_l, pad_r, pad_t, pad_b),  # torch is padding in the order (left, right, top, bottom)
+        mode="constant",
+        value=-float("inf"),
+    )
+    # run torch maxpool2d
     golden_pytorch = torch.nn.MaxPool2d(
         kernel_size,
         stride=stride,
-        padding=padding,
+        padding=[0, 0],  # always use zero padding we are padding manually
         dilation=dilation,
         return_indices=False,
         ceil_mode=ceil_mode,
-    )(act)
+    )(act_padded)
 
-    ## test for equivalance
+    # test for equivalance
     golden_shape = golden_pytorch.shape
     output_pytorch = output_pytorch.reshape(golden_shape[0], golden_shape[2], golden_shape[3], golden_shape[1])
 
@@ -257,7 +207,7 @@ def run_max_pool(
 
     logger.debug(f"Passing: {passing}, PCC: {pcc}")
 
-    ## do more rigorous comparision for each element
+    # do more rigorous comparision for each element
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if dtype == ttnn.bfloat8_b:
         atol = 0.35
@@ -340,7 +290,6 @@ def run_max_pool(
         (3, 3),
         (5, 5),
         (9, 9),
-        # (13, 13),
     ),
 )
 @pytest.mark.parametrize(
@@ -348,9 +297,8 @@ def run_max_pool(
     (
         (0, 0),
         (1, 1),
-        (2, 2),
-        (4, 4),
-        # (6, 6),
+        (1, 0, 1, 2),
+        (1, 4, 3, 2),
     ),
 )
 @pytest.mark.parametrize(
@@ -375,7 +323,7 @@ def run_max_pool(
         True,
     ],
 )
-def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, torch_tensor_map, dtype, ceil_mode):
+def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype, ceil_mode):
     run_max_pool(
         act_shape,
         kernel_size,
@@ -383,7 +331,6 @@ def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device,
         stride,
         dilation,
         device,
-        torch_tensor_map,
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
@@ -463,7 +410,6 @@ def test_run_max_pool_width_shard(
     stride,
     dilation,
     device,
-    torch_tensor_map,
     dtype,
     ceil_mode,
 ):
@@ -474,7 +420,6 @@ def test_run_max_pool_width_shard(
         stride,
         dilation,
         device,
-        torch_tensor_map,
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ceil_mode=ceil_mode,
@@ -574,7 +519,6 @@ def test_run_max_pool_block_shard(
     stride,
     dilation,
     device,
-    torch_tensor_map,
     dtype,
     ceil_mode,
 ):
@@ -585,7 +529,6 @@ def test_run_max_pool_block_shard(
         stride,
         dilation,
         device,
-        torch_tensor_map,
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ceil_mode=ceil_mode,
@@ -606,12 +549,9 @@ def test_run_max_pool_block_shard(
 def test_run_max_pool_mem_config(
     act_shape,
     device,
-    torch_tensor_map,
     memory_config,
 ):
-    run_max_pool(
-        act_shape, (3, 3), (1, 1), (2, 2), (1, 1), device, torch_tensor_map, ttnn.bfloat16, memory_config=memory_config
-    )
+    run_max_pool(act_shape, (3, 3), (1, 1), (2, 2), (1, 1), device, ttnn.bfloat16, memory_config=memory_config)
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -649,10 +589,9 @@ def test_run_max_pool_yolov4(
     stride,
     dilation,
     device,
-    torch_tensor_map,
     dtype,
 ):
-    run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, torch_tensor_map, dtype)
+    run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype)
 
 
 @pytest.mark.skip("See GH issue #12285")
@@ -761,7 +700,6 @@ def test_run_max_pool_yolov4(
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_pool_core_nondivis(
     device,
-    torch_tensor_map,
     batch_size,
     input_channels,
     input_height,
@@ -795,9 +733,6 @@ def test_pool_core_nondivis(
     if in_c % 16 != 0:
         pytest.skip("Current maxpool writer needs nchannels to be multiple of 16!")
 
-    if in_c == 16 and dtype == ttnn.bfloat8_b and in_n * in_h * in_w > 600000:
-        pytest.skip("This case runs out of memory on Grayskull")
-
     if in_n > 16 and in_c > 64 and dtype == ttnn.bfloat8_b and is_wormhole_b0():
         pytest.skip("This case runs out of memory on Wormhole b0")
 
@@ -805,17 +740,7 @@ def test_pool_core_nondivis(
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
     ## construct the tensor in NCHW shape
-    act = randomize_torch_tensor(torch_tensor_map, act_shape)
-    # act = torch.zeros(act_shape, dtype=torch.bfloat16)
-    # act = torch.ones(act_shape, dtype=torch.bfloat16)
-    # act = torch.arange(0, volume(act_shape), dtype=torch.bfloat16).reshape(act_shape)
-    # for n in range(act_shape[0]):
-    #     for c in range(act_shape[1]):
-    #         for h in range(act_shape[2]):
-    #             for w in range(act_shape[3]):
-    #                 act[n, c, h, w] = 1 + n + h + w + c # + torch.rand(1) * 0.15
-    # torch.save(act, "act.pt")
-    # act = torch.load("act.pt")
+    act = torch.randn(act_shape, dtype=torch.bfloat16)
 
     ## this op expects input tensor as { N, 1, H * W, C }, so rearrange and reshape tensor
     ## but before that, make sure in_c is multiple of tile width
@@ -931,7 +856,6 @@ def test_run_max_pool_squeeze_net_model(
     stride,
     dilation,
     device,
-    torch_tensor_map,
     dtype,
     ceil_mode,
 ):
@@ -942,7 +866,6 @@ def test_run_max_pool_squeeze_net_model(
         stride,
         dilation,
         device,
-        torch_tensor_map,
         dtype,
         ceil_mode=ceil_mode,
     )

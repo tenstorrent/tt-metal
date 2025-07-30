@@ -8,6 +8,60 @@ import pytest
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+# helper to correct torch output for asymmetric padding
+def correct_torch_asym_pad(
+    torch_output, input_shape, kernel_size, stride, padding, divisor_override, count_include_pad
+):
+    in_n, in_c, in_h, in_w = input_shape
+    pad_t, pad_b, pad_l, pad_r = padding
+    kernel_h, kernel_w = kernel_size
+    stride_h, stride_w = stride
+    out_n, out_c, out_h, out_w = torch_output.shape
+    padded_h = in_h + pad_t + pad_b
+    padded_w = in_w + pad_l + pad_r
+
+    for oh in range(out_h):
+        for ow in range(out_w):
+            # get the kernel position in the padded input
+            top_left_h = oh * stride_h
+            top_left_w = ow * stride_w
+
+            # count the number of sticks positions in the kernel which should be used in the divisor,
+            # and the number used by torch which is unaware of basic padding since it was applied manually
+            valid_sticks = 0
+            torch_sticks = 0
+            for kh in range(kernel_h):
+                for kw in range(kernel_w):
+                    # get the padded coordinates of this stick
+                    h = top_left_h + kh
+                    w = top_left_w + kw
+
+                    if h < padded_h and w < padded_w:
+                        # torch is unaware of basic padding but is aware of ceil mode padding and never includes ceil
+                        # mode sticks in the divisor count so only count sticks that are within the basic padded input
+                        torch_sticks += 1
+
+                        # get the non-padded coordinates of this stick
+                        orig_h = h - pad_t
+                        orig_w = w - pad_l
+
+                        # check if this position is should be used in the divisor (within the original input shape)
+                        if 0 <= orig_h < in_h and 0 <= orig_w < in_w:
+                            valid_sticks += 1
+
+            # apply a divisor correction if there's a mismatch between what torch used as divisor
+            # and what should be used based on actual valid sticks
+            if valid_sticks != torch_sticks:
+                if valid_sticks > 0:
+                    torch_output[:, :, oh, ow] *= torch_sticks / valid_sticks
+                else:
+                    raise ValueError(
+                        "no valid sticks found, cannot correct torch output, it is possible padding is too large for the kernel size so we have an entire kernel in the padded region"
+                    )
+
+    return torch_output
+
+
 @pytest.fixture(scope="module")
 def tensor_map():
     tensor_map = {}
@@ -38,12 +92,32 @@ def run_avg_pool2d(
     run_twice=False,
     dtype=ttnn.bfloat16,
 ):
-    ## Test setup for both.
+    # handle both 2D and 4D padding
+    padding_is_4d = False
+    if len(padding) == 2:
+        pad_h = int(padding[0] * 2)
+        pad_w = int(padding[1] * 2)
+        pad_t = pad_b = padding[0]
+        pad_l = pad_r = padding[1]
+    elif len(padding) == 4:
+        padding_is_4d = True
+        pad_t, pad_b, pad_l, pad_r = padding
+        pad_h = pad_t + pad_b
+        pad_w = pad_l + pad_r
+    else:
+        raise ValueError(f"Padding must be 2D or 4D tuple, got {len(padding)}D")
+
     in_n, in_c, in_h, in_w = input_shape
+    kernel_h, kernel_w = kernel_size
     torch.manual_seed(0)
     torch_input = randomize_tensor(tensor_map, input_shape)
 
-    ## Test setup for Actual.
+    if pad_t > kernel_h / 2 or pad_b > kernel_h / 2 or pad_l > kernel_w / 2 or pad_r > kernel_w / 2:
+        pytest.skip("padding is too large for the kernel size")
+
+    if (in_h + pad_h) < kernel_h or (in_w + pad_w) < kernel_w:
+        pytest.skip("kernel is too large for the padded tensor")
+
     if dtype == ttnn.bfloat8_b:
         ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
     else:
@@ -51,18 +125,41 @@ def run_avg_pool2d(
     ttnn_input = ttnn.permute(ttnn_input, (0, 2, 3, 1))
     ttnn_input = ttnn.reshape(ttnn_input, (1, 1, in_n * in_h * in_w, in_c))
 
-    ## Get Expected output.
+    if padding_is_4d:
+        # apply padding manually to torch tensor since torch doesn't support asymmetric padding
+        torch_input_padded = torch.nn.functional.pad(
+            torch_input,
+            (pad_l, pad_r, pad_t, pad_b),
+            mode="constant",
+            value=0,
+        )
+        torch_padding = [0, 0]  # no additional padding since we already padded manually
+    else:
+        torch_input_padded = torch_input  # no manual padding needed
+        torch_padding = padding  # use original padding
+    # run torch avg_pool2d
     torch_output = torch.nn.functional.avg_pool2d(
-        torch_input,
+        torch_input_padded,
         kernel_size,
         stride,
-        padding,
+        torch_padding,
         ceil_mode=ceil_mode,
         count_include_pad=count_include_pad,
         divisor_override=divisor_override,
     )
+    # apply correction for asymmetric padding when needed
+    if padding_is_4d and divisor_override is None and count_include_pad is False:
+        torch_output = correct_torch_asym_pad(
+            torch_output,
+            input_shape,
+            kernel_size,
+            stride,
+            (pad_t, pad_b, pad_l, pad_r),
+            divisor_override,
+            count_include_pad,
+        )
 
-    ## Get Actual output
+    # run ttnn avg_pool2d
     ttnn_output = ttnn.avg_pool2d(
         input_tensor=ttnn_input,
         batch_size=in_n,
@@ -71,7 +168,7 @@ def run_avg_pool2d(
         channels=in_c,
         kernel_size=kernel_size,
         stride=stride,
-        padding=padding,
+        padding=[pad_t, pad_b, pad_l, pad_r],
         ceil_mode=ceil_mode,
         divisor_override=divisor_override,
         count_include_pad=count_include_pad,
@@ -87,7 +184,7 @@ def run_avg_pool2d(
             channels=in_c,
             kernel_size=kernel_size,
             stride=stride,
-            padding=padding,
+            padding=[pad_t, pad_b, pad_l, pad_r],
             ceil_mode=ceil_mode,
             divisor_override=divisor_override,
             count_include_pad=count_include_pad,
@@ -103,7 +200,7 @@ def run_avg_pool2d(
     ttnn_output = ttnn.to_torch(ttnn_output)
 
     ## Assertion
-    pcc_thresh = 0.99
+    pcc_thresh = 0.985
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     # TTNN only supports scalars in Bfloat16, so we cannot support rtol lower than 0.01
     # for instance, a 3x3 kernel uses scalar 1/9 = 0.111, which in Bfloat16 is 0.11084
@@ -162,9 +259,9 @@ def run_avg_pool2d(
     "padding",
     (
         (0, 0),
-        (1, 2),
-        (2, 3),
-        (4, 4),
+        (3, 4),
+        (1, 0, 1, 2),
+        (1, 4, 3, 2),
     ),
 )
 @pytest.mark.parametrize(

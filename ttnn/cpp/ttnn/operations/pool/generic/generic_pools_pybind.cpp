@@ -7,11 +7,26 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <array>
+#include <variant>
+#include <cstdint>
 
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::pool {
+namespace py = pybind11;
+
+// Helper function to convert padding variant to 4-element array
+inline std::array<uint32_t, 4> convert_padding_to_4d(
+    const std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>>& padding) {
+    if (std::holds_alternative<std::array<uint32_t, 2>>(padding)) {
+        auto pad_2d = std::get<std::array<uint32_t, 2>>(padding);
+        return {pad_2d[0], pad_2d[0], pad_2d[1], pad_2d[1]};  // [h, w, h, w]
+    } else {
+        return std::get<std::array<uint32_t, 4>>(padding);
+    }
+}
 
 void bind_max_pool2d_operation(py::module& module) {
     bind_registered_operation(
@@ -32,7 +47,6 @@ void bind_max_pool2d_operation(py::module& module) {
             stride (List of [int]): the (h, w) stride of the kernel window.
             padding (List of [int]): the (h, w) padding of the input tensor.
             dilation (List of [int]): the (h, w) dilation of the kernel window.
-            ceil_mode (bool): whether to use ceil mode for the output shape. Defaults to `False`.
             ceil_mode (bool): whether to use ceil mode for the output shape. Defaults to `False`.
 
         Keyword Args:
@@ -86,13 +100,14 @@ void bind_max_pool2d_operation(py::module& module) {
                uint32_t channels,
                std::array<uint32_t, 2> kernel_size,
                std::array<uint32_t, 2> stride,
-               std::array<uint32_t, 2> padding,
+               std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
                std::array<uint32_t, 2> dilation,
                bool ceil_mode,
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
                bool in_place_halo,
                QueueId queue_id) -> ttnn::Tensor {
+                auto padding_4d = convert_padding_to_4d(padding);
                 return self(
                     queue_id,
                     input_tensor,
@@ -102,7 +117,7 @@ void bind_max_pool2d_operation(py::module& module) {
                     channels,
                     kernel_size,
                     stride,
-                    padding,
+                    padding_4d,
                     dilation,
                     ceil_mode,
                     memory_config,
@@ -198,7 +213,7 @@ void bind_avg_pool2d_operation(py::module& module) {
                uint32_t channels,
                std::array<uint32_t, 2> kernel_size,
                std::array<uint32_t, 2> stride,
-               std::array<uint32_t, 2> padding,
+               std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
                bool ceil_mode,
                bool count_include_pad,
                std::optional<int32_t> divisor_override,
@@ -206,6 +221,7 @@ void bind_avg_pool2d_operation(py::module& module) {
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
                bool in_place_halo,
                QueueId queue_id) -> ttnn::Tensor {
+                auto padding_4d = convert_padding_to_4d(padding);
                 return self(
                     queue_id,
                     input_tensor,
@@ -215,7 +231,7 @@ void bind_avg_pool2d_operation(py::module& module) {
                     channels,
                     kernel_size,
                     stride,
-                    padding,
+                    padding_4d,
                     ceil_mode,
                     count_include_pad,
                     divisor_override,
