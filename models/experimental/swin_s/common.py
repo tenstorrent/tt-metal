@@ -15,7 +15,7 @@ def load_torch_model(torch_model, i=0, j=0, module="model", model_location_gener
     else:
         weights_path = (
             model_location_generator("vision-models/swin_s", model_subdir="", download_if_ci_v2=True)
-            / "swin_small_patch4_window7_224.pth"
+            / "swin_s-5e29d889.pth"
         )
         state_dict = torch.load(weights_path)
 
