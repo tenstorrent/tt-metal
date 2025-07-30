@@ -67,9 +67,9 @@ CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.1.4)
 include(FetchContent)
 
 FetchContent_Declare(
-  enchantum
-  GIT_REPOSITORY https://github.com/ZXShady/enchantum.git
-  GIT_TAG        8ca5b0eb7e7ebe0252e5bc6915083f1dd1b8294e
+    enchantum
+    GIT_REPOSITORY https://github.com/ZXShady/enchantum.git
+    GIT_TAG 8ca5b0eb7e7ebe0252e5bc6915083f1dd1b8294e
 )
 
 FetchContent_MakeAvailable(enchantum)
