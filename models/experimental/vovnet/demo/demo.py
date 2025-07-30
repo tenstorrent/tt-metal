@@ -5,7 +5,6 @@
 import pytest
 import torch
 import ttnn
-import torch.nn.functional as F
 from loguru import logger
 from tqdm import tqdm
 from transformers import AutoImageProcessor
@@ -16,17 +15,9 @@ from models.utility_functions import profiler, run_for_wormhole_b0
 NUM_VALIDATION_IMAGES_IMAGENET = 49920
 
 
-@run_for_wormhole_b0()
-@pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
-)
-@pytest.mark.parametrize(
-    "batch_size, iterations, act_dtype, weight_dtype",
-    ((1, 100, ttnn.bfloat8_b, ttnn.bfloat8_b),),
-)
-def test_vovnet_imagenet_demo(
+def run_vovnet_imagenet_demo(
     device,
-    batch_size,
+    device_batch_size,
     iterations,
     imagenet_label_dict,
     act_dtype,
@@ -34,14 +25,16 @@ def test_vovnet_imagenet_demo(
     model_location_generator,
     entire_imagenet_dataset=False,
 ):
+    batch_size = device_batch_size * device.get_num_devices()
     if entire_imagenet_dataset:
         iterations = NUM_VALIDATION_IMAGES_IMAGENET // batch_size
-
+    else:
+        iterations = iterations // batch_size
     profiler.clear()
     with torch.no_grad():
         vovnet_trace_2cq = VovnetPerformantRunner(
             device,
-            batch_size,
+            device_batch_size,
             act_dtype,
             weight_dtype,
         )
@@ -71,17 +64,8 @@ def test_vovnet_imagenet_demo(
             torch_input_tensor = input_tensors_all[iter]
             labels = input_labels_all[iter]
             profiler.start(f"run")
-
-            n, c, h, w = torch_input_tensor.shape
-            torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
-            torch_input_tensor = torch_input_tensor.reshape(1, 1, h * w * n, c)
-            min_channels = 16
-            if c < min_channels:
-                padding_c = min_channels - c
-            torch_input_tensor = F.pad(torch_input_tensor, (0, padding_c), "constant", 0)
-            tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-            output = vovnet_trace_2cq._execute_vovnet_trace_2cqs_inference(tt_inputs_host)
-            output = ttnn.to_torch(output)
+            output = vovnet_trace_2cq.run(torch_input_tensor)
+            output = ttnn.to_torch(output, mesh_composer=vovnet_trace_2cq.runner_infra.output_mesh_composer)
             prediction = output.argmax(dim=-1)
 
             profiler.end(f"run")
@@ -106,3 +90,41 @@ def test_vovnet_imagenet_demo(
         inference_time_avg = total_inference_time / (iterations)
 
         compile_time = first_iter_time - 2 * inference_time_avg
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "device_batch_size, iterations, act_dtype, weight_dtype",
+    ((1, 100, ttnn.bfloat8_b, ttnn.bfloat8_b),),
+)
+def test_vovnet_imagenet_demo(
+    device, device_batch_size, iterations, imagenet_label_dict, act_dtype, weight_dtype, model_location_generator
+):
+    return run_vovnet_imagenet_demo(
+        device, device_batch_size, iterations, imagenet_label_dict, act_dtype, weight_dtype, model_location_generator
+    )
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "device_batch_size, iterations, act_dtype, weight_dtype",
+    ((1, 100, ttnn.bfloat8_b, ttnn.bfloat8_b),),
+)
+def test_vovnet_imagenet_demo_dp(
+    mesh_device, device_batch_size, iterations, imagenet_label_dict, act_dtype, weight_dtype, model_location_generator
+):
+    return run_vovnet_imagenet_demo(
+        mesh_device,
+        device_batch_size,
+        iterations,
+        imagenet_label_dict,
+        act_dtype,
+        weight_dtype,
+        model_location_generator,
+    )

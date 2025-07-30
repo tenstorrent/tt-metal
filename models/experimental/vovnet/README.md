@@ -36,15 +36,27 @@ pytest --disable-warnings models/experimental/vovnet/tests/pcc/test_tt_vovnet.py
 ```
 
 ### Performant Model with Trace+2CQ
-- end-2-end perf is 84 FPS
+
+#### Single Device (BS=1):
+
+- end-2-end perf is `110` FPS
 
 Use the following command to run the performant Model with Trace+2CQs:
 
 ```
-pytest --disable-warnings models/experimental/yolov5x/tests/test_e2e_performant.py
-    ```
+pytest --disable-warnings models/experimental/vovnet/tests/perf/test_e2e_performant.py::test_vovnet_e2e_performant
+```
+#### Multi Device (DP=2, N300):
 
-### Demo on ImageNet:
+- end-2-end perf is `205` FPS
+
+Use the following command to run the performant Model with Trace+2CQs:
+
+```
+pytest --disable-warnings models/experimental/vovnet/tests/perf/test_e2e_performant.py::test_vovnet_e2e_performant_dp
+```
+
+### Performant Demo with Trace+2CQ
 
 You will need a huggingFace account to download ImageNet dataset as part of this test. You may create a token from:
 ```bash
@@ -70,3 +82,39 @@ pytest  models/experimental/vovnet/demo/demo.py::test_vovnet_imagenet_demo
 - The post-processing is performed using PyTorch.
 - The first time the Imagenet demo is run, you need to login to huggingface using your token: `huggingface-cli login` or by setting the token with the command `export HF_TOKEN=<token>`.
 - To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens.
+
+#### Single Device (BS=1):
+
+Use the following command to run the performant Demo with Trace+2CQs:
+
+```
+pytest --disable-warnings models/experimental/vovnet/demo/demo.py::test_vovnet_imagenet_demo
+```
+
+#### Multi Device (DP=2, N300):
+
+Use the following command to run the performant Demo with Trace+2CQs:
+
+```
+pytest --disable-warnings models/experimental/vovnet/demo/demo.py::test_vovnet_imagenet_demo_dp
+```
+
+### Performant Data evaluation with Trace+2CQ
+
+#### Single Device (BS=1):
+
+Use the following command to run the performant evaluation with Trace+2CQs:
+
+```
+pytest --disable-warnings models/experimental/classification_eval/classification_eval.py::test_vovnet_image_classification_eval
+```
+
+#### Multi Device (DP=2, N300):
+
+Use the following command to run the performant evaluation with Trace+2CQs:
+
+```
+pytest --disable-warnings models/experimental/classification_eval/classification_eval.py::test_vovnet_image_classification_eval_dp
+```
+
+Note: The model is evaluated with 512 samples.

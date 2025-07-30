@@ -40,8 +40,15 @@ Where,
 
 **VoVNet:** <br>
 **_For 224x224,_**<br>
+
+**_Single-Device (BS-1):_**<br>
  ```sh
  pytest models/experimental/classification_eval/classification_eval.py::test_vovnet_image_classification_eval[1-224-tt_model-device_params0]
+ ```
+
+**_Multi-Device (DP-2,N300):_**<br>
+ ```sh
+ pytest models/experimental/classification_eval/classification_eval.py::test_vovnet_image_classification_eval_dp[wormhole_b0-1-224-tt_model-device_params0]
  ```
 
 ## To run the test of torch vs ground truth, please follow the following commands:
@@ -66,6 +73,13 @@ Where,
 
  **VoVNet:** <br>
 **_For 224x224,_**<br>
+
+**_Single-Device (BS-1):_**<br>
  ```sh
  pytest models/experimental/classification_eval/classification_eval.py::test_vovnet_image_classification_eval[1-224-torch_model-device_params0]
+ ```
+
+**_Multi-Device (DP-2,N300):_**<br>
+ ```sh
+ pytest models/experimental/classification_eval/classification_eval.py::test_vovnet_image_classification_eval_dp[wormhole_b0-1-224-torch_model-device_params0]
  ```

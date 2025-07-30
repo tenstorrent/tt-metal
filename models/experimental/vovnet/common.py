@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-
+import ttnn
 import torch
 import timm
 
@@ -22,3 +22,15 @@ def load_torch_model(reference_model, target_prefix="", model_location_generator
 
         model.load_state_dict(state_dict)
         return model.eval()
+
+
+def get_mesh_mappers(device):
+    if device.get_num_devices() > 1:
+        inputs_mesh_mapper = ttnn.shard_tensor_to_mesh_mapper(device, dim=0)
+        weights_mesh_mapper = None
+        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+    else:
+        inputs_mesh_mapper = None
+        weights_mesh_mapper = None
+        output_mesh_composer = None
+    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
