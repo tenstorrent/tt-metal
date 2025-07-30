@@ -5,10 +5,7 @@
 
 """
 Usage:
-    scripts/debugging_scripts/check_noc_status.py <elf-file>
-
-Arguments:
-    <elf-file>  Path to risc firmware elf file
+    scripts/debugging_scripts/check_noc_status.py
 
 Description:
     This script checks if there are any mismatches between values of number of NOC transactions
@@ -22,14 +19,17 @@ from ttexalens.parse_elf import mem_access
 from ttexalens.firmware import ELF
 
 from check_per_device import run as get_check_per_device
+from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from triage import ScriptConfig, log_check, run_script
 
 script_config = ScriptConfig(
-    depends=["check_per_device"],
+    depends=["check_per_device", "dispatcher_data"],
 )
 
 
-def check_noc_status(device: Device, fw_elf_path: str, context: Context, risc_name: str = "brisc", noc_id: int = 0):
+def check_noc_status(
+    device: Device, dispatcher_data: DispatcherData, context: Context, risc_name: str = "brisc", noc_id: int = 0
+):
     """
     Checks for mismatches between variables and registers that store number of NOC transactions
     and stores them in dictionary creating summary of checking process
@@ -44,10 +44,12 @@ def check_noc_status(device: Device, fw_elf_path: str, context: Context, risc_na
         "noc_posted_writes_num_issued": "NIU_MST_POSTED_WR_REQ_SENT",
     }
 
-    fw_elf = parse_elf(fw_elf_path, context)
-
     # Get all functional workers and loop through them
     locations = device.get_block_locations(block_type="functional_workers")
+    # Since all firmware elfs are the same, we can query dispatcher data and parse elf only once
+    fw_elf_path = dispatcher_data.get_core_data(locations[0], risc_name).firmware_path
+    fw_elf = parse_elf(fw_elf_path, context)
+
     for loc in locations:
         message = f"Device {device._id} at {loc.to_user_str()}\n"
         passed = True
@@ -75,10 +77,10 @@ def check_noc_status(device: Device, fw_elf_path: str, context: Context, risc_na
 
 
 def run(args, context: Context):
-    fw_elf_path = args["<elf-file>"]
     check_per_device = get_check_per_device(args, context)
+    dispatcher_data = get_dispatcher_data(args, context)
     check_per_device.run_check(
-        lambda device: check_noc_status(device, fw_elf_path, context, risc_name="brisc", noc_id=0)
+        lambda device: check_noc_status(device, dispatcher_data, context, risc_name="brisc", noc_id=0)
     )
 
 
