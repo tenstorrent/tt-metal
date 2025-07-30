@@ -193,10 +193,12 @@ class MLP1D(AbstractModule):
                 input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             ),
             "reduce_scatter": ReduceScatterConfig(
+                mesh_device=mesh_device,
                 dim=-1,  # We are scattering across the feature dimension (last one)
                 math_op=ttnn.ReduceType.Sum,
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cluster_axis=1,
             ),
             "input_memory_config": ttnn.DRAM_MEMORY_CONFIG,  # RMSNorm must provide this shard spec as its output
             "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
