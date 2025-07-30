@@ -77,12 +77,14 @@ class MLA1D(AbstractModule):
             "kv_a_proj_with_mqa": "wkv_a",
             "kv_b_proj": "wkv_b",
             "o_proj": "wo",
+            "q_a_layernorm": "q_norm",
+            "kv_a_layernorm": "kv_norm",
         }
 
         # wq_a
         hf_name = "q_a_proj"
         our_name = hf_ttnn_name_mapping[hf_name]
-        torch_weight = state_dict[f"{our_name}.weight"]
+        torch_weight = state_dict[f"{hf_name}.weight"]
         torch_weight = torch.transpose(torch_weight, -2, -1)
 
         wq_a_weight_config = MLA1D.convert_weight(
@@ -104,7 +106,7 @@ class MLA1D(AbstractModule):
         # wq_b
         hf_name = "q_b_proj"
         our_name = hf_ttnn_name_mapping[hf_name]
-        torch_weight = state_dict[f"{our_name}.weight"]
+        torch_weight = state_dict[f"{hf_name}.weight"]
         torch_weight = torch.transpose(torch_weight, -2, -1)
 
         wq_b_weight_config = MLA1D.convert_weight(
@@ -126,7 +128,7 @@ class MLA1D(AbstractModule):
         # wkv_a
         hf_name = "kv_a_proj_with_mqa"
         our_name = hf_ttnn_name_mapping[hf_name]
-        torch_weight = state_dict[f"{our_name}.weight"]
+        torch_weight = state_dict[f"{hf_name}.weight"]
         torch_weight = torch.transpose(torch_weight, -2, -1)
 
         wkv_a_weight_config = MLA1D.convert_weight(
@@ -148,7 +150,7 @@ class MLA1D(AbstractModule):
         # wkv_b1
         hf_name = "kv_b_proj"
         our_name = hf_ttnn_name_mapping[hf_name]
-        torch_weight = state_dict[f"{our_name}.weight"]
+        torch_weight = state_dict[f"{hf_name}.weight"]
 
         # This weight needs to be split
         torch_weight = torch_weight.view(kv_lora_rank, num_heads * (qk_nope_head_dim + v_head_dim))
@@ -194,7 +196,7 @@ class MLA1D(AbstractModule):
         # wo
         hf_name = "o_proj"
         our_name = hf_ttnn_name_mapping[hf_name]
-        torch_weight = state_dict[f"{our_name}.weight"]
+        torch_weight = state_dict[f"{hf_name}.weight"]
         torch_weight = torch.transpose(torch_weight, -2, -1)
 
         wo_weight_config = MLA1D.convert_weight(
@@ -214,8 +216,9 @@ class MLA1D(AbstractModule):
         )
 
         # Norm weights
-        our_name = "q_norm"
-        q_norm_state_dict = {"weight": state_dict[f"{our_name}.weight"]}
+        hf_name = "q_a_layernorm"
+        our_name = hf_ttnn_name_mapping[hf_name]
+        q_norm_state_dict = {"weight": state_dict[f"{hf_name}.weight"]}
         q_norm_weight_config = RMSNorm.convert_weights(
             hf_config,
             q_norm_state_dict,
@@ -223,8 +226,9 @@ class MLA1D(AbstractModule):
             mesh_device,
         )
 
-        our_name = "kv_norm"
-        kv_norm_state_dict = {"weight": state_dict[f"{our_name}.weight"]}
+        hf_name = "kv_a_layernorm"
+        our_name = hf_ttnn_name_mapping[hf_name]
+        kv_norm_state_dict = {"weight": state_dict[f"{hf_name}.weight"]}
         kv_norm_weight_config = RMSNorm.convert_weights(
             hf_config,
             kv_norm_state_dict,
