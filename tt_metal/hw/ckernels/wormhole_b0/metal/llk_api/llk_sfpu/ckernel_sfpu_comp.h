@@ -6,14 +6,12 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_int_sum.h"  // For existing conversion functions
+#include "ckernel_sfpu_int_sum.h"
 
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
-
-// Use existing sfpu_sign_mag_to_twos_comp() from ckernel_sfpu_int_sum.h
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp(uint exponent_size_8) {
