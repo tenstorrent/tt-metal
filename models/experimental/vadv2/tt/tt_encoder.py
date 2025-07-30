@@ -68,22 +68,26 @@ class TtBEVFormerEncoder:
     @staticmethod
     def get_reference_points_ttnn(H, W, Z=8, num_points_in_pillar=4, dim="3d", bs=1, device=None, dtype=ttnn.bfloat16):
         if dim == "3d":
-            # Z values (pillar height)
-            step_z = int(Z / num_points_in_pillar)
-            z_vals = torch.linspace(0.5, Z - 0.5, num_points_in_pillar)
-            z_vals = ttnn.from_torch(z_vals, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+            def _linspace_ttnn(start, end, steps):
+                idx = ttnn.arange(0, steps, dtype=ttnn.bfloat16, device=device)
+                step_size = (end - start) / (steps - 1)
+                return ttnn.add(ttnn.multiply(idx, step_size), start)
+
+            # Generate z-values
+            z_vals = _linspace_ttnn(0.5, Z - 0.5, num_points_in_pillar)
             z_vals = ttnn.reshape(z_vals, (num_points_in_pillar, 1, 1))
             z_vals = ttnn.expand(z_vals, (num_points_in_pillar, H, W))
             z_vals = ttnn.divide(z_vals, Z)
 
-            x_vals = torch.linspace(0.5, W - 0.5, W)
-            x_vals = ttnn.from_torch(x_vals, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+            # Generate x-values
+            x_vals = _linspace_ttnn(0.5, W - 0.5, W)
             x_vals = ttnn.reshape(x_vals, (1, 1, W))
             x_vals = ttnn.expand(x_vals, (num_points_in_pillar, H, W))
             x_vals = ttnn.divide(x_vals, W)
 
-            y_vals = torch.linspace(0.5, H - 0.5, H)
-            y_vals = ttnn.from_torch(y_vals, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+            # Generate y-values
+            y_vals = _linspace_ttnn(0.5, H - 0.5, H)
             y_vals = ttnn.reshape(y_vals, (1, H, 1))
             y_vals = ttnn.expand(y_vals, (num_points_in_pillar, H, W))
             y_vals = ttnn.divide(y_vals, H)
@@ -125,107 +129,80 @@ class TtBEVFormerEncoder:
 
             return ref
 
-    def point_sampling(self, reference_points, pc_range, img_metas):  # TODO Handle fp32
+    def point_sampling_ttnn(self, reference_points, pc_range, img_metas):
         lidar2img = []
         for img_meta in img_metas:
             lidar2img.append(img_meta["lidar2img"])
         lidar2img = np.asarray(lidar2img)
         reference_points = ttnn.to_torch(reference_points)
         lidar2img = reference_points.new_tensor(lidar2img)  # (B, N, 4, 4)
-        reference_points = reference_points.clone()
+        reference_points = ttnn.from_torch(
+            reference_points, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
+        )
+        lidar2img = ttnn.from_torch(lidar2img, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
+        ref = ttnn.clone(reference_points)
 
-        reference_points[..., 0:1] = reference_points[..., 0:1] * (pc_range[3] - pc_range[0]) + pc_range[0]
-        reference_points[..., 1:2] = reference_points[..., 1:2] * (pc_range[4] - pc_range[1]) + pc_range[1]
-        reference_points[..., 2:3] = reference_points[..., 2:3] * (pc_range[5] - pc_range[2]) + pc_range[2]
+        x, y, z = ttnn.split(ref, (1, 1, 1), dim=3)
 
-        reference_points = torch.cat((reference_points, torch.ones_like(reference_points[..., :1])), -1)
+        x = x * (pc_range[3] - pc_range[0]) + pc_range[0]
+        y = y * (pc_range[4] - pc_range[1]) + pc_range[1]
+        z = z * (pc_range[5] - pc_range[2]) + pc_range[2]
 
-        reference_points = reference_points.permute(1, 0, 2, 3)
-        D, B, num_query = reference_points.size()[:3]
-        num_cam = lidar2img.size(1)
-        reference_points = reference_points.view(D, B, 1, num_query, 4).repeat(1, 1, num_cam, 1, 1).unsqueeze(-1)
-        lidar2img = lidar2img.view(1, B, num_cam, 1, 4, 4).repeat(D, 1, 1, num_query, 1, 1)
-        reference_points_cam = torch.matmul(lidar2img.to(torch.float32), reference_points.to(torch.float32)).squeeze(-1)
+        reference_points = ttnn.concat((x, y, z), dim=-1)
+        ones = ttnn.ones_like(reference_points[..., :1])
+        reference_points = ttnn.concat((reference_points, ones), dim=-1)
+
+        reference_points = ttnn.permute(reference_points, (1, 0, 2, 3))  # [D, B, Q, 4]
+        D = reference_points.shape[0]
+        B = reference_points.shape[1]
+        num_query = reference_points.shape[2]
+        num_cam = lidar2img.shape[1]
+
+        reference_points = ttnn.unsqueeze(reference_points, 2)
+        reference_points = ttnn.repeat(reference_points, (1, 1, num_cam, 1, 1))
+        reference_points = ttnn.unsqueeze(reference_points, -1)
+
+        lidar2img = ttnn.unsqueeze(lidar2img, 0)
+        lidar2img = ttnn.unsqueeze(lidar2img, 3)
+        lidar2img = ttnn.repeat(lidar2img, (D, 1, 1, num_query, 1, 1))
+
+        reference_points_cam = ttnn.matmul(lidar2img, reference_points)
+        reference_points_cam = ttnn.squeeze(reference_points_cam, -1)
+
         eps = 1e-5
+        z = reference_points_cam[..., 2:3]
+        bev_mask = z > eps
 
-        bev_mask = reference_points_cam[..., 2:3] > eps
-        reference_points_cam = reference_points_cam[..., 0:2] / torch.maximum(
-            reference_points_cam[..., 2:3], torch.ones_like(reference_points_cam[..., 2:3]) * eps
+        reference_points_cam = ttnn.divide(
+            reference_points_cam[..., 0:2],
+            ttnn.maximum(reference_points_cam[..., 2:3], ttnn.ones_like(reference_points_cam[..., 2:3]) * eps),
         )
+        x = reference_points_cam[..., 0]
+        y = reference_points_cam[..., 1]
 
-        reference_points_cam[..., 0] /= img_metas[0]["img_shape"][0][1]
-        reference_points_cam[..., 1] /= img_metas[0]["img_shape"][0][0]
+        x = ttnn.divide(x, img_metas[0]["img_shape"][0][1])
+        y = ttnn.divide(y, img_metas[0]["img_shape"][0][0])
+        x = ttnn.unsqueeze(x, dim=-1)
+        y = ttnn.unsqueeze(y, dim=-1)
+        reference_points_cam = ttnn.concat([x, y], dim=-1)
 
-        bev_mask = (
-            bev_mask
-            & (reference_points_cam[..., 1:2] > 0.0)
-            & (reference_points_cam[..., 1:2] < 1.0)
-            & (reference_points_cam[..., 0:1] < 1.0)
-            & (reference_points_cam[..., 0:1] > 0.0)
-        )
-        # TODO handle
-        bev_mask = torch.nan_to_num(bev_mask)
-        reference_points_cam = reference_points_cam.permute(2, 1, 3, 0, 4)
-        bev_mask = bev_mask.permute(2, 1, 3, 0, 4).squeeze(-1)
+        a = reference_points_cam[..., 1:2]
+        b = reference_points_cam[..., 0:1]
+        y_gt_0 = ttnn.gt(a, 0.0)
+        y_lt_1 = ttnn.lt(a, 1.0)
+        x_gt_0 = ttnn.gt(b, 0.0)
+        x_lt_1 = ttnn.lt(b, 1.0)
+        bev_mask = ttnn.logical_and(bev_mask, y_gt_0)
+        bev_mask = ttnn.logical_and(bev_mask, y_lt_1)
+        bev_mask = ttnn.logical_and(bev_mask, x_gt_0)
+        bev_mask = ttnn.logical_and(bev_mask, x_lt_1)
+
+        bev_mask = ttnn.where(ttnn.isnan(bev_mask), ttnn.zeros_like(bev_mask), bev_mask)
+        reference_points_cam = ttnn.permute(reference_points_cam, [2, 1, 3, 0, 4])
+        bev_mask = ttnn.permute(bev_mask, [2, 1, 3, 0, 4])
+        bev_mask = ttnn.squeeze(bev_mask, dim=-1)
 
         return reference_points_cam, bev_mask
-
-    # def point_sampling_ttnn(self, reference_points, pc_range, img_metas):
-    # # lidar2img from metadata
-    #     lidar2img = []
-    #     for img_meta in img_metas:
-    #         lidar2img.append(img_meta["lidar2img"])
-    #     lidar2img = np.asarray(lidar2img)
-    #     reference_points = ttnn.to_torch(reference_points)
-    #     lidar2img = reference_points.new_tensor(lidar2img)  # (B, N, 4, 4)
-    #     reference_points = ttnn.from_torch(reference_points, dtype = ttnn.bfloat16, layout = ttnn.ROW_MAJOR_LAYOUT, device = self.device)
-    #     lidar2img = ttnn.from_torch(lidar2img, dtype = ttnn.bfloat16, layout = ttnn.ROW_MAJOR_LAYOUT, device = self.device)
-    #     ref = ttnn.clone(reference_points)
-    #     print(ref.shape)
-
-    #     # Denormalize to real-world space
-    #     x, y, z = ttnn.split(ref, (1,1,1), dim=3)
-
-    #     x = x * (pc_range[3] - pc_range[0]) + pc_range[0]
-    #     y = y * (pc_range[4] - pc_range[1]) + pc_range[1]
-    #     z = z * (pc_range[5] - pc_range[2]) + pc_range[2]
-
-    #     reference_points = ttnn.concat((x, y, z), dim=-1)
-    #     reference_points = ttnn.permute(reference_points, (1, 0, 2, 3))  # [D, B, Q, 4]
-
-    #     B = reference_points.shape[0]
-    #     D = reference_points.shape[1]
-    #     Q = reference_points.shape[2]
-    #     num_cam = lidar2img.shape[1]
-
-    #     reference_points = ttnn.unsqueeze(reference_points, 2)
-    #     reference_points = ttnn.repeat(reference_points,(1, 1, num_cam, 1, 1))
-
-    #     lidar2img = ttnn.unsqueeze(lidar2img,0)
-    #     lidar2img = ttnn.unsqueeze(lidar2img,3)
-    #     lidar2img = ttnn.repeat(lidar2img,(D, 1, 1, Q, 1, 1))
-
-    #     reference_points_cam = ttnn.matmul(lidar2img, reference_points)
-    #     reference_points_cam = ttnn.squeeze(reference_points_cam,-1)
-
-    #     eps = 1e-5
-    #     z = reference_points_cam[..., 2:3]
-    #     bev_mask = z > eps
-
-    #     xy = reference_points_cam[..., 0:2] / ttnn.maximum(z, eps)
-
-    #     img_h, img_w = img_metas[0]["img_shape"][0]
-    #     xy[..., 0] /= img_w
-    #     xy[..., 1] /= img_h
-
-    #     valid = (xy[..., 0:1] > 0.0) & (xy[..., 0:1] < 1.0) & (xy[..., 1:2] > 0.0) & (xy[..., 1:2] < 1.0)
-    #     bev_mask = bev_mask & valid
-    #     bev_mask = ttnn.nan_to_num(bev_mask)
-
-    #     xy = ttnn.permute(xy, (2, 1, 3, 0, 4))        # [cam, B, Q, D, 2]
-    #     bev_mask = ttnn.permute(bev_mask.squeeze(-1), (2, 1, 3, 0))  # [cam, B, Q, D]
-
-    #     return xy, bev_mask
 
     def __call__(
         self,
@@ -258,9 +235,7 @@ class TtBEVFormerEncoder:
 
         ref_2d = self.get_reference_points_ttnn(bev_h, bev_w, dim="2d", bs=bev_query.shape[1], device=self.device)
 
-        reference_points_cam, bev_mask = self.point_sampling(ref_3d, self.pc_range, kwargs["img_metas"])
-
-        bev_mask = ttnn.from_torch(bev_mask, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        reference_points_cam, bev_mask = self.point_sampling_ttnn(ref_3d, self.pc_range, kwargs["img_metas"])
 
         shift_ref_2d = ttnn.clone(ref_2d, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         shift = ttnn.reshape(shift, (shift.shape[0], 1, 1, shift.shape[1]))
@@ -281,7 +256,7 @@ class TtBEVFormerEncoder:
         ttnn.deallocate(ref_2d)
         ttnn.deallocate(shift)
         ttnn.deallocate(shift_ref_2d)
-
+        reference_points_cam = ttnn.to_torch(reference_points_cam)
         for lid, layer in enumerate(self.layers):
             output = layer(
                 bev_query,
