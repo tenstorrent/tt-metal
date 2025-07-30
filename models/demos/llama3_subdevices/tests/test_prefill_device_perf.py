@@ -158,7 +158,7 @@ def is_collective_op(op_code):
 
 @pytest.mark.models_device_performance_bare_metal
 # To update:
-# Run FAKE_DEVICE=TG pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py::test_llama_TG_perf_device
+# Run pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py::test_llama_TG_perf_device
 # Copy the printed kernel_duration_per_instance_averaged_dict and dispatch_duration_per_instance_averaged_dict dictionaries
 # Manually compare each entry between old-expected and the new average values
 # - Any perf regressions? Everything as expected?

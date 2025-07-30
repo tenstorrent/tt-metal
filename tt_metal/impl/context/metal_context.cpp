@@ -515,10 +515,10 @@ void MetalContext::initialize_control_plane() {
     std::string mesh_graph_descriptor;
     auto cluster_type = cluster_->get_cluster_type();
     switch (cluster_type) {
-        case tt::ClusterType::N150: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::N300: mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::T3K: mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::GALAXY:
+        case tt::tt_metal::ClusterType::N150: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
+        case tt::tt_metal::ClusterType::N300: mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml"; break;
+        case tt::tt_metal::ClusterType::T3K: mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml"; break;
+        case tt::tt_metal::ClusterType::GALAXY:
             if (tt::tt_fabric::get_fabric_type(this->fabric_config_, cluster_type) ==
                 tt::tt_fabric::FabricType::TORUS_XY) {
                 mesh_graph_descriptor = "single_galaxy_torus_xy_graph_descriptor.yaml";
@@ -526,15 +526,19 @@ void MetalContext::initialize_control_plane() {
                 mesh_graph_descriptor = "single_galaxy_mesh_graph_descriptor.yaml";
             }
             break;
-        case tt::ClusterType::TG: mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P100: mesh_graph_descriptor = "p100_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P150: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P150_X2: mesh_graph_descriptor = "p150_x2_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::P150_X4: mesh_graph_descriptor = "p150_x4_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::SIMULATOR_WORMHOLE_B0: mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::SIMULATOR_BLACKHOLE: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::N300_2x2: mesh_graph_descriptor = "n300_2x2_mesh_graph_descriptor.yaml"; break;
-        case tt::ClusterType::INVALID: TT_THROW("Unknown cluster type");
+        case tt::tt_metal::ClusterType::TG: mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml"; break;
+        case tt::tt_metal::ClusterType::P100: mesh_graph_descriptor = "p100_mesh_graph_descriptor.yaml"; break;
+        case tt::tt_metal::ClusterType::P150: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
+        case tt::tt_metal::ClusterType::P150_X2: mesh_graph_descriptor = "p150_x2_mesh_graph_descriptor.yaml"; break;
+        case tt::tt_metal::ClusterType::P150_X4: mesh_graph_descriptor = "p150_x4_mesh_graph_descriptor.yaml"; break;
+        case tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0:
+            mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml";
+            break;
+        case tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE:
+            mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml";
+            break;
+        case tt::tt_metal::ClusterType::N300_2x2: mesh_graph_descriptor = "n300_2x2_mesh_graph_descriptor.yaml"; break;
+        case tt::tt_metal::ClusterType::INVALID: TT_THROW("Unknown cluster type");
     }
     const std::filesystem::path mesh_graph_desc_path = std::filesystem::path(rtoptions_.get_root_dir()) /
                                                        "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
