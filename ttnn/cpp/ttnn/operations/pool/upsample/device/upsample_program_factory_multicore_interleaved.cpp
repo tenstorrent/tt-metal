@@ -178,18 +178,43 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, kernel_defines));
 
     // Compute kernel (only for tiled layout)
-    tt::tt_metal::KernelHandle compute_kernel_id = 0;
+    tt::tt_metal::KernelHandle compute_kernel_group1_id = 0;
+    tt::tt_metal::KernelHandle compute_kernel_group2_id = 0;
     if (is_tiled_layout) {
         const uint32_t num_input_tiles_in_row =
             input.padded_shape()[-1] / input.tensor_spec().tile().get_tile_shape()[1];
-        const std::vector<uint32_t> compute_compile_time_args = {
-            (uint32_t)num_input_tiles_in_row, (uint32_t)src0_cb_index, (uint32_t)output_cb_index};
 
-        compute_kernel_id = tt::tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/compute/untilize.cpp",
-            all_cores,
-            tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args});
+        // Create compute kernel for core group 1 if it has cores
+        if (core_group_1.num_cores() > 0) {
+            const std::vector<uint32_t> compute_compile_time_args_group1 = {
+                (uint32_t)work_per_core_group_1,   // per_core_block_cnt (compile-time)
+                (uint32_t)num_input_tiles_in_row,  // per_block_ntiles
+                (uint32_t)src0_cb_index,           // src_cb_id
+                (uint32_t)output_cb_index          // out_cb_id
+            };
+
+            compute_kernel_group1_id = tt::tt_metal::CreateKernel(
+                program,
+                "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp",
+                core_group_1,
+                tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args_group1});
+        }
+
+        // Create compute kernel for core group 2 if it has cores and different block count
+        if (core_group_2.num_cores() > 0 && work_per_core_group_2 != work_per_core_group_1) {
+            const std::vector<uint32_t> compute_compile_time_args_group2 = {
+                (uint32_t)work_per_core_group_2,   // per_core_block_cnt (compile-time)
+                (uint32_t)num_input_tiles_in_row,  // per_block_ntiles
+                (uint32_t)src0_cb_index,           // src_cb_id
+                (uint32_t)output_cb_index          // out_cb_id
+            };
+
+            compute_kernel_group2_id = tt::tt_metal::CreateKernel(
+                program,
+                "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp",
+                core_group_2,
+                tt::tt_metal::ComputeConfig{.compile_args = compute_compile_time_args_group2});
+        }
     }
 
     // Set up runtime arguments
@@ -204,11 +229,6 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
         0,  // set in loop, num of units on core
         0   // set in loop, start_id of unit on core
     };
-
-    std::vector<uint32_t> compute_rt_arguments;
-    if (is_tiled_layout) {
-        compute_rt_arguments = {0};  // set in loop, number of blocks per core
-    }
 
     /*
     For tiled input, a block refers to a row of input tiles
@@ -235,36 +255,30 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_arguments);
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_arguments);
 
-        if (is_tiled_layout) {
-            compute_rt_arguments[0] = blocks_per_core;
-            tt::tt_metal::SetRuntimeArgs(program, compute_kernel_id, core, compute_rt_arguments);
-        }
-
         blocks_processed += blocks_per_core;
     }
 
-    auto override_runtime_args_callback =
-        [unary_reader_kernel_id, unary_writer_kernel_id, compute_kernel_id, num_cores, num_cores_y, is_tiled_layout](
-            const void* operation,
-            tt::tt_metal::Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>&,
-            const std::vector<Tensor>& output_tensors) {
-            const auto src_buffer = input_tensors.at(0).buffer();
-            const auto dst_buffer = output_tensors.at(0).buffer();
+    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id, num_cores, num_cores_y](
+                                              const void* operation,
+                                              tt::tt_metal::Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        const auto src_buffer = input_tensors.at(0).buffer();
+        const auto dst_buffer = output_tensors.at(0).buffer();
 
-            for (uint32_t i = 0; i < num_cores; i++) {
-                const CoreCoord core = {i / num_cores_y, i % num_cores_y};
-                {
-                    auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, core);
-                    runtime_args[0] = src_buffer->address();
-                }
-                {
-                    auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
-                    runtime_args[0] = dst_buffer->address();
-                }
+        for (uint32_t i = 0; i < num_cores; i++) {
+            const CoreCoord core = {i / num_cores_y, i % num_cores_y};
+            {
+                auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, core);
+                runtime_args[0] = src_buffer->address();
             }
-        };
+            {
+                auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
+                runtime_args[0] = dst_buffer->address();
+            }
+        }
+    };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
