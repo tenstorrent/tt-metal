@@ -363,6 +363,10 @@ void RunTimeOptions::ParseInspectorEnv() {
         // Only fallback to TT_METAL_HOME if TT_METAL_HOME is set
         if (is_root_dir_env_var_set) {
             inspector_settings.log_path = std::filesystem::path(get_root_dir()) / "generated/inspector";
+        } else {
+            // Fallback to temporary directory if neither TT_METAL_INSPECTOR_LOG_PATH nor TT_METAL_HOME are set
+            // This is needed to avoid segfault
+            inspector_settings.log_path = std::filesystem::temp_directory_path() / "ttnn_inspector";
         }
     }
 
