@@ -201,6 +201,8 @@ def run(
         ceil_mode,
     ) = input_specs
     sharding = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+
+    torch_tensor_map = {}
     run_max_pool(
         [in_n, in_c, in_h, in_w],
         [kernel_h, kernel_w],
@@ -208,10 +210,12 @@ def run(
         [stride_h, stride_w],
         [dilation_h, dilation_w],
         device,
+        torch_tensor_map,
         dtype,
         shard_scheme=sharding,
         ceil_mode=ceil_mode,
         in_place=False,
+        nightly_skips=False,
     )
 
 
@@ -237,6 +241,8 @@ def test_max_pool2d_localrun(device, dtype, input_spec):
         dilation_w,
         ceil_mode,
     ) = input_spec
+
+    torch_tensor_map = {}
     run_max_pool(
         [in_n, in_c, in_h, in_w],
         [kernel_h, kernel_w],
@@ -244,10 +250,12 @@ def test_max_pool2d_localrun(device, dtype, input_spec):
         [stride_h, stride_w],
         [dilation_h, dilation_w],
         device,
+        torch_tensor_map,
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
         in_place=False,
+        nightly_skips=False,
     )
 
 
@@ -277,6 +285,8 @@ def test_max_pool2d_localrun(device, dtype, in_place, input_spec):
         pytest.skip(
             "this case runs out of memory on blackhole due to large remote temp CB, this is only an issue on blackhole since the larger number of cores results in a smaller nhe per core which results in more remote references and hence a larger remote temp CB"
         )
+
+    torch_tensor_map = {}
     run_max_pool(
         [in_n, in_c, in_h, in_w],
         [kernel_h, kernel_w],
@@ -284,10 +294,12 @@ def test_max_pool2d_localrun(device, dtype, in_place, input_spec):
         [stride_h, stride_w],
         [dilation_h, dilation_w],
         device,
+        torch_tensor_map,
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
         in_place=False,
+        nightly_skips=False,
     )
 
 
@@ -310,6 +322,8 @@ def test_run_max_pool(device, dtype, input_spec):
         dilation_w,
         ceil_mode,
     ) = input_spec
+
+    torch_tensor_map = {}
     run_max_pool(
         [in_n, in_c, in_h, in_w],
         [kernel_h, kernel_w],
@@ -317,10 +331,12 @@ def test_run_max_pool(device, dtype, input_spec):
         [stride_h, stride_w],
         [dilation_h, dilation_w],
         device,
+        torch_tensor_map,
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
         in_place=False,
+        nightly_skips=False,
     )
 
 
@@ -344,6 +360,8 @@ def test_run_max_pool_width_shard(device, dtype, in_place, input_spec):
         dilation_w,
         ceil_mode,
     ) = input_spec
+
+    torch_tensor_map = {}
     run_max_pool(
         [in_n, in_c, in_h, in_w],
         [kernel_h, kernel_w],
@@ -351,10 +369,12 @@ def test_run_max_pool_width_shard(device, dtype, in_place, input_spec):
         [stride_h, stride_w],
         [dilation_h, dilation_w],
         device,
+        torch_tensor_map,
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ceil_mode=ceil_mode,
         in_place=False,
+        nightly_skips=False,
     )
 
 
@@ -378,6 +398,8 @@ def test_run_max_pool_block_shard(device, dtype, in_place, input_spec):
         dilation_w,
         ceil_mode,
     ) = input_spec
+
+    torch_tensor_map = {}
     run_max_pool(
         [in_n, in_c, in_h, in_w],
         [kernel_h, kernel_w],
@@ -385,10 +407,12 @@ def test_run_max_pool_block_shard(device, dtype, in_place, input_spec):
         [stride_h, stride_w],
         [dilation_h, dilation_w],
         device,
+        torch_tensor_map,
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ceil_mode=ceil_mode,
         in_place=False,
+        nightly_skips=False,
     )
 
 
@@ -412,6 +436,8 @@ def test_run_max_pool_mem_config(device, dtype, input_spec, memory_config):
         dilation_w,
         ceil_mode,
     ) = input_spec
+
+    torch_tensor_map = {}
     run_max_pool(
         [in_n, in_c, in_h, in_w],
         [kernel_h, kernel_w],
@@ -419,9 +445,11 @@ def test_run_max_pool_mem_config(device, dtype, input_spec, memory_config):
         [stride_h, stride_w],
         [dilation_h, dilation_w],
         device,
+        torch_tensor_map,
         dtype,
         memory_config=memory_config,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
         in_place=False,
+        nightly_skips=False,
     )

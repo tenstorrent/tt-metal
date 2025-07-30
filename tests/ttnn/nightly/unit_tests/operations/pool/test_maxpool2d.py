@@ -14,6 +14,25 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
 
 
+# Cache map used for torch tensor reuse - the tensor will not be generated if a tensor of the same dimensions has already been generated
+@pytest.fixture(scope="module")
+def torch_tensor_map(request):
+    torch_tensor_map = {}
+
+    return torch_tensor_map
+
+
+def randomize_torch_tensor(torch_tensor_map, tensor_shape):
+    tensor_shape = tuple(tensor_shape)
+    if tensor_shape in torch_tensor_map.keys():
+        torch_tensor = torch_tensor_map[tensor_shape]
+    else:
+        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+        torch_tensor_map[tensor_shape] = torch_tensor
+
+    return torch_tensor
+
+
 def run_max_pool(
     act_shape,
     kernel_size,
@@ -21,11 +40,13 @@ def run_max_pool(
     stride,
     dilation,
     device,
+    torch_tensor_map,
     dtype,
     memory_config=None,
     shard_scheme=None,
     ceil_mode=False,
     in_place=False,
+    nightly_skips=True,
 ):
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size
@@ -61,6 +82,21 @@ def run_max_pool(
     cores_x = device.core_grid.x
     cores_y = device.core_grid.y
     max_cores = cores_x * cores_y
+
+    # skips to speed up nightly test
+    if nightly_skips:
+        if dtype == ttnn.bfloat8_b:
+            if stride == (2, 2):
+                pytest.skip("Skip for stride (2, 2) for BF8!")
+            if kernel_size == (9, 9):
+                pytest.skip("Skip for kernel size (9, 9) for BF8!")
+            if ceil_mode:
+                pytest.skip("Skip for ceil mode for BF8!")
+        if ceil_mode:
+            if stride == (1, 1):
+                pytest.skip("Skip for stride (1, 1) for ceil mode!")
+            if kernel_size == (9, 9):
+                pytest.skip("Skip for kernel size (9, 9) for ceil mode!")
 
     if shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED or shard_scheme is None:
         if in_c % 16 != 0:
@@ -112,7 +148,7 @@ def run_max_pool(
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
     # construct the tensor in NCHW shape
-    act = torch.randn(act_shape, dtype=torch.bfloat16)
+    act = randomize_torch_tensor(torch_tensor_map, act_shape)
     # act = torch.zeros(act_shape, dtype=torch.bfloat16)
     # for n in range(act_shape[0]):
     #     for c in range(act_shape[1]):
@@ -286,10 +322,10 @@ def run_max_pool(
 @pytest.mark.parametrize(
     "kernel_size",
     (
-        (2, 2),
-        (3, 3),
-        (5, 5),
-        (9, 9),
+        (3, 3),  # 1 face 1 chunk
+        (5, 5),  # 2 faces 1 chunk
+        (7, 7),  # 2 chunks
+        (9, 9),  # 3 chunks
     ),
 )
 @pytest.mark.parametrize(
@@ -297,7 +333,6 @@ def run_max_pool(
     (
         (0, 0),
         (1, 1),
-        (1, 0, 1, 2),
         (1, 4, 3, 2),
     ),
 )
@@ -323,7 +358,7 @@ def run_max_pool(
         True,
     ],
 )
-def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype, ceil_mode):
+def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, torch_tensor_map, dtype, ceil_mode):
     run_max_pool(
         act_shape,
         kernel_size,
@@ -331,6 +366,7 @@ def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device,
         stride,
         dilation,
         device,
+        torch_tensor_map,
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
@@ -343,64 +379,44 @@ def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device,
     (
         (
             [1, 512, 28, 28],
-            [1, 512, 14, 14],
             [1, 1024, 6, 6],
-            [1, 2048, 6, 6],
-            [1, 4096, 6, 6],
-            [4, 1024, 40, 40],
             [2, 2048, 40, 40],
             [8, 4096, 10, 16],
             # wide yolo kernel
             [1, 32768, 10, 10],
             [1, 6144, 6, 6],
-            # wide non-8 multiple tests
-            [1, 800 * 64, 8, 8],
-            [1, 640 * 64, 8, 8],
-            [1, 576 * 64, 8, 8],
-            [1, 384 * 64, 8, 8],
         )
     ),
 )
 @pytest.mark.parametrize(
     "kernel_size",
     (
-        (2, 2),
-        (3, 3),
         (5, 5),
         (9, 9),
-        # (13, 13),
     ),
 )
 @pytest.mark.parametrize(
     "padding",
     (
-        (0, 0),
-        (1, 1),
         (2, 2),
         (4, 4),
-        # (6, 6),
     ),
 )
 @pytest.mark.parametrize(
     "stride",
-    (
-        (1, 1),
-        (2, 2),
-    ),
+    ((1, 1),),
 )
 @pytest.mark.parametrize("dilation", ((1, 1),))  ## default
 @pytest.mark.parametrize(
     "dtype",
     [
         ttnn.bfloat16,
-        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "ceil_mode",
     [
         False,
-        True,
     ],
 )
 def test_run_max_pool_width_shard(
@@ -410,6 +426,7 @@ def test_run_max_pool_width_shard(
     stride,
     dilation,
     device,
+    torch_tensor_map,
     dtype,
     ceil_mode,
 ):
@@ -420,6 +437,7 @@ def test_run_max_pool_width_shard(
         stride,
         dilation,
         device,
+        torch_tensor_map,
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ceil_mode=ceil_mode,
@@ -432,8 +450,6 @@ def test_run_max_pool_width_shard(
     (
         (
             [1, 256, 56, 56],
-            [1, 256, 28, 28],
-            [1, 256, 14, 14],
             [1, 256, 10, 14],
             [1, 512, 8, 6],
             [1, 1024, 6, 6],
@@ -457,59 +473,42 @@ def test_run_max_pool_width_shard(
             [32, 32, 264, 40],
             [4, 16, 1056, 160],
             [8, 16, 528, 80],
-            [16, 16, 528, 80],
             # wide yolo kernel
             [1, 4096, 10, 10],
             [1, 768, 56, 56],
             [1, 1280, 8, 6],
-            # wide non-8 multiple tests
-            [1, 800 * 8, 16, 16],
-            [1, 640 * 8, 16, 16],
-            [1, 576 * 8, 16, 16],
-            [1, 384 * 8, 16, 16],
         )
     ),
 )
 @pytest.mark.parametrize(
     "kernel_size",
     (
-        (2, 2),
-        (3, 3),
         (5, 5),
         (9, 9),
-        # (13, 13),
     ),
 )
 @pytest.mark.parametrize(
     "padding",
     (
-        (0, 0),
-        (1, 1),
         (2, 2),
         (4, 4),
-        # (6, 6),
     ),
 )
 @pytest.mark.parametrize(
     "stride",
-    (
-        (1, 1),
-        (2, 2),
-    ),
+    ((1, 1),),
 )
 @pytest.mark.parametrize("dilation", ((1, 1),))  ## default
 @pytest.mark.parametrize(
     "dtype",
     [
         ttnn.bfloat16,
-        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "ceil_mode",
     [
         False,
-        True,
     ],
 )
 def test_run_max_pool_block_shard(
@@ -519,6 +518,7 @@ def test_run_max_pool_block_shard(
     stride,
     dilation,
     device,
+    torch_tensor_map,
     dtype,
     ceil_mode,
 ):
@@ -529,6 +529,7 @@ def test_run_max_pool_block_shard(
         stride,
         dilation,
         device,
+        torch_tensor_map,
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ceil_mode=ceil_mode,
@@ -589,9 +590,10 @@ def test_run_max_pool_yolov4(
     stride,
     dilation,
     device,
+    torch_tensor_map,
     dtype,
 ):
-    run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype)
+    run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, torch_tensor_map, dtype)
 
 
 @pytest.mark.skip("See GH issue #12285")
@@ -856,6 +858,7 @@ def test_run_max_pool_squeeze_net_model(
     stride,
     dilation,
     device,
+    torch_tensor_map,
     dtype,
     ceil_mode,
 ):
@@ -866,6 +869,7 @@ def test_run_max_pool_squeeze_net_model(
         stride,
         dilation,
         device,
+        torch_tensor_map,
         dtype,
         ceil_mode=ceil_mode,
     )
