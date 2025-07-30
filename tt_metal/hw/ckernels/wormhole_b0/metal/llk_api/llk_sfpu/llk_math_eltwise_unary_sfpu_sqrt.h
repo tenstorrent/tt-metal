@@ -12,10 +12,10 @@ namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE>
+template <bool APPROXIMATE, bool fp32_dest_acc_en>
 inline void llk_math_eltwise_unary_sfpu_sqrt(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_sqrt<APPROXIMATE>, dst_index, vector_mode);
+        ckernel::sfpu::calculate_sqrt<APPROXIMATE, fp32_dest_acc_en>, dst_index, vector_mode);
 }
 
 template <bool APPROXIMATE>

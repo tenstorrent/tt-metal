@@ -12,9 +12,9 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool layernorm_compat>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool fp32_dest_acc_en, bool layernorm_compat>
 inline void calculate_rsqrt() {
-    _calculate_rsqrt_<APPROXIMATION_MODE, ITERATIONS, layernorm_compat>(ITERATIONS);
+    _calculate_rsqrt_<APPROXIMATION_MODE, ITERATIONS, fp32_dest_acc_en, layernorm_compat>(ITERATIONS);
 }
 
 template <bool APPROXIMATION_MODE, bool layernorm_compat>

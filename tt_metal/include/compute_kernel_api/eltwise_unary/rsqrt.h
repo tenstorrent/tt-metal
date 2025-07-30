@@ -39,7 +39,7 @@ ALWI void rsqrt_tile_init() {
 // clang-format on
 template <bool layernorm_compat = false>
 ALWI void rsqrt_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_rsqrt<APPROX, layernorm_compat>(idst)));
+    MATH((llk_math_eltwise_unary_sfpu_rsqrt<APPROX, DST_ACCUM_MODE, layernorm_compat>(idst)));
 }
 
 }  // namespace ckernel
