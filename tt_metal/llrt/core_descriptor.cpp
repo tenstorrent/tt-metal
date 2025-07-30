@@ -33,15 +33,7 @@ namespace tt {
 inline std::string get_core_descriptor_file(
     const tt::ARCH& arch, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
-    std::string core_desc_dir;
-    if (getenv("TT_METAL_HOME")) {
-        core_desc_dir = getenv("TT_METAL_HOME");
-    } else {
-        core_desc_dir = "./";
-    }
-    if (core_desc_dir.back() != '/') {
-        core_desc_dir += "/";
-    }
+    std::string core_desc_dir = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir();
     core_desc_dir += "tt_metal/core_descriptors/";
 
     bool use_small_core_desc_yaml = false; // override to a different core descriptor for small RTL sims

@@ -58,15 +58,7 @@ namespace {
 inline std::string get_soc_description_file(
     const tt::ARCH& arch, tt::TargetDevice target_device, [[maybe_unused]] const std::string& output_dir = "") {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
-    std::string path;
-    if (auto* home = getenv("TT_METAL_HOME")) {
-        path = home;
-    } else {
-        path = "./";
-    }
-    if (path.back() != '/') {
-        path.push_back('/');
-    }
+    std::string path = tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir();
     path += "tt_metal/soc_descriptors/";
     bool is_sim = target_device == tt::TargetDevice::Simulator;
     const char* file = nullptr;
