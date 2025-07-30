@@ -13,6 +13,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
 
@@ -997,12 +998,11 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
             all_cores,
             WriterDataMovementConfig(writer_ct_args));
     } else {
-        bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
         std::vector<uint32_t> writer_ct_args = {
-            (uint32_t)out_is_dram,
             (uint32_t)(input_cb_data_format == tt::DataFormat::Float32 or
-                       input_cb_data_format == tt::DataFormat::UInt32 or
-                       input_cb_data_format == tt::DataFormat::Int32)};
+                       input_cb_data_format == tt::DataFormat::UInt32 or input_cb_data_format == tt::DataFormat::Int32),
+            output_row_size};
+        TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
         unary_writer_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp",
@@ -1133,7 +1133,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
                 std::uint32_t{1},
                 std::uint32_t{1},
                 std::uint32_t{1},
-                output_row_size,
                 row_size_unpadded,
                 num_rows_unpadded,
                 block_start_row_id_offset,
