@@ -1114,8 +1114,10 @@ void DeviceProfiler::readRiscProfilerResults(
                     riscNumRead = data_buffer.at(index) & 0x7;
                     coreFlatIDRead = (data_buffer.at(index) >> 3) & 0xFF;
                     runHostCounterRead = data_buffer.at(index + 1);
+                    auto [base_program_id, _device_id, is_host_fallback_op] =
+                        tt::tt_metal::detail::DecodePerDeviceProgramID(runHostCounterRead);
 
-                    opname = getOpNameIfAvailable(device_id, runHostCounterRead);
+                    opname = getOpNameIfAvailable(device_id, base_program_id);
 
                 } else {
                     uint32_t timer_id = (data_buffer.at(index) >> 12) & 0x7FFFF;
@@ -1499,7 +1501,7 @@ void DeviceProfiler::processResults(
         readRiscProfilerResults(device, virtual_core, data_source, metadata);
     }
 
-    if (rtoptions.get_profiler_noc_events_enabled() && state == ProfilerDumpState::NORMAL) {
+    if (rtoptions.get_profiler_noc_events_enabled() && (state == ProfilerDumpState::NORMAL || state == ProfilerDumpState::LAST_FD_DUMP)) {
         const nlohmann::ordered_json noc_trace_json_log = convertNocTracePacketsToJson(
             device_data_points.begin() + num_device_data_points_before_reading, device_data_points.end());
         FabricRoutingLookup routing_lookup(device);
