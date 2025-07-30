@@ -134,8 +134,50 @@ tests:
   60:
     name: "All to All Packet Sizes"
 
+  61:
+    name: "DRAM Interleaved Page Numbers"
+
+  62:
+    name: "DRAM Interleaved Page Core Locations"
+
+  63:
+    name: "DRAM Interleaved Page Read Numbers"
+
+  64:
+    name: "DRAM Interleaved Page Write Numbers"
+
+  65:
+    name: "DRAM Interleaved Page Directed Ideal"
+
+  66:
+    name: "L1 Interleaved Page Numbers"
+
+  67:
+    name: "L1 Interleaved Page Core Locations"
+
+  68:
+    name: "L1 Interleaved Page Read Numbers"
+
+  69:
+    name: "L1 Interleaved Page Write Numbers"
+
   70:
     name: "All from All Packet Sizes"
+
+  71:
+    name: "L1 Interleaved Page Directed Ideal"
+
+  72:
+    name: "DRAM Interleaved Page Read Noc Swap"
+
+  73:
+    name: "DRAM Interleaved Page Write Noc Swap"
+
+  74:
+    name: "L1 Interleaved Page Read Noc Swap"
+
+  75:
+    name: "L1 Interleaved Page Write Noc Swap"
 
   100:
     name: "Multicast Schemes (Loopback Enabled)"
