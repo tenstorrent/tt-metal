@@ -151,7 +151,6 @@ jobs:
       tracy: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
       build-wheel: true
       version: 22.04
-      ref: ${{ inputs.commit || github.sha }}
   tg-quick:
     if: ${{ needs.determine-tests.outputs.run-quick == 'true' }}
     needs: [build-artifact, determine-tests]

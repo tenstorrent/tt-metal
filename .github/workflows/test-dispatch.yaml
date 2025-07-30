@@ -71,6 +71,7 @@ jobs:
       tracy: ${{ inputs.tracy }}
       version: ${{ inputs.version }}
       build-wheel: true
+      ref: ${{ inputs.commit || github.sha }}
   test-dispatch:
     # needs: setup
     needs: build-artifact
