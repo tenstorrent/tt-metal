@@ -8,7 +8,6 @@ This version of LLama-3.3-70B is tuned for inference performance, achieving comp
 
 Read more about this model at the huggingface page for [Llama-3.3-70B-Instruct](https://huggingface.co/meta-llama/Llama-3.3-70B-Instruct).
 
-
 ### Key Features
 - **Paged Attention**: Efficient memory management for long-context inference
 - **Batch Inference**: Supports up to 32 users per batch
@@ -95,7 +94,6 @@ It supports the following parameters:
 - **start_pos (int)**: Start position for decoding
 - **optimizations (str)**: Optimization level (performance, accuracy)
 
-
 #### Mixing topologies in prefill ccl ops [Debug-Only]
 Please note that using line topology on a galaxy system might affect model accuracy. This functionality is for debug purposes only!
 
@@ -111,7 +109,6 @@ To use line for only some of the AG ops, you can set USE_LINE_AG set in `llama_c
 - USE_LINE_AG = {"QKV"}
 
 Please note that when using line CCL implementations the maximum sequence length we have validated is 16K tokens. This should just be used for debugging purposes!
-
 
 ## Details
 ### Demo parameters
@@ -166,7 +163,6 @@ Ensure first you have a proper TT-Metal installation. (Optional check: `python -
 vLLM can be install from the TT fork over at https://github.com/tenstorrent/vllm/tree/dev (make sure you're at `dev` branch).
 
 Please follow the [README from vLLM](https://github.com/tenstorrent/vllm/blob/dev/tt_metal/README.md) for the latest instructions on how to build vLLM.
-
 
 #### Running the vLLM server
 To run a vLLM server on a Galaxy system with Llama-3.3-70B you can execute the following command:
