@@ -476,7 +476,7 @@ jobs:
           PR_NUMBER="${{ inputs.recheck_tests == true && needs.recheck-tests.outputs.pr-number || needs.update-submodule.outputs.pr-number }}"
 
           # Mark as ready if needed
-          if [ "${{ inputs.draft == 'true' || github.event_name == 'repository_dispatch' }}" = "true" ]; then
+          if [ "${{ inputs.draft }}" = "true" ] || [ "${{ github.event_name }}" = "repository_dispatch" ]; then
             echo "Marking PR as ready for review"
             if gh pr ready "$PR_NUMBER" --repo "${{ github.repository }}" 2>/dev/null; then
               echo "ℹ️ PR converted to ready-for-review"
