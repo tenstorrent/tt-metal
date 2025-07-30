@@ -231,7 +231,6 @@ if(TT_INSTALL)
             reflect
             magic_enum
             TracyClient
-            span
             small_vector
             tt-logger
         EXPORT Metalium

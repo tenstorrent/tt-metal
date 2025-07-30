@@ -15,8 +15,6 @@
     - [4.1 Interleaved](#41-interleaved)
       - [4.1.1 User Interface](#411-user-interface)
     - [4.2 Sharding](#42-sharding)
-      - [4.2.1 User Interface](#421-user-interface)
-      - [4.2.2 Other Sharding Parameters And Notes](#422-other-sharding-parameters-and-notes)
 
 ## 1. Introduction
 Tensors are stored in a 2D memory space known as a `buffer`. An N-dimensional tensor is represented as a 2D memory object by combining the outer dimensions into a single dimension while keeping the inner dimension as the second dimension. For example, a tensor with dimensions `[1x4x6x8]` will be represented in memory as a `[24x8]` tensor, where 1x4x6 is squeezed into 24. At the most granular level, a block of memory representing a portion of the tensor is referred to as a page.
@@ -117,44 +115,4 @@ a = ttnn.to_device(a, device, memory_config=ttnn.L1_MEMORY_CONFIG)
 
 
 ### 4.2 Sharding
-
-A sharded tensor physically distributes the tensor across the L1 memories of multiple cores in a core grid according to a user-specified distribution, known as a shard specification. The tensor is divided into partitions called shards, with each shard placed in the L1 memory of a specific core.
-
-Unlike interleaved tensors, where pages are distributed across all available L1 banks on the device without explicit mapping, sharding explicitly assigns each shard to specific cores.
-
-
-This can be illustrated with an example. Consider a tensor with 16 pages, denoted P0 to P15. The left side of the figure shows how the tiled tensor appears in host memory. When the tensor is sharded, each shard is written into the L1 memory of a core.
-
-In the example illustrated in *Figure 4*, Core (0,0) holds pages 0, 1, 4, and 5, while Core (0,1) holds pages 8, 9, 12, and 13. This distribution is defined by a shard specification that includes the shard shape (in this case, 2x2 pages) and the core grid where the shards are placed (a 2x2 core grid).
-
-<img src="images/sharded_page_mapping_2.svg" style="width:1000px;"/>
-
-*Figure 5: Mapping of a sharded tensor onto a core-grid.*
-
-
-The main purpose of sharding is to keep data local. While an interleaved L1 tensor can also be distributed across banks in multiple cores, sharding offers a more explicit mapping of pages. This allows us to ensure that each core works on a specific portion of memory that is kept local within its respective L1 memory.
-
-#### 4.2.1 User Interface
-The sharded tensor requires more detailed memory config with the shard shape, core grid, shard strategy.
-
-The following is example code to specify the above example:
-```
-torch_a = torch.randn((64, 64), dtype=torch.bfloat16)
-a = ttnn.from_torch(torch_a)
-sharded_memory_config = ttnn.create_sharded_memory_config(
-            32x32, core_grid=ttnn.CoreGrid(y=2, x=2), strategy=ttnn.ShardStrategy.BLOCK, use_height_and_width_as_shard_shape=True
-        )
-a = ttnn.to_device(a, device, memory_config=sharded_memory_config)
-```
-
-#### 4.2.2 Other Sharding Parameters And Notes
-Other sharding parameters include:
-
-- **Sharding Strategy**: Describes how the tensor is split when distributed across the core grid. The available methods are:
-  - `HEIGHT`: Each shard represents entire rows of the tensor (i.e., the shard width is equivalent to the tensor width).
-  - `WIDTH`: Each shard represents entire columns of the tensor.
-  - `BLOCK`: Each shard is neither an entire row nor an entire column, similar to the example above.
-
-- **Shard Orientation**: Describes the order in which shards are distributed to the cores in the core grid. This can be either `ROW-MAJOR` or `COLUMN-MAJOR`.
-
-- For tensors with a `Row-Major` layout, each page typically represents a single row of the tensor. However, for sharded tensors, the width of each page matches the width of the shard. For tiled tensors, the page shape remains the same as the tile shape (e.g., 32x32).
+Tensor sharding is a technique that allows you to customize how tensor data is distributed across memory banks by dividing it into smaller pieces called shards. This approach improves performance by enhancing data locality and reducing communication overhead. It is fully described [here](../tensor_sharding/tensor_sharding.md).

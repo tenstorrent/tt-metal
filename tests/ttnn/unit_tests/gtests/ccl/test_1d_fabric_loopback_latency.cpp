@@ -41,7 +41,6 @@ inline void RunPersistent1dFabricLatencyTest(
     bool use_device_init_fabric = std::is_same_v<DEVICE_FIXTURE_T, Fabric1DRingDeviceInitFixture>;
     size_t num_links = 1;
 
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     bool is_6u = num_devices == 32 && tt::tt_metal::GetNumPCIeDevices() == num_devices;
     if (num_devices < line_size && !is_6u) {
@@ -108,7 +107,6 @@ inline void RunPersistent1dFabricLatencyTest(
 
     // Temporary until we move this to be under tt_metal and migrate to device init fabric
     // OR packet header management is removed from user space, whichever comes first
-    static constexpr uint32_t source_payload_cb_index = tt::CB::c_in0;
     std::vector<size_t> dest_buffer_addresses(writer_specs.size(), 0);
 
     for (size_t i = 0; i < writer_specs.size(); i++) {
@@ -137,7 +135,6 @@ inline void RunPersistent1dFabricLatencyTest(
             TT_FATAL(address != 0, "address uninitialized");
         }
     }
-    static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
     // Get the inner 4 device ring on a WH T3K device so that we can use both links for all devices
 
     // build the mesh device
@@ -277,7 +274,6 @@ inline void RunPersistent1dFabricLatencyTest(
                 ? "tests/ttnn/unit_tests/gtests/ccl/kernels/1D_fabric_loopback_latency_test_writer.cpp"
                 : "tests/ttnn/unit_tests/gtests/ccl/kernels/1D_fabric_latency_datapath_congestion_writer.cpp";
         if (is_latency_packet_sender) {
-            const auto& packet_spec = std::get<LatencyPacketTestWriterSpec>(writer_specs[i]->spec);
             bool payloads_are_mcast = false;
             bool sem_inc_only = writer_specs.at(i)->message_size_bytes == 0;
             worker_ct_args = {!sem_inc_only && enable_fused_payload_with_sync, payloads_are_mcast, sem_inc_only};
@@ -455,7 +451,6 @@ inline void RunPersistent1dFabricLatencyTest(
     }
     for (size_t i = 0; i < programs.size(); i++) {
         auto d = devices_with_workers.at(i);
-        auto& program = programs.at(i);
         tt_metal::detail::DumpDeviceProfileResults(d);
     }
     log_info(tt::LogTest, "Finished");

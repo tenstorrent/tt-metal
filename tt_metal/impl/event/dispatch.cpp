@@ -4,7 +4,7 @@
 
 #include "tt_metal/impl/event/dispatch.hpp"
 
-#include <boost/core/span.hpp>
+#include <tt_stl/span.hpp>
 #include <tt_align.hpp>
 #include <utility>
 #include <vector>
