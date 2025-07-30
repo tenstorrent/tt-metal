@@ -12,16 +12,12 @@ from ttnn.model_preprocessing import infer_ttnn_module_args, preprocess_model_pa
 import ttnn
 from models.demos.yolov6l.reference.yolov6l import Model
 from models.demos.yolov6l.reference.yolov6l_utils import fuse_model
+from models.demos.yolov6l.tt.common import get_mesh_mappers
 
 sys.path.append("models/demos/yolov6l/reference/")
 
 
-def generate_anchors(
-    device,
-    feats,
-    fpn_strides,
-    grid_cell_offset=0.5,
-):
+def generate_anchors(device, feats, fpn_strides, grid_cell_offset=0.5, weights_mesh_mapper=None):
     anchor_points = []
     stride_tensor = []
     assert feats is not None
@@ -38,35 +34,40 @@ def generate_anchors(
     anchor_points = torch.cat(anchor_points)
     stride_tensor = torch.cat(stride_tensor)
     return (
-        ttnn.from_torch(anchor_points, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
-        ttnn.from_torch(stride_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+        ttnn.from_torch(
+            anchor_points, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=weights_mesh_mapper
+        ),
+        ttnn.from_torch(
+            stride_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=weights_mesh_mapper
+        ),
     )
 
 
-def custom_preprocessor(model, name):
+def custom_preprocessor(model, name, weights_mesh_mapper=None):
     parameters = {}
 
     if isinstance(model, nn.Conv2d):
-        parameters["weight"] = ttnn.from_torch(model.weight, dtype=ttnn.float32)
+        parameters["weight"] = ttnn.from_torch(model.weight, dtype=ttnn.float32, mesh_mapper=weights_mesh_mapper)
         if model.bias is not None:
             bias = model.bias.reshape((1, 1, 1, -1))
-            parameters["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+            parameters["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=weights_mesh_mapper)
 
     if isinstance(model, nn.ConvTranspose2d):
         weight = model.weight
         bias = model.bias
         parameters["conv_t"] = {}
-        parameters["conv_t"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["conv_t"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32, mesh_mapper=weights_mesh_mapper)
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["conv_t"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["conv_t"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=weights_mesh_mapper)
 
     return parameters
 
 
 def create_yolov6l_model_parameters(model: Model, torch_input: torch.Tensor, device):
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        custom_preprocessor=custom_preprocessor,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=device,
     )
 
@@ -78,10 +79,12 @@ def create_yolov6l_model_parameters(model: Model, torch_input: torch.Tensor, dev
 
     feats = [(80, 80), (40, 40), (20, 20)]
     strides = torch.tensor([8.0, 16.0, 32.0])
-    anchor_points, stride_tensor = generate_anchors(device, feats, strides)
+    anchor_points, stride_tensor = generate_anchors(device, feats, strides, weights_mesh_mapper=weights_mesh_mapper)
 
     ones_tensor = torch.ones((1, 8400, 1), dtype=torch.float32)
-    ones_tensor = ttnn.from_torch(ones_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ones_tensor = ttnn.from_torch(
+        ones_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, mesh_mapper=weights_mesh_mapper
+    )
     if "detect" in parameters:
         parameters.detect["anchors"] = anchor_points
         parameters.detect["strides"] = stride_tensor
@@ -174,12 +177,8 @@ def create_yolov6l_model_parameters_sppf(model: Model, torch_input: torch.Tensor
     return parameters
 
 
-def load_torch_model_yolov6l():
-    weights = "tests/ttnn/integration_tests/yolov6l/yolov6l.pt"
-    if not os.path.exists(weights):
-        os.system("bash models/demos/yolov6l/weights_download.sh")
+def create_custom_mesh_preprocessor(mesh_mapper=None):
+    def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
+        return custom_preprocessor(model, name, mesh_mapper)
 
-    ckpt = torch.load(weights, map_location=torch.device("cpu"), weights_only=False)
-    model = ckpt["ema" if ckpt.get("ema") else "model"].float()
-    model = fuse_model(model).eval()
-    return model
+    return custom_mesh_preprocessor
