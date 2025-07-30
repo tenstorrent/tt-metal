@@ -91,6 +91,7 @@ def run_avg_pool2d(
     shard_scheme,
     run_twice=False,
     dtype=ttnn.bfloat16,
+    nightly_skips=True,
 ):
     # handle both 2D and 4D padding
     padding_is_4d = False
@@ -106,6 +107,27 @@ def run_avg_pool2d(
         pad_w = pad_l + pad_r
     else:
         raise ValueError(f"Padding must be 2D or 4D tuple, got {len(padding)}D")
+
+    # skips to avoid unimportant combinations
+    if divisor_override is not None:
+        if count_include_pad or ceil_mode:
+            pytest.skip("divisor_override paired with count_include_pad or ceil_mode is trivial and not useful to test")
+    if count_include_pad and padding == (0, 0):
+        pytest.skip("count_include_pad paired with no padding is trivial and not useful to test")
+    if ceil_mode:
+        if stride == (1, 1):
+            pytest.skip("ceiling mode with stride (1, 1) is trivial and not useful to test")
+
+    # skips to speed up nightly test
+    if nightly_skips:
+        if dtype == ttnn.bfloat8_b:
+            if stride == (2, 2) or padding == (1, 1):
+                pytest.skip("Skip for stride (2, 2) and padding (1, 1) for BF8!")
+            if kernel_size == (9, 9):
+                pytest.skip("Skip for kernel size (9, 9) for BF8!")
+        if ceil_mode:
+            if kernel_size == (3, 3) or kernel_size == (9, 9):
+                pytest.skip("Skip for kernel size (3, 3) and (9, 9) for ceil mode!")
 
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
@@ -222,30 +244,26 @@ def run_avg_pool2d(
 @pytest.mark.parametrize(
     "input_shape",  # NCHW
     (
-        # Normal reduction cases are when channels <= 8 * 32 and kernel_hw <= 16
-        # Wide reduction cases channels > 8 * 32
-        # Large reduction cases (channels < 32 and kernel_hw > 16) or (channels > 32 and kernel_hw > 32)
-        [1, 32, 16, 16],
-        [1, 512, 112, 32],
-        [1, 512, 16, 16],
-        [1, 800, 16, 16],
-        [2, 32, 16, 16],
-        [2, 512, 112, 32],
-        [2, 512, 16, 16],
-        [2, 800, 16, 16],
+        # model shapes
+        [1, 64, 112, 112],
+        [8, 32, 132, 20],
+        [1, 256, 56, 56],
+        [1, 512, 28, 28],
+        [1, 192, 264, 40],
+        # wide non-4 multiple tests
+        [1, 800, 32, 32],
+        [1, 576, 32, 32],
+        # C=16 test
+        [1, 16, 12, 12],
     ),
 )
 @pytest.mark.parametrize(
     "kernel_size",
     (
-        # Wide and normal reductions go to normal kernels
-        # Large reductions go to large kernels
-        # Reductions which are large and wide at the same time
-        # go to large kernels
-        (2, 2),
-        (3, 3),
-        (5, 5),
-        (9, 9),
+        (3, 3),  # 1 face 1 chunk
+        (5, 5),  # 2 faces 1 chunk
+        (7, 7),  # 2 chunks
+        (9, 9),  # 3 chunks
     ),
 )
 @pytest.mark.parametrize(
@@ -259,8 +277,7 @@ def run_avg_pool2d(
     "padding",
     (
         (0, 0),
-        (3, 4),
-        (1, 0, 1, 2),
+        (1, 1),
         (1, 4, 3, 2),
     ),
 )
@@ -288,18 +305,16 @@ def run_avg_pool2d(
 @pytest.mark.parametrize(
     "shard_scheme",
     [
+        # only test height sharding, max pool tests the other schemes
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
 @pytest.mark.parametrize(
-    "use_program_cache",
-    [True, False],
+    "dtype",
+    [ttnn.bfloat16, ttnn.bfloat8_b],
 )
 def test_run_avg_pool2d(
     device,
-    use_program_cache,
     tensor_map,
     input_shape,
     kernel_size,
@@ -309,19 +324,8 @@ def test_run_avg_pool2d(
     divisor_override,
     count_include_pad,
     shard_scheme,
+    dtype,
 ):
-    if (
-        shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED
-        and (tuple(input_shape) == (2, 512, 112, 32) or tuple(input_shape) == (1, 512, 112, 32))
-        and divisor_override == None
-        and (ceil_mode == True or count_include_pad == False)
-    ):
-        pytest.skip("Not enough L1 space for the correct calculation of the elements, use different kind of sharding")
-
-    if any(p > k // 2 for p, k in zip(padding, kernel_size)):
-        pytest.skip(
-            "Known issue with this combination of parameters - RuntimeError: pad should be at most half of kernel size."
-        )
     run_avg_pool2d(
         device,
         tensor_map,
@@ -333,5 +337,6 @@ def test_run_avg_pool2d(
         divisor_override=divisor_override,
         count_include_pad=count_include_pad,
         shard_scheme=shard_scheme,
+        dtype=dtype,
         run_twice=True,
     )

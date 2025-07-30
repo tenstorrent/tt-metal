@@ -83,21 +83,23 @@ def run_max_pool(
     cores_y = device.core_grid.y
     max_cores = cores_x * cores_y
 
+    # skips to avoid unimportant combinations
+    if ceil_mode:
+        if stride == (1, 1):
+            pytest.skip("ceiling mode with stride (1, 1) is trivial and not useful to test")
+
     # skips to speed up nightly test
     if nightly_skips:
         if dtype == ttnn.bfloat8_b:
-            if stride == (2, 2):
-                pytest.skip("Skip for stride (2, 2) for BF8!")
+            if stride == (2, 2) or padding == (1, 1):
+                pytest.skip("Skip for stride (2, 2) and padding (1, 1) for BF8!")
             if kernel_size == (9, 9):
                 pytest.skip("Skip for kernel size (9, 9) for BF8!")
-            if ceil_mode:
-                pytest.skip("Skip for ceil mode for BF8!")
         if ceil_mode:
-            if stride == (1, 1):
-                pytest.skip("Skip for stride (1, 1) for ceil mode!")
-            if kernel_size == (9, 9):
-                pytest.skip("Skip for kernel size (9, 9) for ceil mode!")
+            if kernel_size == (3, 3) or kernel_size == (9, 9):
+                pytest.skip("Skip for kernel size (3, 3) and (9, 9) for ceil mode!")
 
+    # OOM skips
     if shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED or shard_scheme is None:
         if in_c == 16 and dtype == ttnn.bfloat8_b and in_n * in_h * in_w > 600000:
             pytest.skip("This case runs out of memory")

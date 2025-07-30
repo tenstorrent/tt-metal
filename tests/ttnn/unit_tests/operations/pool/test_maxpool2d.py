@@ -62,6 +62,22 @@ parameters = {
             [1, 512, 20, 20, 8, 8, 6, 6, 0, 0, 1, 1, False],  # max rows per reduction multiple large kernel wide
             [1, 320, 48, 48, 36, 36, 1, 1, 0, 0, 1, 1, False],  # 3 reduction stages, multiple indexes per core, wide
             [1, 320, 47, 47, 36, 36, 1, 1, 0, 0, 1, 1, False],  # non-tile multiple NHW
+            [
+                1,
+                320,
+                48,
+                48,
+                36,
+                36,
+                1,
+                1,
+                0,
+                0,
+                1,
+                1,
+                True,
+            ],  # 3 reduction stages, multiple indexes per core, wide, ceil mode
+            [1, 320, 47, 47, 36, 36, 1, 1, 0, 0, 1, 1, True],  # non-tile multiple NHW, ceil mode
         ],
     },
     "test_run_max_pool": {
