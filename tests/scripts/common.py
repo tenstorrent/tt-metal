@@ -268,25 +268,29 @@ def error_out_if_test_report_has_failures(test_report):
 def get_dispatch_core_type():
     import ttnn
 
-    # TODO: 11059 move dispatch_core_type to device_params when all tests are updated to not use WH_ARCH_YAML env flag
-    dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
-    if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
-        dispatch_core_type = ttnn.device.DispatchCoreType.ETH
-    return dispatch_core_type
+    eth_dispatch_default_clusters = [
+        ttnn.cluster.ClusterType.N300,
+        ttnn.cluster.ClusterType.T3K,
+        ttnn.cluster.ClusterType.N300_2x2,
+    ]
+    return ttnn.device.DispatchCoreType.ETH if ttnn.cluster.get_cluster_type() else ttnn.device.DispatchCoreType.WORKER
 
 
 def get_updated_device_params(device_params):
     import ttnn
 
-    dispatch_core_type = get_dispatch_core_type()
     new_device_params = device_params.copy()
 
     is_blackhole = ttnn.get_arch_name() == "blackhole"
     dispatch_core_axis = new_device_params.pop("dispatch_core_axis", None)
+    dispatch_core_type = new_device_params.pop("dispatch_core_type", None)
 
     # Set default if not specified
     if dispatch_core_axis is None:
         dispatch_core_axis = ttnn.DispatchCoreAxis.COL if is_blackhole else ttnn.DispatchCoreAxis.ROW
+
+    if dispatch_core_type is None:
+        dispatch_core_type = get_dispatch_core_type()
 
     # Force COL for blackhole regardless of user setting
     if is_blackhole and dispatch_core_axis == ttnn.DispatchCoreAxis.ROW:
