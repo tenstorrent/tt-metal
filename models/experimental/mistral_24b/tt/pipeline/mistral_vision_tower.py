@@ -109,7 +109,6 @@ class MistralVisionTower(LightweightModule):
         """
         input_tensor shape: (B, C, H, W)
         """
-        print("MistralVisionTower forward called with input_tensor shape:", input_tensor.shape)
         patch_embeds = self.patch_conv(input_tensor)
         patch_embeds = ttnn.transpose(patch_embeds, 1, 2)
         height, width = image_sizes[0]
@@ -146,16 +145,11 @@ class MistralVisionTower(LightweightModule):
             device=self.mesh_device,
         )
 
-        # torch_position_ids = ttnn.to_torch(position_ids)
-        print("position_ids:", position_ids)
-        print("position_ids shape:", position_ids.shape)
         torch_position_ids = ttnn.to_torch(position_ids, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=0))[
             : position_ids.shape[-1]
         ]
 
-        print("torch_position_ids shape:", torch_position_ids.shape)
         position_embeddings = self.patch_positional_embedding.get_rot_mats(torch_position_ids)
-        print("position_embeddings[0] Cos shape:", position_embeddings[0].shape)
 
         attention_mask = generate_block_attention_mask_tt(
             [p.shape[-2] * p.shape[-1] for p in patch_embeds_list], patch_embeds, tt_device=self.mesh_device

@@ -249,5 +249,4 @@ class TtMistralImageAttention(LightweightModule):
         #     return dense_out_reduced_trimmed
         # else:
         #     return output_11SH
-        print("output_11SH", output_11SH.shape)
         return output_11SH

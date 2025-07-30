@@ -158,7 +158,6 @@ def process_real_vision_inputs(messages, model_args):
     encoded = processor(
         text=[text], images=image_inputs, videos=video_inputs, return_tensors="pt", return_dict=True
     ).to("cpu", dtype=torch.bfloat16)
-    print("encoded: ", encoded)
     input_ids = encoded["input_ids"]
     pixel_values = encoded["pixel_values"]
     attention_mask = encoded["attention_mask"]
@@ -194,8 +193,6 @@ def load_separate_models_like_test_end2end(model_args, mesh_device, dtype, paged
         dtype=dtype,
         model_args=model_args,
     )
-
-    print("vision_model:", vision_model)
 
     # Load text model (exactly like test_end2end.py)
     text_model = Transformer(
@@ -242,10 +239,6 @@ def run_generation_exactly_like_test_end2end(
         max_prefill_len=8192,
     )
 
-    print("input_tokens_prefill_pt: ", input_tokens_prefill_pt)  # (1, 528)
-    print("encoded_prompts: ", encoded_prompts)
-    print("decoding_pos: ", decoding_pos)
-    print("prefill_lens: ", prefill_lens)
     input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(batch_size, -1)
 
     logger.info("Running prefill...")
@@ -259,14 +252,35 @@ def run_generation_exactly_like_test_end2end(
     )
 
     prefilled_token = torch.argmax(logits, dim=-1)
+    prefilled_token_decoded_res = model_args.tokenizer.decode(prefilled_token[0].item())
+    logger.info(f"prefilled_token_decoded_res: {prefilled_token_decoded_res}")
+
     logger.info(f"Prefilled token: {prefilled_token}")
+
+    import torch.nn.functional as F
+
+    logger.info(f"Encoded prompt: {encoded_prompts[0]}")
+    logger.info(f"Decoded prompt: {model_args.tokenizer.decode(encoded_prompts[0])}")
+
+    # logits: [1, 1, vocab_size]
+    last_logits = logits[0, -1]  # shape: [vocab_size]
+    probs = F.softmax(last_logits, dim=-1)
+
+    top_k = 5
+    topk_probs, topk_indices = torch.topk(probs, k=top_k)
+
+    topk_tokens = [model_args.tokenizer.decode([idx.item()]) for idx in topk_indices]
+
+    logger.info("🔍 Top-5 predicted tokens (with probabilities):")
+    for i in range(top_k):
+        logger.info(f"{i+1}. Token: '{topk_tokens[i]}' (ID={topk_indices[i].item()}), P={topk_probs[i].item():.4f}")
 
     all_outputs = [encoded_prompts[0][: prefill_lens[0]]]
     all_outputs[0].append(int(prefilled_token[0].item()))
 
     current_pos = torch.tensor([decoding_pos[0]])
     out_tok = prefilled_token
-    generation_length = 1
+    generation_length = 100
 
     results = []
 
@@ -425,14 +439,12 @@ def test_e2e_vision_text_pipeline(
 
     # Setup vision prompts and tokenizer
     messages, tokenizer = setup_vision_prompts_and_tokenizer(model_args, instruct)
-    print("messages", messages)
 
-    logger.info("Running reference HF vision-text model using messages..... ")
-    hf_output = run_reference_demo_pipeline(messages)
+    # logger.info("Running reference HF vision-text model using messages..... ")
+    # hf_output = run_reference_demo_pipeline(messages)
 
     # Process real vision inputs from images
     processed_inputs = process_real_vision_inputs(messages, model_args)
-    print("processed_inputs", processed_inputs)
 
     # Load separate models following test_end2end.py pattern
     logger.info("Loading separate vision and text models like test_end2end.py...")
@@ -440,8 +452,6 @@ def test_e2e_vision_text_pipeline(
         model_args, mesh_device, dtype, paged_attention, page_params
     )
 
-    print("vision_model", vision_model)
-    print("text_model", text_model)
     # Setup page table for paged attention (exactly like test_end2end.py)
     page_table_tt = None
     paged_attention_config = None
