@@ -220,12 +220,12 @@ void MetalContext::teardown() {
     tt::tt_metal::reset_topology_state();
 }
 
-MetalContext& MetalContext::instance() {
-    static tt::stl::Indestructible<MetalContext> inst;
+MetalContext& MetalContext::instance(const std::string& root_dir) {
+    static tt::stl::Indestructible<MetalContext> inst(root_dir);
     return inst.get();
 }
 
-MetalContext::MetalContext() {
+MetalContext::MetalContext(const std::string& root_dir) : rtoptions_(root_dir) {
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
     if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {

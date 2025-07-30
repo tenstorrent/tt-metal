@@ -51,6 +51,7 @@ def close_device(device: "ttnn.device.Device"):
 
 
 synchronize_device = ttnn._ttnn.device.synchronize_device
+SetRootDir = ttnn._ttnn.device.SetRootDir
 GetDefaultDevice = ttnn._ttnn.device.GetDefaultDevice
 SetDefaultDevice = ttnn._ttnn.device.SetDefaultDevice
 GetPCIeDeviceID = ttnn._ttnn.device.GetPCIeDeviceID
@@ -165,8 +166,6 @@ def is_blackhole(device=None):
     return "blackhole" in ARCH_NAME
 
 
-SetDefaultDevice = ttnn._ttnn.device.SetDefaultDevice
-GetDefaultDevice = ttnn._ttnn.device.GetDefaultDevice
 format_input_tensor = ttnn._ttnn.device.format_input_tensor
 format_output_tensor = ttnn._ttnn.device.format_output_tensor
 pad_to_tile_shape = ttnn._ttnn.device.pad_to_tile_shape
