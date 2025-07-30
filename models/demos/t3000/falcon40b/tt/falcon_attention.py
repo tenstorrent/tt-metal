@@ -598,7 +598,7 @@ class TtFalconAttention:
             dim=3,
             multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"],
+            memory_config=self.model_config["DEFAULT_MEMCFG"],
             barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
             chunks_per_sync=10,
             num_workers_per_link=2,
