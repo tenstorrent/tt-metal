@@ -13,11 +13,11 @@
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
-    uint32_t wIndex __attribute__((used));
-    uint32_t stackSize __attribute__((used));
-    uint32_t sums[SUM_COUNT] __attribute__((used));
-    uint32_t sumIDs[SUM_COUNT] __attribute__((used));
-}
+uint32_t wIndex __attribute__((used));
+uint32_t stackSize __attribute__((used));
+uint32_t sums[SUM_COUNT] __attribute__((used));
+uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+}  // namespace kernel_profiler
 #endif
 
 uint8_t noc_index = 0;  // TODO: remove hardcoding
@@ -35,9 +35,9 @@ uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 
-uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
-uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
-uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
@@ -98,20 +98,21 @@ void __attribute__((noinline)) Application(void) {
     WAYPOINT("REW");
     uint32_t count = 0;
     while (routing_info->routing_enabled != 1) {
-        volatile uint32_t *ptr = (volatile uint32_t *)0xffb2010c;
+        volatile uint32_t* ptr = (volatile uint32_t*)0xffb2010c;
         count++;
         *ptr = 0xAABB0000 | (count & 0xFFFF);
         internal_::risc_context_switch();
     }
     WAYPOINT("RED");
 
-    mailboxes->launch_msg_rd_ptr = 0; // Initialize the rdptr to 0
+    mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
     while (routing_info->routing_enabled) {
         // FD: assume that no more host -> remote writes are pending
         uint8_t go_message_signal = mailboxes->go_message.signal;
         if (go_message_signal == RUN_MSG_GO) {
-            // Only include this iteration in the device profile if the launch message is valid. This is because all workers get a go signal regardless of whether
-            // they're running a kernel or not. We don't want to profile "invalid" iterations.
+            // Only include this iteration in the device profile if the launch message is valid. This is because all
+            // workers get a go signal regardless of whether they're running a kernel or not. We don't want to profile
+            // "invalid" iterations.
             DeviceZoneScopedMainN("ERISC-FW");
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);

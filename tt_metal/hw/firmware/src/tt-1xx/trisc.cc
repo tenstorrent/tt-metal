@@ -24,15 +24,15 @@
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
-    uint32_t wIndex __attribute__((used));
-    uint32_t stackSize __attribute__((used));
-    uint32_t sums[SUM_COUNT] __attribute__((used));
-    uint32_t sumIDs[SUM_COUNT] __attribute__((used));
-}
+uint32_t wIndex __attribute__((used));
+uint32_t stackSize __attribute__((used));
+uint32_t sums[SUM_COUNT] __attribute__((used));
+uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+}  // namespace kernel_profiler
 #endif
 
-uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
-uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
 
 uint8_t my_logical_x_ __attribute__((used));
 uint8_t my_logical_y_ __attribute__((used));
@@ -43,10 +43,10 @@ namespace ckernel {
 
 enum class ttRiscCores : std::uint32_t { Unpack = 0, Math = 1, Pack = 2, Brisc = 3, Nrisc = 4 };
 
-volatile tt_reg_ptr uint *reg_base = reinterpret_cast<volatile uint *>(0xFFB10000);
-volatile tt_reg_ptr uint *pc_buf_base = reinterpret_cast<volatile uint *>(PC_BUF_BASE);
+volatile tt_reg_ptr uint* reg_base = reinterpret_cast<volatile uint*>(0xFFB10000);
+volatile tt_reg_ptr uint* pc_buf_base = reinterpret_cast<volatile uint*>(PC_BUF_BASE);
 volatile tt_reg_ptr uint* regfile = reinterpret_cast<volatile uint*>(REGFILE_BASE);
-tt_reg_ptr uint *regmem = reinterpret_cast<tt_reg_ptr uint *>(REGFILE_BASE);
+tt_reg_ptr uint* regmem = reinterpret_cast<tt_reg_ptr uint*>(REGFILE_BASE);
 
 uint32_t cfg_state_id __attribute__((used)) = 0;    // Flip between 0 and 1 to keep state between kernel calls
 uint32_t dest_offset_id __attribute__((used)) = 0;  // Flip between 0 and 1 to keep dest pointer between kernel calls
@@ -57,13 +57,13 @@ const uint8_t thread_id = COMPILE_FOR_TRISC;
 
 #define GET_TRISC_RUN_EVAL(x, t) x##t
 #define GET_TRISC_RUN(x, t) GET_TRISC_RUN_EVAL(x, t)
-volatile tt_l1_ptr uint8_t *const trisc_run =
-    &GET_TRISC_RUN(((tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE))->subordinate_sync.trisc, COMPILE_FOR_TRISC);
-tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE);
+volatile tt_l1_ptr uint8_t* const trisc_run =
+    &GET_TRISC_RUN(((tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE))->subordinate_sync.trisc, COMPILE_FOR_TRISC);
+tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
 }  // namespace ckernel
 
 #if !defined(UCK_CHLKC_MATH)
-uint32_t tt_l1_ptr *cb_l1_base __attribute__((used));
+uint32_t tt_l1_ptr* cb_l1_base __attribute__((used));
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 #endif
 
@@ -91,15 +91,17 @@ void init_sync_registers() {
     }
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
     configure_csr();
     WAYPOINT("I");
 
-    do_crt1((uint32_t tt_l1_ptr *)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE_SCRATCH));
+    do_crt1((uint32_t tt_l1_ptr*)PREPROCESSOR_EXPAND(MEM_TRISC, COMPILE_FOR_TRISC, _INIT_LOCAL_L1_BASE_SCRATCH));
 
     // Initialize GPRs to all 0s
 #pragma GCC unroll 0
-    for (int i = 0; i < 64; i++) regfile[i] = 0;
+    for (int i = 0; i < 64; i++) {
+        regfile[i] = 0;
+    }
 
     reset_cfg_state_id();
 
@@ -144,8 +146,9 @@ int main(int argc, char *argv[]) {
         experimental::setup_remote_cb_interfaces<false>(cb_l1_base, end_cb_index, 0, 0, 0, 0);
 #endif
 
-        rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
-            launch_msg->kernel_config.rta_offset[DISPATCH_CLASS_TENSIX_COMPUTE].rta_offset);
+        rta_l1_base =
+            (uint32_t tt_l1_ptr*)(kernel_config_base +
+                                  launch_msg->kernel_config.rta_offset[DISPATCH_CLASS_TENSIX_COMPUTE].rta_offset);
         crta_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base +
                                   launch_msg->kernel_config.rta_offset[DISPATCH_CLASS_TENSIX_COMPUTE].crta_offset);
@@ -153,9 +156,9 @@ int main(int argc, char *argv[]) {
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 
         WAYPOINT("R");
-        int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::MATH0) + thread_id;
-        uint32_t kernel_lma = (kernel_config_base +
-                               launch_msg->kernel_config.kernel_text_offset[index]);
+        int index =
+            static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::MATH0) + thread_id;
+        uint32_t kernel_lma = (kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         record_stack_usage(stack_free);
         WAYPOINT("D");
