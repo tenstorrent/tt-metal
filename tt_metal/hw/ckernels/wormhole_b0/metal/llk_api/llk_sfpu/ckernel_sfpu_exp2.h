@@ -22,13 +22,9 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_21f_(sfpi::vFloat val) {
         sfpi::vInt zii = exexp(sfpi::reinterpret<sfpi::vFloat>(z));         // Extract exponent
         sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa
 
-        constexpr float CONST_D1 = 0.40196114e-7f;
-        constexpr int CONST_D2 = 0xf94ee7;
-        constexpr int CONST_D3 = 0x560;
-
-        sfpi::vFloat d1 = sfpi::vFloat(CONST_D1);
-        sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(CONST_D2) + zif, 0);
-        sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(CONST_D3) + zif, 0);
+        sfpi::vFloat d1 = sfpi::vFloat(sfpi::vConstFloatPrgm0);
+        sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(sfpi::vConstIntPrgm1) + zif, 0);
+        sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(sfpi::vConstIntPrgm2) + zif, 0);
         d2 = d1 * d2;
         zif = sfpu::_float_to_int32_(d2 * d3);
 
@@ -49,6 +45,13 @@ inline void calculate_exp2() {
         sfpi::dst_reg[0] = _sfpu_exp2_21f_(v);
         sfpi::dst_reg++;
     }
+}
+
+template <bool APPROXIMATION_MODE>
+inline void exp2_init() {
+    sfpi::vConstFloatPrgm0 = 0.40196114e-7f;
+    sfpi::vConstIntPrgm1 = 0xf94ee7;
+    sfpi::vConstIntPrgm2 = 0x560;
 }
 
 }  // namespace ckernel::sfpu
