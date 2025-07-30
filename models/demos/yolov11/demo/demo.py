@@ -8,9 +8,9 @@ import time
 import pytest
 import torch
 from loguru import logger
-from ultralytics import YOLO
 
 import ttnn
+from models.demos.yolov11.common import load_torch_model
 from models.demos.yolov11.demo.demo_utils import load_coco_class_names
 from models.demos.yolov11.reference import yolov11
 from models.demos.yolov11.runner.performant_runner import YOLOv11PerformantRunner
@@ -43,17 +43,13 @@ from models.utility_functions import disable_persistent_kernel_cache
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
-def test_demo(device, source, model_type, resolution, use_pretrained_weight):
+def test_demo(device, source, model_type, resolution, use_pretrained_weight, model_location_generator):
     disable_persistent_kernel_cache()
-    weights = "yolo11n.pt"
-    if use_pretrained_weight:
-        torch_model = YOLO(weights)
-        state_dict = {k.replace("model.", "", 1): v for k, v in torch_model.state_dict().items()}
-
     model = yolov11.YoloV11()
     model.eval()
+
     if use_pretrained_weight:
-        model.load_state_dict(state_dict)
+        model = load_torch_model(model_location_generator)
     if model_type == "torch_model":
         logger.info("Inferencing using Torch Model")
     else:
