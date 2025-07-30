@@ -389,6 +389,7 @@ class TtStableDiffusion3Pipeline:
         num_inference_steps: int = 40,
         seed: int | None = None,
         traced: bool = False,
+        clip_skip: int | None = None,
     ) -> None:
         timer = self.timing_collector
 
@@ -437,6 +438,7 @@ class TtStableDiffusion3Pipeline:
                     num_images_per_prompt=num_images_per_prompt,
                     max_t5_sequence_length=max_t5_sequence_length,
                     do_classifier_free_guidance=do_classifier_free_guidance,
+                    clip_skip=clip_skip,
                 )
                 # HACK: reshape submesh device 0 from 1D to 2D
                 self.encoder_parallel_manager.mesh_device.reshape(
@@ -772,6 +774,7 @@ class TtStableDiffusion3Pipeline:
         num_images_per_prompt: int,
         max_t5_sequence_length: int,
         do_classifier_free_guidance: bool,
+        clip_skip: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         timer = self.timing_collector
 
@@ -786,6 +789,7 @@ class TtStableDiffusion3Pipeline:
                 tokenizer_max_length=tokenizer_max_length,
                 ttnn_device=self.encoder_parallel_manager.mesh_device,
                 encoder_parallel_manager=self.encoder_parallel_manager,
+                clip_skip=clip_skip,
             )
 
             prompt_2_embed, pooled_prompt_2_embed = _get_clip_prompt_embeds(
@@ -796,6 +800,7 @@ class TtStableDiffusion3Pipeline:
                 tokenizer_max_length=tokenizer_max_length,
                 ttnn_device=self.encoder_parallel_manager.mesh_device,
                 encoder_parallel_manager=self.encoder_parallel_manager,
+                clip_skip=clip_skip,
             )
             clip_prompt_embeds = torch.cat([prompt_embed, prompt_2_embed], dim=-1)
 
@@ -832,6 +837,7 @@ class TtStableDiffusion3Pipeline:
                 tokenizer_max_length=tokenizer_max_length,
                 encoder_parallel_manager=self.encoder_parallel_manager,
                 ttnn_device=self.encoder_parallel_manager.mesh_device,
+                clip_skip=clip_skip,
             )
             negative_prompt_2_embed, negative_pooled_prompt_2_embed = _get_clip_prompt_embeds(
                 prompt=negative_prompt_2,
@@ -841,6 +847,7 @@ class TtStableDiffusion3Pipeline:
                 tokenizer_max_length=tokenizer_max_length,
                 encoder_parallel_manager=self.encoder_parallel_manager,
                 ttnn_device=self.encoder_parallel_manager.mesh_device,
+                clip_skip=clip_skip,
             )
             negative_clip_prompt_embeds = torch.cat([negative_prompt_embed, negative_prompt_2_embed], dim=-1)
 
@@ -885,7 +892,7 @@ def _get_clip_prompt_embeds(
     encoder_parallel_manager: EncoderParallelManager | None = None,
     num_images_per_prompt: int,
     prompt: list[str],
-    text_encoder: CLIPTextModelWithProjection,
+    text_encoder: TtCLIPTextTransformer,
     tokenizer_max_length: int,
     tokenizer: CLIPTokenizer,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -916,13 +923,25 @@ def _get_clip_prompt_embeds(
         mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
     )
 
-    sequence_embeddings, pooled_output = text_encoder(
-        tt_text_input_ids, ttnn_device, parallel_manager=encoder_parallel_manager
+    encoder_output, projected_output = text_encoder(
+        tt_text_input_ids,
+        ttnn_device,
+        parallel_manager=encoder_parallel_manager,
+        clip_skip=clip_skip,
+        output_hidden_states=True,
     )
+
+    if clip_skip is None:
+        sequence_embeddings = encoder_output.hidden_states[-2]
+    else:
+        layer_index = -(clip_skip + 2)
+        if abs(layer_index) > len(encoder_output.hidden_states):
+            layer_index = -2
+        sequence_embeddings = encoder_output.hidden_states[layer_index]
 
     prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(sequence_embeddings)[0])
 
-    pooled_prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(pooled_output)[0])
+    pooled_prompt_embeds = ttnn.to_torch(ttnn.get_device_tensors(projected_output)[0])
 
     prompt_embeds = prompt_embeds.to(device=device)
     pooled_prompt_embeds = pooled_prompt_embeds.to(device=device)

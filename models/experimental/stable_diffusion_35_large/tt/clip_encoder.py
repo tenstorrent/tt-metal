@@ -17,6 +17,15 @@ import math
 
 
 @dataclass
+class CLIPEncoderOutput:
+    # stores all hidden states
+    hidden_states: list[ttnn.Tensor]
+
+    def __getitem__(self, idx):
+        return self.hidden_states[idx]
+
+
+@dataclass
 class TtCLIPConfig:
     vocab_size: int
     d_model: int  # embedding dim
@@ -356,12 +365,10 @@ class TtCLIPEncoderLayer:
         parallel_manager: EncoderParallelManager = None,
     ) -> ttnn.Tensor:
         # self attention block
-        residual = hidden_states  # replicated
+        residual = hidden_states
         hidden_states = ttnn.layer_norm(
             hidden_states, weight=self._layer_norm1, bias=self._layer_norm1_bias, epsilon=self._layer_norm_eps
         )
-
-        # replicated
         attn_output = self._self_attn(hidden_states, causal_attention_mask, parallel_manager=parallel_manager)
         hidden_states = residual + attn_output
 
@@ -371,7 +378,6 @@ class TtCLIPEncoderLayer:
             hidden_states, weight=self._layer_norm2, bias=self._layer_norm2_bias, epsilon=self._layer_norm_eps
         )
         mlp_output = self._mlp(hidden_states, parallel_manager=parallel_manager)
-        # replicated
         hidden_states = residual + mlp_output
 
         return hidden_states
@@ -414,12 +420,19 @@ class TtCLIPTransformer:
         hidden_states: ttnn.Tensor,
         causal_attention_mask: ttnn.Tensor,
         parallel_manager: EncoderParallelManager = None,
-    ) -> ttnn.Tensor:
-        for layer in self._layers:
-            # hidden states replicated
-            hidden_states = layer(hidden_states, causal_attention_mask, parallel_manager=parallel_manager)
+        output_hidden_states: bool = True,
+    ) -> CLIPEncoderOutput:
+        all_hidden_states = []
 
-        return hidden_states
+        if output_hidden_states:
+            all_hidden_states.append(hidden_states)
+
+        for layer in self._layers:
+            hidden_states = layer(hidden_states, causal_attention_mask, parallel_manager=parallel_manager)
+            if output_hidden_states:
+                all_hidden_states.append(hidden_states)
+
+        return CLIPEncoderOutput(hidden_states=all_hidden_states)
 
 
 @dataclass
@@ -440,7 +453,7 @@ class TtCLIPEncoderParameters:
                 state,
                 dtype=dtype,
                 device=device,
-                parallel_manager=parallel_manager,  # state is already the encoder substate
+                parallel_manager=parallel_manager,
             )
         )
 
@@ -454,8 +467,14 @@ class TtCLIPEncoder:
         hidden_states: ttnn.Tensor,
         causal_attention_mask: ttnn.Tensor,
         parallel_manager: EncoderParallelManager = None,
-    ) -> ttnn.Tensor:
-        return self._text_model(hidden_states, causal_attention_mask, parallel_manager=parallel_manager)
+        output_hidden_states: bool = True,
+    ) -> CLIPEncoderOutput:
+        return self._text_model(
+            hidden_states,
+            causal_attention_mask,
+            parallel_manager=parallel_manager,
+            output_hidden_states=output_hidden_states,
+        )
 
 
 @dataclass
@@ -572,42 +591,41 @@ class TtCLIPTextTransformer:
         device: ttnn.Device,
         eos_token_id: int = None,
         parallel_manager: EncoderParallelManager = None,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """
-        input_ids: replicated across devices
-        returns:
-            sequence_embeddings: replicated across devices
-            pooled_output: replicated across devices
-        """
+        output_hidden_states: bool = True,
+        clip_skip: int = None,
+    ) -> tuple[CLIPEncoderOutput, ttnn.Tensor]:
         batch_size, seq_length = input_ids.shape
 
-        # replicated input / output
         hidden_states = self._embeddings(input_ids, device)
 
         causal_attention_mask = _create_4d_causal_attention_mask(
             input_ids.shape, device, dtype=hidden_states.get_dtype()
         )
 
-        hidden_states = self._encoder(hidden_states, causal_attention_mask, parallel_manager=parallel_manager)
-
-        sequence_embeddings = ttnn.layer_norm(
-            hidden_states, weight=self._final_layer_norm, bias=self._final_layer_norm_bias, epsilon=self._layer_norm_eps
+        encoder_output = self._encoder(
+            hidden_states,
+            causal_attention_mask,
+            parallel_manager=parallel_manager,
+            output_hidden_states=output_hidden_states,
         )
 
-        # pool based on the eos_token_id strategy (same as HF):
-        # if eos_token_id not provided, use a fallback
+        final_hidden_state = encoder_output.hidden_states[-1]  # Last encoder layer output
+        normalized_final_state = ttnn.layer_norm(
+            final_hidden_state,
+            weight=self._final_layer_norm,
+            bias=self._final_layer_norm_bias,
+            epsilon=self._layer_norm_eps,
+        )
+
         if eos_token_id is None:
-            # fallback: assume eos_token_id = 2 (common for clip models based on logs)
             eos_token_id = 2
 
-        pooled_output = self._gather_eos(sequence_embeddings, input_ids, eos_token_id, device)
+        pooled_output = self._gather_eos(normalized_final_state, input_ids, eos_token_id, device)
 
-        # final text proj
-        # text_proj: [hidden_size, proj_dim]. must transpose for matmul
         text_projection_transposed = ttnn.transpose(self._text_projection, -2, -1)
         projected_output = ttnn.matmul(pooled_output, text_projection_transposed)
 
-        return sequence_embeddings, projected_output
+        return encoder_output, projected_output
 
     def _gather_eos(
         self, seq_emb: ttnn.Tensor, input_ids: ttnn.Tensor, eos_token_id: int, device: ttnn.Device
