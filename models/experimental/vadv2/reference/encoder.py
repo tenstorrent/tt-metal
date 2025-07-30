@@ -130,7 +130,6 @@ class BEVFormerEncoder(nn.Module):
 
         reference_points_cam[..., 0] /= img_metas[0]["img_shape"][0][1]
         reference_points_cam[..., 1] /= img_metas[0]["img_shape"][0][0]
-
         bev_mask = (
             bev_mask
             & (reference_points_cam[..., 1:2] > 0.0)
