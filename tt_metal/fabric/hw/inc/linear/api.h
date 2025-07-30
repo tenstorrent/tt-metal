@@ -30,7 +30,6 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc(
     tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
-    uint32_t src_addr,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header,
     uint8_t num_hops,
     uint32_t route_id = 0) {
@@ -58,15 +57,12 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write(
     tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
-    uint32_t src_addr,
-    uint32_t size,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header,
     uint8_t num_hops,
     uint32_t route_id = 0) {
     packet_header->to_chip_unicast(num_hops);
     packet_header->to_noc_unicast_inline_write(noc_unicast_inline_write_command_header);
     client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
@@ -104,7 +100,6 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
     tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
-    uint32_t src_addr,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header,
     uint8_t start_distance,
     uint8_t range,
@@ -134,8 +129,6 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
     tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
-    uint32_t src_addr,
-    uint32_t size,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header,
     uint8_t start_distance,
     uint8_t range,
@@ -143,7 +136,6 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
     packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
     packet_header->to_noc_unicast_inline_write(noc_unicast_inline_write_command_header);
     client_interface->wait_for_empty_write_slot();
-    client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
