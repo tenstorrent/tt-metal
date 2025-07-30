@@ -499,7 +499,7 @@ def test_demo_text(
     page_params = request.config.getoption("--page_params") or page_params
     sampling_params = request.config.getoption("--sampling_params") or sampling_params
 
-    stop_at_eos = False # Default to False
+    stop_at_eos = False  # Default to False
     if request.config.getoption("--stop_at_eos") in [
         0,
         1,
