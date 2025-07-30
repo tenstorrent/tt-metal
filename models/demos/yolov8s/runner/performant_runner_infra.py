@@ -4,20 +4,13 @@
 
 import torch
 from loguru import logger
-from ultralytics import YOLO
 
 import ttnn
+from models.demos.yolov8s.common import load_torch_model
 from models.demos.yolov8s.tt.tt_yolov8s_utils import custom_preprocessor
 from models.demos.yolov8s.tt.ttnn_yolov8s import TtYolov8sModel
 from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-def load_torch_model():
-    torch_model = YOLO("yolov8s.pt")
-    torch_model = torch_model.model
-    torch_model.eval()
-    return torch_model
 
 
 def load_ttnn_model(device, torch_model, inp_h, inp_w):
@@ -41,7 +34,7 @@ class YOLOv8sPerformanceRunnerInfra:
         self.device = device
         self.batch_size = batch_size
         self.model_location_generator = model_location_generator
-        torch_model = load_torch_model()
+        torch_model = load_torch_model(model_location_generator)
         input_shape = (1, 640, 640, 3)
         inp_h, inp_w = input_shape[1], input_shape[2]
         self.ttnn_yolov8_model = load_ttnn_model(device=self.device, torch_model=torch_model, inp_h=inp_h, inp_w=inp_w)

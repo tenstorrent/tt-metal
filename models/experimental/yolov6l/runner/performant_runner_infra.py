@@ -4,15 +4,16 @@
 
 
 import torch
-from loguru import logger
 import sys
+
+from loguru import logger
 
 import ttnn
 from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-from models.experimental.yolov6l.tt.model_preprocessing import create_yolov6l_model_parameters, load_torch_model_yolov6l
+from models.experimental.yolov6l.tt.model_preprocessing import create_yolov6l_model_parameters
 from models.experimental.yolov6l.tt.ttnn_yolov6l import TtYolov6l
+from models.experimental.yolov6l.common import load_torch_model
 
 sys.path.append("models/experimental/yolov6l/reference/")
 
@@ -39,7 +40,7 @@ class YOLOv6lPerformanceRunnerInfra:
         self.model_location_generator = model_location_generator
         self.torch_input_tensor = torch_input_tensor
 
-        model = load_torch_model_yolov6l()
+        model = load_torch_model(model_location_generator)
         self.torch_model = model
         self.torch_input_tensor = (
             torch.randn((1, 3, 640, 640), dtype=torch.float32)

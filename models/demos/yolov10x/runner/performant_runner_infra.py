@@ -9,7 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.yolov10x.tests.common import load_torch_model
+from models.demos.yolov10x.common import load_torch_model
 from models.demos.yolov10x.tt.model_preprocessing import create_yolov10x_model_parameters
 from models.demos.yolov10x.tt.yolov10x import TtnnYolov10
 from models.utility_functions import divup, is_wormhole_b0
@@ -56,7 +56,7 @@ class YOLOv10PerformanceRunnerInfra:
         self.model_location_generator = model_location_generator
         self.torch_input_tensor = torch_input_tensor
 
-        self.torch_model = load_torch_model(use_weights_from_ultralytics=use_pretrained_weight)
+        self.torch_model = load_torch_model(model_location_generator)
 
         self.torch_input_tensor = (
             torch.randn((1, 3, 640, 640), dtype=torch.float32)

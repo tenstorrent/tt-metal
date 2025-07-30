@@ -1,1 +1,1 @@
-../../../ttnn/integration_tests/vgg_unet/test_vgg_unet.py
+../../../../models/demos/vgg_unet/tests/pcc/test_vgg_unet.py

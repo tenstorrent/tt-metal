@@ -30,7 +30,7 @@ Resource link - [source](https://github.com/meituan/YOLOv6)
 
 Use the following command to run the model :
 ```
-pytest --disable-warnings tests/ttnn/integration_tests/yolov6l/test_ttnn_yolov6l.py
+pytest --disable-warnings models/experimental/yolov6l/tests/pcc/test_ttnn_yolov6l.py
 ```
 
 ### Performant Model with Trace+2CQ

@@ -5,15 +5,16 @@
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoImageProcessor, SegformerForImageClassification
+from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.demo.classification_demo_utils import get_batch, get_data_loader
 from models.demos.segformer.reference.segformer_for_image_classification import SegformerForImageClassificationReference
+from models.demos.segformer.tests.pcc.test_segformer_for_image_classification import create_custom_preprocessor
+from models.demos.segformer.tests.pcc.test_segformer_model import move_to_device
 from models.demos.segformer.tt.ttnn_segformer_for_image_classification import TtSegformerForImageClassification
-from tests.ttnn.integration_tests.segformer.test_segformer_for_image_classification import create_custom_preprocessor
-from tests.ttnn.integration_tests.segformer.test_segformer_model import move_to_device
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -21,15 +22,11 @@ from tests.ttnn.integration_tests.segformer.test_segformer_model import move_to_
 @pytest.mark.parametrize("batch_size", [1])
 def test_segformer_classification_demo(device, imagenet_label_dict, iterations, batch_size, model_location_generator):
     image_processor = AutoImageProcessor.from_pretrained("nvidia/mit-b0")
-    torch_model = SegformerForImageClassification.from_pretrained("nvidia/mit-b0").to(torch.bfloat16)
-    reference_model = SegformerForImageClassificationReference(config=torch_model.config)
     logger.info("ImageNet-1k validation Dataset")
     input_loc = str(model_location_generator("ImageNet_data"))
     correct, torch_correct, ttnn_correct = 0, 0, 0
     data_loader = get_data_loader(input_loc, batch_size, iterations)
     for iter in range(iterations):
-        predictions = []
-        torch_predictions = []
         inputs, labels = get_batch(data_loader)
         inputs = image_processor(inputs, return_tensors="pt")
         torch_input_tensor = inputs.pixel_values
@@ -41,8 +38,11 @@ def test_segformer_classification_demo(device, imagenet_label_dict, iterations, 
             device=device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
-        reference_model.load_state_dict(torch_model.state_dict())
-        reference_model.eval()
+        config = load_config("configs/segformer_img_classification_config.json")
+        reference_model = SegformerForImageClassificationReference(config)
+        reference_model = load_torch_model(
+            reference_model, f"", module="image_classification", model_location_generator=model_location_generator
+        )
         torch_output = reference_model(torch_input_tensor)
         parameters = preprocess_model_parameters(
             initialize_model=lambda: reference_model,
@@ -50,7 +50,7 @@ def test_segformer_classification_demo(device, imagenet_label_dict, iterations, 
             device=None,
         )
         parameters = move_to_device(parameters, device)
-        ttnn_model = TtSegformerForImageClassification(torch_model.config, parameters)
+        ttnn_model = TtSegformerForImageClassification(config, parameters)
         ttnn_output = ttnn_model(
             ttnn_input_tensor,
             output_attentions=None,
