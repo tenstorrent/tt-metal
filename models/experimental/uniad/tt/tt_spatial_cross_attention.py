@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import warnings
 import ttnn
 from models.experimental.uniad.tt.tt_temporal_self_attention import multi_scale_deformable_attn_pytorch

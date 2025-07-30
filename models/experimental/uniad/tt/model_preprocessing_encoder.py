@@ -22,6 +22,47 @@ from ttnn.model_preprocessing import (
 
 def custom_preprocessor(model, name):
     parameters = {}
+
+    # if isinstance(model, QueryInteractionModule):
+    #     parameters = {
+    #     "query_interact": {
+    #         "self_attn": {
+    #             "out_proj": {
+    #                 "weight": preprocess_linear_weight(model.self_attn.out_proj.weight, dtype=ttnn.bfloat16),
+    #                 "bias": preprocess_linear_bias(model.self_attn.out_proj.bias, dtype=ttnn.bfloat16),
+    #             }
+    #         },
+    #         "linear1": {
+    #             "weight": preprocess_linear_weight(model.linear1.weight, dtype=ttnn.bfloat16),
+    #             "bias": preprocess_linear_bias(model.linear1.bias, dtype=ttnn.bfloat16),
+    #         },
+    #         "linear2": {
+    #             "weight": preprocess_linear_weight(model.linear2.weight, dtype=ttnn.bfloat16),
+    #             "bias": preprocess_linear_bias(model.linear2.bias, dtype=ttnn.bfloat16),
+    #         },
+    #         "linear_pos1": {
+    #             "weight": preprocess_linear_weight(model.linear_pos1.weight, dtype=ttnn.bfloat16),
+    #             "bias": preprocess_linear_bias(model.linear_pos1.bias, dtype=ttnn.bfloat16),
+    #         },
+    #         "linear_pos2": {
+    #             "weight": preprocess_linear_weight(model.linear_pos2.weight, dtype=ttnn.bfloat16),
+    #             "bias": preprocess_linear_bias(model.linear_pos2.bias, dtype=ttnn.bfloat16),
+    #         },
+    #         "linear_feat1": {
+    #             "weight": preprocess_linear_weight(model.linear_feat1.weight, dtype=ttnn.bfloat16),
+    #             "bias": preprocess_linear_bias(model.linear_feat1.bias, dtype=ttnn.bfloat16),
+    #         },
+    #         "linear_feat2": {
+    #             "weight": preprocess_linear_weight(model.linear_feat2.weight, dtype=ttnn.bfloat16),
+    #             "bias": preprocess_linear_bias(model.linear_feat2.bias, dtype=ttnn.bfloat16),
+    #         },
+    #         "norm_pos": preprocess_layernorm(model.norm_pos, dtype=ttnn.bfloat16),
+    #         "norm_feat": preprocess_layernorm(model.norm_feat, dtype=ttnn.bfloat16),
+    #         "norm1": preprocess_layernorm(model.norm1, dtype=ttnn.bfloat16),
+    #         "norm2": preprocess_layernorm(model.norm2, dtype=ttnn.bfloat16),
+    #     }
+    # }
+
     if isinstance(model, FPN):
         parameters["fpn"] = {}
 
@@ -81,8 +122,8 @@ def custom_preprocessor(model, name):
         )
         bias = model.fpn_convs[1].conv.bias.reshape((1, 1, 1, -1))
         parameters["fpn"]["fpn_convs"]["1"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
-        parameters["fpn"]["fpn_convs"]["1"]["conv"]["height"] = 40
-        parameters["fpn"]["fpn_convs"]["1"]["conv"]["width"] = 23
+        parameters["fpn"]["fpn_convs"]["1"]["conv"]["height"] = 80
+        parameters["fpn"]["fpn_convs"]["1"]["conv"]["width"] = 45
         parameters["fpn"]["fpn_convs"]["1"]["conv"]["batch"] = 6
 
         parameters["fpn"]["fpn_convs"]["2"] = {}
@@ -92,8 +133,8 @@ def custom_preprocessor(model, name):
         )
         bias = model.fpn_convs[2].conv.bias.reshape((1, 1, 1, -1))
         parameters["fpn"]["fpn_convs"]["2"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
-        parameters["fpn"]["fpn_convs"]["2"]["conv"]["height"] = 20
-        parameters["fpn"]["fpn_convs"]["2"]["conv"]["width"] = 12
+        parameters["fpn"]["fpn_convs"]["2"]["conv"]["height"] = 40
+        parameters["fpn"]["fpn_convs"]["2"]["conv"]["width"] = 23
         parameters["fpn"]["fpn_convs"]["2"]["conv"]["batch"] = 6
 
     if isinstance(model, TemporalSelfAttention):
@@ -438,3 +479,46 @@ def create_uniad_model_parameters_encoder(model, device=None):
         device=device,
     )
     return parameters
+
+
+import ttnn
+import torch.nn as nn
+
+from ttnn.model_preprocessing import (
+    preprocess_linear_weight,
+    preprocess_linear_bias,
+    preprocess_layernorm_parameter,
+)
+
+
+def extract_sequential_branch(module_list, dtype, device):
+    branch_params = {}
+
+    for i, mod in enumerate(module_list):
+        layer_params = {}
+        layer_index = 0
+
+        if isinstance(mod, nn.Sequential):
+            layers = mod
+        elif hasattr(mod, "mlp") and isinstance(mod.mlp, nn.Sequential):
+            layers = mod.mlp
+        else:
+            layers = [mod]
+
+        for layer in layers:
+            if isinstance(layer, nn.Linear):
+                layer_params[str(layer_index)] = {
+                    "weight": ttnn.to_device(preprocess_linear_weight(layer.weight, dtype=dtype), device=device),
+                    "bias": ttnn.to_device(preprocess_linear_bias(layer.bias, dtype=dtype), device=device),
+                }
+                layer_index += 1
+            elif isinstance(layer, nn.LayerNorm):
+                layer_params[f"{layer_index}_norm"] = {
+                    "weight": preprocess_layernorm_parameter(layer.weight, dtype=dtype),
+                    "bias": preprocess_layernorm_parameter(layer.bias, dtype=dtype),
+                }
+                layer_index += 1
+
+        branch_params[str(i)] = layer_params
+
+    return branch_params

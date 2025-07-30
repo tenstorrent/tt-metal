@@ -2,66 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-
-import torch
-import torch.nn.functional as F
-import itertools
-import numpy as np
 from typing import Any, Dict, List, Tuple, Union, Sequence
+import torch
+import ttnn
 from torch import Tensor
-
-
-def multi_scale_deformable_attn_pytorch(
-    value: torch.Tensor,
-    value_spatial_shapes: torch.Tensor,
-    level_start_index: torch.Tensor,
-    sampling_locations: torch.Tensor,
-    attention_weights: torch.Tensor,
-    im2col_step: torch.Tensor,
-) -> torch.Tensor:
-    bs, num_keys, num_heads, head_dim = value.shape
-    num_levels = value_spatial_shapes.shape[0]
-    num_queries = sampling_locations.shape[1]
-    num_points = sampling_locations.shape[4]
-
-    # Split value into a list of tensors for each level
-    value_list = []
-    start = 0
-    for lvl in range(num_levels):
-        h_l, w_l = value_spatial_shapes[lvl]
-        h_l = int(h_l.item())
-        w_l = int(w_l.item())
-        len_l = h_l * w_l
-        value_l = value[:, start : start + len_l, :, :]
-        value_list.append(value_l)
-        start += len_l
-
-    # Normalize sampling locations to [-1, 1]
-    sampling_grids = []
-    for lvl in range(num_levels):
-        h_l, w_l = value_spatial_shapes[lvl]
-        h_l = int(h_l.item())
-        w_l = int(w_l.item())
-        grid = sampling_locations[:, :, :, lvl, :, :]
-        grid = grid.clone()
-        grid[..., 0] = grid[..., 0] / w_l * 2 - 1
-        grid[..., 1] = grid[..., 1] / h_l * 2 - 1
-        sampling_grids.append(grid)
-
-    # Perform sampling and attention
-    output = torch.zeros(bs, num_queries, num_heads, head_dim, device=value.device)
-    for lvl in range(num_levels):
-        h_l, w_l = value_spatial_shapes[lvl]
-        h_l = int(h_l.item())
-        w_l = int(w_l.item())
-        value_l = value_list[lvl].permute(0, 2, 3, 1).reshape(bs * num_heads, head_dim, h_l, w_l)
-        grid = sampling_grids[lvl].permute(0, 2, 1, 3, 4).reshape(bs * num_heads, num_queries * num_points, 1, 2)
-        sampled = F.grid_sample(value_l, grid, mode="bilinear", padding_mode="zeros", align_corners=False)
-        sampled = sampled.view(bs, num_heads, head_dim, num_queries, num_points).permute(0, 3, 1, 4, 2)
-        attn = attention_weights[:, :, :, lvl, :].unsqueeze(-1)
-        output += (sampled * attn).sum(-2)
-
-    return output.view(bs, num_queries, num_heads * head_dim)
+import numpy as np
 
 
 class Instances:
@@ -88,6 +33,7 @@ class Instances:
     """
 
     def __init__(self, image_size: Tuple[int, int], **kwargs: Any):
+        print("image_size in init", image_size)
         """
         Args:
             image_size (height, width): the spatial size of the image.
@@ -123,11 +69,9 @@ class Instances:
         The length of `value` must be the number of instances,
         and must agree with other existing fields in this object.
         """
-        data_len = len(value)
-        if len(self._fields):
-            assert len(self) == data_len, "Adding a field of length {} to a Instances of length {}".format(
-                data_len, len(self)
-            )
+        print("set in ttnn Instance", type(value[0]), value.shape)
+        data_len = value.shape[0]
+        print("data_len", data_len)
         self._fields[name] = value
 
     def has(self, name: str) -> bool:
@@ -197,6 +141,7 @@ class Instances:
             # print(k, type(item), 'getitem', item.type(), item.dtype)
             # if index by torch.BoolTensor
             if k == "kalman_models" and isinstance(item, torch.Tensor):
+                # print(item.shape, 'in get item')
                 ret_list = []
                 for i, if_true in enumerate(item):
                     if if_true:
@@ -204,6 +149,7 @@ class Instances:
                 ret.set(k, ret_list)
 
             else:
+                # print("INSDIE class INSTANCES",k, v[item])
                 ret.set(k, v)
         return ret
 
@@ -224,6 +170,9 @@ class Instances:
         Returns:
             Instances
         """
+        print("instance_lists", len(instance_lists))
+        for i in instance_lists:
+            print(type(i), Instances)
         assert all(isinstance(i, Instances) for i in instance_lists)
         assert len(instance_lists) > 0
         if len(instance_lists) == 1:
@@ -236,14 +185,36 @@ class Instances:
         for k in instance_lists[0]._fields.keys():
             values = [i.get(k) for i in instance_lists]
             v0 = values[0]
+            for i in range(len(values)):
+                values[i] = ttnn.to_layout(values[i], layout=ttnn.TILE_LAYOUT)
+                # values[i] = ttnn.to_torch(values[i])
             if isinstance(v0, torch.Tensor):
-                values = torch.cat(values, dim=0)
+                print("Here 1")
+                # values = torch.cat(values, dim=0)
             elif isinstance(v0, list):
-                values = list(itertools.chain(*values))
+                print("Here 2")
+                # values = list(itertools.chain(*values))
             elif hasattr(type(v0), "cat"):
-                values = type(v0).cat(values)
+                print("Here 3")
+                # values = type(v0).cat(values)
             else:
-                raise ValueError("Unsupported type {} for concatenation".format(type(v0)))
+                print("values for ttnn concat", len(values), values[0].shape, values[1].shape)
+                if len(values[0].shape) == 1:
+                    values[0] = ttnn.add(values[0], 0, dtype=ttnn.bfloat16)
+                    values[1] = ttnn.add(values[1], 0, dtype=ttnn.bfloat16)
+                    values[0] = ttnn.unsqueeze(values[0], 0)
+                    values[1] = ttnn.unsqueeze(values[1], 0)
+                    print(
+                        values[0].shape,
+                        values[1].shape,
+                        values[0].get_dtype(),
+                        values[1].get_dtype(),
+                    )
+                    values = ttnn.concat(values, dim=1)
+                else:
+                    values = ttnn.concat(values, dim=0)
+                print("After concat ttnn", values.shape)
+
             ret.set(k, values)
         return ret
 
@@ -259,28 +230,28 @@ class Instances:
 
 
 # taken from mmdet3d/structures/bbox_3d/base_box3d.py
-class BaseInstance3DBoxes:
-    """Base class for 3D Boxes.
-    Note:
-        The box is bottom centered, i.e. the relative position of origin in the
-        box is (0.5, 0.5, 0).
-    Args:
-        tensor (Tensor or np.ndarray or Sequence[Sequence[float]]): The boxes
-            data with shape (N, box_dim).
-        box_dim (int): Number of the dimension of a box. Each row is
-            (x, y, z, x_size, y_size, z_size, yaw). Defaults to 7.
-        with_yaw (bool): Whether the box is with yaw rotation. If False, the
-            value of yaw will be set to 0 as minmax boxes. Defaults to True.
-        origin (Tuple[float]): Relative position of the box origin.
-            Defaults to (0.5, 0.5, 0). This will guide the box be converted to
-            (0.5, 0.5, 0) mode.
-    Attributes:
-        tensor (Tensor): Float matrix with shape (N, box_dim).
-        box_dim (int): Integer indicating the dimension of a box. Each row is
-            (x, y, z, x_size, y_size, z_size, yaw, ...).
-        with_yaw (bool): If True, the value of yaw will be set to 0 as minmax
-            boxes.
-    """
+class TtBaseInstance3DBoxes:
+    # """Base class for 3D Boxes.
+    # Note:
+    #     The box is bottom centered, i.e. the relative position of origin in the
+    #     box is (0.5, 0.5, 0).
+    # Args:
+    #     tensor (Tensor or np.ndarray or Sequence[Sequence[float]]): The boxes
+    #         data with shape (N, box_dim).
+    #     box_dim (int): Number of the dimension of a box. Each row is
+    #         (x, y, z, x_size, y_size, z_size, yaw). Defaults to 7.
+    #     with_yaw (bool): Whether the box is with yaw rotation. If False, the
+    #         value of yaw will be set to 0 as minmax boxes. Defaults to True.
+    #     origin (Tuple[float]): Relative position of the box origin.
+    #         Defaults to (0.5, 0.5, 0). This will guide the box be converted to
+    #         (0.5, 0.5, 0) mode.
+    # Attributes:
+    #     tensor (Tensor): Float matrix with shape (N, box_dim).
+    #     box_dim (int): Integer indicating the dimension of a box. Each row is
+    #         (x, y, z, x_size, y_size, z_size, yaw, ...).
+    #     with_yaw (bool): If True, the value of yaw will be set to 0 as minmax
+    #         boxes.
+    # """
 
     YAW_AXIS: int = 0
 
@@ -291,16 +262,12 @@ class BaseInstance3DBoxes:
         with_yaw: bool = True,
         origin: Tuple[float, float, float] = (0.5, 0.5, 0),
     ) -> None:
-        if isinstance(tensor, Tensor):
-            device = tensor.device
-        else:
-            device = torch.device("cpu")
-        tensor = torch.as_tensor(tensor, dtype=torch.float32, device=device)
-        if tensor.numel() == 0:
+        # tensor = torch.Tensor(tensor, dtype=ttnn.bfloat16, device=device)
+        if tensor.shape[-1] == 0:
             # Use reshape, so we don't end up creating a new tensor that does
             # not depend on the inputs (and consequently confuses jit)
             tensor = tensor.reshape((-1, box_dim))
-        assert tensor.dim() == 2 and tensor.size(-1) == box_dim, (
+        assert len(tensor.shape) == 2 and tensor.shape[-1] == box_dim, (
             "The box dimension must be 2 and the length of the last "
             f"dimension must be {box_dim}, but got boxes with shape "
             f"{tensor.shape}."
@@ -315,14 +282,14 @@ class BaseInstance3DBoxes:
         else:
             self.box_dim = box_dim
             self.with_yaw = with_yaw
-        self.tensor = tensor.clone()
+        self.tensor = ttnn.clone(tensor)
 
         if origin != (0.5, 0.5, 0):
             dst = self.tensor.new_tensor((0.5, 0.5, 0))
             src = self.tensor.new_tensor(origin)
             self.tensor[:, :3] += self.tensor[:, 3:6] * (dst - src)
 
-    def __getitem__(self, item: Union[int, slice, np.ndarray, Tensor]) -> "BaseInstance3DBoxes":
+    def __getitem__(self, item: Union[int, slice, np.ndarray, Tensor]) -> "TtBaseInstance3DBoxes":
         """
         Args:
             item (int or slice or np.ndarray or Tensor): Index of boxes.
@@ -347,7 +314,7 @@ class BaseInstance3DBoxes:
         assert b.dim() == 2, f"Indexing on Boxes with {item} failed to return a matrix!"
         return original_type(b, box_dim=self.box_dim, with_yaw=self.with_yaw)
 
-    def to(self, device: Union[str, torch.device], *args, **kwargs) -> "BaseInstance3DBoxes":
+    def to(self, device: Union[str, torch.device], *args, **kwargs) -> "TtBaseInstance3DBoxes":
         """Convert current boxes to a specific device.
         Args:
             device (str or :obj:`torch.device`): The name of the device.
@@ -373,14 +340,15 @@ class BaseInstance3DBoxes:
 
 
 # taken from mmdet3d/structures/bbox_3d/lidar_box3d.py, removed all the functions from this class as they are not  invoked
-class LiDARInstance3DBoxes(BaseInstance3DBoxes):
+class TtLiDARInstance3DBoxes(TtBaseInstance3DBoxes):
     YAW_AXIS = 2
 
     @property
     def gravity_center(self):
         """torch.Tensor: A tensor with center of each box in shape (N, 3)."""
         bottom_center = self.bottom_center
-        gravity_center = torch.zeros_like(bottom_center)
-        gravity_center[:, :2] = bottom_center[:, :2]
-        gravity_center[:, 2] = bottom_center[:, 2] + self.tensor[:, 5] * 0.5
+        gravity_center = ttnn.zeros(bottom_center.shape)  # no use
+        gravity_center1 = bottom_center[:, :2]
+        gravity_center2 = bottom_center[:, 2:3] + self.tensor[:, 5] * 0.5
+        gravity_center = ttnn.concat([gravity_center1, gravity_center2], dim=1)
         return gravity_center
