@@ -275,8 +275,6 @@ protected:
 
 using UnitMeshCQSingleCardBufferFixture = UnitMeshCQSingleCardFixture;
 
-class CommandQueueSingleCardBufferFixture : public CommandQueueSingleCardFixture {};
-
 // left in for subdevice testing
 class CommandQueueSingleCardTraceFixture : virtual public CommandQueueSingleCardFixture {
 protected:
@@ -375,8 +373,6 @@ protected:
 };
 
 class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixture {};
-
-class CommandQueueMultiDeviceBufferFixture : public CommandQueueMultiDeviceFixture {};
 
 class UnitMeshCQMultiDeviceBufferFixture : public UnitMeshCQMultiDeviceFixture {};
 
