@@ -23,7 +23,11 @@ namespace ttnn::tensor_accessor_args {
 void py_module_types(py::module& module) {
     export_enum<tensor_accessor::ArgConfig>(module);
     py::class_<tt::tt_metal::TensorAccessorArgs>(module, "TensorAccessorArgs");
-    py::class_<tensor_accessor::ArgsConfig>(module, "ArgsConfig")
+    py::class_<tensor_accessor::ArgsConfig>(module, "ArgsConfig");
+}
+
+void py_module(py::module& module) {
+    static_cast<py::class_<tensor_accessor::ArgsConfig>>(module.attr("ArgsConfig"))
         .def(py::init<>())
         .def(py::init<tensor_accessor::ArgConfig>())
         .def(py::init<tensor_accessor::ArgConfig, tensor_accessor::ArgConfig>())
@@ -33,9 +37,7 @@ void py_module_types(py::module& module) {
         .def(py::self | tensor_accessor::ArgConfig())
         .def(py::self | py::self)
         .def(py::self & tensor_accessor::ArgConfig());
-}
 
-void py_module(py::module& module) {
     static_cast<py::class_<tt::tt_metal::TensorAccessorArgs>>(module.attr("TensorAccessorArgs"))
         .def(
             py::init([](const ttnn::Tensor& tensor, tensor_accessor::ArgsConfig args_config) {
