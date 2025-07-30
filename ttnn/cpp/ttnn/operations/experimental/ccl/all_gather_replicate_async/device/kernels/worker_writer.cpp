@@ -10,6 +10,7 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <cstdint>
 #include <utility>
+#include "tt_metal/tools/profiler/experimental/fabric_event_profiler.hpp"
 
 using address_t = uint32_t;
 FORCE_INLINE void advance_local_read_address_for_fabric_write(
@@ -132,6 +133,8 @@ void kernel_main() {
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_forward);
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
+    RECORD_FABRIC_HEADER(pkt_hdr_forward);
+    RECORD_FABRIC_HEADER(pkt_hdr_backward);
     pkt_hdr_forward->to_chip_multicast(
         tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
     pkt_hdr_backward->to_chip_multicast(
