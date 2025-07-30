@@ -11,6 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -68,10 +69,10 @@ operation::ProgramWithCallbacks non_zero_indices_single_core(
         (std::uint32_t)input_cb_index,
         (std::uint32_t)output_cb_index_0,
         (std::uint32_t)output_cb_index_1,
-        (std::uint32_t)src_is_dram,
-        (std::uint32_t)out_is_dram_0,
-        (std::uint32_t)out_is_dram_1,
     };
+    TensorAccessorArgs(*input.buffer()).append_to(compile_time_args);
+    TensorAccessorArgs(*out_num_indices.buffer()).append_to(compile_time_args);
+    TensorAccessorArgs(*out_indices.buffer()).append_to(compile_time_args);
 
     const std::array run_time_args = {
         (std::uint32_t)input.buffer()->address(),
