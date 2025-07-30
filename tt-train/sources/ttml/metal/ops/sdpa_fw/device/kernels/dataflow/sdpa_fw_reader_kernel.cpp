@@ -143,27 +143,27 @@ void kernel_main() {
             cb_push_back(cb_value, kv_chunks_size);
 
             // ----- [Debug] -----
-            if (h % 2 == 0) {
-                cb_wait_front(cb_temp_accum, onetile);
-                DPRINT << "h == " << h << ", cb_temp_accum: " << ENDL();
-                print_tile(cb_temp_accum, 0, false);
+            // if (h % 2 == 0) {
+            //     cb_wait_front(cb_temp_accum, onetile);
+            //     DPRINT << "h == " << h << ", cb_temp_accum: " << ENDL();
+            //     print_tile(cb_temp_accum, 0, false);
 
-                // cb_wait_front(cb_prev_max, onetile);
-                // DPRINT << "h == " << h << ", cb_prev_max: " << ENDL();
-                // print_tile(cb_prev_max, 0, false);
+            //     // cb_wait_front(cb_prev_max, onetile);
+            //     // DPRINT << "h == " << h << ", cb_prev_max: " << ENDL();
+            //     // print_tile(cb_prev_max, 0, false);
 
-                cb_wait_front(cb_cur_max, onetile);
-                DPRINT << "h == " << h << ", cb_cur_max: " << ENDL();
-                print_tile(cb_cur_max, 0, false);
-            } else {
-                cb_wait_front(cb_temp_accum, onetile);
-                DPRINT << "h == " << h << ", cb_temp_accum: " << ENDL();
-                print_tile(cb_temp_accum, 0, false);
+            //     cb_wait_front(cb_cur_max, onetile);
+            //     DPRINT << "h == " << h << ", cb_cur_max: " << ENDL();
+            //     print_tile(cb_cur_max, 0, false);
+            // } else {
+            //     cb_wait_front(cb_temp_accum, onetile);
+            //     DPRINT << "h == " << h << ", cb_temp_accum: " << ENDL();
+            //     print_tile(cb_temp_accum, 0, false);
 
-                cb_wait_front(cb_prev_max, onetile);
-                DPRINT << "h == " << h << ", cb_prev_max: " << ENDL();
-                print_tile(cb_prev_max, 0, false);
-            }
+            //     cb_wait_front(cb_prev_max, onetile);
+            //     DPRINT << "h == " << h << ", cb_prev_max: " << ENDL();
+            //     print_tile(cb_prev_max, 0, false);
+            // }
 
             // ----- [Debug] -----
         }

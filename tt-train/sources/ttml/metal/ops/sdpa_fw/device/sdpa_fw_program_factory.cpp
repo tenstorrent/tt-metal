@@ -40,7 +40,7 @@ constexpr auto kTempAccumCbIndex = tt::CBIndex::c_7;     // used for accumulatin
 
 constexpr auto kPrevMaxValueCbIndex = tt::CBIndex::c_8;  // used for holding max value during reduce
 constexpr auto kCurMaxValueCbIndex = tt::CBIndex::c_9;   // used for holding max value during reduce
-constexpr auto kExpSumDiffCbIndex = tt::CBIndex::c_10;   // used for holding exp sum diff during reduce
+constexpr auto kExpMaxDiffCbIndex = tt::CBIndex::c_10;   // used for holding exp sum diff during reduce
 constexpr auto kPrevSumExpCbIndex = tt::CBIndex::c_11;   // used for holding exp sum during reduce
 constexpr auto kCurSumExpCbIndex = tt::CBIndex::c_12;    // used for holding exp sum during reduce
 constexpr auto kPrevMmOutCbIndex = tt::CBIndex::c_13;    // used for holding previous matmul output
@@ -51,7 +51,7 @@ constexpr auto kOutputCbIndex = tt::CBIndex::c_15;
 constexpr uint32_t kNumScalerTiles = 1U;
 constexpr uint32_t kTempAccumTiles = 1U;  //[Debug] should be 2U
 constexpr uint32_t kMaxValueHolderTiles = 1U;
-constexpr uint32_t kExpSumDiffTiles = 1U;
+constexpr uint32_t kExpMaxDiffTiles = 1U;
 constexpr uint32_t kExpSumTiles = 1U;
 
 }  // namespace
@@ -311,7 +311,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     // lets try to use precise data format for holding exp sum/diff values
     auto cb_exp_max_diff = create_circular_buffer(
-        program, all_cores, kExpSumDiffCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpSumDiffTiles);
+        program, all_cores, kExpMaxDiffCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpMaxDiffTiles);
 
     auto cb_prev_exp_sum = create_circular_buffer(
         program, all_cores, kPrevSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpSumTiles);

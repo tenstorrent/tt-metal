@@ -50,7 +50,7 @@ constexpr uint32_t cb_temp_accum = tt::CBIndex::c_7;     // used for accumulatin
 
 constexpr uint32_t cb_prev_max = tt::CBIndex::c_8;       // used to store previous max value
 constexpr uint32_t cb_cur_max = tt::CBIndex::c_9;        // used to store current max value
-constexpr uint32_t cb_exp_sum_diff = tt::CBIndex::c_10;  // used for holding exp sum diff during reduce
+constexpr uint32_t cb_exp_max_diff = tt::CBIndex::c_10;  // used for holding exp max diff during reduce
 constexpr uint32_t cb_prev_sum_exp = tt::CBIndex::c_11;  // used for holding exp sum during reduce
 constexpr uint32_t cb_cur_sum_exp = tt::CBIndex::c_12;   // used for holding exp sum during reduce
 constexpr uint32_t cb_prev_mm_out = tt::CBIndex::c_13;   // used for holding previous matmul output
@@ -68,7 +68,7 @@ const uint32_t kv_chunks_number = Ht;
 
 // TODO: maybe I can move this file to compute_common.hpp file where I have other helper functions for sdpa_fw
 template <PoolType pool_type, ReduceDim reduce_dim, uint32_t cb_qk_result, uint32_t cb_identity_scaler>
-void find_max_value(uint32_t cb_cur_max_value, uint32_t cb_prev_max_value, bool do_eltwise_max = false) {
+void update_cur_row_max_value(uint32_t cb_cur_max_value, uint32_t cb_prev_max_value, bool do_eltwise_max = false) {
     cb_wait_front(cb_qk_result, onetile);
     cb_reserve_back(cb_cur_max_value, onetile);
 
@@ -100,15 +100,179 @@ void find_max_value(uint32_t cb_cur_max_value, uint32_t cb_prev_max_value, bool 
     cb_push_back(cb_cur_max_value, onetile);
 }
 
-// /* We process data by one tile, because we read only one row of K
-//  * Maybe we can read two rows of K and V and then process data by subblocks*/
-// template <uint32_t cb_qk_result, uint32_t cb_identity_scaler>
-// void find_cur_exp_sum(uint32_t cb_cur_max_value, uint32_t cb_cur_exp_sum) {
-//     cb_wait_front(cb_qk_result, onetile);
-//     cb_wait_front(cb_cur_max_value, onetile);
-//     cb_reserve_back(cb_cur_exp_sum, onetile);
+/* We process data by one tile, because we read only one row of K
+ * Maybe we can read two rows of K and V and then process data by subblocks*/
+template <uint32_t cb_qk_result, uint32_t cb_identity_scaler>
+void apply_exp_inplace_and_find_exp_sum(uint32_t cb_cur_max_value, uint32_t cb_cur_exp_sum_holder) {
+    cb_wait_front(cb_qk_result, onetile);
+    // cb_wait_front(cb_cur_exp_sum_holder, onetile);
 
-// }
+    const uint32_t exp_dst_idx = 0;
+    sub_bcast_cols_init_short(cb_qk_result, cb_cur_exp_sum_holder);
+    tile_regs_acquire();
+    sub_tiles_bcast_cols(
+        cb_qk_result, cb_cur_exp_sum_holder, /* tile_idx */ 0, /* tile_idx */ 0, /* dst_reg_idx */ exp_dst_idx);
+    exp_tile<false>(exp_dst_idx);
+    tile_regs_commit();
+
+    tile_regs_wait();
+    // update current qk matmul result with exp values
+    cb_pop_front(cb_qk_result, onetile);
+    cb_reserve_back(cb_qk_result, onetile);
+    pack_reconfig_data_format(cb_qk_result);
+    pack_tile(exp_dst_idx, cb_qk_result);
+
+    /* update current exp sum with exp values
+     * at the moment we pack one tile here
+     * but we can use L1 accumlator to pack more tiles
+     * in case we will be able to read more then one row of K and V
+     */
+    cb_reserve_back(cb_cur_exp_sum_holder, onetile);
+    pack_reconfig_data_format(cb_cur_exp_sum_holder);
+    pack_tile(exp_dst_idx, cb_cur_exp_sum_holder);
+    tile_regs_release();
+
+    cb_push_back(cb_qk_result, onetile);
+    cb_push_back(cb_cur_exp_sum_holder, onetile);
+}
+
+void matmul_qk_by_v(uint32_t cb_qk_result, uint32_t cb_cur_mm_out_holder) {
+    cb_wait_front(cb_temp_accum, onetile);
+    cb_wait_front(cb_value, kv_chunks_size);
+    cb_reserve_back(cb_cur_mm_out_holder, q_chunk_size);
+
+    // TODO[check]: check whether I can use mm_init_short here instead of full init
+    // mm_init_short(cb_qk_result, cb_value, /* transpose */ 0);
+    mm_init(cb_qk_result, cb_value, cb_cur_mm_out_holder, /* transpose */ 0);
+    for (uint32_t tile_idx = 0; tile_idx < kv_chunks_size; tile_idx += block_size) {
+        tile_regs_acquire();
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            matmul_tiles(
+                cb_qk_result,
+                cb_value,
+                /* tile_idx */ 0,
+                /* tile_idx */ tile_idx + block_idx,
+                block_idx,
+                0);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            pack_tile(block_idx, cb_cur_mm_out_holder);
+        }
+        tile_regs_release();
+    }
+    cb_push_back(cb_cur_mm_out_holder, q_chunk_size);
+}
+
+void update_exp_max_diff(uint32_t cb_prev_max_value, uint32_t cb_cur_max_value) {
+    cb_wait_front(cb_prev_max_value, onetile);
+    cb_wait_front(cb_cur_max_value, onetile);
+
+    cb_reserve_back(cb_exp_max_diff, onetile);
+
+    const uint32_t exp_max_diff_dst_idx = 0;
+    tile_regs_acquire();
+    sub_tiles_init(cb_prev_max_value, cb_cur_max_value);
+    sub_tiles(
+        cb_prev_max_value,
+        cb_cur_max_value,
+        /* tile_idx */ 0,
+        /* tile_idx */ 0,
+        /* dst_reg_idx */ exp_max_diff_dst_idx);
+
+    exp_tile_init<false>();
+    exp_tile<false>(exp_max_diff_dst_idx);
+    tile_regs_commit();
+
+    tile_regs_wait();
+    pack_reconfig_data_format(cb_exp_max_diff);
+    pack_tile(exp_max_diff_dst_idx, cb_exp_max_diff);
+    tile_regs_release();
+    cb_push_back(cb_exp_max_diff, onetile);
+}
+
+void update_cur_exp_sum_inplace(
+    uint32_t cb_prev_sum_exp_holder, uint32_t cb_cur_sum_exp_holder, uint32_t cb_exp_max_diff_holder) {
+    cb_wait_front(cb_prev_sum_exp_holder, onetile);
+    cb_wait_front(cb_cur_sum_exp_holder, onetile);
+    cb_wait_front(cb_exp_max_diff_holder, onetile);
+
+    const uint32_t exp_sum_dst_idx = 0;
+    mul_bcast_cols_init_short(cb_prev_sum_exp_holder, cb_exp_max_diff_holder);
+    tile_regs_acquire();
+    // multiply previous exp sum with exp_max_diff
+    reconfig_data_format(cb_prev_sum_exp_holder, cb_exp_max_diff_holder);  // reconfig data format to precise
+    mul_tiles_bcast_cols(cb_prev_sum_exp_holder, cb_exp_max_diff_holder, 0, 0, exp_sum_dst_idx);
+
+    // copy current sum exp to next register
+    copy_tile_init(cb_cur_sum_exp_holder);
+    copy_tile(cb_cur_sum_exp_holder, /* tile_idx */ 0, /* register idx */ exp_sum_dst_idx + 1U);
+
+    // add to updated previous exp sum with current exp sum
+    add_binary_tile_init();
+    add_binary_tile(exp_sum_dst_idx, exp_sum_dst_idx + 1U);
+    tile_regs_commit();
+
+    tile_regs_wait();
+    cb_pop_front(cb_cur_sum_exp_holder, onetile);
+    cb_reserve_back(cb_cur_sum_exp_holder, onetile);
+    pack_reconfig_data_format(cb_cur_sum_exp_holder);
+    pack_tile(exp_sum_dst_idx, cb_cur_sum_exp_holder);
+    tile_regs_release();
+    cb_push_back(cb_cur_sum_exp_holder, onetile);
+}
+
+/*This uses L1 accumulation to accumulate onto cb_cur_mm_out_holder*/
+void update_cur_mm_out(uint32_t cb_prev_mm_out_holder, uint32_t cb_cur_mm_out_holder, uint32_t cb_exp_max_diff_holder) {
+    cb_wait_front(cb_prev_mm_out_holder, q_chunk_size);
+    // cb_wait_front(cb_cur_mm_out_holder, q_chunk_size);
+    cb_wait_front(cb_exp_max_diff_holder, onetile);
+
+    PACK((llk_pack_reconfig_l1_acc(true)));  // enable L1 accumulation
+    pack_reconfig_data_format(cb_cur_mm_out_holder);
+
+    reconfig_data_format(cb_prev_mm_out_holder, cb_exp_max_diff_holder);
+    mul_bcast_cols_init_short(cb_prev_mm_out_holder, cb_exp_max_diff_holder);
+    for (uint32_t tile_idx = 0; tile_idx < q_chunk_size; tile_idx += block_size) {
+        tile_regs_acquire();
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            mul_tiles_bcast_cols(cb_prev_mm_out_holder, cb_exp_max_diff_holder, tile_idx + block_idx, 0, block_idx);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            pack_tile(block_idx, cb_cur_mm_out_holder);
+        }
+        tile_regs_release();
+    }
+    PACK((llk_pack_reconfig_l1_acc(false)));  // disable L1 accumulation
+    cb_pop_front(cb_cur_mm_out_holder, q_chunk_size);
+    cb_reserve_back(cb_cur_mm_out_holder, q_chunk_size);
+    cb_push_back(cb_cur_mm_out_holder, q_chunk_size);
+}
+
+void recip_tile_inplace(uint32_t in_cb) {
+    cb_wait_front(in_cb, onetile);
+
+    copy_tile_to_dst_init_short(in_cb);
+    recip_tile_init();
+    reconfig_data_format_srca(in_cb);
+    pack_reconfig_data_format(in_cb);
+
+    const uint32_t recip_reg_idx = 0;
+    tile_regs_acquire();
+    copy_tile(in_cb, 0, recip_reg_idx);
+    recip_tile(0, static_cast<int>(VectorMode::C));
+    tile_regs_commit();
+
+    tile_regs_wait();
+    cb_pop_front(in_cb, onetile);
+    cb_reserve_back(in_cb, onetile);
+    pack_tile(recip_reg_idx, in_cb);
+    tile_regs_release();
+    cb_push_back(in_cb, onetile);
+}
 
 void MAIN {
     init_sfpu(cb_query, cb_output);
@@ -118,18 +282,20 @@ void MAIN {
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         cb_wait_front(cb_query, q_chunk_size);
         cb_wait_front(cb_attn_mask, Ht);  // wait until reader kernel has written kv_chunks_size tiles to cb_attn_mask
-        cb_reserve_back(cb_output, q_chunk_size);
 
         // set up ping pong buffers
         // we will swap these buffer after each row processing to avoid overwriting previous results
         uint32_t alias_cb_prev_max = cb_prev_max;
         uint32_t alias_cb_cur_max = cb_cur_max;
+        uint32_t alias_cb_prev_sum_exp = cb_prev_sum_exp;
+        uint32_t alias_cb_cur_sum_exp = cb_cur_sum_exp;
+        uint32_t alias_cb_prev_mm_out = cb_prev_mm_out;
+        uint32_t alias_cb_cur_mm_out = cb_cur_mm_out;
 
         const uint32_t matmul_accum_reg = 0;
         const uint32_t mask_register = 1U;                 // mask register should be next to data register
         for (uint32_t h = 0; h < kv_chunks_number; ++h) {  // read all
             cb_wait_front(cb_key, kv_chunks_size);
-            cb_wait_front(cb_value, kv_chunks_size);
 
             mm_init(cb_query, cb_key, cb_temp_accum, /* transpose */ 1);
             // TODO[check]: check whether I can use mm_init_short here instead of full init
@@ -159,7 +325,8 @@ void MAIN {
             copy_tile_init(cb_attn_mask);
             copy_tile(
                 cb_attn_mask,
-                /* tile_idx */ h,  // row of K define the column in (QK^T) matrix, so it define the column of attn_mask
+                /* tile_idx */ h,  // row of K define the column in (QK^T) matrix, so it define the column of
+                                   // attn_mask
                 /* register idx */ mask_register);
 
             // Apply the attention mask to Q @ K^T scores:
@@ -170,7 +337,8 @@ void MAIN {
             binop_with_scalar_tile_init();
             // mul_unary_tile(matmul_accum_reg, scaler_bits);   // multiply by scaler factor
             add_unary_tile(mask_register, minus_one_bits);  // subtract 1.0 from mask, so it becomes 0.0 and -1.0
-            // mul_unary_tile(mask_register, custom_inf_bits);  // multiply by 1e9F to transform mask to 0.0 and -1e9F
+            // mul_unary_tile(mask_register, custom_inf_bits);  // multiply by 1e9F to transform mask to 0.0 and
+            // -1e9F
 
             // Add mask to scaled matmul result:
             // masked positions receive large negative values (will be 0.0 after softmax),
@@ -197,54 +365,106 @@ void MAIN {
              * else:
              *  cur_max = max(qk, dim=-1)
              */
-            find_max_value<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_temp_accum, cb_reduction_scaler>(
+            update_cur_row_max_value<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_temp_accum, cb_reduction_scaler>(
                 alias_cb_cur_max, alias_cb_prev_max, /* if it first reduction in a row*/ h > 0);
 
-            // wait for Q_chunk by K_chunk result to be ready
-            cb_wait_front(cb_temp_accum, onetile);
-            mm_init(cb_temp_accum, cb_value, cb_output, /* transpose */ 0);
-            // TODO[check]: check whether I can use mm_init_short here instead of full init
-            // mm_init_short(cb_temp_accum, cb_value, /* transpose */ 0);
-            for (uint32_t tile_idx = 0; tile_idx < kv_chunks_size; tile_idx += block_size) {
-                tile_regs_acquire();
-                for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                    matmul_tiles(
-                        cb_temp_accum,
-                        cb_value,
-                        /* tile_idx */ 0,
-                        /* tile_idx */ tile_idx + block_idx,
-                        block_idx,
-                        0);
-                }
-                tile_regs_commit();
+            /* apply exp on qk_result inplace and */
+            apply_exp_inplace_and_find_exp_sum<cb_temp_accum, cb_reduction_scaler>(
+                alias_cb_cur_max, alias_cb_cur_sum_exp);
 
-                tile_regs_wait();
-                if (h > 0) {
-                    // if in the same q_chunk(row) continue accumulating
-                    PACK((llk_pack_reconfig_l1_acc(1)));
-                }
-
-                // TODO[improve]: change block_idx/size naming to dst_reg_idx/count to be more clear
-                for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
-                    pack_tile<true>(
-                        /* dst_reg_idx */ block_idx, /* cb_idx */ cb_output, /* tile_idx */ tile_idx + block_idx);
-                }
-                tile_regs_release();
-                PACK((llk_pack_reconfig_l1_acc(0)));
-            }
-
-            if (h > 0) {
-                cb_pop_front(alias_cb_prev_max, onetile);  // pop previous max after processing  K and V row
-            }
-            std::swap(alias_cb_prev_max, alias_cb_cur_max);  // swap buffers for next iteration
-
-            // pop data from circular buffers
-            cb_pop_front(cb_temp_accum, onetile);
+            /* wait on exp(qk_result) and multiply it by V row*/
+            matmul_qk_by_v(cb_temp_accum, alias_cb_cur_mm_out);
+            cb_pop_front(cb_temp_accum, onetile);  // pop exp(qk_result) to make space for next row
             cb_pop_front(cb_value, kv_chunks_size);
+
+            /* if we process not first row of K and V:
+             * we need to update exp_max_diff = exp(cur_max_value - prev_max_value)
+             * we need to update previous exp sum with exp_max_diff and add it to current exp sum
+             * we need to update previous matmul output with exp_max_diff and add it to current matmul output
+             */
+            if (h > 0) {
+                // update exp_max_diff = exp(cur_max_value - prev_max_value)
+                update_exp_max_diff(alias_cb_prev_max, alias_cb_cur_max);
+                cb_pop_front(alias_cb_prev_max, onetile);
+
+                // update exp sum
+                update_cur_exp_sum_inplace(alias_cb_prev_sum_exp, alias_cb_cur_sum_exp, cb_exp_max_diff);
+                cb_pop_front(alias_cb_prev_sum_exp, onetile);
+
+                // update previous matmul output with exp_max_diff and add it to current matmul output
+                update_cur_mm_out(alias_cb_prev_mm_out, alias_cb_cur_mm_out, cb_exp_max_diff);
+                cb_pop_front(cb_exp_max_diff, onetile);
+            }
+
+            // wait for exp(qk_mm_result) to be ready
+            // cb_wait_front(cb_temp_accum, onetile);
+            // cb_wait_front(cb_value, kv_chunks_size);
+            // mm_init(cb_temp_accum, cb_value, cb_output, /* transpose */ 0);
+            // // TODO[check]: check whether I can use mm_init_short here instead of full init
+            // // mm_init_short(cb_temp_accum, cb_value, /* transpose */ 0);
+            // for (uint32_t tile_idx = 0; tile_idx < kv_chunks_size; tile_idx += block_size) {
+            //     tile_regs_acquire();
+            //     for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            //         matmul_tiles(
+            //             cb_temp_accum,
+            //             cb_value,
+            //             /* tile_idx */ 0,
+            //             /* tile_idx */ tile_idx + block_idx,
+            //             block_idx,
+            //             0);
+            //     }
+            //     tile_regs_commit();
+
+            //     tile_regs_wait();
+            //     if (h > 0) {
+            //         // if in the same q_chunk(row) continue accumulating
+            //         PACK((llk_pack_reconfig_l1_acc(1)));
+            //     }
+
+            //     // TODO[improve]: change block_idx/size naming to dst_reg_idx/count to be more clear
+            //     for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+            //         pack_tile<true>(
+            //             /* dst_reg_idx */ block_idx, /* cb_idx */ cb_output, /* tile_idx */ tile_idx + block_idx);
+            //     }
+            //     tile_regs_release();
+            //     PACK((llk_pack_reconfig_l1_acc(0)));
+            // }
+
+            // swap buffers for next iteration
+            std::swap(alias_cb_prev_max, alias_cb_cur_max);
+            std::swap(alias_cb_prev_sum_exp, alias_cb_cur_sum_exp);
+            std::swap(alias_cb_prev_mm_out, alias_cb_cur_mm_out);
         }
-        // cb_pop_front(cb_scaler, onetile);  // pop scaler after processing all K and V rows
-        cb_pop_front(cb_attn_mask, Ht);  // pop attn_mask after processing all K and V rows
+
+        // update final output
+        cb_reserve_back(cb_output, q_chunk_size);
+        pack_reconfig_data_format(cb_output);
+
+        recip_tile_inplace(alias_cb_prev_sum_exp);  // calculate 1/sum(exp(x)) and store it in cb_prev_sum_exp
+        // cb_wait_front(alias_cb_prev_sum_exp, onetile);
+        // cb_wait_front(alias_cb_prev_mm_out, q_chunk_size);
+
+        reconfig_data_format(alias_cb_prev_mm_out, alias_cb_prev_sum_exp);
+        mul_bcast_cols_init_short(alias_cb_prev_mm_out, alias_cb_prev_sum_exp);
+        for (uint32_t tile_idx = 0; tile_idx < q_chunk_size; tile_idx += block_size) {
+            tile_regs_acquire();
+            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                mul_tiles_bcast_cols(alias_cb_prev_mm_out, alias_cb_prev_sum_exp, tile_idx + block_idx, 0, block_idx);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
+                pack_tile(block_idx, cb_output);
+            }
+            tile_regs_release();
+        }
         cb_push_back(cb_output, q_chunk_size);
+
+        cb_pop_front(alias_cb_prev_mm_out, q_chunk_size);  // pop previous matmul output to make space for next row
+        cb_pop_front(alias_cb_prev_max, onetile);
+        cb_pop_front(alias_cb_prev_sum_exp, onetile);  // pop previous exp
+
+        cb_pop_front(cb_attn_mask, Ht);  // pop attn_mask after processing all K and V rows
         cb_pop_front(cb_query, q_chunk_size);
     }
 }

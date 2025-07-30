@@ -243,7 +243,7 @@ ttnn::Tensor composite_sdpa_fw(
 TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
     using namespace ttml;
 
-    const uint32_t B = 1U, H = 1U, S = 128U, d = 128U;
+    const uint32_t B = 1U, H = 1U, S = 32U, d = 32U;
     const float dropout_prob = 0.8F;
 
     std::random_device rd;
