@@ -240,7 +240,7 @@ def test_tt_model_acc(
         )
 
         # Sampling
-        tt_out_tok = tt_sampling(tt_out[0], top_k, top_p, seed)
+        tt_out_tok = tt_sampling(tt_out[0], seed)
 
         # Update the idxs
         ttnn.plus_one(

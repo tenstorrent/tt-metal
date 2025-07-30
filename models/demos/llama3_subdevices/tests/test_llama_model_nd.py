@@ -217,7 +217,7 @@ def test_llama_model_inference(
                 page_table=page_table_tt,
             )
             # Sampling
-            tt_out_tok = tt_sampling(tt_out[0], top_k, top_p, seed)
+            tt_out_tok = tt_sampling(tt_out[0], seed)
 
             tt_out_tok_device0 = ttnn.get_device_tensors(tt_out_tok)[0]
             tt_out_tok_cpu = tt_out_tok_device0.cpu(blocking=True, cq_id=0)
