@@ -766,7 +766,7 @@ void RunTestUnicastTGGateways(BaseFabricFixture* fixture) {
         GTEST_SKIP();
     }
 
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::ClusterType::TG) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::TG) {
         log_info(tt::LogTest, "This test is only for TG");
         GTEST_SKIP();
     }
