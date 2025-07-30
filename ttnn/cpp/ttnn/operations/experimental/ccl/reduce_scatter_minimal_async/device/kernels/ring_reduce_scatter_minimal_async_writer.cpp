@@ -6,6 +6,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
@@ -53,6 +54,10 @@ constexpr size_t fabric_mux_buffer_index_address = get_compile_time_arg_val(25);
 constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(26);
 constexpr uint8_t fabric_mux_channel_id = get_compile_time_arg_val(27);
 constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(28);
+constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info =
+    ccl_routing_utils::get_line_unicast_route_info_from_args<29>();
+constexpr ccl_routing_utils::line_multicast_route_info_t multicast_route_info =
+    ccl_routing_utils::get_line_multicast_route_info_from_args<29 + ccl_routing_utils::num_line_unicast_args>();
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -89,7 +94,7 @@ void kernel_main() {
     uint32_t termination_master_noc_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_mux_clients = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 29;
+    constexpr uint32_t ct_idx = 29 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
 
 #ifdef INTERMEDIATE_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -175,7 +180,7 @@ void kernel_main() {
 
     // pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
-    pkt_hdr->to_chip_unicast(1);
+    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, unicast_route_info);
 
     volatile PACKET_HEADER_TYPE* pkt_hdr_seminc =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
@@ -189,8 +194,8 @@ void kernel_main() {
             safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
         pkt_hdr_seminc->to_noc_unicast_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
-        pkt_hdr_seminc->to_chip_unicast(1);
-	tt::tt_fabric::fabric_atomic_inc(mux_connection_handle, pkt_hdr_seminc);
+        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
+        tt::tt_fabric::fabric_atomic_inc(mux_connection_handle, pkt_hdr_seminc);
 
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
@@ -342,7 +347,7 @@ void kernel_main() {
                             out_ready_sem_noc_addr_in_pkt,
                             static_cast<uint16_t>(1),  // increment 1
                             32});
-                        pkt_hdr_seminc->to_chip_unicast(1);
+                        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
                         tt::tt_fabric::fabric_atomic_inc(mux_connection_handle, pkt_hdr_seminc);
                     }
                 }
@@ -355,7 +360,7 @@ void kernel_main() {
                         out_ready_sem_noc_addr_in_pkt,
                         static_cast<uint16_t>(1),  // increment 1
                         32});
-                    pkt_hdr_seminc->to_chip_unicast(1);
+                        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
                     tt::tt_fabric::fabric_atomic_inc(mux_connection_handle, pkt_hdr_seminc);
                 }
                 noc_async_writes_flushed();
@@ -411,8 +416,7 @@ void kernel_main() {
                     static_cast<uint16_t>(1),  // increment 1
                     32});
                 // Write the mcast packet
-                pkt_hdr_seminc->to_chip_multicast(
-                    tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(ring_size - 1)});
+                ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, multicast_route_info);
                 tt::tt_fabric::fabric_atomic_inc(mux_connection_handle, pkt_hdr_seminc);
                 noc_async_writes_flushed();
             }
