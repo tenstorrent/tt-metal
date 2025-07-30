@@ -32,3 +32,26 @@ Command to run the inference pipeline with random weights and random tensor:
 ```
 pytest models/experimental/swin_v2/tests/test_ttnn_swin_v2_s.py
 ```
+
+## Model performant running with Trace+2CQ
+Use the following command to run the e2e perf:
+- end-2-end perf is 6 FPS
+
+-  For overall rutime inference (end-2-end), use the following command to run the demo:
+
+    ```sh
+    pytest --disable-warnings models/experimental/swin_v2/tests/test_e2e_performant.py
+    ```
+
+
+### Note:
+
+- When running the ImageNet demo for the first time, you need to authenticate with Hugging Face by either running `huggingface-cli login` or setting the token directly using `export HF_TOKEN=<your_token>`.
+- To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens.
+
+
+- Use the following command to run the demo for Imagenet-1K:
+
+  ```sh
+  pytest --disable-warnings models/demos/swin_v2/demo/demo.py::test_run_swin_v2_trace_2cqs_inference
+  ```
