@@ -228,7 +228,7 @@ bool matmul_multi_core_single_dram(std::shared_ptr<distributed::MeshDevice> mesh
         .writer_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unswizzle.cpp"};
 
     auto [workload, mm_reader_kernel, unary_writer_kernel] =
-        unit_tests_common::matmul::test_matmul_multi_core_X_dram::create_program(
+        unit_tests_common::matmul::multi_core_X_dram::create_program(
             mesh_device,
             matmul_cfg,  // not multi dram
             num_cores_r,
