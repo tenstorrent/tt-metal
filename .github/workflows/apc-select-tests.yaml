@@ -22,59 +22,31 @@ on:
           - "22.04"
           - "24.04"
         default: "22.04"
-
-      core-unit-tests:
-        description: "Run Core Unit Tests (sd-unit-tests, fast-dispatch-unit-tests, fabric-unit-tests, cpp-unit-tests)"
+      tests-json:
+        description: |
+          JSON object specifying which tests to run.
+          Example: {"sd-unit-tests":true,"fast-dispatch-unit-tests":true,"fabric-unit-tests":false,"cpp-unit-tests":true,"ttnn-unit-tests":true,"models-unit-tests":true,"tt-train-cpp-unit-tests":false,"run-profiler-regression":true,"t3000-fast-tests":false,"build-and-docs":true}
         required: false
-        type: boolean
-        default: true
-
-      ttnn-model-train-tests:
-        description: "Run TTNN/Model/Train Tests (ttnn-unit-tests, models-unit-tests, tt-train-cpp-unit-tests)"
-        required: false
-        type: boolean
-        default: true
-
-      regression-performance:
-        description: "Run Regression/Performance (run-profiler-regression, t3000-fast-tests)"
-        required: false
-        type: boolean
-        default: true
-
-      build-and-docs:
-        description: "Run Build and Build Docs"
-        required: false
-        type: boolean
-        default: true
+        type: string
+        default: '{"sd-unit-tests":true,"fast-dispatch-unit-tests":true,"fabric-unit-tests":true,"cpp-unit-tests":true,"ttnn-unit-tests":true,"models-unit-tests":true,"tt-train-cpp-unit-tests":true,"run-profiler-regression":true,"t3000-fast-tests":true,"build-and-docs":true}'
 
 jobs:
+  parse-tests-json:
+    runs-on: ubuntu-latest
+    outputs:
+      tests-to-run: ${{ steps.parse.outputs.tests_to_run }}
+    steps:
+      - name: Parse tests-json to comma-separated string
+        id: parse
+        run: |
+          TESTS_JSON='${{ inputs.tests-json }}'
+          TESTS=$(echo "$TESTS_JSON" | jq -r 'to_entries | map(select(.value == true) | .key) | join(",")')
+          echo "tests_to_run=$TESTS" >> $GITHUB_OUTPUT
+
   call-post-commit:
+    needs: parse-tests-json
     uses: ./.github/workflows/all-post-commit-workflows.yaml
     with:
       build-type: ${{ inputs.build-type }}
       version: ${{ inputs.version }}
-      tests-to-run: ${{ join(
-        (inputs['core-unit-tests'] && [
-          'sd-unit-tests',
-          'fast-dispatch-unit-tests',
-          'fabric-unit-tests',
-          'cpp-unit-tests'
-        ] || [])
-        +
-        (inputs['ttnn-model-train-tests'] && [
-          'ttnn-unit-tests',
-          'models-unit-tests',
-          'tt-train-cpp-unit-tests'
-        ] || [])
-        +
-        (inputs['regression-performance'] && [
-          'run-profiler-regression',
-          't3000-fast-tests'
-        ] || [])
-        +
-        (inputs['build-and-docs'] && [
-          'build',
-          'build-docs'
-        ] || [])
-        , ','
-        ) }}
+      tests-to-run: ${{ needs.parse-tests-json.outputs.tests-to-run }}
