@@ -23,7 +23,7 @@ To obtain the perf reports through profiler, please build with the following com
 
 ### To run the Swin_S model of 512x512 resolution:
 ```
-pytest --disable-warnings tests/ttnn/integration_tests/swin_s/test_ttnn_swin_transformer.py
+pytest --disable-warnings models/experimental/swin_s/tests/pcc/test_ttnn_swin_transformer.py
 ```
 
 ### Owner: [HariniMohan0102](https://github.com/HariniMohan0102)

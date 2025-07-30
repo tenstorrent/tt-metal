@@ -24,6 +24,7 @@ void kernel_main() {
     const uint32_t gamma_addr = get_arg_val<uint32_t>(7);
     const uint32_t beta_addr = get_arg_val<uint32_t>(8);
     const uint32_t stats_addr = get_arg_val<uint32_t>(9);
+    const uint32_t y_offset = get_arg_val<uint32_t>(10);
 
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
     constexpr uint32_t cb_stats = tt::CBIndex::c_1;
@@ -109,7 +110,7 @@ void kernel_main() {
                     cb_reserve_back(cb_gamma, blk);
                     uint32_t l1_write_addr = get_write_ptr(cb_gamma);
                     for (uint32_t r = 0; r < blk; r++) {
-                        uint64_t gamma_noc_addr = get_noc_addr(wt + r, addrg);
+                        uint64_t gamma_noc_addr = get_noc_addr(y_offset + wt + r, addrg);
                         noc_async_read(gamma_noc_addr, l1_write_addr, 32 * 2);
                         gamma_noc_addr = get_noc_addr(l1_write_addr + 32);
                         noc_async_read_barrier();
