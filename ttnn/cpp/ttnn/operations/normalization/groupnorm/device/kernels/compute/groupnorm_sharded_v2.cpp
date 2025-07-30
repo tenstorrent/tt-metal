@@ -18,8 +18,11 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/matmul.h"
-
 // #include "debug/dprint.h"
+
+#include "debug/dprint.h"
+#include "debug/dprint_pages.h"
+#include "debug/dprint_tensix.h"
 // #include "debug/waypoint.h"
 
 // SPLIT REDUCE across Cores
@@ -160,6 +163,8 @@ void MAIN {
     binary_op_init_common(cb_in0, cb_input_mask, cb_x);
 #endif
 
+    uint32_t num_tiles_printed = 0;
+
     index_b_offset = 0;
     for (uint32_t b = 0; b < batch; ++b) {
         index_g_offset = 0;
@@ -169,8 +174,19 @@ void MAIN {
             index_h_offset = index_b_offset + index_g_offset;
             reconfig_data_format_srcb(cb_in0, cb_input_mask);
             mul_tiles_init(cb_in0, cb_input_mask);
+
+            // cb_x is empty
+            // cb_xmm is empty
+
             cb_reserve_back(cb_x, block_hw);
             cb_wait_front(cb_input_mask, block_w);
+
+            // if (g == 3) {
+            //     // print mask tiles for first group
+            //     tt::compute::common::print_full_tile(cb_input_mask, 0, true);
+            //     tt::compute::common::print_full_tile(cb_input_mask, 1, true);
+            // }
+
             for (uint32_t i = 0; i < block_h; ++i) {
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; ++j) {
@@ -178,11 +194,24 @@ void MAIN {
                     for (uint32_t w = 0; w < subblock_w; ++w) {
                         uint32_t index = w + index_subblock_w_offset + index_h_offset;
                         uint32_t index_mask = w + index_subblock_w_offset;
+                        if (g == 0) {
+                            // This is mask for first group
+                            // DPRINT << "g is: " << g << " index_mask is: " << index_mask << ENDL();
+                        }
+                        if (g == 3 && i == 0 && j == 0 && w == 1) {
+                            // dprint_tensix_dest_reg(w);
+                        }
 #ifdef TILIZE_IN
                         mul_tiles(cb_in, cb_input_mask, index, index_mask, w);
+
 #else
                         mul_tiles(cb_in0, cb_input_mask, index, index_mask, w);
 #endif
+
+                        if (g == 3 && i == 0 && j == 0 && w == 1) {
+                            // DPRINT << "After mul with mask" << ENDL();
+                            // dprint_tensix_dest_reg(w);
+                        }
                     }
                     tile_regs_commit();
                     tile_regs_wait();
@@ -195,6 +224,10 @@ void MAIN {
                 index_h_offset += per_core_N;
             }
             cb_push_back(cb_x, block_hw);
+
+            // cb_x is full
+            // cb_xmm is empty
+
             reconfig_data_format_srcb(cb_input_mask, cb_scaler);
 
             // Partial-E[x]
@@ -258,6 +291,8 @@ void MAIN {
                 }
                 cb_pop_front(cb_x, block_w);
             }
+            // cb_xmm is full
+            // cb_x is empty
             cb_pop_front(cb_ex_global, 1);
             cb_push_back(cb_xmm, block_hw);
 
@@ -289,18 +324,35 @@ void MAIN {
             cb_push_back(cb_x, block_hw);
             reconfig_data_format_srcb(cb_input_mask, cb_x);
 
+            // cb_xmm is empty
+            // cb_x is full
+
             // (x - E[x])^2
+            // this could maybe be done inplace
+            // we are calculating (x-E[x])^2 and storing the result in cb_xmm
+            // cb_x at this point is (x-E[x])
             index_h_offset = 0;
             mul_tiles_init(cb_x, cb_x);
             cb_reserve_back(cb_xmm, block_hw);
             cb_wait_front(cb_x, block_hw);
+            /*
             for (uint32_t i = 0; i < block_h; i++) {
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; j++) {
                     tile_regs_acquire();
                     for (uint32_t w = 0; w < subblock_w; w++) {
                         uint32_t index = w + index_subblock_w_offset + index_h_offset;
+                        //DPRINT << "PRE MUL" << ENDL();
+                        //dprint_tensix_dest_reg(w);
                         mul_tiles(cb_x, cb_x, index, index, w);
+                        if (num_tiles_printed < 5) {
+                            //DPRINT << "Print index is: " << num_tiles_printed << " Dest index is: " << w << ENDL();
+                            num_tiles_printed++;
+                            //dprint_tensix_dest_reg(w);
+                        }
+                        if (g == 0 && i == 0 && j == 0 && w == 0) {
+
+                        }
                     }
                     tile_regs_commit();
                     tile_regs_wait();
@@ -312,6 +364,43 @@ void MAIN {
                 }
                 index_h_offset += block_w;
             }
+            */
+            // tile_regs_acquire();
+            // for (uint32_t i = 0; i < block_h; i++) {
+            //     index_subblock_w_offset = 0;
+            //     for (uint32_t j = 0; j < num_subblocks_w; j++) {
+            //         // tile_regs_acquire();
+            //         for (uint32_t w = 0; w < subblock_w; w++) {
+            //             uint32_t index = w + index_subblock_w_offset + index_h_offset;
+            //             //w = 0; // always sum in first tile
+            //             uint32_t w_index = 0;
+            //             mul_tiles(cb_x, cb_x, index, index, w_index);
+            //             if (num_tiles_printed < 5) {
+            //                 DPRINT << "Print index is: " << num_tiles_printed << " Dest index is: " << w_index <<
+            //                 ENDL(); num_tiles_printed++; dprint_tensix_dest_reg(w_index);
+            //             }
+            //             if (g == 0 && i == 0 && j == 0 && w == 0) {
+
+            //             }
+            //         }
+            //         // tile_regs_commit();
+            //         // tile_regs_wait();
+            //         // for (uint32_t i = 0; i < subblock_w; i++) {
+            //         //     pack_tile(i, cb_xmm);
+            //         // }
+            //         //tile_regs_release();
+            //         index_subblock_w_offset += subblock_w;
+            //     }
+            //     index_h_offset += block_w;
+            // }
+            // tile_regs_commit();
+            // tile_regs_wait();
+            // for (uint32_t i = 0; i < subblock_w; i++) {
+            //     pack_tile(i, cb_xmm);
+            // }
+            // tile_regs_release();
+            // cb_xmm is full
+            // cb_x is empty
             cb_push_back(cb_xmm, block_hw);
 
             // Partial-Var(x)
@@ -353,6 +442,9 @@ void MAIN {
                 cb_push_back(cb_ex_global, 1);
                 cb_push_back(cb_ex, 1);
             }
+
+            // cb_xmm is empty
+            // cb_x is (x-E[x])
 
             // global reduce results
             cb_wait_front(cb_eps, 1);
@@ -400,6 +492,8 @@ void MAIN {
                 }
                 index_h_offset += block_w;
             }
+            // at this point cb_xmm is storing calculated results of (x-E[x]) * 1/[sqrt(Var + eps)]
+            // cb_x being freed
             cb_push_back(cb_xmm, block_hw);
             cb_pop_front(cb_ex2pe, 1);
             cb_pop_front(cb_x, block_hw);
