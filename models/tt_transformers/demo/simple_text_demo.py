@@ -462,7 +462,7 @@ def prepare_generator_args(
             1,  # data_parallel
             False,  # token_accuracy
         ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
+        (  # CI Batch-1 run - Measures token matching accuracy of a single user over 500 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -495,7 +495,7 @@ def prepare_generator_args(
         "ci-b1-DP-16",  # CI DP 16 batch 1
         "ci-b1-DP-32",  # CI DP 32 batch 1
         "ci-stress-1",  # CI Stress test batch-1
-        "ci-token-matching",  # CI token matching accuracy test batch=1
+        "ci-token-matching",  # CI performs token accuracy matching with reference procomputed tokens
     ],
 )
 @pytest.mark.parametrize(
