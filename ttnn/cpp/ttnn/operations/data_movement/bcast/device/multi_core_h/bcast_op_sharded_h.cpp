@@ -9,6 +9,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -101,8 +102,8 @@ operation::ProgramWithCallbacks bcast_sharded_h(
 
     auto src1_buffer = b.buffer();
     auto dst_buffer = output.buffer();
-    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index, (uint32_t)src1_is_dram};
+    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
+    TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
@@ -124,8 +125,7 @@ operation::ProgramWithCallbacks bcast_sharded_h(
     uint32_t ncores_y = ncores / ncores_x;
     log_debug(
         tt::LogOp,
-        "ncores {}, ncores_x {}, Wt {}, Ht {}, src0_cb_index {}, src1_cb_index {}, output_cb_index {}, src1_is_dram "
-        "{}, dst_is_dram {}",
+        "ncores {}, ncores_x {}, Wt {}, Ht {}, src0_cb_index {}, src1_cb_index {}, output_cb_index {}, dst_is_dram {}",
         ncores,
         ncores_x,
         Wt,
@@ -133,7 +133,6 @@ operation::ProgramWithCallbacks bcast_sharded_h(
         src0_cb_index,
         src1_cb_index,
         output_cb_index,
-        src1_is_dram,
         dst_is_dram);
     for (uint32_t i = 0; i < ncores; i++) {
         CoreCoord core;
