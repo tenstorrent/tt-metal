@@ -62,9 +62,7 @@ def get_whisper_model_repo():
 
 def load_conditional_generation_ref_model():
     model_repo = get_whisper_model_repo()
-    hf_ref_model = (
-        WhisperForConditionalGeneration.from_pretrained(model_repo).to(torch.bfloat16).eval()
-    )
+    hf_ref_model = WhisperForConditionalGeneration.from_pretrained(model_repo).to(torch.bfloat16).eval()
     processor = AutoProcessor.from_pretrained(model_repo, language="English", task="transcribe")
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_repo)
     config = hf_ref_model.config
