@@ -265,21 +265,6 @@ def error_out_if_test_report_has_failures(test_report):
 # Device helpers to be shared with top-level conftest.py and other conftest.py files that will handle open/close of devices.
 
 
-def get_dispatch_core_type():
-    import ttnn
-
-    eth_dispatch_default_clusters = [
-        ttnn.cluster.ClusterType.N300,
-        ttnn.cluster.ClusterType.T3K,
-        ttnn.cluster.ClusterType.N300_2x2,
-    ]
-    return (
-        ttnn.device.DispatchCoreType.ETH
-        if ttnn.cluster.get_cluster_type() in eth_dispatch_default_clusters
-        else ttnn.device.DispatchCoreType.WORKER
-    )
-
-
 def get_updated_device_params(device_params):
     import ttnn
 
@@ -293,8 +278,9 @@ def get_updated_device_params(device_params):
     if dispatch_core_axis is None:
         dispatch_core_axis = ttnn.DispatchCoreAxis.COL if is_blackhole else ttnn.DispatchCoreAxis.ROW
 
+    # If the user doesn't specify a dispatch core type, use DispatchCoreType.WORKER
     if dispatch_core_type is None:
-        dispatch_core_type = get_dispatch_core_type()
+        dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
 
     # Force COL for blackhole regardless of user setting
     if is_blackhole and dispatch_core_axis == ttnn.DispatchCoreAxis.ROW:

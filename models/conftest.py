@@ -45,3 +45,27 @@ def hf_cat_image_sample_input():
     path = "models/sample_data/huggingface_cat_image.jpg"
     im = Image.open(path)
     return im
+
+
+def get_dispatch_core_type():
+    import ttnn
+
+    eth_dispatch_default_clusters = [
+        ttnn.cluster.ClusterType.N300,
+        ttnn.cluster.ClusterType.T3K,
+        ttnn.cluster.ClusterType.N300_2x2,
+    ]
+    return (
+        ttnn.device.DispatchCoreType.ETH
+        if ttnn.cluster.get_cluster_type() in eth_dispatch_default_clusters
+        else ttnn.device.DispatchCoreType.WORKER
+    )
+
+
+@pytest.fixture(scope="function")
+def device_params(request):
+    device_params = getattr(request, "param", {})
+    if "dispatch_core_type" not in device_params:
+        device_params["dispatch_core_type"] = get_dispatch_core_type()
+
+    return device_params
