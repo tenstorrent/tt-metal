@@ -273,7 +273,11 @@ def get_dispatch_core_type():
         ttnn.cluster.ClusterType.T3K,
         ttnn.cluster.ClusterType.N300_2x2,
     ]
-    return ttnn.device.DispatchCoreType.ETH if ttnn.cluster.get_cluster_type() else ttnn.device.DispatchCoreType.WORKER
+    return (
+        ttnn.device.DispatchCoreType.ETH
+        if ttnn.cluster.get_cluster_type() in eth_dispatch_default_clusters
+        else ttnn.device.DispatchCoreType.WORKER
+    )
 
 
 def get_updated_device_params(device_params):
