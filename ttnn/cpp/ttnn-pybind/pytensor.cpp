@@ -113,8 +113,8 @@ void log_from_cpp(const char* file, int line, const char* func, Args&&... messag
     logger.attr("handle")(log_record);
 }
 
-#define py_log(...) log_from_cpp(__FILE__, __LINE__, __func__, "[" #__VA_ARGS__ "] =" __VA_OPT__(, ) __VA_ARGS__);
-// #define py_log(...)
+// #define py_log(...) log_from_cpp(__FILE__, __LINE__, __func__, "[" #__VA_ARGS__ "] =" __VA_OPT__(, ) __VA_ARGS__);
+#define py_log(...)
 
 std::string format_tensor_as_string(pybind11::object tensor, int precision = 4) {
     pybind11::object tensor_list;
@@ -316,7 +316,7 @@ Tensor create_tt_tensor_from_py_data(
         return create_typed_tt_tensor_from_py_data<T>(
             py_data_ptr, py_data_shape, tensor_layout, device, pydata_pin, cq_id, pad_value, mesh_mapper);
     };
-    py_log(tensor_layout.get_data_type());
+    py_log(tensor_layout.get_data_type(), tensor_layout.get_layout(), py_data_shape);
     switch (tensor_layout.get_data_type()) {
         case DataType::UINT8: return create_concrete.operator()<uint8_t>();
         case DataType::UINT16: return create_concrete.operator()<uint16_t>();
@@ -524,6 +524,10 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
 
     py_log(dtype, tensor.attr("dtype"), layout, tensor.attr("min")(), tensor.attr("max")());
 
+    const bool is_int32_with_retiling =
+        ((dtype.has_value() && dtype.value() == DataType::INT32) || (!dtype.has_value())) &&
+        (tensor.attr("dtype").equal(torch.attr("int32")) && layout.has_value() && layout != Layout::ROW_MAJOR);
+
     if (tensor.attr("dtype").equal(torch.attr("int64"))) {
         py_log();
         if (!dtype.has_value()) {
@@ -572,9 +576,7 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
         // The test triggering this bug is test_matmul.py::test_tiny_tiles_bfloat
         py_log();
         do_host_conversion_through_fallback();
-    } else if (
-        dtype.has_value() && dtype.value() == DataType::INT32 &&
-        (tensor.attr("dtype").equal(torch.attr("int32")) && layout.has_value() && layout != Layout::ROW_MAJOR)) {
+    } else if (is_int32_with_retiling) {
         // Convert tensor on host, as int32 tensors above certain size loose precision.
         // One instance of this is reported in https://github.com/tenstorrent/tt-metal/issues/23407
         // but the size is not, stable `(32, 32, 64, 64)` can also trigger this.
@@ -641,11 +643,8 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
         res.host_side_conversion = true;
         res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
         res.construct_with_data_type = dtype;
-    } else if (
-        dtype.has_value() && dtype.value() == DataType::INT32 &&
-        (tensor.attr("dtype").equal(torch.attr("int32")) && layout.has_value() && layout != Layout::ROW_MAJOR)) {
+    } else if (is_int32_with_retiling) {
         py_log();
-        res.host_side_conversion = true;
         res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
         res.construct_with_data_type = DataType::INT32;
     } else if (
