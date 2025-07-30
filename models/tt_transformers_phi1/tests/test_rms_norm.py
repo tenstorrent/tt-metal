@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.layernorm import LayerNorm as LayerNorm
+from models.common.rmsnorm import LayerNorm as LayerNorm
 from models.tt_transformers_phi1.tt.distributed_norm import DistributedNorm
 from models.tt_transformers_phi1.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
