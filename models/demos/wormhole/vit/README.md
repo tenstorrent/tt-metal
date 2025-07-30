@@ -58,7 +58,7 @@ To run the demo for ViT model, follow these instructions:
     ./build_metal.sh -p
 
     # To manually inspect ops
-    ./tt_metal/tools/profiler/profile_this.py -n vit -c "pytest --disable-warnings models/demos/wormhole/vit/demo/test_vit_device_perf.py::test_vit_device_ops"
+    ./tools/tracy/profile_this.py -n vit -c "pytest --disable-warnings models/demos/wormhole/vit/demo/test_vit_device_perf.py::test_vit_device_ops"
 
     # For an automated device perf report(samples/s)
     pytest models/demos/wormhole/vit/demo/test_vit_device_perf.py::test_vit_perf_device
