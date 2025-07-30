@@ -33,7 +33,7 @@ Resource link - [source](https://github.com/ultralytics/ultralytics/blob/main/ul
 Use the following command to run the model :
 
 ```
-pytest --disable-warnings tests/ttnn/integration_tests/yolov8s/test_yolov8s.py::test_yolov8s_640
+pytest --disable-warnings models/demos/yolov8s/tests/pcc/test_yolov8s.py::test_yolov8s_640
 ```
 
 ### Performant Model with Trace+2CQ
@@ -43,7 +43,7 @@ pytest --disable-warnings tests/ttnn/integration_tests/yolov8s/test_yolov8s.py::
 Use the following command to run the performant Model with Trace+2CQs:
 
 ```
-pytest --disable-warnings models/demos/yolov8s/tests/test_e2e_performant.py
+pytest --disable-warnings models/demos/yolov8s/tests/perf/test_e2e_performant.py
 ```
 
 ### Demo with Trace+2CQ
