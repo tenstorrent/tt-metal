@@ -8,6 +8,7 @@
 #include <tt_metal/api/tt-metalium/assert.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn_test_fixtures.hpp"
@@ -305,10 +306,9 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpBinaryEltwiseAdd) {
     };
 
     bool block_or_width_sharded = false;
-    uint32_t src0_is_dram = device_input_tensor_a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    uint32_t src1_is_dram = device_input_tensor_b.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
-        src0_is_dram, src1_is_dram, (uint32_t)block_or_width_sharded};
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {(uint32_t)block_or_width_sharded};
+    TensorAccessorArgs(*device_input_tensor_a.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*device_input_tensor_b.buffer()).append_to(reader_compile_time_args);
 
     uint32_t dst_is_dram = device_output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     const KernelDescriptor::CompileTimeArgs writer_compile_time_args = {dst_cb_index, dst_is_dram};
