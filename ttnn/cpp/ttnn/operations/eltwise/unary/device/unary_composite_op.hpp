@@ -36,7 +36,6 @@ enum class UnaryCompositeOpType {
     POLYGAMMA,
     SOFTSHRINK,
     LOGIT,
-    CELU,
     LOGICAL_NOT_,
     RPOW,
     NORMALIZE_GLOBAL,
@@ -73,7 +72,6 @@ Tensor _polygamma(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
 Tensor _softshrink(
     const Tensor& a, float lambd = 0.5f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _logit(const Tensor& a, float eps = 0.0f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-Tensor _celu(const Tensor& a, float alpha = 1.0f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _logical_not_(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _rpow(const Tensor& a, float param, const std::optional<MemoryConfig>&);
 Tensor _normalize_global(const Tensor&, const std::optional<MemoryConfig>&);
@@ -223,13 +221,6 @@ template <>
 struct OpHandler<UnaryCompositeOpType::LOGIT> {
     static Tensor handle(const Tensor& t1, float eps, const std::optional<MemoryConfig>& mem_cfg) {
         return _logit(t1, eps, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::CELU> {
-    static Tensor handle(const Tensor& t1, float alpha, const std::optional<MemoryConfig>& mem_cfg) {
-        return _celu(t1, alpha, mem_cfg);
     }
 };
 
