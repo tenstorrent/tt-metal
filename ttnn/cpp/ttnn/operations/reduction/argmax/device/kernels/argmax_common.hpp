@@ -47,7 +47,7 @@ auto get_tt_l1_ptr_based_on_data_format(const uint32_t addr) {
     } else if constexpr (data_format == DataFormat::UInt32) {
         return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
     } else {
-        static_assert(data_format != data_format, "Unsupported data format in get_tt_l1_ptr_based_on_data_format");
+        static_assert(false, "Unsupported data format in get_tt_l1_ptr_based_on_data_format");
     }
 }
 
@@ -84,7 +84,7 @@ auto get_default_value() {
     } else if constexpr (data_format == DataFormat::UInt32) {
         return uint32_t{MIN_UINT32};
     } else {
-        static_assert(data_format != data_format, "Unsupported data format");
+        static_assert(false, "Unsupported data format");
     }
 }
 
@@ -181,7 +181,7 @@ void compare_values(
     } else if constexpr (data_format == DataFormat::UInt32) {
         update_max_if_greater(max_val, max_idx, val, index, [](auto a, auto b) { return a > b; });
     } else {
-        static_assert(data_format != data_format, "Unsupported data format in compare_values");
+        static_assert(false, "Unsupported data format in compare_values");
     }
 }
 
