@@ -764,7 +764,7 @@ void JitBuildState::link(const string& log_file, const string& out_dir, const Ji
     string lflags = this->lflags_;
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_build_map_enabled()) {
         lflags += "-Wl,-Map=" + out_dir + this->target_name_ + ".map ";
-        lflags += "-save-temps ";
+        lflags += "-save-temps -fdump-tree-all -fdump-rtl-all ";
     }
 
     // Append user args
