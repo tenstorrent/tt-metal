@@ -12,6 +12,7 @@ from loguru import logger
 from sklearn.metrics.pairwise import cosine_similarity
 
 import ttnn
+from models.demos.sentence_bert.common import load_torch_model
 from models.demos.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
 from models.demos.sentence_bert.runner.performant_runner import SentenceBERTPerformantRunner
 
@@ -60,7 +61,9 @@ def test_sentence_bert_demo_inference(mesh_device, inputs, model_name, sequence_
     token_type_ids = encoded_input["token_type_ids"]
     position_ids = torch.arange(0, input_ids.shape[-1], dtype=torch.int64).unsqueeze(dim=0)
     reference_module = BertModel(config).to(torch.bfloat16)
-    reference_module.load_state_dict(transformers_model.state_dict())
+    reference_module = load_torch_model(
+        reference_module, target_prefix="", model_location_generator=model_location_generator
+    )
     reference_sentence_embeddings = reference_module(
         input_ids,
         extended_attention_mask=extended_mask,
