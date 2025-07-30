@@ -4,7 +4,7 @@
 
 import os
 from loguru import logger
-
+import torch.nn.functional as F
 import torch
 import torchvision
 import pytest
@@ -36,7 +36,7 @@ def evaluation(
     gt_id = []
     pred_id = []
     for i in range(iterations // batch_size):
-        if model_name in ["vit", "resnet50", "mobilenetv2"]:
+        if model_name in ["vit", "resnet50", "mobilenetv2", "vovnet"]:
             inputs, labels = get_batch(data_loader, image_processor)
         else:
             inputs, labels = get_batch(data_loader)
@@ -44,7 +44,18 @@ def evaluation(
 
         # preprocess
         if model_name == "mobilenetv2":
-            torch_input_tensor = inputs
+            n, c, h, w = inputs.shape
+            torch_input_tensor = inputs.reshape(batch_size, 3, res, res)
+            tt_inputs = torch.permute(inputs, (0, 2, 3, 1))
+            ttnn_input_tensor = tt_inputs.reshape(
+                1,
+                1,
+                n * h * w,
+                c,
+            )
+
+            ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+            ttnn_input_tensor = ttnn.pad(ttnn_input_tensor, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
         elif model_name == "resnet50":
             torch_input_tensor = inputs
             if model_type == "tt_model":
@@ -78,11 +89,25 @@ def evaluation(
                 output = model.execute_vit_trace_2cqs_inference(tt_inputs_host)
             elif model_name == "resnet50":
                 output = model.execute_resnet50_trace_2cqs_inference(tt_inputs_host)
+            elif model_name == "vovnet":
+                output = model._execute_vovnet_trace_2cqs_inference(ttnn_input_tensor)
         elif model_type == "torch_model":
             output = model(torch_input_tensor)
 
         # post_process
         if model_name == "mobilenetv2":
+            if model_type == "tt_model":
+                final_output = ttnn.to_torch(output, mesh_composer=model.test_infra.output_mesh_composer)
+            else:
+                final_output = output
+            prediction = final_output.argmax(dim=-1)
+
+            for i in range(batch_size):
+                pred_id.append(prediction[i].item())
+                gt_id.append(labels[i])
+            del output, final_output
+
+        elif model_name == "vovnet":
             if model_type == "tt_model":
                 final_output = ttnn.to_torch(output, mesh_composer=model.test_infra.output_mesh_composer)
             else:
@@ -120,6 +145,8 @@ def evaluation(
     if model_type == "tt_model":
         if model_name == "mobilenetv2":
             model.release_mobilenetv2_trace_2cqs_inference()
+        elif model_name == "vovnet":
+            model.release()
         elif model_name == "resnet50":
             model.release_resnet50_trace_2cqs_inference()
         elif model_name == "vit":
