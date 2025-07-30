@@ -285,6 +285,7 @@ jobs:
           CLEAN_NAME=$(echo "${{ matrix.test-info.name }}" | tr ' ' '-')
           export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+          cat $DEVICE_PERF_REPORT_FILENAME
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
       - name: Check device perf report exists
