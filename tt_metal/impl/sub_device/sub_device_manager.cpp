@@ -184,7 +184,7 @@ uint8_t SubDeviceManager::get_sub_device_index(SubDeviceId sub_device_id) const 
     auto sub_device_index = *sub_device_id;
     TT_FATAL(
         sub_device_index < sub_devices_.size(),
-        "SubDevice index {} out of bounds {}",
+        "SubDevice index {} out of bounds {} INDEX",
         sub_device_index,
         sub_devices_.size());
     return sub_device_index;

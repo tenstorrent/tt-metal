@@ -909,8 +909,13 @@ bool MeshDevice::initialize(
     cq_shared_state->sub_device_cq_owner.resize(1);
 
     const auto& allocator = reference_device()->allocator();
-    sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
+    sub_device_manager_tracker_ = std::make_shared<SubDeviceManagerTracker>(
         this, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
+
+    // Share the tracker with all individual devices
+    // for (auto* device : this->get_devices()) {
+    //     static_cast<Device*>(device)->set_sub_device_manager_tracker(sub_device_manager_tracker_);
+    // }
     // Issue #19729: Store the maximum number of active ethernet cores across opened physical devices in the Mesh
     // as the number of virtual ethernet cores seen by the MeshDevice
     num_virtual_eth_cores_ = DevicePool::instance().get_max_num_eth_cores_across_all_devices();
