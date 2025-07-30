@@ -478,7 +478,7 @@ jobs:
           # Mark as ready if needed
           if [ "${{ inputs.draft == 'true' || github.event_name == 'repository_dispatch' }}" = "true" ]; then
             echo "Marking PR as ready for review"
-            if gh pr ready "$PR_NUMBER" --repo "$ {{ github.repository }}" 2>/dev/null; then
+            if gh pr ready "$PR_NUMBER" --repo "${{ github.repository }}" 2>/dev/null; then
               echo "ℹ️ PR converted to ready-for-review"
             else
               echo "⚠️ PR already ready or failed to convert (check permissions)"
