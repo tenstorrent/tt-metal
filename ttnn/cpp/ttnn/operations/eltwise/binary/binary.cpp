@@ -841,7 +841,6 @@ template struct BinaryOperationSfpu<BinaryOpType::MAXIMUM>;
 template struct BinaryOperationSfpu<BinaryOpType::MINIMUM>;
 template struct BinaryOperationSfpu<BinaryOpType::GCD>;
 template struct BinaryOperationSfpu<BinaryOpType::LCM>;
-template struct BinaryOperationSfpu<BinaryOpType::XLOGY>;
 
 template struct BinaryOperationAddalpha<BinaryOpType::ADDALPHA>;
 template struct BinaryOperationSubalpha<BinaryOpType::SUBALPHA>;
