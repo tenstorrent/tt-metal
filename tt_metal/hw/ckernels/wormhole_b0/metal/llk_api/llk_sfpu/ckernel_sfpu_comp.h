@@ -6,12 +6,27 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_sfpu_int_sum.h"
 
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
+
+// These constants and function should ideally go to SFPI
+// Copied from ckernel_sfpu_int_sum.h to avoid dependency complications
+#define BIT_MASK_32 0xFFFFFFFF
+#define SIGN 0x80000000
+#define MAGNITUDE 0x7FFFFFFF
+
+// Convert from sign-magnitude to two's complement format
+sfpi_inline vInt sfpu_sign_mag_to_twos_comp(vInt value) {
+    v_if(value & SIGN) {
+        vInt magnitude = value & MAGNITUDE;
+        value = (~magnitude + 1) & BIT_MASK_32;
+    }
+    v_endif;
+    return value;
+}
 
 template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp(uint exponent_size_8) {
