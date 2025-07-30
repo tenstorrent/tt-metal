@@ -473,19 +473,17 @@ SkipMcast conv_skip_mcast(
     return SkipMcast{.skip_activation_mcast = skip_mcast, .skip_weights_mcast = skip_mcast};
 }
 
-template <typename DeviceType>
-DeviceComputeKernelConfig get_conv_default_compute_kernel_config(DeviceType* device) {
+DeviceComputeKernelConfig get_conv_default_compute_kernel_config(MeshDevice* device) {
     return init_device_compute_kernel_config(device->arch(), std::nullopt, MathFidelity::HiFi4, true, false, false);
 }
 
-template <typename DeviceType>
 std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     const Conv2dConfig& conv_config,
     uint32_t batch_size,
     ttnn::Shape input_tensor_shape,
     ttnn::Shape output_tensor_shape,
     bool is_mm_conv,
-    DeviceType* device,
+    MeshDevice* device,
     Layout input_tensor_layout,
     const std::optional<ParallelConfig>& input_tensor_parallel_config) {
     TT_FATAL(conv_config.shard_layout.has_value(), "Shard layout must be set in Conv2dConfig.");
@@ -529,9 +527,8 @@ std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config(
     return {input_padded_shape, input_tensor_sharded_memory_config};
 };
 
-template <typename T>
 static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config(
-    T* device,
+    MeshDevice* device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
     uint32_t batch_size,
@@ -668,9 +665,8 @@ ttnn::Shape flatten_4d_shape(const ttnn::Shape& input_shape) {
     return ttnn::Shape{1, 1, nhw, channels};
 }
 
-template <typename T>
 std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor_if_required(
-    T* device,
+    MeshDevice* device,
     const ttnn::Tensor& input_tensor_,
     const Conv2dConfig& conv_config,
     uint32_t batch_size,
@@ -1058,10 +1054,9 @@ bool conv2d::determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint3
     return packer_l1_acc && ((enable_bias && in0_num_blocks_w > 1) || (in0_num_blocks_w > 2));
 }
 
-template <typename T>
 ttnn::Tensor fold_tensor(
     const ttnn::Tensor& tensor,
-    T* device,
+    MeshDevice* device,
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 4> padding_n4) {
@@ -1118,48 +1113,6 @@ KernelStrideFoldingResult compute_kernel_stride_folding_params(
         .kernel_size = {kernel_h, kernel_w},
         .mm_conv = (kernel_size[0] == stride[0] && kernel_size[1] == stride[1])};
 }
-
-template std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_shape_and_mem_config<MeshDevice>(
-    MeshDevice* device,
-    const ttnn::Tensor& input_tensor_,
-    const Conv2dConfig& conv_config,
-    uint32_t batch_size,
-    uint32_t height,
-    uint32_t width,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    bool is_mm_conv);
-
-template std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor_if_required<MeshDevice>(
-    MeshDevice* device,
-    const ttnn::Tensor& input_tensor_,
-    const Conv2dConfig& conv_config,
-    uint32_t batch_size,
-    uint32_t height,
-    uint32_t width,
-    uint32_t in_channels,
-    uint32_t out_channel,
-    bool is_mm_conv,
-    bool auto_shard);
-
-template std::tuple<ttnn::Shape, ttnn::MemoryConfig> determine_input_memory_config<MeshDevice>(
-    const Conv2dConfig& conv_config,
-    uint32_t batch_size,
-    ttnn::Shape input_tensor_shape,
-    ttnn::Shape output_tensor_shape,
-    bool is_mm_conv,
-    MeshDevice* device,
-    Layout input_tensor_layout,
-    const std::optional<ParallelConfig>& input_tensor_parallel_config);
-
-template DeviceComputeKernelConfig get_conv_default_compute_kernel_config<ttnn::MeshDevice>(ttnn::MeshDevice* device);
-
-template ttnn::Tensor fold_tensor<MeshDevice>(
-    const ttnn::Tensor& tensor,
-    tt::tt_metal::distributed::MeshDevice* device,
-    std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 4> padding_n4);
 
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config) {
     tt::stl::reflection::operator<<(os, config);
