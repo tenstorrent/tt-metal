@@ -1,36 +1,45 @@
-# Vovnet - Model
+    # Vovnet - Model
 
-### Platforms:
+    ### Platforms:
 
-Wormhole N150, N300
+    Wormhole N150, N300
 
-**Note:** On N300, make sure to use `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml` with the pytest.
+    **Note:** On N300, make sure to use `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml` with the pytest.
 
-Or, make sure to set the following environment variable in the terminal:
-```
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-```
+    Or, make sure to set the following environment variable in the terminal:
+    ```
+    export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+    ```
 
-To obtain the perf reports through profiler, please build with following command:
-```
-./build_metal.sh -p
-```
+    To obtain the perf reports through profiler, please build with following command:
+    ```
+    ./build_metal.sh -p
+    ```
 
-### Introduction
+    ### Introduction
 
-**VoVNet** is a convolutional neural network designed for efficient and high-performance image recognition tasks. It introduces a novel One-Shot Aggregation (OSA) module that aggregates features from several layers at once, reducing redundancy and improving efficiency. Unlike DenseNet, which uses dense connections, VoVNet performs a single aggregation at the end of each block. This design leads to faster inference and lower memory usage while maintaining strong accuracy.
+    **VoVNet** is a convolutional neural network designed for efficient and high-performance image recognition tasks. It introduces a novel One-Shot Aggregation (OSA) module that aggregates features from several layers at once, reducing redundancy and improving efficiency. Unlike DenseNet, which uses dense connections, VoVNet performs a single aggregation at the end of each block. This design leads to faster inference and lower memory usage while maintaining strong accuracy.
 
 
-### Details
+    ### Details
 
-- The entry point to the vovnet is located at:`models/experimental/functional_vovnet/tt/vovnet.py`
-- Batch Size :1
-- Supported Input Resolution - (224,224) (Height,Width)
+    - The entry point to the vovnet is located at:`models/experimental/functional_vovnet/tt/vovnet.py`
+    - Batch Size :1
+    - Supported Input Resolution - (224,224) (Height,Width)
 
-### How to Run:
+    ### How to Run:
 
-Use the following command to run the model :
+    Use the following command to run the model :
 
-```
-pytest --disable-warnings models/experimental/vovnet/tests/pcc/test_tt_vovnet.py
-```
+    ```
+    pytest --disable-warnings models/experimental/vovnet/tests/pcc/test_tt_vovnet.py
+    ```
+
+    ### Performant Model with Trace+2CQ
+    - end-2-end perf is 84 FPS
+
+    Use the following command to run the performant Model with Trace+2CQs:
+
+    ```
+    pytest --disable-warnings models/experimental/yolov5x/tests/test_e2e_performant.py
+    ```
