@@ -6,7 +6,7 @@ import os
 
 import torch
 
-from models.experimental.yolov6l.reference.yolov6l_utils import fuse_model
+from models.demos.yolov6l.reference.yolov6l_utils import fuse_model
 
 
 def load_torch_model(model_location_generator=None):
