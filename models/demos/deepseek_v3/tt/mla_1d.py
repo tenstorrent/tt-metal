@@ -47,6 +47,15 @@ class MLA1D(AbstractModule):
 
     MAX_BATCH_SIZE = ttnn.TILE_SIZE
     TG_GRID = (8, 4)
+    HF_TTNN_MAPPING = {
+        "q_a_proj": "wq_a",
+        "q_b_proj": "wq_b",
+        "kv_a_proj_with_mqa": "wkv_a",
+        "kv_b_proj": "wkv_b",
+        "o_proj": "wo",
+        "q_a_layernorm": "q_norm",
+        "kv_a_layernorm": "kv_norm",
+    }
 
     @classmethod
     def convert_weights(
@@ -60,10 +69,9 @@ class MLA1D(AbstractModule):
 
         Args:
             hf_config: HuggingFace model configuration object
-            state_dict: PyTorch state dict for this layer
+            state_dicts: Tuple of state dictionaries containing model weights
             output_path: Path to save converted weights
             mesh_device: TTNN mesh device
-
         Returns:
             Dict mapping operation names to their TTNN weight file paths
         """
@@ -80,104 +88,92 @@ class MLA1D(AbstractModule):
         q_lora_rank = hf_config.q_lora_rank
         q_head_dim = qk_nope_head_dim + qk_rope_head_dim
 
-        hf_ttnn_name_mapping = {
-            "q_a_proj": "wq_a",
-            "q_b_proj": "wq_b",
-            "kv_a_proj_with_mqa": "wkv_a",
-            "kv_b_proj": "wkv_b",
-            "o_proj": "wo",
-            "q_a_layernorm": "q_norm",
-            "kv_a_layernorm": "kv_norm",
-        }
+        def convert_linear_weight(
+            hf_name: str | None,
+            shape: tuple[int, ...] | None,
+            mesh_dims: tuple[int, ...],
+            dtype: ttnn.DataType = ttnn.bfloat8_b,
+            mem_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+            layout: ttnn.Layout = ttnn.TILE_LAYOUT,
+            ttnn_name: str | None = None,
+            torch_weights: torch.Tensor | None = None,
+        ) -> dict:
+            """Helper to convert linear weights."""
+
+            if ttnn_name is None:
+                ttnn_name = cls.HF_TTNN_MAPPING[hf_name]
+            if torch_weights is None:
+                torch_weights = get_state_dicts(state_dicts, f"{hf_name}.weight", shape, torch.float32)
+                torch_weights = torch.transpose(torch_weights, -2, -1)
+
+            ttnn_weight = ttnn.as_tensor(
+                torch_weights,
+                dtype=dtype,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    mesh_device,
+                    dims=mesh_dims,
+                    mesh_shape=list(mesh_device.shape),
+                ),
+                layout=layout,
+                memory_config=mem_config,
+            )
+
+            # Create weight config
+            weight_file_path = output_path / f"{ttnn_name}.input_tensor_b"
+            return {ttnn_name: {"input_tensor_b": save_and_get_path(weight_file_path, ttnn_weight)}}
+
+        def convert_norm_weight(hf_name: str) -> dict:
+            """Helper to convert normalization weights."""
+            ttnn_name = cls.HF_TTNN_MAPPING[hf_name]
+            norm_state_dicts = sub_state_dicts(state_dicts, f"{hf_name}.weight")
+            norm_state_dicts = [{"weight": item[""].to(torch.bfloat16)} for item in norm_state_dicts]
+            return {
+                ttnn_name: RMSNorm.convert_weights(hf_config, norm_state_dicts, output_path / ttnn_name, mesh_device)
+            }
+
+        # Norm weights
+        hf_name = "q_a_layernorm"
+        q_norm_weight_config = convert_norm_weight(hf_name)
+
+        hf_name = "kv_a_layernorm"
+        kv_norm_weight_config = convert_norm_weight(hf_name)
 
         # wq_a
         hf_name = "q_a_proj"
-        ttnn_name = hf_ttnn_name_mapping[hf_name]
-        torch_weights = get_state_dicts(
-            state_dicts,
-            f"{hf_name}.weight",
-            shape=(q_lora_rank, dim),  # Torch shape
-            dtype=torch.float32,
-        )
-        torch_weights = torch.transpose(torch_weights, -2, -1)  # TTNN shape
-
-        wq_a_weight_config = MLA1D.convert_weight(
-            torch_weights,
-            ttnn_name,
-            "input_tensor_b",
-            dtype=ttnn.bfloat8_b,
-            mem_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                dims=[0, -2],
-                mesh_shape=list(mesh_device.shape),
-            ),
-            mesh_device=mesh_device,
-            output_path=output_path,
+        shape = (q_lora_rank, dim)  # Torch shape
+        wq_a_weight_config = convert_linear_weight(
+            hf_name,
+            shape,
+            mesh_dims=(0, -2),
         )
 
         # wq_b
         hf_name = "q_b_proj"
-        ttnn_name = hf_ttnn_name_mapping[hf_name]
-        torch_weights = get_state_dicts(
-            state_dicts,
-            f"{hf_name}.weight",
-            shape=(num_heads * q_head_dim, q_lora_rank),  # Torch shape
-            dtype=torch.float32,
-        )
-        torch_weights = torch.transpose(torch_weights, -2, -1)
-
-        wq_b_weight_config = MLA1D.convert_weight(
-            torch_weights,
-            ttnn_name,
-            "input_tensor_b",
-            dtype=ttnn.bfloat8_b,
-            mem_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                dims=[0, -1],
-                mesh_shape=list(mesh_device.shape),
-            ),
-            mesh_device=mesh_device,
-            output_path=output_path,
+        shape = (num_heads * q_head_dim, q_lora_rank)  # Torch shape
+        wq_b_weight_config = convert_linear_weight(
+            hf_name,
+            shape,
+            mesh_dims=(0, -1),
         )
 
         # wkv_a
         hf_name = "kv_a_proj_with_mqa"
-        ttnn_name = hf_ttnn_name_mapping[hf_name]
-        torch_weights = get_state_dicts(
-            state_dicts,
-            f"{hf_name}.weight",
-            shape=(kv_lora_rank + qk_rope_head_dim, dim),  # Torch shape
-            dtype=torch.float32,
-        )
-        torch_weights = torch.transpose(torch_weights, -2, -1)
-
-        wkv_a_weight_config = MLA1D.convert_weight(
-            torch_weights,
-            ttnn_name,
-            "input_tensor_b",
-            dtype=ttnn.bfloat8_b,
-            mem_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                dims=[0, -2],
-                mesh_shape=list(mesh_device.shape),
-            ),
-            mesh_device=mesh_device,
-            output_path=output_path,
+        shape = (kv_lora_rank + qk_rope_head_dim, dim)  # Torch shape
+        wkv_a_weight_config = convert_linear_weight(
+            hf_name,
+            shape,
+            mesh_dims=(0, -2),
         )
 
-        # wkv_b1
+        # wkv_b (Needs Special handling!!)
         hf_name = "kv_b_proj"
-        ttnn_name = hf_ttnn_name_mapping[hf_name]
+        shape = (num_heads * (qk_nope_head_dim + v_head_dim), kv_lora_rank)  # Torch shape
+        ttnn_name = cls.HF_TTNN_MAPPING[hf_name]
         torch_weights = get_state_dicts(
             state_dicts,
             f"{hf_name}.weight",
-            shape=(num_heads * (qk_nope_head_dim + v_head_dim), kv_lora_rank),  # Torch shape
+            shape=shape,
             dtype=torch.float32,
         )
 
@@ -190,86 +186,29 @@ class MLA1D(AbstractModule):
             -2, -1
         )  # [num_heads, kv_lora_rank, v_head_dim]
 
-        wkv_b1_weight_config = MLA1D.convert_weight(
-            torch_weights_k,
-            ttnn_name + "1",
-            "input_tensor_b",
-            dtype=ttnn.bfloat8_b,
-            mem_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                dims=[0, -3],
-                mesh_shape=list(mesh_device.shape),
-            ),
-            mesh_device=mesh_device,
-            output_path=output_path,
+        wkv_b1_weight_config = convert_linear_weight(
+            hf_name=None,
+            shape=None,
+            mesh_dims=(0, -3),
+            ttnn_name=ttnn_name + "1",
+            torch_weights=torch_weights_k,
         )
 
-        wkv_b2_weight_config = MLA1D.convert_weight(
-            torch_weights_v,
-            ttnn_name + "2",
-            "input_tensor_b",
-            dtype=ttnn.bfloat8_b,
-            mem_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                dims=[0, -3],
-                mesh_shape=list(mesh_device.shape),
-            ),
-            mesh_device=mesh_device,
-            output_path=output_path,
+        wkv_b2_weight_config = convert_linear_weight(
+            hf_name=None,
+            shape=None,
+            mesh_dims=(0, -3),
+            ttnn_name=ttnn_name + "2",
+            torch_weights=torch_weights_v,
         )
 
         # wo
         hf_name = "o_proj"
-        ttnn_name = hf_ttnn_name_mapping[hf_name]
-        torch_weights = get_state_dicts(
-            state_dicts,
-            f"{hf_name}.weight",
-            shape=(dim, num_heads * v_head_dim),  # Torch shape
-            dtype=torch.float32,
-        )
-        torch_weights = torch.transpose(torch_weights, -2, -1)
-
-        wo_weight_config = MLA1D.convert_weight(
-            torch_weights,
-            ttnn_name,
-            "input_tensor_b",
-            dtype=ttnn.bfloat8_b,
-            mem_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_device,
-                dims=[0, -1],
-                mesh_shape=list(mesh_device.shape),
-            ),
-            mesh_device=mesh_device,
-            output_path=output_path,
-        )
-
-        # Norm weights
-        hf_name = "q_a_layernorm"
-        ttnn_name = hf_ttnn_name_mapping[hf_name]
-        q_norm_state_dicts = sub_state_dicts(state_dicts, f"{hf_name}.weight")  # List of dicts
-        q_norm_state_dicts = [{"weight": item[""].to(torch.bfloat16)} for item in q_norm_state_dicts]
-        q_norm_weight_config = RMSNorm.convert_weights(
-            hf_config,
-            q_norm_state_dicts,
-            output_path / "q_norm",
-            mesh_device,
-        )
-
-        hf_name = "kv_a_layernorm"
-        ttnn_name = hf_ttnn_name_mapping[hf_name]
-        kv_norm_state_dicts = sub_state_dicts(state_dicts, f"{hf_name}.weight")  # List of dicts
-        kv_norm_state_dicts = [{"weight": item[""].to(torch.bfloat16)} for item in kv_norm_state_dicts]
-        kv_norm_weight_config = RMSNorm.convert_weights(
-            hf_config,
-            kv_norm_state_dicts,
-            output_path / "kv_norm",
-            mesh_device,
+        shape = (dim, num_heads * v_head_dim)  # Torch shape
+        wo_weight_config = convert_linear_weight(
+            hf_name,
+            shape,
+            mesh_dims=(0, -1),
         )
 
         return {
@@ -279,37 +218,9 @@ class MLA1D(AbstractModule):
             **wkv_b1_weight_config,
             **wkv_b2_weight_config,
             **wo_weight_config,
-            "q_norm": q_norm_weight_config,
-            "kv_norm": kv_norm_weight_config,
+            **q_norm_weight_config,
+            **kv_norm_weight_config,
         }
-
-    @classmethod
-    def convert_weight(
-        cls,
-        torch_weight,
-        ttnn_name,
-        kwarg_name,
-        dtype,
-        mem_config,
-        layout,
-        mesh_mapper,
-        mesh_device,
-        output_path: Path,
-    ) -> dict:
-        """Helper function to convert and save weights, returning the weight config."""
-        ttnn_weight = ttnn.as_tensor(
-            torch_weight,
-            dtype=dtype,
-            device=mesh_device,
-            mesh_mapper=mesh_mapper,
-            layout=layout,
-            memory_config=mem_config,
-        )
-        ttnn_weight = ttnn.unsqueeze_to_4D(ttnn_weight)
-
-        # Create weight config
-        weight_file_path = output_path / f"{ttnn_name}.{kwarg_name}.weight"
-        return {ttnn_name: {kwarg_name: save_and_get_path(weight_file_path, ttnn_weight)}}
 
     @classmethod
     def is_device_supported(cls, mesh_device: ttnn.Device) -> bool:
