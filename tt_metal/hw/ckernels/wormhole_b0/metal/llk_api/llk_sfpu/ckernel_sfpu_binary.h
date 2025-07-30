@@ -123,8 +123,8 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
 
     // Compute formula in Horner form
     sfpi::vFloat d1 = sfpi::vFloat(0.40196114e-7);
-    sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(0xf94ee7) + zif);
-    sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(0x560) + zif);
+    sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(0xf94ee7) + zif, 0);
+    sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(0x560) + zif, 0);
     d2 = d1 * d2;
     zif = _float_to_int32_positive_(d2 * d3);
 
