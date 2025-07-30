@@ -1017,38 +1017,16 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
 }
 
 uint32_t calculate_conv_dram_L1(
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
-    std::array<uint32_t, 2> dilation,
-    uint32_t groups,
-    MeshDevice* device,
-    const std::optional<const DataType>& dtype,
-    Conv2dConfig conv_config,
-    const DeviceComputeKernelConfig& compute_kernel_config,
-    const Conv2dSliceConfig& dram_slice_config,
-    const CoreCoord& compute_grid,
-    const ttnn::Shape& weights_shape,
-    const DataType weights_datatype,
-    const DataType output_datatype,
-    const bool enable_bias) {
+    const ConvDRAMParamters& params, MeshDevice* device, const Conv2dSliceConfig& dram_slice_config) {
+    Conv2dConfig conv_config = params.conv_config;
     TT_FATAL(
         dram_slice_config.num_slices > 0, "Number of slices must be greater than 0 for DRAM L1 usage calculation.");
 
-    std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
-    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
-    auto [output_height, output_width] =
-        calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
-
     const uint32_t input_sliced_dim =
-        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? input_height : input_width;
-    const uint32_t output_sliced_dim =
-        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? output_height : output_width;
+        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? params.input_height : params.input_width;
+    const uint32_t output_sliced_dim = dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT
+                                           ? params.output_height
+                                           : params.output_width;
 
     uint32_t slice_rounding_value = 1;
     if (conv_config.output_layout == tt_metal::Layout::TILE) {
@@ -1070,40 +1048,40 @@ uint32_t calculate_conv_dram_L1(
     uint32_t input_slice_height, input_slice_width;
     if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT) {
         output_slice_height = max_output_slice_size;
-        output_slice_width = output_width;
-        input_slice_height = (max_output_slice_size * stride[0]);
-        input_slice_width = input_width;
+        output_slice_width = params.output_width;
+        input_slice_height = (max_output_slice_size * params.stride[0]);
+        input_slice_width = params.input_width;
     } else {
-        output_slice_height = output_height;
+        output_slice_height = params.output_height;
         output_slice_width = max_output_slice_size;
-        input_slice_height = input_height;
-        input_slice_width = (max_output_slice_size * stride[1]);
+        input_slice_height = params.input_height;
+        input_slice_width = (max_output_slice_size * params.stride[1]);
     }
 
     if (!conv_config.shard_layout.has_value()) {
         if (!conv_config.weights_dtype.has_value()) {
-            conv_config.weights_dtype = weights_datatype;
+            conv_config.weights_dtype = params.weights_datatype;
         }
         conv_config = determine_conv_config_for_auto_shard(
             conv_config,
-            mm_conv,
-            batch_size,
-            in_channels,
-            out_channels,
+            params.mm_conv,
+            params.batch_size,
+            params.in_channels,
+            params.out_channels,
             output_slice_height,
             output_slice_width,
-            out_channels,
+            params.out_channels,
             input_slice_height,
             input_slice_width,
-            compute_grid,
+            params.compute_grid,
             conv_config.output_layout,
             DataType::BFLOAT16,  // Input datatype is always BFLOAT16 in Conv2D DRAM
-            output_datatype,
+            params.output_datatype,
             std::nullopt,
-            kernel_size,
-            groups,
-            enable_bias,
-            compute_kernel_config);
+            params.kernel_size,
+            params.groups,
+            params.enable_bias,
+            params.compute_kernel_config);
     }
     log_info(
         tt::LogOp,
@@ -1115,10 +1093,10 @@ uint32_t calculate_conv_dram_L1(
         output_slice_width);
     auto sliced_input_tensor_memory_config = std::get<1>(determine_input_memory_config(
         conv_config,
-        batch_size,
-        ttnn::Shape({batch_size, input_slice_height, input_slice_width, in_channels}),
-        ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}),
-        mm_conv,
+        params.batch_size,
+        ttnn::Shape({params.batch_size, input_slice_height, input_slice_width, params.in_channels}),
+        ttnn::Shape({params.batch_size, output_slice_height, output_slice_width, params.out_channels}),
+        params.mm_conv,
         device,
         // Setting layout to TILE forces input_channels_alignment to 32.
         //  The padded_slice op needs aligned reads from L1.
@@ -1130,31 +1108,32 @@ uint32_t calculate_conv_dram_L1(
         .shard_orientation = sliced_input_tensor_memory_config.shard_spec().value().orientation};
 
     ParallelConfig output_parallel_config =
-        determine_output_parallel_config(parallel_config, compute_grid, out_channels, mm_conv);
+        determine_output_parallel_config(parallel_config, params.compute_grid, params.out_channels, params.mm_conv);
 
     auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
         conv_config,
-        compute_kernel_config,
+        params.compute_kernel_config,
         parallel_config,
         output_parallel_config,
-        tt::round_up(in_channels, constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(parallel_config)),
-        out_channels,
-        batch_size,
+        tt::round_up(
+            params.in_channels, constants::TILE_WIDTH * get_num_cores_channels_from_parallel_config(parallel_config)),
+        params.out_channels,
+        params.batch_size,
         output_slice_height,
         output_slice_width,
-        kernel_size,
-        compute_grid);
+        params.kernel_size,
+        params.compute_grid);
 
     conv_op_l1_usage l1_usage = calculate_L1_usage(
-        compute_kernel_config,
+        params.compute_kernel_config,
         opt_conv_op_block_config,
         opt_conv_op_parallel_config,
-        weights_shape,
-        kernel_size,
+        params.weights_shape,
+        params.kernel_size,
         conv_config,
         DataType::BFLOAT16,  // Input datatype is always BFLOAT16 in Conv2D DRAM
-        output_datatype,
-        enable_bias,
+        params.output_datatype,
+        params.enable_bias,
         false);
 
     auto shard_shape = sliced_input_tensor_memory_config.shard_spec().value().shape;
@@ -1162,9 +1141,10 @@ uint32_t calculate_conv_dram_L1(
     // Output of padded slice is always BFloat16, so size is 2 bytes.
     uint32_t input_size = shard_shape[0] * shard_shape[1] * 2;
     const float approx_halo_size_margin = 1.1;
-    float float_shard_height = ((float)shard_shape[0]) / input_width;
-    uint32_t approx_halo_size = approx_halo_size_margin * (float_shard_height + (dilation[0] * kernel_size[0] / 2)) *
-                                input_size / float_shard_height;
+    float float_shard_height = ((float)shard_shape[0]) / params.input_width;
+    uint32_t approx_halo_size = approx_halo_size_margin *
+                                (float_shard_height + (params.dilation[0] * params.kernel_size[0] / 2)) * input_size /
+                                float_shard_height;
     const float output_size_margin = 1.0f;
     log_info(
         tt::LogOp,

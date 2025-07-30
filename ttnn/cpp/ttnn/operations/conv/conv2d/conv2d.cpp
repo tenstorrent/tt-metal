@@ -192,27 +192,32 @@ Result conv2d_DRAM(
                 "Conv2D DRAM Slicing: Trying with {} slices, Free memory = {}",
                 current_num_slices,
                 L1_stats.total_free_bytes);
-            if (L1_stats.total_free_bytes >= calculate_conv_dram_L1(
-                                                 in_channels,
-                                                 out_channels,
-                                                 batch_size,
-                                                 input_height,
-                                                 input_width,
-                                                 kernel_size,
-                                                 stride,
-                                                 padding,
-                                                 dilation,
-                                                 groups,
-                                                 device,
-                                                 dtype,
-                                                 conv_config,
-                                                 compute_config,
-                                                 dram_slice_config,
-                                                 compute_grid_size,
-                                                 weight_tensor.padded_shape(),
-                                                 conv_config.weights_dtype.value_or(weight_tensor.dtype()),
-                                                 output_dtype,
-                                                 bias_tensor.has_value())) {
+            if (L1_stats.total_free_bytes >=
+                calculate_conv_dram_L1(
+                    ConvDRAMParamters{
+                        .in_channels = in_channels,
+                        .out_channels = out_channels,
+                        .batch_size = batch_size,
+                        .input_height = input_height,
+                        .input_width = input_width,
+                        .output_height = output_height,
+                        .output_width = output_width,
+                        .kernel_size = kernel_size,
+                        .stride = stride,
+                        .padding_n4 = padding_n4,
+                        .dilation = dilation,
+                        .groups = groups,
+                        .conv_config = conv_config,
+                        .compute_kernel_config = compute_config,
+                        .compute_grid = compute_grid_size,
+                        .weights_shape = weight_tensor.padded_shape(),
+                        .weights_datatype = conv_config.weights_dtype.value_or(weight_tensor.dtype()),
+                        .output_datatype = output_dtype,
+                        .enable_bias = bias_tensor.has_value(),
+                        .mm_conv = mm_conv,
+                    },
+                    device,
+                    dram_slice_config)) {
                 break;
             }
             current_num_slices++;
