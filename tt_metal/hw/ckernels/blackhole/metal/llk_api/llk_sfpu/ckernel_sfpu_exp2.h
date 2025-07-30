@@ -45,9 +45,9 @@ template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_exp2() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v = dst_reg[0];
-        dst_reg[0] = _sfpu_exp2_21f_(v);
-        dst_reg++;
+        sfpi::vFloat v = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = _sfpu_exp2_21f_(v);
+        sfpi::dst_reg++;
     }
 }
 
