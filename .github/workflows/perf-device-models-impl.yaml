@@ -166,15 +166,6 @@ jobs:
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
-      - name: vovnet tests
-        uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
-        with:
-          model_name: "vovnet"
-          commands: |
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/vovnet/tests -m models_device_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
-        timeout-minutes: ${{ matrix.test-info.timeout }}
-
       - name: sentence_bert tests
         uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
         with:

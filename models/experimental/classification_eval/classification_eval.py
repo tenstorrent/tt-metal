@@ -4,7 +4,6 @@
 
 import os
 from loguru import logger
-import torch.nn.functional as F
 import torch
 import torchvision
 import pytest
@@ -65,6 +64,8 @@ def evaluation(
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     mesh_mapper=model.test_infra.inputs_mesh_mapper,
                 )
+        elif model_name == "vovnet":
+            torch_input_tensor = inputs
         else:
             torch_input_tensor = inputs
             if model_type == "tt_model":
@@ -90,7 +91,7 @@ def evaluation(
             elif model_name == "resnet50":
                 output = model.execute_resnet50_trace_2cqs_inference(tt_inputs_host)
             elif model_name == "vovnet":
-                output = model._execute_vovnet_trace_2cqs_inference(ttnn_input_tensor)
+                output = model.run(torch_input_tensor)
         elif model_type == "torch_model":
             output = model(torch_input_tensor)
 
@@ -109,7 +110,7 @@ def evaluation(
 
         elif model_name == "vovnet":
             if model_type == "tt_model":
-                final_output = ttnn.to_torch(output, mesh_composer=model.test_infra.output_mesh_composer)
+                final_output = ttnn.to_torch(output, mesh_composer=model.runner_infra.output_mesh_composer)
             else:
                 final_output = output
             prediction = final_output.argmax(dim=-1)
@@ -117,6 +118,7 @@ def evaluation(
             for i in range(batch_size):
                 pred_id.append(prediction[i].item())
                 gt_id.append(labels[i])
+
             del output, final_output
 
         elif model_name == "vit":
@@ -363,4 +365,77 @@ def test_mobilenetv2_image_classification_eval_dp(
 ):
     run_mobilenetv2_image_classification_eval(
         mesh_device, model_type, batch_size, res, model_location_generator, reset_seeds
+    )
+
+
+def run_vovnet_image_classification_eval(
+    device, model_type, device_batch_size, res, model_location_generator, reset_seeds
+):
+    from models.experimental.vovnet.runner.performant_runner import VovnetPerformantRunner
+    from models.demos.ttnn_resnet.tests.demo_utils import get_batch
+    from models.experimental.vovnet.common import load_torch_model
+
+    model_version = "microsoft/resnet-50"
+    image_processor = AutoImageProcessor.from_pretrained(model_version)
+    batch_size = device_batch_size * device.get_num_devices()
+    if model_type == "torch_model":
+        torch_model = load_torch_model(model_location_generator).eval()
+    else:
+        vovnet_trace_2cq = VovnetPerformantRunner(
+            device,
+            device_batch_size,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            resolution=(224, 224),
+            model_location_generator=model_location_generator,
+        )
+
+        vovnet_trace_2cq._capture_vovnet_trace_2cqs()
+    evaluation(
+        device=device,
+        model=vovnet_trace_2cq if model_type == "tt_model" else torch_model,
+        model_location_generator=model_location_generator,
+        model_type=model_type,
+        model_name="vovnet",
+        image_processor=image_processor,
+        config=None,
+        get_batch=get_batch,
+        batch_size=batch_size,
+        res=res,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 1752064, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        ("tt_model"),
+        ("torch_model"),
+    ],
+)
+@pytest.mark.parametrize("batch_size, res", [[1, 224]])
+def test_vovnet_image_classification_eval(device, model_type, batch_size, res, model_location_generator, reset_seeds):
+    return run_vovnet_image_classification_eval(
+        device, model_type, batch_size, res, model_location_generator, reset_seeds
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 1752064, "num_command_queues": 2}], indirect=True
+)
+@pytest.mark.parametrize(
+    "model_type",
+    [
+        ("tt_model"),
+        ("torch_model"),
+    ],
+)
+@pytest.mark.parametrize("device_batch_size, res", [[1, 224]])
+def test_vovnet_image_classification_eval_dp(
+    mesh_device, model_type, device_batch_size, res, model_location_generator, reset_seeds
+):
+    return run_vovnet_image_classification_eval(
+        mesh_device, model_type, device_batch_size, res, model_location_generator, reset_seeds
     )
