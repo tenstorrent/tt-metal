@@ -217,27 +217,31 @@ KernelStrideFoldingResult compute_kernel_stride_folding_params(
     const Conv2dConfig& conv_config);
 std::ostream& operator<<(std::ostream& os, const Conv2dConfig& config);
 
-uint32_t calculate_conv_dram_L1(
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
-    std::array<uint32_t, 2> dilation,
-    uint32_t groups,
-    MeshDevice* device,
-    const std::optional<const DataType>& dtype,
-    Conv2dConfig conv_config,
-    const DeviceComputeKernelConfig& compute_kernel_config,
-    const Conv2dSliceConfig& dram_slice_config,
-    const CoreCoord& compute_grid,
-    const ttnn::Shape& weights_shape,
-    const DataType weights_datatype,
-    const DataType output_datatype,
-    const bool enable_bias);
+struct ConvDRAMParamters {
+    uint32_t in_channels;
+    uint32_t out_channels;
+    uint32_t batch_size;
+    uint32_t input_height;
+    uint32_t input_width;
+    uint32_t output_height;
+    uint32_t output_width;
+    std::array<uint32_t, 2> kernel_size;
+    std::array<uint32_t, 2> stride;
+    std::array<uint32_t, 4> padding_n4;
+    std::array<uint32_t, 2> dilation;
+    uint32_t groups;
+    Conv2dConfig conv_config;
+    DeviceComputeKernelConfig compute_kernel_config;
+    Conv2dSliceConfig dram_slice_config;
+    CoreCoord compute_grid;
+    ttnn::Shape weights_shape;
+    DataType weights_datatype;
+    DataType output_datatype;
+    bool enable_bias;
+    bool mm_conv;
+};
+
+uint32_t calculate_conv_dram_L1(const ConvDRAMParamters& params, MeshDevice* device, const Conv2dSliceConfig& dram_slice_config);
 
 }  // namespace operations::conv
 }  // namespace ttnn
