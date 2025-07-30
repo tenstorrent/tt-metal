@@ -11,7 +11,8 @@ from loguru import logger
 from models.utility_functions import skip_for_blackhole
 
 
-def _test_eltwise_exp(device):
+@skip_for_blackhole("Not tested / built for Blackhole")
+def test_eltwise_exp(device):
     num_tiles = 4
     src_bank_id = 0
     dst_bank_id = 0
@@ -118,14 +119,3 @@ def _test_eltwise_exp(device):
     matching = torch.allclose(torch_golden, torch_output)
     logger.info(f"Tensors are matching: {matching}")
     assert matching
-
-
-@skip_for_blackhole("Not tested / built for Blackhole")
-def test_generic_op():
-    # Choose not to parametrize the input tensors
-    # this was chosen to highlight the operation of the Generic Op instead of testing Eltwise Op's func
-    device = ttnn.open_device(device_id=0)
-
-    _test_eltwise_exp(device)
-
-    ttnn.close_device(device)
