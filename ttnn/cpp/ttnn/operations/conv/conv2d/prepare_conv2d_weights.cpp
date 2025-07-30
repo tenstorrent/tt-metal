@@ -69,6 +69,7 @@ public:
         }
 
         std::vector<std::thread> threads;
+        std::exception_ptr exception_caught = nullptr;
         threads.reserve(cfg.out_threads * cfg.in_threads);
 
         for (uint32_t ot = 0; ot < cfg.out_threads; ++ot) {
@@ -79,14 +80,27 @@ public:
                 uint32_t i_start = it * cfg.in_per_thread;
                 uint32_t i_end = (it == cfg.in_threads - 1) ? cfg.in_total : i_start + cfg.in_per_thread;
 
-                threads.emplace_back([=, work_func = std::forward<Func>(work_func)] {
-                    work_func(ot, it, o_start, o_end, i_start, i_end);
+                threads.emplace_back([=, &exception_caught, work_func = std::forward<Func>(work_func)] {
+                    try {
+                        work_func(ot, it, o_start, o_end, i_start, i_end);
+                    } catch (...) {
+                        // catch the first exception and store it
+                        if (!exception_caught) {
+                            exception_caught = std::current_exception();
+                        }
+                    }
                 });
             }
         }
 
+        // Wait for all threads to complete
         for (auto& t : threads) {
             t.join();
+        }
+
+        // Rethrow first exception if one was caught
+        if (exception_caught) {
+            std::rethrow_exception(exception_caught);
         }
     }
 };
