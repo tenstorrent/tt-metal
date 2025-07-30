@@ -802,7 +802,7 @@ def test_conv_dram(
         (2, 256, 2048, 9, 9, 3, 3, 1, 1, 1),
         (2, 512, 2048, 17, 17, 3, 3, 1, 1, 1),
         (2, 768, 768, 17, 17, 3, 3, 0, 0, 1),
-        (2, 1280, 2560, 15, 15, 3, 3, 1, 1, 1),
+        (2, 1280, 2560, 15, 15, 3, 3, 1, 1, 2),
         (2, 1280, 1280, 17, 17, 3, 3, 1, 1, 1),
         [1, 3024, 1232, 14, 14, 1, 1, 0, 0, 1],
         (2, 768, 32, 9, 9, 3, 3, 1, 1, 1),
@@ -857,8 +857,9 @@ def test_conv_ws(
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 grid for wormhole_b0")
 
-    if input_channels == 2560 and auto_shard:
-        pytest.skip("Skipping 2560 input channels with auto_shard due to #23712")
+    if is_blackhole():
+        # Different core counts on Blackhole causes act block width to not be evenly divided, causing errors.
+        act_block_w_div = 1
 
     stride_h = stride
     stride_w = stride
