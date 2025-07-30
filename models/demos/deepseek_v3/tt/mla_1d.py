@@ -22,7 +22,12 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     ReduceScatterAsyncConfig,
     ReshardConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import even_int_div, save_and_get_path
+from models.demos.deepseek_v3.utils.config_helpers import (
+    even_int_div,
+    get_state_dicts,
+    save_and_get_path,
+    sub_state_dicts,
+)
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -47,7 +52,7 @@ class MLA1D(AbstractModule):
     def convert_weights(
         cls,
         hf_config: PretrainedConfig,
-        state_dict: dict[str, torch.Tensor],
+        state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
@@ -64,12 +69,16 @@ class MLA1D(AbstractModule):
         """
         assert cls.is_device_supported(mesh_device)
 
+        num_shards = mesh_device.shape[0]
+
         dim = hf_config.hidden_size
-        hidden_dim = hf_config.intermediate_size
         num_heads = hf_config.num_attention_heads
         kv_lora_rank = hf_config.kv_lora_rank
         qk_nope_head_dim = hf_config.qk_nope_head_dim
+        qk_rope_head_dim = hf_config.qk_rope_head_dim
         v_head_dim = hf_config.v_head_dim
+        q_lora_rank = hf_config.q_lora_rank
+        q_head_dim = qk_nope_head_dim + qk_rope_head_dim
 
         hf_ttnn_name_mapping = {
             "q_a_proj": "wq_a",
@@ -83,20 +92,25 @@ class MLA1D(AbstractModule):
 
         # wq_a
         hf_name = "q_a_proj"
-        our_name = hf_ttnn_name_mapping[hf_name]
-        torch_weight = state_dict[f"{hf_name}.weight"]
-        torch_weight = torch.transpose(torch_weight, -2, -1)
+        ttnn_name = hf_ttnn_name_mapping[hf_name]
+        torch_weights = get_state_dicts(
+            state_dicts,
+            f"{hf_name}.weight",
+            shape=(q_lora_rank, dim),  # Torch shape
+            dtype=torch.float32,
+        )
+        torch_weights = torch.transpose(torch_weights, -2, -1)  # TTNN shape
 
         wq_a_weight_config = MLA1D.convert_weight(
-            torch_weight,
-            our_name,
+            torch_weights,
+            ttnn_name,
             "input_tensor_b",
             dtype=ttnn.bfloat8_b,
             mem_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=[None, -2],
+                dims=[0, -2],
                 mesh_shape=list(mesh_device.shape),
             ),
             mesh_device=mesh_device,
@@ -105,20 +119,25 @@ class MLA1D(AbstractModule):
 
         # wq_b
         hf_name = "q_b_proj"
-        our_name = hf_ttnn_name_mapping[hf_name]
-        torch_weight = state_dict[f"{hf_name}.weight"]
-        torch_weight = torch.transpose(torch_weight, -2, -1)
+        ttnn_name = hf_ttnn_name_mapping[hf_name]
+        torch_weights = get_state_dicts(
+            state_dicts,
+            f"{hf_name}.weight",
+            shape=(num_heads * q_head_dim, q_lora_rank),  # Torch shape
+            dtype=torch.float32,
+        )
+        torch_weights = torch.transpose(torch_weights, -2, -1)
 
         wq_b_weight_config = MLA1D.convert_weight(
-            torch_weight,
-            our_name,
+            torch_weights,
+            ttnn_name,
             "input_tensor_b",
             dtype=ttnn.bfloat8_b,
             mem_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=[None, -1],
+                dims=[0, -1],
                 mesh_shape=list(mesh_device.shape),
             ),
             mesh_device=mesh_device,
@@ -127,20 +146,25 @@ class MLA1D(AbstractModule):
 
         # wkv_a
         hf_name = "kv_a_proj_with_mqa"
-        our_name = hf_ttnn_name_mapping[hf_name]
-        torch_weight = state_dict[f"{hf_name}.weight"]
-        torch_weight = torch.transpose(torch_weight, -2, -1)
+        ttnn_name = hf_ttnn_name_mapping[hf_name]
+        torch_weights = get_state_dicts(
+            state_dicts,
+            f"{hf_name}.weight",
+            shape=(kv_lora_rank + qk_rope_head_dim, dim),  # Torch shape
+            dtype=torch.float32,
+        )
+        torch_weights = torch.transpose(torch_weights, -2, -1)
 
         wkv_a_weight_config = MLA1D.convert_weight(
-            torch_weight,
-            our_name,
+            torch_weights,
+            ttnn_name,
             "input_tensor_b",
             dtype=ttnn.bfloat8_b,
             mem_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=[None, -2],
+                dims=[0, -2],
                 mesh_shape=list(mesh_device.shape),
             ),
             mesh_device=mesh_device,
@@ -149,28 +173,33 @@ class MLA1D(AbstractModule):
 
         # wkv_b1
         hf_name = "kv_b_proj"
-        our_name = hf_ttnn_name_mapping[hf_name]
-        torch_weight = state_dict[f"{hf_name}.weight"]
+        ttnn_name = hf_ttnn_name_mapping[hf_name]
+        torch_weights = get_state_dicts(
+            state_dicts,
+            f"{hf_name}.weight",
+            shape=(num_heads * (qk_nope_head_dim + v_head_dim), kv_lora_rank),  # Torch shape
+            dtype=torch.float32,
+        )
 
         # This weight needs to be split
-        torch_weight = torch_weight.view(kv_lora_rank, num_heads * (qk_nope_head_dim + v_head_dim))
-        torch_weight = torch_weight.reshape(num_heads, -1, kv_lora_rank)
+        torch_weights = torch_weights.view(num_shards, kv_lora_rank, num_heads * (qk_nope_head_dim + v_head_dim))
+        torch_weights = torch_weights.reshape(num_shards, num_heads, -1, kv_lora_rank)
 
-        torch_weight_k = torch_weight[:, :qk_nope_head_dim, :]  # [num_heads, qk_nope_head_dim, kv_lora_rank]
-        torch_weight_v = torch_weight[:, qk_nope_head_dim:, :].transpose(
+        torch_weights_k = torch_weights[..., :qk_nope_head_dim, :]  # [num_heads, qk_nope_head_dim, kv_lora_rank]
+        torch_weights_v = torch_weights[..., qk_nope_head_dim:, :].transpose(
             -2, -1
         )  # [num_heads, kv_lora_rank, v_head_dim]
 
         wkv_b1_weight_config = MLA1D.convert_weight(
-            torch_weight_k,
-            our_name + "1",
+            torch_weights_k,
+            ttnn_name + "1",
             "input_tensor_b",
             dtype=ttnn.bfloat8_b,
             mem_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=[None, -3],
+                dims=[0, -3],
                 mesh_shape=list(mesh_device.shape),
             ),
             mesh_device=mesh_device,
@@ -178,15 +207,15 @@ class MLA1D(AbstractModule):
         )
 
         wkv_b2_weight_config = MLA1D.convert_weight(
-            torch_weight_v,
-            our_name + "2",
+            torch_weights_v,
+            ttnn_name + "2",
             "input_tensor_b",
             dtype=ttnn.bfloat8_b,
             mem_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=[None, -3],
+                dims=[0, -3],
                 mesh_shape=list(mesh_device.shape),
             ),
             mesh_device=mesh_device,
@@ -195,20 +224,25 @@ class MLA1D(AbstractModule):
 
         # wo
         hf_name = "o_proj"
-        our_name = hf_ttnn_name_mapping[hf_name]
-        torch_weight = state_dict[f"{hf_name}.weight"]
-        torch_weight = torch.transpose(torch_weight, -2, -1)
+        ttnn_name = hf_ttnn_name_mapping[hf_name]
+        torch_weights = get_state_dicts(
+            state_dicts,
+            f"{hf_name}.weight",
+            shape=(dim, num_heads * v_head_dim),  # Torch shape
+            dtype=torch.float32,
+        )
+        torch_weights = torch.transpose(torch_weights, -2, -1)
 
         wo_weight_config = MLA1D.convert_weight(
-            torch_weight,
-            our_name,
+            torch_weights,
+            ttnn_name,
             "input_tensor_b",
             dtype=ttnn.bfloat8_b,
             mem_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=[None, -1],
+                dims=[0, -1],
                 mesh_shape=list(mesh_device.shape),
             ),
             mesh_device=mesh_device,
@@ -217,21 +251,23 @@ class MLA1D(AbstractModule):
 
         # Norm weights
         hf_name = "q_a_layernorm"
-        our_name = hf_ttnn_name_mapping[hf_name]
-        q_norm_state_dict = {"weight": state_dict[f"{hf_name}.weight"]}
+        ttnn_name = hf_ttnn_name_mapping[hf_name]
+        q_norm_state_dicts = sub_state_dicts(state_dicts, f"{hf_name}.weight")  # List of dicts
+        q_norm_state_dicts = [{"weight": item[""].to(torch.bfloat16)} for item in q_norm_state_dicts]
         q_norm_weight_config = RMSNorm.convert_weights(
             hf_config,
-            q_norm_state_dict,
+            q_norm_state_dicts,
             output_path / "q_norm",
             mesh_device,
         )
 
         hf_name = "kv_a_layernorm"
-        our_name = hf_ttnn_name_mapping[hf_name]
-        kv_norm_state_dict = {"weight": state_dict[f"{hf_name}.weight"]}
+        ttnn_name = hf_ttnn_name_mapping[hf_name]
+        kv_norm_state_dicts = sub_state_dicts(state_dicts, f"{hf_name}.weight")  # List of dicts
+        kv_norm_state_dicts = [{"weight": item[""].to(torch.bfloat16)} for item in kv_norm_state_dicts]
         kv_norm_weight_config = RMSNorm.convert_weights(
             hf_config,
-            kv_norm_state_dict,
+            kv_norm_state_dicts,
             output_path / "kv_norm",
             mesh_device,
         )
@@ -251,7 +287,7 @@ class MLA1D(AbstractModule):
     def convert_weight(
         cls,
         torch_weight,
-        our_name,
+        ttnn_name,
         kwarg_name,
         dtype,
         mem_config,
@@ -272,8 +308,8 @@ class MLA1D(AbstractModule):
         ttnn_weight = ttnn.unsqueeze_to_4D(ttnn_weight)
 
         # Create weight config
-        weight_file_path = output_path / f"{our_name}.{kwarg_name}.weight"
-        return {our_name: {kwarg_name: save_and_get_path(weight_file_path, ttnn_weight)}}
+        weight_file_path = output_path / f"{ttnn_name}.{kwarg_name}.weight"
+        return {ttnn_name: {kwarg_name: save_and_get_path(weight_file_path, ttnn_weight)}}
 
     @classmethod
     def is_device_supported(cls, mesh_device: ttnn.Device) -> bool:

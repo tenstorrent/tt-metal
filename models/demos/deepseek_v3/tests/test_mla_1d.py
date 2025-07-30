@@ -170,8 +170,9 @@ def test_forward_pass(
     reference,
     hf_config_short,
     tmp_path,
-    mesh_row,
+    mesh_device,
 ):
+    mesh_row = mesh_device
     hf_config = hf_config_short
     mesh_shape = list(mesh_row.shape)
 
@@ -190,7 +191,8 @@ def test_forward_pass(
     ############################
     # Setup: Convert weights and get weight_config
     logger.info(f"Converting weights for MLA1D to {tmp_path}")
-    weight_config = MLA1D.convert_weights(hf_config, reference_model.state_dict(), tmp_path, mesh_row)
+    state_dicts = [reference_model.state_dict()] * mesh_shape[0]  # Duplicate state dicts for each row in the mesh
+    weight_config = MLA1D.convert_weights(hf_config, state_dicts, tmp_path, mesh_row)
 
     # Generate appropriate configs
     ccl = CCL1D(hf_config, mesh_row)
