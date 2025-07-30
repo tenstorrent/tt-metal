@@ -41,7 +41,7 @@ class TtFPN:
                 TtConvModule(conv_args.lateral_convs[i], conv_pth.fpn.lateral_convs[str(i)], device=device)
             )
         for i in range(3):
-            if i == 0:
+            if i == 0 or i == 1:
                 self.fpn_convs.append(
                     TtConvModule(
                         conv_args.fpn_convs[i],
@@ -68,22 +68,31 @@ class TtFPN:
 
         for i in range(used_backbone_levels - 1, 0, -1):
             laterals[i] = ttnn.to_layout(laterals[i], ttnn.ROW_MAJOR_LAYOUT)
-            inp_dim = self.conv_pth.fpn.fpn_convs[str(i)].conv
+            inp_dim = self.conv_pth.fpn.lateral_convs[str(i)].conv
             laterals[i] = ttnn.reshape(
                 laterals[i], (inp_dim.batch, inp_dim.height, inp_dim.width, laterals[i].shape[-1])
             )
-            laterals[i] = ttnn.upsample(laterals[i], 2)
-            laterals[i] = laterals[i][:, :, :-1, :]
+            laterals_upsample = ttnn.upsample(laterals[i], 2)
+            laterals_sliced = laterals_upsample[:, :, : (laterals_upsample.shape[2] - 1), :]
             laterals[i] = ttnn.reshape(
-                laterals[i],
-                [1, 1, laterals[i].shape[0] * laterals[i].shape[1] * laterals[i].shape[2], laterals[i].shape[-1]],
+                laterals_sliced,
+                [
+                    1,
+                    1,
+                    laterals_sliced.shape[0] * laterals_sliced.shape[1] * laterals_sliced.shape[2],
+                    laterals_sliced.shape[-1],
+                ],
             )
-            laterals[i] = ttnn.sharded_to_interleaved(laterals[i], memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(laterals_upsample)
+            ttnn.deallocate(laterals_sliced)
+            if i != 1:
+                laterals[i] = ttnn.sharded_to_interleaved(laterals[i], memory_config=ttnn.L1_MEMORY_CONFIG)
+            if i == 1:
+                laterals[i] = ttnn.sharded_to_interleaved(laterals[i], memory_config=ttnn.DRAM_MEMORY_CONFIG)
             laterals[i] = ttnn.to_layout(laterals[i], ttnn.TILE_LAYOUT)
-            laterals[i - 1] = laterals[i - 1] + laterals[i]
+            laterals[i - 1] = ttnn.add(laterals[i - 1], laterals[i])
 
         for i in range(used_backbone_levels):
-            # laterals[i] = ttnn.to_layout(laterals[i], ttnn.TILE_LAYOUT)
             output = self.fpn_convs[i](laterals[i])
             outs.append(output)
 

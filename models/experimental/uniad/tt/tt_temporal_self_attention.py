@@ -213,6 +213,7 @@ def multi_scale_deformable_attn_pytorch(
         h_l = int(h_l.item())
         w_l = int(w_l.item())
         grid = sampling_locations[:, :, :, lvl, :, :]
+        grid = ttnn.to_memory_config(grid, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         grid = ttnn.clone(grid)
         grid = ttnn.to_torch(grid)
         grid[..., 0] = grid[..., 0] / w_l * 2 - 1
