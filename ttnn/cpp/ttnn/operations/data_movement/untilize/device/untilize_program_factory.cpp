@@ -604,11 +604,17 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
             {out_is_dram, log2_stick_size, total_num_rows, third_dim, TILE_HEIGHT}, writer_defines));
 
     // compute
-
+    bool use_pack_kernel = true;
+    if (!use_pack_untilize || a.dtype() == DataType::UINT16 ||
+        (a.dtype() == DataType::FLOAT32 && num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH)) {
+        use_pack_kernel = false;
+    }
     if (core_range.size() > 0) {
         CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            use_pack_kernel
+                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
+                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -617,7 +623,9 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     if (has_cliff_col && has_cliff_row) {
         CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            use_pack_kernel
+                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
+                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_col_row_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -626,7 +634,9 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     if (has_cliff_row) {
         CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            use_pack_kernel
+                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
+                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_row_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -636,7 +646,9 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     if (has_cliff_col) {
         CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
+            use_pack_kernel
+                ? "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize_wh.cpp"
+                : "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp",
             cliff_col_core_range,
             ComputeConfig{
                 .fp32_dest_acc_en = fp32_dest_acc_en,
