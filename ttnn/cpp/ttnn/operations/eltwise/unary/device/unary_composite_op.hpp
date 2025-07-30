@@ -26,7 +26,6 @@ enum class UnaryCompositeOpType {
     STD_HW,
     NORMALIZE_HW,
     HARDSWISH,
-    HARDTANH,
     SELU,
     GLU,
     REGLU,
@@ -64,8 +63,6 @@ Tensor _hardswish(
     float scale = 1.0f / 6.0f,
     float shift = 0.5f,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-Tensor _hardtanh(
-    const Tensor&, float min = -1, float max = 1, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _selu(
     const Tensor&,
     float scale = 1.0507,
@@ -167,13 +164,6 @@ template <>
 struct OpHandler<UnaryCompositeOpType::HARDSWISH> {
     static Tensor handle(const Tensor& t1, float scale, float shift, const std::optional<MemoryConfig>& mem_cfg) {
         return _hardswish(t1, scale, shift, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::HARDTANH> {
-    static Tensor handle(const Tensor& t1, float low, float high, const std::optional<MemoryConfig>& mem_cfg) {
-        return _hardtanh(t1, low, high, mem_cfg);
     }
 };
 

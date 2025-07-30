@@ -191,9 +191,6 @@ constexpr auto normalize_hw = ttnn::register_operation<
 constexpr auto hardswish = ttnn::register_operation<
     "ttnn::hardswish",
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::HARDSWISH>>();
-constexpr auto hardtanh = ttnn::register_operation<
-    "ttnn::hardtanh",
-    operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::HARDTANH>>();
 constexpr auto clip = ttnn::register_operation<"ttnn::clip", operations::unary::ExecuteUnaryCompositeClip>();
 constexpr auto clamp = ttnn::register_operation<"ttnn::clamp", operations::unary::ExecuteUnaryCompositeClamp>();
 constexpr auto selu = ttnn::register_operation<
