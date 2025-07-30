@@ -1336,7 +1336,7 @@ TEST(EdmFabric, RingDeadlockStabilityTest) {
     size_t num_links = 1;
     std::vector<size_t> num_devices_vec;
     auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
-    if (cluster_type == tt::ClusterType::GALAXY) {
+    if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
         num_devices_vec = {4, 8};
         num_links = 4;
     } else {
@@ -1368,7 +1368,7 @@ TEST(EdmFabric, RingDeadlockStabilityTest_RelaxedFabricStrictness) {
     std::vector<size_t> num_devices;
     auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
 
-    if (cluster_type != tt::ClusterType::GALAXY) {
+    if (cluster_type != tt::tt_metal::ClusterType::GALAXY) {
         return;
     }
     num_devices = {4, 8};

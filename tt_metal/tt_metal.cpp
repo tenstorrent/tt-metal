@@ -29,6 +29,10 @@
 #include "buffer_types.hpp"
 #include "circular_buffer_config.hpp"
 #include "data_types.hpp"
+#include "llrt/tt_cluster.hpp"
+#include <umd/device/cluster.h>
+#include <umd/device/tt_cluster_descriptor.h>
+#include <filesystem>
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "kernels/kernel_impl.hpp"
@@ -946,6 +950,13 @@ size_t GetNumPCIeDevices() { return tt::tt_metal::MetalContext::instance().get_c
 
 chip_id_t GetPCIeDeviceID(chip_id_t device_id) {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+}
+
+ClusterType GetClusterType() { return tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type(); }
+
+std::string SerializeClusterDescriptor() {
+    std::filesystem::path path = tt::umd::Cluster::create_cluster_descriptor()->serialize_to_file();
+    return path.string();
 }
 
 IDevice* CreateDevice(

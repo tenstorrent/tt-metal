@@ -944,7 +944,8 @@ void build_tt_fabric_program(
     using namespace tt_fabric;
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
-    const bool is_TG = (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG);
+    const bool is_TG =
+        (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG);
     auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto& edm_config = fabric_context.get_fabric_router_config();
@@ -1085,7 +1086,7 @@ void build_tt_fabric_program(
     }
 
     const bool is_galaxy =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::GALAXY;
+        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::GALAXY;
 
     auto connect_downstream_builders = [&](RoutingDirection dir1, RoutingDirection dir2) {
         bool can_connect =
