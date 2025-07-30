@@ -319,11 +319,10 @@ class TtVADHead:
                 if i < 4:
                     cls_tmp = ttnn.relu(cls_tmp)
 
-            outputs_class = cls_tmp  # pcc =  0.995
-
-            torch.save(ttnn.to_torch(outputs_class), "models/experimental/vadv2/dumps/outputs_class")
+            outputs_class = cls_tmp
 
             reg_layers = self.params.head.branches.reg_branches[str(lvl)]
+
             tmp = hs[lvl]
 
             for i in range(3):
@@ -332,7 +331,6 @@ class TtVADHead:
                 )
                 if i < 2:
                     tmp = ttnn.relu(tmp)
-                torch.save(ttnn.to_torch(tmp), "models/experimental/vadv2/dumps/tmp")
 
             updated_xy = tmp[..., 0:2] + reference[..., 0:2]
             updated_xy = ttnn.sigmoid(updated_xy)
@@ -347,7 +345,7 @@ class TtVADHead:
 
             tmp_out = ttnn.concat(
                 [x, y, tmp[..., 2:4], z, tmp[..., 5:]], dim=-1  # 0  # 1  # 2:4 untouched  # 4  # 5:10 untouched
-            )  # pcc = 0.996
+            )
 
             #     # TODO: check if using sigmoid
             outputs_coord = tmp_out
@@ -379,7 +377,7 @@ class TtVADHead:
                     )
                 if i < 4:
                     cls_tmp = ttnn.relu(cls_tmp)
-            map_outputs_class = cls_tmp  # pcc = 0.998
+            map_outputs_class = cls_tmp
 
             # === Regression Branch ===
             reg_params = self.params.head.branches.map_reg_branches[str(lvl)]
@@ -401,7 +399,7 @@ class TtVADHead:
             tmp_coord = ttnn.sigmoid(tmp_coord)
 
             tmp_full = ttnn.concat([tmp_coord], dim=-1)
-            map_outputs_coord, map_outputs_pts_coord = self.map_transform_box(tmp_full)  # pcc =  0.9949 , 0.996
+            map_outputs_coord, map_outputs_pts_coord = self.map_transform_box(tmp_full)
             map_outputs_coords_bev.append(ttnn.clone(map_outputs_pts_coord, memory_config=ttnn.L1_MEMORY_CONFIG))
             map_outputs_classes.append(map_outputs_class)
             map_outputs_coords.append(map_outputs_coord)
@@ -430,7 +428,7 @@ class TtVADHead:
                 motion_pos = ttnn.reshape(
                     motion_pos, (motion_pos.shape[0], motion_pos.shape[1] * motion_pos.shape[2], motion_pos.shape[3])
                 )
-                motion_pos = ttnn.permute(motion_pos, (1, 0, 2))  # [M, B, D] # pcc 0.9995
+                motion_pos = ttnn.permute(motion_pos, (1, 0, 2))  # [M, B, D]
             else:
                 motion_pos = None
 
@@ -458,7 +456,7 @@ class TtVADHead:
                 query_pos=motion_pos,
                 key_pos=motion_pos,
                 key_padding_mask=invalid_motion_idx,
-            )  # pcc 0.997
+            )
 
             if self.motion_map_decoder is not None:
                 motion_coords = outputs_coords_bev[-1]  # [B, A, 2]
@@ -509,7 +507,7 @@ class TtVADHead:
                     query_pos=motion_pos,
                     key_pos=map_pos,
                     key_padding_mask=key_padding_mask,
-                )  # pcc 0.997
+                )
             else:
                 ca_motion_query = ttnn.permute(motion_hs, (1, 0, 2))
                 ca_motion_query = ttnn.reshape(
@@ -521,9 +519,7 @@ class TtVADHead:
             motion_hs = ttnn.permute(motion_hs, (1, 0, 2))
             B, S, D = motion_hs.shape
             motion_hs = ttnn.reshape(motion_hs, (B, num_agent, self.fut_mode, D))  # [B, A, T, D]
-            ca_motion_query = ttnn.reshape(
-                ca_motion_query, (batch_size, num_agent, self.fut_mode, -1)
-            )  # [B, A, T, D] #0.995
+            ca_motion_query = ttnn.reshape(ca_motion_query, (batch_size, num_agent, self.fut_mode, -1))  # [B, A, T, D]
 
             motion_hs = ttnn.concat([motion_hs, ca_motion_query], dim=-1)  # [B, A, fut_mode, 2D]  #0.99
         else:
@@ -540,7 +536,7 @@ class TtVADHead:
             )
             if i < 2:
                 motion_h = ttnn.relu(motion_h)
-        outputs_traj = motion_h  # pcc 0.985407378463829
+        outputs_traj = motion_h
         outputs_trajs.append(outputs_traj)
         cls_tmp = motion_hs
         traj_cls_params = self.params.head.traj_cls_branches["0"]
@@ -558,7 +554,7 @@ class TtVADHead:
                 )
             if i < 4:
                 cls_tmp = ttnn.relu(cls_tmp)
-        outputs_traj_class = cls_tmp  # 0.9974445725292228
+        outputs_traj_class = cls_tmp
         outputs_trajs_classes.append(ttnn.squeeze(outputs_traj_class, -1))
         (batch, num_agent) = motion_hs.shape[0], motion_hs.shape[1]
 
@@ -577,7 +573,7 @@ class TtVADHead:
             ego_his_feats = self.ego_his_encoder(ego_his_trajs)  # [B, 1, dim]
         else:
             ego_his_feats = ttnn.unsqueeze(self.params.head.ego_query.weight, 0)
-            ego_his_feats = ttnn.repeat(ego_his_feats, (batch, 1, 1))  # 0.99
+            ego_his_feats = ttnn.repeat(ego_his_feats, (batch, 1, 1))
         # # Interaction
         ego_query = ego_his_feats
         ego_pos = ttnn.zeros((batch, 1, 2), device=self.device, layout=ttnn.TILE_LAYOUT)
@@ -616,7 +612,7 @@ class TtVADHead:
         agent_pos = ttnn.to_layout(agent_pos, ttnn.TILE_LAYOUT)
         agent_pos_emb = self.ego_agent_pos_mlp(
             agent_pos, self.params.head.ego_agent_pos_mlp.weight, bias=self.params.head.ego_agent_pos_mlp.bias
-        )  # pcc 0.9996951481307231
+        )
         # ego <-> agent interaction
         ego_agent_query = self.ego_agent_decoder(
             query=ttnn.permute(ego_query, (1, 0, 2)),
@@ -625,7 +621,7 @@ class TtVADHead:
             query_pos=ttnn.permute(ego_pos_emb, (1, 0, 2)),
             key_pos=ttnn.permute(agent_pos_emb, (1, 0, 2)),
             key_padding_mask=agent_mask,
-        )  # pcc 0.9999227894476461
+        )
 
         # # ego <-> map interaction
         ego_pos = ttnn.zeros((batch, 1, 2), device=self.device, layout=ttnn.TILE_LAYOUT)
@@ -659,9 +655,7 @@ class TtVADHead:
 
         min_map_pos = ttnn.from_torch(min_map_pos, dtype=ttnn.bfloat16, device=self.device)
 
-        # map_pos = ttnn.from_torch(map_pos, dtype=ttnn.bfloat16, device=self.device)
-
-        min_map_pos = ttnn.reshape(min_map_pos, (batch, num_map, 2))  # [B, P, 2] #0.999
+        min_map_pos = ttnn.reshape(min_map_pos, (batch, num_map, 2))  # [B, P, 2]
         map_query, map_pos, map_mask = self.select_and_pad_query(
             map_query, min_map_pos, map_conf, score_thresh=self.query_thresh, use_fix_pad=self.query_use_fix_pad
         )
@@ -680,7 +674,7 @@ class TtVADHead:
             query_pos=ttnn.permute(ego_pos_emb, (1, 0, 2)),
             key_pos=ttnn.permute(map_pos_emb, (1, 0, 2)),
             key_padding_mask=map_mask,
-        )  # 0.9998
+        )
 
         if self.ego_his_encoder is not None and self.ego_lcf_feat_idx is not None:
             ego_feats = ttnn.concat(
@@ -727,8 +721,7 @@ class TtVADHead:
         outputs_ego_trajs = cls_tmp
         outputs_ego_trajs = ttnn.reshape(
             outputs_ego_trajs, (outputs_ego_trajs.shape[0], self.ego_fut_mode, self.fut_ts, 2)
-        )  #  0.9999179842005836
-
+        )
         outs = {
             "bev_embed": bev_embed,
             "all_cls_scores": outputs_classes,

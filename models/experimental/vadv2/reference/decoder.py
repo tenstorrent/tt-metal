@@ -322,8 +322,6 @@ class MapDetectionTransformerDecoder(nn.Module):
                 new_reference_points = torch.zeros_like(reference_points)
 
                 new_reference_points[..., :2] = tmp[..., :2] + inverse_sigmoid(reference_points[..., :2])
-                # new_reference_points[..., 2:3] = tmp[
-                #     ..., 4:5] + inverse_sigmoid(reference_points[..., 2:3])
 
                 new_reference_points = new_reference_points.sigmoid()
                 reference_points = new_reference_points.detach()
