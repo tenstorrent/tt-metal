@@ -17,6 +17,7 @@ void kernel_main() {
     constexpr uint32_t ntiles_per_row = get_compile_time_arg_val(6);  // Number of tiles per row
     constexpr uint32_t element_size = get_compile_time_arg_val(7);    // Size of each element in bytes
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(8);       // Input compute buffer ID
+    constexpr auto dst_args = TensorAccessorArgs<9>();
 
     // Runtime arguments
     uint32_t dst_addr = get_arg_val<uint32_t>(0);          // Destination address in DRAM
@@ -30,7 +31,7 @@ void kernel_main() {
     // dump(stick_nbytes);
 
     // Initialize DRAM address generator
-    const InterleavedAddrGen<true> d = {.bank_base_address = dst_addr, .page_size = stick_nbytes};
+    const auto d = TensorAccessor(dst_args, dst_addr, stick_nbytes);
 
     // Pre-calculate output dimensions and patch size - moved outside loops
     const uint32_t OH = input_height / stride_height;                   // Output height

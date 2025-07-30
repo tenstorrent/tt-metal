@@ -7,6 +7,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
@@ -48,8 +49,8 @@ operation::ProgramWithCallbacks fill_rm_single_core(
             .set_page_size(1, single_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*dst_buffer).append_to(reader_compile_time_args);
 
     tt::tt_metal::KernelHandle binary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

@@ -6,6 +6,7 @@
 
 #include "clone_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
 
 namespace ttnn::operations::data_movement::clone {
@@ -61,29 +62,15 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
 
     std::vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
     if (tilized) {
-        reader_compile_time_args = {
-            (uint32_t)src_cb_id,
-            (uint32_t)input_is_dram,
-        };
-        writer_compile_time_args = {
-            (uint32_t)dst_cb_id,
-            (uint32_t)output_is_dram,
-        };
+        reader_compile_time_args = {(uint32_t)src_cb_id};
+        TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
+        writer_compile_time_args = {(uint32_t)dst_cb_id};
+        TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
     } else {
-        bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(input_unit_size);
-        uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (uint32_t)log2(input_unit_size) : 0;
-        reader_compile_time_args = {
-            (uint32_t)src_cb_id,
-            (uint32_t)input_is_dram,
-            (uint32_t)src_stick_size_is_power_of_two,
-            (uint32_t)src_log2_stick_size};
-        bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_unit_size);
-        uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (uint32_t)log2(output_unit_size) : 0;
-        writer_compile_time_args = {
-            (uint32_t)dst_cb_id,
-            (uint32_t)output_is_dram,
-            (uint32_t)dst_stick_size_is_power_of_two,
-            (uint32_t)dst_log2_stick_size};
+        reader_compile_time_args = {(uint32_t)src_cb_id, (uint32_t)input_unit_size};
+        TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
+        writer_compile_time_args = {(uint32_t)dst_cb_id, (uint32_t)output_unit_size};
+        TensorAccessorArgs(*output_buffer).append_to(writer_compile_time_args);
     }
 
     auto read_kernel_id = CreateKernel(
