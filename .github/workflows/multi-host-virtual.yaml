@@ -1,8 +1,8 @@
 name: Multi-Host Deployment (Virtualized)
 on:
-  push:
-    branches:
-      - akirby/multi-host-workflow
+  # push:
+  #   branches:
+  #     - akirby/multi-host-workflow
   workflow_dispatch:
 
 jobs:
