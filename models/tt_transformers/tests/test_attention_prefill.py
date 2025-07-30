@@ -9,6 +9,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.tt_transformers.tt.attention import Attention
 from models.tt_transformers.tt.common import PagedAttentionConfig, get_prefill_rot_mat, get_rot_transformation_mat
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -62,7 +63,7 @@ def test_attention_inference(
     pcc = 0.99
     batch_size = 1  # For prefill we only support batch_size = 1
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -134,7 +135,12 @@ def test_attention_inference(
         paged_attention_config=paged_attention_config,
     )
 
-    pt_attention_input = (torch.rand(batch_size, max_seq_len, model_args.dim) * 2) - 1
+    pt_attention_input = (
+        torch.rand(
+            batch_size, max_seq_len, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
+        )
+        * 2
+    ) - 1
     tt_attention_input = pt_attention_input.clone()
     attention_input = model_args.prepare_residual_tensor_prefill(
         tt_attention_input,

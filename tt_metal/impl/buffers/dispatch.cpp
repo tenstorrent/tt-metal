@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/core/span.hpp>
+#include <tt_stl/span.hpp>
 #include <device.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <algorithm>
@@ -29,6 +29,8 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/event/dispatch.hpp"
 #include "tt_metal/impl/device/dispatch.hpp"
+#include <tt-metalium/graph_tracking.hpp>
+#include <tracy/Tracy.hpp>
 
 enum class CoreType;
 
@@ -577,6 +579,7 @@ void issue_buffer_dispatch_command_sequence(
     T& dispatch_params,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     CoreType dispatch_core_type) {
+    ZoneScoped;
     uint32_t num_worker_counters = sub_device_ids.size();
     uint32_t data_size_bytes = dispatch_params.pages_per_txn * dispatch_params.page_size_to_write;
     tt::tt_metal::DeviceCommandCalculator calculator;
@@ -621,6 +624,7 @@ void write_interleaved_buffer_to_device(
     const BufferDispatchConstants& buf_dispatch_constants,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     CoreType dispatch_core_type) {
+    ZoneScoped;
     uint32_t byte_offset_in_cq = MetalContext::instance().hal().get_alignment(
         HalMemType::HOST);  // data appended after CQ_PREFETCH_CMD_RELAY_INLINE
                             // + CQ_DISPATCH_CMD_WRITE_PAGED
@@ -659,9 +663,14 @@ void write_sharded_buffer_to_core(
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     const CoreCoord core,
     CoreType dispatch_core_type) {
+    ZoneScoped;
     // Skip writing the padded pages along the bottom
     // Currently since writing sharded tensors uses write_linear, we write the padded pages on width
     // Alternative write each page row into separate commands, or have a strided linear write
+
+    if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
+        return;
+    }
 
     dispatch_params.reset_params_for_core(core, core_page_mapping);
 
@@ -697,7 +706,13 @@ void write_to_device_buffer(
     tt::stl::Span<const uint32_t> expected_num_workers_completed,
     CoreType dispatch_core_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScoped;
     SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
+
+    if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
+        return;
+    }
+
     const BufferDispatchConstants buf_dispatch_constants =
         generate_buffer_dispatch_constants(sysmem_manager, dispatch_core_type, cq_id);
 
@@ -789,6 +804,10 @@ BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
 template <typename T>
 void issue_read_buffer_dispatch_command_sequence(
     Buffer& buffer, T& dispatch_params, tt::stl::Span<const SubDeviceId> sub_device_ids, CoreType dispatch_core_type) {
+    if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(&buffer)) {
+        return;
+    }
+
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     uint32_t num_worker_counters = sub_device_ids.size();
     tt::tt_metal::DeviceCommandCalculator calculator;
@@ -954,6 +973,7 @@ void copy_completion_queue_data_into_user_space(
         if (exit_condition) {
             break;
         }
+        ZoneScopedN("copying completion queue data into user space");
 
         uint32_t completion_q_write_ptr = (completion_queue_write_ptr_and_toggle & 0x7fffffff) << 4;
         uint32_t completion_q_write_toggle = completion_queue_write_ptr_and_toggle >> (31);

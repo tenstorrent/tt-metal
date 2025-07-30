@@ -69,6 +69,12 @@ struct Conv2dConfig {
     // Increased perf, but increased L1 usage.
     bool enable_weights_double_buffer = false;
 
+    // Applies only to block sharded layout.
+    // By default inner dim of activation matrix will be sliced by kernel_h.
+    // If L1 constraints allowed it we can use full inner dim.
+    // This will increase perf, but it will take more L1 space.
+    bool full_inner_dim = false;
+
     // Only for height sharding.
     // Increases perf if op is reader bound. Act_block_h should be >= 64, if true
     bool enable_split_reader = false;
@@ -85,8 +91,18 @@ struct Conv2dConfig {
     // Kernel Stride Folding (Issue: #22378)
     // Enables tensor folding optimization where:
     // - Input tensor (NHWC) is reshaped to (N, H/stride[0], W/stride[1], C * stride[0] * stride[1])
-    // - Weight tensor (OC, IC, kernel[0], kernel[1]) is reshaped and permuted to (1, 1, IC * kernel[0] * kernel[1], OC)
-    // Currently only applied when strides match kernel dimensions
+    // - Weight tensor (OC, IC, kernel[0], kernel[1]) is reshaped and permuted to (1, 1, IC * (kernel[0] + pad_h) *
+    // (kernel[1] + pad_w), OC).
+    //     Note: The zero padding applied to the weight tensor is implicit and not passed by the user via the padding
+    //     argument, where pad_h = kernel[0] % stride[0] and pad_w = kernel[1] % stride[1].
+    //
+    // Note: This optimization is currently only applied when all of the following conditions are met:
+    //    1. The input tensor is stored in DRAM memory.
+    //    2. The input tensor's height and width are divisible by the stride dimensions.
+    //    3. Stride values are equal to or less than the kernel dimensions.
+    //    4. Input tensor's padding must be zero.
+    //    5. Input tensor data type is not BFLOAT8_B.
+
     bool enable_kernel_stride_folding = false;
     // ===============================================================
 
@@ -105,6 +121,7 @@ struct Conv2dConfig {
         "output_layout",
         "enable_act_double_buffer",
         "enable_weights_double_buffer",
+        "full_inner_dim",
         "enable_split_reader",
         "enable_subblock_padding",
         "in_place",
@@ -125,6 +142,7 @@ struct Conv2dConfig {
             std::cref(this->output_layout),
             std::cref(this->enable_act_double_buffer),
             std::cref(this->enable_weights_double_buffer),
+            std::cref(this->full_inner_dim),
             std::cref(this->enable_split_reader),
             std::cref(this->enable_subblock_padding),
             std::cref(this->in_place),
@@ -184,7 +202,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
     bool enable_split_reader,
-    bool enable_subblock_padding);
+    bool enable_subblock_padding,
+    bool full_inner_dim);
 
 // new micro op
 struct OptimizedConvNew {
@@ -201,6 +220,7 @@ struct OptimizedConvNew {
     const DeviceComputeKernelConfig compute_kernel_config;
     bool enable_act_double_buffer;
     bool enable_weights_double_buffer;
+    bool full_inner_dim;
     bool enable_split_reader;
     bool enable_subblock_padding;
     uint32_t pre_op_l1_allocation_size_bytes;
@@ -219,6 +239,7 @@ struct OptimizedConvNew {
         const DeviceComputeKernelConfig compute_kernel_config,
         bool enable_act_double_buffer,
         bool enable_weights_double_buffer,
+        bool full_inner_dim,
         bool enable_split_reader,
         bool enable_subblock_padding) :
         output_channels(output_channels),
@@ -235,6 +256,7 @@ struct OptimizedConvNew {
         compute_kernel_config(compute_kernel_config),
         enable_act_double_buffer(enable_act_double_buffer),
         enable_weights_double_buffer(enable_weights_double_buffer),
+        full_inner_dim(full_inner_dim),
         enable_split_reader(enable_split_reader),
         enable_subblock_padding(enable_subblock_padding) {}
 
@@ -305,6 +327,7 @@ Tensor optimized_conv_new(
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool enable_act_double_buffer = false,
     bool enable_weights_double_buffer = false,
+    bool full_inner_dim = false,
     bool enable_split_reader = false,
     bool enable_subblock_padding = false);
 

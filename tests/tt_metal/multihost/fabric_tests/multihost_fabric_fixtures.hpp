@@ -28,7 +28,7 @@ void validate_and_setup_control_plane_config(Fixture* fixture) {
 
     auto chip_to_eth_coord_mapping = multihost_utils::get_physical_chip_mapping_from_eth_coords_mapping(
         fixture->get_eth_coord_mapping(), std::stoi(local_mesh_id));
-    tt::tt_metal::MetalContext::instance().set_custom_control_plane_mesh_graph(
+    tt::tt_metal::MetalContext::instance().set_custom_fabric_topology(
         fixture->get_path_to_mesh_graph_desc(), chip_to_eth_coord_mapping);
     TT_FATAL(
         tt::tt_metal::MetalContext::instance().get_control_plane().system_has_intermesh_links(),
@@ -127,19 +127,19 @@ public:
 };
 
 // Base fixture for Multi-Host MeshDevice tests relying on Inter-Mesh Routing.
-class MultiMeshDeviceFabricFixture : public tt::tt_metal::GenericMeshDevice2DFabricFixture {
+class MultiMeshDeviceFabricFixture : public tt::tt_metal::GenericMeshDeviceFabric2DFixture {
 public:
     void SetUp() override {
         if (not system_supported()) {
             GTEST_SKIP() << "Skipping since this is not a supported system.";
         }
         validate_and_setup_control_plane_config(this);
-        tt::tt_metal::GenericMeshDevice2DFabricFixture::SetUp();
+        tt::tt_metal::GenericMeshDeviceFabric2DFixture::SetUp();
     }
 
     void TearDown() override {
         if (system_supported()) {
-            tt::tt_metal::GenericMeshDevice2DFabricFixture::TearDown();
+            tt::tt_metal::GenericMeshDeviceFabric2DFixture::TearDown();
         }
     }
 
