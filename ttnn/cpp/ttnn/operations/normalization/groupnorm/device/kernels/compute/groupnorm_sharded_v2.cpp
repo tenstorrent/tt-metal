@@ -88,6 +88,7 @@ void MAIN {
     constexpr uint32_t cb_ex = tt::CBIndex::c_9;
     constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
     constexpr uint32_t cb_ex_global = num_cores_per_mcast_group == 1 ? cb_ex_partial : tt::CBIndex::c_15;
+    DPRINT << "cb_ex_global is: " << cb_ex_global << ENDL();
     constexpr uint32_t cb_ex2pe = tt::CBIndex::c_17;
 
     // interm cbs reuse
@@ -399,6 +400,35 @@ void MAIN {
             pack_tile(dst0, cb_ex_partial);
             tile_regs_release();
             cb_push_back(cb_ex_partial, 1);
+
+            // sum up the variance
+            DPRINT << "A" << ENDL();
+            reduce_init(cb_ex_partial, cb_scaler, cb_ex_partial);
+            DPRINT << "B" << ENDL();
+            cb_wait_front(cb_scaler, 1);
+            DPRINT << "C" << ENDL();
+            cb_wait_front(cb_ex_partial, 1);
+            DPRINT << "D" << ENDL();
+            tile_regs_acquire();
+            DPRINT << "E" << ENDL();
+            reduce_tile(cb_ex_partial, cb_scaler, 0, scaler0, dst0);
+            DPRINT << "F" << ENDL();
+            tile_regs_commit();
+            DPRINT << "G" << ENDL();
+            cb_pop_front(cb_ex_partial, 1);
+            DPRINT << "H" << ENDL();
+            cb_reserve_back(cb_ex_partial, 1);
+            DPRINT << "I" << ENDL();
+            tile_regs_wait();
+            DPRINT << "J" << ENDL();
+            pack_tile(dst0, cb_ex_partial);
+            DPRINT << "K" << ENDL();
+            tile_regs_release();
+            DPRINT << "L" << ENDL();
+            cb_push_back(cb_ex_partial, 1);
+            DPRINT << "M" << ENDL();
+            reduce_uninit();
+            DPRINT << "N" << ENDL();
 
             // cb_wait_front(cb_ex_partial, 1);
             // DPRINT << "Printing variance" << " g = " << g << ENDL();
