@@ -283,6 +283,8 @@ jobs:
           TRACY_NO_INVARIANT_CHECK: 1
         run: |
           CLEAN_NAME=$(echo "${{ matrix.test-info.name }}" | tr ' ' '-')
+          touch Models_Device_Perf_${{ matrix.test-info.test-type }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+          > Models_Device_Perf_${{ matrix.test-info.test-type }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
           export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
           cat $DEVICE_PERF_REPORT_FILENAME
