@@ -5,7 +5,6 @@
 import torch
 import pytest
 from loguru import logger
-import os
 import ttnn
 from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
 from models.utility_functions import (
@@ -190,9 +189,7 @@ def reference_sampling(input_tensor, sampling_params, num_devices, padded_vocab_
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
+        (8, 4),
     ],
     indirect=True,
 )
