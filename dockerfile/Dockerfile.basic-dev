@@ -16,10 +16,6 @@ RUN apt-get update && apt-get install -y \
     ninja-build \
     g++-12 \
     build-essential \
-    git \
-    python3-dev \
-    python3-pip \
-    python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 # Install mpi-ulfm from the tenstorrent repository
@@ -34,11 +30,24 @@ RUN set -eux; \
     rm -rf "$TMP_DIR" && \
     rm -rf /var/lib/apt/lists/*
 
+#############################################################
+
+FROM base AS basic-ttnn-runtime
+
+RUN cat /etc/os-release
+
+RUN apt-get update && apt-get install -y \
+    git \
+    python3-dev \
+    python3-pip \
+    python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install the SFPI compiler
-COPY scripts/basic_dev_image/install_minimum_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_minimum_dependencies.sh
+COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
-RUN chmod +x /opt/tt_metal_infra/scripts/docker/install_minimum_dependencies.sh
-RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_minimum_dependencies.sh
+RUN chmod +x /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
+RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --sfpi
 
 # Set up virtual environment
 ENV PYTHON_ENV_DIR=/opt/venv
