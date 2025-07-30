@@ -243,13 +243,6 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                         p.join()
                     p = None
                     reset_util.reset()
-                    # pause for 5 seconds
-                    # time.sleep(3)
-
-                    # Restart the process for subsequent tests
-                    # if len(test_vectors) > 1:
-                    #     p = Process(target=run, args=(test_module, input_queue, output_queue))
-                    #     p.start()
 
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
                 result["e2e_perf"] = None
@@ -261,25 +254,30 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                 suite_pbar.update()
                 results.append(result)
 
-                # Skip all remaining tests in the suite
-                logger.info("Skipping remaining tests in suite due to timeout.")
-                for j in range(i + 1, len(test_vectors)):
-                    remaining_vector = test_vectors[j]
-                    skipped_result = dict()
-                    skipped_result["start_time_ts"] = dt.datetime.now()
-                    skipped_result["original_vector_data"] = remaining_vector.copy()
-                    skipped_result["status"] = TestStatus.NOT_RUN
-                    skipped_result["exception"] = "SKIPPED DUE TO PREVIOUS TIMEOUT"
-                    skipped_result["e2e_perf"] = None
-                    skipped_result["end_time_ts"] = dt.datetime.now()
-                    skipped_result["timestamp"] = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                    skipped_result["host"] = get_hostname()
-                    skipped_result["user"] = get_username()
-                    results.append(skipped_result)
-                    suite_pbar.update()
+                # Check if we should skip remaining tests in the suite
+                if SKIP_REMAINING_ON_TIMEOUT:
+                    # Skip all remaining tests in the suite
+                    logger.info("Skipping remaining tests in suite due to timeout.")
+                    for j in range(i + 1, len(test_vectors)):
+                        remaining_vector = test_vectors[j]
+                        skipped_result = dict()
+                        skipped_result["start_time_ts"] = dt.datetime.now()
+                        skipped_result["original_vector_data"] = remaining_vector.copy()
+                        skipped_result["status"] = TestStatus.NOT_RUN
+                        skipped_result["exception"] = "SKIPPED DUE TO PREVIOUS TIMEOUT"
+                        skipped_result["e2e_perf"] = None
+                        skipped_result["end_time_ts"] = dt.datetime.now()
+                        skipped_result["timestamp"] = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                        skipped_result["host"] = get_hostname()
+                        skipped_result["user"] = get_username()
+                        results.append(skipped_result)
+                        suite_pbar.update()
 
-                # Abort the suite
-                break
+                    # Abort the suite
+                    break
+                else:
+                    logger.info("Continuing with remaining tests in suite despite timeout.")
+                    # Continue to the next test vector without breaking
 
         # Add the original test vector data to the result
         result["original_vector_data"] = original_vector_data
@@ -1596,6 +1594,13 @@ if __name__ == "__main__":
         help="Comma-separated list of modules to skip when running all modules.",
     )
 
+    parser.add_argument(
+        "--skip-on-timeout",
+        action="store_true",
+        required=False,
+        help="Skip remaining tests in suite when a test times out. Default behavior is to not skip.",
+    )
+
     args = parser.parse_args(sys.argv[1:])
     if args.module_name or args.suite_name:
         run_contents_details = []
@@ -1644,7 +1649,15 @@ if __name__ == "__main__":
     global POSTGRES_ENV
     POSTGRES_ENV = args.postgres_env
 
+    global SKIP_REMAINING_ON_TIMEOUT
+    SKIP_REMAINING_ON_TIMEOUT = args.skip_on_timeout
+
     logger.info(f"Running current sweeps with tag: {SWEEPS_TAG} using {DATABASE_BACKEND} backend.")
+
+    if SKIP_REMAINING_ON_TIMEOUT:
+        logger.info("Timeout behavior: Skip remaining tests in suite when a test times out.")
+    else:
+        logger.info("Timeout behavior: Continue running remaining tests in suite when a test times out.")
 
     if args.watcher:
         enable_watcher()
