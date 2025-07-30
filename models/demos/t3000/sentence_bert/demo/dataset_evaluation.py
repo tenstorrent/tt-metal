@@ -46,7 +46,14 @@ def load_sts_tr(split="test"):
     [("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", 384, 8, 10)],
 )
 def test_sentence_bert_eval_data_parallel(
-    mesh_device, model_name, sequence_length, device_batch_size, num_samples, start=0, end=7
+    mesh_device,
+    model_name,
+    sequence_length,
+    device_batch_size,
+    num_samples,
+    start=0,
+    end=7,
+    model_location_generator=None,
 ):
     batch_size = device_batch_size * mesh_device.get_num_devices()
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
@@ -92,6 +99,7 @@ def test_sentence_bert_eval_data_parallel(
                 attention_mask=attention_mask,
                 token_type_ids=token_type_ids,
                 position_ids=position_ids,
+                model_location_generator=model_location_generator,
             )
             ttnn_module._capture_sentencebert_trace_2cqs()
         t0 = time.time()

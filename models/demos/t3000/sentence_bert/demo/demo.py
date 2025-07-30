@@ -42,7 +42,7 @@ from models.demos.sentence_bert.runner.performant_runner import SentenceBERTPerf
     indirect=True,
 )
 @pytest.mark.parametrize("model_name, sequence_length", [("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", 384)])
-def test_sentence_bert_demo_inference(mesh_device, inputs, model_name, sequence_length):
+def test_sentence_bert_demo_inference(mesh_device, inputs, model_name, sequence_length, model_location_generator):
     batch_size = len(inputs[0]) * mesh_device.get_num_devices()
     transformers_model = transformers.AutoModel.from_pretrained(model_name).eval()
     config = transformers.BertConfig.from_pretrained(model_name)
@@ -75,6 +75,7 @@ def test_sentence_bert_demo_inference(mesh_device, inputs, model_name, sequence_
         attention_mask=attention_mask,
         token_type_ids=token_type_ids,
         position_ids=position_ids,
+        model_location_generator=model_location_generator,
     )
     ttnn_module._capture_sentencebert_trace_2cqs()
     t0 = time.time()
