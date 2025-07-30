@@ -1346,7 +1346,7 @@ Tensor pad(
         if (rank == 1) {
             std::memcpy(
                 output_buffer.data() + input_tensor_start[0],
-                input_buffer.begin(),
+                input_buffer.data(),
                 static_cast<size_t>(input_padded_shape[0]) * sizeof(T));
             return output_buffer;
         }
@@ -1375,7 +1375,7 @@ Tensor pad(
             // Copy entire input row with memcpy
             std::memcpy(
                 output_buffer.data() + output_idx,
-                input_buffer.begin() + input_idx,
+                input_buffer.data() + input_idx,
                 static_cast<size_t>(input_padded_shape[rank - 1]) * sizeof(T));
 
             // Increment coordinates (from right to left), ignore last dimension
