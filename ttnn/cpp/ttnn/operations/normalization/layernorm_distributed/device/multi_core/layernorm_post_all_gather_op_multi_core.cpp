@@ -512,7 +512,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
                 uint32_t tile_offset = x * Wt + y * tiles_per_core_y;
                 uint32_t stats_offset = x * stats_tiles_cols;
 
-                log_info(
+                log_debug(
                     tt::LogOp,
                     "Setting reader runtime args for core: {}, tile_offset: {}, tiles_per_core_y: {}",
                     core.x,
@@ -528,11 +528,11 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
                      tile_offset,
                      stats_offset,
                      packed_winv_value,
-                     e.u,  // 0-5
+                     e.u,  // 0-6
                      gamma_dram_addr,
                      beta_dram_addr,
                      stats_addr,
-                     y * tiles_per_core_y}  // 6-8
+                     y * tiles_per_core_y}  // 7-9
                 );
                 SetRuntimeArgs(program, compute_kernels_id, core, {tiles_per_core_x});
                 SetRuntimeArgs(

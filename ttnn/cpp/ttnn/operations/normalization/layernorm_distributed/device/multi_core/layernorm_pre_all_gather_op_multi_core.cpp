@@ -334,9 +334,6 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     IDevice* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
 
-    // Determine if we should use 2D kernel layout
-    // If use_2d_core_grid is explicitly set, use that value
-    // Otherwise, infer based on shape conditions (RMSNorm with single batch and small height)
     bool use_2d_kernel = false;
     if (use_2d_core_grid.has_value()) {
         use_2d_kernel = *use_2d_core_grid;
