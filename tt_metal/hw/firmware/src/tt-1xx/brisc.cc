@@ -66,9 +66,9 @@ uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 
-uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
-uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
-uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
@@ -81,11 +81,11 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
-    uint32_t wIndex __attribute__((used));
-    uint32_t stackSize __attribute__((used));
-    uint32_t sums[SUM_COUNT] __attribute__((used));
-    uint32_t sumIDs[SUM_COUNT] __attribute__((used));
-}
+uint32_t wIndex __attribute__((used));
+uint32_t stackSize __attribute__((used));
+uint32_t sums[SUM_COUNT] __attribute__((used));
+uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+}  // namespace kernel_profiler
 #endif
 
 void enable_power_management() {
@@ -93,12 +93,12 @@ void enable_power_management() {
     uint32_t pm_mask = 0xFFFF;
     uint32_t pm_hyst = 32;
 
-    #ifdef ARCH_BLACKHOLE
+#ifdef ARCH_BLACKHOLE
     uint32_t hyst_val = pm_hyst;
-    #else
+#else
     // Important: program hyteresis first then enable, otherwise the en_pulse will fail to latch the value
     uint32_t hyst_val = pm_hyst & 0x7f;
-    #endif
+#endif
 
     {
         // Program slightly off values for each CG
@@ -115,14 +115,14 @@ void enable_power_management() {
         WRITE_REG(RISCV_DEBUG_REG_CG_CTRL_HYST2, hyst2_reg_data);
     }
 
-    #ifdef ARCH_BLACKHOLE
+#ifdef ARCH_BLACKHOLE
     /*FIXME: need to deal with srcb ctrl bit not fitting in 16 bits. For  */
     /*now just always turn it on */
-    *((uint32_t volatile*)RISCV_DEBUG_REG_CG_CTRL_EN) = 0x10000 | (pm_mask);
-    #else
+    *((volatile uint32_t*)RISCV_DEBUG_REG_CG_CTRL_EN) = 0x10000 | (pm_mask);
+#else
     // core.ex_setc16(CG_CTRL_EN_Hyst_ADDR32, command_data[1] >> 16, instrn_buf[0]);
     core.ex_setc16(CG_CTRL_EN_Regblocks_ADDR32, pm_mask, instrn_buf[0]);
-    #endif
+#endif
 
     if (((pm_mask & 0x0100) >> 8) == 1) {  // enable noc clk gatting
 
@@ -196,7 +196,7 @@ void device_setup() {
 
 #ifdef ARCH_BLACKHOLE
     // Disable DEST CG
-    *((uint32_t volatile*)RISCV_DEBUG_REG_DEST_CG_CTRL) = 0;
+    *((volatile uint32_t*)RISCV_DEBUG_REG_DEST_CG_CTRL) = 0;
 #endif
 
     WRITE_REG(RISCV_TDMA_REG_CLK_GATE_EN, 0x3f);  // Enable clock gating
@@ -219,7 +219,8 @@ void device_setup() {
     wzeromem(MEM_ZEROS_BASE, MEM_ZEROS_SIZE);
 
     // Invalidate tensix icache for all 4 risc cores
-    cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
+    cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
+        RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
     // Clear destination registers
     core.ex_zeroacc(instrn_buf[0]);
@@ -331,7 +332,7 @@ int main() {
 
     noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
 
-    mailboxes->launch_msg_rd_ptr = 0; // Initialize the rdptr to 0
+    mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
     noc_index = 0;
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
@@ -391,8 +392,9 @@ int main() {
         WAYPOINT("GD");
 
         {
-            // Only include this iteration in the device profile if the launch message is valid. This is because all workers get a go signal regardless of whether
-            // they're running a kernel or not. We don't want to profile "invalid" iterations.
+            // Only include this iteration in the device profile if the launch message is valid. This is because all
+            // workers get a go signal regardless of whether they're running a kernel or not. We don't want to profile
+            // "invalid" iterations.
             DeviceZoneScopedMainN("BRISC-FW");
             uint32_t launch_msg_rd_ptr = mailboxes->launch_msg_rd_ptr;
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
@@ -409,7 +411,8 @@ int main() {
                 firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, DISPATCH_CLASS_TENSIX_DM0);
             // Invalidate the i$ now the kernels have loaded and before running
             volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
-            cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
+            cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
+                RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
             run_triscs(enables);
 
@@ -455,8 +458,8 @@ int main() {
                 barrier_remote_cb_interface_setup(noc_index, end_cb_index);
                 start_ncrisc_kernel_run(enables);
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
-                uint32_t kernel_lma = (kernel_config_base +
-                                       launch_msg_address->kernel_config.kernel_text_offset[index]);
+                uint32_t kernel_lma =
+                    (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
                 auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
                 record_stack_usage(stack_free);
             } else {
@@ -513,7 +516,8 @@ int main() {
 
             // Notify dispatcher core that tensix has completed running kernels, if the launch_msg was populated
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
-                // Set launch message to invalid, so that the next time this slot is encountered, kernels are only run if a valid launch message is sent.
+                // Set launch message to invalid, so that the next time this slot is encountered, kernels are only run
+                // if a valid launch message is sent.
                 launch_msg_address->kernel_config.enables = 0;
                 launch_msg_address->kernel_config.preload = 0;
                 uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_message);

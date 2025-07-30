@@ -10,7 +10,8 @@
 namespace kernel_profiler {
 
 void record_fabric_header(const volatile PACKET_HEADER_TYPE* fabric_header_ptr) {
-#ifdef PROFILE_NOC_EVENTS
+#if defined(PROFILE_NOC_EVENTS) && \
+    (!defined(DISPATCH_KERNEL) || (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES)))
 
     // determine routing fields type at compile time
     KernelProfilerNocEventMetadata::FabricPacketType routing_fields_type;
