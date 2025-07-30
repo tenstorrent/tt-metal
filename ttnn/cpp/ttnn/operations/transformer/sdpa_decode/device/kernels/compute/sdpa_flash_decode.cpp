@@ -315,8 +315,9 @@ void MAIN {
 
                 reconfig_data_format(cb_qk_im, cb_identity_scale_in);
                 pack_reconfig_data_format(cb_cur_sum);
+                uint32_t cb_sum_dest = k_chunk > k_chunk_start ? cb_cur_sum : cb_prev_sum;
                 reduce_c<PoolType::SUM, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
-                    cb_cur_sum, cb_cur_sum, Sk_chunk_t_dynamic, false);
+                    cb_sum_dest, cb_sum_dest, Sk_chunk_t_dynamic, false);
 
                 /* OUT_IM = QK @ V_CHUNK */
                 reconfig_data_format(cb_qk_im, cb_v_in);  // DEBUG
@@ -360,7 +361,7 @@ void MAIN {
                     /* cb_cur_sum += cb_prev_sum */
                     reconfig_data_format(cb_cur_sum, cb_prev_sum);  // DEBUG
                     pack_reconfig_data_format(cb_cur_sum);
-                    add_block_inplace<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
+                    add_block(cb_cur_sum, cb_prev_sum, cb_prev_sum, Sq_chunk_t);
 
                     /* cb_out_accumulate_im += cb_out_im */
                     reconfig_data_format(cb_out_accumulate_im, cb_out_im);  // DEBUG
@@ -372,12 +373,11 @@ void MAIN {
                     reconfig_data_format(cb_cur_max, cb_cur_max);  // DEBUG
                     pack_reconfig_data_format(cb_prev_max);
                     move_block<true>(cb_cur_max, cb_prev_max, Sq_chunk_t);
-                    move_block<true>(cb_cur_sum, cb_prev_sum, Sq_chunk_t);
                 } else {
                     // Write o, m, l into cb_out
                     move_block<true>(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
                     move_block<true>(cb_cur_max, cb_out_m, Sq_chunk_t);
-                    move_block<true>(cb_cur_sum, cb_out_l, Sq_chunk_t);
+                    move_block<true>(cb_prev_sum, cb_out_l, Sq_chunk_t);
                 }
             }
         }
@@ -421,16 +421,14 @@ void MAIN {
                 }
             }
             /* cb_cur_sum = 1.0 / cb_cur_sum */
-            cb_push_back(cb_cur_sum, Sq_chunk_t);
+            reconfig_data_format(cb_prev_sum, cb_prev_sum);  // DEBUG
+            pack_reconfig_data_format(cb_prev_sum);
+            recip_block_inplace(cb_prev_sum, Sq_chunk_t);
 
-            reconfig_data_format(cb_cur_sum, cb_cur_sum);  // DEBUG
-            pack_reconfig_data_format(cb_cur_sum);
-            recip_block_inplace(cb_cur_sum, Sq_chunk_t);
-
-            /* cb_out_accumulate_im *= cb_cur_sum */
-            reconfig_data_format(cb_out_accumulate_im, cb_cur_sum);  // DEBUG
+            /* cb_out_accumulate_im *= cb_prev_sum */
+            reconfig_data_format(cb_out_accumulate_im, cb_prev_sum);  // DEBUG
             pack_reconfig_data_format(cb_out_accumulate_im);
-            mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_cur_sum, Sq_chunk_t, vDHt);
+            mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_prev_sum, Sq_chunk_t, vDHt);
             pack_reconfig_data_format(cb_out_final);
 
             if constexpr (untilize_output) {
@@ -458,7 +456,6 @@ void MAIN {
             }
             // free up cb_prev_max after K chunks
             cb_pop_front(cb_prev_max, Sq_chunk_t);
-            cb_pop_front(cb_prev_sum, Sq_chunk_t);
         }
     }
     cb_pop_front(cb_q_in, q_chunk_tiles);
