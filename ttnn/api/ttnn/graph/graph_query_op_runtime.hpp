@@ -13,6 +13,12 @@
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/trace.hpp"
 
+#ifdef BUILD_MLP_OP_PERF
+#include "interface.hpp"
+#include "tt_stl/tt_stl/small_vector.hpp"
+#include "tt_metal/third_party/mlp-op-perf/interface/include/interface.hpp"
+#endif
+
 namespace ttnn::graph {
 
 struct RuntimeQueryResponse {
@@ -40,27 +46,9 @@ static constexpr size_t WARMUP_TRACE_EXECUTIONS = 5;
  */
 template <typename Op, typename... Args>
 auto capture_op_trace(Op op, MeshDevice* device, Args&&... args) {
-    // helper lambda to transform TensorSpec to DeviceTensor
-    auto transform_arg = [device](auto&& arg) {
-        if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, TensorSpec>) {
-            return create_device_tensor(arg, device);
-        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::optional<TensorSpec>>) {
-            return arg ? std::optional<Tensor>(create_device_tensor(*arg, device)) : std::nullopt;
-        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::vector<TensorSpec>>) {
-            std::vector<Tensor> result(arg.size());
-            std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& arg) {
-                return create_device_tensor(arg, device);
-            });
-            return result;
-        } else {
-            return std::forward<decltype(arg)>(arg);
-        }
-    };
-    auto transformed_args = std::make_tuple(transform_arg(std::forward<Args>(args))...);
-
     device->enable_program_cache();
     {  // warm up the program cache - required for trace capture
-        std::apply(op, transformed_args);
+        std::apply(op, args);
     }
 
     auto trace_id = ttnn::operations::trace::begin_trace_capture(device, ttnn::DefaultQueueId);
@@ -131,6 +119,45 @@ uint64_t execute_time_and_release_trace(TraceID trace_id, MeshDevice* device) {
  */
 template <typename Op, typename... Args>
 auto query_op_runtime(Op op, MeshDevice* device, Args&&... args) {
+    // helper lambda to transform TensorSpec to DeviceTensor
+    auto transform_arg = [device](auto&& arg) {
+        if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, TensorSpec>) {
+            return create_device_tensor(arg, device);
+        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::optional<TensorSpec>>) {
+            return arg ? std::optional<Tensor>(create_device_tensor(*arg, device)) : std::nullopt;
+        } else if constexpr (std::is_same_v<std::decay_t<decltype(arg)>, std::vector<TensorSpec>>) {
+            std::vector<Tensor> result(arg.size());
+            std::transform(arg.begin(), arg.end(), result.begin(), [device](auto&& arg) {
+                return create_device_tensor(arg, device);
+            });
+            return result;
+        } else {
+            return std::forward<decltype(arg)>(arg);
+        }
+    };
+
+#ifdef BUILD_MLP_OP_PERF
+
+    // helper lambda to make nlohmann::json objects from args
+    auto transform_to_json = [](auto&& arg) {
+        return tt::stl::json::to_json(arg);  // will either return a json obj or a string saying it is unsupported
+    };
+
+    auto transformed_args = std::make_tuple(transform_arg(std::forward<Args>(args))...);
+    auto json_args = transform_to_json(std::forward<Args>(transformed_args))...;
+
+    std::string op_name;
+    if constexpr (std::is_same_v<Op, ttnn::exp>) {
+        op_name = "ttnn::exp";
+    } else {
+        op_name = "unknown";
+    }
+
+    uint64_t runtime = op_perf::get_runtime_from_model(op_name, json_args...);
+    .if (runtime != 0) { return RuntimeQueryResponse{ExecutionStatus::Success, runtime, ""}; }
+
+#endif
+
     try {
         auto trace_id = capture_op_trace(op, device, std::forward<Args>(args)...);
         auto runtime = execute_time_and_release_trace(trace_id, device);
