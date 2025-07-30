@@ -1,6 +1,6 @@
 project(tt_stl)
 
-add_library(tt_stl INTERFACE)
+add_library(tt_stl STATIC ${CMAKE_CURRENT_SOURCE_DIR}/tt_stl/llvm_small_vector.cpp)
 add_library(TT::STL ALIAS tt_stl)
 
 # FIXME: TT-STL should support down to C++17 (so that TT-Metalium can), but we have headers (eg: <reflect>) in our
@@ -27,6 +27,8 @@ target_sources(
             tt_stl/strong_type.hpp
             tt_stl/type_name.hpp
             tt_stl/unique_any.hpp
+            tt_stl/llvm_small_vector.hpp
+            tt_stl/memAlloc.hpp
 )
 
 # These dependencies are currently brought in by dependencies/CMakeLists.txt
@@ -38,7 +40,7 @@ target_link_libraries(
         Reflect::Reflect
         magic_enum::magic_enum
         nlohmann_json::nlohmann_json
-        small_vector
+        #small_vector
         fmt::fmt-header-only
         tt-logger::tt-logger
 )
