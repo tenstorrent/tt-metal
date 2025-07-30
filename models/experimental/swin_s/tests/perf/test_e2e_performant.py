@@ -9,6 +9,7 @@ from loguru import logger
 import ttnn
 from models.experimental.swin_s.runner.performant_runner import SwinSPerformantRunner
 from models.utility_functions import run_for_wormhole_b0
+from models.experimental.swin_s.common import SWIN_S_L1_SMALL_SIZE
 
 
 @pytest.mark.parametrize(
@@ -22,10 +23,11 @@ from models.utility_functions import run_for_wormhole_b0
     ],
 )
 @pytest.mark.models_performance_bare_metal
-@pytest.mark.models_performance_virtual_machine
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 16998400, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": SWIN_S_L1_SMALL_SIZE, "trace_region_size": 16998400, "num_command_queues": 2}],
+    indirect=True,
 )
 def test_e2e_performant(
     device,
@@ -41,7 +43,7 @@ def test_e2e_performant(
         act_dtype,
         weight_dtype,
         resolution=resolution,
-        model_location_generator=None,
+        model_location_generator=model_location_generator,
     )
     performant_runner._capture_swins_trace_2cqs()
 

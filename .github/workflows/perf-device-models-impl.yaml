@@ -281,7 +281,7 @@ jobs:
         with:
           model_name: "swin_s"
           commands: |
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/swin_s/tests/perf -m models_device_performance_bare_metal
+            pytest models/experimental/swin_s/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
