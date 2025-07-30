@@ -48,13 +48,12 @@ class Transformer(LightweightModule):
         )
 
         self.rope_setup = RotarySetup(
-            mesh_device,
-            args.max_batch_size,
-            args.head_dim,
-            args.max_seq_len,
-            args.rope_theta,
-            args.rope_scaling_factor,
-            args.orig_context_len,
+            device=mesh_device,
+            batch_size=args.max_batch_size,
+            head_dim=args.head_dim,
+            max_seq_len=args.max_seq_len,
+            rope_theta=args.rope_theta,
+            rope_scaling=args.rope_scaling,
         )
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
