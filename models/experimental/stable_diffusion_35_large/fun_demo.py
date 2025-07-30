@@ -81,16 +81,12 @@ def test_sd3(
         num_links=num_links,
     )
 
-    """
-    Make a 1x4 submesh
-    Make an EncoderParallelManager
-    Pass into pipeline
-    Run encoders on device
-    """
-    # encoder_submesh = mesh_device.create_submesh(ttnn.MeshShape(*encoder_submesh_shape))
-
     # HACK: reshape submesh device 0 from 2D to 1D
-    parallel_manager.submesh_devices[0].reshape(ttnn.MeshShape(1, 4))
+    if parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape[1] != 4:
+        cfg_shape = parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape
+        assert cfg_shape[0] * cfg_shape[1] == 4, f"Cannot reshape {cfg_shape} to a 1x4 mesh"
+        print(f"Reshaping submesh device 0 from {cfg_shape} to (1, 4) for CLIP + T5")
+        parallel_manager.submesh_devices[0].reshape(ttnn.MeshShape(1, 4))
     encoder_parallel_manager = EncoderParallelManager(
         parallel_manager.submesh_devices[0],
         topology,
@@ -98,7 +94,9 @@ def test_sd3(
         num_links=num_links,
     )
     # HACK: reshape submesh device 0 from 1D to 2D
-    parallel_manager.submesh_devices[0].reshape(ttnn.MeshShape(2, 2))
+    parallel_manager.submesh_devices[0].reshape(
+        ttnn.MeshShape(*parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape)
+    )
 
     if guidance_scale > 1 and cfg_factor == 1:
         guidance_cond = 2
@@ -108,7 +106,7 @@ def test_sd3(
     pipeline = TtStableDiffusion3Pipeline(
         checkpoint_name=f"stabilityai/stable-diffusion-3.5-{model_name}",
         mesh_device=mesh_device,
-        enable_t5_text_encoder=False,  # submesh_devices[0].get_num_devices() >= 4,
+        enable_t5_text_encoder=True,  # submesh_devices[0].get_num_devices() >= 4,
         guidance_cond=guidance_cond,
         parallel_manager=parallel_manager,
         encoder_parallel_manager=encoder_parallel_manager,

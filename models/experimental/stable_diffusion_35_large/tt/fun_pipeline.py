@@ -194,7 +194,9 @@ class TtStableDiffusion3Pipeline:
         self._image_processor = VaeImageProcessor(vae_scale_factor=self._vae_scale_factor)
 
         # HACK: reshape submesh device 0 to 1D
-        encoder_parallel_manager.mesh_device.reshape(ttnn.MeshShape(1, 4))
+        encoder_parallel_manager.mesh_device.reshape(
+            ttnn.MeshShape(*encoder_parallel_manager.tensor_parallel.mesh_shape)
+        )
 
         logger.info("creating TT-NN CLIP text encoder...")
         parameters_1 = TtCLIPTextTransformerParameters.from_torch(
@@ -262,7 +264,9 @@ class TtStableDiffusion3Pipeline:
 
         ttnn.synchronize_device(self.encoder_parallel_manager.mesh_device)
         # HACK: reshape submesh device 0 from 1D to 2D
-        encoder_parallel_manager.mesh_device.reshape(ttnn.MeshShape(2, 2))
+        self.encoder_parallel_manager.mesh_device.reshape(
+            ttnn.MeshShape(*self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape)
+        )
 
     def prepare(
         self,
@@ -419,7 +423,9 @@ class TtStableDiffusion3Pipeline:
 
             with timer.time_section("total_encoding") if timer else nullcontext():
                 # HACK: reshape submesh device 0 from 2D to 1D
-                self.encoder_parallel_manager.mesh_device.reshape(ttnn.MeshShape(1, 4))
+                self.encoder_parallel_manager.mesh_device.reshape(
+                    ttnn.MeshShape(*self.encoder_parallel_manager.tensor_parallel.mesh_shape)
+                )
                 prompt_encoding_start_time = time.time()
                 prompt_embeds, pooled_prompt_embeds = self._encode_prompts(
                     prompt_1=prompt_1,
@@ -433,7 +439,9 @@ class TtStableDiffusion3Pipeline:
                     do_classifier_free_guidance=do_classifier_free_guidance,
                 )
                 # HACK: reshape submesh device 0 from 1D to 2D
-                self.encoder_parallel_manager.mesh_device.reshape(ttnn.MeshShape(2, 2))
+                self.encoder_parallel_manager.mesh_device.reshape(
+                    ttnn.MeshShape(*self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape)
+                )
                 prompt_encoding_end_time = time.time()
                 logger.info("preparing timesteps...")
 

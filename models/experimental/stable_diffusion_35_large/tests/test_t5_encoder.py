@@ -22,14 +22,20 @@ from ..tt.parallel_config import EncoderParallelManager
         "large",
     ],
 )
-@pytest.mark.parametrize("mesh_device", [(1, 4), (1, 2)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4), (8, 4)], ids=["t3k", "tg"], indirect=True)
+@pytest.mark.parametrize("submesh_shape", [(1, 4), (2, 2), (4, 4)], ids=["1x4", "2x2", "4x4"])
 @pytest.mark.parametrize(
     "device_params, topology",
     [[{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear]],
     indirect=["device_params"],
 )
-def test_t5_encoder(*, mesh_device: ttnn.Device, model_name: str, topology) -> None:
-    parallel_manager = EncoderParallelManager(mesh_device, topology, mesh_axis=1, num_links=1)
+def test_t5_encoder(*, mesh_device: ttnn.Device, submesh_shape: ttnn.MeshShape, model_name: str, topology) -> None:
+    parent_mesh_shape = tuple(mesh_device.shape)
+    if any(x[0] < x[1] for x in zip(parent_mesh_shape, submesh_shape)):
+        pytest.skip("submesh shape is larger than parent mesh shape, skipping")
+    encoder_submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    print(f"Running on submesh {encoder_submesh.shape} of parent mesh {mesh_device.shape}")
+    parallel_manager = EncoderParallelManager(encoder_submesh, topology, mesh_axis=1, num_links=1)
 
     hf_model = T5EncoderModel.from_pretrained(
         f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="text_encoder_3", local_files_only=True
@@ -54,7 +60,7 @@ def test_t5_encoder(*, mesh_device: ttnn.Device, model_name: str, topology) -> N
 
     start_time = time.time()
     parameters = TtT5EncoderParameters.from_torch(
-        torch_model.state_dict(), device=mesh_device, dtype=ttnn.bfloat16, parallel_manager=parallel_manager
+        torch_model.state_dict(), device=encoder_submesh, dtype=ttnn.bfloat16, parallel_manager=parallel_manager
     )
     tt_model = TtT5Encoder(
         parameters,
@@ -69,7 +75,7 @@ def test_t5_encoder(*, mesh_device: ttnn.Device, model_name: str, topology) -> N
     tokens = torch.randint(hf_model.config.vocab_size, [1, 256])
 
     tt_tokens_host = ttnn.from_torch(
-        tokens, layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device)
+        tokens, layout=ttnn.TILE_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh)
     )
 
     start_time = time.time()
@@ -77,14 +83,14 @@ def test_t5_encoder(*, mesh_device: ttnn.Device, model_name: str, topology) -> N
         output = torch_model(tokens)
     logger.info(f"CPU runtime: {time.time() - start_time}")
 
-    tt_tokens = tt_tokens_host.to(mesh_device)
+    tt_tokens = tt_tokens_host.to(encoder_submesh)
 
     logger.info("compiling...")
-    tt_model(tt_tokens, mesh_device, parallel_manager)
+    tt_model(tt_tokens, encoder_submesh, parallel_manager)
 
     logger.info("executing...")
     start_time = time.time()
-    tt_output = tt_model(tt_tokens, mesh_device, parallel_manager)
+    tt_output = tt_model(tt_tokens, encoder_submesh, parallel_manager)
     logger.info(f"TT-NN runtime: {time.time() - start_time}")
     logger.info("done...")
 
