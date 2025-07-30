@@ -28,6 +28,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     save_and_get_path,
     sub_state_dicts,
 )
+from models.demos.deepseek_v3.utils.meta_layer_utils import MetaLayerState
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -932,7 +933,13 @@ class MLA1D(AbstractModule):
 
     @classmethod
     def forward_decode(
-        self, x: ttnn.Tensor, cfg: RunDecodeConfig, position_idxs: [int], rope_tensors: dict, page_table: ttnn.Tensor
+        self,
+        x: ttnn.Tensor,
+        cfg: RunDecodeConfig,
+        position_idxs: [int],
+        rope_tensors: dict,
+        page_table: ttnn.Tensor,
+        meta_layer_state: MetaLayerState,
     ) -> ttnn.Tensor:
         """Forward pass of MLA1D in decode mode.
 
@@ -1060,6 +1067,7 @@ class MLA1D(AbstractModule):
             tt_kvpe,
             update_idxs_tensor=position_idxs,
             page_table=page_table,
+            mesh_coords=meta_layer_state.get_current_device_coords(),
         )
 
         # FlashMLA

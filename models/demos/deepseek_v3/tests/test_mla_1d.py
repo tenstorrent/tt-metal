@@ -16,6 +16,7 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Atten
 from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
+from models.demos.deepseek_v3.utils.meta_layer_utils import MetaLayerState
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.utility_functions import comp_pcc
 
@@ -126,15 +127,22 @@ def reference_forward(
     return out, cache
 
 
-def get_cache_on_host(tt_cache, mesh_device):
+def get_cache_on_host(tt_cache: ttnn.Tensor, row_idx: int, mesh_device: ttnn.MeshDevice) -> torch.Tensor:
     """
     Get the KVPE cache on the host from the TTNN cache.
-    This specifically retrieves the first row of the mesh_device.
+
+    Args:
+        tt_cache (ttnn.Tensor): The TTNN cache tensor.
+        row_idx (int): The row index to get the cache from.
+        mesh_device (ttnn.MeshDevice): The mesh device to get the cache from.
+    Returns:
+        torch.Tensor: The cache tensor on the host.
     """
+    mesh_shape = list(mesh_device.shape)
+    select_devices = slice(row_idx * mesh_shape[1], (row_idx + 1) * mesh_shape[1])
+
     host_cache = []
-    for i, t in enumerate(
-        ttnn.get_device_tensors(tt_cache)[: list(mesh_device.shape)[1]]
-    ):  # Only get from first row of mesh_device
+    for i, t in enumerate(ttnn.get_device_tensors(tt_cache)[select_devices]):  # Only get from first row of mesh_device
         host_t = t.cpu().to_torch()
         host_cache.append(host_t)
     host_cache = torch.concat(host_cache, dim=0)
@@ -299,18 +307,24 @@ def test_forward_pass(
     ### TTNN forward pass
     ############################
     logger.info("Running TTNN forward pass")
+
+    cur_row = randint(0, mesh_shape[0] - 1)
+    meta_layer_state = MetaLayerState(mesh_device, cur_row)
+
     if mode == "prefill":
         tt_output = MLA1D.forward_prefill(tt_input, run_config, user_id, rope_tensors)
     else:
-        tt_output = MLA1D.forward_decode(tt_input, run_config, position_idxs_tensor, rope_tensors, tt_page_table)
+        tt_output = MLA1D.forward_decode(
+            tt_input, run_config, position_idxs_tensor, rope_tensors, tt_page_table, meta_layer_state
+        )
 
     tt_output_torch = ttnn.to_torch(
         tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_shape)
-    )[:1, ...]
+    )[cur_row, ...]
 
     if mode == "decode":
         # Torch Shape: [batch_size, seq_len, hidden_size]
-        tt_output_torch = tt_output_torch.squeeze(0).permute(1, 0, 2)
+        tt_output_torch = tt_output_torch.permute(1, 0, 2)
 
     ############################
     ### Validation
@@ -332,13 +346,15 @@ def test_forward_pass(
 
         if mode == "decode":
             tt_cache = get_cache_on_host(
-                run_config["kvpe_cache"], mesh_device
+                run_config["kvpe_cache"], cur_row, mesh_device
             )  # [DP Factor * max_num_blocks, nh, block_size, head_dim + rope_head_dim]
             tt_cache = MLA1D.from_paged_cache(tt_cache, page_table, dp_factor).squeeze(
                 1
             )  # [bsz, max_seq_len, head_dim + rope_head_dim]
         else:
-            tt_cache = get_cache_on_host(run_config["kvpe_cache"], mesh_device)[: MLA1D.MAX_BATCH_SIZE, ...].squeeze(
+            tt_cache = get_cache_on_host(run_config["kvpe_cache"], cur_row, mesh_device)[
+                : MLA1D.MAX_BATCH_SIZE, ...
+            ].squeeze(
                 1
             )  # [bsz, max_seq_len, head_dim + rope_head_dim]
 
