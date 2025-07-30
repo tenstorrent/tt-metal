@@ -400,6 +400,10 @@ void MAIN {
             tile_regs_release();
             cb_push_back(cb_ex_partial, 1);
 
+            // cb_wait_front(cb_ex_partial, 1);
+            // DPRINT << "Printing variance" << " g = " << g << ENDL();
+            // tt::compute::common::print_full_tile(cb_ex_partial, 0, true);
+
             // cb_xmm is full
             // cb_x is empty
             // cb_push_back(cb_xmm, block_hw);
