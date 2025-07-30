@@ -273,7 +273,7 @@ void MAIN {
                  */
 
                 if constexpr (is_causal) {
-                    // For decode, we only apply mask at the last chunk for causal modes
+                    // For decode, we only apply mask at the last chunk for causal mode
                     if (k_chunk == k_chunk_end - 1 && apply_mask_at_last_chunk) {
                         /* QK += MASK */
                         reconfig_data_format(cb_qk_im, cb_mask_in);
@@ -421,9 +421,10 @@ void MAIN {
                 }
             }
             /* cb_cur_sum = 1.0 / cb_cur_sum */
+
             reconfig_data_format(cb_prev_sum, cb_prev_sum);  // DEBUG
             pack_reconfig_data_format(cb_prev_sum);
-            recip_block_inplace(cb_prev_sum, Sq_chunk_t);
+            recip_block_inplace<vector_mode>(cb_prev_sum, Sq_chunk_t);
 
             /* cb_out_accumulate_im *= cb_prev_sum */
             reconfig_data_format(cb_out_accumulate_im, cb_prev_sum);  // DEBUG
