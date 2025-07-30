@@ -192,7 +192,6 @@ def test_tt_model_acc(
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
-        temperature=temperature,
         tt_ccl=tt_model.tt_ccl,
     )
     # Initialize embedding

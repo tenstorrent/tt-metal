@@ -196,14 +196,18 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
     tt::tt_metal::CreateCircularBuffer(program, core_grid, output_cb_config);
 
     // Add k and p circular buffers
+    const uint32_t uint32_bytes = 4;
+    const uint32_t bf16_bytes = 2;
     uint32_t k_cb_index = tt::CBIndex::c_14;
     tt::tt_metal::CircularBufferConfig k_cb_config =
-        tt::tt_metal::CircularBufferConfig(32 * 4, {{k_cb_index, k_cb_data_format}}).set_page_size(k_cb_index, 32 * 4);
+        tt::tt_metal::CircularBufferConfig(TILE_WIDTH * uint32_bytes, {{k_cb_index, k_cb_data_format}})
+            .set_page_size(k_cb_index, TILE_WIDTH * uint32_bytes);
     auto cb_k_tensor = tt::tt_metal::CreateCircularBuffer(program, core_grid, k_cb_config);
 
     uint32_t p_cb_index = tt::CBIndex::c_15;
     tt::tt_metal::CircularBufferConfig p_cb_config =
-        tt::tt_metal::CircularBufferConfig(32 * 2, {{p_cb_index, p_cb_data_format}}).set_page_size(p_cb_index, 32 * 2);
+        tt::tt_metal::CircularBufferConfig(TILE_WIDTH * bf16_bytes, {{p_cb_index, p_cb_data_format}})
+            .set_page_size(p_cb_index, TILE_WIDTH * bf16_bytes);
     auto cb_p_tensor = tt::tt_metal::CreateCircularBuffer(program, core_grid, p_cb_config);
 
     // Add temp circular buffer
@@ -268,7 +272,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
             p_cb_index,
             temp_cb_index,
             i,
-            32,
+            TILE_WIDTH,
         };
         tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
             program,

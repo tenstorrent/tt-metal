@@ -135,13 +135,13 @@ def run_llama3_demo(
 
     top_k = sampling_params["top_k"]
     if isinstance(top_k, int):
-        top_k = [top_k] * batch_size
+        top_k = torch.tensor([top_k] * batch_size)
     top_p = sampling_params["top_p"]
     if isinstance(top_p, float):
-        top_p = [top_p] * batch_size
+        top_p = torch.tensor([top_p] * batch_size)
     temperature = sampling_params["temperature"]
     if isinstance(temperature, float):
-        temperature = [temperature] * batch_size
+        temperature = torch.tensor([temperature] * batch_size)
     seed = sampling_params["seed"]
 
     dummy_weights = weights == "random"
@@ -248,6 +248,9 @@ def run_llama3_demo(
         args=model_args,
         mesh_device=mesh_device,
         tt_ccl=tt_model.tt_ccl,
+        k=top_k,
+        p=top_p,
+        temp=temperature,
     )
     profiler.end("loading_weights_to_device")
     logger.info("Finished loading weights to device.")

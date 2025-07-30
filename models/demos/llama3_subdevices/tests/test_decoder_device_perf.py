@@ -24,7 +24,7 @@ from models.demos.llama3_subdevices.demo.demo_decode import LlamaOptimizations
 
 DECODER_OP_START_INDEX = 4
 DECODER_OP_END_INDEX = -23
-NUM_OPS_IN_SAMPLING = 13
+NUM_OPS_IN_SAMPLING = 12
 
 DECODER_PREFIX = "model"
 MODEL_TAIL_PREFIX = "model_tail"

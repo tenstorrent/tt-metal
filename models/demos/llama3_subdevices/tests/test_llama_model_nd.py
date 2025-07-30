@@ -170,7 +170,6 @@ def test_llama_model_inference(
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
-        temperature=temperature,
         tt_ccl=tt_model.tt_ccl,
     )
     logger.info("Model and caches loaded.")
