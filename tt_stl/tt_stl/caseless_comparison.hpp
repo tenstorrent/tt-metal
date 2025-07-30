@@ -15,26 +15,26 @@ namespace ttsl {
 //
 
 struct ascii_caseless_comp_t {
-  
-  constexpr bool operator()(const char a, const char b) const noexcept
-  {
-    constexpr auto tolower = [](const char c) { return (c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c; };
-    return tolower(a) == tolower(b);
-  }
+    constexpr bool operator()(const char a, const char b) const noexcept {
+        constexpr auto tolower = [](const char c) { return (c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c; };
+        return tolower(a) == tolower(b);
+    }
 
-  template<typename String>
-  constexpr bool operator()(const String& a, const String& b) const noexcept
-  {
-    if (a.size() != b.size())
-      return false;
-    constexpr auto tolower = [](const char c) { return (c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c; };
-    for (std::size_t i = 0; i < a.size(); ++i)
-      if (tolower(a[i]) != tolower(b[i]))
-        return false;
-    return true;
-  }
+    template <typename String>
+    constexpr bool operator()(const String& a, const String& b) const noexcept {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        constexpr auto tolower = [](const char c) { return (c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c; };
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            if (tolower(a[i]) != tolower(b[i])) {
+                return false;
+            }
+        }
+        return true;
+    }
 };
 
 inline constexpr ascii_caseless_comp_t ascii_caseless_comp{};
 
-}
+}  // namespace ttsl
