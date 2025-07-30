@@ -199,7 +199,6 @@ def import_device_profile_log(logPath):
                 for risc, riscData in coreData["riscs"].items():
                     riscData["timeseries"].sort(key=lambda x: x[1])
                     for marker, timestamp, attachedData in riscData["timeseries"]:
-                        shiftedTS = timestamp - globalMinTS
                         # ERISC dispatch is EOL, some models still use it. Need to check and drop it here until it is fully removed.
                         if (
                             "CQ-DISPATCH" in marker["zone_name"] or "CQ-PREFETCH" in marker["zone_name"]
@@ -401,7 +400,6 @@ def risc_to_core_timeseries(devicesData, detectOps):
     for chipID, deviceData in devicesData["devices"].items():
         for core, coreData in deviceData["cores"].items():
             tmpTimeseries = []
-            tmpDurations = []
             for risc, riscData in coreData["riscs"].items():
                 for ts in riscData["timeseries"]:
                     tmpTimeseries.append(ts + (risc,))

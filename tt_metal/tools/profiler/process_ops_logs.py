@@ -147,7 +147,6 @@ def import_tracy_op_logs(logFolder):
                     else:  # cached device op
                         opDataList = opDataStr.split(":", 1)[-1].split(",")
                         assert len(opDataList) > 3, "Wrong cached op info format"
-                        opCode = opDataList[0].strip()
                         opHash = int(opDataList[1])
                         deviceID = int(opDataList[2])
                         opID = int(opDataList[3])
@@ -194,27 +193,28 @@ def import_tracy_op_logs(logFolder):
     for opData in opsData:
         ops[opData["global_call_count"]] = opData
 
+    tracyOpTimesData = []
     with open(tracyOpTimesLog, "r") as csvFile:
         csvReader = csv.DictReader(csvFile)
-        for op in csvReader:
-            if "TT_DNN" in op["name"] or "TT_METAL" in op["name"]:
-                opID = int(op["zone_text"].split(":")[-1])
-                assert opID in ops.keys(), f"Op time for op {opID} must present"
-                ops[opID]["host_time"] = op
+        tracyOpTimesData = list(csvReader)
 
-    with open(tracyOpTimesLog, "r") as csvFile:
-        csvReader = csv.DictReader(csvFile)
-        for op in csvReader:
-            if op["special_parent_text"] and "id:" in op["special_parent_text"]:
-                parentOpID = int(op["special_parent_text"].split(":")[-1])
+    for op in tracyOpTimesData:
+        if "TT_DNN" in op["name"] or "TT_METAL" in op["name"]:
+            opID = int(op["zone_text"].split(":")[-1])
+            assert opID in ops.keys(), f"Op time for op {opID} must present"
+            ops[opID]["host_time"] = op
 
-                if "child_calls" in ops[parentOpID].keys():
-                    if op["name"] in ops[parentOpID]["child_calls"].keys():
-                        ops[parentOpID]["child_calls"][op["name"]] += int(op["exec_time_ns"])
-                    else:
-                        ops[parentOpID]["child_calls"][op["name"]] = int(op["exec_time_ns"])
+    for op in tracyOpTimesData:
+        if op["special_parent_text"] and "id:" in op["special_parent_text"]:
+            parentOpID = int(op["special_parent_text"].split(":")[-1])
+
+            if "child_calls" in ops[parentOpID].keys():
+                if op["name"] in ops[parentOpID]["child_calls"].keys():
+                    ops[parentOpID]["child_calls"][op["name"]] += int(op["exec_time_ns"])
                 else:
-                    ops[parentOpID]["child_calls"] = {op["name"]: int(op["exec_time_ns"])}
+                    ops[parentOpID]["child_calls"][op["name"]] = int(op["exec_time_ns"])
+            else:
+                ops[parentOpID]["child_calls"] = {op["name"]: int(op["exec_time_ns"])}
 
     return ops, signposts, traceReplays
 
