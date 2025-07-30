@@ -11,6 +11,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
@@ -76,11 +77,8 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)cb_index,
-        (std::uint32_t)out_is_dram,
-        (std::uint32_t)stick_size_is_power_of_two,
-        (std::uint32_t)log2_stick_size};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)cb_index, (std::uint32_t)page_size};
+    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,

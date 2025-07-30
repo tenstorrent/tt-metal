@@ -11,6 +11,7 @@
 #include "ttnn/tensor/tensor.hpp"
 
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::constants;
@@ -837,11 +838,17 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         concat_defines["WIDTH_CONCAT"] = "1";
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
-                                                      (std::uint32_t)src0_cb_index,
-                                                      (std::uint32_t)dst_is_dram,
-                                                      0,
-                                                      0};
+    std::vector<uint32_t> writer_compile_time_args;
+    if (rm_layout) {
+        writer_compile_time_args = {(std::uint32_t)src0_cb_index, dst_buffer->page_size()};
+        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    } else {
+        writer_compile_time_args = {// interleaved accessor args
+                                    (std::uint32_t)src0_cb_index,
+                                    (std::uint32_t)dst_is_dram,
+                                    0,
+                                    0};
+    }
 
     // Tilized reader
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
