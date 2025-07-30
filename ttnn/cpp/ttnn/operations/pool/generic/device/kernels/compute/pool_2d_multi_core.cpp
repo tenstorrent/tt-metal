@@ -158,22 +158,16 @@ void MAIN {
 
         if constexpr (is_out_tiled) {  // TODO: make sure 32 rows and then tilize. go into the loop. ^
             if (i == 31) {
-                // DPRINT << "ci:"<<i<<"/"<<nsticks_per_core << ENDL();
+                DPRINT << "ci:" << i << "/" << nsticks_per_core << "/" << partial_iter_output_tiles << ENDL();
                 tilize_init_short(tmp_cb_id, partial_iter_output_tiles * TILE_HEIGHT, out_cb_id);
-                DPRINT << "end1" << ENDL();
                 cb_wait_front(tmp_cb_id, partial_iter_output_tiles * TILE_HEIGHT);
                 cb_reserve_back(out_cb_id, partial_iter_output_tiles * TILE_HEIGHT);
-                DPRINT << "end2" << ENDL();
-                tilize_block(
-                    tmp_cb_id,
-                    partial_iter_output_tiles * TILE_HEIGHT,
-                    out_cb_id);  // nsticks_per_core -> tile_height (32)
-                DPRINT << "end3" << ENDL();
+                tilize_block(tmp_cb_id, partial_iter_output_tiles * TILE_HEIGHT, out_cb_id);
                 cb_push_back(out_cb_id, partial_iter_output_tiles * TILE_HEIGHT);
+                cb_pop_front(tmp_cb_id, partial_iter_output_tiles * nsticks_per_core);
                 tilize_uninit(tmp_cb_id, out_cb_id);  // TODO: verify output is a multiple of 32, output to out cb.
             }
         }
-        cb_pop_front(tmp_cb_id, partial_iter_output_tiles * nsticks_per_core);
 
         if constexpr (!one_scalar_per_core) {  // TODO: knows how many rows output
             cb_pop_front(curr_scalar_cb_id, 1);

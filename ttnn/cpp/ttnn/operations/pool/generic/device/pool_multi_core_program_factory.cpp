@@ -673,7 +673,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
         .noc = tt::tt_metal::NOC::RISCV_1_default,
         .compile_args = cb_copy_args};
-    // CreateKernel(program, cb_coppy_kernel_fname, all_cores, cb_copy_config);
+    CreateKernel(program, cb_coppy_kernel_fname, all_cores, cb_copy_config);
 
     // uint32_t temporary_size = program.get_cb_memory_size();
     // uint32_t post_allocate_size =

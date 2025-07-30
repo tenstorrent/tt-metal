@@ -23,10 +23,14 @@ void kernel_main() {
     constexpr uint32_t out_w = get_compile_time_arg_val(7);
     constexpr uint32_t is_out_tiled = get_compile_time_arg_val(8);
     constexpr uint32_t BYTES_PER_ELEM = 2;  // bf16
-    // for (int i = 0; i<32;i++){
-    //     DPRINT<<"["<<i<<"]"<<ENDL();
-    //     tt::data_movement::common ::print_bf16_pages(get_write_ptr(cb_src)+64*i*BYTES_PER_ELEM, 64, BYTES_PER_ELEM);
-    // }
+    for (int i = 0; i < 1; i++) {
+        DPRINT << "s[" << i << "]" << ENDL();
+        tt::data_movement::common ::print_bf16_pages(get_write_ptr(cb_src), 64, BYTES_PER_ELEM);
+    }
+    for (int i = 0; i < 1; i++) {
+        DPRINT << "d[" << i << "]" << ENDL();
+        tt::data_movement::common ::print_bf16_pages(get_write_ptr(cb_dst), 64, BYTES_PER_ELEM);
+    }
     DPRINT << "dcb_src:" << cb_src << ENDL();
     DPRINT << "dcb_dst:" << cb_dst << ENDL();
     DPRINT << "dnum_top_left_indexes:" << num_top_left_indexes << ENDL();
@@ -51,7 +55,7 @@ void kernel_main() {
 
     uint32_t out_l1_write_addr_base = get_write_ptr(cb_dst);
 
-    for (uint32_t i = 0; i < num_top_left_indexes; ++i) {  // read row by row
+    for (uint32_t i = 0; i < 0; ++i) {  // read row by row
 
         for (uint32_t c_i = 0; c_i < in_nblocks_c - 1; ++c_i) {
             uint32_t in_l1_read_addr = get_read_ptr(cb_src);
