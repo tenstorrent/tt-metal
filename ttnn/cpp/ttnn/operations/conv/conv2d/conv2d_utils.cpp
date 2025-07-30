@@ -1165,7 +1165,7 @@ uint32_t calculate_conv_dram_L1(
     float float_shard_height = ((float)shard_shape[0]) / input_width;
     uint32_t approx_halo_size = approx_halo_size_margin * (float_shard_height + (dilation[0] * kernel_size[0] / 2)) *
                                 input_size / float_shard_height;
-    const float output_size_margin = 1.1;
+    const float output_size_margin = 1.0f;
     log_info(
         tt::LogOp,
         "Conv DRAM L1 estimate Input {}, Approx Halo {}, Output {}, CB {}",
