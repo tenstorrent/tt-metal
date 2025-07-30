@@ -72,6 +72,7 @@ def get_shard_grid_from_num_cores(device, ncores: Union[int, Tuple[int, int]]) -
         [2, 64, 32, 32],
         [1, 32, 96, 96],
         [1, 96, 32, 32],
+        [1, 32, 80, 32],
     ],
 )
 @pytest.mark.parametrize("scale_h", [2, 3])
