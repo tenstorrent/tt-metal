@@ -46,11 +46,9 @@ def test_vadv2(
     state_dict = torch.load(weights_path)
     new_state_dict = {}
     for k, v in state_dict.items():
-        # Remove the '.0' after 'lateral_convs' or 'fpn_convs' if present
         k_new = k.replace("lateral_convs.0.", "lateral_convs.")
         k_new = k_new.replace("fpn_convs.0.", "fpn_convs.")
         new_state_dict[k_new] = v
-
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
 
@@ -137,7 +135,28 @@ def test_vadv2(
                         "pcd_scale_factor": 1.0,
                         "pts_filename": "data/pcd.bin",
                         "scene_token": "fcbccedd61424f1b85dcbf8f897f9754",
-                        "can_bus": np.zeros(18, dtype=np.float32),
+                        "can_bus": np.array(
+                            [
+                                6.50486842e02,
+                                1.81754303e03,
+                                0.00000000e00,
+                                1.84843146e-01,
+                                1.84843146e-01,
+                                1.84843146e-01,
+                                1.84843146e-01,
+                                8.47522666e-01,
+                                1.34135536e00,
+                                9.58588434e00,
+                                -9.57939215e-03,
+                                6.51179999e-03,
+                                3.75314295e-01,
+                                3.77446848e00,
+                                0.00000000e00,
+                                0.00000000e00,
+                                3.51370076e00,
+                                2.01320224e02,
+                            ]
+                        ),
                     }
                 ]
             ]
@@ -617,10 +636,6 @@ def test_vadv2(
         ],
         device,
     )
-
-    with open("parameter_vad.txt", "w") as f:
-        print(parameter, file=f)
-    # ss
 
     tensor = ttnn.from_torch(tensor, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
     img = []

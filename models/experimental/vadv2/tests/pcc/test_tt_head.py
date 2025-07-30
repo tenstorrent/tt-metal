@@ -247,12 +247,10 @@ def custom_preprocessor(model, name):
                 parameters["head"]["transformer"]["encoder"] = extract_transformer_parameters(model.transformer.encoder)
 
             if isinstance(model.transformer.decoder, DetectionTransformerDecoder):
-                print("Executedddddddddddd")
                 parameters["head"]["transformer"]["decoder"] = extract_transformer_parameters(model.transformer.decoder)
 
             # Handle map_decoder if present
             if isinstance(model.transformer.map_decoder, MapDetectionTransformerDecoder):
-                print("yes here")
                 parameters["head"]["transformer"]["map_decoder"] = extract_transformer_parameters(
                     model.transformer.map_decoder
                 )
@@ -426,9 +424,6 @@ def test_vadv2_head(
 
     parameter = create_vadv2_model_parameters_head(torch_model, device=device)
 
-    with open("parameter.txt", "w") as f:
-        print(parameter, file=f)
-
     tt_model = TtVADHead(
         params=parameter,
         device=device,
@@ -486,7 +481,6 @@ def test_vadv2_head(
         ego_lcf_feat_idx=None,
         valid_fut_ts=6,
     )
-    print("Initialising is done")
 
     mlvl_feats = []
     c = torch.randn(1, 6, 256, 12, 20)
@@ -550,8 +544,6 @@ def test_vadv2_head(
             "flip": False,
             "pcd_horizontal_flip": False,
             "pcd_vertical_flip": False,
-            # 'box_mode_3d': <Box3DMode.LIDAR: 0>,
-            # 'box_type_3d': <class 'mmdet3d.core.bbox.structures.lidar_box3d.LiDARInstance3DBoxes'>,
             "img_norm_cfg": {
                 "mean": np.array([123.675, 116.28, 103.53], dtype=np.float32),
                 "std": np.array([58.395, 57.12, 57.375], dtype=np.float32),

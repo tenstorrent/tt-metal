@@ -65,9 +65,6 @@ class FPN(nn.Module):
         self.lateral_convs = ConvModule(in_channels[0], out_channels, kernel_size=1, stride=1)
         self.fpn_convs = ConvModule(out_channels, out_channels, kernel_size=3, stride=1, padding=1)
 
-        # self.lateral_convs.append(l_conv)
-        # self.fpn_convs.append(fpn_conv)
-
     def forward(self, inputs):
         assert len(inputs) == len(self.in_channels)
 

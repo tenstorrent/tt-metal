@@ -67,7 +67,6 @@ class TtSpatialCrossAttention:
         D = reference_points_cam.size(3)
         indexes = []
         indexes = []
-
         for i, mask_per_img in enumerate(bev_mask):
             index_query_per_img = ttnn.sum(mask_per_img[0], -1)
             index_query_per_img = ttnn.to_torch(index_query_per_img)
@@ -127,10 +126,17 @@ class TtSpatialCrossAttention:
         slots = ttnn.from_torch(slots, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device)
         slots = ttnn.div(slots, count)
         slots = ttnn.linear(slots, self.params.output_proj.weight, bias=self.params.output_proj.bias)
+        ttnn.deallocate(count)
+        ttnn.deallocate(key)
+        ttnn.deallocate(value)
         ttnn.deallocate(self.params.output_proj.weight)
         ttnn.deallocate(self.params.output_proj.bias)
-        ttnn.deallocate(queries_rebatch)
-        return slots + inp_residual
+
+        output = slots + inp_residual
+        ttnn.deallocate(slots)
+        ttnn.deallocate(inp_residual)
+
+        return output
 
 
 class TtMSDeformableAttention3D:
@@ -193,7 +199,6 @@ class TtMSDeformableAttention3D:
         level_start_index=None,
         **kwargs,
     ):
-        ttnn.deallocate(key)
         params = self.params
         if value is None:
             value = query
@@ -213,21 +218,23 @@ class TtMSDeformableAttention3D:
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
 
         value = ttnn.linear(value, params.value_proj.weight, bias=params.value_proj.bias)
+        ttnn.deallocate(params.value_proj.weight)
+        ttnn.deallocate(params.value_proj.bias)
         if key_padding_mask is not None:
             mask = key_padding_mask[..., None]
             value = ttnn.where(mask, ttnn.zeros_like(value), value)
         value = ttnn.reshape(value, (bs, num_value, self.num_heads, -1))
-        # query = ttnn.from_torch(query, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT)
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
 
         sampling_offsets = ttnn.linear(query, params.sampling_offsets.weight, bias=params.sampling_offsets.bias)
+        ttnn.deallocate(params.sampling_offsets.weight)
+        ttnn.deallocate(params.sampling_offsets.bias)
         sampling_offsets = ttnn.reshape(
             sampling_offsets, (bs, num_query, self.num_heads, self.num_levels, self.num_points, 2)
         )
         attention_weights = ttnn.linear(query, params.attention_weights.weight, bias=params.attention_weights.bias)
         ttnn.deallocate(params.attention_weights.weight)
         ttnn.deallocate(params.attention_weights.bias)
-
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_levels * self.num_points)
         )
@@ -236,6 +243,7 @@ class TtMSDeformableAttention3D:
         attention_weights = ttnn.from_torch(
             attention_weights, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
         )
+        # attention_weights = ttnn.softmax(attention_weights, -1)
 
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_levels, self.num_points)
@@ -268,7 +276,6 @@ class TtMSDeformableAttention3D:
             ttnn.deallocate(offset_normalizer_xy)
 
             sampling_locations = ttnn.reshape(sampling_locations, sampling_offsets.shape)
-            ttnn.deallocate(sampling_offsets)
 
             bs, num_query, num_heads, num_levels, num_all_points, xy = sampling_locations.shape
             sampling_locations = ttnn.reshape(
@@ -318,12 +325,11 @@ class TtMSDeformableAttention3D:
             raise ValueError(
                 f"Last dim of reference_points must be" f" 2 or 4, but get {reference_points.shape[-1]} instead."
             )
-        ttnn.deallocate(reference_points)
+
         output = multi_scale_deformable_attn(value, spatial_shapes, sampling_locations, attention_weights, self.device)
-        ttnn.deallocate(attention_weights)
         ttnn.deallocate(value)
         ttnn.deallocate(sampling_locations)
-
+        ttnn.deallocate(attention_weights)
         if not self.batch_first:
             output = ttnn.permute(output, (1, 0, 2))
 

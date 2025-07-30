@@ -434,12 +434,6 @@ class VADHead(nn.Module):
             )
 
         bev_embed, hs, init_reference, inter_references, map_hs, map_init_reference, map_inter_references = outputs
-        torch.save(hs, "models/experimental/vadv2/dumps/hs_torch")
-        torch.save(init_reference, "models/experimental/vadv2/dumps/init_reference_torch")
-        torch.save(inter_references, "models/experimental/vadv2/dumps/inter_references_torch")
-        torch.save(map_init_reference, "models/experimental/vadv2/dumps/map_init_reference_torch")
-        torch.save(map_inter_references, "models/experimental/vadv2/dumps/map_inter_references_torch")
-        torch.save(map_hs, "models/experimental/vadv2/dumps/map_hs_torch")
 
         hs = hs.permute(0, 2, 1, 3)
         outputs_classes = []
@@ -460,10 +454,7 @@ class VADHead(nn.Module):
                 reference = inter_references[lvl - 1]
             reference = inverse_sigmoid(reference)
             outputs_class = self.cls_branches[lvl](hs[lvl])
-
             tmp = self.reg_branches[lvl](hs[lvl])
-            torch.save(outputs_class, "models/experimental/vadv2/dumps/outputs_class_torch")
-            torch.save(tmp, "models/experimental/vadv2/dumps/tmp_torch")
             # TODO: check the shape of reference
             assert reference.shape[-1] == 3
             tmp[..., 0:2] = tmp[..., 0:2] + reference[..., 0:2]

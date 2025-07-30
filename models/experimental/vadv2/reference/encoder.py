@@ -174,12 +174,10 @@ class BEVFormerEncoder(nn.Module):
             device=bev_query.device,
             dtype=bev_query.dtype,
         )
-        torch.save(ref_3d, "models/experimental/vadv2/tt/dumps/ref_3d_torch")
 
         ref_2d = self.get_reference_points(
             bev_h, bev_w, dim="2d", bs=bev_query.size(1), device=bev_query.device, dtype=bev_query.dtype
         )
-        torch.save(ref_2d, "models/experimental/vadv2/tt/dumps/ref_2d_torch")
 
         reference_points_cam, bev_mask = self.point_sampling(ref_3d, self.pc_range, kwargs["img_metas"])
 

@@ -31,8 +31,6 @@ class TemporalSelfAttention(nn.Module):
         self.batch_first = batch_first
         self.fp16_enabled = False
 
-        # you'd better set dim_per_head to a power of 2
-        # which is more efficient in the CUDA implementation
         def _is_power_of_2(n):
             if (not isinstance(n, int)) or (n < 0):
                 raise ValueError("invalid input for _is_power_of_2: {} (type: {})".format(n, type(n)))
@@ -60,7 +58,6 @@ class TemporalSelfAttention(nn.Module):
         )
         self.value_proj = nn.Linear(embed_dims, embed_dims)
         self.output_proj = nn.Linear(embed_dims, embed_dims)
-        # self.init_weights()
 
     def forward(
         self,
@@ -116,8 +113,6 @@ class TemporalSelfAttention(nn.Module):
             assert self.batch_first
             bs, len_bev, c = query.shape
             value = torch.stack([query, query], 1).reshape(bs * 2, len_bev, c)
-
-            # value = torch.cat([query, query], 0)
 
         if identity is None:
             identity = query
@@ -196,17 +191,11 @@ class TemporalSelfAttention(nn.Module):
         """
         output = multi_scale_deformable_attn_pytorch(value, spatial_shapes, sampling_locations, attention_weights)
 
-        # output shape (bs*num_bev_queue, num_query, embed_dims)
-        # (bs*num_bev_queue, num_query, embed_dims)-> (num_query, embed_dims, bs*num_bev_queue)
         output = output.permute(1, 2, 0)
-
-        # fuse history value and current value
-        # (num_query, embed_dims, bs*num_bev_queue)-> (num_query, embed_dims, bs, num_bev_queue)
         output = output.view(num_query, embed_dims, bs, self.num_bev_queue)
 
         output = output.mean(-1)
 
-        # (num_query, embed_dims, bs)-> (bs, num_query, embed_dims)
         output = output.permute(2, 0, 1)
 
         output = self.output_proj(output)
