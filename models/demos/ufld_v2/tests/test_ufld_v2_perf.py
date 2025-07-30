@@ -21,7 +21,7 @@ from models.utility_functions import (
     is_wormhole_b0,
     run_for_wormhole_b0,
 )
-from tests.ttnn.integration_tests.ufld_v2.test_ttnn_ufld_v2 import custom_preprocessor_whole_model
+from tests.ttnn.integration_tests.ufld_v2.test_ttnn_ufld_v2 import create_custom_mesh_preprocessor
 
 
 def get_expected_times(name):
@@ -30,7 +30,6 @@ def get_expected_times(name):
 
 
 @run_for_wormhole_b0()
-@pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size,input_channels,height,width",
@@ -65,7 +64,7 @@ def test_ufld_v2_perf(device, batch_size, input_channels, height, width, use_pre
             reference_model.load_state_dict(new_state_dict)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: reference_model,
-        custom_preprocessor=custom_preprocessor_whole_model,
+        custom_preprocessor=create_custom_mesh_preprocessor(),
         device=device,
     )
     parameters.conv_args = {}
@@ -112,7 +111,7 @@ def test_ufld_v2_perf(device, batch_size, input_channels, height, width, use_pre
 @pytest.mark.parametrize(
     "batch_size, expected_perf,test",
     [
-        [1, 347, "UFLD-v2"],
+        [1, 320, "UFLD-v2"],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
