@@ -15,7 +15,7 @@ DEFAULT_GOLDEN_FILE = os.path.join(
     "benchmark_rw_buffer_golden.json",
 )
 
-DEFAULT_BANDWIDTH_VAIRANCE_TOLERANCE_PCT = 5
+DEFAULT_BANDWIDTH_VARIANCE_TOLERANCE_PCT = 5
 
 
 def parse_args():
@@ -35,7 +35,7 @@ def parse_args():
         "--tolerance",
         type=float,
         help="Tolerance for benchmark results.",
-        default=DEFAULT_BANDWIDTH_VAIRANCE_TOLERANCE_PCT,
+        default=DEFAULT_BANDWIDTH_VARIANCE_TOLERANCE_PCT,
     )
     args = parser.parse_args()
     return args.golden, args.json, args.tolerance
