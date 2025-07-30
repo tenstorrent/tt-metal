@@ -112,7 +112,7 @@ def test_ufld_v2_perf(device, batch_size, input_channels, height, width, use_pre
 @pytest.mark.parametrize(
     "batch_size, expected_perf,test",
     [
-        [1, 295, "UFLD-v2"],
+        [1, 347, "UFLD-v2"],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

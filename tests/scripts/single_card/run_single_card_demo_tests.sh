@@ -22,12 +22,12 @@ run_qwen7b_func() {
 }
 
 run_segformer_func() {
-
   #Segformer Segmentation Demo
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py --timeout 600; fail+=$?
 
+  ## Commenting out Segformer Classification Demo. Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
   #Segformer Classification Demo
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py --timeout 600; fail+=$?
+  # WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py --timeout 600; fail+=$?
 
 }
 
@@ -41,12 +41,12 @@ run_sentencebert_func() {
 
 }
 
-#run_yolov11_func() {
-#
-#  #Yolov11 Demo
-#  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/yolov11/demo/demo.py --timeout 600; fail+=$?
-#
-#}
+run_yolov11_func() {
+
+ #Yolov11 Demo
+ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/yolov11/demo/demo.py --timeout 600; fail+=$?
+
+}
 
 run_llama3_func() {
   fail=0
@@ -72,12 +72,14 @@ run_llama3_func() {
 }
 
 ## comment out ufld_v2 from CI tests for now unitl dataset_evaluation test failure is debugged.
-#run_ufld_v2_func() {
-#  #ufld_v2
-#  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/demo/demo.py --timeout 600
-#  #ufld_v2 eval
-#  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/demo/dataset_evaluation.py --timeout 1500
-#}
+run_ufld_v2_func() {
+  #ufld_v2
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/demo/demo.py --timeout 600
+  #ufld_v2 eval
+  ## Commenting out UFLDv2 eval since CIv2 does not support dataset download from Kaggle
+  # Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
+  #WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/demo/dataset_evaluation.py --timeout 1500
+}
 run_vgg_func() {
 
   #VGG11/VGG16
@@ -243,11 +245,12 @@ run_yolov8s_perf() {
 }
 
 # commenting out the test from CI due to HF issue. TODO explore AWS alternative suggested by infra team.
-#run_mobilenetv2_perf(){
-#
+# Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
+# run_mobilenetv2_perf(){
+
 #  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo --timeout 600
-#
-#}
+
+# }
 
 run_yolov8s_world_perf() {
 
@@ -256,19 +259,20 @@ run_yolov8s_world_perf() {
 }
 
 #comment out vanilla unet for now unitl data and weights loading issues are resolved.
-#run_vanilla_unet_demo() {
-#
-#  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/vanilla_unet/demo/demo.py::test_unet_demo_single_image
-#
-#}
+run_vanilla_unet_demo() {
+
+ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/vanilla_unet/demo/demo.py::test_unet_demo_single_image
+
+}
 run_yolov8x_perf() {
 
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov8x/demo/demo.py --timeout 600
 
 }
 run_yolov4_perf() {
-
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov4/demo.py --timeout 600
+## Removed coco dataset evaluation for now because CIv2 does not support downloading of the dataset.
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4 --timeout 600
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4_dp --timeout 600
 }
 run_yolov10x_demo() {
 
@@ -282,12 +286,13 @@ run_yolov7_demo() {
 
 }
 
-# comment out vgg_unet from CI until data and weights loading problems are resolved
-#run_vgg_unet_demo() {
-#
+# Commenting out VGG_Unet Demo since CIv2 does not support dataset download from Kaggle
+# Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
+# run_vgg_unet_demo() {
+
 #  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/vgg_unet/demo/demo.py --timeout 600
-#
-#}
+
+# }
 
 
 
