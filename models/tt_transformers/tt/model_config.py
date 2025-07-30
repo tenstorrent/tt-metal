@@ -1455,8 +1455,11 @@ class ModelArgs:
                     )
                     self.hidden_dim = padded_hidden_dim
 
+        self.layer_types = text_config.get("layer_types", None)
+
         # RoPE params
         self.rope_theta = text_config.get("rope_theta")
+        self.rope_theta_local = text_config.get("rope_local_base_freq", None)
         # If use_scaled_rope is not present, assume setting rope_scaling means use scaled rope
         # If it is present and is set to false, do not use scaled rope
         # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
