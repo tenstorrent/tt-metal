@@ -29,7 +29,8 @@ from ..tt.parallel_config import EncoderParallelManager
     ],
     ids=["encoder_1", "encoder_2"],
 )
-@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4), (8, 4)], ids=["t3k", "tg"], indirect=True)
+@pytest.mark.parametrize("submesh_shape", [(1, 4), (2, 2), (4, 4)], ids=["1x4", "2x2", "4x4"])
 @pytest.mark.parametrize(
     "device_params, topology",
     [[{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear]],
@@ -38,13 +39,18 @@ from ..tt.parallel_config import EncoderParallelManager
 def test_clip_encoder(
     *,
     mesh_device: ttnn.Device,
+    submesh_shape: ttnn.MeshShape,
     model_name: str,
     clip_path: str,
     tokenizer_path: str,
     expected_pcc: float,
     topology: ttnn.Topology,
 ) -> None:
-    encoder_submesh = mesh_device.create_submesh(ttnn.MeshShape(1, 4))
+    parent_mesh_shape = tuple(mesh_device.shape)
+    if any(x[0] < x[1] for x in zip(parent_mesh_shape, submesh_shape)):
+        pytest.skip("submesh shape is larger than parent mesh shape, skipping")
+    encoder_submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    print(f"Running on submesh {encoder_submesh.shape} of parent mesh {mesh_device.shape}")
     parallel_manager = EncoderParallelManager(encoder_submesh, topology, mesh_axis=1, num_links=1)
     model_name_checkpoint = f"stabilityai/stable-diffusion-3.5-{model_name}"
 
@@ -57,17 +63,6 @@ def test_clip_encoder(
 
     # debug
     logger.info("=== HuggingFace Model 1 Config ===")
-    logger.info(f"vocab_size: {hf_model.config.vocab_size}")
-    logger.info(f"hidden_size: {hf_model.config.hidden_size}")
-    logger.info(f"intermediate_size: {hf_model.config.intermediate_size}")
-    logger.info(f"num_attention_heads: {hf_model.config.num_attention_heads}")
-    logger.info(f"num_hidden_layers: {hf_model.config.num_hidden_layers}")
-    logger.info(f"layer_norm_eps: {hf_model.config.layer_norm_eps}")
-    logger.info(f"attention_dropout: {hf_model.config.attention_dropout}")
-    logger.info(f"hidden_act: {hf_model.config.hidden_act}")
-    logger.info(f"Full config: {hf_model.config}")
-
-    logger.info("=== HuggingFace Model 2 Config ===")
     logger.info(f"vocab_size: {hf_model.config.vocab_size}")
     logger.info(f"hidden_size: {hf_model.config.hidden_size}")
     logger.info(f"intermediate_size: {hf_model.config.intermediate_size}")
@@ -99,15 +94,6 @@ def test_clip_encoder(
         attention_dropout=hf_model.config.attention_dropout,
         hidden_act=hf_model.config.hidden_act,
     )
-    logger.info("=== TtCLIPConfig 1 ===")
-    logger.info(f"vocab_size: {config.vocab_size}")
-    logger.info(f"d_model: {config.d_model}")
-    logger.info(f"d_ff: {config.d_ff}")
-    logger.info(f"num_heads: {config.num_heads}")
-    logger.info(f"num_layers: {config.num_layers}")
-    logger.info(f"max_position_embeddings: {config.max_position_embeddings}")
-    logger.info(f"layer_norm_eps: {config.layer_norm_eps}")
-    logger.info(f"attention_dropout: {config.attention_dropout}")
 
     tt_model = TtCLIPTextTransformer(parameters, config)
     logger.info(f"text encoder creation time: {time.time() - start_time}")

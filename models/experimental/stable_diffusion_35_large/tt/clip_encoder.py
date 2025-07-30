@@ -43,6 +43,7 @@ class TtCLIPAttentionParameters:
         *,
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
+        parallel_manager: EncoderParallelManager = None,
     ) -> TtCLIPAttentionParameters:
         def column_parallel_linear(name):
             my_state = substate(state, name)
@@ -50,13 +51,16 @@ class TtCLIPAttentionParameters:
             bias = my_state.get("bias", None)  # [num_heads * head_dim]
             weight = weight.T  # [input_dim, num_heads * head_dim]
 
+            shard_dims = [None, None]
+            shard_dims[parallel_manager.tensor_parallel.mesh_axis] = -1
+
             weight = ttnn.from_torch(
                 weight,
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensorToMesh(device, dim=-1),
+                mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
             )
 
             if bias is not None:
@@ -67,7 +71,7 @@ class TtCLIPAttentionParameters:
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ShardTensorToMesh(device, dim=-1),
+                    mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
                 )
 
             return TtLinearParameters(weight=weight, bias=bias)
@@ -153,10 +157,12 @@ class TtCLIPAttention:
         attn_output = ttnn.experimental.all_gather_async(
             attn_output,
             dim=len(attn_output.shape) - 1,
+            cluster_axis=parallel_manager.tensor_parallel.mesh_axis,
+            mesh_device=parallel_manager.mesh_device,
+            topology=parallel_manager.topology,
             multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(),
             num_links=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=parallel_manager.topology,
         )
 
         dense_out = self._o_proj(attn_output)
@@ -164,10 +170,12 @@ class TtCLIPAttention:
         dense_out = ttnn.experimental.all_gather_async(
             dense_out,
             dim=len(dense_out.shape) - 1,
+            cluster_axis=parallel_manager.tensor_parallel.mesh_axis,
+            mesh_device=parallel_manager.mesh_device,
+            topology=parallel_manager.topology,
             multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(),
             num_links=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=parallel_manager.topology,
         )
         dense_out_shape = list(dense_out.shape)
         dense_out_shape[2] = orig_shape[2]
@@ -196,13 +204,16 @@ class TtCLIPMLPParameters:
             weight = my_state["weight"].transpose(0, 1)
             bias = my_state.get("bias", None)
 
+            weight_shard_dims = [None, None]
+            weight_shard_dims[parallel_manager.tensor_parallel.mesh_axis] = dim
+
             weight = ttnn.from_torch(
                 weight,
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ShardTensorToMesh(device, dim=dim),
+                mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=weight_shard_dims),
             )
             if bias is not None:
                 # Bias always sharded on last dimension. If row-parallel, extend
@@ -212,13 +223,16 @@ class TtCLIPMLPParameters:
                     # row-parallel, only one device should apply bias
                     zero_bias = torch.zeros_like(bias)
                     bias = torch.cat([bias] + [zero_bias] * (parallel_manager.tensor_parallel.factor - 1), dim=-1)
+
+                bias_shard_dims = [None, None]
+                bias_shard_dims[parallel_manager.tensor_parallel.mesh_axis] = -1
                 bias = ttnn.from_torch(
                     bias,
                     dtype=dtype,
                     layout=ttnn.TILE_LAYOUT,
                     device=device,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ShardTensorToMesh(device, dim=-1),
+                    mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=bias_shard_dims),
                 )
             return TtLinearParameters(weight=weight, bias=bias)
 
@@ -259,10 +273,12 @@ class TtCLIPMLP:
         hidden_states = ttnn.experimental.all_gather_async(
             hidden_states_scattered,
             dim=3,
+            cluster_axis=parallel_manager.tensor_parallel.mesh_axis,
+            mesh_device=parallel_manager.mesh_device,
+            topology=parallel_manager.topology,
             multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(),
             num_links=1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=parallel_manager.topology,
         )
         hidden_states = ttnn.reshape(hidden_states, hidden_states_shape, hidden_states.shape)
         return hidden_states
@@ -298,7 +314,9 @@ class TtCLIPEncoderLayerParameters:
         parallel_manager: EncoderParallelManager = None,
     ) -> TtCLIPEncoderLayerParameters:
         return cls(
-            self_attn=TtCLIPAttentionParameters.from_torch(substate(state, "self_attn"), dtype=dtype, device=device),
+            self_attn=TtCLIPAttentionParameters.from_torch(
+                substate(state, "self_attn"), dtype=dtype, device=device, parallel_manager=parallel_manager
+            ),
             mlp=TtCLIPMLPParameters.from_torch(
                 substate(state, "mlp"), dtype=dtype, device=device, parallel_manager=parallel_manager
             ),
