@@ -39,6 +39,7 @@ void RunCustomCycle(tt_metal::IDevice* device, int fastDispatch) {
         tt_metal::ComputeConfig{.compile_args = trisc_kernel_args});
 
     for (int i = 0; i < fastDispatch; i++) {
+        program.set_runtime_id(i + 1);
         EnqueueProgram(device->command_queue(), program, false);
     }
 }
@@ -54,11 +55,11 @@ int main() {
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         // Run 1
-        RunCustomCycle(device, PROFILER_OP_SUPPORT_COUNT);
-        tt_metal::detail::DumpDeviceProfileResults(device);
+        // RunCustomCycle(device, 1);
+        // tt_metal::detail::DumpDeviceProfileResults(device);
 
         // Run 2
-        RunCustomCycle(device, PROFILER_OP_SUPPORT_COUNT);
+        RunCustomCycle(device, 2);
         tt_metal::detail::DumpDeviceProfileResults(device);
 
         pass &= tt_metal::CloseDevice(device);
