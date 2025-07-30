@@ -28,7 +28,9 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
         for (uint32_t j = 0; j < Wt; j += block_size) {
-            generate_tile_with_bfloat16_value(cb_dataflow_idx, j);
+            for (uint32_t b = 0; b < block_size; ++b) {
+                generate_tile_with_bfloat16_value(cb_dataflow_idx, j);
+            }
         }
     }
 }
