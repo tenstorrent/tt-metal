@@ -67,7 +67,7 @@ def run_demo_inference(device, reset_seeds, input_path, num_prompts, num_inferen
     profiler.clear()
 
     # Until di/dt issues are resolved
-    os.environ["SLOW_MATMULS"] = "1"
+    os.environ["TT_MM_THROTTLE_PERF"] = "5"
     assert (
         num_inference_steps >= 4
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"
@@ -225,7 +225,7 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
     enable_persistent_kernel_cache()
 
     # Until di/dt issues are resolved
-    os.environ["SLOW_MATMULS"] = "1"
+    os.environ["TT_MM_THROTTLE_PERF"] = "5"
     assert (
         num_inference_steps >= 4
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"
@@ -365,7 +365,7 @@ def run_demo_inference_diffusiondb(
     enable_persistent_kernel_cache()
 
     # Until di/dt issues are resolved
-    os.environ["SLOW_MATMULS"] = "1"
+    os.environ["TT_MM_THROTTLE_PERF"] = "5"
 
     assert (
         num_inference_steps >= 4
