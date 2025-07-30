@@ -77,7 +77,8 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::MINIMUM:
         case UnaryOpType::MAXIMUM:
         case UnaryOpType::LOG1P:
-        case UnaryOpType::HARDSHRINK: return true;
+        case UnaryOpType::HARDSHRINK:
+        case UnaryOpType::WHERE_TSS: return true;
         default: return false;
     }
     return false;
@@ -87,5 +88,7 @@ void update_macro_defines(UnaryOpType op_type, std::map<std::string, std::string
 
 std::string get_compute_kernel_path(
     UnaryOpType op_type, const std::string& compute_root, std::optional<DataType> input_dtype = std::nullopt);
+
+uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype);
 
 }  // namespace ttnn::operations::unary::utils
