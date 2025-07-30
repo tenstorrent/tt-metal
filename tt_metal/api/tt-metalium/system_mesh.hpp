@@ -48,6 +48,16 @@ public:
 
         // Fabric node ID is set for host-local and host-remote devices globally.
         std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+
+        // Returns true if all devices are local.
+        bool all_local() const {
+            for (const auto& device_id : device_ids) {
+                if (device_id.is_remote()) {
+                    return false;
+                }
+            }
+            return true;
+        }
     };
 
     // Returns devices that should be mapped to a MeshDevice according to the shape and offset.
