@@ -367,7 +367,7 @@ void MAIN {
             }
             */
             tile_regs_acquire();
-            cb_reserve_back(cb_ex_partial, 1);
+            cb_reserve_back(cb_xmm, 1);
             for (uint32_t i = 0; i < block_h; i++) {
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -397,42 +397,44 @@ void MAIN {
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(dst0, cb_ex_partial);
+            pack_tile(dst0, cb_xmm);
             tile_regs_release();
-            cb_push_back(cb_ex_partial, 1);
+            cb_push_back(cb_xmm, 1);
 
             // sum up the variance
-            DPRINT << "A" << ENDL();
-            reduce_init(cb_ex_partial, cb_scaler, cb_ex_partial);
-            DPRINT << "B" << ENDL();
-            cb_wait_front(cb_scaler, 1);
-            DPRINT << "C" << ENDL();
-            cb_wait_front(cb_ex_partial, 1);
-            DPRINT << "D" << ENDL();
-            tile_regs_acquire();
-            DPRINT << "E" << ENDL();
-            reduce_tile(cb_ex_partial, cb_scaler, 0, scaler0, dst0);
-            DPRINT << "F" << ENDL();
-            tile_regs_commit();
-            DPRINT << "G" << ENDL();
-            cb_pop_front(cb_ex_partial, 1);
-            DPRINT << "H" << ENDL();
+            // DPRINT << "A" << ENDL();
             cb_reserve_back(cb_ex_partial, 1);
-            DPRINT << "I" << ENDL();
+            reduce_init(cb_xmm, cb_scaler, cb_ex_partial);
+            // DPRINT << "B" << ENDL();
+            cb_wait_front(cb_scaler, 1);
+            // DPRINT << "C" << ENDL();
+            cb_wait_front(cb_xmm, 1);
+            // DPRINT << "D" << ENDL();
+            tile_regs_acquire();
+            // DPRINT << "E" << ENDL();
+            reduce_tile(cb_xmm, cb_scaler, 0, scaler0, dst0);
+            // DPRINT << "F" << ENDL();
+            tile_regs_commit();
+            // DPRINT << "G" << ENDL();
+            cb_pop_front(cb_xmm, 1);
+            // DPRINT << "H" << ENDL();
+            // cb_reserve_back(cb_ex_partial, 1);
+            // DPRINT << "I" << ENDL();
             tile_regs_wait();
-            DPRINT << "J" << ENDL();
+            // DPRINT << "J" << ENDL();
             pack_tile(dst0, cb_ex_partial);
-            DPRINT << "K" << ENDL();
+            // DPRINT << "K" << ENDL();
             tile_regs_release();
-            DPRINT << "L" << ENDL();
+            // DPRINT << "L" << ENDL();
             cb_push_back(cb_ex_partial, 1);
-            DPRINT << "M" << ENDL();
+            // DPRINT << "M" << ENDL();
             reduce_uninit();
-            DPRINT << "N" << ENDL();
+            // DPRINT << "N" << ENDL();
+            cb_pop_front(cb_xmm, 1);
 
-            // cb_wait_front(cb_ex_partial, 1);
-            // DPRINT << "Printing variance" << " g = " << g << ENDL();
-            // tt::compute::common::print_full_tile(cb_ex_partial, 0, true);
+            cb_wait_front(cb_ex_partial, 1);
+            DPRINT << "Printing variance" << " g = " << g << ENDL();
+            tt::compute::common::print_full_tile(cb_ex_partial, 0, true);
 
             // cb_xmm is full
             // cb_x is empty
