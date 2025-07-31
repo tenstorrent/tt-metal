@@ -275,15 +275,18 @@ class TtStableDiffusion3Pipeline:
         ttnn.synchronize_device(self.encoder_parallel_manager.mesh_device)
 
         # HACK: reshape submesh device 0 to 1D
-        vae_parallel_manager.device.reshape(ttnn.MeshShape(*encoder_parallel_manager.tensor_parallel.mesh_shape))
+        original_vae_device_shape = tuple(vae_parallel_manager.device.shape)
+        if original_vae_device_shape != tuple(encoder_parallel_manager.tensor_parallel.mesh_shape):
+            vae_parallel_manager.device.reshape(ttnn.MeshShape(*encoder_parallel_manager.tensor_parallel.mesh_shape))
         self._vae_parameters = TtVaeDecoderParameters.from_torch(
             torch_vae_decoder=self._torch_vae.decoder, dtype=ttnn.bfloat16, parallel_config=vae_parallel_manager
         )
 
         # HACK: reshape submesh device 0 from 1D to 2D
-        vae_parallel_manager.device.reshape(
-            ttnn.MeshShape(*self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape)
-        )
+        if original_vae_device_shape != tuple(encoder_parallel_manager.tensor_parallel.mesh_shape):
+            vae_parallel_manager.device.reshape(
+                ttnn.MeshShape(*self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape)
+            )
 
     def prepare(
         self,
@@ -610,10 +613,13 @@ class TtStableDiffusion3Pipeline:
                 ) + self._torch_vae_shift_factor
                 # with torch.no_grad():
                 latents = latents.permute(0, 2, 3, 1)  # channels-last
+
+                original_vae_device_shape = tuple(self.vae_parallel_manager.device.shape)
+                if original_vae_device_shape != tuple(self.encoder_parallel_manager.tensor_parallel.mesh_shape):
+                    self.vae_parallel_manager.device.reshape(
+                        ttnn.MeshShape(*self.encoder_parallel_manager.tensor_parallel.mesh_shape)
+                    )
                 # HACK: reshape submesh device 0 from 2D to 1D
-                self.vae_parallel_manager.device.reshape(
-                    ttnn.MeshShape(*self.encoder_parallel_manager.tensor_parallel.mesh_shape)
-                )
                 tt_latents = ttnn.from_torch(
                     latents,
                     layout=ttnn.TILE_LAYOUT,
@@ -624,9 +630,10 @@ class TtStableDiffusion3Pipeline:
                 decoded_output = sd_vae_decode(tt_latents, self._vae_parameters)
                 decoded_output = ttnn.to_torch(ttnn.get_device_tensors(decoded_output)[0]).permute(0, 3, 1, 2)
                 # HACK: reshape submesh device 0 from 1D to 2D
-                self.vae_parallel_manager.device.reshape(
-                    ttnn.MeshShape(*self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape)
-                )
+                if original_vae_device_shape != tuple(self.encoder_parallel_manager.tensor_parallel.mesh_shape):
+                    self.vae_parallel_manager.device.reshape(
+                        ttnn.MeshShape(*self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape)
+                    )
                 # image = self._torch_vae.decoder(tt_latents)
                 image = self._image_processor.postprocess(decoded_output, output_type="pt")
                 print(f"postprocessed image shape: {image.shape}")
