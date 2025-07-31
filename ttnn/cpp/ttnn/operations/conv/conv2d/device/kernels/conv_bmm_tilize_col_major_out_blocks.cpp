@@ -97,6 +97,7 @@ void MAIN {
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(24);
     constexpr bool partials_cb_uses_output = get_compile_time_arg_val(26);
     constexpr uint32_t in0_nblocks_w_tilize = get_compile_time_arg_val(27);
+    constexpr uint32_t reader_num_subblocks = get_compile_time_arg_val(28);
 
     constexpr uint32_t out_block_num_tiles = in0_num_subblocks * in1_num_subblocks * out_subblock_num_tiles;
     constexpr uint32_t out_block_w = in1_block_w;
@@ -115,12 +116,15 @@ void MAIN {
 
     constexpr uint32_t mm_in0_cb_id = height_sharded ? tilized_in0_cb_id : in0_cb_id;
 
+// TODO change for better split reader
+// ------------------------------------------------------------
 #ifdef SPLIT_READER
-    constexpr uint32_t in0_num_subblocks_read_last = in0_num_subblocks / 2;
-    constexpr uint32_t in0_num_subblocks_read = in0_num_subblocks - in0_num_subblocks_read_last;
+    constexpr uint32_t in0_num_subblocks_read_last = reader_num_subblocks / 2;
+    constexpr uint32_t in0_num_subblocks_read = reader_num_subblocks - in0_num_subblocks_read_last;
 #else
-    constexpr uint32_t in0_num_subblocks_read = in0_num_subblocks;
+    constexpr uint32_t in0_num_subblocks_read = reader_num_subblocks;
 #endif
+    // ------------------------------------------------------------
 
     mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
@@ -159,7 +163,7 @@ void MAIN {
 #endif
 
                         tilize_in(
-                            in0_pretilize_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
+                            in0_pretilize_cb_id, in0_subblock_h, in0_block_w, reader_num_subblocks, tilized_in0_cb_id);
 
                         mm_block_init_short_with_both_dt(
                             in0_cb_id,
