@@ -11,11 +11,12 @@ from tests.tt_metal.tt_metal.data_movement.python.constants import *
 
 
 class StatsReporter:
-    def __init__(self, dm_stats, aggregate_stats, test_id_to_name, output_dir):
+    def __init__(self, dm_stats, aggregate_stats, test_id_to_name, output_dir, arch):
         self.dm_stats = dm_stats
         self.aggregate_stats = aggregate_stats
         self.test_id_to_name = test_id_to_name
-        self.output_dir = output_dir
+        # Create architecture-specific subdirectory
+        self.output_dir = os.path.join(output_dir, arch)
 
     def print_stats(self):
         # Print stats per runtime host id

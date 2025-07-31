@@ -25,6 +25,13 @@ TEST_TYPE_ATTRIBUTES = {
             "Subordinate Grid Size Y": "sub_grid_size_y",
         },
     },
+    "virtual_channels": {
+        "test_ids": [150, 151, 152, 153, 154, 155],  # Consider putting this in the yaml file instead
+        "attributes": {
+            "Number of Virtual Channels": "num_virtual_channels",
+            "NoC Index": "noc_index",
+        },
+    },
 }
 
 # Plot configuration
@@ -42,3 +49,4 @@ RISC_TO_KERNEL_MAP = {
 
 # Output directory default
 DEFAULT_OUTPUT_DIR = "tests/tt_metal/tt_metal/data_movement/data"
+# TO-DO: Make a directory for WH and BH

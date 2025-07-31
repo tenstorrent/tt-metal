@@ -146,6 +146,15 @@ tests:
   101:
     name: "Multicast Schemes (Loopback Disabled)"
 
+  150:
+    name: "One to One Virtual Channels"
+
+  152:
+    name: "One to All Unicast Virtual Channels"
+
+  154:
+    name: "All to All Virtual Channels"
+
   200:
     name: "Deinterleave Single Core"
     comment: |
