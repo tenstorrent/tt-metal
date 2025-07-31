@@ -1675,8 +1675,7 @@ class ModelArgs:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
                 # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-                is_qwen25_vl = "Qwen2.5-VL" in self.model_name
-                if is_qwen25_vl:
+                if "Qwen2.5-VL" in self.model_name:
                     from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
                         Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
                     )
@@ -1698,7 +1697,8 @@ class ModelArgs:
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
 
-            if is_qwen25_vl:
+        if self.checkpoint_type == CheckpointType.HuggingFace:
+            if "Qwen2.5-VL" in self.model_name:
                 state_dict = standardize_hf_keys_qwen25_vl(state_dict)
             else:
                 state_dict = standardize_hf_keys(state_dict)
