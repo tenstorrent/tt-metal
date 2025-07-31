@@ -381,4 +381,60 @@ TEST_F(BlackholeSingleCardFixture, TensixL1DataCache) {
     EXPECT_EQ(random_vec[0], value_to_write);
 }
 
+TEST_F(DeviceFixture, VerifyLogicalToTranslatedMap)
+{
+    std::map<CoreCoord, CoreCoord> logical_to_translated_map;
+
+    for (auto device : devices_) {
+        auto logical_grid_size = device->logical_grid_size();
+        for (int r = 0; r < logical_grid_size.y; r++) {
+            for (int c = 0; c < logical_grid_size.x; c++) {
+                CoreCoord logical_coord(c, r);
+                auto translated_coord = device->virtual_core_from_logical_core(logical_coord, CoreType::WORKER);
+                logical_to_translated_map[logical_coord] = translated_coord;
+            }
+        }
+
+        CoreCoord logical_core(0, 0);
+        tt_metal::Program program = tt_metal::CreateProgram();
+        uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        std::vector<uint32_t> host_buffer;
+        uint32_t read_size = sizeof(uint32_t) * logical_grid_size.x * logical_grid_size.y;
+        std::vector<uint32_t> logical_col_to_translated_col(logical_grid_size.x);
+        std::vector<uint32_t> logical_row_to_translated_row(logical_grid_size.y);
+
+        auto pcie_reader = tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/dataflow/read_logical_to_trans_table.cpp",
+            logical_core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = tt_metal::NOC::NOC_0,
+                .compile_args = {l1_unreserved_base, logical_grid_size.x, logical_grid_size.y}});
+
+       
+        tt_metal::detail::LaunchProgram(device, program);
+        
+        tt_metal::detail::ReadFromDeviceL1(device, logical_core, l1_unreserved_base, read_size, host_buffer);
+
+        size_t host_buffer_offset = 0;
+        bool first_half = true;
+        for (size_t i = 0; i < logical_grid_size.x; i++) {
+            logical_col_to_translated_col[i] = host_buffer[host_buffer_offset++];
+        }
+        for (size_t i = 0; i < logical_grid_size.y; i++) {
+            logical_row_to_translated_row[i] = host_buffer[host_buffer_offset++];
+        }
+
+        for (auto test_coords : logical_to_translated_map) {
+            auto translated_coord = tt_xy_pair{logical_col_to_translated_col[test_coords.first.x],
+                                                logical_row_to_translated_row[test_coords.first.y]};
+            EXPECT_EQ(test_coords.second, translated_coord)
+                << "Logical coord: " << test_coords.first.str()
+                << " does not match translated coord: " << translated_coord.str()
+                << " expected: " << test_coords.second.str();
+        }
+    }
+}
+
 }  // namespace tt::tt_metal
