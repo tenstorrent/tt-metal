@@ -222,11 +222,11 @@ inline auto any_subtile_broadcasted_block_format(const Tensor& a, const auto& b)
 
 inline auto any_sharded_scalar(const Tensor& a, const auto& b) {
     if constexpr (requires {
-                      b.get_logical_shape();
+                      b.logical_shape();
                       b.is_sharded();
                   }) {
-        const auto& a_shape = a.get_logical_shape();
-        const auto& b_shape = b.get_logical_shape();
+        const auto& a_shape = a.logical_shape();
+        const auto& b_shape = b.logical_shape();
         return (a.is_sharded() or b.is_sharded()) and
                ((a_shape[-2] == 1 and a_shape[-1] == 1) or (b_shape[-2] == 1 and b_shape[-1] == 1));
     }
