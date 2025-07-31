@@ -331,7 +331,8 @@ ALWI void cb_matmul_blocks(
     const uint32_t& subblock_w,
     const bool& transpose,
     const bool& add_mask,
-    const uint32_t& mask_cb) {
+    const uint32_t& mask_cb,
+    const uint32_t& zero_cb) {
     // precondition: in0_cb has M*K produced
     // preconditino: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
@@ -347,7 +348,6 @@ ALWI void cb_matmul_blocks(
     cb_reserve_back(out_cb, output_num_tiles);
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
     uint32_t in0_index_offset = 0;
-    constexpr uint32_t cb_zero_in = tt::CBIndex::c_12;
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
         uint32_t in1_index_offset = 0;
@@ -366,11 +366,12 @@ ALWI void cb_matmul_blocks(
             }
             if (add_mask) {
                 cb_wait_front(mask_cb, out_subblock_num_tiles);
-                cb_wait_front(cb_zero_in, 1);
-                add_tiles_init(cb_zero_in, mask_cb, true);
+                cb_wait_front(zero_cb, 1);
+                add_tiles_init(zero_cb, mask_cb, true);
                 for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
-                    add_tiles(cb_zero_in, mask_cb, 0, i, i);
+                    add_tiles(zero_cb, mask_cb, 0, i, i);
                 }
+                cb_pop_front(mask_cb, out_subblock_num_tiles);
             }
             tile_regs_commit();
             tile_regs_wait();

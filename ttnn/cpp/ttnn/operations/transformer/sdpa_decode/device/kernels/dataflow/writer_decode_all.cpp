@@ -9,6 +9,7 @@
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);     // batch size
@@ -157,12 +158,15 @@ void kernel_main() {
     uint32_t barrier_count = 0;
 
     // generate and send mask to compute if causal
-    if constexpr (is_causal) {
-        // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
-        generate_mask<cb_mask_in, PNHt>(k_num_chunks, Sk_chunk_t_dynamic, cur_pos);
+    {
+        if constexpr (is_causal) {
+            // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
+            generate_mask<cb_mask_in, PNHt>(k_num_chunks, Sk_chunk_t_dynamic, cur_pos);
+        }
     }
 
     noc_async_write_barrier();  // #19201 BH hang workaround
+
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
          cur_head < cur_head_group * num_heads_per_core + num_heads_per_core;
          ++cur_head) {
@@ -208,11 +212,16 @@ void kernel_main() {
 
         // Write entire out into its corresponding batch
         uint32_t out_tile_id = out_batch_offset;
-        if constexpr (num_kv_heads > 1 || !is_out_sharded) {
-            cb_wait_front(cb_out, out_chunk_tiles);
+        {
+            if constexpr (num_kv_heads > 1 || !is_out_sharded) {
+                cb_wait_front(cb_out, out_chunk_tiles);
+            }
         }
         noc_async_writes_flushed();
 
+        {
+            DeviceZoneScopedN("Write Out");
+        }
         if constexpr (num_kv_heads > 1) {
             // if gqa, we will need to write partial outputs for each head
             // we are assuming here that num_heads_to_write = nh/nkv is a power of 2 here, so that we don't write
@@ -225,6 +234,9 @@ void kernel_main() {
             }
             // sharded out case
             else if (do_output) {
+                {
+                    DeviceZoneScopedN("Writing sharded out");
+                }
                 constexpr uint32_t SUBTILE_LINE_BYTES = 16 * ELEMENT_SIZE;
                 // read from reducer cores
                 constexpr uint32_t num_reducers_per_output = num_reducer_cores / num_output_cores;

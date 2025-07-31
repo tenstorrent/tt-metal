@@ -8,6 +8,7 @@
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     /*
@@ -139,6 +140,7 @@ void kernel_main() {
     uint32_t q_batch_offset = cur_batch * q_chunk_tiles;
 
     if constexpr (is_q_sharded) {
+        DeviceZoneScopedN("Reading Q");
         uint64_t q_read_addr;
         uint32_t q_write_ptr;
         if (is_output_core) {
@@ -220,6 +222,7 @@ void kernel_main() {
         const uint32_t mask_chunk_offset = k_chunk_start * Sk_chunk_t_dynamic;
         uint32_t mask_start_tile_id = mask_batch_offset + mask_chunk_offset;
         if constexpr (is_paged_attention) {
+            DeviceZoneScopedN("Reading K Paged");
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
                 const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t_dynamic;
                 uint64_t k_base_read_ptr;
@@ -242,6 +245,9 @@ void kernel_main() {
                             k_write_ptr_col += Sk_chunk_t_dynamic * k_tile_bytes;  // Go to next column in CB
 
                             if (++barrier_count == barrier_threshold) {
+                                {
+                                    DeviceZoneScopedN("Read a K chunk");
+                                }
                                 noc_async_read_barrier();
                                 barrier_count = 0;
                             }
@@ -252,6 +258,7 @@ void kernel_main() {
                 }
 
                 if constexpr (use_attention_mask) {
+                    DeviceZoneScopedN("Read Attn Mask");
                     mask_start_tile_id = read_mask_chunk<cb_mask_in, mask_tile_bytes, barrier_threshold, PNHt>(
                         PSt, Sk_chunk_t_dynamic, mask_chunk_tiles, mask_start_tile_id, mask_reader);
                 }
@@ -259,6 +266,7 @@ void kernel_main() {
                 {
                     if constexpr (reuse_k) {
                         // Read V chunk (tranpose of K), from K's L1 buffer
+                        DeviceZoneScopedN("Reading V L1");
                         cb_reserve_back(cb_v_in, v_chunk_tiles);
                         uint32_t v_write_ptr = get_write_ptr(cb_v_in);
                         uint64_t k_read_ptr = k_base_read_ptr;
@@ -274,6 +282,8 @@ void kernel_main() {
                             }
                         }
                     } else {
+                        DeviceZoneScopedN("Reading V RM");
+
                         // Read V chunk in row major order, write in row-major order
                         cb_reserve_back(cb_v_in, v_chunk_tiles);
                         uint32_t v_write_ptr = get_write_ptr(cb_v_in);
@@ -306,6 +316,8 @@ void kernel_main() {
             }
         } else {
             // Offset for current batch
+            DeviceZoneScopedN("Reading K Normal");
+
             const uint32_t k_batch_offset = ((cur_batch / q_heads_parallel_factor) % Bkv) * num_kv_heads * St * DHt;
             const uint32_t k_head_offset = cur_head * St * DHt;
 
