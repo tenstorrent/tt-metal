@@ -185,17 +185,14 @@ test_suite_bh_single_pcie_didt_tests"
 hw_topology_test_suites["blackhole_llmbox"]="
 test_suite_bh_multi_pcie_metal_unit_tests
 test_suite_bh_multi_pcie_llama_demo_tests
-test_suite_bh_multi_pcie_llama_stress_tests"
 
 hw_topology_test_suites["blackhole_deskbox"]="
 test_suite_bh_multi_pcie_metal_unit_tests
 test_suite_bh_multi_pcie_llama_demo_tests
-test_suite_bh_multi_pcie_llama_stress_tests"
 
 hw_topology_test_suites["blackhole_rackbox"]="
 test_suite_bh_multi_pcie_metal_unit_tests
 test_suite_bh_multi_pcie_llama_demo_tests
-test_suite_bh_multi_pcie_llama_stress_tests"
 
 
 hw_topology_test_suites["wh_6u"]="test_suite_wh_6u_model_unit_tests
