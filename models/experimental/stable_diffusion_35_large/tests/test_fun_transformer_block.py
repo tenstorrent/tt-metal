@@ -45,7 +45,7 @@ TILE_SIZE = 32
     [
         [(2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear, 1],
         [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
-        [(8, 4), (2, 0), (4, 0), (4, 1), ttnn.Topology.Linear, 3],
+        [(8, 4), (2, 0), (4, 0), (4, 1), ttnn.Topology.Linear, 4],
         [(8, 4), (2, 1), (8, 0), (2, 1), ttnn.Topology.Linear, 3],
         [(8, 4), (2, 1), (2, 1), (8, 0), ttnn.Topology.Linear, 3],
     ],
