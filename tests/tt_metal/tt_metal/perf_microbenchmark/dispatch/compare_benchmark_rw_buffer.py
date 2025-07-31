@@ -68,17 +68,22 @@ def compare_benchmarks(golden_benchmarks, result_benchmarks, result_failed_bench
         else:
             successed_benchmarks.append((name, result_value, golden_value, pct_diff))
 
-    success = golden_benchmarks_names == result_benchmarks_names and not underperforming_benchmarks and not result_failed_benchmarks
+    success = (
+        golden_benchmarks_names == result_benchmarks_names
+        and not underperforming_benchmarks
+        and not result_failed_benchmarks
+    )
 
     print(f"Benchmark {'FAILED' if not success else 'PASSED'}:")
     print("----------------------------------------------------")
-    print(f"Total underperforming benchmarks: {len(underperforming_benchmarks)}")
-    print(f"Total successed benchmarks: {len(successed_benchmarks)}")
-    print(f"Total benchmarks: {len(result_benchmarks_names)}")
-    print(f"Mismatched benchmarks: {len(golden_benchmarks_names ^ result_benchmarks_names)}")
+    print(f"# normal benchmarks: {len(successed_benchmarks)}")
+    print(f"# failed benchmarks: {len(result_failed_benchmarks)}")
+    print(f"# benchmarks outside of expected variance: {len(underperforming_benchmarks)}")
+    print(f"# mismatched benchmarks: {len(golden_benchmarks_names ^ result_benchmarks_names)}")
+    print(f"# total benchmarks: {len(result_benchmarks_names)}")
     print("----------------------------------------------------")
 
-    print("Successed benchmarks:")
+    print("Successed benchmarks: (bytes per second, result vs golden)")
     for name, result_value, golden_value, pct_diff in successed_benchmarks:
         print(f"PASSED | Benchmark {name}: {result_value:.2f} vs {golden_value:.2f} (diff: {pct_diff:+.2f}%)")
     print("----------------------------------------------------")
@@ -95,7 +100,7 @@ def compare_benchmarks(golden_benchmarks, result_benchmarks, result_failed_bench
         print(f"FAILED | Benchmark {name}: excess from results")
     print("----------------------------------------------------")
 
-    print("Underperforming benchmarks: (bytes per second, result vs golden)")
+    print("Benchmarks outside of expected variance: (bytes per second, result vs golden)")
     for name, result_value, golden_value, pct_diff in sorted(underperforming_benchmarks, key=lambda x: x[3]):
         print(f"FAILED | Benchmark {name}: {result_value:.2f} vs {golden_value:.2f} (diff: {pct_diff:+.2f}%)")
     print("----------------------------------------------------")
