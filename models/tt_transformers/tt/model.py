@@ -58,6 +58,16 @@ class Transformer(LightweightModule):
             rope_theta=args.rope_theta,
             rope_scaling=args.rope_scaling,
         )
+
+        if args.rope_theta_local:
+            self.rope_local_setup = RotarySetup(
+                mesh_device,
+                args.max_batch_size,
+                args.head_dim,
+                args.max_seq_len,
+                args.rope_theta_local,
+            )
+
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
         self.layers = [
@@ -129,10 +139,19 @@ class Transformer(LightweightModule):
         assert (
             self.rope_setup.cos_matrix.shape[2] >= start_pos + S
         ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
-        tt_rot_mats_prefill = [
+
+        tt_rot_mats_prefill_global = [
             self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
             self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
         ]
+
+        if hasattr(self, "rope_local_setup"):
+            tt_rot_mats_prefill_local = [
+                self.rope_local_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
+                self.rope_local_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
+            ]
+        else:
+            tt_rot_mats_prefill_local = None
 
         if page_table is not None:
             tt_page_table = ttnn.from_torch(
@@ -156,7 +175,7 @@ class Transformer(LightweightModule):
         else:
             tt_chunk_page_table = None
 
-        return tokens_embd, tt_rot_mats_prefill, tt_page_table, tt_chunk_page_table
+        return tokens_embd, tt_rot_mats_prefill_global, tt_rot_mats_prefill_local, tt_page_table, tt_chunk_page_table
 
     def prepare_inputs_decode(self, *inputs):
         """
@@ -272,8 +291,9 @@ class Transformer(LightweightModule):
     def ttnn_prefill_forward(
         self,
         x,
-        rot_mats,
-        user_id,
+        rot_mats_global=None,
+        rot_mats_local=None,
+        user_id=0,
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
@@ -287,7 +307,8 @@ class Transformer(LightweightModule):
         return self.forward(
             x,
             current_pos=None,
-            rot_mats=rot_mats,
+            rot_mats_global=rot_mats_global,
+            rot_mats_local=rot_mats_local,
             user_id=user_id,
             mode="prefill",
             page_table=page_table,
@@ -315,7 +336,8 @@ class Transformer(LightweightModule):
         self,
         x,
         current_pos,
-        rot_mat_idxs,
+        rot_mat_idxs_global=None,
+        rot_mat_idxs_local=None,
         page_table=None,
         kv_cache=None,
         argmax_on_device=False,
@@ -324,13 +346,15 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
-        rot_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
+        rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs_global)
+        rot_mats_local = self.rope_local_setup.get_rot_mats(rot_mat_idxs_local) if rot_mat_idxs_local is not None else None
         x_embed = self._transform_decode_inputs_device(x)
 
         tt_logits = self.forward(
             x_embed,
             current_pos,
-            rot_mats=rot_mats,
+            rot_mats_global=rot_mats_global,
+            rot_mats_local=rot_mats_local,
             mode="decode",
             page_table=page_table,
             kv_cache=kv_cache,
@@ -369,7 +393,8 @@ class Transformer(LightweightModule):
         self,
         x: ttnn.Tensor,
         current_pos,
-        rot_mats=None,
+        rot_mats_global=None,
+        rot_mats_local=None,
         user_id=0,
         mode="decode",
         page_table=None,
@@ -391,10 +416,11 @@ class Transformer(LightweightModule):
             x = layer(
                 x,
                 current_pos,
-                rot_mats,
-                user_id,
-                mode,
-                page_table,
+                rot_mats_global=rot_mats_global,
+                rot_mats_local=rot_mats_local,
+                user_id=user_id,
+                mode=mode,
+                page_table=page_table,
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
