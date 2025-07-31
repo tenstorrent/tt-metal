@@ -206,14 +206,15 @@ jobs:
       - get-image-tags
       - build-images
     strategy:
+      fail-fast: false
       matrix:
         bh-config:
           - runner-label: BH-LLMBox
             image-name: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
-          - runner-label: BH-DeskBox
-            image-name: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
-          - runner-label: BH-RackBox
-            image-name: ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
+          # - runner-label: BH-DeskBox
+          #   image-name: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
+          # - runner-label: BH-RackBox
+          #   image-name: ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
     runs-on:
       - ${{ matrix.bh-config.runner-label }}
       - in-service
