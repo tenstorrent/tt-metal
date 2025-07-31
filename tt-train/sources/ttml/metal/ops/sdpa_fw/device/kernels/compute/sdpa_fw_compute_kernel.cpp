@@ -43,7 +43,7 @@ constexpr uint32_t cb_query = tt::CBIndex::c_0;
 constexpr uint32_t cb_key = tt::CBIndex::c_1;
 constexpr uint32_t cb_value = tt::CBIndex::c_2;
 constexpr uint32_t cb_attn_mask = tt::CBIndex::c_3;
-constexpr uint32_t cb_scaler = tt::CBIndex::c_4;
+constexpr uint32_t cb_intermediates = tt::CBIndex::c_4;
 constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_5;
 constexpr uint32_t cb_transpose_key = tt::CBIndex::c_6;  // isn't used right now, for debugging only
 constexpr uint32_t cb_temp_accum = tt::CBIndex::c_7;     // used for accumulating results
@@ -252,26 +252,46 @@ void update_cur_mm_out(uint32_t cb_prev_mm_out_holder, uint32_t cb_cur_mm_out_ho
     cb_push_back(cb_cur_mm_out_holder, q_chunk_size);
 }
 
-void recip_tile_inplace(uint32_t in_cb) {
-    cb_wait_front(in_cb, onetile);
+template <PoolType pool_type, ReduceDim reduce_dim, uint32_t cb_identity_scaler>
+void reduce_and_recip_tile_inplace(uint32_t cb_in_idx) {
+    cb_wait_front(cb_in_idx, onetile);
+    const uint32_t reduce_dst_idx = 0;
 
-    copy_tile_to_dst_init_short(in_cb);
-    recip_tile_init();
-    reconfig_data_format_srca(in_cb);
-    pack_reconfig_data_format(in_cb);
-
-    const uint32_t recip_reg_idx = 0;
+    reconfig_data_format(cb_in_idx, cb_identity_scaler);  // reconfig data format to precise
+    reduce_init<pool_type, reduce_dim>(cb_in_idx, cb_identity_scaler, cb_in_idx);
     tile_regs_acquire();
-    copy_tile(in_cb, 0, recip_reg_idx);
-    recip_tile(0, static_cast<int>(VectorMode::C));
+    reduce_tile<pool_type, reduce_dim>(
+        cb_in_idx, cb_identity_scaler, /* tile_idx */ 0, /* tile_idx */ 0, /* dst_reg_idx */ reduce_dst_idx);
+    reduce_uninit();
+
+    recip_tile_init();
+    recip_tile(reduce_dst_idx);
     tile_regs_commit();
 
     tile_regs_wait();
-    cb_pop_front(in_cb, onetile);
-    cb_reserve_back(in_cb, onetile);
-    pack_tile(recip_reg_idx, in_cb);
+    cb_pop_front(cb_in_idx, onetile);
+    cb_reserve_back(cb_in_idx, onetile);
+    pack_reconfig_data_format(cb_in_idx);
+    pack_tile(reduce_dst_idx, cb_in_idx);
     tile_regs_release();
-    cb_push_back(in_cb, onetile);
+    cb_push_back(cb_in_idx, onetile);
+}
+
+void pack_intermediate_result(uint32_t cb_in_idx, uint32_t cb_out_idx) {
+    cb_wait_front(cb_in_idx, onetile);
+    cb_reserve_back(cb_out_idx, onetile);
+
+    reconfig_data_format(cb_in_idx, cb_out_idx);
+    tile_regs_acquire();
+    copy_tile_init(cb_in_idx);
+    copy_tile(cb_in_idx, /* tile_idx */ 0, /* register idx */ 0);
+    tile_regs_commit();
+
+    tile_regs_wait();
+    pack_reconfig_data_format(cb_out_idx);
+    pack_tile(0, cb_out_idx);
+    tile_regs_release();
+    cb_push_back(cb_out_idx, onetile);
 }
 
 void MAIN {
@@ -335,9 +355,9 @@ void MAIN {
             mask_tile(matmul_accum_reg, mask_register);
 
             binop_with_scalar_tile_init();
-            // mul_unary_tile(matmul_accum_reg, scaler_bits);   // multiply by scaler factor
-            add_unary_tile(mask_register, minus_one_bits);  // subtract 1.0 from mask, so it becomes 0.0 and -1.0
-            // mul_unary_tile(mask_register, custom_inf_bits);  // multiply by 1e9F to transform mask to 0.0 and
+            mul_unary_tile(matmul_accum_reg, scaler_bits);   // multiply by scaler factor
+            add_unary_tile(mask_register, minus_one_bits);   // subtract 1.0 from mask, so it becomes 0.0 and -1.0
+            mul_unary_tile(mask_register, custom_inf_bits);  // multiply by 1e9F to transform mask to 0.0 and
             // -1e9F
 
             // Add mask to scaled matmul result:
@@ -440,9 +460,9 @@ void MAIN {
         cb_reserve_back(cb_output, q_chunk_size);
         pack_reconfig_data_format(cb_output);
 
-        recip_tile_inplace(alias_cb_prev_sum_exp);  // calculate 1/sum(exp(x)) and store it in cb_prev_sum_exp
-        // cb_wait_front(alias_cb_prev_sum_exp, onetile);
-        // cb_wait_front(alias_cb_prev_mm_out, q_chunk_size);
+        reduce_and_recip_tile_inplace<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_reduction_scaler>(alias_cb_prev_sum_exp);
+        cb_wait_front(alias_cb_prev_sum_exp, onetile);
+        cb_wait_front(alias_cb_prev_mm_out, q_chunk_size);
 
         reconfig_data_format(alias_cb_prev_mm_out, alias_cb_prev_sum_exp);
         mul_bcast_cols_init_short(alias_cb_prev_mm_out, alias_cb_prev_sum_exp);
@@ -460,9 +480,11 @@ void MAIN {
         }
         cb_push_back(cb_output, q_chunk_size);
 
-        cb_pop_front(alias_cb_prev_mm_out, q_chunk_size);  // pop previous matmul output to make space for next row
+        pack_intermediate_result(alias_cb_prev_max, cb_intermediates);
         cb_pop_front(alias_cb_prev_max, onetile);
-        cb_pop_front(alias_cb_prev_sum_exp, onetile);  // pop previous exp
+
+        cb_pop_front(alias_cb_prev_mm_out, q_chunk_size);  // pop previous matmul output to make space for next row
+        cb_pop_front(alias_cb_prev_sum_exp, onetile);      // pop previous exp
 
         cb_pop_front(cb_attn_mask, Ht);  // pop attn_mask after processing all K and V rows
         cb_pop_front(cb_query, q_chunk_size);

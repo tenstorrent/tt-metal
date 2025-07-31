@@ -43,7 +43,6 @@ spec_return_value_t SDPAForwardDeviceOperation::compute_output_specs(
         output_specs.push_back(tensor_args.preallocated_output->tensor_spec());
     } else {
         auto shape = tensor_args.query.logical_shape();  // output shape is the same as query shape
-        // shape[3] = shape[2];
         output_specs.emplace_back(
             shape,
             tt::tt_metal::TensorLayout(
@@ -52,6 +51,16 @@ spec_return_value_t SDPAForwardDeviceOperation::compute_output_specs(
 
     if (args.return_intermediates) {
         // TODO: add intermediate spec when I'll know what exactly I want to return
+        if (tensor_args.preallocated_intermediate.has_value()) {
+            output_specs.push_back(tensor_args.preallocated_intermediate->tensor_spec());
+        } else {
+            auto shape = tensor_args.query.logical_shape();
+            shape[-1] = 1U;  // intermediate is a scalar per row
+            output_specs.emplace_back(
+                shape,
+                tt::tt_metal::TensorLayout(
+                    tensor_args.query.dtype(), tt::tt_metal::Layout::TILE, tensor_args.query.memory_config()));
+        }
     }
 
     return output_specs;
@@ -71,7 +80,11 @@ tensor_return_value_t SDPAForwardDeviceOperation::create_output_tensors(
     }
 
     if (args.return_intermediates) {
-        // TODO: add intermediate tensor when I'll know what exactly I want to return
+        if (tensor_args.preallocated_intermediate.has_value()) {
+            output_tensors.push_back(tensor_args.preallocated_intermediate.value());
+        } else {
+            output_tensors.push_back(create_device_tensor(output_specs[1], tensor_args.query.device()));
+        }
     }
 
     return output_tensors;

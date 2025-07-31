@@ -28,14 +28,15 @@ constexpr uint32_t kMaskBufferIdx = 3U;
 
 // writer runtime args
 constexpr uint32_t kOutputBufferIdx = 0;
+constexpr uint32_t kIntermediateBufferIdx = 1U;
 
 constexpr auto kQueryCbIndex = tt::CBIndex::c_0;
 constexpr auto kKeyCbIndex = tt::CBIndex::c_1;
 constexpr auto kValueCbIndex = tt::CBIndex::c_2;
-constexpr auto KAttnMaskCbIndex = tt::CBIndex::c_3;
-constexpr auto kScalerCbIndex = tt::CBIndex::c_4;
+constexpr auto kAttnMaskCbIndex = tt::CBIndex::c_3;
+constexpr auto kIntermediateCbIndex = tt::CBIndex::c_4;
 constexpr auto kReductionScalerCbIndex = tt::CBIndex::c_5;
-constexpr auto kTranspoxeKeyCbIndex = tt::CBIndex::c_6;  // used for transposing key tiles
+constexpr auto kTransposeKeyCbIndex = tt::CBIndex::c_6;  // used for transposing key tiles
 constexpr auto kTempAccumCbIndex = tt::CBIndex::c_7;     // used for accumulating results
 
 constexpr auto kPrevMaxValueCbIndex = tt::CBIndex::c_8;  // used for holding max value during reduce
@@ -53,6 +54,9 @@ constexpr uint32_t kTempAccumTiles = 1U;  //[Debug] should be 2U
 constexpr uint32_t kMaxValueHolderTiles = 1U;
 constexpr uint32_t kExpMaxDiffTiles = 1U;
 constexpr uint32_t kExpSumTiles = 1U;
+constexpr uint32_t kIntermediateTiles = 1U;  // [Debug] should be 2U
+
+const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
 
 }  // namespace
 
@@ -146,6 +150,7 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::Buffer* value_buffer,
     const tt::tt_metal::Buffer* mask_buffer,
     const tt::tt_metal::Buffer* output_buffer,
+    const tt::tt_metal::Buffer* intermediates_buffer,
     uint32_t num_cores,
     uint32_t num_cores_y,
     uint32_t num_rows_per_core_group_1,
@@ -177,8 +182,12 @@ void assign_per_core_runtime_args(
              num_rows_per_core,
              num_rows_written});
 
-        // Writer kernel: (dst_addr, number_of_rows, offset_in_rows)
-        SetRuntimeArgs(program, kernels.writer, core, {output_buffer->address(), num_rows_per_core, num_rows_written});
+        // Writer kernel: (output_addr, intermediates_addr, number_of_rows, offset_in_rows)
+        SetRuntimeArgs(
+            program,
+            kernels.writer,
+            core,
+            {output_buffer->address(), intermediates_buffer->address(), num_rows_per_core, num_rows_written});
 
         num_rows_written += num_rows_per_core;
     }
@@ -289,16 +298,16 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         create_circular_buffer(program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Wt);
 
     auto cb_attn_mask = create_circular_buffer(
-        program, all_cores, KAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Ht_);
+        program, all_cores, kAttnMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Ht_);
 
-    auto cb_scaler = create_circular_buffer(
-        program, all_cores, kScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
+    auto cb_intermediate = create_circular_buffer(
+        program, all_cores, kIntermediateCbIndex, data_format, bfloat16_single_tile_size_bytes, kIntermediateTiles);
 
     auto cb_reduction_scaler = create_circular_buffer(
         program, all_cores, kReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
     auto cb_transposed_key = create_circular_buffer(
-        program, all_cores, kTranspoxeKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Wt);
+        program, all_cores, kTransposeKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * Wt);
 
     auto cb_temp_accum = create_circular_buffer(
         program, all_cores, kTempAccumCbIndex, data_format, bfloat16_single_tile_size_bytes, kTempAccumTiles);
@@ -364,6 +373,12 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         "Output buffer must be in DRAM. Output buffer of type {}",
         magic_enum::enum_name(output_buffer->buffer_type()));
 
+    auto* intermediates_buffer = output.back().buffer();
+    TT_FATAL(
+        intermediates_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        "Intermediates buffer must be in DRAM. Intermediates buffer of type {}",
+        magic_enum::enum_name(intermediates_buffer->buffer_type()));
+
     // configure defines
     std::map<std::string, std::string> defines;
     // setup defines for reduce
@@ -371,6 +386,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // LLK reduction uses define values as default template parameters
     defines["REDUCE_OP"] = "PoolType::SUM";
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
+
+    if (args.return_intermediates) {
+        defines[kReturnIntermediates] = "1";
+    }
 
     SDPAForwardKernels kernels;
     kernels.reader = create_reader_kernel(
@@ -428,6 +447,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         value_buffer,
         mask_buffer,
         output_buffer,
+        intermediates_buffer,
         num_cores,
         num_cores_y,
         num_rows_per_core_group_1,
@@ -472,6 +492,7 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
     const auto* value_buffer = tensor_args.value.buffer();
     const auto* mask_buffer = tensor_args.mask.has_value() ? tensor_args.mask.value().buffer() : nullptr;
     auto* output_buffer = tensor_return_value.front().buffer();
+    auto* intermediates_buffer = tensor_return_value.back().buffer();
 
     // Only address arguments need updating here; tile counts remain the same as in create().
     auto& reader_runtime_args = GetRuntimeArgs(program, sdpa_fw_reader_kernel);
@@ -497,6 +518,7 @@ void SDPAForwardProgramFactory::override_runtime_arguments(
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
             runtime_args[kOutputBufferIdx] = output_buffer->address();
+            runtime_args[kIntermediateBufferIdx] = intermediates_buffer->address();
         }
     }
 }

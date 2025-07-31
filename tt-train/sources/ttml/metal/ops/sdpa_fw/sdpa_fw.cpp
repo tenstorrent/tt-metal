@@ -21,7 +21,7 @@ std::vector<std::optional<ttnn::Tensor>> SDPAForwardOperation::invoke(
         return {result[0], std::nullopt};
     }
 
-    return {result[0], result[1]};
+    return {result[0], result[1]};  // maybe I need to return more than 2 tensors in the future
 };
 
 }  // namespace ttml::metal::ops::sdpa_fw

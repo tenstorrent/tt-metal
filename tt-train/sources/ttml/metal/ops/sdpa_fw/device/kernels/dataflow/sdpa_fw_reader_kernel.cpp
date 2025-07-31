@@ -30,7 +30,7 @@ void kernel_main() {
     constexpr uint32_t cb_key = tt::CBIndex::c_1;
     constexpr uint32_t cb_value = tt::CBIndex::c_2;
     constexpr uint32_t cb_attn_mask = tt::CBIndex::c_3;
-    constexpr uint32_t cb_scaler = tt::CBIndex::c_4;
+    constexpr uint32_t cb_intermediates = tt::CBIndex::c_4;
     constexpr uint32_t cb_reduction_scaler = tt::CBIndex::c_5;
 
     // [Debug]: all next cb used for debug here

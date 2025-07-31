@@ -4,19 +4,22 @@
 
 #include <debug/dprint.h>
 
+#include <cstdint>
+
 #include "dataflow_api.h"
 #include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
 
 void kernel_main() {
     uint32_t runtime_args_counter = 0;
     uint32_t output_addr = get_arg_val<uint32_t>(runtime_args_counter++);
+    uint32_t intermediates_addr = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t num_rows_to_process = get_arg_val<uint32_t>(runtime_args_counter++);
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
+    constexpr uint32_t cb_intermediates = tt::CBIndex::c_4;
     constexpr uint32_t cb_output = tt::CBIndex::c_15;
 
     // [Debug]: all next cb used for debug here
-    constexpr uint32_t cb_scaler = tt::CBIndex::c_4;
     constexpr uint32_t cb_prev_max = tt::CBIndex::c_8;  // used to store previous max value
     constexpr uint32_t cb_cur_max = tt::CBIndex::c_9;   // used to store current max value
 
@@ -32,6 +35,9 @@ void kernel_main() {
     const InterleavedAddrGenFast</* is dram */ true> output_addr_generator = {
         .bank_base_address = output_addr, .page_size = tile_bytes, .data_format = data_format};
 
+    const InterleavedAddrGenFast</* is dram */ true> intermediates_addr_generator = {
+        .bank_base_address = intermediates_addr, .page_size = tile_bytes, .data_format = data_format};
+
     uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; r++) {
         uint32_t idx = r * Wt;
@@ -44,5 +50,11 @@ void kernel_main() {
         }
         noc_async_write_barrier();
         cb_pop_front(cb_output, Wt);
+
+        // cb_wait_front(cb_intermediates, onetile);
+        // uint32_t l1_intermediates_read_addr = get_read_ptr(cb_intermediates);
+        // noc_async_write_tile(idx, intermediates_addr_generator, l1_intermediates_read_addr);
+        // noc_async_write_barrier();
+        // cb_pop_front(cb_intermediates, onetile);
     }
 }

@@ -195,13 +195,13 @@ xt::xarray<float> xt_composite_sdpa_fw(
     return result;
 }
 
-ttnn::Tensor composite_sdpa_fw(
+std::vector<ttnn::Tensor> composite_sdpa_fw(
     const ttnn::Tensor& query,
     const ttnn::Tensor& key,
     const ttnn::Tensor& value,
     const std::optional<ttnn::Tensor>& attn_mask) {
-    // This is a placeholder for the actual SDPA forward implementation
-    // In practice, this would call the SDPA forward kernel
+    // std::vector<ttnn::Tensor> result;
+    // result.reserve(2U);  // one for output, one for intermediate if needed
 
     using namespace ttml;
     auto [batch_num, heads, seq_len, embedding_dim] = query.logical_shape().to_array_4D();
@@ -235,9 +235,11 @@ ttnn::Tensor composite_sdpa_fw(
             none,
             false);
     }
+    auto mask_value = ttnn::max(qk_scaled, /* dim */ 3, /* keepdim */ true);
+    auto attention_weights = ttml::metal::softmax(qk_scaled, /* axis */ 3);
 
-    auto attention_qkv = ttnn_fixed::matmul(qk_scaled, value, /*transpose_a=*/false, /*transpose_b=*/false);
-    return attention_qkv;
+    auto attention_qkv = ttnn_fixed::matmul(attention_weights, value, /*transpose_a=*/false, /*transpose_b=*/false);
+    return {attention_qkv, mask_value};
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
@@ -254,14 +256,14 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
     xt::xarray<float> attn_mask_tensor = xt::ones<float>({B, H, S, S});
     // xt::xarray<float> attn_mask_tensor = generate_mask(query_tensor);
 
-    for (uint32_t b = 0; b < B; ++b) {
-        for (uint32_t i = 0; i < S; ++i) {
-            for (uint32_t j = 0; j < d; ++j) {
-                query_tensor(b, 0, i, j) = static_cast<float>(1U);
-                key_tensor(b, 0, i, j) = static_cast<float>(4U - (i / 32U));
-            }
-        }
-    }
+    // for (uint32_t b = 0; b < B; ++b) {
+    //     for (uint32_t i = 0; i < S; ++i) {
+    //         for (uint32_t j = 0; j < d; ++j) {
+    //             query_tensor(b, 0, i, j) = static_cast<float>(1U);
+    //             key_tensor(b, 0, i, j) = static_cast<float>(4U - (i / 32U));
+    //         }
+    //     }
+    // }
     // std::cout << '\n';
     // for (uint32_t i = 0; i < d; ++i) {
     //     std::cout << key_tensor(0, 0, 64, i) << ' ';
@@ -272,16 +274,22 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
     auto key = core::from_xtensor(key_tensor, &autograd::ctx().get_device());
     auto value = core::from_xtensor(value_tensor, &autograd::ctx().get_device());
     auto attn_mask = core::from_xtensor(attn_mask_tensor, &autograd::ctx().get_device());
+    const bool return_intermediates = true;
 
-    auto result = ttml::metal::sdpa_fw(query, key, value, attn_mask, dropout_prob, false);
+    auto result = ttml::metal::sdpa_fw(query, key, value, attn_mask, dropout_prob, return_intermediates);
+    xt::xarray<float> result_xtensor = core::to_xtensor(result[0].value());
+    xt::xarray<float> interm_xtensor =
+        (return_intermediates) ? core::to_xtensor(result[1].value()) : xt::xarray<float>();
 
     auto baseline_result = composite_sdpa_fw(query, key, value, attn_mask);
-    xt::xarray<float> baseline_result_xtensor = core::to_xtensor(baseline_result);
+    xt::xarray<float> baseline_result_xtensor = core::to_xtensor(baseline_result[0]);
+    xt::xarray<float> baseline_interm_xtensor = core::to_xtensor(baseline_result[1]);
 
     xt::xarray<float> expected_result = compute_sdpa_without_softmax(query_tensor, key_tensor, value_tensor);
 
-    xt::xarray<float> result_xtensor = core::to_xtensor(result[0].value());
     assert((result_xtensor.shape() == expected_result.shape()));
+    assert((baseline_result_xtensor.shape() == expected_result.shape()));
+    assert((interm_xtensor.shape() == baseline_interm_xtensor.shape()));
 
     // float mse_result = compute_mse(expected_result, result_xtensor);
     // float mse_baseline = compute_mse(expected_result, baseline_result_xtensor);
