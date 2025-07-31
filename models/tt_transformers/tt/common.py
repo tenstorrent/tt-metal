@@ -43,7 +43,7 @@ class RopeScaling(BaseModel):
     """RoPE scaling configuration."""
 
     rope_type: RopeScalingType = Field(exclude=True, description="RoPE scaling type")
-    factor: float
+    factor: Optional[float]
     original_max_position_embeddings: int
 
 
@@ -71,7 +71,7 @@ def rope_scaling_model_factory(rope_scaling_params: dict) -> RopeScaling:
     elif rope_scaling_params.get("rope_type") == RopeScalingType.YARN:
         return RopeScalingYarn(**rope_scaling_params)
     else:
-        raise ValueError(f"Invalid RoPE scaling type: {rope_scaling_params.get('rope_type')}")
+        return RopeScaling(rope_type=RopeScalingType.LLAMA3, **rope_scaling_params)
 
 
 def encode_prompt_instruct(tokenizer, prompt_text, system_prompt_text=None):

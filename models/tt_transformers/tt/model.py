@@ -49,7 +49,8 @@ class Transformer(LightweightModule):
             dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
         )
 
-        self.rope_setup = RotarySetup(
+        ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else RotarySetup
+        self.rope_setup = ActualRopeSetupClass(
             device=mesh_device,
             batch_size=args.max_batch_size,
             head_dim=args.head_dim,

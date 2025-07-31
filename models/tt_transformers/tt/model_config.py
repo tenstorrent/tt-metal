@@ -1488,6 +1488,15 @@ class ModelArgs:
         # RoPE params
         self.rope_theta = text_config.get("rope_theta")
         rope_scaling_params = text_config.get("rope_scaling", None)
+        if rope_scaling_params:
+            rope_scaling_params = {
+                "factor": rope_scaling_params.get("factor", None),
+                "original_max_position_embeddings": rope_scaling_params.get(
+                    "original_max_position_embeddings", self.max_context_len
+                ),
+            }
+        # if rope_scaling_params and rope_scaling_params.get("factor", None) is None:
+        #     rope_scaling_params = None
         self.rope_scaling = rope_scaling_model_factory(rope_scaling_params) if rope_scaling_params else None
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
