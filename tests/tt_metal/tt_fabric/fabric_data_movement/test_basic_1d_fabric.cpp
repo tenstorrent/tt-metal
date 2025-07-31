@@ -1608,7 +1608,6 @@ TEST_F(Fabric1DFixture, DISABLED_TestEDMConnectionStressTestQuick) {
     // For each epoch, run with increasing number of workers
     log_debug(tt::LogTest, "Starting EDM connection stress test");
     auto compute_with_storage_grid_size = sender_device->compute_with_storage_grid_size();
-    size_t num_rows = compute_with_storage_grid_size.y;
     size_t num_cols = compute_with_storage_grid_size.x;
     for (size_t iter = 0; iter < 10; iter++) {
         log_debug(tt::LogTest, "iter {}", iter);
