@@ -33,7 +33,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void dropout_tile(uint32_t idst, uint32_t probability, uint32_t scale_factor) {
-    MATH(SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS(dropout, RC, APPROX, idst, probability, scale_factor));
+    MATH(SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS(calculate_dropout, RC, APPROX, idst, probability, scale_factor));
 }
 
 /**
