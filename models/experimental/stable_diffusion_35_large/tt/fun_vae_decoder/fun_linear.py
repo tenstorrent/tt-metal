@@ -46,20 +46,30 @@ class TtLinearParameters:
             packer_l1_acc=False,
         )
 
+        shard_dims = [None, -1]  # TP on columns of mesh
+
         return cls(
             weight=ttnn.from_torch(
                 weight.permute(-1, -2),
                 dtype=dtype,
                 device=parallel_config.device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensorToMesh(parallel_config.device, dim=-1) if mesh_sharded_output else None,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    parallel_config.device, tuple(parallel_config.device.shape), dims=shard_dims
+                )
+                if mesh_sharded_output
+                else None,
             ),
             bias=ttnn.from_torch(
                 bias.reshape((1, 1, 1, -1)),
                 dtype=dtype,
                 device=parallel_config.device,
                 layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensorToMesh(parallel_config.device, dim=-1) if mesh_sharded_output else None,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    parallel_config.device, tuple(parallel_config.device.shape), dims=shard_dims
+                )
+                if mesh_sharded_output
+                else None,
             ),
             compute_config=compute_config,
             parallel_config=parallel_config,

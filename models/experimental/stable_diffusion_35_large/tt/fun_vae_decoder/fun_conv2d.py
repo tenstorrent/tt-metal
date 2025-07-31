@@ -47,6 +47,19 @@ slice_params = {
         (1024, 1024, 128, 128): (16, ttnn.Conv2dSliceWidth),
         (1024, 1024, 128, 3): (8, ttnn.Conv2dSliceWidth),
     },
+    (4, 4): {
+        (512, 512, 512, 64): (16, ttnn.Conv2dSliceWidth),
+        (128, 128, 16, 512): (8, ttnn.Conv2dSliceWidth),
+        (128, 128, 512, 512): (4, ttnn.Conv2dSliceWidth),
+        (256, 256, 512, 512): (8, ttnn.Conv2dSliceWidth),
+        (512, 512, 512, 512): (16, ttnn.Conv2dSliceWidth),
+        (512, 512, 512, 256): (16, ttnn.Conv2dSliceWidth),
+        (512, 512, 256, 256): (4, ttnn.Conv2dSliceWidth),
+        (1024, 1024, 256, 256): (16, ttnn.Conv2dSliceWidth),
+        (1024, 1024, 256, 128): (16, ttnn.Conv2dSliceWidth),
+        (1024, 1024, 128, 128): (16, ttnn.Conv2dSliceWidth),
+        (1024, 1024, 128, 3): (8, ttnn.Conv2dSliceWidth),
+    },
     (2, 4): {
         (128, 128, 16, 512): (8, ttnn.Conv2dSliceWidth),
         (128, 128, 512, 512): (4, ttnn.Conv2dSliceWidth),
@@ -127,7 +140,7 @@ class TtConv2dParameters:
         # setup strategy
         o_c, i_c, _, _ = weight.shape
         mesh_shape = list(parallel_config.device.shape)
-        device_count = mesh_shape[0] * mesh_shape[1]
+        device_count = mesh_shape[1]
 
         # configure weight distribution. Default is DP (Patch based)
         conv_parallel_strategy = ConvStrategy.DP
@@ -136,12 +149,20 @@ class TtConv2dParameters:
         device_slice_mask = None
         if (o_c // device_count) % 32 == 0 < (o_c // device_count):
             conv_parallel_strategy = ConvStrategy.TP
-            w_mesh_mapper = ttnn.ShardTensorToMesh(parallel_config.device, dim=0)
-            b_mesh_mapper = ttnn.ShardTensorToMesh(parallel_config.device, dim=-1)
+            w_mesh_mapper = ttnn.ShardTensor2dMesh(
+                parallel_config.device, tuple(parallel_config.device.shape), dims=[None, 0]
+            )
+            b_mesh_mapper = ttnn.ShardTensor2dMesh(
+                parallel_config.device, tuple(parallel_config.device.shape), dims=[None, -1]
+            )
         elif False:  # ((i_c//device_count) % 32 == 0 < (i_c//device_count)) or i_c == o_c:
             conv_parallel_strategy = ConvStrategy.TP_DP
-            w_mesh_mapper = ttnn.ShardTensorToMesh(parallel_config.device, dim=1)
-            b_mesh_mapper = ttnn.ShardTensorToMesh(parallel_config.device, dim=-1)
+            w_mesh_mapper = ttnn.ShardTensor2dMesh(
+                parallel_config.device, tuple(parallel_config.device.shape), dims=[None, 1]
+            )
+            b_mesh_mapper = ttnn.ShardTensor2dMesh(
+                parallel_config.device, tuple(parallel_config.device.shape), dims=[None, -1]
+            )
             bias = torch.cat([bias, torch.zeros((device_count - 1) * o_c)])  # Force bias only on first device
             device_slice_mask = ttnn.from_torch(
                 torch.eye(i_c),
