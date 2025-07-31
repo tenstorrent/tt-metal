@@ -419,7 +419,12 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
             tt::constants::TILE_WIDTH);
 
     } else if (parallel_config.shard_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
-        TT_ASSERT(padded_in_channels % (32 * parallel_config.grid.num_cores() * act_block_w_div) == 0);
+        TT_ASSERT(
+            padded_in_channels % (32 * parallel_config.grid.num_cores() * act_block_w_div) == 0,
+            "Padded In Channels = {}, num_cores = {}, act_block_w_div = {}",
+            padded_in_channels,
+            parallel_config.grid.num_cores(),
+            act_block_w_div);
         act_block_w = (padded_in_channels * window_h * window_w) / (parallel_config.grid.num_cores() * act_block_w_div);
     }
 
