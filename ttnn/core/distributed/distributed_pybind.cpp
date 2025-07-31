@@ -20,6 +20,7 @@
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/maybe_remote.hpp>
 #include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -38,17 +39,29 @@ class SystemMeshDescriptor {
 private:
     MeshShape global_shape_;
     MeshShape local_shape_;
-    tt::tt_metal::distributed::SystemMesh::MappedDevices mapped_devices_;
+    tt::tt_metal::distributed::MeshContainer<tt::tt_metal::distributed::MaybeRemote<int>> device_ids_;
 
 public:
     SystemMeshDescriptor() :
         global_shape_(tt::tt_metal::distributed::SystemMesh::instance().shape()),
         local_shape_(tt::tt_metal::distributed::SystemMesh::instance().local_shape()),
-        mapped_devices_(tt::tt_metal::distributed::SystemMesh::instance().get_mapped_devices(global_shape_)) {}
+        device_ids_(
+            global_shape_,
+            tt::tt_metal::distributed::SystemMesh::instance().get_mapped_devices(global_shape_).device_ids) {}
 
     const MeshShape& shape() const { return global_shape_; }
     const MeshShape& local_shape() const { return local_shape_; }
-    const tt::tt_metal::distributed::SystemMesh::MappedDevices& mapped_devices() const { return mapped_devices_; }
+
+    int get_device_id(const MeshCoordinate& coord) const {
+        if (!device_ids_.at(coord).is_local()) {
+            TT_FATAL(false, "Device at {} is remote.", coord);
+        }
+        return device_ids_.at(coord).value();
+    }
+
+    bool is_local_at(const MeshCoordinate& coord) const { return device_ids_.at(coord).is_local(); }
+
+    bool all_local() const { return global_shape_ == local_shape_; }
 };
 
 namespace py = pybind11;
@@ -70,7 +83,6 @@ void py_module_types(py::module& module) {
     py::class_<MeshCoordinateRangeSet>(
         module, "MeshCoordinateRangeSet", "Set of coordinate ranges within a mesh device.");
     py::class_<SystemMeshDescriptor>(module, "SystemMeshDescriptor");
-    py::class_<tt::tt_metal::distributed::SystemMesh::MappedDevices>(module, "MappedDevices");
 }
 
 void py_module(py::module& module) {
@@ -183,27 +195,9 @@ void py_module(py::module& module) {
         .def(py::init([]() { return SystemMeshDescriptor(); }))
         .def("shape", &SystemMeshDescriptor::shape)
         .def("local_shape", &SystemMeshDescriptor::local_shape)
-        .def("mapped_devices", &SystemMeshDescriptor::mapped_devices);
-
-    static_cast<py::class_<tt::tt_metal::distributed::SystemMesh::MappedDevices>>(module.attr("MappedDevices"))
-        .def(
-            "__getitem__",
-            [](const tt::tt_metal::distributed::SystemMesh::MappedDevices& self, int index) {
-                return self.device_ids[index].value();
-            })
-        .def(
-            "__iter__",
-            [](const tt::tt_metal::distributed::SystemMesh::MappedDevices& self) {
-                return py::make_iterator(self.device_ids.begin(), self.device_ids.end());
-            })
-        .def(
-            "is_local_at",
-            [](const tt::tt_metal::distributed::SystemMesh::MappedDevices& self, int index) {
-                return self.device_ids[index].is_local();
-            })
-        .def("all_local", [](const tt::tt_metal::distributed::SystemMesh::MappedDevices& self) {
-            return self.all_local();
-        });
+        .def("get_device_id", &SystemMeshDescriptor::get_device_id)
+        .def("is_local_at", &SystemMeshDescriptor::is_local_at)
+        .def("all_local", &SystemMeshDescriptor::all_local);
 
     auto py_mesh_device = static_cast<py::class_<MeshDevice, std::shared_ptr<MeshDevice>>>(module.attr("MeshDevice"));
     py_mesh_device

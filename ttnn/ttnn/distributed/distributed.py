@@ -164,7 +164,7 @@ def create_system_mesh_table():
         logger.error("Error getting system mesh shapes: {}.", e)
         return None
 
-    mapped_devices = system_mesh_desc.mapped_devices()
+    all_local = system_mesh_desc.all_local()
 
     mesh_table = Table(
         title=f"SystemMesh Global Shape: ({rows}, {cols}) | Local Shape: ({local_rows}, {local_cols})",
@@ -185,16 +185,17 @@ def create_system_mesh_table():
         for col_idx in range(cols):
             try:
                 coords = f"({row_idx}, {col_idx})"
+                coord = ttnn.MeshCoordinate(row_idx, col_idx)
 
                 # Create cell content
-                if mapped_devices.all_local():
-                    device_id = f"Dev. ID: {mapped_devices[row_idx * cols + col_idx]}"
+                if all_local:
+                    device_id = f"Dev. ID: {system_mesh_desc.get_device_id(coord)}"
                     cell_content = Text(f"{device_id}\n{coords}", justify="center")
                     cell_style = Style(bgcolor="dark_green")
                 else:
-                    is_local = mapped_devices.is_local_at(row_idx * cols + col_idx)
+                    is_local = system_mesh_desc.is_local_at(coord)
                     locality = "Local\n" if is_local else "Remote\n"
-                    device_id = f"Dev. ID: {device_id}\n" if is_local else "Unknown\n"
+                    device_id = f"Dev. ID: {system_mesh_desc.get_device_id(coord)}\n" if is_local else "Unknown\n"
                     cell_content = Text(f"{locality}{device_id}{coords}", justify="center")
                     cell_style = None
 
