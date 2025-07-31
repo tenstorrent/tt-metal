@@ -763,7 +763,7 @@ def test_dram_reshard_with_program_cache(
     ],
 )
 @pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16])
-def test_reshard_2(
+def test_reshard_diff_width(
     device,
     input_shape,
     input_layout,
@@ -797,6 +797,4 @@ def test_reshard_2(
         passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
     else:
         passing, output = comp_pcc(torch_tensor, torch_tensor_after_round_trip)
-    print("torch tensor:", torch_tensor)
-    print("torch tensor after round trip:", torch_tensor_after_round_trip)
     assert passing, output

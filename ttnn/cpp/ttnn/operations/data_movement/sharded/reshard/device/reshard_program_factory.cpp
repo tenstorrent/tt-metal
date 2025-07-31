@@ -18,215 +18,12 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::detail {
 
-std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
-    Buffer* input_buffer, Buffer* output_buffer, const Tensor& input) {
-    const auto& output_buffer_page_mapping = *output_buffer->get_buffer_page_mapping();
-    const auto& input_buffer_page_mapping = *input_buffer->get_buffer_page_mapping();
-    uint32_t num_rows = 1;
-    for (uint32_t i = 0; i < input.logical_shape().rank() - 1; i++) {
-        num_rows *= input.logical_shape()[i];
-    }
-    printf("num rows: %u\n", num_rows);
-
-    // Find GCD of page sizes to use as the new base page size
-    uint32_t input_page_size = input_buffer->page_size();
-    uint32_t output_page_size = output_buffer->page_size();
-    uint32_t base_page_size = std::gcd(input_page_size, output_page_size);
-    printf("Input page size: %u\n", input_page_size);
-    printf("Output page size: %u\n", output_page_size);
-    printf("Base page size: %u\n", base_page_size);
-
-    // Calculate how many base pages make up an input/output page
-    uint32_t input_pages_per_original = input_page_size / base_page_size;
-    uint32_t output_pages_per_original = output_page_size / base_page_size;
-    printf("Input pages per original: %u\n", input_pages_per_original);
-    printf("Output pages per original: %u\n", output_pages_per_original);
-
-    // Map input pages to base units
-    std::vector<std::pair<CoreCoord, uint32_t>> host_page_to_input_core_mapping(
-        input_buffer->num_pages() * input_pages_per_original);
-
-    auto input_width = input_buffer->shard_spec().shape()[1];
-    auto output_width = output_buffer->shard_spec().shape()[1];
-    auto total_width = input.logical_shape()[-1];
-    // Create input mapping
-    uint32_t core_count = 0;
-    uint32_t core_start_elem = 0;
-    auto total_page_number = input.logical_shape()[-1] * input.element_size() / base_page_size;
-    uint32_t num_input_pages_per_row = input_pages_per_original * std::ceil((float)total_width / (float)input_width);
-    uint32_t num_output_pages_per_row = output_pages_per_original * std::ceil((float)total_width / (float)output_width);
-    printf("num input pages per row: %u\n", num_input_pages_per_row);
-    printf("num output pages per row: %u\n", num_output_pages_per_row);
-    printf("Total page number: %u\n", total_page_number);
-    for (auto mapped_page : input_buffer_page_mapping) {
-        auto core = input_buffer_page_mapping.all_cores[mapped_page.core_id];
-        uint32_t base_start_page = mapped_page.host_page * input_pages_per_original;
-        uint32_t device_base_start = mapped_page.device_page * input_pages_per_original;
-        printf(
-            "Core: (%zu, %zu), Base start page: %u, Device base start: %u\n",
-            core.x,
-            core.y,
-            base_start_page,
-            device_base_start);
-        uint32_t next_total =
-            ((base_start_page + num_input_pages_per_row) / num_input_pages_per_row) * total_page_number;
-        next_total = std::max(next_total, total_page_number);
-        printf("Next total: %u\n", next_total);
-        uint32_t valid_pages = std::min(next_total - base_start_page, input_pages_per_original);
-        printf("Valid pages: %u\n", valid_pages);
-        for (uint32_t i = 0; i < valid_pages; i++) {
-            host_page_to_input_core_mapping[base_start_page + i] = {core, device_base_start + i};
-        }
-    }
-    for (uint32_t i = 0; i < host_page_to_input_core_mapping.size(); i++) {
-        printf(
-            "Input page %u: Core (%zu, %zu), Page %u\n",
-            i,
-            host_page_to_input_core_mapping[i].first.x,
-            host_page_to_input_core_mapping[i].first.y,
-            host_page_to_input_core_mapping[i].second);
-    }
-
-    // Create similar mapping for output pages to their cores
-    std::vector<std::pair<CoreCoord, uint32_t>> host_page_to_output_core_mapping(total_page_number * num_rows);
-    printf("output buff num pages: %u\n", output_buffer->num_pages());
-    printf("NOW OUTPUT\n");
-    core_count = 0;
-    core_start_elem = 0;
-    std::unordered_set<uint32_t> invalid_pages;
-    std::unordered_map<uint32_t, uint32_t> invalid_mapping;
-    uint32_t num_invalid_pages = 0;
-    for (uint32_t i = 1; i <= num_rows; i++) {
-        invalid_mapping[total_page_number * i] = 0;
-        printf(
-            "initial invalid mapping for row %u is %u\n",
-            total_page_number * i,
-            invalid_mapping[total_page_number * i]);
-    }
-    for (auto mapped_page : output_buffer_page_mapping) {
-        auto core = output_buffer_page_mapping.all_cores[mapped_page.core_id];
-        printf("core %zu, %zu\n", core.x, core.y);
-        uint32_t base_start_page = mapped_page.host_page * output_pages_per_original;
-        uint32_t device_base_start = mapped_page.device_page * output_pages_per_original;
-        uint32_t next_total = ((base_start_page + total_page_number) / total_page_number) * total_page_number;
-        uint32_t valid_pages = std::min(next_total - base_start_page, output_pages_per_original);
-        printf("output pages per orginal: %u, valid pages: %u\n", output_pages_per_original, valid_pages);
-        if (output_pages_per_original - valid_pages > 0) {
-            num_invalid_pages = output_pages_per_original - valid_pages;
-            break;
-        }
-    }
-
-    for (uint32_t i = 1; i <= num_rows; i++) {
-        invalid_mapping[total_page_number * i] = (i - 1) * num_invalid_pages;
-        printf(
-            "invalid mapping after for row %u is %u\n", total_page_number * i, invalid_mapping[total_page_number * i]);
-    }
-
-    for (auto mapped_page : output_buffer_page_mapping) {
-        auto core = output_buffer_page_mapping.all_cores[mapped_page.core_id];
-        uint32_t base_start_page = mapped_page.host_page * output_pages_per_original;
-        uint32_t device_base_start = mapped_page.device_page * output_pages_per_original;
-        printf(
-            "Core: (%zu, %zu), Base start page: %u, Device base start: %u\n",
-            core.x,
-            core.y,
-            base_start_page,
-            device_base_start);
-        uint32_t next_total =
-            ((base_start_page + num_output_pages_per_row) / num_output_pages_per_row) * total_page_number;
-        next_total = std::max(next_total, total_page_number);
-        printf("Next total: %u\n", next_total);
-        base_start_page = base_start_page - invalid_mapping[next_total];
-        printf("base start page should be : %u\n", base_start_page - invalid_mapping[next_total]);
-        uint32_t valid_pages = std::min(next_total - base_start_page, output_pages_per_original);
-        printf("Valid pages: %u\n", valid_pages);
-        for (uint32_t i = 0; i < valid_pages; i++) {
-            host_page_to_output_core_mapping[base_start_page + i] = {core, device_base_start + i};
-        }
-        for (uint32_t i = valid_pages; i < output_pages_per_original; i++) {
-            invalid_pages.insert(base_start_page + i);
-        }
-    }
-    uint32_t count = 0;
-    /*
-    for (uint32_t i = 0; i < host_page_to_output_core_mapping_before.size(); i++) {
-        if (invalid_pages.find(i) == invalid_pages.end()) {
-            host_page_to_output_core_mapping[count] = host_page_to_output_core_mapping_before[i];
-            count++;
-        }
-        else{
-            printf("Invalid page %u for output core %zu, %zu and device page %u\n", i,
-                   host_page_to_output_core_mapping_before[i].first.x,
-                   host_page_to_output_core_mapping_before[i].first.y,
-                   host_page_to_output_core_mapping_before[i].second);
-        }
-    }
-    */
-    for (uint32_t i = 0; i < host_page_to_output_core_mapping.size(); i++) {
-        printf(
-            "Output page %u: Core (%zu, %zu), Page %u\n",
-            i,
-            host_page_to_output_core_mapping[i].first.x,
-            host_page_to_output_core_mapping[i].first.y,
-            host_page_to_output_core_mapping[i].second);
-    }
-
-    // Create final mapping of output cores to input pages they need
-    auto output_cores = output_buffer_page_mapping.all_cores;
-    std::vector<std::vector<std::optional<std::pair<CoreCoord, uint32_t>>>> output_core_to_vector_input_core_page_bef(
-        output_cores.size());
-
-    // For each output core's base pages, find which input pages it needs
-    for (uint32_t core_id = 0; core_id < output_cores.size(); core_id++) {
-        auto& cur_output_core_pages = output_core_to_vector_input_core_page_bef[core_id];
-
-        // Find all host pages that map to this output core
-        for (uint32_t host_page = 0; host_page < host_page_to_output_core_mapping.size(); host_page++) {
-            if (host_page_to_output_core_mapping[host_page].first == output_cores[core_id]) {
-                // This host page belongs to current output core
-                // Get corresponding input core and page
-                auto input_mapping = host_page_to_input_core_mapping[host_page];
-
-                // Add to vector if needed
-                uint32_t device_page = host_page_to_output_core_mapping[host_page].second;
-                if (cur_output_core_pages.size() <= device_page) {
-                    cur_output_core_pages.resize(device_page + 1);
-                }
-                cur_output_core_pages[device_page] = input_mapping;
-            }
-        }
-    }
-    std::vector<std::vector<std::optional<std::pair<CoreCoord, uint32_t>>>> output_core_to_vector_input_core_page(
-        output_cores.size());
-    for (uint32_t i = 0; i < output_core_to_vector_input_core_page_bef.size(); i++) {
-        /*
-        if (i == 2 || i == 5){
-            std::vector<std::optional<std::pair<CoreCoord, uint32_t>>> temp_vec;
-            for (uint32_t j = 0; j < output_core_to_vector_input_core_page_bef[i].size(); j++){
-                temp_vec.push_back(output_core_to_vector_input_core_page_bef[i][j]);
-                temp_vec.push_back(output_core_to_vector_input_core_page_bef[i][j]);
-            }
-            output_core_to_vector_input_core_page[i] = temp_vec;
-        }
-        else{
-            output_core_to_vector_input_core_page[i] = output_core_to_vector_input_core_page_bef[i];
-        }
-        */
-        output_core_to_vector_input_core_page[i] = output_core_to_vector_input_core_page_bef[i];
-    }
-    // Debug print
-    for (uint32_t i = 0; i < output_core_to_vector_input_core_page.size(); i++) {
-        printf("Output core %u:\n", i);
-        for (const auto& page : output_core_to_vector_input_core_page[i]) {
-            if (page.has_value()) {
-                printf("  Input Core: (%zu, %zu), Input Page: %u\n", page->first.x, page->first.y, page->second);
-            }
-        }
-    }
-
-    // now compress to output_core to vector<pair<input_core, input_page_range> (num_page_ranges_in_output)
+std::unordered_map<CoreCoord, std::vector<PageStride>> create_map_for_reshard(
+    std::vector<std::vector<std::optional<std::pair<CoreCoord, uint32_t>>>> output_core_to_vector_input_core_page,
+    Buffer* input_buffer,
+    Buffer* output_buffer) {
     std::unordered_map<CoreCoord, std::vector<PageStride>> ret_map;
+    auto output_cores = output_buffer->get_buffer_page_mapping()->all_cores;
     ret_map.reserve(output_cores.size());
 
     auto device = input_buffer->device();
@@ -408,24 +205,147 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
         }
         output_core_id++;
     }
-    for (const auto& [core, page_strides] : ret_map) {
-        printf("Core (%zu, %zu):\n", core.x, core.y);
-        for (const auto& ps : page_strides) {
-            printf(
-                "  Start Data: %u, Stride Size: %u, Stride: (%zu, %zu), Data Stride: %u, Num Strides: %u, Skip: %s\n",
-                ps.start_data,
-                ps.stride_size,
-                ps.stride.core.x,
-                ps.stride.core.y,
-                ps.stride.data,
-                ps.num_strides,
-                ps.skip ? "true" : "false");
-        }
-    }
-
     return ret_map;
 }
 
+std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
+    Buffer* input_buffer, Buffer* output_buffer) {
+    const auto& output_buffer_page_mapping = *output_buffer->get_buffer_page_mapping();
+    const auto& input_buffer_page_mapping = *input_buffer->get_buffer_page_mapping();
+
+    std::vector<std::pair<CoreCoord, uint32_t>> host_page_to_input_core_mapping(input_buffer->num_pages());
+    for (auto mapped_page : input_buffer_page_mapping) {
+        auto core = input_buffer_page_mapping.all_cores[mapped_page.core_id];
+        host_page_to_input_core_mapping[mapped_page.host_page] = {core, mapped_page.device_page};
+    }
+
+    auto output_cores = output_buffer_page_mapping.all_cores;
+    // First get output_core to vector< pair<input_core, input_page> (num_pages_in_output)
+    std::vector<std::vector<std::optional<std::pair<CoreCoord, uint32_t>>>> output_core_to_vector_input_core_page(
+        output_cores.size());
+
+    for (auto mapped_page : output_buffer_page_mapping) {
+        auto& cur_output_core_to_vector_input_core_page = output_core_to_vector_input_core_page[mapped_page.core_id];
+        auto [input_core, input_core_page] = host_page_to_input_core_mapping[mapped_page.host_page];
+        if (cur_output_core_to_vector_input_core_page.size() <= mapped_page.device_page) {
+            cur_output_core_to_vector_input_core_page.resize(mapped_page.device_page + 1);
+        }
+        cur_output_core_to_vector_input_core_page[mapped_page.device_page] = {input_core, input_core_page};
+    }
+    auto ret_map = create_map_for_reshard(output_core_to_vector_input_core_page, input_buffer, output_buffer);
+    return ret_map;
+}
+
+std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges_diff_width(
+    Buffer* input_buffer, Buffer* output_buffer, const Tensor& input) {
+    const auto& output_buffer_page_mapping = *output_buffer->get_buffer_page_mapping();
+    const auto& input_buffer_page_mapping = *input_buffer->get_buffer_page_mapping();
+    uint32_t num_rows = 1;
+    for (uint32_t i = 0; i < input.logical_shape().rank() - 1; i++) {
+        num_rows *= input.logical_shape()[i];
+    }
+    // Find GCD of page sizes to use as the new base page size
+    uint32_t input_page_size = input_buffer->page_size();
+    uint32_t output_page_size = output_buffer->page_size();
+    uint32_t base_page_size = std::gcd(input_page_size, output_page_size);
+
+    // Calculate how many base pages make up an input/output page
+    uint32_t input_pages_per_original = input_page_size / base_page_size;
+    uint32_t output_pages_per_original = output_page_size / base_page_size;
+
+    // Map input pages to base units
+    std::vector<std::pair<CoreCoord, uint32_t>> host_page_to_input_core_mapping(
+        input_buffer->num_pages() * input_pages_per_original);
+
+    auto input_width = input_buffer->shard_spec().shape()[1];
+    auto output_width = output_buffer->shard_spec().shape()[1];
+    auto total_width = input.logical_shape()[-1];
+    // Create input mapping
+    uint32_t total_page_number =
+        std::ceil((float)(input.logical_shape()[-1] * input.element_size()) / (float)base_page_size);
+    uint32_t num_input_pages_per_row = input_pages_per_original * std::ceil((float)total_width / (float)input_width);
+    uint32_t num_output_pages_per_row = output_pages_per_original * std::ceil((float)total_width / (float)output_width);
+
+    for (auto mapped_page : input_buffer_page_mapping) {
+        auto core = input_buffer_page_mapping.all_cores[mapped_page.core_id];
+        uint32_t base_start_page = mapped_page.host_page * input_pages_per_original;
+        uint32_t device_base_start = mapped_page.device_page * input_pages_per_original;
+        uint32_t next_total =
+            ((base_start_page + num_input_pages_per_row) / num_input_pages_per_row) * total_page_number;
+        next_total = std::max(next_total, total_page_number);
+        uint32_t valid_pages = std::min(next_total - base_start_page, input_pages_per_original);
+        for (uint32_t i = 0; i < valid_pages; i++) {
+            host_page_to_input_core_mapping[base_start_page + i] = {core, device_base_start + i};
+        }
+    }
+
+    // Create similar mapping for output pages to their cores
+    std::vector<std::pair<CoreCoord, uint32_t>> host_page_to_output_core_mapping(total_page_number * num_rows);
+
+    std::unordered_map<uint32_t, uint32_t> invalid_mapping;
+    uint32_t num_invalid_pages = 0;
+    for (uint32_t i = 1; i <= num_rows; i++) {
+        invalid_mapping[total_page_number * i] = 0;
+    }
+    for (auto mapped_page : output_buffer_page_mapping) {
+        auto core = output_buffer_page_mapping.all_cores[mapped_page.core_id];
+        uint32_t base_start_page = mapped_page.host_page * output_pages_per_original;
+        uint32_t device_base_start = mapped_page.device_page * output_pages_per_original;
+        uint32_t next_total = ((base_start_page + total_page_number) / total_page_number) * total_page_number;
+        uint32_t valid_pages = std::min(next_total - base_start_page, output_pages_per_original);
+        if (output_pages_per_original - valid_pages > 0) {
+            num_invalid_pages = output_pages_per_original - valid_pages;
+            break;
+        }
+    }
+
+    for (uint32_t i = 1; i <= num_rows; i++) {
+        invalid_mapping[total_page_number * i] = (i - 1) * num_invalid_pages;
+    }
+
+    for (auto mapped_page : output_buffer_page_mapping) {
+        auto core = output_buffer_page_mapping.all_cores[mapped_page.core_id];
+        uint32_t base_start_page = mapped_page.host_page * output_pages_per_original;
+        uint32_t device_base_start = mapped_page.device_page * output_pages_per_original;
+
+        uint32_t next_total =
+            ((base_start_page + num_output_pages_per_row) / num_output_pages_per_row) * total_page_number;
+        next_total = std::max(next_total, total_page_number);
+        base_start_page = base_start_page - invalid_mapping[next_total];
+        uint32_t valid_pages = std::min(next_total - base_start_page, output_pages_per_original);
+        for (uint32_t i = 0; i < valid_pages; i++) {
+            host_page_to_output_core_mapping[base_start_page + i] = {core, device_base_start + i};
+        }
+    }
+    // Create final mapping of output cores to input pages they need
+    auto output_cores = output_buffer_page_mapping.all_cores;
+    std::vector<std::vector<std::optional<std::pair<CoreCoord, uint32_t>>>> output_core_to_vector_input_core_page(
+        output_cores.size());
+
+    // For each output core's base pages, find which input pages it needs
+    for (uint32_t core_id = 0; core_id < output_cores.size(); core_id++) {
+        auto& cur_output_core_pages = output_core_to_vector_input_core_page[core_id];
+
+        // Find all host pages that map to this output core
+        for (uint32_t host_page = 0; host_page < host_page_to_output_core_mapping.size(); host_page++) {
+            if (host_page_to_output_core_mapping[host_page].first == output_cores[core_id]) {
+                // This host page belongs to current output core
+                // Get corresponding input core and page
+                auto input_mapping = host_page_to_input_core_mapping[host_page];
+
+                // Add to vector if needed
+                uint32_t device_page = host_page_to_output_core_mapping[host_page].second;
+                if (cur_output_core_pages.size() <= device_page) {
+                    cur_output_core_pages.resize(device_page + 1);
+                }
+                cur_output_core_pages[device_page] = input_mapping;
+            }
+        }
+    }
+
+    auto ret_map = create_map_for_reshard(output_core_to_vector_input_core_page, input_buffer, output_buffer);
+    return ret_map;
+}
 enum class ReshardStridesInRange { ALL_STRIDES, FIRST_HALF, SECOND_HALF };
 
 std::vector<uint32_t> get_runtime_args_for_given_ranges(
@@ -678,9 +598,7 @@ Tensor construct_per_core_host_tensor(const std::unordered_map<CoreCoord, std::v
     }
 
     // Create host buffer and tensor
-    printf("flattened_data size: %zu\n", flattened_data.size());
     auto config_buffer = tt::tt_metal::HostBuffer(std::move(flattened_data));
-    printf("after host buffer call\n");
     return Tensor(std::move(config_buffer), tensor_shape, DataType::UINT32, Layout::ROW_MAJOR);
 }
 
@@ -701,8 +619,12 @@ Tensor move_per_core_config_to_device(const Tensor& host_tensor, const CoreRange
 
 operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, Tensor& output) {
     auto device = input.device();
-    printf("calling get core page ranges\n");
-    auto output_core_to_page_range_pair = get_core_page_ranges(input.buffer(), output.buffer(), input);
+    std::unordered_map<CoreCoord, std::vector<PageStride>> output_core_to_page_range_pair;
+    if (input.buffer()->page_size() != output.buffer()->page_size()) {
+        output_core_to_page_range_pair = get_core_page_ranges_diff_width(input.buffer(), output.buffer(), input);
+    } else {
+        output_core_to_page_range_pair = get_core_page_ranges(input.buffer(), output.buffer());
+    }
 
     tt::tt_metal::Program program{};
 
@@ -733,28 +655,8 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
         unit_size = base_page_size;  // Use base page size as unit
         page_size = base_page_size;  // Use same for page size
         total_size = output_shard_shape[0] * output_shard_shape[1] * output.element_size();
-
-        printf(
-            "ROW_MAJOR sizes - base: %u, input_page: %u, output_page: %u, total: %u\n",
-            base_page_size,
-            input_page_size,
-            output_page_size,
-            total_size);
     }
-    /*
-    tt::tt_metal::KernelHandle kernel_id_0 = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size}));
 
-    tt::tt_metal::KernelHandle kernel_id_1 = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size}));
-    */
-    printf("total size: %u, page size: %u, unit size: %u\n", total_size, page_size, unit_size);
     tt::tt_metal::CircularBufferConfig cb_dst_config =
         tt::tt_metal::CircularBufferConfig(total_size, {{dst_cb_index, data_format}})
             .set_page_size(dst_cb_index, output.buffer()->page_size())
@@ -786,7 +688,6 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
         auto output_page_offset =
             runtime_args_0[physical_core_coords.size() + 1];  // offset is equivalent to number of pages output in
                                                               // previous risc core
-        printf("runtime args 0 for reader 0: %zu\n", runtime_args_0.size());
         rt_config_map_0[core] = runtime_args_0;
 
         // tt::tt_metal::SetRuntimeArgs(program, kernel_id_0, core, runtime_args_0);
@@ -797,29 +698,8 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
             input.buffer()->address(),
             tt::div_up(page_stride_vector.size(), 2),
             page_stride_vector.size());
-        printf("runtime args 1 for reader 1: %zu\n", runtime_args_1.size());
         rt_config_map_1[core] = runtime_args_1;
-        // tt::tt_metal::SetRuntimeArgs(program, kernel_id_1, core, runtime_args_1);
     }
-    // construct host tensor for runtime args
-    /*
-    printf("RUNTIME ARGS MAP 0\n");
-    for (const auto& [core, data] : rt_config_map_0) {
-        printf("core: (%zu, %zu), data size: %zu\n", core.x, core.y, data.size());
-        for (const auto& val : data) {
-            printf("%u ", val);
-        }
-        printf("\n");
-    }
-    printf("RUNTIME ARGS MAP 1\n");
-    for (const auto& [core, data] : rt_config_map_1) {
-        printf("core: (%zu, %zu), data size: %zu\n", core.x, core.y, data.size());
-        for (const auto& val : data) {
-            printf("%u ", val);
-        }
-        printf("\n");
-    }
-    */
     auto runtime_args_tensor_0 = construct_per_core_host_tensor(rt_config_map_0);
     auto runtime_args_tensor_1 = construct_per_core_host_tensor(rt_config_map_1);
 
@@ -827,17 +707,9 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     auto device_runtime_args_0 = move_per_core_config_to_device(runtime_args_tensor_0, output_shard_spec.grid, device);
 
     auto device_runtime_args_1 = move_per_core_config_to_device(runtime_args_tensor_1, output_shard_spec.grid, device);
-    printf("host tensors moved to device\n");
 
     constexpr uint32_t rt_args_cb_index_0 = 17;  // Choose available CB indices
     constexpr uint32_t rt_args_cb_index_1 = 18;
-
-    printf(
-        "device_runtime_args_shape: %u, %u\n",
-        device_runtime_args_0.logical_shape()[0],
-        device_runtime_args_0.logical_shape()[1]);
-    printf("circular buffer 1 size: %zu\n", device_runtime_args_1.logical_shape()[1] * sizeof(uint32_t));
-    printf("circular bubber 0 size: %zu\n", device_runtime_args_0.logical_shape()[1] * sizeof(uint32_t));
 
     // CB config for first runtime args tensor
     tt::tt_metal::CircularBufferConfig cb_rt_args_config_0 =
@@ -855,10 +727,8 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
             .set_globally_allocated_address(*device_runtime_args_1.buffer());
 
     // Create the circular buffers
-    printf("before creating circular buffers\n");
     auto cb_rt_args_0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_rt_args_config_0);
     auto cb_rt_args_1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_rt_args_config_1);
-    printf("after creating circular buffers\n");
 
     tt::tt_metal::KernelHandle kernel_id_0 = tt::tt_metal::CreateKernel(
         program,
@@ -883,16 +753,6 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
         const auto& input = input_tensors.at(0);
         const auto& output = output_tensors.at(0);
         uint32_t input_addr = input.buffer()->address();
-        /*
-        auto& runtime_args_0_by_core = GetRuntimeArgs(program, kernel_id_0);
-        auto& runtime_args_1_by_core = GetRuntimeArgs(program, kernel_id_1);
-        for (auto core : cores) {
-            auto& runtime_args_0 = runtime_args_0_by_core[core.x][core.y];
-            auto& runtime_args_1 = runtime_args_1_by_core[core.x][core.y];
-            runtime_args_0[grid.x + grid.y] = input_addr;
-            runtime_args_1[grid.x + grid.y] = input_addr;
-        }
-        */
         UpdateDynamicCircularBufferAddress(program, cb_dst0, *output.buffer());
     };
 
@@ -1034,10 +894,8 @@ operation::ProgramWithCallbacks reshard_multi_core(const Tensor& input, Tensor& 
         input.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
         output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
         if (output.memory_config().buffer_type() == BufferType::L1) {
-            printf("here using reshard_multi_core_same_height\n");
             return reshard_multi_core_same_height<true>(input, output);
         } else {
-            printf("using reshard_multi_core_same_height\n");
             return reshard_multi_core_same_height<false>(input, output);
         }
     } else {
