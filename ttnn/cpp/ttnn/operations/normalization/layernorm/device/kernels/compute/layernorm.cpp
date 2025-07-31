@@ -14,6 +14,7 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
+#include "compute_kernel_api/welford.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -65,6 +66,7 @@ void MAIN {
 #else
     binary_op_init_common(cb_in, cb_in, cb_xmm2);
 #endif
+    welford_init();
 
     cb_wait_front(cb_scaler, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
