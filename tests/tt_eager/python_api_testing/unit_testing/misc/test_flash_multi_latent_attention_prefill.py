@@ -69,15 +69,15 @@ def run_flash_mla_prefill_impl(
     block_size=ttnn.TILE_SIZE,
 ):
     # Log the test parameters
-    logger.info(f"Running FlashMLA Prefill with parameters: ")
-    logger.info(f"Batch: {batch}")
-    logger.info(f"Sequence Length: {seq_len}")
-    logger.info(f"Number of Heads (Q): {nh}")
-    logger.info(f"Number of Heads (KV): {nkv}")
-    logger.info(f"KV LoRA Rank: {kv_lora_rank}")
-    logger.info(f"Dimensionality of RoPE: {d_rope}")
-    logger.info(f"Query Data Type: {q_dtype}")
-    logger.info(f"Key-Value Data Type: {dtype}")
+    logger.debug(f"Running FlashMLA Prefill with parameters: ")
+    logger.debug(f"Batch: {batch}")
+    logger.debug(f"Sequence Length: {seq_len}")
+    logger.debug(f"Number of Heads (Q): {nh}")
+    logger.debug(f"Number of Heads (KV): {nkv}")
+    logger.debug(f"KV LoRA Rank: {kv_lora_rank}")
+    logger.debug(f"Dimensionality of RoPE: {d_rope}")
+    logger.debug(f"Query Data Type: {q_dtype}")
+    logger.debug(f"Key-Value Data Type: {dtype}")
 
     # Paged attention configuration
     paged_attention_cfg = None
@@ -210,7 +210,7 @@ def run_flash_mla_prefill_impl(
         pcc_threshold = 0.98
 
     out_pass, out_pcc = comp_pcc(tt_out_torch, out_t, pcc_threshold)
-    logger.info(f"Output PCC: {out_pcc}")
+    logger.debug(f"Output PCC: {out_pcc}")
 
     assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"
 
@@ -283,7 +283,7 @@ def test_flash_mla_prefill(
     "batch",
     [
         1,  # Single batch
-        2,  # Multiple batches
+        # 2,  # Multiple batches # Removing to reduce CI load
         8,  # Even larger batch size
     ],
 )
@@ -305,7 +305,7 @@ def test_flash_mla_prefill(
     "nkv",
     [
         1,
-        8,
+        # 8, # Removing to reduce CI load
         16,
     ],
 )
