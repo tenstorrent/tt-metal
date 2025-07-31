@@ -267,8 +267,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         tt::tt_metal::CircularBufferConfig(cb_sizes[5], {{packet_header_cb_id, tt::DataFormat::RawUInt32}})
             .set_page_size(packet_header_cb_id, cb_page_sizes[5]);
 
-    auto subdevice_core_range_set =
-        mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.subdevice_id);
+    auto subdevice_core_range_set = operation_attributes.subdevice_core_range_set;
 
     auto subdevice_cores = corerange_to_cores(subdevice_core_range_set);
     TT_FATAL(

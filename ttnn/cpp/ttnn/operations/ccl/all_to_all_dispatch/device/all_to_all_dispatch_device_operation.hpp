@@ -36,7 +36,7 @@ struct AllToAllDispatchDeviceOperation {
         PageByPage,  // Each page is sent directly to the output buffer to conserve L1 space via intermediates
     };
     struct operation_attributes_t {
-        const tt::tt_metal::SubDeviceId subdevice_id;
+        const CoreRangeSet subdevice_core_range_set;
         const MemoryConfig output_mem_config;
         const std::optional<uint32_t> axis;
         const uint32_t num_links;
@@ -112,7 +112,7 @@ struct AllToAllDispatchDeviceOperation {
         uint32_t num_links,
         tt::tt_fabric::Topology topology,
         const ttnn::MemoryConfig& memory_config,
-        tt::tt_metal::SubDeviceId subdevice_id,
+        const CoreRangeSet& subdevice_core_range_set,
         const std::optional<GlobalSemaphore>& global_semaphore,
         AllToAllTransferType impl);
 };
