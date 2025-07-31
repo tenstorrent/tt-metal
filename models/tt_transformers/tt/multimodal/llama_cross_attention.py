@@ -300,6 +300,7 @@ class TtLlamaCrossAttention(LightweightModule):
             else:
                 output = ttnn.experimental.reduce_scatter_minimal_async(
                     output,
+                    persistent_output_buffers=None,
                     dim=3,
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
@@ -405,6 +406,7 @@ class TtLlamaCrossAttention(LightweightModule):
             else:
                 dense_out_reduced = ttnn.experimental.reduce_scatter_minimal_async(
                     output,
+                    persistent_output_buffers=None,
                     dim=3,
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(),
                     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
