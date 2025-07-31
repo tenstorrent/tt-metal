@@ -1,12 +1,26 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+"""
+source: models/tt_transformers/tt/decoder.py
+
+This is the Decoder block for the gemma 3-4b-it model
+We couldn't use the existing implementation in TT-Transformers because the usage of submodules is different
+
+In Gemma-3-4b-it, The decoder Block has Additional pre_feedforward_layernorm and post_feedforward_layernorm,
+And the logic of implementation is different from the existing implementation in TT-Transformers.
+"""
+
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+
 import ttnn
+
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
-from models.tt_transformers.tt.attention import Attention as DefaultAttention
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
-from models.tt_transformers.tt.mlp import MLP
+from models.experimental.gemma3_4b.tt.rmsnorm import RMSNorm
+
+from models.experimental.gemma3_4b.tt.attention import Attention
+
+from models.experimental.gemma3_4b.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import TensorGroup
 
 
@@ -22,7 +36,6 @@ class TransformerBlock(LightweightModule):
         transformation_mats,
         paged_attention_config=None,
         use_paged_kv_cache=False,
-        attention_class=None,
     ):
         super().__init__()
 
@@ -42,9 +55,7 @@ class TransformerBlock(LightweightModule):
 
         self.layer_num = layer_num
 
-        ActualAttentionClass = attention_class if attention_class is not None else DefaultAttention
-
-        self.attention = ActualAttentionClass(
+        self.attention = Attention(
             mesh_device=mesh_device,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
@@ -64,7 +75,8 @@ class TransformerBlock(LightweightModule):
             dtype=dtype,
             model_config=self.model_config,
         )
-        self.attention_norm = DistributedNorm(
+
+        self.attention_norm = DistributedNorm(  # input_layernorm
             RMSNorm(
                 device=mesh_device,
                 dim=args.dim,
@@ -75,7 +87,6 @@ class TransformerBlock(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key="attention_norm",
                 is_distributed=self.args.is_distributed_norm,
-                add_unit_offset=self.args.rms_norm_add_unit_offset,
                 sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
@@ -83,7 +94,8 @@ class TransformerBlock(LightweightModule):
             args,
             TG=args.is_galaxy,
         )
-        self.ff_norm = DistributedNorm(
+
+        self.ff_norm = DistributedNorm(  # post_attention_layernorm
             RMSNorm(
                 device=mesh_device,
                 dim=args.dim,
@@ -94,7 +106,44 @@ class TransformerBlock(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key="ffn_norm",
                 is_distributed=self.args.is_distributed_norm,
-                add_unit_offset=self.args.rms_norm_add_unit_offset,
+                sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
+                sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
+                ccl_topology=self.args.ccl_topology(),
+            ),
+            args,
+            TG=args.is_galaxy,
+        )
+
+        self.pre_ff_norm = DistributedNorm(  # pre_feedforward_layernorm
+            RMSNorm(
+                device=mesh_device,
+                dim=args.dim,
+                eps=args.norm_eps,
+                state_dict=state_dict,
+                state_dict_prefix=args.get_state_dict_prefix("", layer_num),
+                weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                weight_dtype=ttnn.bfloat16,
+                weight_key="pre_feedforward_layernorm",
+                is_distributed=self.args.is_distributed_norm,
+                sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
+                sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
+                ccl_topology=self.args.ccl_topology(),
+            ),
+            args,
+            TG=args.is_galaxy,
+        )
+
+        self.post_ff_norm = DistributedNorm(  # post_feedforward_layernorm
+            RMSNorm(
+                device=mesh_device,
+                dim=args.dim,
+                eps=args.norm_eps,
+                state_dict=state_dict,
+                state_dict_prefix=args.get_state_dict_prefix("", layer_num),
+                weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                weight_dtype=ttnn.bfloat16,
+                weight_key="post_feedforward_layernorm",
+                is_distributed=self.args.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                 sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                 ccl_topology=self.args.ccl_topology(),
@@ -105,7 +154,7 @@ class TransformerBlock(LightweightModule):
 
     def forward(
         self,
-        x: ttnn.Tensor,
+        hidden_states: ttnn.Tensor,
         current_pos,
         rot_mats=None,
         user_id=0,
@@ -114,20 +163,26 @@ class TransformerBlock(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
-    ) -> ttnn.Tensor:
+    ):
         TG = self.args.is_galaxy
-        # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
         skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+
         assert (
-            x.memory_config() == skip_mem_cfg
-        ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
-        # Norms take fractured inputs and output replicated across devices
-        attn_in = self.attention_norm(x, mode)
-        # Attention takes replicated inputs and produces fractured outputs
+            hidden_states.memory_config() == skip_mem_cfg
+        ), f"decoder input memcfg mismatch: {hidden_states.memory_config()} != {skip_mem_cfg}"
+        residual = hidden_states
+
+        attn_in = self.attention_norm(hidden_states, mode)
+
+        if self.attention.is_sliding:
+            position_embeddings = rot_mats[1]
+        else:
+            position_embeddings = rot_mats[0]
+
         attn_out = self.attention.forward(
             attn_in,
             current_pos,
-            rot_mats,
+            position_embeddings,
             user_id,
             mode,
             page_table=page_table,
@@ -135,28 +190,36 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
-        # Here x and attn_out are both fractured across devices
-        h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
-        ttnn.deallocate(attn_out)
-        if mode == "prefill":
-            x.deallocate(True)
 
-        # Norms take fractured inputs and output replicated across devices
-        ff_in = self.ff_norm(h, mode)
+        hidden_states = self.ff_norm(attn_out, mode)
+
+        ttnn.deallocate(attn_out)
+        ttnn.deallocate(attn_in)
+
+        hidden_states = ttnn.add(hidden_states, residual, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
+
+        residual = hidden_states
+
+        hidden_states = self.pre_ff_norm(hidden_states, mode)
+
         if TG and mode == "decode":
-            ff_in = ttnn.to_memory_config(ff_in, memory_config=self.model_config["MLP_ACT_MEMCFG"])
-        # MLP takes replicated inputs and produces fractured outputs
-        ff_out = self.feed_forward.forward(ff_in, mode)
-        # ff_out and h are both fractured across devices
+            hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.model_config["MLP_ACT_MEMCFG"])
+
+        hidden_states = self.feed_forward.forward(hidden_states, mode)
+
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
         )
-        out = ttnn.add(
-            h,
-            ff_out,
+
+        hidden_states = self.post_ff_norm(hidden_states, mode)
+
+        hidden_states = ttnn.add(
+            hidden_states,
+            residual,
             memory_config=skip_mem_cfg,
             dtype=self.args.ccl_dtype
             if TG and not self.args.is_distributed_norm(mode)
             else activation_dtype or ttnn.bfloat16,
         )
-        return out  # fractured across devices
+
+        return hidden_states

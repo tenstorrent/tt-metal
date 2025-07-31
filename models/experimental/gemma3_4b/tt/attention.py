@@ -1,4 +1,15 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+"""
+source: models/tt_transformers/tt/attention.py
+
+This is the attention implementation of the Gemma-3-4b-it
+
+We have re-used the Attention implementation of the TT-Transformers with few modifications.
+This implementation has Changes in Datatype (Bfloat16) that supports the RMSNorm,
+Sliding Window support.
+
+"""
+
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,7 +19,8 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
+
+from models.experimental.gemma3_4b.tt.rmsnorm import RMSNorm
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup
 
@@ -27,6 +39,7 @@ class Attention(LightweightModule):
         use_paged_kv_cache=False,
     ):
         super().__init__()
+        self.is_sliding = bool((layer_num + 1) % configuration.sliding_window_pattern)
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
@@ -110,22 +123,22 @@ class Attention(LightweightModule):
             decoder_id=layer_num, tensor=TensorGroup.KV_CACHE
         )
         self.li_qkv_decode_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.LI_QKV_DECODE, configuration=configuration
+            decoder_id=layer_num, op=OpGroup.ACCURACY, configuration=configuration
         )
         self.sdpa_decode_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.SDPA_DECODE, configuration=configuration
+            decoder_id=layer_num, op=OpGroup.ACCURACY, configuration=configuration
         )
         self.li_o_decode_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.LI_O_DECODE, configuration=configuration
+            decoder_id=layer_num, op=OpGroup.ACCURACY, configuration=configuration
         )
         self.sdpa_prefill_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.SDPA_PREFILL, configuration=configuration
+            decoder_id=layer_num, op=OpGroup.ACCURACY, configuration=configuration
         )
         self.li_qkv_prefill_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.LI_QKV_PREFILL, configuration=configuration
+            decoder_id=layer_num, op=OpGroup.ACCURACY, configuration=configuration
         )
         self.li_o_prefill_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.LI_O_PREFILL, configuration=configuration
+            decoder_id=layer_num, op=OpGroup.ACCURACY, configuration=configuration
         )
 
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
@@ -498,6 +511,7 @@ class Attention(LightweightModule):
         # For example, a prompt w/ 1 user vs, the same prompt repeated N times for N users, will produce different outputs
         # This is because the SDPA op in decode mode has different number of reductions depending on batch size
         # Which leads to slightly different outputs from attention (due to accumulated errors)
+        q_heads_1BQD = ttnn.to_memory_config(q_heads_1BQD, ttnn.DRAM_MEMORY_CONFIG)
         if page_table:
             attn_output_1G4D = ttnn.transformer.paged_scaled_dot_product_attention_decode(
                 q_heads_1BQD,
@@ -584,7 +598,7 @@ class Attention(LightweightModule):
                 core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
                 program_config=self.model_config["ATTN_OUTPUT_PROGCFG"] if not self.TG else None,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b if self.TG else None,
+                dtype=ttnn.bfloat8_b if self.TG else ttnn.bfloat16,
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
             )
 
@@ -772,7 +786,7 @@ class Attention(LightweightModule):
             ttnn.deallocate(v_fill)
 
         # SDPA
-        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=self.activation_dtype or ttnn.bfloat8_b)
+        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=self.activation_dtype or ttnn.bfloat16)
         ttnn.deallocate(q_heads_1QSD)
 
         if chunk_start_idx is not None:
@@ -829,7 +843,7 @@ class Attention(LightweightModule):
             attn_output_11SH,
             self.wo,
             compute_kernel_config=self.li_o_prefill_compute_kernel_cfg,
-            dtype=self.activation_dtype or ttnn.bfloat8_b,
+            dtype=self.activation_dtype or ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
         )

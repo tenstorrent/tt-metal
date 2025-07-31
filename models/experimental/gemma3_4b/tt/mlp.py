@@ -1,4 +1,14 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+"""
+source: models/tt_transformers/tt/mlp.py
+
+This is the implementation of MLP (feed-forward) submodule of Gemma-3-4b-it.
+
+We have re-used the MLP implementation of the TT-Transformers library with few modifications.
+This implementation has changes in Data Type (bfloat16).
+"""
+
+
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -72,7 +82,9 @@ class MLP(LightweightModule):
         self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
 
         # Default activation is SILU
-        self.activation_type = self.args.mlp_activation_type
+        self.activation_type = (
+            args.mlp_activation_type if hasattr(args, "mlp_activation_type") else ttnn.UnaryOpType.SILU
+        )
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
@@ -88,7 +100,7 @@ class MLP(LightweightModule):
             decoder_id=layer_num, tensor=TensorGroup.ACTIVATION
         )
         li_ff1_3_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.LI_FF1_FF3, configuration=self.args
+            decoder_id=layer_num, op=OpGroup.ACCURACY, configuration=self.args
         )
 
         if mode == "decode":  # Sharded config
@@ -182,7 +194,7 @@ class MLP(LightweightModule):
             w1_out,
             w3_out,
             input_tensor_a_activations=[self.activation_type],
-            dtype=activation_dtype or ttnn.bfloat8_b,
+            dtype=activation_dtype or ttnn.bfloat16,
             memory_config=w1_out.memory_config(),
         )
 
@@ -207,7 +219,7 @@ class MLP(LightweightModule):
                 w2_in = ttnn.to_memory_config(w2_in, ttnn.L1_MEMORY_CONFIG)
 
         li_ff2_compute_kernel_cfg = self.model_config["DECODERS_OPTIMIZATIONS"].get_math_fidelity(
-            decoder_id=layer_num, op=OpGroup.LI_FF2, configuration=self.args
+            decoder_id=layer_num, op=OpGroup.ACCURACY, configuration=self.args
         )
         w2_out = ttnn.linear(
             w2_in,
