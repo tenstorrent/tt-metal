@@ -482,30 +482,30 @@ def prepare_generator_args(
     ],
     ids=[
         "batch-1",  # latency
-        # "batch-32",  # throughput
-        # "long-context-64k",  # 64k context, max_seq_len=128k
-        # "long-context-32k",  # 32k context, max_seq_len=32k
-        # "long-context-16k",  # 16k context, max_seq_len=32k
-        # "reasoning-1",  # reasoning
-        # "ci-1",  # CI batch 1
-        # "ci-32",  # CI batch 32
-        # "DP-4-b1",  # DP 4 latency
-        # "DP-8-b1",  # DP 8 latency
-        # "DP-4-b32",  # DP 4 throughput
-        # "ci-b1-DP-4",  # CI DP 4 batch 1
-        # "ci-b1-DP-8",  # CI DP 8 batch 1
-        # "ci-b1-DP-16",  # CI DP 16 batch 1
-        # "ci-b1-DP-32",  # CI DP 32 batch 1
-        # "ci-stress-1",  # CI Stress test batch-1
+        "batch-32",  # throughput
+        "long-context-64k",  # 64k context, max_seq_len=128k
+        "long-context-32k",  # 32k context, max_seq_len=32k
+        "long-context-16k",  # 16k context, max_seq_len=32k
+        "reasoning-1",  # reasoning
+        "ci-1",  # CI batch 1
+        "ci-32",  # CI batch 32
+        "DP-4-b1",  # DP 4 latency
+        "DP-8-b1",  # DP 8 latency
+        "DP-4-b32",  # DP 4 throughput
+        "ci-b1-DP-4",  # CI DP 4 batch 1
+        "ci-b1-DP-8",  # CI DP 8 batch 1
+        "ci-b1-DP-16",  # CI DP 16 batch 1
+        "ci-b1-DP-32",  # CI DP 32 batch 1
+        "ci-stress-1",  # CI Stress test batch-1
     ],
 )
 @pytest.mark.parametrize(
     "optimizations",
     [
-        # lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
+        lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
         lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
-    ids=["accuracy"],
+    ids=["performance", "accuracy"],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 30000000, "num_command_queues": 1}], indirect=True)
 @pytest.mark.parametrize(
