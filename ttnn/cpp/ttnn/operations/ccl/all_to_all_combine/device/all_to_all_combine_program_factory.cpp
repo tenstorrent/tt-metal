@@ -269,9 +269,8 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         operation_attributes.cross_device_semaphore.address(),
     };
     for (auto& neighbor : neighbors) {
-        auto neighbor_coordinate = mesh_view.find_device(neighbor->id());
         uint32_t link_id = 0;
-        const auto neighbor_fabric_id = get_fabric_node_id_from_physical_chip_id(neighbor->id());
+        const auto neighbor_fabric_id = mesh_device->get_device_fabric_node_id(neighbor);
         append_fabric_connection_rt_args(
             fabric_node_id, neighbor_fabric_id, link_id, program, sender_core, writer_runtime_args);
     }
