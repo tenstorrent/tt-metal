@@ -936,7 +936,7 @@ class MLA1D(AbstractModule):
         self,
         x: ttnn.Tensor,
         cfg: RunDecodeConfig,
-        position_idxs: [int],
+        position_idxs: ttnn.Tensor,
         rope_tensors: dict,
         page_table: ttnn.Tensor,
         meta_layer_state: MetaLayerState,
