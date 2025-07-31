@@ -43,10 +43,10 @@ on:
             - "22.04"
             - "24.04"
       commit:
-        description: 'Commit SHA to test (default: HEAD)'
         required: false
-        default: "main"
         type: string
+        default: ""
+        description: 'Commit SHA to test (default: HEAD)'
 
 run-name: ${{ inputs.description }}
 jobs:
