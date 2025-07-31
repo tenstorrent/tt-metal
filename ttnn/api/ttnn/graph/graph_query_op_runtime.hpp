@@ -154,7 +154,9 @@ auto query_op_runtime(Op op, MeshDevice* device, Args&&... args) {
     }
 
     uint64_t runtime = op_perf::get_runtime_from_model(op_name, json_args...);
-    .if (runtime != 0) { return RuntimeQueryResponse{ExecutionStatus::Success, runtime, ""}; }
+    if (runtime != 0) {
+        return RuntimeQueryResponse{ExecutionStatus::Success, runtime, ""};
+    }
 
 #endif
 
