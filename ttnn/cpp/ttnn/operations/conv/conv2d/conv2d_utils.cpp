@@ -1083,14 +1083,6 @@ uint32_t calculate_conv_dram_L1(
             params.enable_bias,
             params.compute_kernel_config);
     }
-    log_info(
-        tt::LogOp,
-        "Slice Config {}, input slice {}x{}, output slice {}x{}",
-        dram_slice_config,
-        input_slice_height,
-        input_slice_width,
-        output_slice_height,
-        output_slice_width);
     auto sliced_input_tensor_memory_config = std::get<1>(determine_input_memory_config(
         conv_config,
         params.batch_size,
@@ -1146,13 +1138,6 @@ uint32_t calculate_conv_dram_L1(
                                 (float_shard_height + (params.dilation[0] * params.kernel_size[0] / 2)) * input_size /
                                 float_shard_height;
     const float output_size_margin = 1.0f;
-    log_info(
-        tt::LogOp,
-        "Conv DRAM L1 estimate Input {}, Approx Halo {}, Output {}, CB {}",
-        input_size,
-        approx_halo_size,
-        l1_usage.tensor_allocation_size,
-        l1_usage.CB_allocation_size);
     return output_size_margin * std::max<uint32_t>(
                                     approx_halo_size + l1_usage.tensor_allocation_size + l1_usage.CB_allocation_size,
                                     input_size + approx_halo_size);

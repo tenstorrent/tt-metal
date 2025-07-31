@@ -187,11 +187,6 @@ Result conv2d_DRAM(
         uint32_t current_num_slices = 2;
         while (current_num_slices < output_sliced_dim) {
             dram_slice_config.num_slices = current_num_slices;
-            log_info(
-                tt::LogOp,
-                "Conv2D DRAM Slicing: Trying with {} slices, Free memory = {}",
-                current_num_slices,
-                L1_stats.total_free_bytes);
             if (L1_stats.total_free_bytes >=
                 calculate_conv_dram_L1(
                     ConvDRAMParamters{
