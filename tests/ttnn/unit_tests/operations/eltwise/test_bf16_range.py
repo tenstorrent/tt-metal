@@ -26,6 +26,96 @@ EPSILON = 2**-9
 # ttnn.enable_program_cache(device)  # Useful: we are going to call the same kernel several times
 
 
+def test_exp2_plot(device):
+    torch_binary_op = torch.exp2
+    ttnn_op = ttnn.exp2
+    low = -5
+    high = 5
+
+    x = torch.arange(low, high, 0.001, dtype=torch.float32)  # for fractional ULP error calculation
+
+    plot_dir = "accuracy_results/exp2_results/plots/"
+    csv_dir = "accuracy_results/exp2_results/csv/"
+    os.makedirs(plot_dir, exist_ok=True)
+    os.makedirs(csv_dir, exist_ok=True)
+
+    csv_path = os.path.join(csv_dir, f"{ttnn_op.__name__}_bf16_tensor_input_results.csv")
+
+    with open(csv_path, mode="w", newline="") as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["input_x", "torch_result", "ttnn_result", "abs_error", "ulp_error"])
+
+    torch_out = torch_binary_op(x)
+
+    ttnn_x = ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    ttnn_out_res = ttnn_op(ttnn_x)
+    ttnn_out = ttnn.to_torch(ttnn_out_res).to(torch.float32)
+
+    abs_error = torch.abs(torch_out - ttnn_out)
+    ulp_spacing = util.ulp(torch_out.to(torch.bfloat16)).to(torch.float32)
+    ulp_error = abs_error / ulp_spacing
+
+    valid_mask = torch.isfinite(ulp_error)
+
+    with open(csv_path, mode="a", newline="") as csv_file:
+        writer = csv.writer(csv_file)
+        for i in range(len(x)):
+            writer.writerow(
+                [
+                    x[i].item(),
+                    torch_out[i].item(),
+                    ttnn_out[i].item(),
+                    abs_error[i].item(),
+                    ulp_error[i].item(),
+                ]
+            )
+
+    # Output Comparison Plot
+    plt.scatter(x.to(torch.float32).numpy(), torch_out.to(torch.float32).numpy(), label="torch", s=1)
+    plt.scatter(x.to(torch.float32).numpy(), ttnn_out.numpy(), label="ttnn", s=1)
+    plt.title(f"Output Comparison: exp2(x)\nInput Range: x ∈ [{low}, {high}]")
+    plt.xlabel("x")
+    plt.ylabel("exp2(x)")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    save_path = os.path.join(plot_dir, f"{ttnn_op.__name__}_tensor_input_output.png")
+    plt.savefig(save_path)
+    plt.close()
+    print(f"\nOutput graph saved to {os.path.abspath(save_path)}")
+
+    # ULP Error Plot (with y-axis clamped to 5)
+    plt.figure(figsize=(10, 5))
+    plt.scatter(x.to(torch.float32).numpy(), ulp_error.numpy(), label="ULP Error", color="red", s=1)
+    plt.title(f"ULP Error: {ttnn_op.__name__} vs Torch\nInput Range: x ∈ [{low}, {high}]")
+    plt.xlabel("x")
+    plt.ylabel("ULP Error")
+    plt.ylim(0, 5)
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    ulp_path = os.path.join(plot_dir, f"{ttnn_op.__name__}_tensor_input_ulp_clamped.png")
+    plt.savefig(ulp_path)
+    plt.close()
+    print(f"Clamped ULP graph saved to {os.path.abspath(ulp_path)}")
+
+    # ULP Error Plot (without any y-axis clamping)
+    plt.figure(figsize=(10, 5))
+    plt.scatter(x.to(torch.float32).numpy(), ulp_error.numpy(), label="ULP Error", color="blue", s=1)
+    plt.title(f"ULP Error (Full Range): {ttnn_op.__name__} vs Torch\nInput Range: x ∈ [{low}, {high}]")
+    plt.xlabel("x")
+    plt.ylabel("ULP Error")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    ulp_full_range_path = os.path.join(plot_dir, f"{ttnn_op.__name__}_tensor_input_ulp_full_range.png")
+    plt.savefig(ulp_full_range_path)
+    plt.close()
+    print(f"Full-range ULP graph saved to {os.path.abspath(ulp_full_range_path)}")
+
+    print(f"\nAll results saved to CSV: {os.path.abspath(csv_path)}")
+
+
 def test_plot_binary_op_pow_looping_tensor():
     torch_binary_op = torch.pow
     ttnn_op = ttnn.pow
