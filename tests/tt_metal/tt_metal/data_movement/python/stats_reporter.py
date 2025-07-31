@@ -11,10 +11,11 @@ from tests.tt_metal.tt_metal.data_movement.python.constants import *
 
 
 class StatsReporter:
-    def __init__(self, dm_stats, aggregate_stats, test_id_to_name, output_dir, arch):
+    def __init__(self, dm_stats, aggregate_stats, test_id_to_name, test_type_attributes, output_dir, arch):
         self.dm_stats = dm_stats
         self.aggregate_stats = aggregate_stats
         self.test_id_to_name = test_id_to_name
+        self.test_type_attributes = test_type_attributes
         # Create architecture-specific subdirectory
         self.output_dir = os.path.join(output_dir, arch)
 
@@ -85,8 +86,8 @@ class StatsReporter:
                     "Bandwidth (bytes/cycle)",
                 ]
                 # Add test-specific headers
-                for test_type, test_type_attributes in TEST_TYPE_ATTRIBUTES.items():
-                    if test_id in test_type_attributes["test_ids"]:
+                for test_type, test_type_attributes in self.test_type_attributes.items():
+                    if test_type.replace("_", " ").title() in test_name:
                         header.extend(test_type_attributes["attributes"].keys())
                         if test_type == "multicast_schemes":
                             header.append("Grid Dimensions")
@@ -111,8 +112,8 @@ class StatsReporter:
                         ]
 
                         # Add test-specific data
-                        for test_type, test_type_attributes in TEST_TYPE_ATTRIBUTES.items():
-                            if test_id in test_type_attributes["test_ids"]:
+                        for test_type, test_type_attributes in self.test_type_attributes.items():
+                            if test_type.replace("_", " ").title() in test_name:
                                 row.extend([run_stats.get(val) for val in test_type_attributes["attributes"].values()])
                                 if test_type == "multicast_schemes":
                                     row.append(run_stats.get("grid_dimensions"))

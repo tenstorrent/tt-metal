@@ -36,11 +36,11 @@ class Plotter:
             "hspace": 0.3,  # Vertical space between plots
         }
 
-    def get_dynamic_plot_config(self, test_id):
+    def get_dynamic_plot_config(self, test_name):
         """Returns dynamic plot configuration based on test type"""
         config = self.plot_config.copy()
 
-        if test_id in TEST_TYPE_ATTRIBUTES["virtual_channels"]["test_ids"]:
+        if "Virtual Channels" in test_name:
             # For virtual channels tests, use two plots (1x2 grid) for NOC 0 and NOC 1
             config["nrows_per_figure"] = 1
             config["ncols_per_figure"] = 2
@@ -77,7 +77,7 @@ class Plotter:
             )
 
             # Get dynamic plot configuration for this test type
-            plot_config = self.get_dynamic_plot_config(test_id)
+            plot_config = self.get_dynamic_plot_config(test_name)
 
             # Prepare figure for the current test ID
             figure_height = (
@@ -104,22 +104,20 @@ class Plotter:
                     axes.append(fig.add_subplot(gridspec[row, col]))
 
             # Generate plots based on test type
-            if test_id in TEST_TYPE_ATTRIBUTES["multicast_schemes"]["test_ids"]:
+            if "Multicast Schemes" in test_name:
                 self.plot_bandwidth_multicast(
                     axes[0],
                     plot_data[test_id],
-                    x_axis="grid_dimensions",
                     riscv="riscv_0",
                     noc_index=0,
                 )
                 self.plot_bandwidth_multicast(
                     axes[1],
                     plot_data[test_id],
-                    x_axis="grid_dimensions",
                     riscv="riscv_0",
                     noc_index=1,
                 )
-            elif test_id in TEST_TYPE_ATTRIBUTES["virtual_channels"]["test_ids"]:
+            elif "Virtual Channels" in test_name:
                 self.plot_bandwidth_virtual_channels(axes[0], plot_data[test_id], noc_index=0)
                 self.plot_bandwidth_virtual_channels(axes[1], plot_data[test_id], noc_index=1)
             else:  # Packet Sizes
@@ -127,11 +125,6 @@ class Plotter:
                 self.plot_data_size_vs_bandwidth(axes[1], plot_data[test_id])
 
             # Add figure title
-            test_name = (
-                self.test_id_to_name.get(test_id, f"Test ID {test_id}")
-                if self.test_id_to_name
-                else f"Test ID {test_id}"
-            )
             fig.suptitle(f"{test_name} ({self.arch.upper()})", fontsize=16, fontweight="bold", y=0.98)
 
             # Add comments section to the figure below the plots

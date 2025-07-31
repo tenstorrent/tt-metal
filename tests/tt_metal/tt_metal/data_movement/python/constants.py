@@ -12,28 +12,6 @@ NOC_WIDTHS = {
     # Add other architectures as needed
 }
 
-# Test category-specific attributes
-# These attributes are dynamically extracted from the test metadata
-# and are used to enrich the aggregated statistics for each test category.
-TEST_TYPE_ATTRIBUTES = {
-    "multicast_schemes": {
-        "test_ids": [100, 101],
-        "attributes": {
-            "NoC Index": "noc_index",
-            "Multicast Scheme Type": "multicast_scheme_number",
-            "Subordinate Grid Size X": "sub_grid_size_x",
-            "Subordinate Grid Size Y": "sub_grid_size_y",
-        },
-    },
-    "virtual_channels": {
-        "test_ids": [150, 151, 152, 153, 154, 155],  # Consider putting this in the yaml file instead
-        "attributes": {
-            "Number of Virtual Channels": "num_virtual_channels",
-            "NoC Index": "noc_index",
-        },
-    },
-}
-
 # Plot configuration
 DEFAULT_PLOT_WIDTH = 12
 DEFAULT_PLOT_HEIGHT = 6
@@ -49,4 +27,3 @@ RISC_TO_KERNEL_MAP = {
 
 # Output directory default
 DEFAULT_OUTPUT_DIR = "tests/tt_metal/tt_metal/data_movement/data"
-# TO-DO: Make a directory for WH and BH
