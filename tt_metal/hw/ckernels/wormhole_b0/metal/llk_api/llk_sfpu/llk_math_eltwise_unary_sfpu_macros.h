@@ -83,9 +83,9 @@
         ckernel::sfpu::calculate_##OP<APPROXIMATE, DST_ACCUM_MODE, DEFAULT_INT>, DST_IDX, VECTOR_MODE)
 
 // For ops where compute takes extra args
-#define SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS(OP, MODE, APPROXIMATE, DST_IDX, PARAM0, PARAM1) \
+#define SFPU_UNARY_PARAMS_KERNEL_EXTRA_ARGS(FN, MODE, APPROXIMATE, DST_IDX, PARAM0, PARAM1) \
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                  \
-        ckernel::sfpu::calculate_##OP<APPROXIMATE>, DST_IDX, (int)VectorMode::MODE, PARAM0, PARAM1);
+        ckernel::sfpu::FN<APPROXIMATE>, DST_IDX, (int)VectorMode::MODE, PARAM0, PARAM1);
 
 // For ops with multiple template parameters and one runtime parameter (e.g., scale)
 #define SFPU_TEMPLATE_PARAMS_KERNEL(                                                                        \
