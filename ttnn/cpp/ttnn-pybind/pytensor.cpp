@@ -31,6 +31,9 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
+#include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
@@ -76,6 +79,179 @@ void log_external_operation(const operation::ExternalOperation& operation, const
 
 #endif
 
+template <typename... Args>
+void log_from_cpp(const char* file, int line, const char* func, Args&&... message) {
+    auto logging = pybind11::module_::import("logging");
+    auto logger = logging.attr("getLogger")("py_log_cxx");
+
+    // Convert arguments to Python objects and join with spaces
+    auto builtins = pybind11::module_::import("builtins");
+    auto str_func = builtins.attr("str");
+
+    std::vector<pybind11::object> py_args;
+    auto convert_arg = [&](auto&& arg) { py_args.push_back(str_func(std::forward<decltype(arg)>(arg))); };
+
+    (convert_arg(std::forward<Args>(message)), ...);
+
+    auto join_str = pybind11::str(" ");
+    auto formatted_message = join_str.attr("join")(py_args);
+
+    // Create a LogRecord manually
+    auto log_record = logging.attr("LogRecord")(
+        "py_log_cxx",                          // name
+        logging.attr("DEBUG"),                 // level
+        std::filesystem::path(file).string(),  // pathname
+        line,                                  // lineno
+        formatted_message,                     // msg
+        pybind11::tuple(),                     // args
+        pybind11::none(),                      // exc_info
+        func,                                  // func
+        pybind11::none()                       // stack_info
+    );
+
+    // Handle the record
+    logger.attr("handle")(log_record);
+}
+
+// #define py_log(...) log_from_cpp(__FILE__, __LINE__, __func__, "[" #__VA_ARGS__ "] =" __VA_OPT__(, ) __VA_ARGS__);
+#define py_log(...)
+
+std::string format_tensor_as_string(pybind11::object tensor, int precision = 4) {
+    pybind11::object tensor_list;
+
+    if (1024 < tensor.attr("volume")().cast<int>()) {
+        return "1024 < volume";
+    }
+
+    if (pybind11::hasattr(tensor, "tolist")) {
+        tensor_list = tensor.attr("tolist")();
+    } else if (pybind11::hasattr(tensor, "to_list")) {
+        tensor_list = tensor.attr("to_list")();
+    } else {
+        return "Unsupported tensor type";
+    }
+
+    std::function<std::vector<double>(pybind11::object)> get_all_values;
+    get_all_values = [&](pybind11::object obj) -> std::vector<double> {
+        std::vector<double> values;
+        if (pybind11::isinstance<pybind11::list>(obj)) {
+            for (auto item : obj) {
+                auto sub_values = get_all_values(item.cast<pybind11::object>());
+                values.insert(values.end(), sub_values.begin(), sub_values.end());
+            }
+        } else {
+            try {
+                values.push_back(obj.cast<double>());
+            } catch (...) {
+                values.push_back(0.0);
+            }
+        }
+        return values;
+    };
+
+    auto calculate_col_width = [&](pybind11::object nested_list) -> int {
+        auto all_values = get_all_values(nested_list);
+        if (all_values.empty()) {
+            return precision + 4;
+        }
+
+        int max_len = 0;
+        for (double val : all_values) {
+            std::ostringstream oss;
+            if (std::abs(val) < 1e-10) {
+                oss << "0.0";
+            } else {
+                oss << std::fixed << std::setprecision(precision) << val;
+            }
+            max_len = std::max(max_len, static_cast<int>(oss.str().length()));
+        }
+        return std::max(max_len + 2, precision + 4);
+    };
+
+    auto format_number = [&](pybind11::object obj, int width) -> std::string {
+        std::ostringstream oss;
+        try {
+            double val = obj.cast<double>();
+            if (std::abs(val) < 1e-10) {
+                oss << "0.0";
+            } else {
+                oss << std::fixed << std::setprecision(precision) << val;
+            }
+        } catch (...) {
+            oss << obj.cast<std::string>();
+        }
+
+        std::string formatted = oss.str();
+        if (formatted.length() < width) {
+            return std::string(width - formatted.length(), ' ') + formatted;
+        }
+        return formatted;
+    };
+
+    std::function<std::string(pybind11::object, int, int)> format_recursive;
+    format_recursive = [&](pybind11::object nested_list, int depth, int col_width) -> std::string {
+        if (!pybind11::isinstance<pybind11::list>(nested_list)) {
+            return format_number(nested_list, col_width);
+        }
+
+        pybind11::list list_obj = nested_list.cast<pybind11::list>();
+        if (list_obj.size() == 0) {
+            return "[]";
+        }
+
+        if (!pybind11::isinstance<pybind11::list>(list_obj[0])) {
+            std::ostringstream oss;
+            oss << "[ ";
+            for (size_t i = 0; i < list_obj.size(); ++i) {
+                if (i > 0) {
+                    oss << "   ";
+                }
+                oss << format_number(pybind11::object(list_obj[i]), col_width);
+            }
+            oss << " ]";
+            return oss.str();
+        }
+
+        std::vector<std::string> lines;
+        std::string indent(depth, ' ');
+
+        for (size_t i = 0; i < list_obj.size(); ++i) {
+            std::string formatted_item = format_recursive(pybind11::object(list_obj[i]), depth + 1, col_width);
+
+            if (i == 0) {
+                lines.push_back("[" + formatted_item);
+            } else {
+                lines.push_back(indent + " " + formatted_item);
+            }
+        }
+
+        if (!lines.empty()) {
+            lines.back() += "]";
+        }
+
+        std::ostringstream result;
+        for (size_t i = 0; i < lines.size(); ++i) {
+            if (i > 0) {
+                result << "\n";
+            }
+            result << lines[i];
+        }
+        return result.str();
+    };
+
+    if (!pybind11::isinstance<pybind11::list>(tensor_list)) {
+        return "[]";
+    }
+
+    pybind11::list list_obj = tensor_list.cast<pybind11::list>();
+    if (list_obj.size() == 0) {
+        return "[]";
+    }
+
+    int col_width = calculate_col_width(tensor_list);
+    return format_recursive(tensor_list, 0, col_width);
+}
+
 template <typename T>
 Tensor create_typed_tt_tensor_from_py_data(
     std::size_t py_data_ptr,
@@ -86,6 +262,7 @@ Tensor create_typed_tt_tensor_from_py_data(
     ttnn::QueueId cq_id,
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
+    ZoneScoped;
     TT_FATAL(
         !tensor_layout.get_memory_config().is_sharded() || tensor_layout.get_memory_config().shard_spec().has_value() ||
             tensor_layout.get_memory_config().nd_shard_spec().has_value(),
@@ -134,10 +311,12 @@ Tensor create_tt_tensor_from_py_data(
     ttnn::QueueId cq_id,
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
+    ZoneScoped;
     auto create_concrete = [&]<typename T>() {
         return create_typed_tt_tensor_from_py_data<T>(
             py_data_ptr, py_data_shape, tensor_layout, device, pydata_pin, cq_id, pad_value, mesh_mapper);
     };
+    py_log(tensor_layout.get_data_type(), tensor_layout.get_layout(), py_data_shape);
     switch (tensor_layout.get_data_type()) {
         case DataType::UINT8: return create_concrete.operator()<uint8_t>();
         case DataType::UINT16: return create_concrete.operator()<uint16_t>();
@@ -191,41 +370,6 @@ PreprocessedPyTensor parse_py_tensor(const py::handle& py_tensor, std::optional<
             data_type = DataType::UINT8;
         } else {
             TT_THROW("Unsupported DataType: {}", std::string(py::repr(py_dtype)));
-        }
-
-        auto maybe_convert_pytorch_tensor = [&contiguous_py_tensor, &py_dtype, &torch](const char* target_py_dtype) {
-            if (not py_dtype.equal(torch.attr(target_py_dtype))) {
-                contiguous_py_tensor = contiguous_py_tensor.attr("to")(torch.attr(target_py_dtype));
-            }
-        };
-        switch (data_type) {
-            case DataType::UINT8: {
-                maybe_convert_pytorch_tensor("uint8");
-                break;
-            }
-            case DataType::UINT16: {
-                maybe_convert_pytorch_tensor("int16");
-                break;
-            }
-            case DataType::INT32:
-            case DataType::UINT32: {
-                maybe_convert_pytorch_tensor("int32");
-                break;
-            }
-            case DataType::BFLOAT4_B:
-            case DataType::BFLOAT8_B:
-            case DataType::FLOAT32: {
-                maybe_convert_pytorch_tensor("float32");
-                break;
-            }
-            case DataType::BFLOAT16: {
-                maybe_convert_pytorch_tensor("bfloat16");
-                break;
-            }
-            default: {
-                TT_THROW("Unsupported DataType: {}", data_type);
-                break;
-            }
         }
 
         return PreprocessedPyTensor{
@@ -302,6 +446,246 @@ PreprocessedPyTensor parse_py_tensor(const py::handle& py_tensor, std::optional<
     }
 }
 
+struct PyTensorHostConversionStrategy {
+    /// Data conversion has already been done on host, no extra type cast is necessary
+    bool host_side_conversion = false;
+    /// Use this layout to construct the initial tensor -- extra conversion might be done
+    /// after the tensor has been moved to device.
+    Layout construct_with_layout = Layout::TILE;
+    std::optional<DataType> construct_with_data_type = std::nullopt;
+    py::object tensor;
+};
+
+PyTensorHostConversionStrategy prepare_conversion_strategy(
+    py::handle const& py_tensor,
+    std::optional<DataType> const& dtype,
+    std::optional<Layout> const& layout,
+    bool has_device,
+    MemoryConfig const& memory_config,
+    std::optional<Tile> const& optional_tile) {
+    PyTensorHostConversionStrategy res;
+    bool HANDLE_FLOAT32_BUG_23405 = true;
+    py::object torch = py::module_::import("torch");
+    py::object tensor = py::reinterpret_borrow<pybind11::object>(py_tensor);
+
+    auto ttnn_fallback_type_mapping = [&torch](std::optional<DataType> dtype) -> std::optional<py::object> {
+        if (!dtype.has_value()) {
+            return std::nullopt;
+        } else {
+            switch (dtype.value()) {
+                case DataType::UINT8: return torch.attr("uint8");
+                case DataType::UINT16: return torch.attr("int16");
+                case DataType::INT32: return torch.attr("int32");
+                case DataType::UINT32: return torch.attr("int32");
+                case DataType::BFLOAT4_B: return torch.attr("float32");
+                case DataType::BFLOAT8_B: return torch.attr("float32");
+                case DataType::FLOAT32: return torch.attr("float32");
+                case DataType::BFLOAT16: return torch.attr("bfloat16");
+                default: return std::nullopt;
+            }
+        }
+    };
+
+    auto ttnn_unsupported_type_mapping = [&torch](py::object dtype) -> std::optional<py::object> {
+        if (dtype.equal(torch.attr("int64"))) {
+            return torch.attr("int32");
+        } else if (dtype.equal(torch.attr("float16"))) {
+            return torch.attr("bfloat16");
+        } else if (dtype.equal(torch.attr("float64"))) {
+            return torch.attr("float32");
+        } else if (dtype.equal(torch.attr("bool"))) {
+            return torch.attr("int32");
+        } else {
+            return std::nullopt;
+        }
+    };
+
+    auto is_torch_missing_data_type = [](std::optional<DataType> dtype) -> bool {
+        return dtype.has_value() && (dtype.value() == DataType::BFLOAT4_B || dtype.value() == DataType::BFLOAT8_B ||
+                                     dtype.value() == DataType::UINT32);
+    };
+
+    auto do_host_conversion_through_fallback = [&]() {
+        if (ttnn_fallback_type_mapping(dtype).has_value()) {
+            py_log(ttnn_fallback_type_mapping(dtype).value());
+            tensor = tensor.attr("to")(ttnn_fallback_type_mapping(dtype).value());
+        } else {
+            py_log();
+            tensor = tensor.attr("to")(ttnn_unsupported_type_mapping(tensor.attr("dtype")));
+        }
+
+        // tensor = tensor.attr("to")(ttnn_fallback_type_mapping(dtype).value());
+
+        res.host_side_conversion = true;
+        if (is_torch_missing_data_type(dtype)) {
+            res.construct_with_data_type = dtype;
+        }
+    };
+
+    py_log(dtype, tensor.attr("dtype"), layout, tensor.attr("min")(), tensor.attr("max")());
+
+    const bool is_int32_with_retiling =
+        ((dtype.has_value() && dtype.value() == DataType::INT32) || (!dtype.has_value())) &&
+        (tensor.attr("dtype").equal(torch.attr("int32")) && layout.has_value() && layout != Layout::ROW_MAJOR);
+
+    if (tensor.attr("dtype").equal(torch.attr("int64"))) {
+        py_log();
+        if (!dtype.has_value()) {
+            tensor = tensor.attr("to")(torch.attr("int32"));
+            res.host_side_conversion = true;
+            res.construct_with_data_type = DataType::UINT32;
+        } else {
+            do_host_conversion_through_fallback();
+        }
+    } else if (!has_device && ttnn_fallback_type_mapping(dtype).has_value()) {
+        py_log();
+        // Strategy: No Device Fallback
+        // No device, conversion must be performed on the host
+        do_host_conversion_through_fallback();
+    } else if (memory_config.is_sharded()) {
+        py_log();
+        do_host_conversion_through_fallback();
+    } else if (
+        optional_tile.has_value() && (((optional_tile->get_tile_shape()[0] % tt::constants::TILE_WIDTH) != 0) ||
+                                      ((optional_tile->get_tile_shape()[1] % tt::constants::TILE_HEIGHT) != 0))) {
+        // On-device tilizing requires padded tensor shape to match the 32x32 tile size,
+        do_host_conversion_through_fallback();
+    } else if (ttnn_unsupported_type_mapping(tensor.attr("dtype")).has_value()) {
+        // Strategy: Unsupported Type
+        // ttnn tensor cannot hold the original host data without losses -- need to perform the conversion while on
+        // host.
+        if (ttnn_fallback_type_mapping(dtype).has_value()) {
+            py_log(ttnn_fallback_type_mapping(dtype).value());
+            tensor = tensor.attr("to")(ttnn_fallback_type_mapping(dtype).value());
+        } else {
+            py_log();
+            tensor = tensor.attr("to")(ttnn_unsupported_type_mapping(tensor.attr("dtype")));
+        }
+        res.host_side_conversion = true;
+        py_log(dtype);
+        if (is_torch_missing_data_type(dtype)) {
+            py_log();
+            res.construct_with_data_type = dtype;
+        } else {
+            py_log("no missing data type");
+        }
+    } else if (
+        tensor.attr("dtype").equal(torch.attr("bfloat16")) && dtype.has_value() &&
+        (dtype.value() == DataType::BFLOAT4_B || dtype.value() == DataType::BFLOAT8_B)) {
+        // Under certain conditions typecast of the bfloat16 to bfloat4b/bfloat8b leaves half of the tensor as zeroes.
+        // The test triggering this bug is test_matmul.py::test_tiny_tiles_bfloat
+        py_log();
+        do_host_conversion_through_fallback();
+    } else if (is_int32_with_retiling) {
+        // Convert tensor on host, as int32 tensors above certain size loose precision.
+        // One instance of this is reported in https://github.com/tenstorrent/tt-metal/issues/23407
+        // but the size is not, stable `(32, 32, 64, 64)` can also trigger this.
+        py_log();
+        do_host_conversion_through_fallback();
+    } else if (tensor.attr("dtype").equal(torch.attr("uint8"))) {
+        // https://github.com/tenstorrent/tt-metal/issues/21682 typecast missing support for uint8
+        py_log();
+        do_host_conversion_through_fallback();
+    } else if (
+        HANDLE_FLOAT32_BUG_23405 && tensor.attr("dtype").equal(torch.attr("float32")) && dtype &&
+        dtype.value() != DataType::FLOAT32) {
+        py_log();
+        do_host_conversion_through_fallback();
+    } else if (
+        layout && layout.value() == Layout::ROW_MAJOR &&
+        (tensor.attr("dtype").equal(torch.attr("float32")) || tensor.attr("dtype").equal(torch.attr("int32"))) &&
+        dtype && dtype.value() == DataType::UINT8) {
+        py_log();
+        // Original data is stored in float32 and requires type casting
+        tensor = tensor.attr("to")(ttnn_fallback_type_mapping(dtype).value());
+        res.host_side_conversion = true;
+    } else if (
+        !dtype.has_value() ||
+        (dtype.value() == DataType::FLOAT32 && tensor.attr("dtype").equal(torch.attr("float32"))) ||
+        (dtype.value() == DataType::BFLOAT16 && tensor.attr("dtype").equal(torch.attr("bfloat16"))) ||
+        (dtype.value() == DataType::INT32 && tensor.attr("dtype").equal(torch.attr("int32"))) ||
+        (dtype.value() == DataType::UINT8 && tensor.attr("dtype").equal(torch.attr("uint8")))) {
+        py_log();
+        // Strategy: No Conversion Needed
+        // No target type specified or target is the same as input, will copy the tensor from source data w/o typecast.
+        res.host_side_conversion = true;
+        if (is_torch_missing_data_type(dtype)) {
+            res.construct_with_data_type = dtype;
+        }
+    } else if (
+        HANDLE_FLOAT32_BUG_23405 && layout && layout.value() == Layout::ROW_MAJOR && dtype &&
+        dtype.value() == DataType::FLOAT32) {
+        py_log();
+        // Strategy: Float32 Bug Workaround
+        // https://github.com/tenstorrent/tt-metal/issues/23405
+        // This condition handles the tensor conversion case where
+        // - input device exists
+        // - type conversion is necessary and is not handled by other edge cases
+        // - the final layout should be a row-major
+        //
+        // Due to the bug linked above this case should also be performed on device, to avoid precision loss
+        do_host_conversion_through_fallback();
+    }
+
+    py_log(tensor.attr("numel")().cast<int>());
+    py_log(tensor.attr("dim")().cast<int>());
+    py_log(res.host_side_conversion);
+
+    if ((tensor.attr("numel")().cast<int>() == 0) || (tensor.attr("dim")().cast<int>() == 0)) {
+        // to tile the tensor it must have non-zero volume or a sufficient rank -- if this fails
+        // the tensor must be constructed on host.
+        py_log();
+        res.host_side_conversion = true;
+        res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
+        res.construct_with_data_type = dtype;
+    } else if (memory_config.is_sharded()) {
+        py_log();
+        res.host_side_conversion = true;
+        res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
+        res.construct_with_data_type = dtype;
+    } else if (is_int32_with_retiling) {
+        py_log();
+        res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
+        res.construct_with_data_type = DataType::INT32;
+    } else if (
+        optional_tile.has_value() && (((optional_tile->get_tile_shape()[0] % tt::constants::TILE_WIDTH) != 0) ||
+                                      ((optional_tile->get_tile_shape()[1] % tt::constants::TILE_HEIGHT) != 0))) {
+        py_log();
+        res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
+        res.construct_with_data_type = dtype;
+    } else {
+        const auto py_dtype = tensor.attr("dtype");
+
+        if (dtype.has_value() && (dtype.value() == DataType::BFLOAT4_B || dtype.value() == DataType::BFLOAT8_B)) {
+            py_log("bfloat4_b/bfloat8_b, need tile layout");
+            res.construct_with_layout = Layout::TILE;
+        } else if (HANDLE_FLOAT32_BUG_23405 and py_dtype.equal(torch.attr("float32"))) {
+            if (dtype && dtype.value() != DataType::FLOAT32) {
+                py_log("float32, need typecast, convert to tile");
+                // Typecast is needed, can't tilize the data on device due to the bug
+                res.construct_with_layout = Layout::TILE;
+            } else {
+                py_log("float32, use target layout");
+                res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
+            }
+        } else if (!(tensor.attr("dtype").equal(torch.attr("float32")) ||
+                     tensor.attr("dtype").equal(torch.attr("int32")) ||
+                     tensor.attr("dtype").equal(torch.attr("bfloat16")))) {
+            // can't convert the host data to tiles on device -- must perform tiling on host
+            res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
+        } else if (has_device) {
+            py_log("has device, construct with row major");
+            res.construct_with_layout = Layout::ROW_MAJOR;
+        } else {
+            res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
+        }
+    }
+
+    res.tensor = tensor;
+
+    return res;
+}
+
 Tensor convert_python_tensor_to_tt_tensor(
     const py::handle& py_tensor,
     std::optional<DataType> optional_data_type,
@@ -312,6 +696,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     ttnn::QueueId cq_id,
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
+    ZoneScoped;
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::detail::convert_python_tensor_to_tt_tensor",
         py_tensor,
@@ -324,7 +709,23 @@ Tensor convert_python_tensor_to_tt_tensor(
         pad_value,
         mesh_mapper);
 
-    auto preprocessed_py_tensor = parse_py_tensor(py_tensor, optional_data_type);
+    std::optional<PyTensorHostConversionStrategy> strategy;
+    if (py::object torch = py::module_::import("torch"); py::isinstance(py_tensor, torch.attr("Tensor"))) {
+        py_log();
+        strategy = prepare_conversion_strategy(
+            py_tensor, optional_data_type, optional_layout, device != nullptr, memory_config, optional_tile);
+        if (strategy) {
+            if (strategy->construct_with_data_type) {
+                py_log("construct with data type", strategy->construct_with_data_type.value());
+            } else {
+                py_log("No construction data type specified");
+            }
+        }
+    }
+
+    auto preprocessed_py_tensor = strategy ? parse_py_tensor(strategy->tensor, strategy->construct_with_data_type)
+                                           : parse_py_tensor(py_tensor, optional_data_type);
+
     const auto shape = ttnn::Shape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
 
     TT_FATAL(
@@ -357,7 +758,11 @@ Tensor convert_python_tensor_to_tt_tensor(
     auto output = create_tt_tensor_from_py_data(
         preprocessed_py_tensor.py_data_ptr,
         shape,
-        TensorLayout(preprocessed_py_tensor.data_type, PageConfig(layout, optional_tile), memory_config),
+        TensorLayout(
+            strategy && strategy->construct_with_data_type ? strategy->construct_with_data_type.value()
+                                                           : preprocessed_py_tensor.data_type,
+            PageConfig(strategy ? strategy->construct_with_layout : layout, optional_tile),
+            memory_config),
         device,
         pydata_pin,
         cq_id,
@@ -365,6 +770,68 @@ Tensor convert_python_tensor_to_tt_tensor(
         mesh_mapper);
 
     output = tt::tt_metal::set_tensor_id(output);
+    py_log("output result ok");
+    py_log(strategy->construct_with_data_type);
+    py_log(
+        "just constructed tensor",
+        output.layout(),
+        output.logical_shape(),
+        output.padded_shape(),
+        output.dtype(),
+        "\n" + format_tensor_as_string(pybind11::cast(output)));
+
+    if (memory_config.is_sharded()) {
+        py_log("Sharded memory config");
+        TT_FATAL(
+            memory_config.shard_spec().has_value() || memory_config.nd_shard_spec().has_value(),
+            "Incoming sharded spec");
+        TT_FATAL(
+            output.shard_spec().has_value() || output.nd_shard_spec().has_value(),
+            "Memory config specifies sharded tensor, but created tensor does not have a shard spec");
+    }
+
+    if (strategy) {
+        if (strategy->host_side_conversion) {
+            if (device != nullptr && optional_layout.has_value() && output.layout() != optional_layout.value()) {
+                py_log("converting to final layout");
+                output = ttnn::to_layout(output, optional_layout.value(), std::nullopt, memory_config);
+                py_log("conversion to final layout result \n" + format_tensor_as_string(pybind11::cast(output)));
+            }
+        } else {
+            if (optional_data_type.has_value() && output.dtype() != optional_data_type.value()) {
+                ZoneScopedN("no-device type conversion");
+                if (output.layout() != Layout::TILE) {
+                    py_log("executing conversion to layout");
+                    ZoneScopedN("pre-typecast layout conversion");
+                    output = ttnn::to_layout(output, ttnn::Layout::TILE, std::nullopt, memory_config);
+                    py_log(
+                        "conversion to tile layout for type casting\n" +
+                        format_tensor_as_string(pybind11::cast(output)));
+                    py_log("done initial layout conversion");
+                }
+
+                py_log();
+                output = ttnn::typecast(output, optional_data_type.value());
+                py_log(
+                    "type casting done",
+                    output.layout(),
+                    output.logical_shape(),
+                    output.padded_shape(),
+                    output.dtype(),
+                    "\n" + format_tensor_as_string(pybind11::cast(output)));
+
+                py_log();
+                if (optional_layout.has_value() && output.layout() != optional_layout.value()) {
+                    ZoneScopedN("post-typecast layout conversion");
+                    output = ttnn::to_layout(output, optional_layout.value(), std::nullopt, memory_config);
+                    py_log("layout conversion after typecast\n" + format_tensor_as_string(pybind11::cast(output)));
+                }
+                py_log();
+            }
+        }
+    }
+    py_log();
+
     GraphTracker::instance().track_function_end(output);
     return output;
 }
@@ -665,7 +1132,7 @@ void pytensor_module(py::module& m_tensor) {
         [](const py::function& function, const std::optional<std::string>& function_name) -> py::function {
             return py::cpp_function(
                 std::function([function, function_name](const py::args& args, const py::kwargs& kwargs) {
-                    ZoneScopedN("TT_DNN_FALLBACK_OP");
+                    ZoneScoped;
                     auto [operation, input_tensors] =
                         CMAKE_UNIQUE_NAMESPACE::parse_external_operation(function, args, kwargs, function_name);
                     GraphTracker::instance().track_function_start(operation.get_type_name(), args, kwargs);
