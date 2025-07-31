@@ -57,7 +57,9 @@ def run_reshard_test(
         memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
         buffer_type=ttnn.BufferType.DRAM,
     )
-    torch_tensor = torch.randn(input_shape).bfloat16()
+    # torch_tensor = torch.ones(input_shape).bfloat16()
+    numel = torch.tensor(input_shape).prod().item()
+    torch_tensor = torch.arange(0.01, 0.01 * numel + 0.001, 0.01).reshape(input_shape).bfloat16()
     tt_tensor_sharded = ttnn.Tensor(torch_tensor, tt_dtype).to(input_layout)
     tt_tensor_sharded = tt_tensor_sharded.to(device, dram_memory_config)
     tt_tensor_sharded = ttnn.interleaved_to_sharded(
@@ -78,7 +80,6 @@ def run_reshard_test(
 
     tt_tensor_interleaved = tt_tensor_interleaved.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
     torch_tensor_after_round_trip = tt_tensor_interleaved.to_torch()
-
     return torch_tensor, torch_tensor_after_round_trip
 
 
@@ -669,16 +670,93 @@ def test_dram_reshard_with_program_cache(
 @pytest.mark.parametrize(
     "input_shape, input_layout, input_shard_grid,  input_shard_shape, input_shard_orientation, input_sharding_scheme, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme",
     [
-        # Test case: input [1, 1, 4096, 960] sharded (512, 120) on 8x8 grid, reshard to (512, 192) on 5x8 grid
         (
-            [1, 1, 4, 960],
+            [1, 1, 16384, 320],
             ttnn.ROW_MAJOR_LAYOUT,
-            [[(0, 0), (7, 1)]],
-            (2, 120),
+            [[(0, 0), (7, 7)]],
+            (2048, 40),
             ttnn.ShardOrientation.ROW_MAJOR,
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            [[(0, 0), (4, 1)]],
-            (2, 192),
+            [[(0, 0), (4, 7)]],
+            (2048, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # Test case: input [1, 1, 4096, 320] sharded (512, 40) on 8x8 grid, reshard to (512, 64) on 5x8 grid
+        (
+            [1, 1, 4096, 320],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 7)]],
+            (512, 40),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (4, 7)]],
+            (512, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # Test case: input [1, 1, 4096, 640] sharded (512, 80) on 8x8 grid, reshard to (512, 96) on 7x8 grid
+        (
+            [1, 1, 4096, 640],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 7)]],
+            (512, 80),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (6, 7)]],
+            (512, 96),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # Test case: input [1, 1, 1024, 640] sharded (128, 80) on 8x8 grid, reshard to (128, 96) on 7x8 grid
+        (
+            [1, 1, 1024, 640],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 7)]],
+            (128, 80),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (6, 7)]],
+            (128, 96),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # Test case: input [1, 1, 4096, 1920] sharded (512, 240) on 8x8 grid, reshard to (512, 288) on 7x8 grid
+        (
+            [1, 1, 4096, 1920],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 7)]],
+            (512, 240),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (6, 7)]],
+            (512, 288),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # Test case: input [1, 1, 4096, 1280] sharded (512, 160) on 8x8 grid, reshard to (512, 192) on 7x8 grid
+        (
+            [1, 1, 4096, 1280],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 7)]],
+            (512, 160),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (6, 7)]],
+            (512, 192),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # Test case: input [1, 1, 4096, 960] sharded (512, 120) on 8x8 grid, reshard to (512, 192) on 5x8 grid
+        (
+            [1, 1, 4096, 960],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 7)]],
+            (512, 120),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (4, 7)]],
+            (512, 192),
             ttnn.ShardOrientation.ROW_MAJOR,
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ),
@@ -719,4 +797,6 @@ def test_reshard_2(
         passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
     else:
         passing, output = comp_pcc(torch_tensor, torch_tensor_after_round_trip)
+    print("torch tensor:", torch_tensor)
+    print("torch tensor after round trip:", torch_tensor_after_round_trip)
     assert passing, output

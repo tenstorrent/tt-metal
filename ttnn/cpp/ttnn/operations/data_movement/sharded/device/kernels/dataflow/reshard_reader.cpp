@@ -83,6 +83,13 @@ void kernel_main() {
 
                 uint64_t noc_address = get_noc_addr(core_id_x, core_id_y, input_shard_addr + addr_offset);
                 noc_async_read(noc_address, l1_write_addr, stride_size);
+                volatile tt_l1_ptr uint16_t* dst_noc2 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);
+                for (uint16_t value = 0; value < stride_size; value++) {
+                    DPRINT << "value at " << (uint16_t)value << " is: " << BF16((uint16_t)dst_noc2[value]) << ENDL();
+                }
+                l1_write_addr += stride_size;
+                DPRINT << "L1 write addr after updating:" << (uint32_t)l1_write_addr << "\n";
+            } else {
                 l1_write_addr += stride_size;
             }
             if (stride_x == 0 and stride_y == 0) {
