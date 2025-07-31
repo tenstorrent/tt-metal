@@ -763,6 +763,7 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     dispatch_params.total_pages_to_read = buffer.size() / buffer.page_size();
     dispatch_params.total_pages_read = 0;
     dispatch_params.expected_num_workers_completed = expected_num_workers_completed;
+    dispatch_params.pages_per_txn = 0;
     return dispatch_params;
 }
 
@@ -782,6 +783,7 @@ BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
     dispatch_params.expected_num_workers_completed = expected_num_workers_completed;
     dispatch_params.num_banks = device->allocator()->get_num_banks(root_buffer->buffer_type());
     dispatch_params.padded_page_size = root_buffer->aligned_page_size();
+    dispatch_params.pages_per_txn = 0;
 
     return dispatch_params;
 }
@@ -831,7 +833,7 @@ void issue_read_buffer_dispatch_command_sequence(
             buffer.device()->virtual_core_from_logical_core(dispatch_params.core, buffer.core_type());
         command_sequence.add_prefetch_relay_linear(
             dispatch_params.device->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core),
-            dispatch_params.padded_page_size * dispatch_params.pages_per_txn,
+            (DeviceAddr)dispatch_params.padded_page_size * dispatch_params.pages_per_txn,
             dispatch_params.address);
     } else {
         command_sequence.add_prefetch_relay_paged(
@@ -932,9 +934,10 @@ void copy_completion_queue_data_into_user_space(
     std::atomic<bool>& exit_condition) {
     const auto& [page_size, padded_page_size, buffer_page_mapping, core_page_mapping, dst, dst_offset, num_pages_read] =
         read_buffer_descriptor;
-    const uint32_t padded_num_bytes = (num_pages_read * padded_page_size) + sizeof(CQDispatchCmd);
+    const SystemMemoryAddressWidth padded_num_bytes =
+        ((SystemMemoryAddressWidth)num_pages_read * padded_page_size) + sizeof(CQDispatchCmd);
     uint32_t contig_dst_offset = dst_offset;
-    uint32_t remaining_bytes_to_read = padded_num_bytes;
+    SystemMemoryAddressWidth remaining_bytes_to_read = padded_num_bytes;
 
     // track the amount of bytes read in the last non-aligned page
     uint32_t remaining_bytes_of_nonaligned_page = 0;
@@ -971,7 +974,9 @@ void copy_completion_queue_data_into_user_space(
         }
 
         // completion queue write ptr on device could have wrapped but our read ptr is lagging behind
-        uint32_t bytes_xfered = std::min(remaining_bytes_to_read, bytes_avail_in_completion_queue);
+        // bytes_xfered will be limited to completion queue size, so can be cast to uint32_t
+        uint32_t bytes_xfered = static_cast<uint32_t>(
+            std::min(remaining_bytes_to_read, (SystemMemoryAddressWidth)bytes_avail_in_completion_queue));
         uint32_t num_pages_xfered = div_up(bytes_xfered, DispatchSettings::TRANSFER_PAGE_SIZE);
 
         remaining_bytes_to_read -= bytes_xfered;
