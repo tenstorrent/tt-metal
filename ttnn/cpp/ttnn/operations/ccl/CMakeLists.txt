@@ -52,3 +52,32 @@ target_link_libraries(
 )
 
 install(TARGETS ttnn_op_ccl LIBRARY COMPONENT tar)
+
+add_library(ttnn_op_ccl_kernels INTERFACE)
+set_target_properties(
+    ttnn_op_ccl_kernels
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
+
+target_sources(
+    ttnn_op_ccl_kernels
+    INTERFACE
+        FILE_SET ttnn_op_ccl_kernels
+        TYPE HEADERS
+        BASE_DIRS ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/operations/ccl/common/kernels
+        FILES
+            common/kernels/ccl_send_reader_two_input.cpp
+            common/kernels/ccl_send.cpp
+            common/kernels/ccl_wait_completion.cpp
+)
+
+install(
+    TARGETS
+        ttnn_op_ccl_kernels
+    FILE_SET
+    ttnn_op_ccl_kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}ttnn/cpp/ttnn/operations/ccl
+        COMPONENT ttnn-runtime
+)
