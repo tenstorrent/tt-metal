@@ -39,7 +39,7 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
         global_semaphore.has_value(),
         "Global semaphore is required for all_to_all_dispatch due to limitations in trace");
     const auto [cb_sizes, cb_page_sizes] =
-        detail::get_cb_sizes(input_tensor, expert_indices_tensor, expert_mapping_tensor, axis);
+        detail::get_cb_sizes(input_tensor, expert_indices_tensor, expert_mapping_tensor, num_links_, axis);
 
     AllToAllDispatchDeviceOperation::AllToAllTransferType impl =
         AllToAllDispatchDeviceOperation::AllToAllTransferType::FullPacket;

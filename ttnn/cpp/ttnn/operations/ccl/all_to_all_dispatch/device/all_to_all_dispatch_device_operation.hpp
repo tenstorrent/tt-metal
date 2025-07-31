@@ -26,6 +26,7 @@ std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& indices_tensor,
     const ttnn::Tensor& mapping_tensor,
+    uint32_t num_links,
     std::optional<uint32_t> axis);
 
 }  // namespace detail

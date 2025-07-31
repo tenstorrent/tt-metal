@@ -43,41 +43,41 @@ std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& indices_tensor,
     const ttnn::Tensor& mapping_tensor,
+    uint32_t num_links,
     std::optional<uint32_t> axis) {
     auto aligned_input_page_size = get_aligned_page_size(input_tensor);
     auto aligned_indices_page_size = get_aligned_page_size(indices_tensor);
     auto aligned_mapping_page_size = get_aligned_page_size(mapping_tensor);
+    uint32_t tokens_per_device = get_num_rows(input_tensor);
+    uint32_t tokens_per_core = tt::div_up(tokens_per_device, num_links);
 
-    auto indices_pages = get_num_pages(indices_tensor);
     auto mapping_pages = get_num_pages(mapping_tensor);
 
     auto mesh_view = input_tensor.mesh_device()->get_view();
     uint32_t num_devices = mesh_view.num_devices();
 
-    uint32_t tokens_per_device = get_num_rows(input_tensor);
-
     uint32_t dispatch_devices =
         axis.has_value() ? (axis.value() == 0 ? mesh_view.num_rows() : mesh_view.num_cols()) : num_devices;
 
     constexpr uint32_t buffering_factor = 2;
+    constexpr uint32_t num_packet_headers = 2;
 
-    static constexpr auto num_packet_headers_storable = 8;
-    static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
     std::array<uint32_t, 6> cb_sizes = {
         buffering_factor * aligned_input_page_size,
-        indices_pages * aligned_indices_page_size,
+        tokens_per_core * aligned_indices_page_size,
         mapping_pages * aligned_mapping_page_size,
-        tokens_per_device * num_devices * sizeof(uint8_t),
+        num_devices * tokens_per_core * sizeof(uint8_t),
         tokens_per_device * dispatch_devices * aligned_indices_page_size,
-        num_packet_headers_storable * packet_header_size_bytes * buffering_factor,
+        num_packet_headers * packet_header_size_bytes,
     };
 
     std::array<uint32_t, 6> cb_page_sizes = {
         aligned_input_page_size,
         aligned_indices_page_size,
         aligned_mapping_page_size,
-        tokens_per_device * sizeof(uint8_t),
+        tokens_per_core * sizeof(uint8_t),
         aligned_indices_page_size,
         packet_header_size_bytes,
     };
@@ -241,7 +241,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         aligned_metadata_page_size);
 
     auto [cb_sizes, cb_page_sizes] =
-        detail::get_cb_sizes(input_tensor, indices_tensor, mapping_tensor, operation_attributes.axis);
+        detail::get_cb_sizes(input_tensor, indices_tensor, mapping_tensor, num_links, operation_attributes.axis);
 
     tt::tt_metal::CircularBufferConfig cb_input_tensor_config =
         tt::tt_metal::CircularBufferConfig(cb_sizes[0], {{input_tensor_cb_id, input_data_format}})

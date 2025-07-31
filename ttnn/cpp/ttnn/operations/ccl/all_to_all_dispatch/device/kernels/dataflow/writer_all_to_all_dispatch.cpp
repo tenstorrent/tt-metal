@@ -177,8 +177,9 @@ void kernel_main() {
             // find the devices that the expert lives on and dispatch the input tokens to them
             // if there is no tensor parallelism, then the token will only be sent to one device
             for (uint32_t d = 0; d < num_devices; d++) {
-                if (devices_for_expert[d] == 1 && send_preparation_buffer[local_token * num_devices + d] == 0) {
-                    send_preparation_buffer[local_token * num_devices + d] = 1;
+                if (devices_for_expert[d] == 1 &&
+                    send_preparation_buffer[(local_token - token_start_idx) * num_devices + d] == 0) {
+                    send_preparation_buffer[(local_token - token_start_idx) * num_devices + d] = 1;
                     if (d == linearized_mesh_coord) {
                         // if the expert lives on the current device, we dispatch the input token to it
                         detail::dispatch_input_local_device(
