@@ -217,8 +217,14 @@ def run_llama_all_gather_matmul_impl(
 
     # Intermediate shapes
     intermediate_num_cores = cluster_shape[cluster_axis]
-    intermediate_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-        ttnn.CoreCoord(3, 0), intermediate_num_cores, SUB_DEVICE_CRS, row_wise=False
+    # intermediate_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+    #     ttnn.CoreCoord(1, 1), intermediate_num_cores, SUB_DEVICE_CRS, row_wise=False
+    # )
+    intermediate_core_range_set = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(1, 2)),
+            ttnn.CoreRange(ttnn.CoreCoord(2, 1), ttnn.CoreCoord(2, 2)),
+        ]
     )
     aggregated_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
         ttnn.CoreCoord(1, 0), MCAST_NUM_CORES, MCAST_CRS, row_wise=True
