@@ -17,7 +17,7 @@ from models.tt_transformers.tt.common import (
     get_rot_transformation_mat,
 )
 from models.tt_transformers.tt.rope import RotarySetup
-from models.demos.llama3_subdevices.tt.llama_rope import TtLlamaRotarySetup
+from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
 
 MAX_SEQ_LEN = 128 * 1024
 
