@@ -78,6 +78,6 @@ install(
         ttnn_op_ccl_kernels
     FILE_SET
     ttnn_op_ccl_kernels
-        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/ttnn/cpp/ttnn/operations/ccl
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/ccl/common/kernels
         COMPONENT ttnn-runtime
 )
