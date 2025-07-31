@@ -15,6 +15,28 @@ static std::ostream &operator<<(std::ostream &os, const UbbId &ubb_id) {
     return os;
 }
 
+static std::ostream &operator<<(std::ostream &os, const tt::tt_metal::ClusterType cluster_type) {
+    switch (cluster_type) {
+    case tt::tt_metal::ClusterType::INVALID:    os << "Invalid"; break;
+    case tt::tt_metal::ClusterType::N150:       os << "N150"; break;
+    case tt::tt_metal::ClusterType::N300:       os << "N300"; break;
+    case tt::tt_metal::ClusterType::T3K:        os << "T3K"; break;
+    case tt::tt_metal::ClusterType::GALAXY:     os << "Galaxy"; break;
+    case tt::tt_metal::ClusterType::TG:         os << "TG"; break;
+    case tt::tt_metal::ClusterType::P100:       os << "P100"; break;
+    case tt::tt_metal::ClusterType::P150:       os << "P150"; break;
+    case tt::tt_metal::ClusterType::P150_X2:    os << "P150 x2"; break;
+    case tt::tt_metal::ClusterType::P150_X4:    os << "P150 x4"; break;
+    case tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0: os << "Simulator Blackhole B0"; break;
+    case tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE:   os << "Simulator Blackhole"; break;
+    case tt::tt_metal::ClusterType::N300_2x2:   os << "N300 2x2"; break;
+    default:
+        os << "Unknown (" << int(cluster_type) << ')';
+        break;
+    }
+    return os;
+}
+
 static UbbId get_ubb_id(chip_id_t chip_id) {
     const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
         {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
@@ -41,7 +63,10 @@ int main() {
             std::tuple<tt::umd::chip_id_t, tt::umd::ethernet_channel_t>
         >
     > ethernet_connections = cluster.get_ethernet_connections();
-    
+    tt::tt_metal::ClusterType cluster_type = cluster.get_cluster_type();
+
+    std::cout << "Cluster Type: " << cluster_type << std::endl;
+
     for (const auto &[chip_id, remote_chip_and_channel_by_channel]: ethernet_connections) {
         std::cout << "Chip " << chip_id << " (UBB ID: " << get_ubb_id(chip_id) << ")" << std::endl;
         for (const auto &[channel, remote_chip_and_channel]: remote_chip_and_channel_by_channel) {
