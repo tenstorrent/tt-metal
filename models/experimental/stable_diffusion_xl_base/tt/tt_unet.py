@@ -129,33 +129,27 @@ class TtUNet2DConditionModel(nn.Module):
 
         self.conv_output_dtype = model_config.get_conv_output_dtype()
         self.conv1_config = model_config.get_conv_config(conv_path="conv_in")
+        self.compute1_config = model_config.get_conv_compute_config(module_path="conv_in")
         (
-            self.compute1_config,
             self.tt_conv1_weights,
             self.tt_conv1_bias,
             self.conv1_params,
         ) = prepare_conv_params(
-            device,
             conv_weights_in,
             conv_bias_in,
             self.conv1_config.weights_dtype,
-            fp32_dest_acc_en=(self.conv1_config.weights_dtype == ttnn.bfloat8_b)
-            and (self.conv1_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         )
 
         self.conv2_config = model_config.get_conv_config(conv_path="conv_out")
+        self.compute2_config = model_config.get_conv_compute_config(module_path="conv_out")
         (
-            self.compute2_config,
             self.tt_conv2_weights,
             self.tt_conv2_bias,
             self.conv2_params,
         ) = prepare_conv_params(
-            device,
             conv_weights_out,
             conv_bias_out,
             self.conv2_config.weights_dtype,
-            fp32_dest_acc_en=(self.conv2_config.weights_dtype == ttnn.bfloat8_b)
-            and (self.conv2_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         )
 
         self.norm_core_grid = ttnn.CoreGrid(y=8, x=8)
