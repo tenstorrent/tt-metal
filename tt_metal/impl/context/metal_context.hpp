@@ -129,8 +129,10 @@ private:
     // Functions used to init/run firmware on devices
     CoreCoord virtual_noc0_coordinate(ChipId device_id, uint8_t noc_index, CoreCoord coord);
     void generate_device_bank_to_noc_tables(ChipId device_id);
+    void generate_logical_to_translated_map(ChipId device_id);
     void initialize_device_bank_to_noc_tables(
         ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core);
+    void initialize_logical_to_translated_tables(ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core);
     void initialize_firmware(
         ChipId device_id,
         const HalProgrammableCoreType& core_type,
@@ -160,6 +162,9 @@ private:
     std::unordered_map<ChipId, std::vector<int32_t>> l1_bank_offset_map_;
     std::unordered_map<ChipId, std::vector<uint16_t>> dram_bank_to_noc_xy_;
     std::unordered_map<ChipId, std::vector<uint16_t>> l1_bank_to_noc_xy_;
+
+    std::unordered_map<chip_id_t, std::vector<uint16_t>> logical_col_to_translated_col_;
+    std::unordered_map<chip_id_t, std::vector<uint16_t>> logical_row_to_translated_row_;
 
     llrt::RunTimeOptions rtoptions_;
     std::unique_ptr<Cluster> cluster_;

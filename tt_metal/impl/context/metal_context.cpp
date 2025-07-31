@@ -152,6 +152,7 @@ void MetalContext::initialize(
         [[maybe_unused]] int ai_clk = cluster_->get_device_aiclk(device_id);
         log_debug(tt::LogMetal, "AI CLK for device {} is:   {} MHz", device_id, ai_clk);
         generate_device_bank_to_noc_tables(device_id);
+        generate_logical_to_translated_map(device_id);
 
         // Create build env for this device, and build FW if it's not built already
         BuildEnvManager::get_instance().add_build_env(device_id, num_hw_cqs_);
@@ -821,6 +822,32 @@ void MetalContext::generate_device_bank_to_noc_tables(ChipId device_id) {
     }
 }
 
+void MetalContext::generate_logical_to_translated_map(chip_id_t device_id) {
+    // Generate logical to translated map for DRAM and L1 banks
+    const auto& soc_desc = cluster_->get_soc_desc(device_id);
+    auto tensix_grid_size = soc_desc.get_grid_size(CoreType::TENSIX);
+
+    logical_col_to_translated_col_[device_id].clear();
+    logical_row_to_translated_row_[device_id].clear();
+    logical_col_to_translated_col_[device_id].reserve(tensix_grid_size.x);
+    logical_row_to_translated_row_[device_id].reserve(tensix_grid_size.y);
+
+    for (uint32_t x = 0; x < tensix_grid_size.x; x++) {
+        logical_col_to_translated_col_[device_id].push_back(soc_desc.translate_coord_to({tt_xy_pair{x, 0}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED).x);
+    }
+    // Fill remaining columns with 0s
+    for (uint32_t x = tensix_grid_size.x; x < soc_desc.grid_size.x; x++) {
+        logical_col_to_translated_col_[device_id].push_back(0);
+    }
+    for (uint32_t y = 0; y < tensix_grid_size.y; y++) {
+        logical_row_to_translated_row_[device_id].push_back(soc_desc.translate_coord_to({tt_xy_pair{0, y}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED).y);
+    }
+    // Fill remaining rows with 0s
+    for (uint32_t y = tensix_grid_size.y; y < soc_desc.grid_size.y; y++) {
+        logical_row_to_translated_row_[device_id].push_back(0);
+    }
+}
+
 void MetalContext::initialize_device_bank_to_noc_tables(
     ChipId device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core) {
     const uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_[device_id].size() * sizeof(uint16_t);
@@ -859,6 +886,34 @@ void MetalContext::initialize_device_bank_to_noc_tables(
         l1_offset_addr);
 }
 
+void MetalContext::initialize_logical_to_translated_tables(chip_id_t device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core) {
+    // Generate logical to translated map for DRAM and L1 banks
+    const auto& soc_desc = cluster_->get_soc_desc(device_id);
+    const uint32_t logical_col_to_translated_col_sz_in_bytes = logical_col_to_translated_col_[device_id].size() * sizeof(uint16_t);
+    const uint32_t logical_row_to_translated_row_sz_in_bytes = logical_row_to_translated_row_[device_id].size() * sizeof(uint16_t);
+    const uint64_t logical_to_translated_map_addr = hal_->get_dev_addr(core_type, HalL1MemAddrType::LOGICAL_TO_TRANSLATED_SCRATCH);
+    const uint32_t logical_to_translated_map_size = hal_->get_dev_size(core_type, HalL1MemAddrType::LOGICAL_TO_TRANSLATED_SCRATCH);
+
+    TT_ASSERT(
+        (logical_col_to_translated_col_sz_in_bytes + logical_row_to_translated_row_sz_in_bytes) <=
+            logical_to_translated_map_size,
+        "Size of logical to translated map is greater than available space");
+
+    uint64_t logical_col_to_translated_col_addr = logical_to_translated_map_addr;
+    cluster_->write_core(
+        &logical_col_to_translated_col_[device_id][0],
+        logical_col_to_translated_col_sz_in_bytes,
+        tt_cxy_pair(device_id, virtual_core),
+        logical_col_to_translated_col_addr);
+        
+    uint64_t logical_row_to_translated_row_addr = logical_to_translated_map_addr + logical_col_to_translated_col_sz_in_bytes;
+    cluster_->write_core(
+        &logical_row_to_translated_row_[device_id][0],
+        logical_row_to_translated_row_sz_in_bytes,
+        tt_cxy_pair(device_id, virtual_core),
+        logical_row_to_translated_row_addr);
+}
+
 void MetalContext::initialize_firmware(
     ChipId device_id,
     const HalProgrammableCoreType& core_type,
@@ -868,6 +923,8 @@ void MetalContext::initialize_firmware(
     ZoneScoped;
 
     initialize_device_bank_to_noc_tables(device_id, core_type, virtual_core);
+    initialize_logical_to_translated_tables(device_id, core_type, virtual_core);
+    
     uint32_t core_type_idx = hal_->get_programmable_core_type_index(core_type);
     uint32_t processor_class_count = hal_->get_processor_classes_count(core_type);
     auto jit_build_config =
