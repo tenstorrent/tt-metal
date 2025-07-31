@@ -355,6 +355,8 @@ class UNet2DConditionModel:
             activation="",
             shard_layout=shard_layout,
             reshard_if_not_optimal=True,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
         compute_config = get_default_compute_config(self.device)
 
@@ -640,6 +642,7 @@ class UNet2DConditionModel:
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             act_block_h_override=64,
             reshard_if_not_optimal=True,
+            enable_act_double_buffer=True,
         )
         compute_config = get_default_compute_config(self.device)
 

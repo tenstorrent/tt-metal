@@ -59,6 +59,8 @@ jobs:
             cmd: |
               ./build/test/ttnn/unit_tests_ttnn_ccl
               ./build/test/ttnn/unit_tests_ttnn_ccl_ops
+          - name: ttnn tensor accessor
+            cmd: "./build/test/ttnn/unit_tests_ttnn_accessor"
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
       image: ${{ inputs.docker-image }}
@@ -80,7 +82,7 @@ jobs:
     runs-on: >-
       ${{
         (startsWith(inputs.runner-label, 'tt-beta-ubuntu') && fromJSON(format('["{0}"]', inputs.runner-label)))
-        || github.event.pull_request.head.repo.fork == true && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
+        || (github.event.pull_request.head.repo.fork == true || inputs.runner-label == 'P150b') && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
         || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     steps:
