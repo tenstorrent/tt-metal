@@ -66,11 +66,16 @@ target_sources(
     INTERFACE
         FILE_SET ttnn_op_ccl_kernels
         TYPE HEADERS
-        BASE_DIRS ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/operations/ccl/common/kernels
+        BASE_DIRS ${PROJECT_SOURCE_DIR}/ttnn/cpp/ttnn/operations/ccl/
         FILES
             common/kernels/ccl_send_reader_two_input.cpp
             common/kernels/ccl_send.cpp
             common/kernels/ccl_wait_completion.cpp
+            shared_with_host/sharded_tensor_addr_gen.hpp
+            shared_with_host/hetergeneous_data_structs.hpp
+            all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp
+            common/kernels/command_processor.hpp
+            common/interpreter_backends/kernel_common/io_descriptors.hpp
 )
 
 install(
@@ -78,6 +83,6 @@ install(
         ttnn_op_ccl_kernels
     FILE_SET
     ttnn_op_ccl_kernels
-        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/ccl/common/kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/ccl/
         COMPONENT ttnn-runtime
 )
