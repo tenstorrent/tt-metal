@@ -39,4 +39,8 @@ ALWI void recip_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC) {
     MATH((llk_math_eltwise_unary_sfpu_reciprocal<APPROX, DST_ACCUM_MODE>(idst, vector_mode)));
 }
 
+ALWI void ln_rsqrt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_ln_rsqrt_init<APPROX>())); }
+ALWI void ln_rsqrt_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC) {
+    MATH((llk_math_eltwise_unary_sfpu_ln_rsqrt<APPROX, DST_ACCUM_MODE>(idst, vector_mode)));
+}
 }  // namespace ckernel
