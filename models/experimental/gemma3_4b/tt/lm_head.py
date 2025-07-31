@@ -1,4 +1,9 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+"""
+source: models/tt_transformers/tt/lm_head.py
+
+This is the LMHead module for the Gemma-3-4B-it model.
+"""
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
