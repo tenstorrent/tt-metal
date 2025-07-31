@@ -107,7 +107,8 @@ def test_vae_decoder(
     )
 
     # print(torch_model)
-    # logger.info(summary(torch_model, input_size=(batch, in_channels, height, width), depth=10))
+    # logger.info(summary(torch_model, input_size=(batch, in_channels, height, width), depth=10,row_settings=("ascii_only","var_names",)))
+    # return
 
     # sd_vae = AutoencoderKL.from_pretrained("stabilityai/stable-diffusion-3.5-large", subfolder="vae")
     # print(sd_vae.decoder)

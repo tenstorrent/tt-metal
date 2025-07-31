@@ -23,6 +23,21 @@ def print_stats(label, data: torch.Tensor, device=None):
     return f"{label}: mean:{data_.mean()} , std:{data_.std()} , range:[{data_.min()}, {data_.max()}]"
 
 
+# TODO: Move to parallel manager
+def gn_all_gather(x, parallel_config):
+    x_g = ttnn.experimental.all_gather_async(
+        input_tensor=x,
+        dim=3,
+        multi_device_global_semaphore=parallel_config.new_gather_handles,
+        topology=ttnn.Topology.Linear,
+        mesh_device=parallel_config.device,
+        cluster_axis=1,
+        num_links=1,
+    )
+    ttnn.synchronize_device(parallel_config.device)
+    return x_g
+
+
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, topology",
     [
@@ -41,10 +56,10 @@ def print_stats(label, data: torch.Tensor, device=None):
     indirect=True,
 )
 @pytest.mark.parametrize(
-    ("batch", "in_channels", "out_channels", "height", "width"),
+    ("batch", "in_channels", "out_channels", "height", "width", "sharded_input"),
     [
-        (1, 512, 512, 256, 256),
-        (1, 512, 512, 256, 256),
+        (1, 512, 512, 256, 256, True),
+        (1, 512, 512, 256, 256, False),
         # (512, 256, 256, 32),
         # (256, 512, 512, 32),
         # (512, 512, 512, 32),
@@ -60,6 +75,7 @@ def test_fun_linear(
     out_channels: int,
     height: int,
     width: int,
+    sharded_input: bool,
     cfg,
     sp,
     tp,
@@ -95,12 +111,15 @@ def test_fun_linear(
     torch_model.eval()
 
     parameters = TtLinearParameters.from_torch(
-        torch_linear=torch_model, dtype=ttnn_dtype, parallel_config=parallel_manager.vae_parallel_config
+        torch_linear=torch_model,
+        dtype=ttnn_dtype,
+        parallel_config=parallel_manager.vae_parallel_config,
+        mesh_sharded_input=sharded_input,
     )
 
     inp = torch.randn(batch, height, width, in_channels)
 
-    tt_inp = ttnn.from_torch(inp, dtype=ttnn_dtype, device=device)
+    tt_inp = ttnn.from_torch(inp, dtype=ttnn_dtype, device=device, layout=ttnn.TILE_LAYOUT)
 
     logger.info(print_stats("torch_input", inp))
     logger.info(print_stats("tt_input", tt_inp, device=device))
@@ -110,6 +129,9 @@ def test_fun_linear(
         out = torch_model(inp)
 
     tt_out = vae_linear(tt_inp, parameters)
+
+    if sharded_input:
+        tt_out = gn_all_gather(tt_out, parallel_manager.vae_parallel_config)
 
     tt_out_torch = to_torch(tt_out)  # .permute(0, 3, 1, 2)
 
