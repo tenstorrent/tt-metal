@@ -1520,10 +1520,28 @@ void DeviceProfiler::processResults(
 }
 
 void DeviceProfiler::dumpRoutingInfo() const {
+    std::filesystem::create_directories(noc_trace_data_output_dir);
+    if (!std::filesystem::is_directory(noc_trace_data_output_dir)) {
+        log_error(
+            tt::LogMetal,
+            "Could not dump topology to '{}' because the directory path could not be created!",
+            noc_trace_data_output_dir);
+        return;
+    }
+
     tt::tt_metal::dumpRoutingInfo(noc_trace_data_output_dir / "topology.json");
 }
 
 void DeviceProfiler::dumpClusterCoordinates() const {
+    std::filesystem::create_directories(noc_trace_data_output_dir);
+    if (!std::filesystem::is_directory(noc_trace_data_output_dir)) {
+        log_error(
+            tt::LogMetal,
+            "Could not dump cluster coordinates to '{}' because the directory path could not be created!",
+            noc_trace_data_output_dir);
+        return;
+    }
+
     tt::tt_metal::dumpClusterCoordinatesAsJson(noc_trace_data_output_dir / "cluster_coordinates.json");
 }
 
