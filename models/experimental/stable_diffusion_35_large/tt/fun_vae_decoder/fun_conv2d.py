@@ -210,7 +210,7 @@ def run_conv2d(x, parameters):
 
 
 def conv2d_all_gather(x, parameters):
-    if x.layout == ttnn.ROW_MAJOR_LAYOUT:
+    if x.layout != ttnn.TILE_LAYOUT:
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.experimental.all_gather_async(
         input_tensor=x,
@@ -221,7 +221,7 @@ def conv2d_all_gather(x, parameters):
         cluster_axis=1,  # mesh_dim,
         num_links=1,
     )
-    ttnn.synchronize_device(parameters.parallel_config.device)
+    # ttnn.synchronize_device(parameters.parallel_config.device)
     return output_tensor
 
 
