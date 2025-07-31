@@ -2,22 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from loguru import logger
-
-import pytest
-import itertools
-import random
-import torch
-import pytest
-import math
-from typing import Optional, Tuple, List
-
-from models.utility_functions import is_wormhole_b0, is_grayskull, is_x2_harvested, torch_random
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc, start_measuring_time, stop_measuring_time
-from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import run_max_pool
-from models.utility_functions import is_blackhole
-
 import ttnn
+import pytest
+from tests.ttnn.nightly.unit_tests.operations.pool.test_maxpool2d import run_max_pool
 
 parameters = {
     "height_shard_tests": {
