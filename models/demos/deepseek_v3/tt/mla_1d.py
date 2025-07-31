@@ -28,7 +28,6 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     save_and_get_path,
     sub_state_dicts,
 )
-from models.demos.deepseek_v3.utils.meta_layer_utils import MetaLayerState
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -932,14 +931,23 @@ class MLA1D(AbstractModule):
         }
 
     @classmethod
+    def row_to_device_coords(cls, row: int, mesh_shape: list[int]) -> set[ttnn.MeshCoordinate]:
+        """
+        Get the devices in the current row.
+        """
+        assert 0 <= row < mesh_shape[0], "Row index out of bounds"
+        device_coords = {(row, col) for col in range(mesh_shape[1])}
+        return {ttnn.MeshCoordinate(*coord) for coord in device_coords}
+
+    @classmethod
     def forward_decode(
-        self,
+        cls,
         x: ttnn.Tensor,
         cfg: RunDecodeConfig,
         position_idxs: ttnn.Tensor,
         rope_tensors: dict,
         page_table: ttnn.Tensor,
-        meta_layer_state: MetaLayerState,
+        row_idx: int,
     ) -> ttnn.Tensor:
         """Forward pass of MLA1D in decode mode.
 
@@ -953,10 +961,11 @@ class MLA1D(AbstractModule):
             Output tensor after MLA1D computation
 
         """
+        mesh_shape = cfg["mesh_shape"]
 
         hf_config = cfg["hf_config"]
         num_heads = hf_config.num_attention_heads
-        num_heads_local = even_int_div(num_heads, cfg["mesh_shape"][1])
+        num_heads_local = even_int_div(num_heads, mesh_shape[1])
         kv_lora_rank = hf_config.kv_lora_rank
         qk_nope_head_dim = hf_config.qk_nope_head_dim
         qk_rope_head_dim = hf_config.qk_rope_head_dim
@@ -966,7 +975,7 @@ class MLA1D(AbstractModule):
         kvpe_cache = cfg["kvpe_cache"]
 
         bsz = x.shape[2]
-        scale = 1.0 / cfg["mesh_shape"][1]
+        scale = 1.0 / mesh_shape[1]
 
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
@@ -1067,7 +1076,7 @@ class MLA1D(AbstractModule):
             tt_kvpe,
             update_idxs_tensor=position_idxs,
             page_table=page_table,
-            mesh_coords=meta_layer_state.get_current_device_coords(),
+            mesh_coords=cls.row_to_device_coords(row_idx, mesh_shape),
         )
 
         # FlashMLA
@@ -1107,7 +1116,7 @@ class MLA1D(AbstractModule):
         return out
 
     @classmethod
-    def forward_prefill(self, x: ttnn.Tensor, cfg: RunPrefillConfig, user_id: int, rope_tensors: dict) -> ttnn.Tensor:
+    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig, user_id: int, rope_tensors: dict) -> ttnn.Tensor:
         """Forward pass of the MLP.
 
         Prefill mode we reshape to respect cfg["max_rows"] and generate program configs from the seq-len lambda.
@@ -1122,9 +1131,11 @@ class MLA1D(AbstractModule):
             Output tensor after MLP computation
         """
 
+        mesh_shape = cfg["mesh_shape"]
+
         hf_config = cfg["hf_config"]
         num_heads = hf_config.num_attention_heads
-        num_heads_local = even_int_div(num_heads, cfg["mesh_shape"][1])
+        num_heads_local = even_int_div(num_heads, mesh_shape[1])
         kv_lora_rank = hf_config.kv_lora_rank
         qk_nope_head_dim = hf_config.qk_nope_head_dim
         qk_rope_head_dim = hf_config.qk_rope_head_dim

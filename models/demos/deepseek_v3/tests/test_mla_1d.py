@@ -16,7 +16,6 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Atten
 from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.utils.meta_layer_utils import MetaLayerState
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.utility_functions import comp_pcc
 
@@ -308,19 +307,18 @@ def test_forward_pass(
     ############################
     logger.info("Running TTNN forward pass")
 
-    cur_row = randint(0, mesh_shape[0] - 1)
-    meta_layer_state = MetaLayerState(mesh_device, cur_row)
+    cur_row_idx = randint(0, mesh_shape[0] - 1)
 
     if mode == "prefill":
         tt_output = MLA1D.forward_prefill(tt_input, run_config, user_id, rope_tensors)
     else:
         tt_output = MLA1D.forward_decode(
-            tt_input, run_config, position_idxs_tensor, rope_tensors, tt_page_table, meta_layer_state
+            tt_input, run_config, position_idxs_tensor, rope_tensors, tt_page_table, cur_row_idx
         )
 
     tt_output_torch = ttnn.to_torch(
         tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_shape)
-    )[cur_row, ...]
+    )[cur_row_idx, ...]
 
     if mode == "decode":
         # Torch Shape: [batch_size, seq_len, hidden_size]
@@ -346,13 +344,13 @@ def test_forward_pass(
 
         if mode == "decode":
             tt_cache = get_cache_on_host(
-                run_config["kvpe_cache"], cur_row, mesh_device
+                run_config["kvpe_cache"], cur_row_idx, mesh_device
             )  # [DP Factor * max_num_blocks, nh, block_size, head_dim + rope_head_dim]
             tt_cache = MLA1D.from_paged_cache(tt_cache, page_table, dp_factor).squeeze(
                 1
             )  # [bsz, max_seq_len, head_dim + rope_head_dim]
         else:
-            tt_cache = get_cache_on_host(run_config["kvpe_cache"], cur_row, mesh_device)[
+            tt_cache = get_cache_on_host(run_config["kvpe_cache"], cur_row_idx, mesh_device)[
                 : MLA1D.MAX_BATCH_SIZE, ...
             ].squeeze(
                 1
