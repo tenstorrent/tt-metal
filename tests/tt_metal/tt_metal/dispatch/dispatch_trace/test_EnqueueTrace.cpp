@@ -107,16 +107,15 @@ constexpr bool kNonBlocking = false;
 vector<bool> blocking_flags = {kBlocking, kNonBlocking};
 
 TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTrace) {
-    CreateDevices(2048);
-    auto mesh_device = this->devices_[0];
+    CreateDevice(2048);
 
     distributed::ReplicatedBufferConfig replicated_config{.size = 2048};
     distributed::DeviceLocalBufferConfig device_config{.page_size = 2048, .buffer_type = BufferType::DRAM};
-    auto input = distributed::MeshBuffer::create(replicated_config, device_config, mesh_device.get());
-    auto output = distributed::MeshBuffer::create(replicated_config, device_config, mesh_device.get());
+    auto input = distributed::MeshBuffer::create(replicated_config, device_config, this->device_.get());
+    auto output = distributed::MeshBuffer::create(replicated_config, device_config, this->device_.get());
 
-    auto& mesh_command_queue = mesh_device->mesh_command_queue(0);
-    auto& data_movement_queue = mesh_device->mesh_command_queue(1);
+    auto& mesh_command_queue = this->device_->mesh_command_queue(0);
+    auto& data_movement_queue = this->device_->mesh_command_queue(1);
 
     // Create program and add to workload
     distributed::MeshWorkload workload;
@@ -144,31 +143,30 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTrace) {
 
     distributed::EnqueueWriteMeshBuffer(data_movement_queue, input, input_data, true);
 
-    auto tid = distributed::BeginTraceCapture(mesh_device.get(), mesh_command_queue.id());
+    auto tid = distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-    distributed::EndTraceCapture(mesh_device.get(), mesh_command_queue.id(), tid);
+    distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), tid);
 
-    distributed::ReplayTrace(mesh_device.get(), mesh_command_queue.id(), tid, true);
+    distributed::ReplayTrace(this->device_.get(), mesh_command_queue.id(), tid, true);
     distributed::ReadShard(data_movement_queue, trace_output_data, output, distributed::MeshCoordinate{0, 0}, true);
     // distributed::EnqueueReadMeshBuffer(data_movement_queue, trace_output_data, output, true);
     EXPECT_TRUE(eager_output_data == trace_output_data);
 
     // Done
     distributed::Finish(mesh_command_queue);
-    distributed::ReleaseTrace(mesh_device.get(), tid);  //?
+    distributed::ReleaseTrace(this->device_.get(), tid);  //?
 }
 
 TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceLoops) {
-    CreateDevices(4096);
-    auto mesh_device = this->devices_[0];
+    CreateDevice(4096);
 
     distributed::ReplicatedBufferConfig replicated_config{.size = 2048};
     distributed::DeviceLocalBufferConfig device_config{.page_size = 2048, .buffer_type = BufferType::DRAM};
-    auto input = distributed::MeshBuffer::create(replicated_config, device_config, mesh_device.get());
-    auto output = distributed::MeshBuffer::create(replicated_config, device_config, mesh_device.get());
+    auto input = distributed::MeshBuffer::create(replicated_config, device_config, this->device_.get());
+    auto output = distributed::MeshBuffer::create(replicated_config, device_config, this->device_.get());
 
-    auto& mesh_command_queue = mesh_device->mesh_command_queue(0);
-    auto& data_movement_queue = mesh_device->mesh_command_queue(1);
+    auto& mesh_command_queue = this->device_->mesh_command_queue(0);
+    auto& data_movement_queue = this->device_->mesh_command_queue(1);
 
     // Create program and add to workload
     distributed::MeshWorkload workload;
@@ -200,13 +198,13 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceLoop
         distributed::EnqueueWriteMeshBuffer(data_movement_queue, input, input_data, true);
 
         if (not trace_captured) {
-            trace_id = distributed::BeginTraceCapture(mesh_device.get(), mesh_command_queue.id());
+            trace_id = distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
             distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-            distributed::EndTraceCapture(mesh_device.get(), mesh_command_queue.id(), trace_id);
+            distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), trace_id);
             trace_captured = true;
         }
 
-        distributed::ReplayTrace(mesh_device.get(), mesh_command_queue.id(), trace_id, false);
+        distributed::ReplayTrace(this->device_.get(), mesh_command_queue.id(), trace_id, false);
         distributed::ReadShard(data_movement_queue, trace_outputs[i], output, distributed::MeshCoordinate{0, 0}, true);
 
         // Expect same output across all loops
@@ -215,17 +213,16 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceLoop
 
     // Done
     distributed::Finish(mesh_command_queue);
-    distributed::ReleaseTrace(mesh_device.get(), trace_id);
+    distributed::ReleaseTrace(this->device_.get(), trace_id);
 }
 
 TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenchmark) {
-    CreateDevices(6144);
-    auto mesh_device = this->devices_[0];
+    CreateDevice(6144);
 
     distributed::ReplicatedBufferConfig replicated_config{.size = 2048};
     distributed::DeviceLocalBufferConfig device_config{.page_size = 2048, .buffer_type = BufferType::DRAM};
-    auto input = distributed::MeshBuffer::create(replicated_config, device_config, mesh_device.get());
-    auto output = distributed::MeshBuffer::create(replicated_config, device_config, mesh_device.get());
+    auto input = distributed::MeshBuffer::create(replicated_config, device_config, this->device_.get());
+    auto output = distributed::MeshBuffer::create(replicated_config, device_config, this->device_.get());
 
     constexpr bool kBlocking = true;
     constexpr bool kNonBlocking = false;
@@ -233,7 +230,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
 
     // Single Q for data and commands
     // Keep this queue in passthrough mode for now
-    auto& mesh_command_queue = mesh_device->mesh_command_queue(0);
+    auto& mesh_command_queue = this->device_->mesh_command_queue(0);
 
     // Create program and add to workload
     distributed::MeshWorkload workload;
@@ -285,15 +282,15 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
     }
 
     // Capture trace on a trace queue
-    auto tid = distributed::BeginTraceCapture(mesh_device.get(), mesh_command_queue.id());
+    auto tid = distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
-    distributed::EndTraceCapture(mesh_device.get(), mesh_command_queue.id(), tid);
+    distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), tid);
 
     // Trace mode execution
     for (auto i = 0; i < num_loops; i++) {
         tt::ScopedTimer timer("Trace loop " + std::to_string(i));
         distributed::EnqueueWriteMeshBuffer(mesh_command_queue, input, input_data, kNonBlocking);
-        distributed::ReplayTrace(mesh_device.get(), mesh_command_queue.id(), tid, kNonBlocking);
+        distributed::ReplayTrace(this->device_.get(), mesh_command_queue.id(), tid, kNonBlocking);
         distributed::ReadShard(
             mesh_command_queue, trace_outputs[i], output, distributed::MeshCoordinate{0, 0}, kNonBlocking);
     }
@@ -303,7 +300,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
     for (auto i = 0; i < num_loops; i++) {
         EXPECT_TRUE(trace_outputs[i] == trace_outputs[0]);
     }
-    distributed::ReleaseTrace(mesh_device.get(), tid);
+    distributed::ReleaseTrace(this->device_.get(), tid);
 }
 
 TEST_F(UnitMeshCQTraceFixture, TensixInstantiateTraceSanity) {
