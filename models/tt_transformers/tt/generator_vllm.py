@@ -391,7 +391,7 @@ class Gemma3ForCausalLM(Generator):
             max_seq_len=max_seq_len,
             n_layers=n_layers,
             dtype=ttnn.bfloat16,
-            optimizations=DecodersPrecision.performance,
+            optimizations=DecodersPrecision.accuracy,
         )
         return cls(tt_model, model_args, mesh_device)
 
