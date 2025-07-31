@@ -24,8 +24,6 @@ from tests.scripts.common import run_process_and_get_result
 from tests.scripts.common import get_dispatch_core_type, get_updated_device_params
 
 # Constants for device configurations
-GALAXY_NUM_DEVICES = 32
-TG_NUM_PCIE_DEVICES = 4
 SIX_U_NUM_PCIE_DEVICES = 32
 
 
@@ -55,9 +53,8 @@ def is_single_card_n300(device):
     import ttnn
 
     num_pcie = ttnn.GetNumPCIeDevices()
-    num_devices = ttnn.GetNumAvailableDevices()
-    # N150 has 1 chip; N300 has 2 chips (1 pcie); T3000 has 8 chips (4 pcie)
-    return num_pcie == 1 and num_devices == 2 and device.arch().name == "WORMHOLE_B0"
+
+    return num_pcie == 1 and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.N300
 
 
 @pytest.fixture(scope="function")
@@ -73,9 +70,7 @@ def galaxy_type():
 def is_galaxy():
     import ttnn
 
-    num_devices = ttnn.GetNumAvailableDevices()
-    # Galaxy systems have 32 devices
-    return num_devices == GALAXY_NUM_DEVICES
+    return ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
 
 
 # TODO: Remove this when TG clusters are deprecated.
@@ -91,7 +86,7 @@ def is_tg_cluster():
     import ttnn
 
     # TG has 4 PCIe devices
-    return is_galaxy() and ttnn.GetNumPCIeDevices() == TG_NUM_PCIE_DEVICES
+    return ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.TG
 
 
 def first_available_tg_device():

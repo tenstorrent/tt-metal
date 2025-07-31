@@ -14,10 +14,7 @@ The entry point to yolov10x model is YoloV10x in `models/demos/yolov10x/tt/ttnn_
 model picks up certain configs and weights from Ultralytics pretrained model. We've used weights available [here](https://docs.ultralytics.com/models/yolov10x/#performance) under YOLOV10x
 
 ## How to Run: (640x640 resolution)
-If running on Wormhole N300 (not required for N150 or Blackhole), the following environment variable needs to be set as the model requires at least 8x8 core grid size:
-```sh
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-```
+
 To obtain the perf reports through profiler, please build with following command:
 ```
 ./build_metal.sh -p

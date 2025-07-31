@@ -30,12 +30,9 @@ python models/demos/qwen/scripts/get_weights.py --weights_path=<FOLDER_TO_SAVE_W
 1. Set up environment variables:
 ```
 export QWEN_DIR=<meta_qwen_model_dir>
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 ```
 
 - `$QWEN_DIR` sets the path for the Qwen model weights and caches.
-
-- `$WH_ARCH_YAML` sets the dispatch over ethernet cores. This is optional for N150 and required for N300 and T3000, enabling a full core grid utilization (8x8), allowing for maximum performance of Qwen models.
 
 On the first execution of each model, TTNN will create weight cache files for that model, to speed up future runs.
 These cache files only need to be created once for each model and each weight (i.e. new finetuned weights will need to be cached) and will be stored accordingly to the machine you are running the models:

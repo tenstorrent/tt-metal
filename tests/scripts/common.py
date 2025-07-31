@@ -268,9 +268,13 @@ def error_out_if_test_report_has_failures(test_report):
 def get_dispatch_core_type():
     import ttnn
 
-    # TODO: 11059 move dispatch_core_type to device_params when all tests are updated to not use WH_ARCH_YAML env flag
     dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
-    if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
+    # Special env to force worker dispatch to test dispatch from worker cores
+    cluster_type = ttnn.cluster.get_cluster_type()
+    if ("TT_TEST_USE_WORKER_DISPATCH" not in os.environ) and cluster_type in [
+        ttnn.cluster.ClusterType.N300,
+        ttnn.cluster.ClusterType.T3K,
+    ]:
         dispatch_core_type = ttnn.device.DispatchCoreType.ETH
     return dispatch_core_type
 
