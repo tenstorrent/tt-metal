@@ -47,11 +47,13 @@ void kernel_main() {
     constexpr uint32_t num_pages = data_size / page_size;
     for (uint32_t i = 0; i < num_pages; ++i) {
         socket_wait_for_pages(receiver_socket, 1);
+        DPRINT << "receiver received page " << i << "\n";
         noc_async_write(receiver_socket.read_ptr, dst_noc_addr, page_size);
         dst_noc_addr += page_size;
         socket_pop_pages(receiver_socket, 1);
         noc_async_writes_flushed();
         fabric_socket_notify_sender(receiver_socket, fabric_connection, socket_packet_header_addr);
+        DPRINT << "receiver notified sender\n";
     }
     update_socket_config(receiver_socket);
     fabric_connection.close();
