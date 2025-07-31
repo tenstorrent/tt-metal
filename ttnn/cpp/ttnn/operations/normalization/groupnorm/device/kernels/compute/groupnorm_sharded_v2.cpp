@@ -671,32 +671,49 @@ void MAIN {
             // (x - Ex) * 1/[sqrt(Var + eps)]
             index_h_offset = 0;
             mul_tiles_bcast_scalar_init_short(cb_x, cb_ex2pe);
-            cb_reserve_back(cb_xmm, block_hw);
+            // cb_reserve_back(cb_xmm, block_hw);
+            //     add_tiles_init(in0_cb, in1_cb);
+            //     for (uint32_t i = 0; i < num_tiles; ++i) {
+            //         tile_regs_acquire();
+            //         add_tiles(in0_cb, in1_cb, 0, 0, 0);
+            //         tile_regs_commit();
+            //         cb_pop_front(in0_cb, dst_tiles);
+            //         cb_pop_front(in1_cb, dst_tiles);
+            //         cb_reserve_back(in0_cb, dst_tiles);
+            //         tile_regs_wait();
+            //         pack_tile(0, in0_cb);
+            //         cb_push_back(in0_cb, dst_tiles);
+            //         tile_regs_release();
+            //     }
+            // }
             cb_wait_front(cb_ex2pe, 1);
             for (uint32_t i = 0; i < block_h; i++) {
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; j++) {
                     tile_regs_acquire();
                     for (uint32_t w = 0; w < subblock_w; w++) {
-                        uint32_t index = w + index_subblock_w_offset + index_h_offset;
+                        uint32_t index = w + index_subblock_w_offset;
                         mul_tiles_bcast_scalar(cb_x, cb_ex2pe, index, 0, w);
                     }
                     tile_regs_commit();
+                    cb_pop_front(cb_x, subblock_w);
+                    cb_reserve_back(cb_x, subblock_w);
                     tile_regs_wait();
                     for (uint32_t i = 0; i < subblock_w; i++) {
-                        pack_tile(i, cb_xmm);
+                        pack_tile(i, cb_x);
                     }
+                    cb_push_back(cb_x, subblock_w);
                     tile_regs_release();
-                    index_subblock_w_offset += subblock_w;
+                    // index_subblock_w_offset += subblock_w;
                 }
-                index_h_offset += block_w;
+                // index_h_offset += block_w;
             }
             // at this point cb_xmm is storing calculated results of (x-E[x]) * 1/[sqrt(Var + eps)]
             // cb_x being freed
-            cb_push_back(cb_xmm, block_hw);
+            // cb_push_back(cb_xmm, block_hw);
             cb_pop_front(cb_ex2pe, 1);
-            cb_pop_front(cb_x, block_hw);
-            cb_wait_front(cb_xmm, block_hw);
+            // cb_pop_front(cb_x, block_hw);
+            cb_wait_front(cb_x, block_hw);
 
             // add or copy with previous output results
             uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
@@ -706,20 +723,20 @@ void MAIN {
                 uint32_t index_h1_offset = 0;
 
                 if (copy_or_add == true) {
-                    copy_tile_init(cb_xmm);
+                    copy_tile_init(cb_x);
                 } else {
-                    add_tiles_init(cb_out, cb_xmm);
+                    add_tiles_init(cb_out, cb_x);
                 }
 
                 for (uint32_t i = 0; i < block_h; ++i) {
                     tile_regs_acquire();
-                    uint32_t index_xmm = w + index_h1_offset;
+                    uint32_t index_x = w + index_h1_offset;
                     uint32_t index = w + index_h_offset;
 
                     if (copy_or_add == true) {
-                        copy_tile(cb_xmm, index_xmm, dst0);
+                        copy_tile(cb_x, index_x, dst0);
                     } else {
-                        add_tiles(cb_out, cb_xmm, index, index_xmm, dst0);
+                        add_tiles(cb_out, cb_x, index, index_x, dst0);
                     }
                     tile_regs_commit();
                     tile_regs_wait();
@@ -748,7 +765,7 @@ void MAIN {
                     index_block_w += 1;
                 }
             }
-            cb_pop_front(cb_xmm, block_hw);
+            cb_pop_front(cb_x, block_hw);
 
             if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
                 if (row_offset == TILE_WIDTH) {
