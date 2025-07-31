@@ -1641,11 +1641,10 @@ void RunTest2DMCastEWConnAPI(
     std::map<std::string, std::string> defines = {};
     defines["FABRIC_2D"] = "";
 
-    // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_2d_mcast_tx.cpp",
+        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_3way_2d_mcast_tx.cpp",
         {sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -1676,11 +1675,26 @@ void RunTest2DMCastEWConnAPI(
     sender_runtime_args.push_back(west_fabric_node_id.chip_id);
     sender_runtime_args.push_back(trunk_hops);
     sender_runtime_args.push_back((branch_west_hops << 16) | branch_east_hops);
+    //sends both north and south hops, uses mcast mode to determine which one to use
 
     link_idx = get_forwarding_link_indices(src_fabric_node_id, west_fabric_node_id)[0];
     append_fabric_connection_rt_args(
-        src_fabric_node_id, west_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+        src_fabric_node_id, west_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args); //south trunk connection
+    
+    sender_runtime_args.push_back(left_fabric_node_id.chip_id);
+    sender_runtime_args.push_back(right_fabric_node_id.chip_id);
+    sender_runtime_args.push_back((direct_left_hops << 16) | direct_right_hops);
 
+    link_idx = get_forwarding_link_indices(src_fabric_node_id, left_fabric_node_id)[0];
+    append_fabric_connection_rt_args(
+        src_fabric_node_id, left_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+    
+    link_idx = get_forwarding_link_indices(src_fabric_node_id, right_fabric_node_id)[0];
+    append_fabric_connection_rt_args(
+        src_fabric_node_id, right_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
+
+    //anything here or below should be good to go in terms of working out of the box, no modifications needed to support
+    //the three way 2d mcast
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
