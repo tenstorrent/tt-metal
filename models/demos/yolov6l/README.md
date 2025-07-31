@@ -1,10 +1,6 @@
 # Yolov6l
 Demo showcasing Yolov6l running on `Wormhole - N150, N300` using ttnn.
 
-### Note:
-
-Wormhole N150, N300
-
 To obtain the perf reports through profiler, please build with following command:
 ```
 ./build_metal.sh -p

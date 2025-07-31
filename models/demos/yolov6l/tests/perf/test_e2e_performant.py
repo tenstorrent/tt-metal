@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.yolov6l.common import YOLOV6L_L1_SMALL_SIZE
 from models.demos.yolov6l.runner.performant_runner import YOLOv6lPerformantRunner
 from models.demos.yolov6l.tt.common import get_mesh_mappers
 from models.perf.perf_utils import prep_perf_report
@@ -26,6 +27,7 @@ def run_yolov6_inference(
     act_dtype,
     weight_dtype,
     resolution,
+    model_location_generator,
 ):
     disable_persistent_kernel_cache()
 
@@ -39,7 +41,7 @@ def run_yolov6_inference(
         act_dtype,
         weight_dtype,
         resolution=resolution,
-        model_location_generator=None,
+        model_location_generator=model_location_generator,
         mesh_mapper=inputs_mesh_mapper,
         weights_mesh_mapper=weights_mesh_mapper,
         mesh_composer=output_mesh_composer,
@@ -67,7 +69,7 @@ def run_yolov6_inference(
 
     expected_compile_time, expected_inference_time = get_expected_times("yolov6l")
     prep_perf_report(
-        model_name="models/experimental/yolov6l/",
+        model_name="models/demos/yolov6l/",
         batch_size=batch_size,
         inference_and_compile_time=inference_and_compile_time,
         inference_time=inference_time,
@@ -80,7 +82,9 @@ def run_yolov6_inference(
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": YOLOV6L_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "batch_size_per_device, act_dtype, weight_dtype",
@@ -99,6 +103,7 @@ def test_perf_yolov6l(
     act_dtype,
     weight_dtype,
     resolution,
+    model_location_generator,
 ):
     run_yolov6_inference(
         device,
@@ -106,12 +111,15 @@ def test_perf_yolov6l(
         act_dtype,
         weight_dtype,
         resolution,
+        model_location_generator=model_location_generator,
     )
 
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": YOLOV6L_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "batch_size_per_device, act_dtype, weight_dtype",
@@ -130,6 +138,7 @@ def test_perf_yolov6l_dp(
     act_dtype,
     weight_dtype,
     resolution,
+    model_location_generator,
 ):
     run_yolov6_inference(
         mesh_device,
@@ -137,4 +146,5 @@ def test_perf_yolov6l_dp(
         act_dtype,
         weight_dtype,
         resolution,
+        model_location_generator=model_location_generator,
     )

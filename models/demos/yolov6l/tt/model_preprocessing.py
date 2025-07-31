@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import sys
 
 import torch
@@ -11,7 +10,6 @@ from ttnn.model_preprocessing import infer_ttnn_module_args, preprocess_model_pa
 
 import ttnn
 from models.demos.yolov6l.reference.yolov6l import Model
-from models.demos.yolov6l.reference.yolov6l_utils import fuse_model
 from models.demos.yolov6l.tt.common import get_mesh_mappers
 
 sys.path.append("models/demos/yolov6l/reference/")
@@ -93,9 +91,10 @@ def create_yolov6l_model_parameters(model: Model, torch_input: torch.Tensor, dev
 
 
 def create_yolov6l_model_parameters_detect(model: Model, torch_input: torch.Tensor, device):
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        custom_preprocessor=custom_preprocessor,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=device,
     )
 

@@ -10,6 +10,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.yolov6l.common import YOLOV6L_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov6l.demo.demo_utils import *
 from models.demos.yolov6l.demo.demo_utils import (
     LoadImages,
@@ -19,11 +20,12 @@ from models.demos.yolov6l.demo.demo_utils import (
 )
 from models.demos.yolov6l.runner.performant_runner import YOLOv6lPerformantRunner
 from models.demos.yolov6l.tt.common import get_mesh_mappers
-from models.demos.yolov6l.tt.model_preprocessing import load_torch_model_yolov6l
 from models.utility_functions import disable_persistent_kernel_cache
 
 
-def init_model_and_runner(device, model_type, use_weights_from_ultralytics, batch_size_per_device):
+def init_model_and_runner(
+    device, model_type, use_weights_from_ultralytics, batch_size_per_device, model_location_generator
+):
     disable_persistent_kernel_cache()
 
     num_devices = device.get_num_devices()
@@ -33,7 +35,7 @@ def init_model_and_runner(device, model_type, use_weights_from_ultralytics, batc
 
     inputs_mesh_mapper, weights_mesh_mapper, outputs_mesh_composer = get_mesh_mappers(device)
 
-    model = load_torch_model_yolov6l()
+    model = load_torch_model(model_location_generator)
     logger.info("Inferencing [Torch] Model")
 
     performant_runner = None
@@ -44,7 +46,7 @@ def init_model_and_runner(device, model_type, use_weights_from_ultralytics, batc
             ttnn.bfloat8_b,
             ttnn.bfloat8_b,
             resolution=(640, 640),
-            model_location_generator=None,
+            model_location_generator=model_location_generator,
             mesh_mapper=inputs_mesh_mapper,
             weights_mesh_mapper=weights_mesh_mapper,
             mesh_composer=outputs_mesh_composer,
@@ -90,9 +92,15 @@ def run_inference_and_save(
         save_yolo_predictions_by_model(result, save_dir, image_path, model_type)
 
 
-def run_yolov6l_demo(device, model_type, use_weights_from_ultralytics, res, input_loc, batch_size_per_device):
+def run_yolov6l_demo(
+    device, model_type, use_weights_from_ultralytics, res, input_loc, batch_size_per_device, model_location_generator
+):
     model, runner, mesh_composer, batch_size = init_model_and_runner(
-        device, model_type, use_weights_from_ultralytics, batch_size_per_device
+        device,
+        model_type,
+        use_weights_from_ultralytics,
+        batch_size_per_device,
+        model_location_generator=model_location_generator,
     )
 
     dataset = LoadImages(path=os.path.abspath(input_loc), batch=batch_size)
@@ -109,9 +117,15 @@ def run_yolov6l_demo(device, model_type, use_weights_from_ultralytics, res, inpu
     logger.info("Inference done")
 
 
-def run_yolov6l_demo_dataset(device, model_type, use_weights_from_ultralytics, res, batch_size_per_device):
+def run_yolov6l_demo_dataset(
+    device, model_type, use_weights_from_ultralytics, res, batch_size_per_device, model_location_generator
+):
     model, runner, mesh_composer, batch_size = init_model_and_runner(
-        device, model_type, use_weights_from_ultralytics, batch_size_per_device
+        device,
+        model_type,
+        use_weights_from_ultralytics,
+        batch_size_per_device,
+        model_location_generator=model_location_generator,
     )
 
     dataset = fiftyone.zoo.load_zoo_dataset("coco-2017", split="validation", max_samples=batch_size)
@@ -133,7 +147,9 @@ def run_yolov6l_demo_dataset(device, model_type, use_weights_from_ultralytics, r
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": YOLOV6L_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "model_type",
@@ -156,12 +172,24 @@ def run_yolov6l_demo_dataset(device, model_type, use_weights_from_ultralytics, r
         ),
     ],
 )
-def test_demo(device, model_type, use_weights_from_ultralytics, res, input_loc, batch_size_per_device):
-    run_yolov6l_demo(device, model_type, use_weights_from_ultralytics, res, input_loc, batch_size_per_device)
+def test_demo(
+    device, model_type, use_weights_from_ultralytics, res, input_loc, batch_size_per_device, model_location_generator
+):
+    run_yolov6l_demo(
+        device,
+        model_type,
+        use_weights_from_ultralytics,
+        res,
+        input_loc,
+        batch_size_per_device,
+        model_location_generator=model_location_generator,
+    )
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": YOLOV6L_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "model_type",
@@ -184,12 +212,30 @@ def test_demo(device, model_type, use_weights_from_ultralytics, res, input_loc, 
         ),
     ],
 )
-def test_demo_dp(mesh_device, model_type, use_weights_from_ultralytics, res, input_loc, batch_size_per_device):
-    run_yolov6l_demo(mesh_device, model_type, use_weights_from_ultralytics, res, input_loc, batch_size_per_device)
+def test_demo_dp(
+    mesh_device,
+    model_type,
+    use_weights_from_ultralytics,
+    res,
+    input_loc,
+    batch_size_per_device,
+    model_location_generator,
+):
+    run_yolov6l_demo(
+        mesh_device,
+        model_type,
+        use_weights_from_ultralytics,
+        res,
+        input_loc,
+        batch_size_per_device,
+        model_location_generator=model_location_generator,
+    )
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": YOLOV6L_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "model_type",
@@ -203,12 +249,21 @@ def test_demo_dp(mesh_device, model_type, use_weights_from_ultralytics, res, inp
     [True],
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_demo_dataset(device, model_type, use_weights_from_ultralytics, res):
-    run_yolov6l_demo_dataset(device, model_type, use_weights_from_ultralytics, res, batch_size_per_device=1)
+def test_demo_dataset(device, model_type, use_weights_from_ultralytics, res, model_location_generator):
+    run_yolov6l_demo_dataset(
+        device,
+        model_type,
+        use_weights_from_ultralytics,
+        res,
+        batch_size_per_device=1,
+        model_location_generator=model_location_generator,
+    )
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": YOLOV6L_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "model_type",
@@ -222,5 +277,12 @@ def test_demo_dataset(device, model_type, use_weights_from_ultralytics, res):
     [True],
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_demo_dataset_dp(mesh_device, model_type, use_weights_from_ultralytics, res):
-    run_yolov6l_demo_dataset(mesh_device, model_type, use_weights_from_ultralytics, res, batch_size_per_device=1)
+def test_demo_dataset_dp(mesh_device, model_type, use_weights_from_ultralytics, res, model_location_generator):
+    run_yolov6l_demo_dataset(
+        mesh_device,
+        model_type,
+        use_weights_from_ultralytics,
+        res,
+        batch_size_per_device=1,
+        model_location_generator=model_location_generator,
+    )

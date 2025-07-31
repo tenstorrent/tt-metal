@@ -6,13 +6,13 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.yolov6l.tt.model_preprocessing import create_yolov6l_model_parameters, load_torch_model_yolov6l
+from models.demos.yolov6l.common import YOLOV6L_L1_SMALL_SIZE, load_torch_model
+from models.demos.yolov6l.tt.model_preprocessing import create_yolov6l_model_parameters
 from models.demos.yolov6l.tt.ttnn_sppf import TtSppf
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.demos.yolov6l.common import load_torch_model
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV6L_L1_SMALL_SIZE}], indirect=True)
 def test_yolov6l_sppf(device, reset_seeds, model_location_generator):
     model = load_torch_model(model_location_generator)
 
