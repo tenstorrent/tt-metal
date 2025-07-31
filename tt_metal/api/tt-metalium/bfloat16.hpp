@@ -12,8 +12,6 @@
 #include <utility>
 #include <vector>
 
-uint16_t fp32_to_bf16_bits(float val);
-
 class bfloat16 {
 private:
     uint16_t uint16_data;
@@ -22,16 +20,16 @@ public:
     static constexpr size_t SIZEOF = 2;
     bfloat16() = default;
 
-    // create from float: no rounding, just truncate
-    bfloat16(float float_num) { uint16_data = fp32_to_bf16_bits(float_num); }
+    // create from float: tie-to-even rounding
+    bfloat16(float float_num);
 
     // store lower 16 as 16-bit uint
-    bfloat16(uint32_t uint32_data) { uint16_data = (uint16_t)uint32_data; }
+    bfloat16(uint32_t uint32_data);
 
-    bfloat16(uint16_t uint16_data_) { uint16_data = uint16_data_; }
+    bfloat16(uint16_t uint16_data_);
 
     // store lower 16 as 16-bit uint
-    bfloat16(int int_data) { uint16_data = (uint16_t)int_data; }
+    bfloat16(int int_data);
 
     float to_float() const {
         // move lower 16 to upper 16 (of 32) and convert to float
