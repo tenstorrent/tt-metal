@@ -97,6 +97,15 @@ def get_rank_environment(
         "TT_HOST_RANK": str(mesh_to_host_rank_id[binding.mesh_id]),
         "TT_MESH_GRAPH_DESC_PATH": config.mesh_graph_desc_path,
     }
+    gtest_output_str = os.environ.get("GTEST_OUTPUT")
+    if gtest_output_str is not None:
+        gtest_output_path = Path(gtest_output_str)
+
+        # Check if path ends with a separator or has no extension
+        is_dir_like = gtest_output_str.endswith(os.sep) or gtest_output_path.suffix == ""
+        if is_dir_like:
+            gtest_output_path = gtest_output_path / str(binding.rank)
+        env["GTEST_OUTPUT"] = f"{gtest_output_path}/"
     mesh_to_host_rank_id[binding.mesh_id] += 1
 
     # Apply environment variables with expansion and proper precedence
@@ -144,7 +153,7 @@ def build_mpi_command(config: TTRunConfig, program: List[str], mpi_args: Optiona
 
     # Build per-rank application contexts
     mesh_to_host_rank_id = defaultdict(int)
-    for i, binding in enumerate(config.rank_bindings):
+    for i, binding in sorted(enumerate(config.rank_bindings), key=lambda x: x[1].rank):
         if i > 0:
             cmd.append(":")
 
@@ -251,6 +260,7 @@ def main(ctx: click.Context, rank_binding: Path, dry_run: bool, verbose: bool, m
         - TT_METAL_HOME: TT-Metal installation directory
         - PYTHONPATH: Python module search path
         - TT_MESH_GRAPH_DESC_PATH: Path to mesh graph descriptor
+        - GTEST_OUTPUT: If GTEST_OUTPUT is set to a directory, a subdirectory will be created for each rank.
 
     See examples/ttrun/ for example configuration files.
     """
