@@ -14,11 +14,8 @@ static constexpr size_t SMALL_VECTOR_SIZE = 8;
 
 template <typename T, size_t PREALLOCATED_SIZE = SMALL_VECTOR_SIZE>
 using SmallVector = llvm::SmallVector<T, PREALLOCATED_SIZE>;
-// struct SmallVector : public llvm::SmallVector<T, PREALLOCATED_SIZE> {
-//     using llvm::SmallVector<T, PREALLOCATED_SIZE>::SmallVector;
-// };
 
-template <typename Stream, typename T, size_t PREALLOCATED_SIZE>
+template <typename Stream, typename T, unsigned PREALLOCATED_SIZE>
 Stream& operator<<(Stream& os, const SmallVector<T, PREALLOCATED_SIZE>& vec) {
     os << "SmallVector([";
     for (auto i = 0; i < vec.size(); ++i) {
@@ -63,7 +60,8 @@ struct fmt::formatter<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
     auto format(const ttsl::SmallVector<T, PREALLOCATED_SIZE>& vector, format_context& ctx) const
         -> format_context::iterator {
         std::stringstream ss;
-        ss << vector;
+        ttsl::operator<<(ss, vector);
+        // ss << vector;
         return fmt::format_to(ctx.out(), "{}", ss.str());
     }
 };

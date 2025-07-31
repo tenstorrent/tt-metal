@@ -518,9 +518,9 @@ protected:
 
     /// Reserve enough space to add one element, and return the updated element
     /// pointer in case it was a reference to the storage.
-    const T* reserveForParamAndGetAddress(const T& Elt, size_t N = 1) {
-        return this->reserveForParamAndGetAddressImpl(this, Elt, N);
-    }
+    // const T* reserveForParamAndGetAddress(const T& Elt, size_t N = 1) {
+    //     return this->reserveForParamAndGetAddressImpl(this, Elt, N);
+    // }
 
     /// Reserve enough space to add one element, and return the updated element
     /// pointer in case it was a reference to the storage.

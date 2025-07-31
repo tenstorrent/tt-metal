@@ -82,10 +82,11 @@ std::unordered_map<std::type_index, GraphArgumentSerializer::ConvertionFunction>
 
 template <typename T, std::size_t N>
 void GraphArgumentSerializer::register_small_vector() {
-    registry()[typeid(std::reference_wrapper<tt::stl::SmallVector<T, N>>)] = [](const std::any& value) -> std::string {
+    registry()[typeid(std::reference_wrapper<ttsl::SmallVector<T, N>>)] = [](const std::any& value) -> std::string {
         std::ostringstream oss;
-        auto referenced_value = std::any_cast<std::reference_wrapper<tt::stl::SmallVector<T, N>>>(value);
-        oss << referenced_value.get();
+        auto referenced_value = std::any_cast<std::reference_wrapper<ttsl::SmallVector<T, N>>>(value);
+        ttsl::operator<<(oss, referenced_value.get());
+        // oss << referenced_value.get();
         return oss.str();
     };
 }
