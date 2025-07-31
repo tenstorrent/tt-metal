@@ -30,7 +30,7 @@ from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 25000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 20000000}],
     indirect=True,
 )
 def test_sd35_performance(
