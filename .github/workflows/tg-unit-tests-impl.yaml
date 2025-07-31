@@ -20,10 +20,6 @@ on:
         required: false
         type: string
         default: "config-tg"
-      ref:
-        required: false
-        type: string
-        default: ""
 
 jobs:
   # See issue 25270
