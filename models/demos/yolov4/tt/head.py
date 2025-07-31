@@ -118,9 +118,6 @@ class TtHead:
             outfrom_Neck1 = ttnn.sharded_to_interleaved(outfrom_Neck1, ttnn.L1_MEMORY_CONFIG)
 
         output_tensor = ttnn.concat([output_tensor, outfrom_Neck1], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(outfrom_Neck1)
-        ttnn.deallocate(input_tensor[2])
-        ttnn.deallocate(input_tensor[0])
 
         output_tensor = self.conv4(output_tensor)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
@@ -141,7 +138,6 @@ class TtHead:
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor_left_2 = self.conv10(output_tensor)[0]
-        output_tensor_left_1 = ttnn.reallocate(output_tensor_left_1)
 
         output_tensor = self.conv11(output_tensor_split)[0]
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
