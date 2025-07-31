@@ -157,7 +157,7 @@ def get_device_ids() -> List[int]:
 
 
 def open_mesh_device(
-    mesh_shape: ttnn.MeshShape,
+    mesh_shape: ttnn.MeshShape = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape(),
     l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
     num_command_queues: int = 1,
@@ -170,7 +170,7 @@ def open_mesh_device(
     Open a mesh device with the specified configuration.
 
     Args:
-        mesh_shape (ttnn.MeshShape): The shape of the mesh device.
+        mesh_shape (ttnn.MeshShape): The shape of the mesh device. Defaults to the global shape of the system mesh.
         l1_small_size (int, optional): Size of the L1 small memory. Defaults to ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE.
         trace_region_size (int, optional): Size of the trace region. Defaults to ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE.
         num_command_queues (int, optional): Number of command queues. Defaults to 1.
