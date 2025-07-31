@@ -313,11 +313,7 @@ jobs:
 
           # Trigger workflow with appropriate inputs
           echo "Triggering $WORKFLOW..."
-          if [ "$WORKFLOW" = "blackhole-post-commit.yaml" ]; then
-            gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" -f enable-ttnn-unit-tests=true --repo "${{ github.repository }}"
-          else
-            gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}"
-          fi
+          gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}"
 
           # Wait for the new run to appear and ensure it's created after trigger time
           run_id=""
