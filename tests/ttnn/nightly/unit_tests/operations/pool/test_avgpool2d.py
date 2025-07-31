@@ -75,7 +75,8 @@ def randomize_tensor(tensor_map, tensor_shape):
     if tensor_shape in tensor_map.keys():
         torch_tensor = tensor_map[tensor_shape]
     else:
-        torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+        torch_tensor = torch.ones(tensor_shape, dtype=torch.bfloat16)
+        tensor_map[tensor_shape] = torch_tensor
     return torch_tensor
 
 
@@ -142,7 +143,9 @@ def run_avg_pool2d(
         pytest.skip("kernel is too large for the padded tensor")
 
     out_n = in_n
-    out_c = max(in_c, 32)  # TTNN will pad the output channels to 32 for bfloat8_b
+    out_c = (
+        max(in_c, 32) if dtype == ttnn.bfloat8_b else in_c
+    )  # TTNN will pad the output channels to 32 for bfloat8_b only
     if ceil_mode:
         out_h = math.ceil((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
         out_w = math.ceil((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
@@ -196,17 +199,24 @@ def run_avg_pool2d(
         )
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
-    torch_input_padded = torch.nn.functional.pad(
-        torch_input,
-        (pad_l, pad_r, pad_t, pad_b),  # torch is padding in the order (left, right, top, bottom)
-        mode="constant",
-        value=0,
-    )
+    # for avg pool we only do this when necessary as it will lead to an expensive correction process
+    torch_needs_correction = padding_is_4d and divisor_override is None and count_include_pad is False
+    if torch_needs_correction:
+        torch_input_padded = torch.nn.functional.pad(
+            torch_input,
+            (pad_l, pad_r, pad_t, pad_b),  # torch is padding in the order (left, right, top, bottom)
+            mode="constant",
+            value=0,
+        )
+        torch_padding = [0, 0]  # use zero padding for torch avg pool since we are padding manually
+    else:
+        torch_input_padded = torch_input
+        torch_padding = padding
     # run torch avg_pool2d
     torch_output = torch.nn.AvgPool2d(
         kernel_size=kernel_size,
         stride=stride,
-        padding=[0, 0],  # always use zero padding we are padding manually
+        padding=torch_padding,
         ceil_mode=ceil_mode,
         count_include_pad=count_include_pad,
         divisor_override=divisor_override,
@@ -219,7 +229,7 @@ def run_avg_pool2d(
     ttnn_output = ttnn_output[:, :in_c, :, :]
 
     # apply correction to TORCH output for asymmetric padding when needed
-    if padding_is_4d and divisor_override is None and count_include_pad is False:
+    if torch_needs_correction:
         torch_output = correct_torch_asym_pad(
             torch_output,
             input_shape,
