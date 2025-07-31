@@ -400,7 +400,7 @@ void virtual_channels_test(
     }
 }
 
-void virtual_channels_custom_test(
+void custom_test(
     ARCH arch_,
     vector<IDevice*>& devices_,
     uint32_t num_devices_,
@@ -829,7 +829,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastCustom) {
     uint32_t pages_per_transaction = 1;
     uint32_t num_virtual_channels = 4;
 
-    unit_tests::dm::core_to_all::virtual_channels_custom_test(
+    unit_tests::dm::core_to_all::custom_test(
         arch_,
         devices_,
         num_devices_,
