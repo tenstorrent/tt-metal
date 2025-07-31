@@ -22,12 +22,12 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
     constexpr bool block_or_width_sharded = get_compile_time_arg_val(0) == 1;
-#if !IN0_SHARDED && !IN1_SHARDED
+#if !defined(IN0_SHARDED) && !defined(IN1_SHARDED)
     constexpr auto src0_args = TensorAccessorArgs<1>();
     constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
-#elif !IN0_SHARDED
+#elif !defined(IN0_SHARDED)
     constexpr auto src0_args = TensorAccessorArgs<1>();
-#elif !IN1_SHARDED
+#elif !defined(IN1_SHARDED)
     constexpr auto src1_args = TensorAccessorArgs<1>();
 #endif
 
