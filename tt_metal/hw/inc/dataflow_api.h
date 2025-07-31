@@ -973,6 +973,26 @@ FORCE_INLINE void noc_async_read_tile(
  * Refer to template <typename AddrGen> noc_async_read_page for a generic implementation and more details.
  */
 // clang-format on
+template <typename DSpec>
+[[deprecated("Use <typename AddrGen> noc_async_read_page instead.")]]
+FORCE_INLINE void noc_async_read_tile(
+    const uint32_t id,
+    const TensorAccessor<DSpec>& addrgen,
+    uint32_t dst_local_l1_addr,
+    uint32_t offset = 0,
+    uint8_t noc = noc_index) {
+    noc_async_read_page<TensorAccessor<DSpec>>(id, addrgen, dst_local_l1_addr, offset, noc);
+}
+
+// clang-format off
+/**
+ * THIS API IS DEPRECATED AND WILL BE REMOVED SOON. Use <typename AddrGen> noc_async_read_page instead.
+ *
+ * Initiates an asynchronous read for a single packet with transaction size and source location determined by the InterleavedAddrGen object.
+ * This function is a convenience wrapper around noc_async_read_page for InterleavedAddrGen objects.
+ * Refer to template <typename AddrGen> noc_async_read_page for a generic implementation and more details.
+ */
+// clang-format on
 template <bool DRAM>
 [[deprecated("Use <typename AddrGen> noc_async_read_page instead.")]]
 FORCE_INLINE void noc_async_read_page(

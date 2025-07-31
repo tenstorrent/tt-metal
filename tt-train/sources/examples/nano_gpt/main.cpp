@@ -529,8 +529,6 @@ int main(int argc, char **argv) {
         fmt::print("MPI config:\n");
         fmt::print("  enable_mpi: {}\n", config.enable_mpi);
         fmt::print("  num_mh_workers: {}\n", config.num_mh_workers);
-    } else {
-        fmt::print("Not MPI run.\n");
     }
 
     if (enable_wandb) {
