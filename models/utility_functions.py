@@ -999,10 +999,7 @@ def get_devices_for_t3000(all_devices, num_devices):
     if num_devices <= 4:
         return all_devices[:num_devices]
     elif num_devices == 8:
-        # Temporary until we move request for ring order to CCL operations directly.
-        # This is better because we no longer need to manually manage the ring order.
-        ring_indices = ttnn.get_t3k_physical_device_ids_ring()
-        return [all_devices[i] for i in ring_indices]
+        return all_devices
     else:
         raise NotImplementedError("Only supports 1, 2, 3, 4, and 8 chip configurations!")
 
