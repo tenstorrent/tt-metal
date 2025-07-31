@@ -11,6 +11,11 @@
 namespace ttnn::operations::ccl::common {
 
 namespace detail {
+
+bool has_wrap_around(tt::tt_fabric::Topology topology) {
+    return topology == tt::tt_fabric::Topology::Ring || topology == tt::tt_fabric::Topology::Torus;
+}
+
 std::vector<tt::tt_metal::IDevice*> get_axis_devices(
     const MeshDeviceView& mesh_view, uint32_t axis, uint32_t axis_value) {
     // axis == 1 -> horizontal row (East/West)
@@ -48,7 +53,7 @@ std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbor
     // directions: {East, West, North, South}
     std::array<bool, 4> directions = {false, false, false, false};
 
-    const bool is_ring = topology == tt::tt_fabric::Topology::Ring;
+    const bool wrap_around_connection = detail::has_wrap_around(topology);
     auto src_device = mesh_view.get_device(mesh_coordinate);
 
     // Helper that appends neighbours for a single axis
@@ -76,7 +81,7 @@ std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbor
             if (next_neighbor_idx < size) {
                 log_debug(tt::LogOp, "Adding East neighbor: {}", next_neighbor_idx);
                 add_neighbor(Direction::East, next_neighbor_idx);
-            } else if (is_ring) {
+            } else if (wrap_around_connection) {
                 add_neighbor(Direction::East, first_device);
             }
 
@@ -84,7 +89,7 @@ std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbor
             if (idx > 0) {
                 log_debug(tt::LogOp, "Adding West neighbor: {}", prev_neighbor_idx);
                 add_neighbor(Direction::West, prev_neighbor_idx);
-            } else if (is_ring) {
+            } else if (wrap_around_connection) {
                 add_neighbor(Direction::West, last_device);
             }
         } else {
@@ -93,7 +98,7 @@ std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbor
             if (idx > 0) {
                 log_debug(tt::LogOp, "Adding North neighbor: {}", prev_neighbor_idx);
                 add_neighbor(Direction::North, prev_neighbor_idx);
-            } else if (is_ring) {
+            } else if (wrap_around_connection) {
                 add_neighbor(Direction::North, last_device);
             }
 
@@ -101,7 +106,7 @@ std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbor
             if (next_neighbor_idx < size) {
                 log_debug(tt::LogOp, "Adding South neighbor: {}", next_neighbor_idx);
                 add_neighbor(Direction::South, next_neighbor_idx);
-            } else if (is_ring) {
+            } else if (wrap_around_connection) {
                 add_neighbor(Direction::South, first_device);
             }
         }
@@ -119,41 +124,10 @@ std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbor
     TT_FATAL(!(axis.has_value() && neighbors.size() > 2), "Along a single axis, there can only be 2 neighbors");
 
     if (!axis.has_value()) {
-        TT_FATAL(!(is_ring && neighbors.size() != 4), "Ring topology must have 4 neighbors");
+        TT_FATAL(!(wrap_around_connection && neighbors.size() != 4), "Ring/Torus topology must have 4 neighbors");
     }
 
     return {neighbors, directions};
-}
-
-uint32_t select_link(
-    const MeshDeviceView& mesh_view,
-    const MeshCoordinate& src,
-    const MeshCoordinate& dst,
-    uint32_t num_links,
-    tt::tt_fabric::Topology topology) {
-    auto same_row = src[0] == dst[0];
-    auto same_col = src[1] == dst[1];
-    auto rows = mesh_view.num_rows();
-    auto cols = mesh_view.num_cols();
-    TT_FATAL(same_row ^ same_col, "src & dst must be neighbours");
-
-    if (same_row) {  // ----- horizontal -----
-        bool east = false;
-        if (topology == tt::tt_fabric::Topology::Ring) {
-            east = dst[1] == (src[1] + 1) % cols;  // wrap-around permitted
-        } else {                                   /* Linear */
-            east = dst[1] == src[1] + 1;           // no wrap-around
-        }
-        return (src[1] + (east ? 0 : 1)) % num_links;  // link id
-    } else {                                           // ----- vertical -----
-        bool south = false;
-        if (topology == tt::tt_fabric::Topology::Ring) {
-            south = dst[0] == (src[0] + 1) % rows;  // wrap-around permitted
-        } else {                                    /* Linear */
-            south = dst[0] == src[0] + 1;           // no wrap-around
-        }
-        return (src[0] + (south ? 0 : 1)) % num_links;  // link id
-    }
 }
 
 uint32_t get_linearized_index(const ttnn::MeshCoordinate& mesh_coordinate, const ttnn::MeshDeviceView& mesh_view) {
