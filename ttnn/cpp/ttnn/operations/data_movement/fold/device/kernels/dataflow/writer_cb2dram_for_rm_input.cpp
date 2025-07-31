@@ -9,17 +9,15 @@
 void kernel_main() {
     constexpr uint32_t stick_nbytes = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(1);
-    constexpr bool dst_stick_size_is_power_of_two = get_compile_time_arg_val(2) == 1;
-    constexpr uint32_t dst_log2_stick_size = get_compile_time_arg_val(3);
-    constexpr uint32_t aligned_stick_nbytes_dram = get_compile_time_arg_val(4);
-    constexpr uint32_t stride_h = get_compile_time_arg_val(5);
-    constexpr uint32_t stride_w = get_compile_time_arg_val(6);
-    constexpr uint32_t input_width = get_compile_time_arg_val(7);
-    constexpr uint32_t work_per_core = get_compile_time_arg_val(8);
+    constexpr uint32_t aligned_stick_nbytes_dram = get_compile_time_arg_val(2);
+    constexpr uint32_t stride_h = get_compile_time_arg_val(3);
+    constexpr uint32_t stride_w = get_compile_time_arg_val(4);
+    constexpr uint32_t input_width = get_compile_time_arg_val(5);
+    constexpr uint32_t work_per_core = get_compile_time_arg_val(6);
+    constexpr auto dst_args = TensorAccessorArgs<7>();
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const auto s_out =
-        get_interleaved_addr_gen<true, dst_stick_size_is_power_of_two>(dst_addr, stick_nbytes, dst_log2_stick_size);
+    const auto s_out = TensorAccessor(dst_args, dst_addr, stick_nbytes);
     uint32_t dst_index = get_arg_val<uint32_t>(1);
     constexpr uint32_t patch_size = stride_h * stride_w;
     for (uint32_t input_idx = 0; input_idx < work_per_core; input_idx++) {

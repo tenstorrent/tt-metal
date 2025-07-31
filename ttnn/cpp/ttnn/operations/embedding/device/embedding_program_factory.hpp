@@ -11,6 +11,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <tracy/Tracy.hpp>
 
@@ -523,11 +524,8 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     // Tilized writer
     KernelHandle writer_kernel_id = 0;
     if (!output_sharded) {
-        std::vector<uint32_t> writer_compile_time_args = {
-            (std::uint32_t)out_cb_index,
-            (std::uint32_t)out_is_dram,
-            (std::uint32_t)output_stick_size_is_power_of_two,
-            (std::uint32_t)output_log2_stick_size};
+        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)out_cb_index, (std::uint32_t)output_page_size};
+        TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
         writer_kernel_id = tt_metal::CreateKernel(
             program,
@@ -742,11 +740,8 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_page_size);
     uint32_t output_log2_stick_size =
         output_stick_size_is_power_of_two ? (std::uint32_t)std::log2(output_page_size) : 0;
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)output_cb_index,
-        (std::uint32_t)out_is_dram,
-        (std::uint32_t)output_stick_size_is_power_of_two,
-        (std::uint32_t)output_log2_stick_size};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)output_page_size};
+    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     // Tilized writer
     auto writer_kernel_id = tt_metal::CreateKernel(
