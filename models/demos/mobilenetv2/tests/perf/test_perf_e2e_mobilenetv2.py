@@ -77,7 +77,9 @@ def run_mobilenetv2_e2e(
     pipe.compile(host_input_tensor)
     host_inputs = [host_input_tensor] * iterations
 
-    pipe.preallocate_output_tensors_on_host(iterations, torch_output_tensor.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+    pipe.preallocate_output_tensors_on_host(
+        iterations, [batch_size_per_device, torch_output_tensor.shape[-1]], ttnn.bfloat16, ttnn.TILE_LAYOUT
+    )
 
     start = time.time()
     outputs = pipe.enqueue(host_inputs).pop_all()
