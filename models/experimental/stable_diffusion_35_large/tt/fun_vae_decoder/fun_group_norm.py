@@ -41,7 +41,7 @@ class TtGroupNormParameters:
         num_channels = torch_groupnorm.num_channels
         num_groups = torch_groupnorm.num_groups
         mesh_shape = list(parallel_config.device.shape)
-        device_count = mesh_shape[0] * mesh_shape[1]  # make this part of parallel config
+        device_count = mesh_shape[1]  # make this part of parallel config
 
         # Apply sharded config.
         # if allow_sharded_compute and mesh_sharded_input and ((num_channels % device_count) == 0 == (num_groups % device_count) == (num_channels / device_count) % 32):
@@ -132,7 +132,7 @@ def group_norm_weight_bias_rm_sharded(
             ttnn.create_group_norm_weight_bias_rm(t, num_channels, opt_core_grid.y) for t in tensor.chunk(device_count)
         ]
         tensor_to_shard = torch.cat(torch_sharded_lst, dim=0)
-        mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+        mesh_mapper = ttnn.ShardTensor2dMesh(device, tuple(device.shape), dims=[None, 0])
     else:
         tensor_to_shard = ttnn.create_group_norm_weight_bias_rm(tensor, num_channels, opt_core_grid.y)
         mesh_mapper = None
