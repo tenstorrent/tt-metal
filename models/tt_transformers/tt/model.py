@@ -357,13 +357,33 @@ class Transformer(LightweightModule):
                         topology=self.args.ccl_topology(),
                     )
                 else:
+                    # TODO: (GR) Using num devices is wrong when cluster axis is present
+                    ag_memory_config = tt_logits.memory_config()
+                    reshaping = False
+                    original_input_shape = tt_logits.shape
+                    reshaped_input_tensor = tt_logits
+                    if original_input_shape[3] % 32 != 0:
+                        reshaping = True
+                        collapsed_outer_dims = (
+                            original_input_shape[0] * original_input_shape[1] * original_input_shape[2]
+                        )
+                        if collapsed_outer_dims % 32 == 0:
+                            ag_memory_config = ttnn.DRAM_MEMORY_CONFIG
+                            reshaped_input_tensor = ttnn.reshape(
+                                reshaped_input_tensor,
+                                (1, 1, 1, collapsed_outer_dims * original_input_shape[3]),
+                                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            )
+                        else:
+                            assert False, "Bad Shape"
+
                     tt_logits = ttnn.experimental.all_gather_async(
-                        tt_logits,
+                        reshaped_input_tensor,
                         persistent_output_buffer=None,
                         dim=3,
                         multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                         num_links=2,
-                        memory_config=tt_logits.memory_config(),
+                        memory_config=ag_memory_config,
                         cluster_axis=0,
                         topology=self.args.ccl_topology(),
                         barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
@@ -371,23 +391,65 @@ class Transformer(LightweightModule):
                         num_workers_per_link=2,
                         num_buffers_per_channel=2,
                     )
+
+                    ttnn.deallocate(reshaped_input_tensor)
+
+                    if reshaping:
+                        split_tensors = ttnn.split(
+                            tt_logits, split_size=int(tt_logits.shape[3] / self.mesh_device.get_num_devices()), dim=3
+                        )
+                        for i in range(len(split_tensors)):
+                            split_tensors[i] = ttnn.reshape(split_tensors[i], original_input_shape)
+                        tt_logits = ttnn.concat(split_tensors, dim=3)
+                        tt_logits = ttnn.to_memory_config(tt_logits, tt_logits.memory_config())
             else:
                 if is_blackhole():
                     tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, topology=self.args.ccl_topology())
                 else:
+                    ag_memory_config = tt_logits.memory_config()
+                    reshaping = False
+                    original_input_shape = tt_logits.shape
+                    reshaped_input_tensor = tt_logits
+                    if original_input_shape[3] % 32 != 0:
+                        reshaping = True
+                        collapsed_outer_dims = (
+                            original_input_shape[0] * original_input_shape[1] * original_input_shape[2]
+                        )
+                        if collapsed_outer_dims % 32 == 0:
+                            ag_memory_config = ttnn.DRAM_MEMORY_CONFIG
+                            reshaped_input_tensor = ttnn.reshape(
+                                reshaped_input_tensor,
+                                (1, 1, 1, collapsed_outer_dims * original_input_shape[3]),
+                                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                            )
+                        else:
+                            assert False, "Bad Shape"
+
                     tt_logits = ttnn.experimental.all_gather_async(
-                        tt_logits,
+                        reshaped_input_tensor,
                         persistent_output_buffer=None,
                         dim=3,
                         multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                         num_links=1,
-                        memory_config=tt_logits.memory_config(),
+                        memory_config=ag_memory_config,
                         topology=self.args.ccl_topology(),
                         barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
                         chunks_per_sync=10,
                         num_workers_per_link=2,
                         num_buffers_per_channel=2,
                     )
+
+                    ttnn.deallocate(reshaped_input_tensor)
+
+                    if reshaping:
+                        split_tensors = ttnn.split(
+                            tt_logits, split_size=int(tt_logits.shape[3] / self.mesh_device.get_num_devices()), dim=3
+                        )
+                        for i in range(len(split_tensors)):
+                            split_tensors[i] = ttnn.reshape(split_tensors[i], original_input_shape)
+                        tt_logits = ttnn.concat(split_tensors, dim=3)
+                        tt_logits = ttnn.to_memory_config(tt_logits, tt_logits.memory_config())
+
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
         if argmax_on_device:
