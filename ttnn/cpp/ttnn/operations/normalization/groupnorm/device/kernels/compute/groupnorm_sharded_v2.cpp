@@ -367,7 +367,8 @@ void MAIN {
             }
             */
             tile_regs_acquire();
-            cb_reserve_back(cb_xmm, 1);
+            cb_reserve_back(cb_ex2pe, 1);
+            bool printed = false;
             for (uint32_t i = 0; i < block_h; i++) {
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -376,6 +377,12 @@ void MAIN {
                         uint32_t index = w + index_subblock_w_offset + index_h_offset;
                         // w = 0; // always sum in first tile as tensix is auto accumulating
                         //  uint32_t w_index = 0;
+                        // if (g == 1 && printed == false) {
+                        //     printed = true;
+                        //     //dprint_tensix_dest_reg(dst0);
+                        //     //print_full_tile(cb_x, 0, true);
+
+                        // }
                         mul_tiles(cb_x, cb_x, index, index, dst0);
                         // if (num_tiles_printed < 5) {
                         //     DPRINT << "Print index is: " << num_tiles_printed << " Dest index is: " << w_index <<
@@ -397,26 +404,34 @@ void MAIN {
             }
             tile_regs_commit();
             tile_regs_wait();
-            pack_tile(dst0, cb_xmm);
+            pack_tile(dst0, cb_ex2pe);
             tile_regs_release();
-            cb_push_back(cb_xmm, 1);
+            cb_push_back(cb_ex2pe, 1);
 
             // sum up the variance
             // DPRINT << "A" << ENDL();
+
             cb_reserve_back(cb_ex_partial, 1);
-            reduce_init(cb_xmm, cb_scaler, cb_ex_partial);
-            // DPRINT << "B" << ENDL();
             cb_wait_front(cb_scaler, 1);
             // DPRINT << "C" << ENDL();
-            cb_wait_front(cb_xmm, 1);
+            cb_wait_front(cb_ex2pe, 1);
+            if (g == 0 && printed == false) {
+                printed = true;
+                // dprint_tensix_dest_reg(dst0);
+                // tt::compute::common::print_full_tile(cb_ex2pe, 0, true);
+            }
+            reduce_init(cb_ex2pe, cb_scaler, cb_ex_partial);
+
+            // DPRINT << "B" << ENDL();
+
             // DPRINT << "D" << ENDL();
             tile_regs_acquire();
             // DPRINT << "E" << ENDL();
-            reduce_tile(cb_xmm, cb_scaler, 0, scaler0, dst0);
+            reduce_tile(cb_ex2pe, cb_scaler, 0, scaler0, dst0);
             // DPRINT << "F" << ENDL();
             tile_regs_commit();
             // DPRINT << "G" << ENDL();
-            cb_pop_front(cb_xmm, 1);
+            // cb_pop_front(cb_ex2pe, 1);
             // DPRINT << "H" << ENDL();
             // cb_reserve_back(cb_ex_partial, 1);
             // DPRINT << "I" << ENDL();
@@ -430,11 +445,11 @@ void MAIN {
             // DPRINT << "M" << ENDL();
             reduce_uninit();
             // DPRINT << "N" << ENDL();
-            cb_pop_front(cb_xmm, 1);
+            cb_pop_front(cb_ex2pe, 1);
 
             cb_wait_front(cb_ex_partial, 1);
-            DPRINT << "Printing variance" << " g = " << g << ENDL();
-            tt::compute::common::print_full_tile(cb_ex_partial, 0, true);
+            // DPRINT << "Printing variance" << " g = " << g << ENDL();
+            // tt::compute::common::print_full_tile(cb_ex_partial, 0, true);
 
             // cb_xmm is full
             // cb_x is empty
