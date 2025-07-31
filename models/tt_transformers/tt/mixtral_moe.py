@@ -137,16 +137,8 @@ class TtMoeLayer(LightweightModule):
 
         # All gather
         if mode == "prefill":
-            output_11BH_gathered = ttnn.all_gather(results_11BH, dim=1, num_links=1)
-            results_11BH.deallocate(True)
-            # Sum reduction
-            output_11BH_reduced = ttnn.experimental.fast_reduce_nc(
-                output_11BH_gathered, dims=[1], output=None, compute_kernel_config=None
-            )
-            output_11BH_gathered.deallocate(True)
-
             output = tt_all_reduce(
-                output_11BH_reduced,
+                results_11BH,
                 self.mesh_device,
                 cluster_axis=0,
                 dim=3,
@@ -158,7 +150,6 @@ class TtMoeLayer(LightweightModule):
                 use_composite=False,
                 topology=self.args.ccl_topology(),
             )
-
             # Ensure dim 0 and 1 are 1
             original_shape = output.shape
             output = ttnn.reshape(
@@ -166,31 +157,25 @@ class TtMoeLayer(LightweightModule):
             )
 
         else:  # Decode mode
-            output_11BH_gathered = ttnn.all_gather(results_11BH, dim=2, num_links=1)
-            results_11BH.deallocate(True)
-            # Reduction
-            output_11BH_reduced = ttnn.matmul(
-                self.reduce_mask, output_11BH_gathered, compute_kernel_config=self.compute_kernel_reduce
-            )
-
-            seq_len = output_11BH_reduced.shape[-2]
+            seq_len = results_11BH.shape[-2]
 
             if seq_len >= 2048:  # Reshape back to intended shape
-                output_11BH_reduced = ttnn.reshape(output_11BH_reduced, [1, 1, seq_len, self.model_args.dim])
+                results_11BH = ttnn.reshape(results_11BH, [1, 1, seq_len, self.model_args.dim])
 
             output = tt_all_reduce(
-                output_11BH_reduced,
+                results_11BH,
                 self.mesh_device,
                 cluster_axis=0,
                 dim=3,
                 num_reduce_scatter_links=self.args.num_reduce_scatter_links,
                 num_all_gather_links=self.args.num_all_gather_links,
                 sharded=(mode == "decode"),
-                memory_config=(output_11BH_reduced.memory_config() if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG),
+                memory_config=(results_11BH.memory_config() if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG),
                 dtype=self.args.ccl_dtype,
                 use_composite=False,
                 topology=self.args.ccl_topology(),
             )
+            results_11BH.deallocate(True)
 
             # # Ensure dim 0 and 1 are 1
             original_shape = output.shape
