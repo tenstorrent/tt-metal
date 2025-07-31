@@ -26,6 +26,7 @@ class DiTParallelConfig(NamedTuple):
 
 class VAEParallelConfig(NamedTuple):
     device: ttnn.MeshDevice  # Mesh device to use for VAE
+    new_gather_handles: list[ttnn._ttnn.global_semaphore.global_sempahore]
     gather_semaphore: ttnn._ttnn.global_semaphore.global_sempahore  # for gather
     reduce_from_semaphore: ttnn._ttnn.global_semaphore.global_sempahore  # for reduce_from
     reduce_to_semaphore: ttnn._ttnn.global_semaphore.global_sempahore  # for reduce_to
@@ -161,11 +162,14 @@ class StableDiffusionParallelManager:
         self.rs_ping_pong_idx = 0
         self.persistent_buffers = [{} for _ in range(self.dit_parallel_config.cfg_parallel.factor)]
 
+        vae_device = self.submesh_devices[0]
+        vae_device.reshape(ttnn.MeshShape(1, 4))
         self.vae_parallel_config = VAEParallelConfig(
-            device=self.submesh_devices[0],
-            gather_semaphore=ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0),
-            reduce_from_semaphore=ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0),
-            reduce_to_semaphore=ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0),
+            device=vae_device,
+            new_gather_handles=[ttnn.create_global_semaphore(vae_device, self.ccl_cores, 0) for _ in range(2)],
+            gather_semaphore=ttnn.create_global_semaphore(vae_device, self.ccl_cores, 0),
+            reduce_from_semaphore=ttnn.create_global_semaphore(vae_device, self.ccl_cores, 0),
+            reduce_to_semaphore=ttnn.create_global_semaphore(vae_device, self.ccl_cores, 0),
         )
 
     def _init_submeshes(self):

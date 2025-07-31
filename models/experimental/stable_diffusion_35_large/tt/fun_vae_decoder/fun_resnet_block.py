@@ -12,9 +12,7 @@ import ttnn
 # from .conv2d import TtConv2d, TtConv2dParameters
 from .fun_conv2d import vae_conv2d, TtConv2dParameters
 from .fun_group_norm import vae_group_norm, TtGroupNormParameters
-from .fun_linear import vae_linear, TtLinearParameters
 from ..parallel_config import VAEParallelConfig
-from loguru import logger
 
 if TYPE_CHECKING:
     import torch
@@ -22,6 +20,7 @@ if TYPE_CHECKING:
 ## Parameters
 
 
+# Assumptions: If input is sharded, output will be sharded. Otherwise, If input is not sharded, output will be replicated across mesh.
 @dataclass
 class TtResnetBlock2DParameters:
     norm1: TtGroupNormParameters
@@ -37,17 +36,41 @@ class TtResnetBlock2DParameters:
         *,
         dtype: ttnn.DataType | None = None,
         parallel_config: VAEParallelConfig,
+        # conv_mesh_sharded_output: bool = False,
+        gn_allow_sharded_compute: bool = True,
+        mesh_sharded_input: bool = True,
     ) -> TtResnetBlock2DParameters:
-        return cls(
-            norm1=TtGroupNormParameters.from_torch(resnet_block.norm1, parallel_config=parallel_config),
-            norm2=TtGroupNormParameters.from_torch(resnet_block.norm2, parallel_config=parallel_config),
-            conv1=TtConv2dParameters.from_torch(resnet_block.conv1, dtype=dtype, parallel_config=parallel_config),
-            conv2=TtConv2dParameters.from_torch(resnet_block.conv2, dtype=dtype, parallel_config=parallel_config),
-            conv_shortcut=TtLinearParameters.from_torch(
-                resnet_block.conv_shortcut, dtype=dtype, parallel_config=parallel_config, is_conv=True
+        if resnet_block.conv_shortcut is not None:
+            conv_shortcut = TtConv2dParameters.from_torch(
+                resnet_block.conv_shortcut,
+                dtype=dtype,
+                parallel_config=parallel_config,
+                mesh_sharded_input=mesh_sharded_input,
+                mesh_sharded_output=mesh_sharded_input,
             )
-            if resnet_block.conv_shortcut
-            else None,
+        else:
+            conv_shortcut = None
+
+        return cls(
+            norm1=TtGroupNormParameters.from_torch(
+                resnet_block.norm1,
+                parallel_config=parallel_config,
+                allow_sharded_compute=gn_allow_sharded_compute,
+                mesh_sharded_input=mesh_sharded_input,
+            ),
+            norm2=TtGroupNormParameters.from_torch(
+                resnet_block.norm2,
+                parallel_config=parallel_config,
+                allow_sharded_compute=gn_allow_sharded_compute,
+                mesh_sharded_input=mesh_sharded_input,
+            ),
+            conv1=TtConv2dParameters.from_torch(
+                resnet_block.conv1, dtype=dtype, parallel_config=parallel_config, mesh_sharded_output=mesh_sharded_input
+            ),
+            conv2=TtConv2dParameters.from_torch(
+                resnet_block.conv2, dtype=dtype, parallel_config=parallel_config, mesh_sharded_output=mesh_sharded_input
+            ),
+            conv_shortcut=conv_shortcut,
         )
 
 
@@ -60,8 +83,7 @@ def resnet_block(x_in: ttnn.Tensor, parameters: TtResnetBlock2DParameters) -> tt
     x = ttnn.silu(x)
     x = vae_conv2d(x, parameters.conv2)
     if parameters.conv_shortcut is not None:
-        residual = vae_linear(residual, parameters.conv_shortcut)
+        residual = vae_conv2d(residual, parameters.conv_shortcut)
     x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
     residual = ttnn.to_layout(residual, ttnn.TILE_LAYOUT)
-    logger.info(f" x.shape: {x.shape} , residual.shape:{residual.shape}")
     return x + residual

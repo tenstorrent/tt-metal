@@ -41,9 +41,23 @@ def print_stats(label, data: torch.Tensor, device=None):
     indirect=True,
 )
 @pytest.mark.parametrize(
-    ("batch", "channels", "height", "width", "group_count"),
+    ("batch", "channels", "height", "width", "group_count", "sharded_input"),
     [
-        (1, 128, 32, 32, 32),  # Group norm observed edge case
+        # Not sharded input
+        (1, 128, 128, 128, 32, False),
+        # (1, 512, 256, 256, 32,False),
+        # (1, 512, 512, 512, 32,False),
+        # (1, 256, 512, 512, 32,False),
+        # (1, 256, 1024, 1024, 32,False),
+        # (1, 128, 1024, 1024, 32,False),
+        # (1, 3, 1024, 1024, 32,False),
+        # Sharded input
+        # (1, 512, 128, 128, 32,True),
+        # (1, 512, 256, 256, 32,True),
+        # (1, 512, 512, 512, 32,True),
+        # (1, 256, 512, 512, 32,True),
+        # (1, 256, 1024, 1024, 32,True),
+        # (1, 128, 1024, 1024, 32,True),
     ],
 )
 def test_group_norm(
@@ -54,6 +68,7 @@ def test_group_norm(
     height: int,
     width: int,
     group_count: int,
+    sharded_input: bool,
     cfg,
     sp,
     tp,
@@ -86,14 +101,22 @@ def test_group_norm(
 
     inp = torch.randn((batch, channels, height, width), dtype=torch_dtype)
 
-    parameters = TtGroupNormParameters.from_torch(torch_model, parallel_config=parallel_manager.vae_parallel_config)
+    parameters = TtGroupNormParameters.from_torch(
+        torch_model,
+        parallel_config=parallel_manager.vae_parallel_config,
+        mesh_sharded_input=sharded_input,
+        allow_sharded_compute=True,
+    )
 
     tt_inp = ttnn.from_torch(
         inp.permute(0, 2, 3, 1),
         dtype=ttnn_dtype,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=parallel_manager.vae_parallel_config.device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # mesh_mapper=ttnn.ReplicateTensorToMesh(parallel_manager.vae_parallel_config.device),
+        mesh_mapper=ttnn.ShardTensorToMesh(parallel_manager.vae_parallel_config.device, dim=-1)
+        if sharded_input
+        else None,
+        layout=ttnn.TILE_LAYOUT,
     )
 
     logger.info(print_stats("torch_input", inp))
@@ -104,10 +127,12 @@ def test_group_norm(
     with torch.no_grad():
         out = torch_model(inp)
 
+    logger.info("vae group norm start ... ")
     tt_out = vae_group_norm(tt_inp, parameters)
-
+    logger.info("vae group norm end ... ")
     tt_out_torch = to_torch(tt_out).permute(0, 3, 1, 2)
 
+    logger.info("Computing PCC ... ")
     assert_quality(out, tt_out_torch, pcc=0.94, ccc=0.94)
     print(comp_allclose(out, tt_out_torch))
     result, output = comp_pcc(out, tt_out_torch)

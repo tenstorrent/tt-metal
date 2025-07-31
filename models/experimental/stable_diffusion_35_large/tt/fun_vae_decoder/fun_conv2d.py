@@ -21,6 +21,19 @@ class ConvStrategy(Enum):
 
 
 slice_params = {
+    (1, 4): {
+        (512, 512, 512, 64): (16, ttnn.Conv2dSliceWidth),
+        (128, 128, 16, 512): (8, ttnn.Conv2dSliceWidth),
+        (128, 128, 512, 512): (4, ttnn.Conv2dSliceWidth),
+        (256, 256, 512, 512): (8, ttnn.Conv2dSliceWidth),
+        (512, 512, 512, 512): (16, ttnn.Conv2dSliceWidth),
+        (512, 512, 512, 256): (16, ttnn.Conv2dSliceWidth),
+        (512, 512, 256, 256): (4, ttnn.Conv2dSliceWidth),
+        (1024, 1024, 256, 256): (16, ttnn.Conv2dSliceWidth),
+        (1024, 1024, 256, 128): (16, ttnn.Conv2dSliceWidth),
+        (1024, 1024, 128, 128): (16, ttnn.Conv2dSliceWidth),
+        (1024, 1024, 128, 3): (8, ttnn.Conv2dSliceWidth),
+    },
     (2, 2): {
         (512, 512, 512, 64): (16, ttnn.Conv2dSliceWidth),
         (128, 128, 16, 512): (8, ttnn.Conv2dSliceWidth),
@@ -66,6 +79,8 @@ def get_slice_config(mesh_device, height, width, in_channels, out_channels):
     return ttnn.Conv2dSliceConfig(num_slices=sl_config[0], slice_type=sl_config[1])
 
 
+# Assumption. The input is replicated across mesh unless specified. Output is either replicated or sharded across mesh depending on mesh_sharded_output
+# TODO: Address situations where mesh_sharded_output is True, but conv_parallel_strategy is not TP
 @dataclass
 class TtConv2dParameters:
     weight: ttnn.Tensor
@@ -82,6 +97,8 @@ class TtConv2dParameters:
     parallel_config: VAEParallelConfig
     conv_parallel_strategy: ConvStrategy
     device_slice_mask: ttnn.Tensor | None
+    mesh_sharded_input: bool  # Indicates the input is sharded across the mesh devices
+    mesh_sharded_output: bool  # Indicates if the output should be left sharded across the mesh devices
 
     @classmethod
     def from_torch(
@@ -90,6 +107,8 @@ class TtConv2dParameters:
         *,
         dtype: ttnn.DataType | None = None,
         parallel_config: VAEParallelConfig,
+        mesh_sharded_output: bool = True,
+        mesh_sharded_input: bool = False,
     ) -> TtConv2dParameters:
         weight = torch_conv.state_dict()["weight"]
         bias = (
@@ -152,6 +171,8 @@ class TtConv2dParameters:
             parallel_config=parallel_config,
             conv_parallel_strategy=conv_parallel_strategy,
             device_slice_mask=device_slice_mask,
+            mesh_sharded_output=mesh_sharded_output,
+            mesh_sharded_input=mesh_sharded_input,
         )
 
 
@@ -188,28 +209,37 @@ def run_conv2d(x, parameters):
     return output_tensor
 
 
+def conv2d_all_gather(x, parameters):
+    if x.layout == ttnn.ROW_MAJOR_LAYOUT:
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+    output_tensor = ttnn.experimental.all_gather_async(
+        input_tensor=x,
+        dim=3,
+        multi_device_global_semaphore=parameters.parallel_config.new_gather_handles,
+        topology=ttnn.Topology.Linear,
+        mesh_device=parameters.parallel_config.device,
+        cluster_axis=1,  # mesh_dim,
+        num_links=1,
+    )
+    ttnn.synchronize_device(parameters.parallel_config.device)
+    return output_tensor
+
+
 # TODO: Try out padded/unpadded variant (unpadded_all_gather_async  from utils.py)
 def vae_conv2d(x, parameters):
     start_time = time.time()
 
-    logger.info(f" CONV: In shape: {x.shape}, channels: {parameters.out_channels}")
+    if parameters.mesh_sharded_input:
+        x = conv2d_all_gather(x, parameters)
 
     if parameters.conv_parallel_strategy == ConvStrategy.TP:
         output_tensor = run_conv2d(x, parameters)
-        for mesh_dim in [1, 0]:  # Assuming a 2d mesh
-            output_tensor = ttnn.experimental.all_gather_async(
-                input_tensor=output_tensor,
-                dim=3,
-                multi_device_global_semaphore=parameters.parallel_config.gather_semaphore,
-                topology=ttnn.Topology.Linear,
-                mesh_device=parameters.parallel_config.device,
-                cluster_axis=mesh_dim,
-                num_links=1,
-            )
+
+        if not parameters.mesh_sharded_output:  # If output is sharded, we need to gather the output
+            output_tensor = conv2d_all_gather(output_tensor, parameters)
 
     elif parameters.conv_parallel_strategy == ConvStrategy.TP_DP:
         # Get device slice
-        logger.info(f"Device slice mask: {parameters.device_slice_mask.shape}")
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT) @ parameters.device_slice_mask
 
         # TODO: Use the intermediate buffer
@@ -217,21 +247,20 @@ def vae_conv2d(x, parameters):
         output_tensor = ttnn.reshape(
             output_tensor, (1, 1, -1, 32)
         )  # Helps resolve the issue with padding when last 2 dims are not multiple of 32
-        for mesh_dim in [0, 1]:  # Assuming a 2d mesh
-            output_tensor = ttnn.experimental.all_reduce_async(
-                input_tensor=output_tensor,
-                cluster_axis=mesh_dim,
-                mesh_device=parameters.parallel_config.device,
-                from_remote_multi_device_global_semaphore=parameters.parallel_config.reduce_from_semaphore,
-                to_remote_multi_device_global_semaphore=parameters.parallel_config.reduce_to_semaphore,
-                gather_multi_device_global_semaphore=parameters.parallel_config.gather_semaphore,
-                math_op=ttnn.ReduceType.Sum,
-                num_links=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=ttnn.Topology.Linear,
-                subdevice_id=None,
-            )
-            ttnn.synchronize_device(parameters.parallel_config.device)
+        output_tensor = ttnn.experimental.all_reduce_async(
+            input_tensor=output_tensor,
+            cluster_axis=1,
+            mesh_device=parameters.parallel_config.device,
+            from_remote_multi_device_global_semaphore=parameters.parallel_config.reduce_from_semaphore,
+            to_remote_multi_device_global_semaphore=parameters.parallel_config.reduce_to_semaphore,
+            gather_multi_device_global_semaphore=parameters.parallel_config.gather_semaphore,
+            math_op=ttnn.ReduceType.Sum,
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
+            subdevice_id=None,
+        )
+        ttnn.synchronize_device(parameters.parallel_config.device)
 
         output_tensor = ttnn.reshape(output_tensor, (x.shape[0], x.shape[1], x.shape[2], parameters.weight.shape[0]))
 
