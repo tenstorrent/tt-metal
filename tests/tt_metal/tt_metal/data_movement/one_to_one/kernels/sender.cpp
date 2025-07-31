@@ -14,7 +14,7 @@ void kernel_main() {
     constexpr uint32_t test_id = get_compile_time_arg_val(3);
     constexpr uint32_t sem_id = get_compile_time_arg_val(4);
     constexpr uint32_t packed_subordinate_core_coordinates = get_compile_time_arg_val(5);
-    constexpr uint32_t virtual_channel = get_compile_time_arg_val(6);
+    constexpr uint32_t num_virtual_channels = get_compile_time_arg_val(6);
 
     // Runtime arguments
     uint32_t receiver_x_coord = packed_subordinate_core_coordinates >> 16;
@@ -29,7 +29,9 @@ void kernel_main() {
     {
         DeviceZoneScopedN("RISCV0");
         for (uint32_t i = 0; i < num_of_transactions; i++) {
-            noc_async_write(l1_local_addr, dst_noc_addr, bytes_per_transaction, virtual_channel);
+            // Cycle through virtual channels 0 to (num_virtual_channels - 1)
+            uint32_t current_virtual_channel = i % num_virtual_channels;
+            noc_async_write(l1_local_addr, dst_noc_addr, bytes_per_transaction, current_virtual_channel);
         }
         noc_async_write_barrier();
     }
@@ -37,8 +39,10 @@ void kernel_main() {
 
     DeviceTimestampedData("Test id", test_id);
 
+    DeviceTimestampedData("NoC Index", noc_index);
+
     DeviceTimestampedData("Number of transactions", num_of_transactions);
     DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction);
 
-    DeviceTimestampedData("Virtual Channel", virtual_channel);
+    DeviceTimestampedData("Number of Virtual Channels", num_virtual_channels);
 }

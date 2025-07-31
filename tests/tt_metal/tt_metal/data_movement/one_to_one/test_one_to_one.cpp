@@ -25,11 +25,11 @@ struct OneToOneConfig {
     uint32_t pages_per_transaction = 0;
     uint32_t bytes_per_page = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
-    uint32_t virtual_channel = 0;  // Virtual channel for the NOC
+    uint32_t num_virtual_channels = 1;  // Number of virtual channels to cycle through (must be > 1 for cycling)
+    NOC noc_id = NOC::NOC_0;
 
     // TODO: Add the following parameters
-    //  1. Which NOC to use
-    //  2. Posted flag
+    //  1. Posted flag
 };
 
 /// @brief Does L1 Sender Core --> L1 Receiver Core
@@ -69,11 +69,15 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
         log_error(tt::LogTest, "Insufficient L1 size for the test configuration");
         return false;
     }
+    // Validate virtual channels configuration
+    if (test_config.num_virtual_channels > 4) {
+        log_error(
+            tt::LogTest,
+            "num_virtual_channels must not be greater than 4 as there are only 4 unicast write virtual channels");
+        return false;
+    }
     // Assigns a "safe" L1 local address for the master and subordinate cores
     uint32_t l1_base_address = master_l1_info.base_address;
-
-    // Semaphores
-    const uint32_t sem_id = CreateSemaphore(program, combined_core_set, 0);
 
     // Physical Core Coordinates
     CoreCoord physical_subordinate_core = device->worker_core_from_logical_core(test_config.subordinate_core_coord);
@@ -88,7 +92,7 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
         (uint32_t)test_config.test_id,
         (uint32_t)sem_id,
         (uint32_t)packed_subordinate_core_coordinates,
-        (uint32_t)test_config.virtual_channel};
+        (uint32_t)test_config.num_virtual_channels};
 
     // Kernels
     std::string kernels_dir = "tests/tt_metal/tt_metal/data_movement/one_to_one/kernels/";
@@ -101,7 +105,7 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
         test_config.master_core_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
-            .noc = NOC::RISCV_0_default,
+            .noc = test_config.noc_id,
             .compile_args = sender_compile_args});
 
     // Assign unique id
@@ -154,7 +158,7 @@ void directed_ideal_test(
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {0, 1},
-    uint32_t virtual_channel = 0) {
+    uint32_t num_virtual_channels = 1) {
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
@@ -177,7 +181,7 @@ void directed_ideal_test(
         .pages_per_transaction = pages_per_transaction,
         .bytes_per_page = bytes_per_page,
         .l1_data_format = DataFormat::Float16_b,
-        .virtual_channel = virtual_channel};
+        .num_virtual_channels = num_virtual_channels};
 
     // Run
     for (unsigned int id = 0; id < num_devices_; id++) {
@@ -192,10 +196,44 @@ void virtual_channels_test(
     uint32_t test_id,
     CoreCoord master_core_coord = {0, 0},
     CoreCoord subordinate_core_coord = {1, 1}) {
-    for (uint32_t virtual_channel = 0; virtual_channel < 4;
-         virtual_channel++) {  // FIND the constant that stores the number of unicast virtual channels
-        directed_ideal_test(
-            arch_, devices_, num_devices_, test_id, master_core_coord, subordinate_core_coord, virtual_channel);
+    // Physical Constraints
+    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+
+    std::uint32_t max_num_pages_per_transaction = 1 << 12;
+    std::uint32_t num_of_transactions = 256;  // Constant value
+    std::uint32_t max_num_virtual_channels = 4;
+
+    // Loop through:
+    // 1. NOCs (NOC_0, NOC_1)
+    // 2. Size of transactions
+    // 3. Numbers of virtual channels
+    for (NOC noc_id : {NOC::NOC_0, NOC::NOC_1}) {
+        for (uint32_t pages_per_transaction = 1; pages_per_transaction <= max_num_pages_per_transaction;
+             pages_per_transaction *= 2) {
+            for (uint32_t num_virtual_channels = 1; num_virtual_channels <= max_num_virtual_channels;
+                 num_virtual_channels++) {
+                // Check if the total page size is within the limits
+                if (pages_per_transaction > max_transmittable_pages) {
+                    continue;
+                }
+
+                unit_tests::dm::core_to_core::OneToOneConfig test_config = {
+                    .test_id = test_id,
+                    .master_core_coord = master_core_coord,
+                    .subordinate_core_coord = subordinate_core_coord,
+                    .num_of_transactions = num_of_transactions,
+                    .pages_per_transaction = pages_per_transaction,
+                    .bytes_per_page = bytes_per_page,
+                    .l1_data_format = DataFormat::Float16_b,
+                    .num_virtual_channels = num_virtual_channels,
+                    .noc_id = noc_id};
+
+                for (unsigned int id = 0; id < num_devices_; id++) {
+                    EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+                }
+            }
+        }
     }
 }
 
@@ -277,66 +315,9 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOneDirectedIdeal) {
 
 TEST_F(DeviceFixture, TensixDataMovementOneToOneVirtualChannels) {  // May be redundant
     // Test ID (Arbitrary)
-    uint32_t test_id = 120;
+    uint32_t test_id = 150;
 
     unit_tests::dm::core_to_core::virtual_channels_test(
-        arch_,
-        devices_,
-        num_devices_,
-        test_id,
-        CoreCoord(0, 0),  // Master Core
-        CoreCoord(0, 1)   // Subordinate Core
-    );
-}
-
-TEST_F(DeviceFixture, TensixDataMovementOneToOneCoreLocationsVirtualChannels) {
-    // Test ID (Arbitrary)
-    uint32_t test_id = 132;
-
-    CoreCoord mst_coord;
-    CoreCoord sub_coord;
-
-    CoreCoord stagnant_coord = {0, 0};
-
-    auto grid_size = devices_.at(0)->compute_with_storage_grid_size();  // May need to fix this in a bit
-    log_info(tt::LogTest, "Grid size x: {}, y: {}", grid_size.x, grid_size.y);
-
-    for (unsigned int iteration = 0; iteration < 2; iteration++) {
-        for (unsigned int x = 0; x < grid_size.x; x++) {
-            for (unsigned int y = 0; y < grid_size.y; y++) {
-                if (x == stagnant_coord.x && y == stagnant_coord.y) {
-                    // Skip the first core in the first iteration
-                    continue;
-                }
-
-                if (iteration == 0) {
-                    mst_coord = stagnant_coord;
-                    sub_coord = {x, y};
-                } else {
-                    mst_coord = {x, y};
-                    sub_coord = stagnant_coord;
-                }
-
-                log_info(
-                    tt::LogTest,
-                    "Master Core: ({}, {}), Subordinate Core: ({}, {})",
-                    mst_coord.x,
-                    mst_coord.y,
-                    sub_coord.x,
-                    sub_coord.y);
-
-                unit_tests::dm::core_to_core::virtual_channels_test(
-                    arch_, devices_, num_devices_, test_id, mst_coord, sub_coord);
-            }
-        }
-    }
-}
-
-TEST_F(DeviceFixture, TensixDataMovementOneToOneVirtualChannelsParallel) {
-    // Test ID (Arbitrary)
-    uint32_t test_id = 121;
-
-    unit_tests::dm::core_to_core::directed_ideal_test(
         arch_,
         devices_,
         num_devices_,
