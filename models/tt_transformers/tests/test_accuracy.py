@@ -245,6 +245,19 @@ def test_tt_model_acc(
             theta=model_args.rope_theta,
             rope_scaling=model_args.rope_scaling,
         )
+
+        if model_args.rope_local_theta is not None:
+            rope_setup_prefill_local = get_prefill_rot_mat(
+                model_args.head_dim,
+                mesh_device,
+                prefill_lens[0],
+                model_args.rope_local_theta,
+                model_args.rope_scaling_factor,
+                model_args.orig_context_len,
+            )
+        else:
+            rope_setup_prefill_local = None
+
         prefill_input = model_args.prepare_residual_tensor_prefill(
             pt_prefill_input[batch_id],
         )
@@ -252,7 +265,7 @@ def test_tt_model_acc(
         tt_out = tt_model(
             prefill_input,
             current_pos=None,
-            rot_mats=rot_mats_prefill,
+            rot_mats=[rot_mats_prefill, rope_setup_prefill_local],
             user_id=batch_id,
             mode="prefill",
             page_table=page_table_tt,
@@ -280,6 +293,7 @@ def test_tt_model_acc(
 
     # Get cos/sin matrices for the current position of each user
     rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
+    rot_mats_local = None if tt_model.rope_setup_local is None else tt_model.rope_setup_local.get_rot_mats(current_pos)
 
     # Print table header
     if use_reference_file:
@@ -310,7 +324,7 @@ def test_tt_model_acc(
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
-            rot_mats=rot_mats,
+            rot_mats=[rot_mats, rot_mats_local],
             mode="decode",
             page_table=page_table_tt,
         )
@@ -351,6 +365,9 @@ def test_tt_model_acc(
         # Update rot_mats for next iteration
         current_pos += 1
         rot_mats = tt_model.rope_setup.get_rot_mats(current_pos)
+        rot_mats_local = (
+            None if tt_model.rope_setup_local is None else tt_model.rope_setup_local.get_rot_mats(current_pos)
+        )
 
         # Modify the accuracy checking section when using reference text
         if not use_reference_file:

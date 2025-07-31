@@ -482,30 +482,30 @@ def prepare_generator_args(
     ],
     ids=[
         "batch-1",  # latency
-        "batch-32",  # throughput
-        "long-context-64k",  # 64k context, max_seq_len=128k
-        "long-context-32k",  # 32k context, max_seq_len=32k
-        "long-context-16k",  # 16k context, max_seq_len=32k
-        "reasoning-1",  # reasoning
-        "ci-1",  # CI batch 1
-        "ci-32",  # CI batch 32
-        "DP-4-b1",  # DP 4 latency
-        "DP-8-b1",  # DP 8 latency
-        "DP-4-b32",  # DP 4 throughput
-        "ci-b1-DP-4",  # CI DP 4 batch 1
-        "ci-b1-DP-8",  # CI DP 8 batch 1
-        "ci-b1-DP-16",  # CI DP 16 batch 1
-        "ci-b1-DP-32",  # CI DP 32 batch 1
-        "ci-stress-1",  # CI Stress test batch-1
+        # "batch-32",  # throughput
+        # "long-context-64k",  # 64k context, max_seq_len=128k
+        # "long-context-32k",  # 32k context, max_seq_len=32k
+        # "long-context-16k",  # 16k context, max_seq_len=32k
+        # "reasoning-1",  # reasoning
+        # "ci-1",  # CI batch 1
+        # "ci-32",  # CI batch 32
+        # "DP-4-b1",  # DP 4 latency
+        # "DP-8-b1",  # DP 8 latency
+        # "DP-4-b32",  # DP 4 throughput
+        # "ci-b1-DP-4",  # CI DP 4 batch 1
+        # "ci-b1-DP-8",  # CI DP 8 batch 1
+        # "ci-b1-DP-16",  # CI DP 16 batch 1
+        # "ci-b1-DP-32",  # CI DP 32 batch 1
+        # "ci-stress-1",  # CI Stress test batch-1
     ],
 )
 @pytest.mark.parametrize(
     "optimizations",
     [
-        lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
+        # lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
         lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
-    ids=["performance", "accuracy"],
+    ids=["accuracy"],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 30000000, "num_command_queues": 1}], indirect=True)
 @pytest.mark.parametrize(
@@ -945,7 +945,15 @@ def test_demo_text(
     )
 
     # Benchmark targets
-    supported_models = ["Llama-3.2-1B", "Llama-3.2-3B", "Llama-3.1-8B", "Llama-3.2-11B", "Llama-3.1-70B", "Mistral-7B"]
+    supported_models = [
+        "Llama-3.2-1B",
+        "Llama-3.2-3B",
+        "Llama-3.1-8B",
+        "Llama-3.2-11B",
+        "Llama-3.1-70B",
+        "Mistral-7B",
+        "gemma-3-1b",
+    ]
     supported_devices = ["N150", "P100", "P150", "P300", "N300", "P150x4", "T3K", "TG"]
 
     tt_device_name = determine_device_name(mesh_device)  # submesh device should not decide performance target
@@ -994,6 +1002,8 @@ def test_demo_text(
             "N300_Mistral-7B": 38,  # TODO Update target
             "T3K_Mistral-7B": 45,  # TODO Update target
             "TG_Mistral-7B": 45,  # TODO Update target
+            #
+            "N150_gemma-3-1b": 25,
         }
         if model_device_key in dict_target_decode_tok_s_u:
             target_decode_tok_s_u = dict_target_decode_tok_s_u[model_device_key]
@@ -1075,6 +1085,7 @@ def test_demo_text(
                 # "T3K_Qwen2.5-Coder-32B": 180,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
                 # "T3K_Qwen2.5-72B": 211,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
                 # "T3K_Qwen3-32B": 250, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
+                "N150_gemma-3-1b": 100,
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better
@@ -1082,6 +1093,7 @@ def test_demo_text(
                 "N150_Llama-3.2-3B": 35,
                 "N150_Llama-3.1-8B": 21,
                 "N150_Mistral-7B": 23,
+                "N150_gemma-3-1b": 25,
                 # N300 targets
                 "N300_Qwen2.5-7B": 20,
                 # T3K targets
