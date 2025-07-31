@@ -41,17 +41,22 @@ class TtVaeDecoderParameters:
     ) -> TtVaeDecoderParameters:
         return cls(
             conv_in=TtConv2dParameters.from_torch(
-                torch_vae_decoder.conv_in, dtype=dtype, parallel_config=parallel_config
+                torch_vae_decoder.conv_in, dtype=dtype, parallel_config=parallel_config, mesh_sharded_output=False
             ),
             mid_block=TtUNetMidBlock2DParameters.from_torch(
-                torch_vae_decoder.mid_block, dtype=dtype, parallel_config=parallel_config
+                torch_vae_decoder.mid_block,
+                dtype=dtype,
+                parallel_config=parallel_config,
+                gn_allow_sharded_compute=False,
+                mesh_sharded_input=False,
             ),
             up_blocks=[
                 TtUpDecoderBlock2DParameters.from_torch(
                     up_block,
                     dtype=dtype,
                     parallel_config=parallel_config,
-                    gn_allow_sharded_compute=(False if idx == len(torch_vae_decoder.up_blocks) - 1 else True),
+                    gn_allow_sharded_compute=False,  # (False if idx == len(torch_vae_decoder.up_blocks) - 1 else True),
+                    mesh_sharded_input=False,
                 )  # No sharded compute for group norm for the last up decoder layer
                 for idx, up_block in enumerate(torch_vae_decoder.up_blocks or [])
             ],
@@ -59,6 +64,7 @@ class TtVaeDecoderParameters:
                 torch_vae_decoder.conv_norm_out,
                 parallel_config=parallel_config,
                 allow_sharded_compute=False,  # No sharded compute for group norm for the last group norm because of hanging issue
+                mesh_sharded_input=False,
             ),
             conv_out=TtConv2dParameters.from_torch(
                 torch_vae_decoder.conv_out,
