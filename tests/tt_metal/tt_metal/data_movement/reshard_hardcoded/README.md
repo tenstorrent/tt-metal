@@ -3,10 +3,10 @@
 This test suite implements tests that measure the performance (i.e. bandwidth) of reshard transactions between Tensix cores.
 They are based on kernel runtime arguments of existing metal tests.
 
-## Mesh Device API Support
-This test suite uses the TT-Metal Mesh Device API, which provides a unified interface for single and multi-device operations. The tests use `GenericMeshDeviceFixture` and run on single-device unit meshes.
+## Slow Dispatch Support
+This test suite uses the TT-Metal slow dispatch mode for reliable program execution. The tests use `DeviceFixture` and are designed to work with the slow dispatch API.
 
-**Note**: The Mesh Device API only supports fast dispatch mode internally and does not support slow dispatch mode. This provides optimal performance for data movement operations.
+**Note**: These tests require slow dispatch mode for proper operation. They use `tt::tt_metal::detail::LaunchProgram()` for direct program execution without command queues.
 
 ## Test Flow
 
@@ -17,7 +17,12 @@ It does not check pcc as the afformentioned test does this.
 The sharding patterns are the exact ones as gotten from the base tests, as such this is a directed test is is not general.
 
 ## Running the Tests
-The tests use the Mesh Device API with fast dispatch mode:
+The tests use slow dispatch mode. Run with the slow dispatch environment variable:
+```
+TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*ReshardHardcoded*"
+```
+
+Or run normally (the DeviceFixture will automatically enforce slow dispatch mode):
 ```
 ./build/test/tt_metal/unit_tests_data_movement --gtest_filter="*ReshardHardcoded*"
 ```

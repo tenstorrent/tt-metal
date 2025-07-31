@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
-#include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_coord.hpp>
+#include "device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -30,11 +28,10 @@ struct ReshardConfig {
 };
 
 /// @brief Does L1 Sender Core --> L1 Receiver Core
-/// @param mesh_device
+/// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const ReshardConfig& test_config) {
-    IDevice* device = mesh_device->get_device(0);
+bool run_dm(IDevice* device, const ReshardConfig& test_config) {
     // Program
     Program program = CreateProgram();
 
@@ -55,23 +52,17 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const ReshardConfig
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
-    // Launch program
+    // Launch program using slow dispatch
     MetalContext::instance().get_cluster().l1_barrier(device->id());
-
-    auto workload = distributed::CreateMeshWorkload();
-    vector<uint32_t> coord_data = {0, 0};
-    auto target_devices = distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), target_devices);
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), workload, false);
-    Finish(mesh_device->mesh_command_queue(0));
+    tt::tt_metal::detail::LaunchProgram(device, program);
 
     return true;
 }
 }  // namespace unit_tests::dm::reshard_hardcoded
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementReshardHardcodedPacketSmallSizes) {
-    auto mesh_device = get_mesh_device();
-    auto arch_ = mesh_device->get_device(0)->arch();
+TEST_F(DeviceFixture, TensixDataMovementReshardHardcodedPacketSmallSizes) {
+    IDevice* device = devices_.at(0);
+    auto arch_ = device->arch();
 
     if (arch_ != ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test for non-BH architecture";
@@ -138,12 +129,12 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementReshardHardcodedPacketSmallSi
     };
 
     // Run
-    EXPECT_TRUE(run_dm(mesh_device, test_config));
+    EXPECT_TRUE(run_dm(device, test_config));
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementReshardHardcodedPacketMedSizes) {
-    auto mesh_device = get_mesh_device();
-    auto arch_ = mesh_device->get_device(0)->arch();
+TEST_F(DeviceFixture, TensixDataMovementReshardHardcodedPacketMedSizes) {
+    IDevice* device = devices_.at(0);
+    auto arch_ = device->arch();
 
     if (arch_ != ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test for non-BH architecture";
@@ -230,12 +221,12 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementReshardHardcodedPacketMedSize
     };
 
     // Run
-    EXPECT_TRUE(run_dm(mesh_device, test_config));
+    EXPECT_TRUE(run_dm(device, test_config));
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementReshardHardcodedPacketManyCoresSizes) {
-    auto mesh_device = get_mesh_device();
-    auto arch_ = mesh_device->get_device(0)->arch();
+TEST_F(DeviceFixture, TensixDataMovementReshardHardcodedPacketManyCoresSizes) {
+    IDevice* device = devices_.at(0);
+    auto arch_ = device->arch();
 
     if (arch_ != ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test for non-BH architecture";
@@ -320,12 +311,12 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementReshardHardcodedPacketManyCor
     };
 
     // Run
-    EXPECT_TRUE(run_dm(mesh_device, test_config));
+    EXPECT_TRUE(run_dm(device, test_config));
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementReshardHardcodedPacketSmallCoresToManyCoresSizes) {
-    auto mesh_device = get_mesh_device();
-    auto arch_ = mesh_device->get_device(0)->arch();
+TEST_F(DeviceFixture, TensixDataMovementReshardHardcodedPacketSmallCoresToManyCoresSizes) {
+    IDevice* device = devices_.at(0);
+    auto arch_ = device->arch();
 
     if (arch_ != ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test for non-BH architecture";
@@ -407,7 +398,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementReshardHardcodedPacketSmallCo
     };
 
     // Run
-    EXPECT_TRUE(run_dm(mesh_device, test_config));
+    EXPECT_TRUE(run_dm(device, test_config));
 }
 
 }  // namespace tt::tt_metal
