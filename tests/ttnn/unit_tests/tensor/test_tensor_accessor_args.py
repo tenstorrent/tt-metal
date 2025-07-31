@@ -8,36 +8,7 @@ import torch
 import ttnn
 
 
-def test_arg_config_enum_values():
-    assert ttnn.ArgsConfig(ttnn.ArgConfig.Sharded).raw() == 1
-    assert ttnn.ArgsConfig(ttnn.ArgConfig.IsDram).raw() == 2
-    assert ttnn.ArgsConfig(ttnn.ArgConfig.RuntimeRank).raw() == 4
-    assert ttnn.ArgsConfig(ttnn.ArgConfig.RuntimeNumBanks).raw() == 8
-    assert ttnn.ArgsConfig(ttnn.ArgConfig.RuntimeTensorShape).raw() == 16
-    assert ttnn.ArgsConfig(ttnn.ArgConfig.RuntimeShardShape).raw() == 32
-    assert ttnn.ArgsConfig(ttnn.ArgConfig.RuntimeBankCoords).raw() == 64
-    assert ttnn.ArgsConfig(ttnn.ArgConfig.Runtime).raw() == 124
-
-
-def test_args_config_creation():
-    config = ttnn.ArgsConfig()
-    config = config | ttnn.ArgConfig.RuntimeRank
-    config = config | ttnn.ArgConfig.RuntimeNumBanks
-    config = config | ttnn.ArgConfig.RuntimeTensorShape
-    config = config | ttnn.ArgConfig.RuntimeShardShape
-    config = config | ttnn.ArgConfig.RuntimeBankCoords
-    assert config.raw() == 124
-
-
-@pytest.mark.parametrize(
-    "args_config",
-    [
-        ttnn.ArgsConfig(getattr(ttnn.ArgConfig, "None")),
-        ttnn.ArgsConfig(ttnn.ArgConfig.RuntimeNumBanks, ttnn.ArgConfig.RuntimeBankCoords),
-        ttnn.ArgsConfig(ttnn.ArgConfig.Runtime),
-    ],
-)
-def test_tensor_accessor_args(device, args_config):
+def test_tensor_accessor_args(device):
     shape = [3, 128, 160]
     shard_shape = [3, 128, 32]
     py_tensor = torch.rand(shape).to(torch.bfloat16)
@@ -56,27 +27,15 @@ def test_tensor_accessor_args(device, args_config):
         py_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=dram_memory_config
     )
 
-    sharded_accessor = ttnn.TensorAccessorArgs(tt_tensor_sharded, args_config)
-    dram_accessor = ttnn.TensorAccessorArgs(tt_tensor_dram, args_config)
+    sharded_accessor = ttnn.TensorAccessorArgs(tt_tensor_sharded)
+    dram_accessor = ttnn.TensorAccessorArgs(tt_tensor_dram)
 
     sharded_accessor_cta = sharded_accessor.get_compile_time_args()
     sharded_accessor_crta = sharded_accessor.get_common_runtime_args()
+    print(sharded_accessor_cta)
+    print(sharded_accessor_crta)
 
     dram_accessor_cta = dram_accessor.get_compile_time_args()
     dram_accessor_crta = dram_accessor.get_common_runtime_args()
     assert len(dram_accessor_cta) == 1
     assert len(dram_accessor_crta) == 0
-
-    cta = [True]
-    crta = [True]
-    if args_config.raw() > 2:
-        sharded_cta_after, sharded_crta_after = sharded_accessor.append_to(cta, crta)
-        dram_cta_after, dram_crta_after = dram_accessor.append_to(cta, crta)
-        assert sharded_crta_after == crta + sharded_accessor_crta
-        assert dram_crta_after == crta + dram_accessor_crta
-    else:
-        sharded_cta_after = sharded_accessor.append_to(cta)
-        dram_cta_after = dram_accessor.append_to(cta)
-
-    assert sharded_cta_after == cta + sharded_accessor_cta
-    assert dram_cta_after == cta + dram_accessor_cta

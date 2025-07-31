@@ -100,5 +100,3 @@ SemaphoreDescriptor = ttnn._ttnn.program_descriptor.SemaphoreDescriptor
 ProgramDescriptor = ttnn._ttnn.program_descriptor.ProgramDescriptor
 
 TensorAccessorArgs = ttnn._ttnn.tensor_accessor_args.TensorAccessorArgs
-ArgsConfig = ttnn._ttnn.tensor_accessor_args.ArgsConfig
-ArgConfig = ttnn._ttnn.tensor_accessor_args.ArgConfig
