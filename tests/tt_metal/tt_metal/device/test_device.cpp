@@ -506,7 +506,7 @@ TEST(Debugging, Test_Active_Eth) {
         num_writes, buffer_base, arg_base, 0x7CC70, 0x36b0, other_debug_core_virt.x, other_debug_core_virt.y};
     std::vector<uint32_t> zero_buffer(num_writes, 0xdeadbeef);
 
-    const auto& core = CoreCoord{0, 11};
+    const auto& core = CoreCoord{0, 0};
     // Zero buffer
     const auto& virtual_core = device->virtual_core_from_logical_core(core, CoreType::ETH);
     llrt::write_hex_vec_to_core(device->id(), virtual_core, zero_buffer, buffer_base);
@@ -518,7 +518,7 @@ TEST(Debugging, Test_Active_Eth) {
         program,
         "tests/tt_metal/tt_metal/device/test_kernel_2.cpp",
         core,
-        tt_metal::EthernetConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .compile_args = ct_args});
+        tt_metal::EthernetConfig{.eth_mode = IDLE, .processor = tt_metal::DataMovementProcessor::RISCV_0, .compile_args = ct_args});
     tt_metal::detail::LaunchProgram(device, program, false);
 
     do_debug_test(device, 0x36b0, buffer_base, arg_base, num_writes, virtual_core, other_debug_core_virt, true);

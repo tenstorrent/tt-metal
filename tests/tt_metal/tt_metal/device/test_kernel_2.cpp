@@ -40,6 +40,7 @@ void kernel_main() {
         volatile uint32_t val = buffer_ptr[i];
         volatile uint32_t msg_status = val & 0xffff0000;
         volatile uint32_t msg_type = val & 0xffff;
+        uint32_t j = 0;
         while (msg_status != 0xca110000) {
             invalidate_l1_cache();
             volatile uint32_t heartbeat = 0xabcd0000 | heartbeat_cnt;
@@ -53,6 +54,7 @@ void kernel_main() {
             debug_dump[1] = 0xaaaa;
             debug_dump[2] = non_volatile_val;
             debug_dump[3] = buffer_ptr[i];
+            debug_dump[4] = j++;
             noc_async_write((uint32_t)&buffer_ptr[i], get_noc_addr(other_x, other_y, 0x20000), 4);
             noc_async_write_barrier();
         }
