@@ -22,6 +22,7 @@ jobs:
     with:
       build-type: RelWithDebInfo
       version: "22.04"
+      build-wheel: true
 
   build-docs:
     needs: build-artifact
