@@ -42,7 +42,7 @@ void kernel_main() {
     auto grad = TensorAccessor(grad_args, grad_addr, get_tile_size(cb_grad));
 
 #if defined(MOMENTUM) && defined(MOMENTUM_INITIALIZED)
-    constexpr auto momentum_in_args = TensorAccessorArgs<param_in_args.next_compile_time_args_offset()>();
+    constexpr auto momentum_in_args = TensorAccessorArgs<grad_args.next_compile_time_args_offset()>();
     auto momentum_in = TensorAccessor(momentum_in_args, momentum_in_addr, get_tile_size(cb_momentum_in));
 #endif
 
