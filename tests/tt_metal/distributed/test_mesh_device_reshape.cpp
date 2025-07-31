@@ -55,8 +55,7 @@ class MeshConfigurationTest : public MeshDeviceFixtureBase, public ::testing::Wi
 public:
     MeshConfigurationTest() :
         MeshDeviceFixtureBase(Config{
-            .system_mesh_shape = MeshShape{2, 4},
-            .mesh_shape_to_open = GetParam(),
+            .mesh_shape = GetParam(),
         }) {}
 };
 
@@ -78,8 +77,7 @@ class MeshDeviceReshapeRoundtripTest : public MeshDeviceFixtureBase,
 public:
     MeshDeviceReshapeRoundtripTest() :
         MeshDeviceFixtureBase(Config{
-            .system_mesh_shape = MeshShape{2, 4},
-            .mesh_shape_to_open = std::get<0>(GetParam()),
+            .mesh_shape = std::get<0>(GetParam()),
         }) {}
 };
 
@@ -123,8 +121,7 @@ class MeshDevice1x8ReshapeTest : public MeshDeviceFixtureBase {
 public:
     MeshDevice1x8ReshapeTest() :
         MeshDeviceFixtureBase(Config{
-            .system_mesh_shape = MeshShape{2, 4},
-            .mesh_shape_to_open = MeshShape{1, 8},
+            .mesh_shape = MeshShape{1, 8},
         }) {}
 };
 
@@ -193,8 +190,7 @@ class MeshDevice1x4ReshapeTest : public MeshDeviceFixtureBase {
 public:
     MeshDevice1x4ReshapeTest() :
         MeshDeviceFixtureBase(Config{
-            .system_mesh_shape = MeshShape{2, 4},
-            .mesh_shape_to_open = MeshShape{1, 4},
+            .mesh_shape = MeshShape{1, 4},
         }) {}
 };
 
@@ -207,8 +203,7 @@ class MeshDevice2x2ReshapeTest : public MeshDeviceFixtureBase {
 public:
     MeshDevice2x2ReshapeTest() :
         MeshDeviceFixtureBase(Config{
-            .system_mesh_shape = MeshShape{2, 4},
-            .mesh_shape_to_open = MeshShape{2, 2},
+            .mesh_shape = MeshShape{2, 2},
         }) {}
 };
 
@@ -241,9 +236,8 @@ class MeshDevice2x2WithOffsetReshapeTest : public MeshDeviceFixtureBase,
 public:
     MeshDevice2x2WithOffsetReshapeTest() :
         MeshDeviceFixtureBase(Config{
-            .system_mesh_shape = MeshShape{2, 4},
-            .mesh_shape_to_open = MeshShape{2, 2},
-            .mesh_offset_to_open = GetParam(),
+            .mesh_shape = MeshShape{2, 2},
+            .mesh_offset = GetParam(),
         }) {}
 };
 
