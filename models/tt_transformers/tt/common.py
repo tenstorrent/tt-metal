@@ -52,9 +52,13 @@ class RopeScalingType(str, Enum):
 class RopeScaling(BaseModel):
     """RoPE scaling configuration."""
 
+<<<<<<< HEAD
     rope_type: RopeScalingType = Field(
         validation_alias=AliasChoices("rope_type", "type"), exclude=True, description="RoPE scaling type"
     )
+=======
+    rope_type: RopeScalingType = Field(validation_alias="type", exclude=True, description="RoPE scaling type")
+>>>>>>> 2ad835013d (add linear scaling support to rope)
     factor: float
     original_max_position_embeddings: Optional[int] = None
 
