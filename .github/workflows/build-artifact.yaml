@@ -83,6 +83,9 @@ on:
       basic-dev-docker-image:
         description: "Docker tag for the basic dev Docker image for basic development"
         value: ${{ jobs.build-docker-image.outputs.basic-dev-tag }}
+      basic-ttnn-runtime-docker-image:
+        description: "Docker tag for the basic TTNN runtime Docker image for running TTNN"
+        value: ${{ jobs.build-docker-image.outputs.basic-ttnn-runtime-tag }}
       packages-artifact-name:
         description: "Name to give download-artifact to get the packages"
         value: ${{ jobs.build-artifact.outputs.packages-artifact-name }}

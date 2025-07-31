@@ -22,7 +22,7 @@ class TtUpBlock2D(nn.Module):
                     f"{module_path}.resnets.{i}",
                     model_config,
                     True,
-                    2,
+                    2 if i == 0 else 1,
                 )
             )
 

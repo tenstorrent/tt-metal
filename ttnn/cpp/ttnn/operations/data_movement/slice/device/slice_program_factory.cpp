@@ -28,9 +28,6 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t num_sticks_per_core_group_1,
     uint32_t num_sticks_per_core_group_2,
     uint32_t max_read_size) {
-    tt::tt_metal::IDevice* device = input_tensor.device();
-
-    auto input_buffer = input_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
@@ -255,7 +252,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
         num_sticks_per_core_group_2,
         MAX_READ_SIZE);
 
-    for (uint32_t i = 0, num_sticks_written = 0; i < num_cores_total; i++) {
+    for (uint32_t i = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
 
@@ -307,7 +304,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
                 num_sticks_per_core_group_2,
                 MAX_READ_SIZE);
 
-            for (uint32_t i = 0, num_tiles_written = 0; i < num_cores_total; i++) {
+            for (uint32_t i = 0; i < num_cores_total; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
                 auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
@@ -353,8 +350,8 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
             .set_page_size(tt::CBIndex::c_24, page_size_output);
 
     CoreRange core({0, 0}, {0, 0});
-    auto cb_input_tensor = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
-    auto cb_output_tensor = tt::tt_metal::CreateCircularBuffer(program, core, cb_dst0_config);
+    tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, core, cb_dst0_config);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -460,12 +457,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t num_cores_y_padded) {
     tt::tt_metal::IDevice* device = input_tensor.device();
 
-    auto output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
-
-    uint32_t padded_row_size_bytes = input_shape[-1] * input_tensor.element_size();
-    uint32_t unpadded_row_size_bytes = output_shape[-1] * input_tensor.element_size();
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
     std::vector<uint32_t> num_unpadded_sticks_per_dim(num_dims);
@@ -488,8 +481,6 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         num_padded_sticks_per_dim[i] = num_padded_dim;
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
-
-    uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, TILE_WIDTH / 2);
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_unpadded);
 
@@ -616,7 +607,6 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     // input shard spec
     auto shard_spec_padded = a.shard_spec().value();
     uint32_t shard_height_padded = shard_spec_padded.shape[0];
-    uint32_t shard_width_padded = shard_spec_padded.shape[1];
 
     auto& all_cores_padded = shard_spec_padded.grid;
     uint32_t num_cores_padded = shard_spec_padded.num_cores();
@@ -633,7 +623,6 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     // output shard spec
     auto shard_spec_unpadded = output.shard_spec().value();
     uint32_t shard_height_unpadded = shard_spec_unpadded.shape[0];
-    uint32_t shard_width_unpadded = shard_spec_unpadded.shape[1];
     bool row_major = shard_spec_unpadded.orientation == ShardOrientation::ROW_MAJOR;
 
     auto& all_cores_unpadded = shard_spec_unpadded.grid;
@@ -647,8 +636,6 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     log_debug(tt::LogOp, "shard_height_unpadded: {}", shard_height_unpadded);
     log_debug(tt::LogOp, "all_cores_unpadded: {}", all_cores_unpadded);
     log_debug(tt::LogOp, "num_cores_unpadded: {}", num_cores_unpadded);
-
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat dst_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -901,7 +888,7 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(a.padded_shape().rank());
 
@@ -964,8 +951,6 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
         const Tensor& dst_tensor = output_tensors[0];
         uint32_t num_unpadded_tiles = dst_tensor.physical_volume() / TILE_HW;
 
-        uint32_t num_cores_x = compute_with_storage_grid_size.x;
-        uint32_t num_cores_y = compute_with_storage_grid_size.y;
         uint32_t num_cores_total = cores.size();
 
         auto
