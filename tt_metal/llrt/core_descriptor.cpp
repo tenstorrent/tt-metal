@@ -45,8 +45,8 @@ inline std::string get_core_descriptor_file(
     core_desc_dir += "tt_metal/core_descriptors/";
 
     std::string blackhole_variant = "blackhole_140_arch.yaml";
-    if (getenv("TT_METAL_BLACKHOLE_CORE_VARIANT")) {
-        auto blackhole_variant_a = getenv("TT_METAL_BLACKHOLE_CORE_VARIANT");
+    if (getenv("BH_ARCH_YAML")) {
+        auto blackhole_variant_a = getenv("BH_ARCH_YAML");
         if (!std::filesystem::exists(core_desc_dir + blackhole_variant_a)) {
             TT_THROW("Blackhole core descriptor variant {} does not exist in {}", blackhole_variant_a, core_desc_dir);
         }
