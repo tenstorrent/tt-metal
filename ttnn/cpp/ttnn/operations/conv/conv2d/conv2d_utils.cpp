@@ -329,7 +329,7 @@ OptimizedConvParallelizationConfig determine_conv_op_parallel_config_from_conv_o
 }
 
 static std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
-    uint32_t block_height, uint32_t block_width, bool fp32_accum, bool split_reader_enabled) {
+    uint32_t block_height, uint32_t block_width, bool fp32_accum) {
     constexpr std::array<std::pair<uint32_t, uint32_t>, 20> subblocks = {{
         {2, 4}, {4, 2}, {1, 8}, {8, 1}, {1, 7}, {7, 1}, {2, 3}, {3, 2}, {1, 6}, {6, 1},
         {1, 5}, {5, 1}, {2, 2}, {1, 4}, {4, 1}, {1, 3}, {3, 1}, {1, 2}, {2, 1}, {1, 1},
@@ -339,10 +339,6 @@ static std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
     uint32_t subblock_w = 0;
     for (auto [subblock_height, subblock_width] : subblocks) {
         if (fp32_accum && (subblock_height * subblock_width > 4)) {
-            continue;
-        }
-
-        if (split_reader_enabled && (block_height / subblock_height) < 2) {
             continue;
         }
 
@@ -357,10 +353,9 @@ static std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
     }
     TT_FATAL(
         subblock_h > 0 && subblock_w > 0,
-        "Could not find valid subblock size for block size {}x{}, split_reader_enabled: {}, fp32_accum: {}",
+        "Could not find valid subblock size for block size {}x{}, fp32_accum: {}",
         block_height,
         block_width,
-        split_reader_enabled,
         fp32_accum);
     return {subblock_h, subblock_w};
 }
@@ -431,8 +426,8 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     TT_ASSERT(act_block_w % 32 == 0);
     uint32_t act_block_w_ntiles = act_block_w / 32;
     uint32_t weight_block_w_ntiles = conv_op_parallel_config.per_core_out_matrix_width_ntile;
-    auto [out_subblock_h_ntiles, out_subblock_w_ntiles] = determine_largest_subblock_size(
-        act_block_h_ntiles, weight_block_w_ntiles, fp32_accum, act_block_h_ntiles > 1 && split_reader_enabled);
+    auto [out_subblock_h_ntiles, out_subblock_w_ntiles] =
+        determine_largest_subblock_size(act_block_h_ntiles, weight_block_w_ntiles, fp32_accum);
     return {
         .act_block_h_ntiles = act_block_h_ntiles,
         .act_block_w_ntiles = act_block_w_ntiles,
