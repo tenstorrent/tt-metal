@@ -29,11 +29,11 @@ def print_stats(label, data: torch.Tensor, device=None):
     "mesh_device, cfg, sp, tp, topology",
     [
         [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear],
-        # [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear],
+        [(8, 4), (2, 0), (4, 0), (4, 1), ttnn.Topology.Linear],
     ],
     ids=[
         "t3k_cfg2_sp2_tp2",
-        #    "tg_cfg2_sp4_tp4",
+        "tg_cfg2_sp4_tp4",
     ],
     indirect=["mesh_device"],
 )
@@ -55,7 +55,7 @@ def print_stats(label, data: torch.Tensor, device=None):
     ),
     [
         (1, 16, 3, 2, 128, 128, 32, (128, 256, 512, 512)),  # slice 128, output blocks 32. Need to parametize
-        (1, 16, 3, 2, 128, 128, 32, (128, 256, 512, 512)),  # slice 128, output blocks 32. Need to parametize
+        # (1, 16, 3, 2, 128, 128, 32, (128, 256, 512, 512)),  # slice 128, output blocks 32. Need to parametize
     ],
 )
 # @pytest.mark.usefixtures("use_program_cache")
