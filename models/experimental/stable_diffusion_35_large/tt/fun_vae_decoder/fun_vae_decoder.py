@@ -47,14 +47,23 @@ class TtVaeDecoderParameters:
                 torch_vae_decoder.mid_block, dtype=dtype, parallel_config=parallel_config
             ),
             up_blocks=[
-                TtUpDecoderBlock2DParameters.from_torch(up_block, dtype=dtype, parallel_config=parallel_config)
-                for up_block in (torch_vae_decoder.up_blocks or [])
+                TtUpDecoderBlock2DParameters.from_torch(
+                    up_block,
+                    dtype=dtype,
+                    parallel_config=parallel_config,
+                    gn_allow_sharded_compute=(False if idx == len(torch_vae_decoder.up_blocks) - 1 else True),
+                )  # No sharded compute for group norm for the last up decoder layer
+                for idx, up_block in enumerate(torch_vae_decoder.up_blocks or [])
             ],
             conv_norm_out=TtGroupNormParameters.from_torch(
-                torch_vae_decoder.conv_norm_out, parallel_config=parallel_config
+                torch_vae_decoder.conv_norm_out,
+                parallel_config=parallel_config,
+                allow_sharded_compute=False,  # No sharded compute for group norm for the last group norm because of hanging issue
             ),
             conv_out=TtConv2dParameters.from_torch(
-                torch_vae_decoder.conv_out, dtype=dtype, parallel_config=parallel_config
+                torch_vae_decoder.conv_out,
+                dtype=dtype,
+                parallel_config=parallel_config,  # This shouldn't use TP compute. If using TP, set mesh_sharded_output=False
             ),
             parallel_config=parallel_config,
         )
