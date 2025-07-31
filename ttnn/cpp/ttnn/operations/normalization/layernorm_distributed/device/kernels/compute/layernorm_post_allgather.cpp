@@ -189,8 +189,8 @@ void MAIN {
         // sqrt_tile(0);
         // recip_tile_init();
         // recip_tile(0);
-        rsqrt_tile_init();
-        rsqrt_tile(dst0);
+        ln_rsqrt_tile_init();
+        ln_rsqrt_tile(dst0);
         pack_tile(0, cb_recip_sqrt_var);
         REL();
         cb_push_back(cb_recip_sqrt_var, 1);

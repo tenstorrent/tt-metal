@@ -187,8 +187,8 @@ void MAIN {
             // sqrt_tile(dst0);
             // recip_tile_init();
             // recip_tile(dst0);
-            rsqrt_tile_init();
-            rsqrt_tile(dst0);
+            ln_rsqrt_tile_init();
+            ln_rsqrt_tile(dst0);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile(dst0, cb_stats_reduced);

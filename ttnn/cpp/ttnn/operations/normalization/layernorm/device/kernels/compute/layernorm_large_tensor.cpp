@@ -205,8 +205,8 @@ void MAIN {
 
         // recip_tile_init();
         // recip_tile(dst0);
-        rsqrt_tile_init();
-        rsqrt_tile(dst0);
+        ln_rsqrt_tile_init();
+        ln_rsqrt_tile(dst0);
 
         tile_regs_commit();
 
