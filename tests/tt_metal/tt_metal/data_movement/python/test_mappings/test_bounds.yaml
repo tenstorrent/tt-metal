@@ -97,8 +97,8 @@
 "One to One Directed Ideal":
   wormhole_b0:
     riscv_0:
-      latency: 46000
-      bandwidth: 29
+      latency: 12000000
+      bandwidth: 30
   blackhole:
     riscv_0:
       latency: 25000

@@ -90,7 +90,6 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
         (uint32_t)test_config.num_of_transactions,
         (uint32_t)bytes_per_transaction,
         (uint32_t)test_config.test_id,
-        (uint32_t)sem_id,
         (uint32_t)packed_subordinate_core_coordinates,
         (uint32_t)test_config.num_virtual_channels};
 

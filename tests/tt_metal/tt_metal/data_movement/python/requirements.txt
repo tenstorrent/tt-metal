@@ -1,5 +1,0 @@
-pyyaml
-loguru
-matplotlib
-numpy
-pytest

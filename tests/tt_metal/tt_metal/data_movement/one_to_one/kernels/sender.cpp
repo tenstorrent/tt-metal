@@ -12,19 +12,14 @@ void kernel_main() {
     constexpr uint32_t num_of_transactions = get_compile_time_arg_val(1);
     constexpr uint32_t bytes_per_transaction = get_compile_time_arg_val(2);
     constexpr uint32_t test_id = get_compile_time_arg_val(3);
-    constexpr uint32_t sem_id = get_compile_time_arg_val(4);
-    constexpr uint32_t packed_subordinate_core_coordinates = get_compile_time_arg_val(5);
-    constexpr uint32_t num_virtual_channels = get_compile_time_arg_val(6);
+    constexpr uint32_t packed_subordinate_core_coordinates = get_compile_time_arg_val(4);
+    constexpr uint32_t num_virtual_channels = get_compile_time_arg_val(5);
 
     // Runtime arguments
     uint32_t receiver_x_coord = packed_subordinate_core_coordinates >> 16;
     uint32_t receiver_y_coord = packed_subordinate_core_coordinates & 0xFFFF;
 
     uint64_t dst_noc_addr = get_noc_addr(receiver_x_coord, receiver_y_coord, l1_local_addr);
-
-    // Derivative values
-    uint32_t sem_addr = get_semaphore(sem_id);
-    uint64_t sem_noc_addr = get_noc_addr(receiver_x_coord, receiver_y_coord, sem_addr);
 
     {
         DeviceZoneScopedN("RISCV0");
@@ -35,7 +30,6 @@ void kernel_main() {
         }
         noc_async_write_barrier();
     }
-    noc_semaphore_inc(sem_noc_addr, 1);
 
     DeviceTimestampedData("Test id", test_id);
 
