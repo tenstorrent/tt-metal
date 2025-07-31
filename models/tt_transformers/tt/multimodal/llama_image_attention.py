@@ -226,6 +226,7 @@ class TtLlamaImageAttention(LightweightModule):
             else:
                 dense_out_gathered = ttnn.experimental.all_gather_async(
                     output_11SH,
+                    persistent_output_buffer=None,
                     dim=1,
                     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                     num_links=1,

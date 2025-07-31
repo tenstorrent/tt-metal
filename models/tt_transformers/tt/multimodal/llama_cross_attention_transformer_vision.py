@@ -112,6 +112,7 @@ class TtLlamaCrossAttentionTransformerVision(LightweightModule):
         else:
             vision_tokens = ttnn.experimental.all_gather_async(
                 vision_tokens,
+                persistent_output_buffer=None,
                 dim=3,
                 multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
                 num_links=1,
