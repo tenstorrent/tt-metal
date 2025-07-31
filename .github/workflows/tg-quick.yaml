@@ -61,9 +61,9 @@ jobs:
       - name: Run quick tests
         timeout-minutes: 20
         run: |
-          pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick";
-          pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "quick";
-          pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_model_prefill.py;
+          pytest models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k "quick";
+          pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "quick";
+          pytest models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py;
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
@@ -169,9 +169,9 @@ jobs:
         # NOTE: These tests do not automatically get added to upstream tests. Please refer to dockerfile/upstream_test_images/.
         run: |
           ./build/test/tt_metal/tt_fabric/test_system_health --system-topology TORUS_XY
-          pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick";
-          pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "quick";
-          pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_model_prefill.py;
+          pytest models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k "quick";
+          pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "quick";
+          pytest models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py;
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

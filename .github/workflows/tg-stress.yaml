@@ -63,7 +63,7 @@ jobs:
         run: |
           for i in {1..5}; do
             echo "🔁 Run #$i"
-            timeout --preserve-status 1200 pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "nd-hang-test"
+            timeout --preserve-status 1200 pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "nd-hang-test"
           done
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
@@ -110,7 +110,7 @@ jobs:
         run: |
           for i in {1..5}; do
             echo "🔁 Run #$i"
-            timeout --preserve-status 1200 pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "nd-hang-test"
+            timeout --preserve-status 1200 pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "nd-hang-test"
           done
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}

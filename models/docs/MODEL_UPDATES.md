@@ -6,7 +6,7 @@
 
 ## July 21, 2025
 
-### [Llama 3.1-70B - Galaxy](demos/llama3_subdevices)
+### [Llama 3.1-70B - Galaxy](demos/llama3_70b_galaxy)
 - Achieved 65 t/s/u (and still working on further improvements) on Wormhole Galaxy for decode mode with our [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal), with batch size 32 and 128 input sequence length.
 
 ### [Qwen 2.5-32B](tt_transformers)
@@ -20,7 +20,7 @@
 ### [Qwen 3](tt_transformers)
 - Added support for dense Qwen3 models (0.6B, 1.7B, 4B, 8B, 14B, 32B) on Wormhole devices.
 
-### [Llama 3.1-70B - Galaxy](demos/llama3_subdevices)
+### [Llama 3.1-70B - Galaxy](demos/llama3_70b_galaxy)
 - Integrated Llama 3.1-70B on Galaxy into the [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal).
 - Added initial support for sampling tokens on device with batch size 32.
 
@@ -45,9 +45,9 @@
 
 ## April 7, 2025
 
-### [Llama 3.1-70B - Galaxy](demos/llama3_subdevices)
+### [Llama 3.1-70B - Galaxy](demos/llama3_70b_galaxy)
 - Achieved 45 t/s/u (and still working on further improvements) on Wormhole Galaxy for decode mode, with batch size 32 and 128 input sequence length. The included optimizations were: 1) using DRAM prefetching to remove memory bottlenecks for matmuls, 2) using [Sub-Devices](../tech_reports/SubDevices/SubDevices.md) to run multiple ops in parallel, 3) using CCLs enabled by [TT-Fabric](../tech_reports/TT-Fabric/TT-Fabric-Architecture.md).
-- Created a functional prefill + decode demo which can be run via [text_demo.py](demos/llama3_subdevices/demo/text_demo.py).
+- Created a functional prefill + decode demo which can be run via [text_demo.py](demos/llama3_70b_galaxy/demo/text_demo.py).
 
 ## March 24, 2025
 
