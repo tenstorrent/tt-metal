@@ -33,7 +33,7 @@ class PagedAttentionConfig:
 class RopeScalingType(str, Enum):
     """Types of RoPE scaling."""
 
-    # LINEAR = "linear"
+    LINEAR = "linear"
     # DYNAMIC = "dynamic"
     YARN = "yarn"
     LLAMA3 = "llama3"
@@ -42,9 +42,13 @@ class RopeScalingType(str, Enum):
 class RopeScaling(BaseModel):
     """RoPE scaling configuration."""
 
-    rope_type: RopeScalingType = Field(exclude=True, description="RoPE scaling type")
+    rope_type: RopeScalingType = Field(validation_alias="type", exclude=True, description="RoPE scaling type")
     factor: float
-    original_max_position_embeddings: int
+    original_max_position_embeddings: Optional[int] = None
+
+
+class RopeScalingLinear(RopeScaling):
+    """RoPE scaling configuration for linear."""
 
 
 class RopeScalingLlama3(RopeScaling):
@@ -66,9 +70,12 @@ class RopeScalingYarn(RopeScaling):
 
 
 def rope_scaling_model_factory(rope_scaling_params: dict) -> RopeScaling:
-    if rope_scaling_params.get("rope_type") == RopeScalingType.LLAMA3:
+    rope_scaling_type = rope_scaling_params.get("rope_type") or rope_scaling_params.get("type")
+    if rope_scaling_type == RopeScalingType.LINEAR:
+        return RopeScalingLinear(**rope_scaling_params)
+    elif rope_scaling_type == RopeScalingType.LLAMA3:
         return RopeScalingLlama3(**rope_scaling_params)
-    elif rope_scaling_params.get("rope_type") == RopeScalingType.YARN:
+    elif rope_scaling_type == RopeScalingType.YARN:
         return RopeScalingYarn(**rope_scaling_params)
     else:
         raise ValueError(f"Invalid RoPE scaling type: {rope_scaling_params.get('rope_type')}")
