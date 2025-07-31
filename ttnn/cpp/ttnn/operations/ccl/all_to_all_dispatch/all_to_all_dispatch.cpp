@@ -21,13 +21,17 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
     const ttnn::Tensor& expert_mapping_tensor,
     std::optional<uint32_t> axis,
     const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
-    uint32_t num_links,
-    tt::tt_fabric::Topology topology,
+    const std::optional<uint32_t> num_links,
+    const std::optional<tt::tt_fabric::Topology> topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<GlobalSemaphore>& global_semaphore) {
     auto mesh_device = input_tensor.mesh_device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+
+    uint32_t num_links_ = num_links.value_or(1);
+    tt::tt_fabric::Topology topology_ = topology.value_or(tt::tt_fabric::get_fabric_topology());
+
     TT_FATAL(
         global_semaphore.has_value(),
         "Global semaphore is required for all_to_all_dispatch due to limitations in trace");
@@ -68,8 +72,8 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
         expert_mapping_tensor,
         axis,
         optional_output_tensors,
-        num_links,
-        topology,
+        num_links_,
+        topology_,
         memory_config.value_or(input_tensor.memory_config()),
         sd_id,
         global_semaphore,
