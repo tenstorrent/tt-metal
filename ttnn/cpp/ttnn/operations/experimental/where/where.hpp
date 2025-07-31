@@ -27,7 +27,7 @@ struct WhereOperation {
         std::optional<Tensor> output_tensor = std::nullopt) {
         if (output_dtype.has_value() && output_tensor.has_value()) {
             TT_FATAL(
-                output_dtype.value() == output_tensor.value().get_dtype(),
+                output_dtype.value() == output_tensor.value().dtype(),
                 "Both output dtype and output tensor provided dtype should match");
         }
 

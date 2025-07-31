@@ -26,7 +26,6 @@
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_memory.h"
-#include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 #include <umd/device/types/arch.h>
@@ -75,16 +74,18 @@ Kernel::Kernel(
 
 void Kernel::register_kernel_with_watcher() {
     if (this->kernel_src_.source_type_ == KernelSource::FILE_PATH) {
-        this->watcher_kernel_id_ = watcher_register_kernel(this->kernel_src_.source_);
+        this->watcher_kernel_id_ =
+            MetalContext::instance().watcher_server()->register_kernel(this->kernel_src_.source_);
     } else {
         TT_FATAL(this->kernel_src_.source_type_ == KernelSource::SOURCE_CODE, "Unsupported kernel source type!");
-        this->watcher_kernel_id_ = watcher_register_kernel(this->name());
+        this->watcher_kernel_id_ = MetalContext::instance().watcher_server()->register_kernel(this->name());
     }
 }
 
 void KernelImpl::register_kernel_elf_paths_with_watcher(IDevice& device) const {
     TT_ASSERT(this->kernel_full_name_.size() > 0, "Kernel full name not set!");
-    watcher_register_kernel_elf_paths(this->watcher_kernel_id_, this->file_paths(device));
+    auto paths = this->file_paths(device);
+    MetalContext::instance().watcher_server()->register_kernel_elf_paths(this->watcher_kernel_id_, paths);
 }
 
 std::string Kernel::name() const { return this->kernel_src_.name(); }
@@ -503,22 +504,21 @@ void EthernetKernel::read_binaries(IDevice* device) {
         device->build_id(), erisc_core_type, dm_class_idx, erisc_id);
     // TODO: fix when active eth supports relo
     auto load_type = MetalContext::instance().hal().get_jit_build_config(erisc_core_type, erisc_id, 0).memory_load;
-    ll_api::memory const& binary_mem = llrt::get_risc_binary(
-        build_state.get_target_out_path(this->kernel_full_name_),
-        load_type);
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_erisc_iram_enabled() &&
-        this->config_.eth_mode != Eth::IDLE) {
-        // text_addr and some of span's addr point to IRAM base address.
-        // However it need to be placed L1 kernel base address for FW to copy it to IRAM then kick off
-        // The kernel can run with IRAM base address once it started.
-        const_cast<ll_api::memory&>(binary_mem)
-            .set_text_addr(tt::tt_metal::MetalContext::instance().hal().erisc_iram_relocate_dev_addr(
-                (uint64_t)binary_mem.get_text_addr()));
-        std::function<void(uint64_t& addr)> update_callback = [](uint64_t& addr) {
-            addr = tt::tt_metal::MetalContext::instance().hal().erisc_iram_relocate_dev_addr(addr);
-        };
-        const_cast<ll_api::memory&>(binary_mem).update_spans(update_callback);
-    }
+    const ll_api::memory& binary_mem = llrt::get_risc_binary(
+        build_state.get_target_out_path(this->kernel_full_name_), load_type, [this](ll_api::memory& binary_mem) {
+            if (tt::tt_metal::MetalContext::instance().rtoptions().get_erisc_iram_enabled() &&
+                this->config_.eth_mode != Eth::IDLE) {
+                // text_addr and some of span's addr point to IRAM base address.
+                // However it need to be placed L1 kernel base address for FW to copy it to IRAM then kick off
+                // The kernel can run with IRAM base address once it started.
+                binary_mem.set_text_addr(tt::tt_metal::MetalContext::instance().hal().erisc_iram_relocate_dev_addr(
+                    (uint64_t)binary_mem.get_text_addr()));
+                std::function<void(uint64_t& addr)> update_callback = [](uint64_t& addr) {
+                    addr = tt::tt_metal::MetalContext::instance().hal().erisc_iram_relocate_dev_addr(addr);
+                };
+                binary_mem.update_spans(update_callback);
+            }
+        });
     binaries.push_back(&binary_mem);
     uint32_t binary_size = binary_mem.get_packed_size();
     log_debug(LogLoader, "ERISC={}, name={}, size={} (bytes)", erisc_id, this->name(), binary_size);

@@ -44,6 +44,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bc \
     libclang-17-dev \
     clang-tidy-17 \
+    clang-tidy-20 \
     curl \
     dialog \
     file \
@@ -136,6 +137,11 @@ RUN [ "$UBUNTU_VERSION" != "24.04" ] \
     && make -j$(nproc) \
     && make install \
     && rm -rf /tmp/gdb-build
+
+COPY /dockerfile/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 
 #############################################################
 

@@ -294,7 +294,7 @@ def postprocess(
                     color=colors[int(cls)],
                     line_thickness=1,
                 )
-        if dataset.mode == "image":
+        if dataset and dataset.mode == "image":
             cv2.imwrite(save_path, im0)
         logger.info(f"Predictions saved to {save_path}")
 

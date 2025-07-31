@@ -134,16 +134,21 @@ def map_hf_to_meta_keys(loaded_weights):
         prefix = next((p for p in _get_known_prefixes_mapping().keys() if key.startswith(p)), "")
         key = key.replace(prefix, _get_known_prefixes_mapping().get(prefix, ""), 1)
 
+        new_key = key
         if key in hf_to_meta:
             # Direct match for top-level keys
-            meta_state_dict[hf_to_meta[key]] = tensor
-        elif "model.layers." in key:
+            new_key = hf_to_meta[key]
+        elif key.startswith("model.layers."):
             # Extract layer number and form a template key
             parts = key.split(".")
             layer_num = parts[2]  # e.g. "0" in "model.layers.0.input_layernorm.weight"
             template_key = "model.layers.{layer}." + ".".join(parts[3:])
             if template_key in hf_to_meta:
-                meta_state_dict[hf_to_meta[template_key].format(layer=layer_num)] = tensor
+                new_key = hf_to_meta[template_key].format(layer=layer_num)
+            else:
+                new_key = key[len("model.") :]  # Remove "model." prefix
+
+        meta_state_dict[new_key] = tensor
 
     return meta_state_dict
 
@@ -151,8 +156,9 @@ def map_hf_to_meta_keys(loaded_weights):
 def load_meta_state_dict(ckpt_dir, n_layers=None, start_layer_idx=0):
     checkpoints = sorted(Path(ckpt_dir).glob("*.pth"))
     assert len(checkpoints) > 0, f"no checkpoint files found in {ckpt_dir}"
-    is_chunked = "layers_" in str(checkpoints[0])
+    is_chunked = any(ckpt.stem.startswith("layers_") for ckpt in checkpoints)
     if is_chunked:
+        checkpoints = [ckpt_name for ckpt_name in checkpoints if ckpt_name.stem.startswith("layers_")]
         checkpoint = load_chunked_checkpoints(checkpoints, n_layers, start_layer_idx)
     else:
         checkpoint = load_sharded_checkpoints(checkpoints, n_layers)

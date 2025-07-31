@@ -72,7 +72,6 @@ bool is_block_float(DataType dtype);
 enum class StorageType {
     HOST = 0,
     DEVICE = 1,
-    MULTI_DEVICE_HOST = 4,  // host storage for multi-device context
 };
 
 tt::DataFormat datatype_to_dataformat_converter(DataType datatype);
@@ -109,8 +108,7 @@ public:
         TensorMemoryLayout memory_layout,
         BufferType buffer_type = BufferType::DRAM,
         std::optional<ShardSpec> shard_spec = std::nullopt);
-    explicit MemoryConfig(BufferType buffer_type,
-        NdShardSpec nd_shard_spec);
+    explicit MemoryConfig(BufferType buffer_type, std::optional<NdShardSpec> nd_shard_spec = std::nullopt);
     MemoryConfig(const MemoryConfig& other) = default;
     MemoryConfig& operator=(const MemoryConfig& other) = default;
     MemoryConfig(MemoryConfig&& other) noexcept = default;

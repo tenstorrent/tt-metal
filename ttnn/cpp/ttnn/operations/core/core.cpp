@@ -18,10 +18,6 @@
 namespace ttnn::operations::core {
 
 ttnn::Tensor unsqueeze_to_4D(const ttnn::Tensor& tensor) {
-    if (tt::tt_metal::is_multi_device_host_tensor(tensor)) {
-        return transform(tensor, [&](const Tensor& device_tensor) { return unsqueeze_to_4D(device_tensor); });
-    }
-
     const auto rank = tensor.logical_shape().rank();
     if (rank == 4) {
         return tensor;
@@ -45,11 +41,6 @@ ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank) {
         return tensor;
     }
     return ttnn::reshape(tensor, tensor.logical_shape().to_rank(rank), tensor.padded_shape().to_rank(rank));
-}
-
-ttnn::Tensor to_device(
-    const ttnn::Tensor& tensor, IDevice* device, const std::optional<MemoryConfig>& memory_config, QueueId cq_id) {
-    return tensor.to_device(device, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG), cq_id);
 }
 
 ttnn::Tensor to_device(

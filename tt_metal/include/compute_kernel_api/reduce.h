@@ -35,18 +35,19 @@ namespace ckernel {
  *
  * Return value: None
  *
- * | Param Type | Name         | Description                                                     | Type      | Valid Range                                    | Required |
- * |------------|--------------|-----------------------------------------------------------------|-----------|------------------------------------------------|----------|
- * | Template   | reduce_type  | The type of reduce op - sum, average or maximum                 | PoolType  | {SUM, AVG, MAX}                                | True     |
- * | Template   | reduce_dim   | The dimension of reduce op - row, column or both                | ReduceDim | {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
- * | Function   | icb          | The identifier of the circular buffer (CB) containing operand A | uint32_t  | 0 to 31                                        | True     |
- * | Function   | icb_scaler   | CB holding scaling factors (see above)                          | uint32_t  | 0 to 31                                        | True     |
- * | Function   | ocb          | The identifier of the output circular buffer (CB)               | uint32_t  | 0 to 31                                        | True     |
+ * | Param Type | Name           | Description                                                     | Type      | Valid Range                                    | Required |
+ * |------------|----------------|-----------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Template   | reduce_type    | The type of reduce op - sum, average or maximum                 | PoolType  | {SUM, AVG, MAX}                                | True     |
+ * | Template   | reduce_dim     | The dimension of reduce op - row, column or both                | ReduceDim | {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
+ * | Template   | fp32_transpose | Enable accumulation of reduction in full FP32 precision         | bool      | {true, false}                                  | True     |
+ * | Function   | icb            | The identifier of the circular buffer (CB) containing operand A | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | icb_scaler     | CB holding scaling factors (see above)                          | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | ocb            | The identifier of the output circular buffer (CB)               | uint32_t  | 0 to 31                                        | True     |
  */
 // clang-format on
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
+template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool fp32_transpose = false>
 ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
-    UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
+    UNPACK((llk_unpack_AB_reduce_init<reduce_dim, BroadcastType::NONE, fp32_transpose>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, MATH_FIDELITY>()));
     PACK((llk_pack_reduce_mask_config<false /*untilize*/, reduce_dim>()));
 }
@@ -58,7 +59,8 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb) {
  * same dimension, this call can be omitted. If this function is not called, the packer will continue to use the edge masks set
  * by the latest reduce_init call, which may lead to incorrect packing behavior in subsequent operations.
  *
- * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025.
+ * NOTE: This function is not in line with our programming model, and will be removed by the end of 2025
+ * as a part of tt-metal#22904.
  *
  * | Param Type | Name | Description                                      | Type | Valid Range | Required |
  * |------------|------|--------------------------------------------------|------|-------------|----------|
@@ -90,20 +92,22 @@ ALWI void reduce_uninit() { PACK((llk_pack_reduce_mask_clear())); }
  * NOTE: For other valid ways of populating the `icb_scaler`, refer to the ISA documentation.
  * Return value: None
  *
- * | Param Type | Name     | Description                                                     | Type     | Valid Range                                    | Required |
- * |------------|----------|-----------------------------------------------------------------|----------|------------------------------------------------|----------|
- * | Template   | reduce_type | The type of reduce op - sum, average or maximum              | PoolType | {SUM, AVG, MAX}                                | True     |
- * | Template   | reduce_dim  | The dimension of reduce op - row, column or both             | ReduceDim| {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
- * | Function   | icb      | The identifier of the circular buffer (CB) containing operand A | uint32_t | 0 to 31                                        | True     |
- * | Function   | icb_scaler  | CB holding scaling factors (see above)                          | uint32_t | 0 to 31                                        | True     |
- * | Function   | itile    | The index of the tile within the first CB                       | uint32_t | Must be less than the size of the CB           | True     |
- * | Function   | itile_sclaer | The index of the tile within the scaling factor CB.             | uint32_t | Must be less than the size of the CB           | True     |
- * | Function   | idst     | The index of the tile in DST REG for the result                 | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | Param Type | Name           | Description                                                     | Type      | Valid Range                                    | Required |
+ * |------------|----------------|-----------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Template   | reduce_type    | The type of reduce op - sum, average or maximum                 | PoolType  | {SUM, AVG, MAX}                                | True     |
+ * | Template   | reduce_dim     | The dimension of reduce op - row, column or both                | ReduceDim | {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
+ * | Template   | fp32_transpose | Enable accumulation of reduction in full FP32 precision         | bool      | {true, false}                                  | True     |
+ * | Function   | icb            | The identifier of the circular buffer (CB) containing operand A | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | icb_scaler     | CB holding scaling factors (see above)                          | uint32_t  | 0 to 31                                        | True     |
+ * | Function   | itile          | The index of the tile within the first CB                       | uint32_t  | Must be less than the size of the CB           | True     |
+ * | Function   | itile_sclaer   | The index of the tile within the scaling factor CB.             | uint32_t  | Must be less than the size of the CB           | True     |
+ * | Function   | idst           | The index of the tile in DST REG for the result                 | uint32_t  | Must be less than the acquired size of DST REG | True     |
  */
 // clang-format on
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
+template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool fp32_transpose = false>
 ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_t itile_sclaer, uint32_t idst) {
-    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(icb, icb_scaler, idst)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, fp32_transpose>(
+        icb, icb_scaler, idst)));
     UNPACK((llk_unpack_AB(icb, icb_scaler, itile, itile_sclaer)));
 }
 
@@ -111,17 +115,19 @@ ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_
 /**
  * Performs a math-only reduction operation on a tile in the DST register. Assumes that source tiles are already in source registers.
  *
- * | Param Type | Name         | Description                                                     | Type      | Valid Range                                    | Required |
- * |------------|--------------|-----------------------------------------------------------------|-----------|------------------------------------------------|----------|
- * | Template   | reduce_type  | The type of reduce op - sum, average or maximum                 | PoolType  | {SUM, AVG, MAX}                                | True     |
- * | Template   | reduce_dim   | The dimension of reduce op - row, column or both                | ReduceDim | {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
- * | Function   | idst         | The index of the tile in DST REG for the result                 | uint32_t  | Must be less than the acquired size of DST REG | True     |
- * | Function   | num_faces    | Number of faces to reduce (optional, default 4)                 | uint32_t  | >= 1                                           | False    |
+ * | Param Type | Name           | Description                                                     | Type      | Valid Range                                    | Required |
+ * |------------|----------------|-----------------------------------------------------------------|-----------|------------------------------------------------|----------|
+ * | Template   | reduce_type    | The type of reduce op - sum, average or maximum                 | PoolType  | {SUM, AVG, MAX}                                | True     |
+ * | Template   | reduce_dim     | The dimension of reduce op - row, column or both                | ReduceDim | {REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR}        | True     |
+ * | Template   | fp32_transpose | Enable accumulation of reduction in full FP32 precision         | bool      | {true, false}                                  | True     |
+ * | Function   | idst           | The index of the tile in DST REG for the result                 | uint32_t  | Must be less than the acquired size of DST REG | True     |
+ * | Function   | num_faces      | Number of faces to reduce (optional, default 4)                 | uint32_t  | 1 to 4                                         | False    |
  */
 // clang-format on
-template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM>
+template <PoolType reduce_type = REDUCE_OP, ReduceDim reduce_dim = REDUCE_DIM, bool fp32_transpose = false>
 ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
-    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(idst, num_faces)));
+    MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, fp32_transpose>(
+        idst, num_faces)));
 }
 
 }  // namespace ckernel

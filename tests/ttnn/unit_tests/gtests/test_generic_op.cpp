@@ -8,6 +8,7 @@
 #include <tt_metal/api/tt-metalium/assert.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <tt-logger/tt-logger.hpp>
 #include "ttnn_test_fixtures.hpp"
@@ -115,7 +116,6 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
 
     ttnn::generic_op(std::vector<Tensor>{device_input_tensor, device_output_tensor}, program_descriptor);
     Tensor output_tensor = device_output_tensor.cpu();
-    auto dtype = golden.dtype();
     auto allclose = ttnn::allclose<uint32_t>(golden, output_tensor);
     ASSERT_TRUE(allclose);
 }
@@ -306,10 +306,9 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpBinaryEltwiseAdd) {
     };
 
     bool block_or_width_sharded = false;
-    uint32_t src0_is_dram = device_input_tensor_a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    uint32_t src1_is_dram = device_input_tensor_b.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
-        src0_is_dram, src1_is_dram, (uint32_t)block_or_width_sharded};
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {(uint32_t)block_or_width_sharded};
+    TensorAccessorArgs(*device_input_tensor_a.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*device_input_tensor_b.buffer()).append_to(reader_compile_time_args);
 
     uint32_t dst_is_dram = device_output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     const KernelDescriptor::CompileTimeArgs writer_compile_time_args = {dst_cb_index, dst_is_dram};
@@ -323,14 +322,12 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpBinaryEltwiseAdd) {
 
     uint32_t block_size_per_core_group_1 = 1;
     uint32_t block_size_per_core_group_2 = 1;
-    uint32_t max_block_size = 1;
     uint32_t block_cnt_per_core_group_1 = num_tiles_per_core_group_1;
     uint32_t block_cnt_per_core_group_2 = num_tiles_per_core_group_2;
     auto cores =
         grid_to_cores(num_cores_total, compute_with_storage_grid_size.x, compute_with_storage_grid_size.y, row_major);
 
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
     KernelDescriptor::RuntimeArgs reader_rt_args_per_core(
         num_cores_x, std::vector<KernelDescriptor::CoreRuntimeArgs>(num_cores_y));
     KernelDescriptor::RuntimeArgs writer_rt_args_per_core(

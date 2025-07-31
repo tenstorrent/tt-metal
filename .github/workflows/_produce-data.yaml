@@ -115,47 +115,7 @@ jobs:
           echo "Sleeping for 60 seconds for github to fully sync the workflow run before calling the API"
           sleep 60
           echo "[Info] Workflow run attempt"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} > workflow.json
-          echo "[Info] Workflow run attempt jobs"
-          # Try the original --paginate approach first, fall back to manual pagination if it fails
-          set +e  # Disable exit on error
-          paginated_output=$(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs --paginate 2>&1)
-          paginate_exit_code=$?
-          set -e  # Re-enable exit on error
-
-          if [ $paginate_exit_code -eq 0 ]; then
-            echo "Successfully fetched jobs using --paginate"
-            echo "$paginated_output" | jq -s '{total_count: .[0].total_count, jobs: map(.jobs) | add}' > workflow_jobs.json
-          else
-            echo "--paginate failed (exit code: $paginate_exit_code), falling back to manual pagination"
-            echo "Error output: $paginated_output"
-            # Manual pagination to avoid 502 errors with --paginate
-            # Get first page to determine total count
-            first_page=$(gh api "/repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs?per_page=50&page=1")
-            total_count=$(echo "$first_page" | jq -r '.total_count')
-            echo "Total jobs: $total_count"
-
-            # Calculate total pages needed
-            per_page=50
-            total_pages=$(( (total_count + per_page - 1) / per_page ))
-            echo "Total pages: $total_pages"
-
-            # Initialize with first page
-            all_jobs=$(echo "$first_page" | jq -r '.jobs')
-
-            # Fetch remaining pages if any
-            for page in $(seq 2 $total_pages); do
-              echo "Fetching page $page of $total_pages"
-              page_data=$(gh api "/repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }}/jobs?per_page=50&page=$page")
-              page_jobs=$(echo "$page_data" | jq -r '.jobs')
-              all_jobs=$(jq -s '.[0] + .[1]' <(echo "$all_jobs") <(echo "$page_jobs"))
-              sleep 5
-            done
-
-            # Create final JSON with total_count and combined jobs
-            echo "$all_jobs" | jq -s '{total_count: '$total_count', jobs: .[0]}' > workflow_jobs.json
-          fi
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} | tee workflow.json
       - name: Collect workflow artifact and job logs
         shell: bash
         env:

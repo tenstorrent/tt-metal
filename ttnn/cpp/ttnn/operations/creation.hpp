@@ -67,7 +67,8 @@ Tensor arange_impl(
     TensorSpec spec{
         ttnn::Shape{static_cast<uint32_t>(size)}, TensorLayout{data_type, PageConfig{layout}, output_mem_config}};
 
-    return Tensor::from_vector(std::move(owned_buffer), spec, device.has_value() ? std::addressof(device->get()) : nullptr);
+    return Tensor::from_vector(
+        std::move(owned_buffer), spec, device.has_value() ? std::addressof(device->get()) : nullptr);
 }
 
 template <typename T>
@@ -133,6 +134,7 @@ Tensor full_impl(
         case DataType::UINT8: return concrete_full.template operator()<uint8_t>(fill_value);
         case DataType::UINT16: return concrete_full.template operator()<uint16_t>(fill_value);
         case DataType::UINT32: return concrete_full.template operator()<uint32_t>(fill_value);
+        case DataType::INT32: return concrete_full.template operator()<int32_t>(fill_value);
         case DataType::FLOAT32: return concrete_full.template operator()<float>(fill_value);
         case DataType::BFLOAT16: return concrete_full.template operator()<::bfloat16>(static_cast<float>(fill_value));
         case DataType::BFLOAT4_B:
@@ -281,9 +283,10 @@ struct EmptyLike {
         Layout layout_value = layout.value_or(tensor.layout());
         DataType dtype_value = dtype.value_or(tensor.dtype());
         MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
+        MeshDevice* device_ptr = device.has_value() ? &device->get() : tensor.mesh_device();
         return allocate_tensor_on_device(
             TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
-            device.has_value() ? &device->get() : tensor.mesh_device());
+            device_ptr);
     }
 };
 

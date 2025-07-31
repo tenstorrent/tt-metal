@@ -31,16 +31,16 @@ std::unordered_map<MeshCoordinate, std::vector<std::pair<uint32_t, SocketConnect
 }
 
 void validate_fabric_config_for_sockets(
-    FabricConfig fabric_config, tt_fabric::FabricNodeId sender_node, tt_fabric::FabricNodeId recv_node) {
+    tt_fabric::FabricConfig fabric_config, tt_fabric::FabricNodeId sender_node, tt_fabric::FabricNodeId recv_node) {
     if (sender_node != recv_node) {
-        TT_FATAL(fabric_config != FabricConfig::DISABLED, "Can only create multi-device sockets with fabric enabled.");
+        TT_FATAL(fabric_config != tt_fabric::FabricConfig::DISABLED, "Can only create multi-device sockets with fabric enabled.");
     }
 
-    static const std::unordered_set<FabricConfig> supported_fabrics = {
-        FabricConfig::FABRIC_1D,
-        FabricConfig::FABRIC_1D_RING,
-        FabricConfig::FABRIC_2D_DYNAMIC,
-        FabricConfig::DISABLED  // Fabric can be disabled as long as socket endpoints are on the same physical device
+    static const std::unordered_set<tt_fabric::FabricConfig> supported_fabrics = {
+        tt_fabric::FabricConfig::FABRIC_1D,
+        tt_fabric::FabricConfig::FABRIC_1D_RING,
+        tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
+        tt_fabric::FabricConfig::DISABLED  // Fabric can be disabled as long as socket endpoints are on the same physical device
     };
 
     bool fabric_config_supported = supported_fabrics.count(fabric_config) > 0;
@@ -52,13 +52,13 @@ void validate_fabric_config_for_sockets(
 std::pair<tt_fabric::MeshId, uint32_t> get_sender_receiver_chip_fabric_encoding(
     tt_fabric::FabricNodeId sender_node_id,
     tt_fabric::FabricNodeId recv_node_id,
-    FabricConfig fabric_config,
+    tt_fabric::FabricConfig fabric_config,
     SocketEndpoint socket_endpoint) {
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
 
     validate_fabric_config_for_sockets(fabric_config, sender_node_id, recv_node_id);
 
-    if (fabric_config == FabricConfig::FABRIC_1D or fabric_config == FabricConfig::FABRIC_1D_RING) {
+    if (fabric_config == tt_fabric::FabricConfig::FABRIC_1D or fabric_config == tt_fabric::FabricConfig::FABRIC_1D_RING) {
         // 1D Fabric requires passing in the number of hops between the sender and receiver
         // Assume 1D is a single mesh
         auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -128,13 +128,14 @@ void validate_remote_desc(const SocketPeerDescriptor& local_desc, const SocketPe
         "Mismatch in number of chip IDs during handshake.");
 }
 
-Tag generate_descriptor_exchange_tag() {
+Tag generate_descriptor_exchange_tag(Rank peer_rank, std::optional<DistributedContextId> context_id) {
     // Generate a unique id to tag the exchange of socket peer
     // descriptors between the sender and receiver.
     // This is used to ensure that the sender and receiver are
     // exchanging the correct descriptors.
-    static uint32_t exchange_tag = 0;
-    return Tag{++exchange_tag};
+    static std::unordered_map<DistributedContextId, std::unordered_map<Rank, uint32_t>> exchange_tags;
+    DistributedContextId unique_context_id = context_id.value_or(DistributedContext::get_current_world()->id());
+    return Tag{exchange_tags[unique_context_id][peer_rank]++};
 }
 }  // namespace
 
@@ -234,11 +235,10 @@ void write_socket_configs(
     auto grouped_connections = group_socket_connections(config, socket_endpoint);
     auto peer_config_buf_addr = peer_descriptor.config_buffer_address;
 
-    FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
+    tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
 
     if (is_sender) {
         std::vector<sender_socket_md> config_data(config_buffer->size() / sizeof(sender_socket_md), sender_socket_md());
-
         for (const auto& [device_coord, indexed_connections] : grouped_connections) {
             for (const auto& [conn_idx, connection] : indexed_connections) {
                 const auto& [sender_core, recv_core] = connection;
@@ -253,7 +253,9 @@ void write_socket_configs(
 
                 uint32_t idx = core_to_core_id.at(sender_core.core_coord);
                 auto& md = config_data[idx];
+                md.bytes_acked = 0;
                 md.write_ptr = peer_descriptor.data_buffer_address;
+                md.bytes_sent = 0;
                 md.downstream_fifo_addr = peer_descriptor.data_buffer_address;
                 md.downstream_fifo_total_size = config.socket_mem_config.fifo_size;
                 md.downstream_mesh_id = *downstream_mesh_id;
@@ -283,6 +285,8 @@ void write_socket_configs(
 
                 uint32_t idx = core_to_core_id.at(recv_core.core_coord);
                 auto& md = config_data[idx];
+                md.bytes_sent = 0;
+                md.bytes_acked = 0;
                 md.read_ptr = local_descriptor.data_buffer_address;
                 md.fifo_addr = local_descriptor.data_buffer_address;
                 md.fifo_total_size = config.socket_mem_config.fifo_size;
@@ -298,14 +302,17 @@ void write_socket_configs(
     }
 }
 
-SocketPeerDescriptor generate_local_endpoint_descriptor(const MeshSocket& socket_endpoint) {
+SocketPeerDescriptor generate_local_endpoint_descriptor(
+    const MeshSocket& socket_endpoint, std::optional<DistributedContextId> context_id) {
     const auto& config = socket_endpoint.get_config();
     bool is_sender = socket_endpoint.get_socket_endpoint_type() == SocketEndpoint::SENDER;
+
+    auto peer_rank = is_sender ? config.receiver_rank : config.sender_rank;
     SocketPeerDescriptor local_endpoint_desc = {
         .config = config,
         .config_buffer_address = socket_endpoint.get_config_buffer()->address(),
         .data_buffer_address = is_sender ? 0 : socket_endpoint.get_data_buffer()->address(),
-        .exchange_tag = generate_descriptor_exchange_tag()  // Unique tag for this exchange
+        .exchange_tag = generate_descriptor_exchange_tag(peer_rank, context_id)  // Unique tag for this exchange
     };
     auto device = socket_endpoint.get_config_buffer()->device();
     for (const auto& [sender_core, recv_core] : config.socket_connection_config) {

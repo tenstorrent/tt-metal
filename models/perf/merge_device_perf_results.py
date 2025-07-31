@@ -48,6 +48,13 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_FILENAME,
         help="The output filename",
     )
+    parser.add_argument(
+        "devperf",
+        type=Path,
+        nargs="?",
+        default="",
+        help="model name",
+    )
     return parser.parse_args()
 
 
@@ -56,5 +63,10 @@ if __name__ == "__main__":
     assert (
         args.output_filename
     ), f"Expected user to provide an output filename for merged report (arguments provided were {args})"
-    merge_perf_files(args.output_filename, "device_perf", expected_cols)
-    check_device_perf_results(args.output_filename, expected_cols, check_cols)
+    if str(args.devperf) == "REPORT":
+        merge_perf_files(args.output_filename, f"device_perf", expected_cols)
+    elif str(args.devperf) == "CHECK":
+        check_device_perf_results(args.output_filename, expected_cols, check_cols)
+    else:
+        merge_perf_files(args.output_filename, f"device_perf", expected_cols)
+        check_device_perf_results(args.output_filename, expected_cols, check_cols)

@@ -36,13 +36,13 @@
 #include <tt_stl/strong_type.hpp>
 #include "system_memory_manager.hpp"
 #include "trace/trace_node.hpp"
-#include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include <umd/device/tt_xy_pair.h>
 #include "data_collection.hpp"
 #include "ringbuffer_cache.hpp"
 #include "program/dispatch.hpp"
+#include <tt-metalium/graph_tracking.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -722,7 +722,7 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
                 // DPrint Server hang, early exit. We're in test mode, so main thread will assert.
                 this->set_exit_condition();
                 return;
-            } else if (tt::watcher_server_killed_due_to_error()) {
+            } else if (MetalContext::instance().watcher_server()->killed_due_to_error()) {
                 // Illegal NOC txn killed watcher, early exit. We're in test mode, so main thread will assert.
                 this->set_exit_condition();
                 return;

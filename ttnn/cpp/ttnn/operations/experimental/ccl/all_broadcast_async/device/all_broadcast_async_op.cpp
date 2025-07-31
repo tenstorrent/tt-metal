@@ -15,8 +15,8 @@ void AllBroadcastAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
-    const auto& layout = input_tensors[0].get_layout();
-    const auto& dtype = input_tensors[0].get_dtype();
+    const auto& layout = input_tensors[0].layout();
+    const auto& dtype = input_tensors[0].dtype();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_broadcast need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_broadcast need to be allocated in buffers on device!");
@@ -40,25 +40,25 @@ void AllBroadcastAsync::validate_with_output_tensors(
                 output_tensor.value().storage_type() == StorageType::DEVICE,
                 "Operands to all_broadcast need to be on device!");
             TT_FATAL(
-                output_tensor.value().get_layout() == layout,
+                output_tensor.value().layout() == layout,
                 "Error, Output tensor layout should be same as input tensor layout but has {}",
-                output_tensor.value().get_layout());
+                output_tensor.value().layout());
             TT_FATAL(
-                output_tensor.value().get_dtype() == dtype,
+                output_tensor.value().dtype() == dtype,
                 "Error, Output tensor dtype should be same as input tensor dtype but has {}",
-                output_tensor.value().get_dtype());
+                output_tensor.value().dtype());
             TT_FATAL(
-                output_tensor.value().get_tensor_spec().page_config() == input_tensor.get_tensor_spec().page_config(),
+                output_tensor.value().tensor_spec().page_config() == input_tensor.tensor_spec().page_config(),
                 "Error, Output tensor page config should be same as input tensor page config but has {}",
-                output_tensor.value().get_tensor_spec().page_config());
+                output_tensor.value().tensor_spec().page_config());
             TT_FATAL(
                 output_tensor.value().memory_config() == this->output_mem_config,
                 "Error, Output tensor memory config should be same as output_mem_config but has {}",
                 output_tensor.value().memory_config());
 
             // check the output tensor size
-            auto output_shape = output_tensor.value().get_padded_shape();
-            const auto& input_shape = input_tensor.get_padded_shape();
+            auto output_shape = output_tensor.value().padded_shape();
+            const auto& input_shape = input_tensor.padded_shape();
             TT_FATAL(
                 output_shape.size() == input_shape.size(),
                 "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
@@ -75,12 +75,12 @@ void AllBroadcastAsync::validate_with_output_tensors(
 
 std::vector<ttnn::TensorSpec> AllBroadcastAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    const auto& shape = input_tensor.get_padded_shape();
+    const auto& shape = input_tensor.padded_shape();
     std::vector<TensorSpec> output_specs;
+    output_specs.reserve(this->ring_size);
     for (uint32_t i = 0; i < this->ring_size; ++i) {
         output_specs.push_back(TensorSpec(
-            shape,
-            TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config)));
+            shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config)));
     }
     return output_specs;
 }
@@ -146,9 +146,9 @@ tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_
 
 tt::tt_metal::operation::Hash AllBroadcastAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");
-    auto input_shape = input_tensors[0].get_padded_shape();
-    auto input_memory_layout = input_tensors[0].get_layout();
-    auto input_dtype = input_tensors[0].get_dtype();
+    auto input_shape = input_tensors[0].padded_shape();
+    auto input_memory_layout = input_tensors[0].layout();
+    auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
     return tt::tt_metal::operation::hash_operation<AllBroadcastAsync>(
         this->num_links,
@@ -217,8 +217,6 @@ std::vector<Tensor> all_broadcast_async_impl(
         mesh_view.is_mesh_2d(),
         "all-broadcast invoked with cluster_axis API on >2D mesh, which is currently unsupported");
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-
-    int32_t rank = input_tensor.get_logical_shape().rank();
 
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_tensor};
 

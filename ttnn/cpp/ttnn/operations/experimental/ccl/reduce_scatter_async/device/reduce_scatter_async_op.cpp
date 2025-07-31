@@ -91,6 +91,9 @@ void ReduceScatterAsync::validate_with_output_tensors(
             }
         }
     }
+    TT_FATAL(
+        tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+        "Only 1D fabric config is supported for generic reduce scatter");
 }
 
 std::vector<ttnn::TensorSpec> ReduceScatterAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
@@ -326,7 +329,7 @@ Tensor reduce_scatter_impl(
     ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(reduce_op);
     int16_t rank = input_tensor.logical_shape().rank();
     int16_t scatter_dim = (dim < 0) ? rank + dim : dim;
-    const auto mesh_view = mesh_device.get_view();
+    const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(),
         "reduce-scatter invoked with cluster_axis API on >2D mesh, which is currently unsupported");

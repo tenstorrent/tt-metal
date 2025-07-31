@@ -519,6 +519,11 @@ void EdmLineFabricOpInterface::build_kernels() const {
                 direction == FORWARD ? edm_builders_forward_direction : edm_builders_backward_direction;
             if (edm_builders.find(device->id()) != edm_builders.end()) {
                 for (auto& edm_builder : edm_builders.at(device->id())) {
+                    auto noc_ids = std::array<tt::tt_metal::NOC, 2>{tt::tt_metal::NOC::NOC_0, tt::tt_metal::NOC::NOC_1};
+                    TT_FATAL(
+                        edm_builder.get_configured_risc_count() <= 2,
+                        "EDM builder has {} risc cores but only a maximum of 2 are supported",
+                        edm_builder.get_configured_risc_count());
                     for (uint32_t risc_id = 0; risc_id < edm_builder.get_configured_risc_count(); risc_id++) {
                         log_trace(
                             tt::LogOp,
@@ -530,13 +535,13 @@ void EdmLineFabricOpInterface::build_kernels() const {
                             device->ethernet_core_from_logical_core(edm_builder.my_eth_core_logical).y,
                             device->ethernet_core_from_logical_core(edm_builder.my_eth_core_logical).x,
                             risc_id);
-                        auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
+                        ttnn::ccl::generate_edm_kernel(
                             *program,
                             device,
                             edm_builder,
                             edm_builder.my_eth_core_logical,
                             static_cast<tt::tt_metal::DataMovementProcessor>(risc_id),
-                            tt::tt_metal::NOC::NOC_0);
+                            noc_ids[risc_id]);
                     }
                 }
             }

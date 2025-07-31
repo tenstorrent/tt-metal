@@ -36,7 +36,9 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     std::size_t q_chunk_size,
     std::size_t k_chunk_size,
     DeviceComputeKernelConfig compute_kernel_config,
-    std::optional<SDPAProgramConfig> program_config) {
+    std::optional<SDPAProgramConfig> program_config,
+    bool use_mla,
+    uint32_t head_dim_v) {
     /*
     Q: B x NQH x S x DH
     K: B x NKH x DH x S
@@ -69,6 +71,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     const uint32_t Sqt = padded_Sq / TILE_HEIGHT;
     const uint32_t Skt = padded_Sk / TILE_HEIGHT;
     const uint32_t DHt = DH / TILE_WIDTH;
+    const uint32_t vDHt = use_mla ? head_dim_v / TILE_WIDTH : DHt;
 
     const uint32_t valid_Sqt = std::ceil((float)Sq / TILE_HEIGHT);
     const uint32_t valid_Skt = std::ceil((float)Sk / TILE_HEIGHT);
@@ -100,6 +103,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     log_debug(tt::LogOp, "Sqt: {}", Sqt);
     log_debug(tt::LogOp, "Skt: {}", Skt);
     log_debug(tt::LogOp, "DHt: {}", DHt);
+    log_debug(tt::LogOp, "vDHt: {}", vDHt);
     log_debug(tt::LogOp, "Sq_chunk_t: {}", Sq_chunk_t);
     log_debug(tt::LogOp, "Sk_chunk_t: {}", Sk_chunk_t);
     log_debug(tt::LogOp, "q_chunk_size: {}", q_chunk_size);
@@ -153,7 +157,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     auto q_buffer = input_tensor_q.buffer();
     auto k_buffer = input_tensor_k.buffer();
-    auto v_buffer = input_tensor_v.buffer();
+    auto v_buffer = use_mla ? input_tensor_k.buffer() : input_tensor_v.buffer();
     auto mask_buffer = attn_mask.has_value() ? attn_mask.value().buffer() : nullptr;
 
     auto out0_buffer = output_tensor.buffer();
@@ -203,11 +207,11 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;            // double buffer
-    uint32_t v_tiles = Sk_chunk_t * DHt * 2;            // double buffer
+    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;           // double buffer
     uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
-    uint32_t out_im_tiles = Sq_chunk_t * DHt;
-    uint32_t out0_t = Sq_chunk_t * DHt;
+    uint32_t out_im_tiles = Sq_chunk_t * vDHt;
+    uint32_t out0_t = Sq_chunk_t * vDHt;
     uint32_t scale_tiles = 1;
     uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
 
@@ -243,12 +247,12 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
-    const uint32_t out_out_subblock_w = std::min(DHt, dst_size);
+    const uint32_t out_out_subblock_w = std::min(vDHt, dst_size);
     const uint32_t out_out_subblock_h =
-        (out_out_subblock_w == DHt) ? (std::min(Sq_chunk_t, dst_size / out_out_subblock_w)) : 1;
+        (out_out_subblock_w == vDHt) ? (std::min(Sq_chunk_t, dst_size / out_out_subblock_w)) : 1;
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
-    const uint32_t out_in1_num_subblocks = DHt / out_out_subblock_w;
+    const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
 
     // log all values
@@ -331,6 +335,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
                                                       valid_Sqt,
                                                       valid_Skt,
                                                       DHt,
+                                                      vDHt,
                                                       Sq_chunk_t,
                                                       q_num_chunks,
                                                       Sk_chunk_t,
@@ -353,6 +358,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         valid_Sqt,
         Sk,
         DHt,
+        vDHt,
         Sq_chunk_t,
         q_num_chunks,
         Sk_chunk_t,
@@ -373,6 +379,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         NKH,
         Skt,
         DHt,
+        vDHt,
         Sq_chunk_t,
         q_num_chunks,
         Sk_chunk_t,
@@ -442,7 +449,12 @@ operation::ProgramWithCallbacks sdpa_multi_core(
 
     tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
-    tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
+    tt::DataFormat v_df;
+    if (use_mla) {
+        v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
+    } else {
+        v_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_v.dtype());
+    }
     tt::DataFormat mask_df = attn_mask.has_value()
                                  ? tt::tt_metal::datatype_to_dataformat_converter(attn_mask.value().dtype())
                                  : tt::DataFormat::Bfp4_b;
@@ -634,7 +646,14 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     }
 
     auto override_runtime_arguments_callback =
-        [num_cores, grid_size, reader_kernels_id, writer_kernels_id, compute_kernels_id, is_chunked, q_chunk_size](
+        [num_cores,
+         grid_size,
+         reader_kernels_id,
+         writer_kernels_id,
+         compute_kernels_id,
+         is_chunked,
+         q_chunk_size,
+         use_mla](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -642,7 +661,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
             const std::vector<Tensor>& output_tensors) {
             auto q_buffer = input_tensors.at(0).buffer();
             auto k_buffer = input_tensors.at(1).buffer();
-            auto v_buffer = input_tensors.at(2).buffer();
+            auto v_buffer = use_mla ? input_tensors.at(1).buffer() : input_tensors.at(2).buffer();
             auto mask_buffer =
                 optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer() : nullptr;
 

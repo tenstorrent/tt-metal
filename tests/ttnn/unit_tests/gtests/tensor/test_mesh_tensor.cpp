@@ -29,7 +29,7 @@ using ::testing::SizeIs;
 using ::testing::ThrowsMessage;
 
 using MeshTensorTest = GenericMeshDeviceFixture;
-using MeshTensorTestT3K = T3000MeshDeviceFixture;
+using MeshTensorTest2x4 = MeshDevice2x4Fixture;
 
 TEST(MeshTensorHostTest, ToHostNonMeshTensor) {
     const ttnn::Shape shape{1, 1, 32, 32};
@@ -110,7 +110,7 @@ TEST(MeshTensorHostTest, FromHostShards) {
         MeshShape(2));
 
     EXPECT_EQ(tensor.tensor_spec().logical_shape(), ttnn::Shape{10});
-    EXPECT_EQ(tensor.storage_type(), StorageType::MULTI_DEVICE_HOST);
+    EXPECT_EQ(tensor.storage_type(), StorageType::HOST);
 
     auto tensors = get_device_tensors(tensor);
     ASSERT_THAT(tensors, SizeIs(2));
@@ -174,7 +174,7 @@ TEST_F(MeshTensorTest, ReplicateHostStorageTensor) {
 
     // Read the tensor back, and compare it with input data.
     Tensor output_host_tensor = tensor_impl::to_host_mesh_tensor_wrapper(device_tensor);
-    EXPECT_TRUE(output_host_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST);
+    EXPECT_TRUE(output_host_tensor.storage_type() == StorageType::HOST);
     EXPECT_EQ(output_host_tensor.tensor_spec().logical_shape(), shape);
 
     for (const auto& tensor : get_device_tensors(output_host_tensor)) {
@@ -221,7 +221,7 @@ TEST_F(MeshTensorTest, GetDeviceTensors) {
     EXPECT_THAT(device_shard_coords, ElementsAreArray(coord_matchers));
 }
 
-TEST_F(MeshTensorTestT3K, CombineDeviceTensors) {
+TEST_F(MeshTensorTest2x4, CombineDeviceTensors) {
     const ttnn::Shape shape{1, 1, 32, 32};
     const TensorSpec tensor_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
@@ -286,7 +286,7 @@ struct MeshTensorWriteTestParams {
     std::function<std::unique_ptr<ttnn::distributed::TensorToMesh>(MeshDevice*)> get_mapper;
 };
 
-class MeshTensorWriteTest : public MeshTensorTestT3K,
+class MeshTensorWriteTest : public MeshTensorTest2x4,
                             public ::testing::WithParamInterface<MeshTensorWriteTestParams> {};
 
 TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
@@ -309,7 +309,7 @@ TEST_P(MeshTensorWriteTest, WriteMultiDeviceHostTensor) {
     std::vector<float> host_data(shape.volume());
     std::iota(host_data.begin(), host_data.end(), 0);
     Tensor input_host_tensor_sharded = distribute_tensor(Tensor::from_vector(host_data, tensor_spec), *mapper);
-    EXPECT_TRUE(input_host_tensor_sharded.storage_type() == StorageType::MULTI_DEVICE_HOST);
+    EXPECT_TRUE(input_host_tensor_sharded.storage_type() == StorageType::HOST);
     EXPECT_EQ(input_host_tensor_sharded.distributed_tensor_config(), mapper->config());
     EXPECT_EQ(input_host_tensor_sharded.tensor_spec().logical_shape(), sharded_shape);
 

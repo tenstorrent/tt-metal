@@ -53,22 +53,19 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
 
-    const auto input_dtype = input_tensor.get_dtype();
+    const auto input_dtype = input_tensor.dtype();
 
     auto mesh_device = input_tensor.mesh_device();
     const auto& mesh_view = mesh_device->get_view();
     const auto src_physical_device_id = mesh_device->get_device(mesh_coordinate)->id();
 
     const auto fabric_node_id = get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
-    const uint32_t src_mesh_id = *fabric_node_id.mesh_id;
     const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
 
-    const auto& input_shape = input_tensor.get_tensor_spec().logical_shape();
-    const auto& mapping_shape = mapping_tensor.get_tensor_spec().logical_shape();
-    const auto& metadata_shape = metadata_tensor.get_tensor_spec().logical_shape();
+    const auto& mapping_shape = mapping_tensor.tensor_spec().logical_shape();
+    const auto& metadata_shape = metadata_tensor.tensor_spec().logical_shape();
 
     const uint32_t num_devices = mesh_view.num_devices();
-    const uint32_t hidden_size = input_shape[-1];
     const uint32_t batch_size = metadata_shape[1];
     const uint32_t seq_size = metadata_shape[2];
     const uint32_t selected_experts_k = metadata_shape[-1];
@@ -77,9 +74,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     TT_FATAL(experts % num_devices == 0, "Currently assuming that experts are evenly split among devices");
     const uint32_t experts_per_device = experts / num_devices;
 
-    const auto& input_spec = input_tensor.get_tensor_spec();
-    const auto& mapping_spec = mapping_tensor.get_tensor_spec();
-    const auto& metadata_spec = metadata_tensor.get_tensor_spec();
+    const auto& input_spec = input_tensor.tensor_spec();
+    const auto& mapping_spec = mapping_tensor.tensor_spec();
+    const auto& metadata_spec = metadata_tensor.tensor_spec();
 
     const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
     const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
@@ -97,27 +94,27 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const auto aligned_mapping_page_size_bytes = tt::align(mapping_page_size_bytes, l1_alignment);
     const auto aligned_metadata_page_size_bytes = tt::align(metadata_page_size_bytes, l1_alignment);
 
-    auto input_data_format = datatype_to_dataformat_converter(input_tensor.get_dtype());
-    auto mapping_data_format = datatype_to_dataformat_converter(mapping_tensor.get_dtype());
-    auto metadata_data_format = datatype_to_dataformat_converter(metadata_tensor.get_dtype());
+    const auto input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
+    const auto mapping_data_format = datatype_to_dataformat_converter(mapping_tensor.dtype());
+    const auto metadata_data_format = datatype_to_dataformat_converter(metadata_tensor.dtype());
 
     // Anything less will lead to deadlocks. It's clear why, TODO fix it.
     const uint32_t buffering_factor = experts_per_device;
 
     // input sharded buffer
-    const auto data_cb_id = tt::CBIndex::c_0;
+    constexpr auto data_cb_id = tt::CBIndex::c_0;
     CircularBufferConfig cb_data_config =
         CircularBufferConfig(buffering_factor * aligned_input_page_size_bytes, {{data_cb_id, input_data_format}})
             .set_page_size(data_cb_id, aligned_input_page_size_bytes);
 
     // full mapping buffer
-    const auto mapping_tensor_cb_id = tt::CBIndex::c_1;
+    constexpr auto mapping_tensor_cb_id = tt::CBIndex::c_1;
     CircularBufferConfig cb_mapping_tensor_config =
         CircularBufferConfig(aligned_mapping_page_size_bytes, {{mapping_tensor_cb_id, mapping_data_format}})
             .set_page_size(mapping_tensor_cb_id, aligned_mapping_page_size_bytes);
 
     // scratch space to store and share indices of per device experts
-    const auto local_experts_cb_id = tt::CBIndex::c_2;
+    constexpr auto local_experts_cb_id = tt::CBIndex::c_2;
     using local_experts_t = uint16_t;
     const auto aligned_local_expert_page_size_bytes =
         tt::align(experts_per_device * sizeof(local_experts_t), l1_alignment);
@@ -127,14 +124,14 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
             .set_page_size(local_experts_cb_id, aligned_local_expert_page_size_bytes);
 
     // metadata page buffer
-    const auto metadata_cb_id = tt::CBIndex::c_3;
+    constexpr auto metadata_cb_id = tt::CBIndex::c_3;
     CircularBufferConfig cb_metadata_config =
         CircularBufferConfig(aligned_metadata_page_size_bytes, {{metadata_cb_id, metadata_data_format}})
             .set_page_size(metadata_cb_id, aligned_metadata_page_size_bytes);
 
     // client interface
     constexpr auto num_headers = 2;  // data unicast headers and atomic inc "multicast" headers
-    const auto client_interface_cb_id = tt::CBIndex::c_4;
+    constexpr auto client_interface_cb_id = tt::CBIndex::c_4;
     CircularBufferConfig client_interface_cb_config =
         CircularBufferConfig(num_headers * CLIENT_INTERFACE_SIZE, {{client_interface_cb_id, tt::DataFormat::UInt32}})
             .set_page_size(client_interface_cb_id, CLIENT_INTERFACE_SIZE);
@@ -153,6 +150,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     std::vector<CoreCoord> sender_cores;
 
     // select
+    sender_cores.reserve(num_links);
     for (uint32_t i = 0; i < num_links; i++) {
         sender_cores.push_back(subdevice_cores.at(i));
     }
@@ -161,11 +159,11 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     auto sender_core = sender_cores.at(0);
 
     // create circular buffers
-    const auto input_cb_handle = CreateCircularBuffer(program, sender_core, cb_data_config);
-    const auto mapping_cb_handle = CreateCircularBuffer(program, sender_core, cb_mapping_tensor_config);
-    const auto local_experts_cb_handle = CreateCircularBuffer(program, sender_core, cb_local_experts_config);
-    const auto metadata_cb_handle = CreateCircularBuffer(program, sender_core, cb_metadata_config);
-    const auto client_interface_cb = CreateCircularBuffer(program, sender_core, client_interface_cb_config);
+    CreateCircularBuffer(program, sender_core, cb_data_config);
+    CreateCircularBuffer(program, sender_core, cb_mapping_tensor_config);
+    CreateCircularBuffer(program, sender_core, cb_local_experts_config);
+    CreateCircularBuffer(program, sender_core, cb_metadata_config);
+    CreateCircularBuffer(program, sender_core, client_interface_cb_config);
 
     const uint32_t flat_mesh_idx = mesh_coordinate[0] * mesh_view.num_cols() + mesh_coordinate[1];
 
@@ -185,7 +183,8 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         metadata_page_size_bytes,
         input_is_dram,
         mapping_is_dram,
-        metadata_is_dram};
+        metadata_is_dram,
+        operation_attributes.locally_reduced};
 
     const DataMovementConfig reader_config{
         .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1, .compile_args = reader_compile_time_args};
@@ -198,7 +197,6 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
     const auto& axis = operation_attributes.axis;
 
-    const uint32_t batch_replicate_dim = axis.has_value() ? mesh_device->shape()[axis.value()] : 1;
     const auto fabric_max_packet_size_bytes = get_tt_fabric_channel_buffer_size_bytes();
     const uint32_t max_packet_size_bytes =
         input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
@@ -220,6 +218,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         mesh_view.num_rows(),
         mesh_view.num_cols(),
         max_packet_size_bytes,
+        common::get_linearized_index(mesh_coordinate, mesh_view),
+        (uint32_t)tt::tt_fabric::get_fabric_topology(),
+        operation_attributes.locally_reduced,
     };
 
     // fabric routing info

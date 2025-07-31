@@ -43,6 +43,10 @@ const std::unordered_map<ConnectorType, LinkingBoardType> linking_board_types = 
     {ConnectorType::LK3, LinkingBoardType::B},
 };
 
+std::uint64_t cw_pair_to_full(uint32_t hi, uint32_t lo) {
+    return (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
+}
+
 UbbId get_ubb_id(chip_id_t chip_id) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& tray_bus_ids = ubb_bus_ids.at(cluster.arch());
@@ -76,12 +80,12 @@ ConnectorType get_connector_type(chip_id_t chip_id, CoreCoord eth_core, uint32_t
     }
 }
 
-bool is_chip_on_edge_of_mesh(chip_id_t physical_chip_id, tt::ClusterType cluster_type) {
+bool is_chip_on_edge_of_mesh(chip_id_t physical_chip_id, tt::tt_metal::ClusterType cluster_type) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    if (cluster_type == tt::ClusterType::GALAXY) {
+    if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
         auto ubb_asic_id = cluster.get_ubb_asic_id(physical_chip_id);
         return (ubb_asic_id >= 2) and (ubb_asic_id <= 5);
-    } else if (cluster_type == tt::ClusterType::T3K) {
+    } else if (cluster_type == tt::tt_metal::ClusterType::T3K) {
         // MMIO chips are on the edge of the mesh
         return cluster.get_associated_mmio_device(physical_chip_id) == physical_chip_id;
     } else {
@@ -93,12 +97,12 @@ bool is_chip_on_edge_of_mesh(chip_id_t physical_chip_id, tt::ClusterType cluster
     }
 }
 
-bool is_chip_on_corner_of_mesh(chip_id_t physical_chip_id, tt::ClusterType cluster_type) {
+bool is_chip_on_corner_of_mesh(chip_id_t physical_chip_id, tt::tt_metal::ClusterType cluster_type) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    if (cluster_type == tt::ClusterType::GALAXY) {
+    if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
         auto ubb_asic_id = cluster.get_ubb_asic_id(physical_chip_id);
         return (ubb_asic_id == 1);
-    } else if (cluster_type == tt::ClusterType::T3K) {
+    } else if (cluster_type == tt::tt_metal::ClusterType::T3K) {
         // Remote chips are on the corner of the mesh
         return cluster.get_associated_mmio_device(physical_chip_id) != physical_chip_id;
     } else {
@@ -187,6 +191,12 @@ TEST(Cluster, ReportSystemHealth) {
     std::vector<std::uint32_t> read_vec;
     auto retrain_count_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_COUNT);
+    auto crc_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CRC_ERR);
+    auto corr_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::CORR_CW);
+    auto uncorr_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNCORR_CW);
     if (unique_chip_ids.empty()) {
         // Temporary patch to workaround unique chip ids not being set for non-6U systems
         for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
@@ -202,7 +212,7 @@ TEST(Cluster, ReportSystemHealth) {
         const auto& soc_desc = cluster.get_soc_desc(chip_id);
         std::stringstream chip_id_ss;
         chip_id_ss << std::dec << "Chip: " << chip_id << " Unique ID: " << std::hex << unique_chip_id;
-        if (cluster_type == tt::ClusterType::GALAXY) {
+        if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
             chip_id_ss << " " << get_ubb_id_str(chip_id);
         }
         ss << chip_id_ss.str() << std::endl;
@@ -210,7 +220,17 @@ TEST(Cluster, ReportSystemHealth) {
             tt_cxy_pair virtual_eth_core(
                 chip_id, cluster.get_virtual_coordinate_from_logical_coordinates(chip_id, eth_core, CoreType::ETH));
             std::stringstream eth_ss;
+            uint32_t crc_error_val = 0;
+            uint32_t corr_val_lo = 0, corr_val_hi = 0, uncorr_val_lo = 0, uncorr_val_hi = 0;
             cluster.read_core(read_vec, sizeof(uint32_t), virtual_eth_core, retrain_count_addr);
+            // TODO: remove WORMHOLE checks once register access available for all platform
+            if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
+                cluster.read_core(&crc_error_val, sizeof(uint32_t), virtual_eth_core, crc_addr);
+                cluster.read_core(&corr_val_hi, sizeof(uint32_t), virtual_eth_core, corr_addr);
+                cluster.read_core(&corr_val_lo, sizeof(uint32_t), virtual_eth_core, corr_addr + 4);
+                cluster.read_core(&uncorr_val_hi, sizeof(uint32_t), virtual_eth_core, uncorr_addr);
+                cluster.read_core(&uncorr_val_lo, sizeof(uint32_t), virtual_eth_core, uncorr_addr + 4);
+            }
             eth_ss << " eth channel " << std::dec << (uint32_t)chan << " " << eth_core.str();
             std::string connection_type = get_connector_str(chip_id, eth_core, chan, cluster_type);
             if (cluster.is_ethernet_link_up(chip_id, eth_core)) {
@@ -219,7 +239,13 @@ TEST(Cluster, ReportSystemHealth) {
                         cluster.get_connected_ethernet_core(std::make_tuple(chip_id, eth_core));
                     eth_ss << " link UP " << connection_type << ", retrain: " << read_vec[0] << ", connected to chip "
                            << connected_chip_id;
-                    if (cluster_type == tt::ClusterType::GALAXY) {
+                    if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
+                        eth_ss << "\n\tCRC Errors: 0x" << std::hex << crc_error_val << " ";
+                        eth_ss << "Corrected Codewords: 0x" << std::hex << cw_pair_to_full(corr_val_hi, corr_val_lo)
+                               << " Uncorrected Codewords: 0x" << std::hex
+                               << cw_pair_to_full(uncorr_val_hi, uncorr_val_lo);
+                    }
+                    if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
                         eth_ss << " " << get_ubb_id_str(connected_chip_id);
                     }
                     eth_ss << " " << connected_eth_core.str();
@@ -227,10 +253,8 @@ TEST(Cluster, ReportSystemHealth) {
                     const auto& [connected_chip_unique_id, connected_eth_core] =
                         cluster.get_connected_ethernet_core_to_remote_mmio_device(std::make_tuple(chip_id, eth_core));
                     eth_ss << " link UP " << connection_type << ", retrain: " << read_vec[0] << ", connected to chip "
-                           << connected_chip_unique_id;
-                    if (cluster_type == tt::ClusterType::GALAXY) {
-                        eth_ss << " " << get_ubb_id_str(connected_chip_unique_id);
-                    }
+                           << std::hex << connected_chip_unique_id;
+                    // Cannot use get_ubb_id_str here as connected_chip_unique_id is on other host
                     eth_ss << " " << connected_eth_core.str();
                 }
                 if (read_vec[0] > 0) {
@@ -266,7 +290,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
         log_info(
             LogTest,
             "  --cluster-type: cluster type to check (defaults to inferred from system) Valid values: {}",
-            magic_enum::enum_names<tt::ClusterType>());
+            magic_enum::enum_names<tt::tt_metal::ClusterType>());
         log_info(
             LogTest,
             "  --min-connections: target minimum number of connections between connected chips (default depends on "
@@ -286,20 +310,21 @@ TEST(Cluster, TestMeshFullConnectivity) {
     std::string cluster_type_str = "";
     std::tie(cluster_type_str, input_args) =
         test_args::get_command_option_and_remaining_args(input_args, "--cluster-type", "");
-    tt::ClusterType cluster_type = cluster.get_cluster_type();
+    tt::tt_metal::ClusterType cluster_type = cluster.get_cluster_type();
     if (not cluster_type_str.empty()) {
-        cluster_type = magic_enum::enum_cast<tt::ClusterType>(cluster_type_str, magic_enum::case_insensitive).value();
+        cluster_type =
+            magic_enum::enum_cast<tt::tt_metal::ClusterType>(cluster_type_str, magic_enum::case_insensitive).value();
     }
 
-    if (cluster_type == tt::ClusterType::T3K) {
+    if (cluster_type == tt::tt_metal::ClusterType::T3K) {
         num_expected_chips = 8;
         num_expected_mmio_chips = 4;
         num_connections_per_side = 2;
-    } else if (cluster_type == tt::ClusterType::GALAXY) {
+    } else if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
         num_expected_chips = 32;
         num_expected_mmio_chips = 32;
         num_connections_per_side = 4;
-    } else if (cluster_type == tt::ClusterType::P150_X4) {
+    } else if (cluster_type == tt::tt_metal::ClusterType::P150_X4) {
         num_expected_chips = 4;
         num_expected_mmio_chips = 4;
         num_connections_per_side = 4;
@@ -338,8 +363,10 @@ TEST(Cluster, TestMeshFullConnectivity) {
         if (target_system_topology.has_value() && *target_system_topology != FabricType::TORUS_XY) {
             bool supported_topology = false;
             switch (cluster_type) {
-                case tt::ClusterType::GALAXY:
-                case tt::ClusterType::T3K: supported_topology = *target_system_topology == FabricType::MESH; break;
+                case tt::tt_metal::ClusterType::GALAXY:
+                case tt::tt_metal::ClusterType::T3K:
+                    supported_topology = *target_system_topology == FabricType::MESH;
+                    break;
                 default: supported_topology = false; break;
             };
             if (not supported_topology) {
@@ -356,7 +383,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
     for (const auto& [chip, connections] : eth_connections) {
         std::stringstream chip_ss;
         chip_ss << "Chip " << chip;
-        if (cluster_type == tt::ClusterType::GALAXY) {
+        if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
             chip_ss << " " << get_ubb_id_str(chip);
         }
         const auto& soc_desc = cluster.get_soc_desc(chip);
@@ -390,7 +417,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
                 validate_num_connections(num_connections_to_chip.size(), num_expected_chip_connections);
             } else {
                 uint32_t num_chip_connections = 0;
-                if (cluster_type == tt::ClusterType::GALAXY) {
+                if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
                     num_chip_connections = num_internal_connections_to_chip.size();
                 } else {
                     num_chip_connections = num_connections_to_chip.size();
@@ -411,7 +438,7 @@ TEST(Cluster, TestMeshFullConnectivity) {
         for (const auto& [other_chip, count] : num_connections_to_chip) {
             std::stringstream other_chip_ss;
             other_chip_ss << "Chip " << other_chip;
-            if (cluster_type == tt::ClusterType::GALAXY) {
+            if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
                 other_chip_ss << " " << get_ubb_id_str(other_chip);
             }
             if (num_target_connections > 0) {

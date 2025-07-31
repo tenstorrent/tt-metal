@@ -71,6 +71,7 @@ Tensor optimized_conv_new(
     const DeviceComputeKernelConfig& compute_kernel_config,
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
+    bool full_inner_dim,
     bool enable_split_reader,
     bool enable_subblock_padding) {
     TT_FATAL(b.layout() == Layout::TILE,
@@ -86,13 +87,6 @@ Tensor optimized_conv_new(
         input_bias_format_params = {
             .pad_shape = bias.value().padded_shape(), .pad_value = 0, .target_layout = Layout::TILE};
     }
-    auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
-    auto arch = is_device_tensor(a)
-                    ? a.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-    bool fp32_accum =
-        a.device()->arch() == tt::ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ?
-                                                      // compute_kernel_config.value().fp32_dest_acc_en : false;
     auto optimized_conv_op = OptimizedConvNew(
         sliding_window_config,
         output_channels,
@@ -108,6 +102,7 @@ Tensor optimized_conv_new(
         compute_kernel_config,
         enable_act_double_buffer,
         enable_weights_double_buffer,
+        full_inner_dim,
         enable_split_reader,
         enable_subblock_padding);
     IDevice* device = a.device();
@@ -178,45 +173,23 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
 
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     if (this->memory_config.is_sharded()) {
-        if (this->memory_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
-            uint32_t total_height_tiles = padded_output_shape.volume() / padded_output_shape[-1] / TILE_HEIGHT;
-            uint32_t num_cores = total_height_tiles / this->parallelization_config.per_core_out_matrix_height_ntile;
-            std::array<uint32_t, 2> shard_shape = {
-                this->parallelization_config.per_core_out_matrix_height_ntile * TILE_HEIGHT, padded_output_shape[-1]};
-            CoreRangeSet shard_grid =
-                tt::tt_metal::num_cores_to_corerangeset(num_cores, this->parallelization_config.grid_size, true);
-            auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
-            auto mem_config = this->memory_config.with_shard_spec(shard_spec);
-            return {TensorSpec(
-                output_shape,
-                TensorLayout::fromPaddedShape(
-                    dtype, PageConfig(output_layout), mem_config, output_shape, padded_output_shape))};
-        } else if (this->memory_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            uint32_t total_height_tiles = padded_output_shape.volume() / padded_output_shape[-1] / TILE_HEIGHT;
-            std::array<uint32_t, 2> shard_shape = {
-                this->parallelization_config.per_core_out_matrix_height_ntile * TILE_HEIGHT,
-                this->parallelization_config.per_core_out_matrix_width_ntile * TILE_WIDTH};
-            auto shard_grid = this->memory_config.shard_spec().value().grid;
-            auto shard_spec = ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec().value().orientation};
-            auto mem_config = this->memory_config.with_shard_spec(shard_spec);
-            return {TensorSpec(
-                output_shape,
-                TensorLayout::fromPaddedShape(
-                    dtype, PageConfig(output_layout), mem_config, output_shape, padded_output_shape))};
-        } else if (this->memory_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
-            auto shard_grid = this->memory_config.shard_spec().value().grid;
-            auto shard_spec = ShardSpec{
-                shard_grid,
-                this->memory_config.shard_spec().value().shape,
-                this->memory_config.shard_spec().value().orientation};
-            auto mem_config = this->memory_config.with_shard_spec(shard_spec);
-            return {TensorSpec(
-                output_shape,
-                TensorLayout::fromPaddedShape(
-                    dtype, PageConfig(output_layout), mem_config, output_shape, padded_output_shape))};
-        } else {
-            TT_THROW("Unsupported shard scheme");
-        }
+        std::array<uint32_t, 2> shard_shape = {
+            this->parallelization_config.per_core_out_matrix_height_ntile * TILE_HEIGHT,
+            this->parallelization_config.per_core_out_matrix_width_ntile * TILE_WIDTH};
+        auto shard_grid = this->memory_config.shard_spec().value().grid;
+        auto shard_spec = ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec().value().orientation};
+        auto mem_config = this->memory_config.with_shard_spec(shard_spec);
+        return {TensorSpec(
+            output_shape,
+            TensorLayout(
+                dtype,
+                PageConfig(output_layout),
+                mem_config,
+                Alignment(
+                    {tt::constants::TILE_HEIGHT,
+                     tt::constants::TILE_WIDTH})  // Conv2D always outputs in tile multiples, even if output layout is
+                                                  // Row Major.
+                ))};
     }
     return {TensorSpec(
         output_shape,
@@ -261,7 +234,8 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         enable_act_double_buffer,
         enable_weights_double_buffer,
         enable_split_reader,
-        enable_subblock_padding);
+        enable_subblock_padding,
+        full_inner_dim);
 
     const uint32_t post_op_l1_allocation_size =
         device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
@@ -291,7 +265,8 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             output_channels,
             kernel_dims[1],
             sliding_window_config.get_output_shape()[2],
-            has_bias));
+            has_bias),
+        is_singlecore_skip_mcast(parallelization_config, input_tensor_a.memory_config().memory_layout()));
 
     TT_FATAL(
         actual_cb_size == l1_usage.CB_allocation_size,
@@ -326,8 +301,6 @@ operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(
     uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
     uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
     uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
-    uint32_t pad_h = (uint32_t)sliding_window_config.get_pad_h();
-    uint32_t pad_w = (uint32_t)sliding_window_config.get_pad_w();
     uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
     uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
 

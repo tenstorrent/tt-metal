@@ -53,6 +53,9 @@ bool is_1d_deptwise_conv(
     uint32_t image_width,
     bool has_bias);
 
+bool is_singlecore_skip_mcast(
+    const OptimizedConvParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout);
+
 sliding_window::ParallelConfig determine_parallel_config(
     TensorMemoryLayout shard_layout,
     uint32_t batch_size,
@@ -108,7 +111,8 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     uint32_t window_h,
     uint32_t window_w,
     bool fp32_accum,
-    bool split_reader_enabled);
+    bool split_reader_enabled,
+    bool full_inner_dim);
 
 std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryConfig> get_conv_configs(
     const Conv2dConfig& conv_config,

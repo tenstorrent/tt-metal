@@ -91,7 +91,7 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_2_messages_Persiste
     auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram);
     ASSERT_EQ(result, 0);
 }
-#ifdef ARCH_WORMHOLE
+
 // Will wrapp sender but not receiver buffers
 TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_2_messages_PersistentFabric_Scatter) {
     const uint32_t page_size = 2048;
@@ -131,7 +131,7 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_20_messages_Persist
     auto result = TestLoopbackEntrypoint(page_size, num_pages_total, src_is_dram, dest_is_dram, true);
     ASSERT_EQ(result, 0);
 }
-#endif
+
 // Will wrapp sender but not receiver buffers
 TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_10_messages_PersistentFabric) {
     const uint32_t page_size = 2048;
@@ -331,7 +331,6 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
 
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded_WithReshard0) {
     ttnn::Shape tensor_shape({1, 1, 32, 128});
-    const Layout layout = Layout::TILE;
     auto input_mem_config = MemoryConfig(
         TensorMemoryLayout::WIDTH_SHARDED,
         BufferType::L1,
@@ -361,7 +360,6 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
 
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded_WithReshard0_UniquePerStream) {
     ttnn::Shape tensor_shape({1, 1, 32, 128});
-    const Layout layout = Layout::TILE;
     size_t in_shard_grid_x = 1;
     size_t in_shard_grid_y = 1;
     size_t out_shard_grid_x = 4;
@@ -1335,11 +1333,10 @@ TEST(EdmFabric, BasicMcastThroughputTest_4_WithLineSync) {
 TEST(EdmFabric, RingDeadlockStabilityTest) {
     constexpr size_t num_mcasts = 200000;
     constexpr size_t num_op_invocations = 5;
-    constexpr bool line_sync = true;
     size_t num_links = 1;
     std::vector<size_t> num_devices_vec;
     auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
-    if (cluster_type == tt::ClusterType::GALAXY) {
+    if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
         num_devices_vec = {4, 8};
         num_links = 4;
     } else {
@@ -1366,13 +1363,12 @@ TEST(EdmFabric, RingDeadlockStabilityTest) {
 TEST(EdmFabric, RingDeadlockStabilityTest_RelaxedFabricStrictness) {
     constexpr size_t num_mcasts = 200000;
     constexpr size_t num_op_invocations = 5;
-    constexpr bool line_sync = true;
     // Set to however many links are available
     std::optional<size_t> num_links = std::nullopt;
     std::vector<size_t> num_devices;
     auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
 
-    if (cluster_type != tt::ClusterType::GALAXY) {
+    if (cluster_type != tt::tt_metal::ClusterType::GALAXY) {
         return;
     }
     num_devices = {4, 8};
