@@ -50,11 +50,10 @@ on:
         required: false
         type: boolean
         default: false
-      commit:
-        description: 'Commit SHA to test (default: HEAD)'
+      tg-stress:
         required: false
-        default: ""
-        type: string
+        type: boolean
+        default: false
 run-name: ${{ inputs.description }}
 jobs:
   # Centralized logic to determine what should run
@@ -175,7 +174,6 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: ${{ needs.determine-tests.outputs.is-config-tg == 'true' && 'config-tg' || 'topology-6u' }}
-      ref: ${{ inputs.commit || github.sha }}
   tg-frequent-tests:
     if: ${{ needs.determine-tests.outputs.run-frequent == 'true' }}
     needs: [build-artifact, determine-tests]
