@@ -125,6 +125,12 @@ def generate_build_header(
         f"constexpr bool UNPACK_TRANSPOSE_WITHIN_FACE = {unpack_transpose_within_face};"
     )
 
+    # Math transpose faces
+    math_transpose_faces = str(test_config.get("math_transpose_faces", False)).lower()
+    header_content.append(
+        f"constexpr bool MATH_TRANSPOSE_FACES = {math_transpose_faces};"
+    )
+
     # Fused Test L1 to L1 : Input of first run is used as input for the second run ...
     # Not fusing: single L1-to-L1 iteration, so we retrieve one format configuration
     # L1_to_L1_iterations is the number of times we perform llk operations from L1 input tensor to L1 output tensor
