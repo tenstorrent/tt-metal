@@ -36,11 +36,14 @@ void kernel_main() {
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
 
-    auto param_in = InterleavedAddrGenFastHelper(param_in_addr, cb_param_in, 0);
-    auto grad = InterleavedAddrGenFastHelper(grad_addr, cb_grad, 1);
+    constexpr auto param_in_args = TensorAccessorArgs<0>();
+    auto param_in = TensorAccessor(param_in_args, param_in_addr, get_tile_size(cb_param_in));
+    constexpr auto grad_args = TensorAccessorArgs<param_in_args.next_compile_time_args_offset()>();
+    auto grad = TensorAccessor(grad_args, grad_addr, get_tile_size(cb_grad));
 
 #if defined(MOMENTUM) && defined(MOMENTUM_INITIALIZED)
-    auto momentum_in = InterleavedAddrGenFastHelper(momentum_in_addr, cb_momentum_in, 2);
+    constexpr auto momentum_in_args = TensorAccessorArgs<grad_args.next_compile_time_args_offset()>();
+    auto momentum_in = TensorAccessor(momentum_in_args, momentum_in_addr, get_tile_size(cb_momentum_in));
 #endif
 
     fill_cb_with_value(cb_scalar_args, lr);
