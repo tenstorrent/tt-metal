@@ -76,6 +76,7 @@ target_sources(
             all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp
             common/kernels/command_processor.hpp
             common/interpreter_backends/kernel_common/io_descriptors.hpp
+            common/types/ccl_types.hpp
 )
 
 install(
