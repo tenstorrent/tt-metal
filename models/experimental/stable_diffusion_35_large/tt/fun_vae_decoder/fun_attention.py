@@ -17,6 +17,7 @@ import torch
 ## Parameters
 
 
+# Assumptions: If input is sharded, output will be sharded. The sharding is only applied to the final linear layer.
 @dataclass
 class TtAttentionParameters:
     group_norm: TtGroupNormParameters
@@ -33,14 +34,25 @@ class TtAttentionParameters:
         *,
         dtype: ttnn.DataType | None = None,
         parallel_config: VAEParallelConfig,
+        mesh_sharded_input: bool = True,
     ) -> TtAttentionParameters:
         return cls(
-            group_norm=TtGroupNormParameters.from_torch(torch_attention.group_norm, parallel_config=parallel_config),
-            to_q=TtLinearParameters.from_torch(torch_attention.to_q, dtype=dtype, parallel_config=parallel_config),
-            to_k=TtLinearParameters.from_torch(torch_attention.to_k, dtype=dtype, parallel_config=parallel_config),
-            to_v=TtLinearParameters.from_torch(torch_attention.to_v, dtype=dtype, parallel_config=parallel_config),
+            group_norm=TtGroupNormParameters.from_torch(
+                torch_attention.group_norm, parallel_config=parallel_config, mesh_sharded_input=mesh_sharded_input
+            ),
+            to_q=TtLinearParameters.from_torch(
+                torch_attention.to_q, dtype=dtype, parallel_config=parallel_config, mesh_sharded_output=False
+            ),
+            to_k=TtLinearParameters.from_torch(
+                torch_attention.to_k, dtype=dtype, parallel_config=parallel_config, mesh_sharded_output=False
+            ),
+            to_v=TtLinearParameters.from_torch(
+                torch_attention.to_v, dtype=dtype, parallel_config=parallel_config, mesh_sharded_output=False
+            ),
             to_out=[
-                TtLinearParameters.from_torch(linear_out, dtype=dtype, parallel_config=parallel_config)
+                TtLinearParameters.from_torch(
+                    linear_out, dtype=dtype, parallel_config=parallel_config, mesh_sharded_output=mesh_sharded_input
+                )
                 for linear_out in torch_attention.to_out
                 if not isinstance(linear_out, torch.nn.Dropout)
             ],

@@ -11,6 +11,7 @@ import ttnn
 from ..parallel_config import VAEParallelConfig
 
 
+# Assumptions: If input is sharded, output will be sharded. If input is not sharded, output will be replicated across mesh.
 @dataclass
 class TtLinearParameters:
     weight: ttnn.Tensor
@@ -26,6 +27,7 @@ class TtLinearParameters:
         dtype: ttnn.DataType | None = None,
         parallel_config: VAEParallelConfig,
         is_conv=False,
+        mesh_sharded_output: bool = True,
     ) -> TtLinearParameters:
         if not len(torch_linear.state_dict().keys()):
             breakpoint()
@@ -46,10 +48,18 @@ class TtLinearParameters:
 
         return cls(
             weight=ttnn.from_torch(
-                weight.permute(-1, -2), dtype=dtype, device=parallel_config.device, layout=ttnn.TILE_LAYOUT
+                weight.permute(-1, -2),
+                dtype=dtype,
+                device=parallel_config.device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(parallel_config.device, dim=-1) if mesh_sharded_output else None,
             ),
             bias=ttnn.from_torch(
-                bias.reshape((1, 1, 1, -1)), dtype=dtype, device=parallel_config.device, layout=ttnn.TILE_LAYOUT
+                bias.reshape((1, 1, 1, -1)),
+                dtype=dtype,
+                device=parallel_config.device,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(parallel_config.device, dim=-1) if mesh_sharded_output else None,
             ),
             compute_config=compute_config,
             parallel_config=parallel_config,
