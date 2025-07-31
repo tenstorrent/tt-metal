@@ -44,15 +44,9 @@ struct dispatch_core_placement_t {
     std::optional<tt_cxy_pair> dispatcher =
         std::nullopt;  // Relays work to worker cores on device that command is targeting. Currently for MMIO devices,
                        // dispatcher == completion_queue_writer
-    std::optional<tt_cxy_pair> mux = std::nullopt;       // Mux
-    std::optional<tt_cxy_pair> demux = std::nullopt;     // Demux
-    std::optional<tt_cxy_pair> tunneler = std::nullopt;  // ethernet tunneler
     std::optional<tt_cxy_pair> prefetcher_d = std::nullopt;
     std::optional<tt_cxy_pair> dispatcher_d = std::nullopt;
     std::optional<tt_cxy_pair> dispatcher_s = std::nullopt;
-    std::optional<tt_cxy_pair> mux_d = std::nullopt;       // Mux
-    std::optional<tt_cxy_pair> demux_d = std::nullopt;     // Demux
-    std::optional<tt_cxy_pair> tunneler_d = std::nullopt;  // ethernet tunneler
     std::unordered_map<int, tt_cxy_pair> fabric_mux;       // Fabric Mux indexed by tunnel / link index
 };
 
@@ -95,49 +89,6 @@ public:
     const tt_cxy_pair& prefetcher_d_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
 
     bool is_prefetcher_d_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
-
-    /// @brief Gets the location of the kernel desginated for multiplexing issue queue traffic to tunneler.
-    /// @param device_id ID of the device that a fast dispatch command targets
-    /// @param channel assigned to the command queue where commands are enqueued
-    /// @param cq_id ID of the command queue within the channel
-    /// @return tt_cxy_pair logical location (chip + core coordinate) of the mux core
-    const tt_cxy_pair& mux_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
-
-    bool is_mux_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
-
-    /// @brief Gets the location of the kernel desginated for multiplexing traffic back towards mmio chip.
-    /// @param device_id ID of the device that a fast dispatch command targets
-    /// @param channel assigned to the command queue where commands are enqueued
-    /// @param cq_id ID of the command queue within the channel
-    /// @return tt_cxy_pair logical location (chip + core coordinate) of the mux_d core
-
-    const tt_cxy_pair& mux_d_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
-
-    /// @brief Gets the location of the kernel desginated for demultiplexing traffic to completion queues.
-    /// @param device_id ID of the device that a fast dispatch command targets
-    /// @param channel assigned to the command queue where commands are enqueued
-    /// @param cq_id ID of the command queue within the channel
-    /// @return tt_cxy_pair logical location (chip + core coordinate) of the mux core
-    const tt_cxy_pair& demux_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
-
-    bool is_demux_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
-
-    /// @brief Gets the location of the kernel desginated for demultiplexing traffic on remote chip.
-    /// @param device_id ID of the device that a fast dispatch command targets
-    /// @param channel assigned to the command queue where commands are enqueued
-    /// @param cq_id ID of the command queue within the channel
-    /// @return tt_cxy_pair logical location (chip + core coordinate) of the demux_d core
-    const tt_cxy_pair& demux_d_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
-
-    /// @brief Gets the location of the kernel desginated for tunneling over ethernet.
-    /// @param device_id ID of the device that a fast dispatch command targets
-    /// @param channel assigned to the command queue where commands are enqueued
-    /// @param cq_id ID of the command queue within the channel
-    /// @return tt_cxy_pair logical location (chip + core coordinate) of the ethernet tunnel core
-    const tt_cxy_pair& tunneler_core(
-        chip_id_t upstream_device_id, chip_id_t device_id, uint16_t channel, uint8_t cq_id);
-
-    const tt_cxy_pair& us_tunneler_core_local(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
 
     /// @brief Gets the location of the kernel desginated to write to the completion queue region for a particular
     /// command queue

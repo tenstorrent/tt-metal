@@ -100,6 +100,10 @@ target_sources(
         reshape_view/device/reshape_device_operation.cpp
         reshape_view/reshape.cpp
         roll/roll.cpp
+        scatter/scatter.cpp
+        scatter/tosa_scatter.cpp
+        scatter/device/scatter_device_operation.cpp
+        scatter/device/scatter_program_factory.cpp
         sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.cpp
         sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.cpp
         sharded/interleaved_to_sharded/interleaved_to_sharded.cpp

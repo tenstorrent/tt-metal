@@ -374,7 +374,7 @@ def run_llama3_decode_performance(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, benchmark_token_range, warmup_iters, inner_iters, paged_attention, page_params",
     [
         (
-            "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_prefill_128.json",
             True,
             1,
             1024,
@@ -386,7 +386,7 @@ def run_llama3_decode_performance(
             None,
         ),
         (
-            "models/demos/llama3_subdevices/demo/input_data_prefill_128.json",
+            "models/demos/llama3_subdevices/demo/sample_prompts/input_data_prefill_128.json",
             True,
             1,
             1024,
@@ -424,9 +424,7 @@ def run_llama3_decode_performance(
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
+        (8, 4),
     ],
     indirect=True,
 )
@@ -462,9 +460,9 @@ def test_llama_decode_performance(
     if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
 
-    # TODO: Remove this once all batch sizes are supported on TG
-    if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
-        pytest.skip("TG only supports batch 1 and 32")
+    # TODO: Remove this once all batch sizes are supported on Galaxy
+    if batch_size not in [1, 32]:
+        pytest.skip("Galaxy only supports batch 1 and 32")
 
     if paged_attention:
         paged_attention_config = PagedAttentionConfig(

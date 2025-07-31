@@ -75,6 +75,12 @@ RunTimeOptions::RunTimeOptions() {
         }
     }
 
+    const char* custom_fabric_mesh_graph_desc_path_str = std::getenv("TT_MESH_GRAPH_DESC_PATH");
+    if (custom_fabric_mesh_graph_desc_path_str != nullptr) {
+        this->is_custom_fabric_mesh_graph_desc_path_set = true;
+        this->custom_fabric_mesh_graph_desc_path = std::string(custom_fabric_mesh_graph_desc_path_str);
+    }
+
     build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);
 
     ParseWatcherEnv();
@@ -237,12 +243,12 @@ RunTimeOptions::RunTimeOptions() {
         force_context_reinit = true;
     }
 
-    if (getenv("TT_METAL_WATCHER_KEEP_ERRORS")) {
-        watcher_keep_errors = true;
-    }
-
     if (getenv("TT_METAL_FABRIC_BLACKHOLE_TWO_ERISC")) {
         this->enable_2_erisc_mode_with_fabric = true;
+    }
+
+    if (getenv("TT_METAL_LOG_KERNELS_COMPILE_COMMANDS")) {
+        this->log_kernels_compilation_commands = true;
     }
 }
 

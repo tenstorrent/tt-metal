@@ -3,7 +3,7 @@ name: "Galaxy frequent tests"
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 3 * * *'  # Every day at 3:00 UTC
+    - cron: "0 3 * * *"  # Every day at 3:00 UTC
 
 jobs:
   build-artifact:

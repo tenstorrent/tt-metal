@@ -158,23 +158,24 @@ def is_collective_op(op_code):
 
 @pytest.mark.models_device_performance_bare_metal
 # To update:
-# Run FAKE_DEVICE=TG pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py::test_llama_TG_perf_device
+# Run pytest models/demos/llama3_subdevices/tests/test_prefill_device_perf.py::test_llama_TG_perf_device
 # Copy the printed kernel_duration_per_instance_averaged_dict and dispatch_duration_per_instance_averaged_dict dictionaries
 # Manually compare each entry between old-expected and the new average values
 # - Any perf regressions? Everything as expected?
 # If all looks good, update the expected_kernel_times_dict and expected_dispatch_times_dict with the new average values
 # If the op list changed (new ops, less ops, fused ops), then update mapping_op_code_to_name and give the new ops meaningful names
 # Run at least once again to verify the new expected values are correct and margins hold
-@pytest.mark.parametrize("seqlen", [4096, 128])
+@pytest.mark.parametrize("seqlen", [128, 4096, 32768])
 def test_llama_TG_perf_device(
     seqlen,
     reset_seeds,
+    galaxy_type,
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
-    step_name = f"tg-llama-prefill-device-perf-{seqlen}-noTrace"
+    step_name = f"tg-llama-prefill-device-{galaxy_type}-perf-{seqlen}"
     batch_size = 1
-    subdir = f"tg-llama-prefill-device-perf-{seqlen}-noTrace"
+    subdir = f"tg-llama-prefill-device-{galaxy_type}-perf-{seqlen}"
     num_iterations = 1
     num_layers = 1
 
@@ -182,11 +183,16 @@ def test_llama_TG_perf_device(
     with open(f"models/demos/llama3_subdevices/tests/perf_targets/prefill_{seqlen}.json", "r") as f:
         perf_targets = json.load(f)
 
-    command = f"pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_decoder_prefill.py -k {seqlen}"
+    # Grab the correct input prompts file name based on the seqlen
+    if seqlen < 1024:
+        seqlen_file = f"input_data_questions_prefill_{seqlen}.json"
+    else:
+        seqlen_file = f"input_data_long_{seqlen // 1024}k.json"
+    command = f"pytest models/demos/llama3_subdevices/demo/text_demo.py -k prefill-profile --input_prompts models/demos/llama3_subdevices/demo/sample_prompts/{seqlen_file}"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
     profiler.start("run")
     profiler.start(step_name)
-    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
+    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size, has_signposts=True)
     profiler.end(step_name)
     profiler.end("run")
 
@@ -457,11 +463,11 @@ def test_llama_TG_perf_device(
     ttft_estimate_80l = ttft_estimate_80l / 1000000
     print(f"80L TTFT time estimate: {ttft_estimate_80l}")
 
-    benchmark_data.add_measurement(profiler, 0, step_name, "ttft_estimate_80l", ttft_estimate_80l)
+    benchmark_data.add_measurement(profiler, 0, step_name, f"ttft_estimate_80l_{galaxy_type}", ttft_estimate_80l)
 
     benchmark_data.save_partial_run_json(
         profiler,
-        run_type=f"tg_llama_demo_prefill_{seqlen}",
+        run_type=f"tg_llama_demo_prefill_{galaxy_type}_{seqlen}",
         ml_model_name="llama70b-tg",
     )
 

@@ -93,7 +93,6 @@ target_link_libraries(
         Reflect::Reflect
         yaml-cpp::yaml-cpp
         magic_enum::magic_enum
-        span
         TT::Metalium::Common
         tt-logger::tt-logger
 )
