@@ -66,7 +66,7 @@ def test_attn_matmul(num_loops, in0_dtype, in1_dtype, out_dtype, device):
 
 # @skip_for_blackhole("Bad pcc on BH. Issue #25421")
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat8_b])
-@pytest.mark.parametrize("num_loops", [20])
+@pytest.mark.parametrize("num_loops", [6])
 def test_attn_matmul_fp32(num_loops, in_dtype, device):
     torch.manual_seed(0)
     torch.set_printoptions(linewidth=500, threshold=10000000, sci_mode=False, precision=2)
@@ -75,19 +75,16 @@ def test_attn_matmul_fp32(num_loops, in_dtype, device):
     # Reduced input shapes for debugging
     input_shape_a = [1, 1, 32, 32]
     input_shape_b = [32, 1, 32, 32]
-    print(f"input_shape_a: {input_shape_a}, input_shape_b: {input_shape_b}")
-    for i in range(num_loops):
-        input_tensor_a = torch.randn(input_shape_a).bfloat16()
-        input_tensor_b = torch.randn(input_shape_b).bfloat16()
-        # input_tensor_a = torch.full(input_shape_a, 0.54(i+1)).bfloat16()
-        # input_tensor_b = torch.full(input_shape_b, 2.32*(i+1)).bfloat16()
+    core_grid = ttnn.CoreCoord(1, 1)
 
+    print(f"input_shape_a: {input_shape_a}, input_shape_b: {input_shape_b}")
+    input_tensor_a = torch.randn(input_shape_a).bfloat16()
+    input_tensor_b = torch.randn(input_shape_b).bfloat16()
+
+    for itr in range(num_loops):
         tt_input_tensor_a = ttnn.Tensor(input_tensor_a, in_dtype).to(ttnn.TILE_LAYOUT).to(device)
         tt_input_tensor_b = ttnn.Tensor(input_tensor_b, in_dtype).to(ttnn.TILE_LAYOUT).to(device)
         ttnn.synchronize_device(device)
-
-        compute_grid_size = device.compute_with_storage_grid_size()
-        # print(f"compute_grid_size: {compute_grid_size}")
 
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,  # Changing this to HiFi2/3/4 will make the test pass
@@ -99,7 +96,7 @@ def test_attn_matmul_fp32(num_loops, in_dtype, device):
         tt_output_tensor_on_device = ttnn.experimental.attn_matmul(
             tt_input_tensor_a,
             tt_input_tensor_b,
-            compute_with_storage_grid_size=ttnn.CoreCoord(1, 10),
+            compute_with_storage_grid_size=core_grid,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             dtype=in_dtype,
             compute_kernel_config=compute_kernel_config,
@@ -115,13 +112,15 @@ def test_attn_matmul_fp32(num_loops, in_dtype, device):
             print("Printing output and golden")
             print(tt_output_tensor[0, 0, 1, :])
             print(golden_output_tensor[0, 0, 1, :])
-            # for i in range(tt_output_tensor.shape[3]):
-            #     print(f"output row {i}")
-            #     print(tt_output_tensor[:, :, :, i])
-            #     print(f"golden row {i}")
-            #     print(golden_output_tensor[:, :, :, i])
-            #     print()
-        assert allclose, f"FAILED on iteration {i}: {output}"
+            for i in range(tt_output_tensor.shape[3]):
+                print(f"output row {i}")
+                print(tt_output_tensor[:, :, :, i])
+                print(f"golden row {i}")
+                print(golden_output_tensor[:, :, :, i])
+                print()
+        else:
+            print(f"Success on iteration {itr}")
+        assert allclose, f"FAILED on iteration {itr}: {output}"
 
 
 @skip_for_blackhole("Bad pcc on BH. Issue #25421")

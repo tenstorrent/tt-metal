@@ -74,11 +74,21 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
          num_output_blocks_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_blocks_total);
 
-    auto all_device_cores = CoreRange(
-        {0, 0},
-        {a.device()->compute_with_storage_grid_size().x - 1, a.device()->compute_with_storage_grid_size().y - 1});
-    auto total_num_cores =
-        a.device()->compute_with_storage_grid_size().x * a.device()->compute_with_storage_grid_size().y;
+    std::cout << "A grid size.x: " << a.device()->compute_with_storage_grid_size().x << std::endl;
+    std::cout << "A grid size.y: " << a.device()->compute_with_storage_grid_size().y << std::endl;
+    std::cout << "B grid size.x: " << b.device()->compute_with_storage_grid_size().x << std::endl;
+    std::cout << "B grid size.y: " << b.device()->compute_with_storage_grid_size().y << std::endl;
+    std::cout << "compute_with_storage_grid_size.x: " << compute_with_storage_grid_size.x << std::endl;
+    std::cout << "compute_with_storage_grid_size.y: " << compute_with_storage_grid_size.y << std::endl;
+
+    // auto all_device_cores = CoreRange(
+    //     {0, 0},
+    //     {a.device()->compute_with_storage_grid_size().x - 1, a.device()->compute_with_storage_grid_size().y - 1});
+    // auto total_num_cores =
+    //     a.device()->compute_with_storage_grid_size().x * a.device()->compute_with_storage_grid_size().y;
+    auto all_device_cores =
+        CoreRange({0, 0}, {compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1});
+    auto total_num_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -188,8 +198,11 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
             .math_fidelity = math_fidelity, .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_args});
 
     uint32_t num_output_blocks_per_core;
+    std::cout << "total_num_cores: " << total_num_cores << std::endl;
+    std::cout << "num_cores_y: " << num_cores_y << std::endl;
     for (uint32_t i = 0, num_blocks_written = 0; i < total_num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        std::cout << "core: " << core.x << ", " << core.y << std::endl;
 
         if (core_group_1.contains(core)) {
             num_output_blocks_per_core = num_output_blocks_per_core_group_1;
