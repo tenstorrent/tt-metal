@@ -981,7 +981,7 @@ class MLA1D(AbstractModule):
 
     @classmethod
     def forward_decode(
-        self, x: ttnn.Tensor, cfg: RunDecodeConfig, position_idxs: [int], rope_tensors: dict, page_table: ttnn.Tensor
+        self, x: ttnn.Tensor, cfg: RunDecodeConfig, position_idxs: ttnn.Tensor, rope_tensors: dict, page_table: ttnn.Tensor
     ) -> ttnn.Tensor:
         """Forward pass of MLA1D in decode mode.
 
