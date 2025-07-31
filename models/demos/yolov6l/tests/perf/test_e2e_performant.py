@@ -26,6 +26,7 @@ def run_yolov6_inference(
     act_dtype,
     weight_dtype,
     resolution,
+    model_location_generator,
 ):
     disable_persistent_kernel_cache()
 
@@ -39,7 +40,7 @@ def run_yolov6_inference(
         act_dtype,
         weight_dtype,
         resolution=resolution,
-        model_location_generator=None,
+        model_location_generator=model_location_generator,
         mesh_mapper=inputs_mesh_mapper,
         weights_mesh_mapper=weights_mesh_mapper,
         mesh_composer=output_mesh_composer,
@@ -67,7 +68,7 @@ def run_yolov6_inference(
 
     expected_compile_time, expected_inference_time = get_expected_times("yolov6l")
     prep_perf_report(
-        model_name="models/experimental/yolov6l/",
+        model_name="models/demos/yolov6l/",
         batch_size=batch_size,
         inference_and_compile_time=inference_and_compile_time,
         inference_time=inference_time,
@@ -99,6 +100,7 @@ def test_perf_yolov6l(
     act_dtype,
     weight_dtype,
     resolution,
+    model_location_generator,
 ):
     run_yolov6_inference(
         device,
@@ -106,6 +108,7 @@ def test_perf_yolov6l(
         act_dtype,
         weight_dtype,
         resolution,
+        model_location_generator=model_location_generator,
     )
 
 
@@ -130,6 +133,7 @@ def test_perf_yolov6l_dp(
     act_dtype,
     weight_dtype,
     resolution,
+    model_location_generator,
 ):
     run_yolov6_inference(
         mesh_device,
@@ -137,4 +141,5 @@ def test_perf_yolov6l_dp(
         act_dtype,
         weight_dtype,
         resolution,
+        model_location_generator=model_location_generator,
     )

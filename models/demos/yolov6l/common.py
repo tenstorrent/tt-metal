@@ -11,9 +11,9 @@ from models.demos.yolov6l.reference.yolov6l_utils import fuse_model
 
 def load_torch_model(model_location_generator=None):
     if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
-        weights = "models/experimental/yolov6l/tests/pcc/yolov6l.pt"
+        weights = "models/demos/yolov6l/tests/pcc/yolov6l.pt"
         if not os.path.exists(weights):
-            os.system("bash models/experimental/yolov6l/weights_download.sh")
+            os.system("bash models/demos/yolov6l/weights_download.sh")
     else:
         weights = (
             model_location_generator("vision-models/yolov6l", model_subdir="", download_if_ci_v2=True) / "yolov6l.pt"

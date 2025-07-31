@@ -7,11 +7,11 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.yolov6l.common import load_torch_model
 from models.demos.yolov6l.tt.model_preprocessing import create_yolov6l_model_parameters
 from models.demos.yolov6l.tt.ttnn_yolov6l import TtYolov6l
 from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.demos.yolov6l.common import load_torch_model
 
 
 class YOLOv6lPerformanceRunnerInfra:
