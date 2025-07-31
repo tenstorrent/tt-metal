@@ -32,7 +32,7 @@ YOLOv7 is a state-of-the-art real-time object detector that surpasses all known 
 
 Use the following command to run the yolov7 model
 ```python
-pytest --disable-warnings tests/ttnn/integration_tests/yolov7/test_ttnn_yolov7.py
+pytest --disable-warnings models/demos/yolov7/tests/pcc/test_ttnn_yolov7.py
 ```
 
 
