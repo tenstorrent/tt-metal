@@ -120,7 +120,9 @@ inline void llk_unpack_AB_matmul(
     const bool partial_face_b = get_operand_partial_face(operandB_id);
 
     std::uint32_t base_address_a = get_local_cb_interface(operandA_id).fifo_rd_ptr - 1;
+    DPRINT << "base_address_a: " << base_address_a << ENDL();
     std::uint32_t base_address_b = get_local_cb_interface(operandB_id).fifo_rd_ptr - 1;
+    DPRINT << "base_address_b: " << base_address_b << ENDL();
 
     std::uint32_t tile_size_a = get_local_cb_interface(operandA_id).fifo_page_size;
     std::uint32_t tile_size_b = get_local_cb_interface(operandB_id).fifo_page_size;

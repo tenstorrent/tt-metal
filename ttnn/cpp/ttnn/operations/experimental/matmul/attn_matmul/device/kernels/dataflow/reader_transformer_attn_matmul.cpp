@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "debug/dprint_pages.h"
+#include "circular_buffer.h"
 
 inline void cust_print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
     DPRINT << "======" << ENDL();
@@ -76,6 +77,10 @@ void kernel_main() {
     uint32_t cb_intermed2_addr;
     constexpr uint32_t bfloat16_row_bytes = fp32_acc_en ? 128 : 64;
     constexpr uint32_t num_rows_in_one_tile = 32;
+
+    DPRINT << "Checking CB2 from the reader kernel" << ENDL();
+    DPRINT << get_local_cb_interface(cb_id_intermed2).fifo_rd_ptr << ENDL();
+    DPRINT << get_local_cb_interface(cb_id_intermed2).fifo_wr_ptr << ENDL();
 
     for (uint32_t b = 0; b < blocks; b++) {
         itileA_Mt = itileA_batch;

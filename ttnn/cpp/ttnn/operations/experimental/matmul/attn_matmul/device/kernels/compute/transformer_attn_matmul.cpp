@@ -33,6 +33,12 @@ void MAIN {
 
     constexpr uint32_t num_rows_in_one_tile = 32;
 
+#if defined(UCK_CHLKC_PACK) || defined(UCK_CHLKC_UNPACK)
+    DPRINT << "Checking CB2 from the compute kernel" << ENDL();
+    DPRINT << get_local_cb_interface(cb_intermed2).fifo_rd_ptr << ENDL();
+    DPRINT << get_local_cb_interface(cb_intermed2).fifo_wr_ptr << ENDL();
+#endif
+
     mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
 
     for (uint32_t nb = 0; nb < batch; ++nb) {
@@ -47,20 +53,17 @@ void MAIN {
                         }
                         cb_wait_front(cb_in1, onetile);
 
-                        // Print out some values from cb_in1 here. These look normal
-                        //  if(tile_row_id == 0) {
-                        //      UNPACK(tt::compute::common::print_full_tile(cb_in1, 0));
-                        //  }
                         matmul_tiles(cb_in0, cb_in1, kt, 0, 0, transpose_hw);
 
                         cb_pop_front(cb_in1, onetile);
                     }
-                    // Print out the dest reg. The matmul is spitting out inf values.
+                    // Print out the dest reg.
                     //  dprint_tensix_dest_reg(0);
                     tile_regs_commit();
 
                     cb_reserve_back(cb_intermed0, onetile);
                     tile_regs_wait();
+                    PACK(DPRINT << "cb_intermed0 address:");
                     pack_tile(0, cb_intermed0);
                     tile_regs_release();
                     cb_push_back(cb_intermed0, onetile);
@@ -90,7 +93,10 @@ void MAIN {
 
                 // tilize CB::intermed2 and write to CBIndex::c_16
                 tilize_init_short_with_dt(cb_in1, cb_intermed2, onetile, out_cb_id);
+
+                // Commenting this out will make it pass?
                 tilize_block(cb_intermed2, onetile, out_cb_id);
+
                 cb_push_back(out_cb_id, onetile);
 
                 cb_pop_front(cb_intermed2, onetile);
@@ -98,7 +104,6 @@ void MAIN {
 
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
 
-                // Some nop here will make it pass
                 mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed2, transpose_hw);
                 // mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
             }
@@ -107,9 +112,8 @@ void MAIN {
         // Here as well
     }  // batch
 
-    // Nop to stall the end of the kernel between successive calls will resolve the race condition
-    //  for (uint32_t i = 0; i < 1000; i++) {
-    //          asm volatile("nop");
+    //  for (uint32_t i = 0; i < 10000; i++) {
+    //       asm volatile("nop");
     //  }
 
 }  // MAIN
