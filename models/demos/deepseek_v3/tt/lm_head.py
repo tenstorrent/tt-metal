@@ -2,20 +2,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import final
+from typing import Any, final
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, LinearConfig, MeshDeviceStub
+from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, LinearConfig, MeshDeviceStub, OpConfigBase
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
     MAX_BATCH_SIZE,
+    SEQ_LEN_CHUNK_SIZE,
     dram_sharded_weight_config,
     even_int_div,
+    find_largest_divisor,
     get_activation_sharding_core_counts_for_dram_matmul,
     get_dram_sharded_matmul_config,
     save_and_get_path,
@@ -30,7 +33,16 @@ from models.demos.deepseek_v3.utils.run_config import (
 
 
 class LMHead(AbstractModule):
-    """Language model head for Deepseek V3."""
+    """TT implementation of Language model head for Deepseek V3."""
+
+    @dataclass
+    class LMHeadProgramConfigData(OpConfigBase):
+        """Data class for the data for generating the PC for ttnn.linear."""
+
+        hidden_dim: int
+        vocab_size: int
+        num_devices: int
+        core_grid_size: ttnn.CoreCoord
 
     @classmethod
     def _get_model_dims_from_cfg(cls, hf_config: PretrainedConfig) -> tuple[int, int]:
@@ -53,6 +65,7 @@ class LMHead(AbstractModule):
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
+        assert cls.is_device_supported(mesh_device)
         return {
             "lm_head.weight": {
                 "input_tensor_b": save_and_get_path(
@@ -75,7 +88,7 @@ class LMHead(AbstractModule):
         mesh_device: ttnn.Device,
     ) -> ttnn.Tensor:
         """
-        Convert a normal (non-quantized) weight tensor to a format suitable for TTNN.
+        Convert a normal weight tensor to a format suitable for TTNN.
 
         Args:
             hf_config: HuggingFace model configuration object.
@@ -92,7 +105,7 @@ class LMHead(AbstractModule):
         assert weight_tensor.shape == (hidden_dim, vocab_size)
         per_device_in_features = hidden_dim
         per_device_out_features = even_int_div(vocab_size, mesh_device.get_num_devices())
-        mesh_sharded_dim = 3
+        mesh_sharded_dim = -1
 
         weight_tensor.unsqueeze_(0).unsqueeze_(0)  # Add batch and sequence dimensions
 
@@ -217,20 +230,94 @@ class LMHead(AbstractModule):
         Returns:
             ModelPrefillConfig containing operator configurations for prefill mode
         """
-        return None
+        matmul_core_grid_size = ttnn.CoreCoord(
+            mesh_device.core_grid.x,
+            mesh_device.core_grid.y,
+        )  # NOTE: we might modify this later during optimization stage
+
+        # Calculate device metrics
+        num_devices = mesh_device.get_num_devices()
+
+        # Extract dimensions from HF config
+        hidden_dim, vocab_size = cls._get_model_dims_from_cfg(hf_config)
+
+        # Compute the program config for the linear layers
+        linear_op_config = LinearConfig(
+            input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+        )
+
+        # Construct the config
+        return {
+            "max_rows": SEQ_LEN_CHUNK_SIZE,  # NOTE: should be 512 for blackhole (in case of future bring-up)
+            "linear_pc_gen": LMHead.LMHeadProgramConfigData(
+                hidden_dim=hidden_dim,
+                vocab_size=vocab_size,
+                num_devices=num_devices,
+                core_grid_size=matmul_core_grid_size,
+            ),
+            "lm_head.weight": linear_op_config,
+            "input_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+            "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+        }
 
     @classmethod
-    def _forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig, mesh_device) -> ttnn.Tensor:
+    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
-        w1_out = ttnn.linear(x, **cfg["lm_head.weight"])
-
-        return w1_out
-
-    @classmethod
-    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig, mesh_device) -> ttnn.Tensor:
-        return cls._forward(x, cfg, mesh_device)
+        output = ttnn.linear(x, **cfg["lm_head.weight"])
+        ttnn.deallocate(x)
+        assert output.memory_config() == cfg["output_memory_config"]
+        return output
 
     @classmethod
-    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig, mesh_device) -> ttnn.Tensor:
-        return cls._forward(x, cfg, mesh_device)
+    def _get_prefill_pc(
+        cls, seq_len: int, hidden_dim: int, vocab_size: int, num_devices: int, core_grid_size: ttnn.CoreCoord
+    ) -> Any:
+        """Get the program config for linear layers in prefill mode based on sequence length."""
+
+        per_device_in_features, per_device_out_features = hidden_dim, even_int_div(vocab_size, num_devices)
+
+        per_core_M_tiles = ttnn.core.divup(seq_len, ttnn.TILE_SIZE * core_grid_size.y)
+        K_tiles = ttnn.core.divup(per_device_in_features, ttnn.TILE_SIZE)
+        per_core_N_tiles = ttnn.core.divup(per_device_out_features, ttnn.TILE_SIZE * core_grid_size.x)
+
+        out_subblock_h = 1
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=core_grid_size,
+            in0_block_w=find_largest_divisor(K_tiles),
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=find_largest_divisor(
+                per_core_N_tiles,
+                out_subblock_h,
+            ),
+            per_core_M=per_core_M_tiles,
+            per_core_N=per_core_N_tiles,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=False,
+        )
+
+    @classmethod
+    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
+        assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
+
+        _, _, seq_len, _ = x.shape
+
+        if seq_len > cfg["max_rows"]:  # For large sequence lengths, process the input in chunks
+            x = ttnn.reshape(x, [1, even_int_div(seq_len, cfg["max_rows"]), cfg["max_rows"], -1])
+            seq_len = cfg["max_rows"]
+
+        output = ttnn.linear(
+            x, program_config=cls._get_prefill_pc(seq_len=seq_len, **cfg["linear_pc_gen"]), **cfg["lm_head.weight"]
+        )
+        ttnn.deallocate(x)
+
+        # De-chunk the output if the input was chunked
+        _, num_chunks, _, output_dim = output.shape
+        if num_chunks > 1:
+            output = ttnn.reshape(output, [1, 1, -1, output_dim])
+
+        assert output.memory_config() == cfg["output_memory_config"]
+        return output

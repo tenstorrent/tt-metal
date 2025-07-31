@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +12,12 @@ import torch.nn as nn
 import ttnn
 from models.demos.deepseek_v3.tt.lm_head import LMHead as TTLMHead
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import assert_hidden_dim_pcc, pad_tensor, run_module_forward
+from models.demos.deepseek_v3.utils.test_utils import (
+    assert_hidden_dim_pcc,
+    get_model_config,
+    pad_tensor,
+    run_module_forward,
+)
 
 
 class DeepseekV3LMHead(nn.Module):
@@ -30,34 +34,26 @@ class DeepseekV3LMHead(nn.Module):
         return self.lm_head(hidden_states)
 
 
-# @pytest.mark.skip(reason="This test hangs for some reason")
-@pytest.fixture
-def temp_dir():
-    """Create a temporary directory for test outputs."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
-
-
 @pytest.mark.parametrize(
     "mode,seq_len",
     [
         ("decode", 32),
-        # ("prefill", 128),
-        # ("prefill", 256),
+        ("prefill", 1024),
+        ("prefill", 2048),
     ],
 )
 def test_forward_pass(
     mode: str,
     seq_len: int,
     hf_config: Any,
-    temp_dir: Path,
+    tmp_path: Path,
     mesh_device: Any,
 ):
+    assert mesh_device.get_num_devices() == 32, "Mesh device must have 32 devices for this test."
     batch_size = 1
     torch.manual_seed(0)
 
     reference_model = DeepseekV3LMHead(hf_config)
-    # Create input tensor
     hf_state_dict = reference_model.state_dict()
     torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
     reference_output = reference_model(torch_input)
@@ -68,17 +64,9 @@ def test_forward_pass(
     print(f"torch_input after pad_tensor: shape = {torch_input.shape}")
 
     # Setup: Convert weights and get weight_config
-    weight_config = TTLMHead.convert_weights(hf_config, hf_state_dict, temp_dir, mesh_device)
-    # Generate appropriate config
-    if mode == "prefill":
-        model_config = TTLMHead.prefill_model_config(hf_config, mesh_device)
-    else:
-        model_config = TTLMHead.decode_model_config(hf_config, mesh_device)
-
-    # Create a new model state
+    weight_config = TTLMHead.convert_weights(hf_config, hf_state_dict, tmp_path, mesh_device)
+    model_config = get_model_config(TTLMHead, mode, hf_config, mesh_device)
     model_state = TTLMHead.create_state(hf_config, mesh_device=mesh_device)
-
-    # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Convert input to TTNN
@@ -93,7 +81,7 @@ def test_forward_pass(
 
     # TTNN forward pass
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-    tt_output = run_module_forward(TTLMHead, mode, tt_input, run_config, mesh_device=mesh_device)
+    tt_output = run_module_forward(TTLMHead, mode, tt_input, run_config)
 
     expected_output_memory_config = run_config["output_memory_config"]
 
