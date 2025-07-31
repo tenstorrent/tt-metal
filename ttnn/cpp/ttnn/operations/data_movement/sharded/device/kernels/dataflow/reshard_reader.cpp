@@ -18,13 +18,14 @@ void kernel_main() {
     const uint32_t local_config_data_l1_addr = get_read_ptr(local_config_cb_id);
     const tt_l1_ptr uint32_t* local_config_data =
         reinterpret_cast<const tt_l1_ptr uint32_t*>(local_config_data_l1_addr);
-    // for (uint32_t i = 0; i < 500; i++) {
-    //     DPRINT << "RT ARG AT " << i << ": " << local_config_data[i] << "\n";
-    // }
+    for (uint32_t i = 0; i < 26; i++) {
+        DPRINT << "RT ARG AT " << i << ": " << local_config_data[i] << "\n";
+    }
     uint32_t arg_index = num_x_cores + num_y_cores;
     const uint32_t input_shard_addr = local_config_data[arg_index++];
     const uint32_t num_output_pages = local_config_data[arg_index++];
     const uint32_t num_ranges = local_config_data[arg_index++];
+    DPRINT << "num ranges: " << (uint32_t)num_ranges << "\n";
     const uint32_t output_page_offset = local_config_data[arg_index++];
 
     uint32_t l1_write_addr = get_write_ptr(shard_cb) + output_page_offset * page_size;
@@ -33,7 +34,9 @@ void kernel_main() {
     uint32_t mask_short = 0x0ffff;  // 16 bits
 
     for (uint32_t range_id = 0; range_id < num_ranges; range_id++) {
+        DPRINT << "ARG INDEX: " << (uint32_t)arg_index << "\n";
         const uint32_t core_start_stride = local_config_data[arg_index++];
+        DPRINT << "Core start stride: " << (uint32_t)core_start_stride << "\n";
         const uint32_t start_x_index = (core_start_stride >> 24);
         const uint32_t start_y_index = (core_start_stride >> 16) & mask_byte;
         const uint32_t stride_x = (core_start_stride >> 8) & mask_byte;
@@ -62,11 +65,17 @@ void kernel_main() {
         uint32_t addr_offset = offset;
         uint32_t core_id_x_index = start_x_index;
         uint32_t core_id_y_index = start_y_index;
+        DPRINT << "start_x_index: " << (uint32_t)start_x_index << "\n";
+        DPRINT << "start_y_index: " << (uint32_t)start_y_index << "\n";
+        DPRINT << "Y offset: " << (uint32_t)y_offset << "\n";
 
         for (uint32_t stride_idx = 0; stride_idx < num_strides; stride_idx++) {
             if (!skip) {
                 uint32_t core_id_x = local_config_data[core_id_x_index];
                 uint32_t core_id_y = local_config_data[y_offset + core_id_y_index];
+                if (core_id_x > 25 || core_id_x < 18 || core_id_y > 25 || core_id_y < 18) {
+                    DPRINT << "CHECK THIS CORE ID: (" << (uint32_t)core_id_x << ", " << (uint32_t)core_id_y << ")\n";
+                }
                 DPRINT << "Reading from core: (" << (uint32_t)core_id_x << "," << (uint32_t)core_id_y << ")\n";
                 DPRINT << "Input addr:" << (uint32_t)(input_shard_addr + addr_offset) << "\n";
                 DPRINT << "L1 write addr:" << (uint32_t)l1_write_addr << "\n";
