@@ -6,15 +6,51 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
-
+#include "cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
 #include "tt_metal/tools/profiler/experimental/fabric_event_profiler.hpp"
 
 using address_t = uint32_t;
+FORCE_INLINE void advance_local_read_address_for_fabric_write(
+    uint64_t noc0_dest_noc_addr,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
+    FabricConnectionManager& fabric_connection,
+    size_t& l1_read_addr,
+    uint32_t payload_size_bytes) {
+    // const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
+    const size_t payload_l1_address = l1_read_addr;
+    pkt_hdr_forward->to_noc_unicast_write(
+        tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
+    pkt_hdr_backward->to_noc_unicast_write(
+        tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
+
+    // noc_async_write(payload_l1_address, safe_get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr),
+    // payload_size_bytes);
+    if (fabric_connection.has_forward_connection()) {
+        fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+        RECORD_FABRIC_HEADER(pkt_hdr_forward);
+        fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
+            l1_read_addr, payload_size_bytes);
+        fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
+            (uint32_t)pkt_hdr_forward, sizeof(PACKET_HEADER_TYPE));
+    }
+
+    if (fabric_connection.has_backward_connection()) {
+        fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+        RECORD_FABRIC_HEADER(pkt_hdr_backward);
+        fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
+            l1_read_addr, payload_size_bytes);
+        fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
+            (uint32_t)pkt_hdr_backward, sizeof(PACKET_HEADER_TYPE));
+    }
+
+    noc_async_writes_flushed();
+
+    l1_read_addr += payload_size_bytes;
+}
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -28,16 +64,26 @@ constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(4);
 constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(5);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
-constexpr ccl_routing_utils::line_multicast_route_info_t forward_multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<8>();
-constexpr ccl_routing_utils::line_multicast_route_info_t backward_multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<8 + ccl_routing_utils::num_line_multicast_args>();
+constexpr bool dynamic_alternate = get_compile_time_arg_val(8);
+constexpr uint32_t num_max_targets = std::max(num_targets_forward_direction, num_targets_backward_direction);
+constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward_direction;
+constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
  * dispatch implementations depending on those invocation parameters.
  */
 void kernel_main() {
+    DPRINT << "Kernel = worker_writer" << ENDL();
+    DPRINT << "my_chip_id: " << my_chip_id << ENDL();
+    DPRINT << "reserved_packet_header_cb_id: " << reserved_packet_header_cb_id << ENDL();
+    DPRINT << "num_packet_headers_storable: " << num_packet_headers_storable << ENDL();
+    DPRINT << "cb0_id: " << cb0_id << ENDL();
+    DPRINT << "packet_size_in_pages: " << packet_size_in_pages << ENDL();
+    DPRINT << "tensor0_page_size: " << tensor0_page_size << ENDL();
+    DPRINT << "num_targets_forward_direction: " << num_targets_forward_direction << ENDL();
+    DPRINT << "num_targets_backward_direction: " << num_targets_backward_direction << ENDL();
+    DPRINT << ENDL();
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
@@ -50,11 +96,19 @@ void kernel_main() {
     uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
-    bool wait_output_semaphore = get_arg_val<uint32_t>(arg_idx++);
-    bool reset_global_semaphore = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-    uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
+
+    DPRINT << "tensor_address0: " << tensor_address0 << ENDL();
+    DPRINT << "num_tiles_per_core: " << num_tiles_per_core << ENDL();
+    DPRINT << "num_tiles_to_read: " << num_tiles_to_read << ENDL();
+    DPRINT << "first_core_tile_start_offset: " << first_core_tile_start_offset << ENDL();
+    DPRINT << "num_cores: " << num_cores << ENDL();
+    DPRINT << "out_ready_sem_bank_addr: " << static_cast<uint32_t>(out_ready_sem_bank_addr) << ENDL();
+    DPRINT << "out_ready_sem_noc0_x: " << static_cast<uint32_t>(out_ready_sem_noc0_x) << ENDL();
+    DPRINT << "out_ready_sem_noc0_y: " << static_cast<uint32_t>(out_ready_sem_noc0_y) << ENDL();
+    DPRINT << ENDL();
+
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
     tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
@@ -81,8 +135,10 @@ void kernel_main() {
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_forward);
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
-    ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_forward, forward_multicast_route_info);
-    ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_backward, backward_multicast_route_info);
+    pkt_hdr_forward->to_chip_multicast(
+        tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
+    pkt_hdr_backward->to_chip_multicast(
+        tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
 
     fabric_connection.open_finish();
 
@@ -99,15 +155,24 @@ void kernel_main() {
         uint64_t noc0_dest_noc_addr =
             get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0 /*noc_id*/);
         noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
+        DPRINT << "num_tiles_to_read_this_core: " << num_tiles_to_read_this_core << ENDL();
+        DPRINT << "core_noc_x[core_id]: " << core_noc_x[core_id] << "core_noc_y[core_id]: " << core_noc_y[core_id]
+               << ENDL();
+        DPRINT << "core_id: " << core_id << " noc0_dest_noc_addr: " << noc0_dest_noc_addr << ENDL();
 
         // This issues a flush barrier
-        write_and_advance_local_read_address_for_fabric_write(
+        advance_local_read_address_for_fabric_write(
             noc0_dest_noc_addr,
             pkt_hdr_forward,
             pkt_hdr_backward,
             fabric_connection,
             l1_read_addr,
             num_tiles_to_read_this_core * tensor0_page_size);
+        if constexpr (dynamic_alternate) {
+            std::swap(
+                pkt_hdr_forward->routing_fields.value,
+                pkt_hdr_backward->routing_fields.value);  // alternate the packet header distance for better balancing
+        }
 
         cb_pop_front(cb0_id, num_tiles_to_read_this_core);
         tiles_read += num_tiles_to_read_this_core;
@@ -119,8 +184,8 @@ void kernel_main() {
     }
 
     // 2. mcast output ready semaphore
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
+
+    auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
     pkt_hdr->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
@@ -130,35 +195,24 @@ void kernel_main() {
     // Write the mcast packet (forward)
     if (fabric_connection.has_forward_connection()) {
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr, forward_multicast_route_info);
-        RECORD_FABRIC_HEADER(pkt_hdr);
+        pkt_hdr->to_chip_multicast(
+            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_forward)});
         fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
     // Write the mcast packet (backward)
     if (fabric_connection.has_backward_connection()) {
-        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr, backward_multicast_route_info);
+        pkt_hdr->to_chip_multicast(
+            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_backward)});
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-        RECORD_FABRIC_HEADER(pkt_hdr);
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
+
     fabric_connection.close();
     // increment locally
-    uint64_t out_ready_sem_noc_addr =
-        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
-    noc_semaphore_inc(out_ready_sem_noc_addr, 1);
-
-    // 3. wait for mcast output ready semaphore
-    if (wait_output_semaphore) {
-        noc_semaphore_wait_min(
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), out_ready_sem_wait_value);
-    }
-
-    // 4. global semaphore reset
-    if (reset_global_semaphore) {
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
-    }
-
+    // uint64_t out_ready_sem_noc_addr =
+    //     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
+    // noc_semaphore_inc(out_ready_sem_noc_addr, 1);
     noc_async_write_barrier();
 }

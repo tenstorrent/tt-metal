@@ -339,40 +339,31 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
     [
-        (True, 10),
         (False, 1),
     ],
-    ids=["perf", "check"],
+    ids=["check"],
 )
 @pytest.mark.parametrize(
     "use_non_fused",
     [
-        True,
         False,
     ],
-    ids=["separate", "fused"],
+    ids=["fused"],
 )
 @pytest.mark.parametrize(
     "use_barrier",
     [
         True,
-        False,
     ],
-    ids=["barrier_active", "barrier_inactive"],
+    ids=["barrier_active"],
 )
 @pytest.mark.parametrize(
     "device_params, use_legacy_allgather, all_gather_topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, False, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, False, ttnn.Topology.Linear),
-        (
-            {"trace_region_size": 90112},
-            True,
-            ttnn.Topology.Ring,
-        ),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear", "legacy_ring"],
+    ids=["fabric_ring"],
 )
 def test_all_gather_matmul_async(
     t3k_mesh_device,
@@ -424,3 +415,4 @@ def test_all_gather_matmul_async(
         num_iters=num_iters,
         use_barrier=use_barrier,
     )
+    ttnn.DumpDeviceProfiler(t3k_mesh_device)

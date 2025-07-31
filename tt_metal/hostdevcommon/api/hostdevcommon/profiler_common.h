@@ -71,7 +71,7 @@ constexpr static std::uint32_t PROFILER_L1_BUFFER_SIZE = PROFILER_L1_VECTOR_SIZE
 
 }  // namespace kernel_profiler
 
-constexpr static std::uint32_t PROFILER_OP_SUPPORT_COUNT = 1000;
+constexpr static std::uint32_t PROFILER_OP_SUPPORT_COUNT = 10000;  // 1000
 constexpr static std::uint32_t PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC =
     kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE *
     (kernel_profiler::PROFILER_L1_PROGRAM_ID_COUNT + kernel_profiler::PROFILER_L1_GUARANTEED_MARKER_COUNT +
