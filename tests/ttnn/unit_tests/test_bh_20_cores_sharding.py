@@ -1,10 +1,23 @@
 import pytest
 import torch
+from models.utility_functions import is_blackhole
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def test_sharding(device):
+def skip_if_not_blackhole_20_cores(device):
+    if not is_blackhole():
+        pytest.skip("This test is intended to run only on Blackhole devices with 20 cores.")
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x != 5 or compute_grid.y != 4:
+        pytest.skip(
+            f"This test is intended to run only on Blackhole devices with 20 cores. Core grid [{compute_grid.x},{compute_grid.y}] must be [5, 4]."
+        )
+
+
+def test_sharding_on_bh_20_cores(device):
+    skip_if_not_blackhole_20_cores(device)
+
     H = 1024 * 20
     W = 32
     in0_shape = (1, 1, H, W)

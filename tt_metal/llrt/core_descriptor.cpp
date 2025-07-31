@@ -179,9 +179,6 @@ const core_descriptor_t& get_core_descriptor_config(
         }
     }
 
-    auto version = desc_yaml["compute_with_storage_grid_range"]["version"];
-    TT_ASSERT(version.isString(), "compute_with_storage_grid_range version must be a string value");
-
     std::vector<RelativeCoreCoord> dispatch_cores;
     auto dispatch_cores_string = "dispatch_cores";
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster() and product_name == "nebula_x1") {
