@@ -22,6 +22,7 @@ from models.tt_transformers.tt.common import (
     get_out_subblock_w,
     nearest_multiple,
     num_to_core_range_set,
+    rope_scaling_model_factory,
 )
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
@@ -1486,16 +1487,8 @@ class ModelArgs:
 
         # RoPE params
         self.rope_theta = text_config.get("rope_theta")
-        # If use_scaled_rope is not present, assume setting rope_scaling means use scaled rope
-        # If it is present and is set to false, do not use scaled rope
-        # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
         rope_scaling_params = text_config.get("rope_scaling", None)
-        if rope_scaling_params:
-            self.rope_scaling_factor = rope_scaling_params.get("factor", None)
-            self.orig_context_len = rope_scaling_params.get("original_max_position_embeddings", self.max_context_len)
-        else:
-            self.rope_scaling_factor = None
-            self.orig_context_len = None
+        self.rope_scaling = rope_scaling_model_factory(rope_scaling_params) if rope_scaling_params else None
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
 
@@ -1527,7 +1520,7 @@ class ModelArgs:
 
     @property
     def use_scaled_rope(self):
-        return self.rope_scaling_factor is not None
+        return self.rope_scaling is not None
 
     @property
     def base_model_name(self):
@@ -1555,8 +1548,9 @@ class ModelArgs:
             params = json.load(f)
         self._set_params_from_dict(params)
 
-        # Meta-style config dicts don't specity model name or rope_scaling_factor so hard-code these
+        # Meta-style config dicts don't specify model name or rope_scaling_factor so hard-code these
         # Set the model name based on the checkpoint directory being loaded
+        self.orig_context_len = 8192
         if "3.2-1B" in checkpoint_dir:
             self.model_name = "Llama-3.2-1B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 32
@@ -1578,8 +1572,20 @@ class ModelArgs:
             self.rope_scaling_factor = 8
             self.is_90b = True
         else:
+            self.rope_scaling_factor = None
+            self.orig_context_len = None
             logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
-        self.orig_context_len = 8192
+        self.rope_scaling = (
+            rope_scaling_model_factory(
+                {
+                    "rope_type": "llama3",
+                    "factor": self.rope_scaling_factor,
+                    "original_max_position_embeddings": self.orig_context_len,
+                }
+            )
+            if self.rope_scaling_factor is not None
+            else None
+        )
 
     def _set_hf_params(self, checkpoint_dir):
         if self.from_hf_url:
@@ -1616,7 +1622,7 @@ class ModelArgs:
     ffn_dim_multiplier={self.ffn_dim_multiplier},
     norm_eps={self.norm_eps},
     rope_theta={self.rope_theta},
-    rope_scaling_factor={self.rope_scaling_factor},
+    rope_scaling_factor={self.rope_scaling.factor},
     max_batch_size={self.max_batch_size},
     max_seq_len={self.max_seq_len},
     vision_chunk_size={self.vision_chunk_size},

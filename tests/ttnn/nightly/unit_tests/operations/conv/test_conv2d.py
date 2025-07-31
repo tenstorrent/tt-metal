@@ -208,12 +208,13 @@ def run_conv(
             mesh_mapper=weight_mesh_mapper,
         )
 
+    requires_device_placement = input_dtype == ttnn.bfloat8_b or sharded_cfg is not None
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         input_dtype,
         mesh_mapper=input_mesh_mapper,
         layout=input_layout,
-        device=device if input_dtype == ttnn.bfloat8_b else None,
+        device=device if requires_device_placement else None,
     )
 
     if sharded_cfg:
@@ -3974,7 +3975,6 @@ def test_conv_single_core(
         config_override = None,
     )
 
-@pytest.mark.skip("Bug id TBD")
 @pytest.mark.parametrize(
     "batch, input_channels, output_channels, input_height, input_width, weights_dtype, output_dtype, groups, kernel, stride, padding, dilation, shard_layout, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, enable_split_reader, act_db, w_db",
     (

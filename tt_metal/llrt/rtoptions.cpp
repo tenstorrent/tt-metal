@@ -243,10 +243,6 @@ RunTimeOptions::RunTimeOptions() {
         force_context_reinit = true;
     }
 
-    if (getenv("TT_METAL_WATCHER_KEEP_ERRORS")) {
-        watcher_keep_errors = true;
-    }
-
     if (getenv("TT_METAL_FABRIC_BLACKHOLE_TWO_ERISC")) {
         this->enable_2_erisc_mode_with_fabric = true;
     }
