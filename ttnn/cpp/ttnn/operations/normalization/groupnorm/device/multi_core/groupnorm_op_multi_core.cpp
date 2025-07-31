@@ -584,8 +584,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)per_core_Nt * TILE_WIDTH * datum_size_bytes,
         (std::uint32_t)per_core_Mt,
         (std::uint32_t)TILE_HEIGHT};
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     // reader kernel
     auto reader_mcast_sender_kernels_id = CreateKernel(
         program,
@@ -1718,8 +1718,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks};
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
 
     // reader kernel
     auto reader_mcast_sender_kernels_id_group_1 = CreateKernel(

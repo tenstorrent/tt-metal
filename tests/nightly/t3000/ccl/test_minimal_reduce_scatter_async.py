@@ -11,11 +11,9 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_
 from models.utility_functions import skip_for_blackhole
 
 
-def create_global_semaphores(mesh_device, num_devices, cores, initial_value, num_links):
+def create_global_semaphores(mesh_device, cores, initial_value):
     # create global semaphore handles
-    ccl_semaphore_handles = [
-        ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(3 * num_links)
-    ]
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(3)]
     return ccl_semaphore_handles
 
 
@@ -36,6 +34,9 @@ def run_reduce_scatter_impl(
     mem_config_intermediate=None,
     cluster_axis=None,
     use_barrier=False,
+    chunks_per_sync=None,
+    num_workers_per_link=None,
+    num_buffers_per_channel=None,
 ):
     torch.manual_seed(0)
 
@@ -63,10 +64,7 @@ def run_reduce_scatter_impl(
     t3k_mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = [
-        create_global_semaphores(t3k_mesh_device, num_devices, ccl_sub_device_crs, 0, num_links)
-        for _ in range(num_iters)
-    ]
+    ccl_semaphore_handles = [create_global_semaphores(t3k_mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
 
     barrier_semaphore_handles = [
         ttnn.create_global_semaphore(t3k_mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
@@ -74,11 +72,13 @@ def run_reduce_scatter_impl(
 
     ### Create persistent output buffers
     logger.info("Creating persistent buffers")
-    single_batch_input_shape = rs_input_shape[:]
-    single_batch_input_shape[0] = 1
+    intermediate_shape = rs_input_shape[:]
+    if rs_topology == ttnn.Topology.Linear:
+        # Line RS requires double-sized input for forward/backward
+        intermediate_shape.insert(0, 2)
     persistent_intermediate_buffers = [
         ttnn.from_torch(
-            torch.zeros(single_batch_input_shape),
+            torch.zeros(intermediate_shape),
             device=t3k_mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=rs_input_dtype,
@@ -158,6 +158,9 @@ def run_reduce_scatter_impl(
             topology=rs_topology,
             subdevice_id=worker_sub_device_id,
             cluster_axis=cluster_axis,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=num_buffers_per_channel,
         )
 
         return tt_reduce_scatter_output_tensor
@@ -328,39 +331,39 @@ def test_reduce_scatter_async(
         (
             [1, 1, 32, 3072],
             3,
-            (32, 512),
+            [32, 512],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            (32, 512),
+            [32, 512],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            (32, 64),
+            [32, 64],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
         (
             [4, 1, 384, 1024],
             3,
-            (256, 1024),
+            [256, 1024],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (64, 1024),
+            [256, 1024],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (256, 128),
+            [256, 128],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
         (
             [4, 1, 384, 3072],
             3,
-            (256, 3072),
+            [256, 3072],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (384, 512),
+            [1536, 512],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            (1536, 64),
+            [1536, 64],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
@@ -380,6 +383,15 @@ def test_reduce_scatter_async(
         True,
         False,
     ],
+    ids=["ones", "random"],
+)
+@pytest.mark.parametrize(
+    "use_barrier",
+    [
+        True,
+        False,
+    ],
+    ids=["barrier_active", "barrier_inactive"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -410,10 +422,15 @@ def test_reduce_scatter_async_sharded_to_sharded(
     enable_trace,
     num_iters,
     ones_tensor,
+    use_barrier,
     rs_topology,
 ):
     if t3k_mesh_device.get_num_devices() != 8:
         pytest.skip("Not T3K!")
+
+    adjusted_intermediate_shard_shape = intermediate_shard_shape[:]
+    if rs_topology == ttnn.Topology.Linear:
+        adjusted_intermediate_shard_shape[0] *= 2
 
     input_shard_spec = ttnn.ShardSpec(
         input_shard_grid,
@@ -422,7 +439,7 @@ def test_reduce_scatter_async_sharded_to_sharded(
     )
     intermediate_shard_spec = ttnn.ShardSpec(
         intermediate_shard_grid,
-        intermediate_shard_shape,
+        adjusted_intermediate_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     output_shard_spec = ttnn.ShardSpec(
@@ -453,6 +470,7 @@ def test_reduce_scatter_async_sharded_to_sharded(
         enable_trace=enable_trace,
         num_iters=num_iters,
         ones_tensor=ones_tensor,
+        use_barrier=use_barrier,
         mem_config_intermediate=mem_config_intermediate,
     )
 
@@ -471,20 +489,20 @@ def test_reduce_scatter_async_sharded_to_sharded(
         (
             [4, 1, 256, 3072],
             3,
-            (256, 512),
+            [1024, 512],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-            (1024, 64),
+            [1024, 64],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
         (
             [4, 1, 384, 1024],
             3,
-            (64, 1024),
+            [256, 1024],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            (256, 128),
+            [256, 128],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
@@ -504,6 +522,15 @@ def test_reduce_scatter_async_sharded_to_sharded(
         True,
         False,
     ],
+    ids=["ones", "random"],
+)
+@pytest.mark.parametrize(
+    "use_barrier",
+    [
+        True,
+        False,
+    ],
+    ids=["barrier_active", "barrier_inactive"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -531,14 +558,19 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     enable_trace,
     num_iters,
     ones_tensor,
+    use_barrier,
     rs_topology,
 ):
     if t3k_mesh_device.get_num_devices() != 8:
         pytest.skip("Not T3K!")
 
+    adjusted_intermediate_shard_shape = intermediate_shard_shape[:]
+    if rs_topology == ttnn.Topology.Linear:
+        adjusted_intermediate_shard_shape[0] *= 2
+
     intermediate_shard_spec = ttnn.ShardSpec(
         intermediate_shard_grid,
-        intermediate_shard_shape,
+        adjusted_intermediate_shard_shape,
         ttnn.ShardOrientation.ROW_MAJOR,
     )
     output_shard_spec = ttnn.ShardSpec(
@@ -567,6 +599,7 @@ def test_reduce_scatter_async_interleaved_to_sharded(
         enable_trace=enable_trace,
         num_iters=num_iters,
         ones_tensor=ones_tensor,
+        use_barrier=use_barrier,
         mem_config_intermediate=mem_config_intermediate,
     )
 
@@ -585,14 +618,14 @@ def test_reduce_scatter_async_interleaved_to_sharded(
         (
             [4, 1, 256, 3072],
             3,
-            (1024, 512),
+            [1024, 512],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
         (
             [4, 1, 384, 1024],
             3,
-            (256, 1024),
+            [256, 1024],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 0))}),
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
@@ -612,6 +645,15 @@ def test_reduce_scatter_async_interleaved_to_sharded(
         True,
         False,
     ],
+    ids=["ones", "random"],
+)
+@pytest.mark.parametrize(
+    "use_barrier",
+    [
+        True,
+        False,
+    ],
+    ids=["barrier_active", "barrier_inactive"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -636,6 +678,7 @@ def test_reduce_scatter_async_sharded_to_interleaved(
     enable_trace,
     num_iters,
     ones_tensor,
+    use_barrier,
     rs_topology,
 ):
     if t3k_mesh_device.get_num_devices() != 8:
@@ -667,5 +710,6 @@ def test_reduce_scatter_async_sharded_to_interleaved(
         enable_trace=enable_trace,
         num_iters=num_iters,
         ones_tensor=ones_tensor,
+        use_barrier=use_barrier,
         mem_config_intermediate=mem_config_intermediate,
     )

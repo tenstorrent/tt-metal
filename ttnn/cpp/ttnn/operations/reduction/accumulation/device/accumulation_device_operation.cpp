@@ -19,8 +19,6 @@ void AccumulationDeviceOperation::validate_on_program_cache_miss(
     const auto& input_shape{input_tensor.logical_shape()};
     auto& optional_out{tensor_args.opt_output};
     auto out_memory_config{optional_out.has_value() ? optional_out->memory_config() : attributes.output_memory_config};
-    const auto& input_dtype{attributes.dtype};
-    const auto& dim = attributes.dim;
 
     if (optional_out.has_value()) {
         const auto& preallocated_output_shape = optional_out.value().logical_shape();

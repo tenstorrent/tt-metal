@@ -8,8 +8,8 @@ METALIUM_GUIDE.md @davorchap
 # CI/CD
 .github/ @tenstorrent/metalium-developers-infra
 .github/workflows/ttnn-run-sweeps.yaml @xanderchin @jdesousa-TT @sjameelTT
-.github/workflows/tg-deepseek-tests.yaml @yieldthought @avoraTT @kpaigwar @barci2 @tenstorrent/metalium-developers-infra
-.github/workflows/tg-deepseek-tests-impl.yaml @yieldthought @avoraTT @kpaigwar @barci2 @tenstorrent/metalium-developers-infra
+.github/workflows/tg-deepseek-tests.yaml @yieldthought @avoraTT @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-developers-infra
+.github/workflows/tg-deepseek-tests-impl.yaml @yieldthought @avoraTT @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-developers-infra
 
 /infra/ @tenstorrent/metalium-developers-infra
 scripts/build_scripts/ @tenstorrent/metalium-developers-infra
@@ -45,7 +45,7 @@ tt_metal/graph/ @dmakoviichuk-tt @sminakov-tt
 tt_metal/hostdevcommon/ @abhullar-tt @jbaumanTT # this should go away
 tt_metal/hw @abhullar-tt @jbaumanTT @pgkeller @nathan-TT
 tt_metal/hw/ckernels/ @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT
-tt_metal/hw/firmware/src/*erisc* @aliuTT @ubcheema
+tt_metal/hw/firmware/src/tt-1xx/*erisc* @aliuTT @ubcheema
 tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
 tt_metal/hw/inc/accessor @tenstorrent/metalium-developers-ttnn-core
@@ -211,7 +211,7 @@ models/common @yieldthought @mtairum @uaydonat
 models/utility_functions.py @yieldthought @mtairum @uaydonat
 models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat
 models/demos @uaydonat @yieldthought @cglagovichTT
-models/demos/deepseek_v3 @uaydonat @yieldthought @avoraTT @kpaigwar @barci2
+models/demos/deepseek_v3 @uaydonat @yieldthought @avoraTT @kpaigwar @barci2 @pprajapatiTT
 models/**/bert*/ @TT-BrianLiu @uaydonat
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 models/*/convnet_mnist/ @sjameelTT @uaydonat
@@ -273,6 +273,8 @@ models/experimental/classification_eval @tenstorrent/cse-developer-ttnn
 models/demos/yolov11 @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/segmentation_evaluation @tenstorrent/cse-developer-ttnn
 models/experimental/yolov6l @ssinghalTT @tenstorrent/cse-developer-ttnn
+models/experimental/efficientnetb0 @ssinghalTT @tenstorrent/cse-developer-ttnn
+models/experimental/yolov5x @ssinghalTT @tenstorrent/cse-developer-ttnn
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
