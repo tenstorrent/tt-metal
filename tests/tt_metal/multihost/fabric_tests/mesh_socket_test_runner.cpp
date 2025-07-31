@@ -42,6 +42,7 @@ void MeshSocketTestRunner::initialize() {
 
     distributed_context_ = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     local_rank_ = distributed_context_->rank();
+    log_info(tt::LogTest, "local_rank {}", *local_rank_);
 
     // Setup fabric configuration first
     setup_fabric_configuration();
@@ -99,6 +100,7 @@ void MeshSocketTestRunner::initialize_and_validate_custom_physical_config(
     const PhysicalMeshConfig& physical_mesh_config) {
     const auto mesh_id_str = std::string(std::getenv("TT_MESH_ID"));
     const auto host_rank_str = std::string(std::getenv("TT_HOST_RANK"));
+    log_info(tt::LogTest, "host_rank_str: {}", host_rank_str);
 
     local_mesh_id_ = MeshId{std::stoi(mesh_id_str)};
     const auto local_rank = tt::tt_metal::distributed::multihost::Rank{std::stoi(host_rank_str)};
@@ -194,6 +196,7 @@ void MeshSocketTestRunner::run_test(const ParsedTestConfig& test) {
             log_test_execution(test, socket_idx, sockets.size());
             execute_socket_test(sockets[socket_idx], test);
         }
+        distributed_context_->barrier();
     }
 }
 
@@ -292,7 +295,6 @@ void MeshSocketTestRunner::execute_socket_test(
         test.memory_config.data_size,
         test.memory_config.page_size,
         test.memory_config.num_transactions);
-    distributed_context_->barrier();
 }
 
 std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>
