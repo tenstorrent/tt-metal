@@ -24,11 +24,11 @@ from models.tt_transformers.tt.common import (
     num_to_core_range_set,
 )
 from models.tt_transformers.tt.load_checkpoints import (
+    convert_hf_to_meta,
     convert_meta_to_hf,
     load_hf_state_dict,
     load_meta_state_dict,
     reverse_permute,
-    split_hf_keys,
     standardize_hf_keys,
 )
 from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
@@ -1354,7 +1354,7 @@ class ModelArgs:
 
     def _get_text_prefix(self):
         if self.is_vision():
-            return "language_model."
+            return "text_model."
         else:
             return ""
 
@@ -1595,10 +1595,10 @@ class ModelArgs:
 
     def get_state_dict_prefix(self, module_name, layer_num):
         text_prefix = self.state_dict_text_prefix
-        layer_prefix = f"model.layers.{layer_num}." if layer_num is not None else ""
+        layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
         module_map = {
-            "MLP": "mlp",
-            "Attention": "self_attn",
+            "MLP": "feed_forward",
+            "Attention": "attention",
             "TransformerBlock": "",
             "": "",  # If no module is given, just get layer prefix
         }
@@ -1654,13 +1654,13 @@ class ModelArgs:
                 state_dict = model.state_dict()
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
-        if self.checkpoint_type == CheckpointType.Meta:
-            state_dict = convert_meta_to_hf(state_dict, self.head_dim)
-        state_dict = standardize_hf_keys(state_dict)
-        state_dict = split_hf_keys(state_dict)
+
+        if self.checkpoint_type == CheckpointType.HuggingFace:
+            state_dict = standardize_hf_keys(state_dict)
+            state_dict = convert_hf_to_meta(state_dict, self.head_dim)
 
         keys_dict = list(state_dict.keys())[:]
-        remv = [f"model.layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
+        remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
         for k in keys_dict:
             if any([r in k for r in remv]):
                 state_dict.pop(k)
