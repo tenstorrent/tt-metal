@@ -57,15 +57,32 @@ GetPCIeDeviceID = ttnn._ttnn.device.GetPCIeDeviceID
 GetNumPCIeDevices = ttnn._ttnn.device.GetNumPCIeDevices
 
 
+def get_default_dispatch_core_type():
+    eth_default_dispatch_clusters = [
+        ttnn.cluster.ClusterType.N300,
+        ttnn.cluster.ClusterType.T3K,
+        ttnn.cluster.ClusterType.N300_2x2,
+    ]
+    return (
+        ttnn.device.DispatchCoreType.ETH
+        if ttnn.cluster.get_cluster_type() in eth_default_dispatch_clusters
+        else ttnn.device.DispatchCoreType.WORKER
+    )
+
+
 def CreateDevice(
     device_id: int,
     num_command_queues: int = 1,
     l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
-    dispatch_core_config: DispatchCoreConfig = ttnn._ttnn.device.DispatchCoreConfig(),
+    dispatch_core_config: DispatchCoreConfig = None,
     *,
     worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
 ):
+    if dispatch_core_config is None:
+        dispatch_core_type = get_default_dispatch_core_type()
+        dispatch_core_config = DispatchCoreConfig(type=dispatch_core_type)
+
     return ttnn._ttnn.device.CreateDevice(
         device_id,
         num_command_queues,
@@ -81,10 +98,14 @@ def CreateDevices(
     num_command_queues: int = 1,
     l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
-    dispatch_core_config: DispatchCoreConfig = ttnn._ttnn.device.DispatchCoreConfig(),
+    dispatch_core_config: DispatchCoreConfig = None,
     *,
     worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
 ):
+    if dispatch_core_config is None:
+        dispatch_core_type = get_default_dispatch_core_type()
+        dispatch_core_config = DispatchCoreConfig(type=dispatch_core_type)
+
     return ttnn._ttnn.device.CreateDevices(
         device_ids,
         num_command_queues,

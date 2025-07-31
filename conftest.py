@@ -21,7 +21,7 @@ from datetime import datetime
 from loguru import logger
 
 from tests.scripts.common import run_process_and_get_result
-from tests.scripts.common import get_dispatch_core_type, get_updated_device_params
+from tests.scripts.common import get_updated_device_params
 
 # Constants for device configurations
 SIX_U_NUM_PCIE_DEVICES = 32
@@ -441,7 +441,7 @@ def t3k_single_board_mesh_device(request, silicon_arch_name, silicon_arch_wormho
     mesh_device_ids = [device_ids[pcie_id], device_ids[pcie_id + 4]]
     mesh_shape = ttnn.MeshShape(1, 2)
     mesh_device = ttnn.open_mesh_device(
-        mesh_shape, mesh_device_ids, dispatch_core_type=get_dispatch_core_type(), **device_params
+        mesh_shape, mesh_device_ids, dispatch_core_type=ttnn.device.DispatchCoreType.WORKER, **device_params
     )
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
