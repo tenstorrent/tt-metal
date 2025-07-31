@@ -1,4 +1,4 @@
-name: Test LLK Branches
+name: Test LLK to Metal integration
 
 on:
   workflow_dispatch:
