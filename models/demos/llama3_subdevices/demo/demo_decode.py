@@ -416,7 +416,7 @@ def run_llama3_demo(
     users_decoding = True  # reset to handle next batch
     total_decoding_time = 0  # Track total decoding time
     total_tokens_generated = 0  # Track total tokens generated
-    tokens_per_second_per_user_token127 = None  # Track tokens per second per user at token 128
+    tokens_per_second_per_user_token121_127 = []  # Track tokens per second per user between tokens 121 and 127
 
     all_outputs = []
 
@@ -510,8 +510,8 @@ def run_llama3_demo(
                     )
                 profiler.end(f"log_printing_iter_{current_iteration}", iteration=current_iteration)
 
-                if current_iteration == 127:
-                    tokens_per_second_per_user_token127 = tokens_per_second_per_user
+                if current_iteration in range(121, 128):
+                    tokens_per_second_per_user_token121_127.append(tokens_per_second_per_user)
 
                 if not stress_test:
                     # Increment failure count if throughput is too low
@@ -542,8 +542,9 @@ def run_llama3_demo(
     profiler.end(profiler_step_name)
     profiler.end("run")
 
-    if is_ci_env and tokens_per_second_per_user_token127 is not None:
-        benchmark_data.add_measurement(profiler, 0, profiler_step_name, "tsu_e2e", tokens_per_second_per_user_token127)
+    if is_ci_env and len(tokens_per_second_per_user_token121_127) > 0:
+        tokens_per_second_per_user_token121_127_avg = sum(tokens_per_second_per_user_token121_127) / len(tokens_per_second_per_user_token121_127)
+        benchmark_data.add_measurement(profiler, 0, profiler_step_name, "tsu_e2e", tokens_per_second_per_user_token121_127_avg)
 
         run_type = "tg_llama_demo_decode" if galaxy_type == "4U" else "tg_llama_demo_decode_6u"
 
@@ -570,8 +571,9 @@ def run_llama3_demo(
             f"Suggested taget range is 5 percentile: {int(percentile_5)} - max: {int(max(all_tokens_per_second_per_user))+1}"
         )
 
-        if tokens_per_second_per_user_token127 is not None:
-            logger.info(f"Tokens per second per user at token 128: {tokens_per_second_per_user_token127}")
+        if len(tokens_per_second_per_user_token121_127) > 0:
+            tokens_per_second_per_user_token121_127_avg = sum(tokens_per_second_per_user_token121_127) / len(tokens_per_second_per_user_token121_127)
+            logger.info(f"Tokens per second per user average at tokens 121-127: {tokens_per_second_per_user_token121_127_avg}")
 
         # print before assertion
         out_of_targets_msg = f"Throughput is out of targets {tsu_thresholds['min']} - {tsu_thresholds['max']} t/s/u in {tsu_failures} iterations"
