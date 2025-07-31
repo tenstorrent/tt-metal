@@ -352,6 +352,47 @@ void virtual_channels_test(ARCH arch_, vector<IDevice*>& devices_, uint32_t num_
     }
 }
 
+void virtual_channels_custom_test(
+    ARCH arch_,
+    vector<IDevice*>& devices_,
+    uint32_t num_devices_,
+    uint32_t test_case_id,
+    uint32_t num_of_transactions,
+    uint32_t pages_per_transaction,
+    uint32_t num_virtual_channels) {
+    // Physical Constraints
+    auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
+        unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+
+    // Parameters for literal all-to-all (use the full grid for both master and subordinate)
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord sub_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+
+    // Test config
+    unit_tests::dm::all_to_all::AllToAllConfig test_config = {
+        .test_id = test_case_id,
+        .mst_logical_start_coord = mst_start_coord,
+        .sub_logical_start_coord = sub_start_coord,
+        .mst_grid_size = mst_grid_size,
+        .sub_grid_size = sub_grid_size,
+        .num_of_transactions_per_master = num_of_transactions,
+        .pages_reservable_per_transaction = pages_per_transaction,
+        .bytes_per_page = bytes_per_page,
+        .l1_data_format = DataFormat::Float16_b,
+        .noc_id = NOC::NOC_0,
+        .num_virtual_channels = num_virtual_channels,
+    };
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    }
+}
+
 }  // namespace unit_tests::dm::all_to_all
 
 /* =============================================================  /
@@ -497,6 +538,18 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAllVirtualChannels) {
     uint32_t test_case_id = 154;
 
     unit_tests::dm::all_to_all::virtual_channels_test(arch_, devices_, num_devices_, test_case_id);
+}
+
+TEST_F(DeviceFixture, TensixDataMovementAllToAllCustom) {
+    uint32_t test_case_id = 155;
+
+    // Custom Parameters
+    uint32_t num_of_transactions = 256;
+    uint32_t pages_per_transaction = 1;
+    uint32_t num_virtual_channels = 4;
+
+    unit_tests::dm::all_to_all::virtual_channels_custom_test(
+        arch_, devices_, num_devices_, test_case_id, num_of_transactions, pages_per_transaction, num_virtual_channels);
 }
 
 }  // namespace tt::tt_metal

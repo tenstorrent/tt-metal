@@ -279,17 +279,46 @@ void packet_sizes_test(
     }
 }
 
+void virtual_channels_custom_test(
+    ARCH arch_,
+    vector<IDevice*>& devices_,
+    uint32_t num_devices_,
+    uint32_t test_id,
+    CoreCoord master_core_coord = {0, 0},
+    CoreCoord subordinate_core_coord = {1, 1},
+    uint32_t num_of_transactions = 256,
+    uint32_t pages_per_transaction = 1,
+    uint32_t num_virtual_channels = 4) {
+    // Physical Constraints
+    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+
+    // Test config
+    unit_tests::dm::core_to_core::OneToOneConfig test_config = {
+        .test_id = test_id,
+        .master_core_coord = master_core_coord,
+        .subordinate_core_coord = subordinate_core_coord,
+        .num_of_transactions = num_of_transactions,
+        .pages_per_transaction = pages_per_transaction,
+        .bytes_per_page = bytes_per_page,
+        .l1_data_format = DataFormat::Float16_b,
+        .num_virtual_channels = num_virtual_channels};
+
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    }
+}
+
 }  // namespace unit_tests::dm::core_to_core
 
-/* ========== Test case for one to one data movement; Test id = 4 ========== */
+/* ========== TEST CASES ========== */
+
 TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
     // Test ID
     uint32_t test_id = 4;
 
     unit_tests::dm::core_to_core::packet_sizes_test(arch_, devices_, num_devices_, test_id);
 }
-
-/* ========== Test case for one to one data movement; Test id = 50 ========== */  // Arbitrary test id
 
 /*
     This test case is for directed ideal data movement from one L1 to another L1.
@@ -312,7 +341,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOneDirectedIdeal) {
     );
 }
 
-TEST_F(DeviceFixture, TensixDataMovementOneToOneVirtualChannels) {  // May be redundant
+TEST_F(DeviceFixture, TensixDataMovementOneToOneVirtualChannels) {
     // Test ID (Arbitrary)
     uint32_t test_id = 150;
 
@@ -324,6 +353,26 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOneVirtualChannels) {  // May be re
         CoreCoord(0, 0),  // Master Core
         CoreCoord(0, 1)   // Subordinate Core
     );
+}
+
+TEST_F(DeviceFixture, TensixDataMovementOneToOneCustom) {
+    uint32_t test_id = 151;
+
+    // Parameters
+    uint32_t num_of_transactions = 256;
+    uint32_t pages_per_transaction = 1;
+    uint32_t num_virtual_channels = 4;
+
+    unit_tests::dm::core_to_core::virtual_channels_custom_test(
+        arch_,
+        devices_,
+        num_devices_,
+        test_id,
+        CoreCoord(0, 0),  // Master Core
+        CoreCoord(0, 1),  // Subordinate Core
+        num_of_transactions,
+        pages_per_transaction,
+        num_virtual_channels);
 }
 
 }  // namespace tt::tt_metal

@@ -343,7 +343,8 @@ void virtual_channels_test(
     bool is_linked,
     CoreCoord mst_core_coord,
     CoreCoord sub_start_core_coord,
-    CoreCoord sub_grid_size) {
+    CoreCoord sub_grid_size,
+    bool loopback) {
     // Virtual channels are only meaningful for unicast
     if (is_multicast) {
         log_info(LogTest, "Virtual channels test is only applicable for unicast, skipping multicast test");
@@ -369,7 +370,7 @@ void virtual_channels_test(
             for (uint32_t num_virtual_channels = 1; num_virtual_channels <= max_num_virtual_channels;
                  num_virtual_channels++) {
                 // Check if the total page size is within the limits (adjusted for loopback)
-                if (pages_per_transaction > max_pages_reservable / 2) {
+                if (pages_per_transaction > max_pages_reservable / (loopback ? 2 : 1)) {
                     continue;
                 }
 
@@ -384,7 +385,7 @@ void virtual_channels_test(
                     .bytes_per_page = bytes_per_page,
                     .l1_data_format = DataFormat::Float16_b,
                     .noc_id = noc_id,
-                    .loopback = true,  // Always use loopback for virtual channels test
+                    .loopback = loopback,
                     .is_multicast = is_multicast,
                     .is_linked = is_linked,
                     .num_virtual_channels = num_virtual_channels,
@@ -396,6 +397,58 @@ void virtual_channels_test(
                 }
             }
         }
+    }
+}
+
+void virtual_channels_custom_test(
+    ARCH arch_,
+    vector<IDevice*>& devices_,
+    uint32_t num_devices_,
+    uint32_t test_case_id,
+    bool is_multicast,
+    bool is_linked,
+    CoreCoord mst_core_coord,
+    CoreCoord sub_start_core_coord,
+    CoreCoord sub_grid_size,
+    uint32_t num_of_transactions,
+    uint32_t pages_per_transaction,
+    uint32_t num_virtual_channels,
+    bool loopback) {
+    // Virtual channels are only meaningful for unicast
+    if (is_multicast) {
+        log_info(LogTest, "Virtual channels test is only applicable for unicast, skipping multicast test");
+        return;
+    }
+
+    // Physical Constraints
+    auto [bytes_per_page, max_bytes_reservable, max_pages_reservable] =
+        unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+
+    if (pages_per_transaction > max_pages_reservable / (loopback ? 2 : 1)) {
+        log_trace(LogTest, "Skipping test due to page size limitations with loopback={}", loopback);
+        return;
+    }
+
+    // Test config
+    unit_tests::dm::core_to_all::OneToAllConfig test_config = {
+        .test_id = test_case_id,
+        .mst_core_coord = mst_core_coord,
+        .sub_start_core_coord = sub_start_core_coord,
+        .sub_grid_size = sub_grid_size,
+        .num_of_transactions = num_of_transactions,
+        .pages_per_transaction = pages_per_transaction,
+        .bytes_per_page = bytes_per_page,
+        .l1_data_format = DataFormat::Float16_b,
+        .noc_id = NOC::NOC_0,
+        .loopback = loopback,
+        .is_multicast = is_multicast,
+        .is_linked = is_linked,
+        .num_virtual_channels = num_virtual_channels,
+    };
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
     }
 }
 
@@ -726,17 +779,22 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal) {
 
 /* ========== VIRTUAL CHANNELS ========== */
 
-/* ========== UNICAST ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastVirtualChannels) {
+TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastVirtualChannels) {  // Expose loopback here?
     // Parameters
     uint32_t test_case_id = 152;
 
+    // These should always be false
     bool is_multicast = false;
     bool is_linked = false;
 
+    // Grid Parameters
     CoreCoord mst_core_coord = {0, 0};
     CoreCoord sub_start_core_coord = {0, 0};
-    CoreCoord sub_grid_size = {2, 2};  // Use a small grid for virtual channels test
+    CoreCoord sub_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+
+    // Loopback
+    bool loopback = true;
 
     unit_tests::dm::core_to_all::virtual_channels_test(
         arch_,
@@ -747,7 +805,44 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastVirtualChannels) {
         is_linked,
         mst_core_coord,
         sub_start_core_coord,
-        sub_grid_size);
+        sub_grid_size,
+        loopback);
+}
+
+TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastCustom) {
+    // Parameters
+    uint32_t test_case_id = 153;
+
+    // These should always be false
+    bool is_multicast = false;
+    bool is_linked = false;
+
+    // Grid Parameters
+    CoreCoord mst_core_coord = {0, 0};
+    CoreCoord sub_start_core_coord = {0, 0};
+    CoreCoord sub_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+
+    // Custom Parameters
+    bool loopback = true;
+    uint32_t num_of_transactions = 256;
+    uint32_t pages_per_transaction = 1;
+    uint32_t num_virtual_channels = 4;
+
+    unit_tests::dm::core_to_all::virtual_channels_custom_test(
+        arch_,
+        devices_,
+        num_devices_,
+        test_case_id,
+        is_multicast,
+        is_linked,
+        mst_core_coord,
+        sub_start_core_coord,
+        sub_grid_size,
+        num_of_transactions,
+        pages_per_transaction,
+        num_virtual_channels,
+        loopback);
 }
 
 }  // namespace tt::tt_metal
