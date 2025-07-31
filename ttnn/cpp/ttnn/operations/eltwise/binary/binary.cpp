@@ -786,6 +786,7 @@ template struct BinaryOperation<BinaryOpType::BITWISE_XOR>;
 template struct BinaryOperation<BinaryOpType::LEFT_SHIFT>;
 template struct BinaryOperation<BinaryOpType::RIGHT_SHIFT>;
 template struct BinaryOperation<BinaryOpType::LOGICAL_RIGHT_SHIFT>;
+template struct BinaryOperation<BinaryOpType::XLOGY>;
 
 template struct RelationalBinary<BinaryOpType::EQ>;
 template struct RelationalBinary<BinaryOpType::NE>;
