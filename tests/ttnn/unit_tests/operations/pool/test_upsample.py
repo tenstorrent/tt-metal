@@ -497,3 +497,83 @@ def test_nearest_upsample_with_uneven_input_shards(
 
     assert allclose
     assert passing
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shapes, size, scale_factor, mode, align_corners, recompute_scale_factor, antialias",
+    [
+        # Scale factor cases
+        ([1, 1, 128, 256], None, 4, "bilinear", False, None, False),
+        ([1, 19, 128, 256], None, 4, "bilinear", False, None, False),
+        ([1, 2, 128, 256], None, 4, "bilinear", False, None, False),
+        # Size cases
+        ([1, 1, 512, 1024], [512, 1024], None, "bilinear", False, None, False),
+        ([1, 128, 64, 128], [128, 256], None, "bilinear", False, None, False),
+        ([1, 19, 512, 1024], [512, 1024], None, "bilinear", False, None, False),
+        ([1, 2, 512, 1024], [512, 1024], None, "bilinear", False, None, False),
+        ([1, 256, 1, 1], [32, 64], None, "bilinear", False, None, False),
+        ([1, 256, 32, 64], [64, 128], None, "bilinear", False, None, False),
+        ([1, 256, 64, 128], [128, 256], None, "bilinear", False, None, False),
+    ],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("math_approx_mode", [True, False])
+def test_upsample_panoptic(
+    device,
+    input_shapes,
+    size,
+    scale_factor,
+    mode,
+    align_corners,
+    recompute_scale_factor,
+    antialias,
+    math_fidelity,
+    math_approx_mode,
+):
+    torch.manual_seed(0)
+    # compute_grid = device.compute_with_storage_grid_size()
+    # if compute_grid.x != 5 or compute_grid.y != 4:
+    #     pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
+    # print(f"compute_grid: {compute_grid.x}x{compute_grid.y}")
+
+    TILE_WIDTH = 32
+    batch_size, num_channels, height, width = input_shapes
+
+    # Pad channels to multiple of 32
+    num_channels_padded = num_channels
+    if num_channels % TILE_WIDTH != 0:
+        num_channels_padded = num_channels + (TILE_WIDTH - num_channels % TILE_WIDTH)
+
+    padded_input_shape = [batch_size, num_channels_padded, height, width]
+
+    shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
+
+    # Handle size vs scale_factor
+    if size is not None:
+        scale_h = int(size[0] / height)
+        scale_w = int(size[1] / width)
+    else:
+        scale_h = scale_factor
+        scale_w = scale_factor
+    torch_result, output_tensor = upsample_multicore_common(
+        device,
+        padded_input_shape,
+        scale_h,
+        scale_w,
+        ttnn.ShardStrategy.HEIGHT,
+        shard_orientation,
+        mode="bilinear",
+        math_fidelity=math_fidelity,
+        math_approx_mode=math_approx_mode,
+    )
+
+    torch_result = torch_result.permute(0, 2, 3, 1)
+    torch_result = torch_result[:, :, :, 0:num_channels]
+    output_tensor = output_tensor[:, :, :, 0:num_channels]
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_result, output_tensor, pcc=0.999)
+    allclose = torch.allclose(output_tensor, torch_result, atol=1e-1, rtol=1e-1)
+    logger.info(pcc_msg)
+
+    assert allclose
+    assert passing
