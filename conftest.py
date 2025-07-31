@@ -296,9 +296,6 @@ def device_params(request):
 
 @pytest.fixture(scope="function")
 def device(request, device_params):
-    import pdb
-
-    pdb.set_trace()
     import ttnn
 
     device_id = request.config.getoption("device_id")
