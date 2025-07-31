@@ -11,10 +11,7 @@ https://huggingface.co/docs/transformers/en/model_doc/vit
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-  - To obtain the perf reports through profiler, please build with following command:
-  ```sh
-  ./build_metal.sh -p
-  ```
+  - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
 
 ## How to Run
 To run the demo for question answering using the Bloom model, follow these instructions:

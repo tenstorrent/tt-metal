@@ -13,22 +13,15 @@ https://huggingface.co/docs/transformers/en/model_doc/vit
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-  - To obtain the perf reports through profiler, please build with following command:
-  ```sh
-  ./build_metal.sh -p
-  ```
-- When running the ImageNet demo for the first time, you need to authenticate with Hugging Face by either running `huggingface-cli login` or setting the token directly using
-  ```
-  export HF_TOKEN=<your_token>
-  ```
-  - To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens.
+  - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
+- login to huggingface with your token: `huggingface-cli login` or by setting the token with the command `export HF_TOKEN=<token>`
+  - To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens
+- [8x8 core grid size support] For **Wormhole n300** cards, setting the following environment variable is required:
+   ```
+   export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+   ```
 
 ## How to Run
-- On N300, make sure to set the following environment variable in the terminal:
-```sh
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-```
-
 - Use the following command to run the ViT model:
 ```sh
 pytest --disable-warnings tests/nightly/single_card/vit/test_ttnn_optimized_sharded_vit_wh.py::test_vit[224-3-224-8-google/vit-base-patch16-224]
@@ -57,7 +50,6 @@ pytest models/demos/wormhole/vit/demo/test_vit_device_perf.py::test_vit_perf_dev
 ```sh
 pytest --disable-warnings models/demos/wormhole/vit/demo/demo_vit_performant_imagenet_inference.py::test_run_vit_trace_2cqs_inference
 ```
-
 
 ## Details
 - Entry point for the model is `vit` in `models/demos/vit/tt/ttnn_optimized_sharded_vit_wh.py`

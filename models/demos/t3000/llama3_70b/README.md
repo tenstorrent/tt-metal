@@ -4,20 +4,21 @@
     LoudBox, QuietBox
 
 ## Introduction
-
 Read more about llama3 at [llama.com/llama3](https://www.llama.com/models/llama-3/).
 
 ## Prerequisites
-
 - An 8-chip LoudBox/QuietBox machine using tensor parallelism
 - The host machine must have at least 512 GB of memory
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 - Submit request to access weights from Meta: [Llama Downloads](https://www.llama.com/llama-downloads)
 - Submit permissions on HuggingFace and have a HF personal access token: [Llama 3.1 70B Instruct](https://huggingface.co/meta-llama/Llama-3.1-70B-Instruct)
+- [8x8 core grid size support] For **Wormhole n300** cards, setting the following environment variable is required:
+   ```
+   export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+   ```
 
 ## How to Run
-
 ### Run in one command:
 ```bash
 chmod +x ./models/demos/t3000/llama3_70b/setup_llama.sh && ./models/demos/t3000/llama3_70b/setup_llama.sh <MODEL_TYPE> <TT_METAL_COMMIT_SHA_OR_TAG> <TT_VLLM_COMMIT_SHA_OR_TAG>
@@ -26,46 +27,36 @@ chmod +x ./models/demos/t3000/llama3_70b/setup_llama.sh && ./models/demos/t3000/
 Where, `TT_METAL_COMMIT_SHA_OR_TAG` and `TT_VLLM_COMMIT_SHA_OR_TAG` are found in the root [README](/README.md#llms) under "Release" version, respectively.
 
 - Example:
-
 ```bash
 ./models/demos/t3000/llama3_70b/setup_llama.sh llama-3.1-70b-instruct v0.54.0-rc2 953161188c50f10da95a88ab305e23977ebd3750
 ```
 
 - Follow prompts as they come up in CLI to select appropriate weights for Llama 3.1 70B Instruct.
 
-
 ### Step-by-step:
-
 1. Download the Llama3/3.1-70B weights from Meta at [llama.meta.com](https://llama.meta.com/)
-
 2. Repack the weights:
-
 ```bash
 python models/demos/t3000/llama2_70b/scripts/repack_weights.py <path_to_checkpoint_dir> <repacked_output_dir> <chunk_size>
 ```
 
 Note: Use `5` for `chunk_size`.
-
 - Once the weights are repacked, move the `params.json` file from the `checkpoint_dir` to the `repacked_output_dir`.
 
 ### Running the demo from TT-Metalium
-
 After setting up the repacked weights and tokenizer, you can run the demo using the commands below:
 
 1. Prepare the weight cache directory:
 ```bash
 # Make a directory for us to cache weights into. This speeds up subsequent runs.
 mkdir <weight_cache_dir>
+
 ```
-
 2. Set up environment variables:
-
 ```bash
 export LLAMA3_CKPT_DIR=<repacked_output_dir>
 export LLAMA3_TOKENIZER_PATH=<path_to_checkpoint_dir>/tokenizer.model  # Path needs to include the tokenizer.model file
 export LLAMA3_CACHE_PATH=<weight_cache_dir>
-
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 export TIKTOKEN_CACHE_DIR=""
 
 pip install -r models/demos/t3000/llama2_70b/reference/llama/requirements.txt
@@ -88,7 +79,6 @@ pytest -svv models/demos/t3000/llama3_70b/demo/demo.py::test_LlamaModel_demo[wor
 ```
 
 ## Testing
-
 - Performance test:
 
 The above demo does not achieve peak performance because we log outputs to the screen. The following perf test will print an accurate end-to-end throughput number.
@@ -100,7 +90,6 @@ pytest -svv models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py::test_
 ```
 
 ## Details
-
 Supported context lengths and batch sizes for the Llama3.1-70B demo are as follows:
 
 | Context Length | Max Batch Size |
@@ -124,7 +113,6 @@ Supported context lengths and batch sizes for the Llama3.1-70B demo are as follo
 Ensure you follow these guidelines to successfully run the Llama3-70B demo.
 
 ### Serving the model from vLLM
-
 1. Complete Step 1 and Step 2 of [Running the Demo from TT-Metalium](#running-the-demo-from-tt-metalium)
 
 2. **Install vLLM**

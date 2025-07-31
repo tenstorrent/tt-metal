@@ -13,11 +13,8 @@ https://huggingface.co/docs/transformers/en/model_doc/vit
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-- When running the ImageNet demo for the first time, you need to authenticate with Hugging Face by either running `huggingface-cli login` or setting the token directly using
-  ```
-  export HF_TOKEN=<your_token>
-  ```
-  - To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens.
+- Login to huggingface with your token: `huggingface-cli login` or by setting the token with the command `export HF_TOKEN=<token>`
+   - To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens
 
 ## How to Run
 This demo includes two performance tests:

@@ -10,22 +10,15 @@ The MobileNetV2 model has been pre-trained on the ImageNet dataset and can be us
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-  - To obtain the perf reports through profiler, please build with following command:
-  ```sh
-  ./build_metal.sh -p
-  ```
-- When running the ImageNet demo for the first time, you need to authenticate with Hugging Face by either running `huggingface-cli login` or setting the token directly using
-  ```
-  export HF_TOKEN=<your_token>
-  ```
-  - To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens.
+  - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
+- login to huggingface with: `huggingface-cli login` or by setting the token with the command `export HF_TOKEN=<token>`
+   - To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens
+- [8x8 core grid size support] For **Wormhole n300** cards, setting the following environment variable is required:
+    ```
+    export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+    ```
 
 ## How to Run
-- **Note:** On N300 ,Make sure to set the following environment variable in the terminal:
-```
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-```
-
 ### Model performant running with Trace+2CQ
 #### For 224x224:
 - end-2-end perf is 2808 FPS
@@ -36,7 +29,6 @@ pytest models/demos/mobilenetv2/tests/perf/test_e2e_performant.py
 ### Demo on ImageNet:
 - Make sure your HuggingFace token is set ([See Prerequisites](#prerequisites) for instructions)
 
-
 - Use the following command to run the Demo on ImageNet dataset:
 ```bash
 pytest  models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo
@@ -45,12 +37,10 @@ pytest  models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo
 ## Testing
 ### Performant evaluation with Trace+2CQ
 Use the following command to run the performant evaluation with Trace+2CQs:
-
 ```
 pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval[8-224-tt_model-device_params0]
 ```
 Note: The model is evaluated with 512 samples.
-
 
 ## Details
 - The entry point to mobilenetv2 model is MobileNetV2 in `models/demos/mobilenetv2/tt/ttnn_monilenetv2.py`.

@@ -14,12 +14,10 @@ Read more about it at:
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-- login to huggingface using your token: `huggingface-cli login` or by setting the token with the command `export HF_TOKEN=<token>`
+- Login to huggingface using your token: `huggingface-cli login` or by setting the token with the command `export HF_TOKEN=<token>`
     - To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens
 
-
 ## How to Run
-
 + To run the demo use:
 ```python
 pytest --disable-warnings models/demos/blackhole/resnet50/demo/demo.py::test_demo_sample
@@ -33,7 +31,6 @@ pytest --disable-warnings models/demos/blackhole/resnet50/demo/demo.py::test_dem
 The 16 (or 32 )refers to batch size per device here and 100 is the number of iterations(batches), hence the model will process 100 batches of size 16 (32 for n300), total of 1600 (3200 for n300) images.
 
 ## Testing
-
 ### Blackhole Device Performance
 + To obtain device performance, run
 ```python
@@ -52,7 +49,6 @@ pytest models/demos/blackhole/resnet50/tests/test_perf_e2e_resnet50.py::test_per
 + **Expected end-to-end perf**: For batch = 32, it is about `10,880 fps` currently. This may vary machine to machine.
 
 ## Details
-
 + The entry point to the Metal ResNet model is `ResNet` in `ttnn_functional_resnet50.py`.
 + The model picks up certain configs and weights from TorchVision pretrained model. We have used `torchvision.models.ResNet50_Weights.IMAGENET1K_V1` version from TorchVision as our reference.
 + Our ImageProcessor on the other hand is based on `microsoft/resnet-50` from huggingface.

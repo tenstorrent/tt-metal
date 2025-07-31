@@ -4,19 +4,18 @@
     LoudBox, QuietBox (WH)
 
 ## Introduction
-
 Read more about Mixtral-8x7B at the Huggingface page for [mistralai/Mixtral-8x7B-v0.1](https://huggingface.co/mistralai/Mixtral-8x7B-v0.1)
 
 ## Prerequisites
-
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-
+- [8x8 core grid size support] For **Wormhole n300** cards, setting the following environment variable is required:
+   ```
+   export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+   ```
 
 ## How to Run
-
 ### Download the weights and repack
-
 1. Download the weights from Huggingface.
 - [Instruct weights](https://huggingface.co/mistralai/Mixtral-8x7B-Instruct-v0.1)
 - [General weights](https://huggingface.co/mistralai/Mixtral-8x7B-v0.1)
@@ -36,7 +35,6 @@ python models/demos/t3000/mixtral8x7b/scripts/repack_weights.py <path_to_checkpo
 1. Set async and dispatch over ethernet cores env vars:
 ```bash
 export TT_METAL_ASYNC_DEVICE_QUEUE=1
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 ```
 
 2. Prepare the weight cache directory:
@@ -58,8 +56,6 @@ pytest -svv models/demos/t3000/mixtral8x7b/tests/test_mixtral_model.py::test_mix
 ```
 
 ### Run the demo
-
-
 #### For general weights:
 - Prefill & Decode demo
 ```bash
@@ -83,7 +79,6 @@ pytest -svv models/demos/t3000/mixtral8x7b/demo/demo.py::test_mixtral8x7b_demo[w
 ```
 
 ## Details
-
 Mixtral prefill support is now available. We include two different demos: a decode-only mode where the prompts are decoded token-by-token and force-pushed until the user starts generating; and a prefill&decode mode, where the KV-caches are first prefilled for the prompt length (e.g. 128 tokens) and then decode as normal.
 
 The `demo_with_prefill.py` supports context lengths up to 32k tokens. Since this is the upper limit to fit on devices, we cap the demo to prefill up to 16k tokens, and then prefill-as-decode if necessary.
@@ -100,9 +95,7 @@ All input files are provided inside `models/demos/t3000/mixtral8x7b/demo/`.
 If you wish you to run the model using a different set of input prompts you can provide a different path to pytest inside the demo code. Keep in mind that for the instruct-mode, the prompts are automatically prefixed and suffixed by `[INST]` and `[/INST]`, respectively, so there's no need to add them to your file.
 
 ### Weights cache folder structure:
-
 Note that the cached weights folder structure will contain the general and instruct cached weights in separate directories, like so:
-
 ```bash
 <weights_cache_dir>
   /mixtral_tensor_cache_bfp8

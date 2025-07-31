@@ -9,17 +9,13 @@ Yolov9 marks a significant advancement in real-time object detection, introducin
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-  - To obtain the perf reports through profiler, please build with following command:
-  ```sh
-  ./build_metal.sh -p
-  ```
+  - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
+- [8x8 core grid size support] For **Wormhole n300** cards, setting the following environment variable is required:
+   ```
+   export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+   ```
 
 ## How to Run:
-If running on Wormhole n300 (not required for n150 or Blackhole), the following environment variable needs to be set as the model requires at least 8x8 core grid size:
-```sh
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-```
-
 ### Model
 - Use the following command to run the Yolov9c model :
 ```

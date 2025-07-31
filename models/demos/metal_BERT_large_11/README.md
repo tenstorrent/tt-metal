@@ -10,7 +10,6 @@ BERT stands for Bidirectional Encoder Representations from Transformers. Unlike 
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
-
 ## How to Run
 ### Batch Support Chart
 Replace `BATCH_SIZE` with the appropriate size for your device according to this chart:
@@ -20,7 +19,7 @@ Replace `BATCH_SIZE` with the appropriate size for your device according to this
 | 8          | :white_check_mark: | :white_check_mark: | :white_check_mark: *|
 | 12         | :white_check_mark: | :x:                | :x:                 |
 
-*For batch size 8 on n300, make sure to set the following: `export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml`
+*For batch size 8 on **Wormhole n300** cards, setting the following environment variable is required: `export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml`
 
 ### Run the Demo
 ```
@@ -37,16 +36,6 @@ This file is expected to have exactly `BATCH_SIZE` inputs.
 ```
 pytest --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py::test_demo_squadv2 -k BATCH_SIZE
 ```
-
-
-
-
-
-
-
-
-
-
 
 ## Details
 - The optimized demos will parallelize batch on one of the device grid dimensions. The grid size used is `batch x 8` or `8 x batch` depending on your device grid.

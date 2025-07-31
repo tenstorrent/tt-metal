@@ -14,10 +14,10 @@
   pip install -r models/demos/yolov8s_world/web_demo/server/requirements.txt
   ```
 
-- After installing the server side requirments, ONLY if you are running the demo on an N300 card,run the following to export the approprite envirement variable for N300.
-  ```
-  export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-  ```
+- [8x8 core grid size support] For **Wormhole n300** cards, setting the following environment variable is required:
+   ```
+   export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+   ```
 
 - From the server run:
   ```

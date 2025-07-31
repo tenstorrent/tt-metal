@@ -4,23 +4,19 @@
     Wormhole (n150, n300)
 
 ## Introduction
-
 **YOLOv11n** is the smallest variant in the YOLOV11 series, it offers improvements in accuracy, speed, and efficiency for real-time object detection. It features enhanced architecture and optimized training methods, suitable for various computer vision tasks.
 
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-  - To obtain the perf reports through profiler, please build with following command:
-  ```sh
-  ./build_metal.sh -p
-  ```
+  - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
+- [8x8 core grid size support] For **Wormhole n300** cards, setting the following environment variable is required:
+   ```
+   export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+   ```
+
 
 ## How to Run
-- **Note:** On N300, make sure to set the following environment variable in the terminal:
-    ```
-    export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-    ```
-
 - Use the following command to run the model:
 ```
 pytest --disable-warnings models/demos/yolov11/tests/pcc/test_ttnn_yolov11.py::test_yolov11

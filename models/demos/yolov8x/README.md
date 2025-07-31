@@ -9,17 +9,13 @@ YOLOv8 is one of the recent iterations in the YOLO series of real-time object de
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-  - To obtain the perf reports through profiler, please build with following command:
-  ```sh
-  ./build_metal.sh -p
+  - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
+- [8x8 core grid size support] For **Wormhole n300** cards, setting the following environment variable is required:
+  ```
+  export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
   ```
 
 ## How to Run
-- On N300 ,make sure to set the following environment variable in the terminal:
-    ```
-    export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-    ```
-
 - Use the following command to run the model:
 ```
 pytest --disable-warnings models/demos/yolov8x/tests/pcc/test_yolov8x.py::test_yolov8x_640

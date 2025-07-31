@@ -4,21 +4,17 @@
         LoudBox, QuietBox (WH)
 
 ## Introduction
-
 Read more about Falcon40b at the Huggingface for [tiiuae/falcon-40b-instruct](https://huggingface.co/tiiuae/falcon-40b-instruct).
 
 ## Prerequisites
-
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
+- [8x8 core grid size support] For **Wormhole n300** cards, setting the following environment variable is required:
+    ```
+    export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+    ```
 
 ## How to Run
-
-- Falcon40b prefill uses 8x8 core grid size, so the following environment variable needs to be set up:
-```sh
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-```
-
 - Run the model for a single prompt using the command line input:
 
 ```sh
@@ -26,7 +22,6 @@ pytest --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES
 ```
 
 ### Inputs
-
 - A sample of input prompts for 32 users is provided in `models/demos/t3000/falcon40b/demo/input_data.json`.
 - If you wish to run the model using a different set of input prompts you can provide a different path `--input-path`.
 
@@ -35,7 +30,6 @@ pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/t
 ```
 
 ## Details
-
 - **Weight caching**: This model picks up certain configs and weights from huggingface pretrained model. The default model weights are the `tiiuae/falcon-40b-instruct` version from huggingface. The first time you run the model, weights are downloaded, pre-processed, and stored on your machine. This might take a few hours. The second time you run the model on your machine, the weights are being read from cached files on your machine and it will be faster.
 
 - **Max Context Length**: The maximum context/sequence length for the demo is currently limited to 128 tokens. Support for context length 2048 is in testing.

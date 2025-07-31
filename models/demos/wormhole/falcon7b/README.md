@@ -11,13 +11,12 @@ Read more about it at [huggingface.co/tiiuae/falcon-7b-instruct](https://hugging
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
+- [8x8 core grid size support] For **Wormhole n300** cards, setting the following environment variable is required:
+   ```
+   export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+   ```
 
 ## How to Run
-- Falcon7b prefill uses 8x8 core grid size, so the following environment variable needs to be set on N300 setup:
-```
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-```
-
 ### Token Generation (Default) Mode
 - To run the model for a single user you can use the command line input:
 ```sh

@@ -5,17 +5,18 @@
 > This model is no longer supported on QuietBox/LoudBox setups.
 
 ## Introduction
-
 Read more about llama2_70b at [llama.com/llama2](https://www.llama.com/llama2/).
 
 ## Prerequisites
-
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 - The host machine must have at least 512 GB of memory.
+- [8x8 core grid size support] For **Wormhole n300** cards, setting the following environment variable is required:
+   ```
+   export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+   ```
 
 ## How to Run
-
 1. Download the Llama2-70B weights from [Meta](https://llama.meta.com/llama2/):
 
 2. Repack the weights:
@@ -27,7 +28,6 @@ Read more about llama2_70b at [llama.com/llama2](https://www.llama.com/llama2/).
 3. Once the weights are repacked, move the `params.json` file from the `checkpoint_dir` to the `repacked_output_dir`.
 
 ### Running the Demo
-
 After setting up the repacked weights and tokenizer, you can run the demo using the commands below:
 
 1. Prepare the weight cache directory:
@@ -40,8 +40,6 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
     export LLAMA2_CKPT_DIR=<repacked_output_dir>
     export LLAMA2_TOKENIZER_PATH=<path_to_checkpoint_dir> # Path needs to include the tokenizer.model file
     export LLAMA2_CACHE_PATH=<weight_cache_dir>
-
-    export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
     export TIKTOKEN_CACHE_DIR=""
 
     pip install -r models/demos/t3000/llama2_70b/reference/llama/requirements.txt
@@ -64,7 +62,6 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
     ```
 
 ## Testing
-
 - Performance test:
 
     The above demo does not achieve peak performance because we log outputs to the screen. The following perf test will print an accurate end-to-end throughput number.
@@ -76,7 +73,6 @@ After setting up the repacked weights and tokenizer, you can run the demo using 
     ```
 
 ## Details
-
 Supported context lengths and batch sizes for the Llama2-70B demo are as follows:
 
 | Context Length | Max Batch Size |

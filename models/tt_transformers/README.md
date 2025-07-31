@@ -132,11 +132,10 @@ or
 export LLAMA_DIR=<path_to_meta_downloaded_model_directory>
 ```
 
-On N150, N300 and LoudBox / QuietBox you should also set:
-
-```
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-```
+8x8 core grid size support] For **Wormhole n300** cards, setting the following environment variable is required:
+   ```
+   export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+   ```
 
 Description of these environment variables:
 - `HF_MODEL` is the HuggingFace org/name of the model you want to run or the path to the downloaded Huggingface weights.
