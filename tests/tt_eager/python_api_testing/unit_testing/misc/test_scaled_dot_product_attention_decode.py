@@ -966,7 +966,13 @@ def run_test_sdpa_decode_paged_attention_single_iter(
         layout=q_layout,
         memory_config=Q_height_sharded_memcfg if sharded_in else dram_memcfg,
     )
-    start_indices_tt = ttnn.Tensor(torch.tensor(start_indices), ttnn.int32).to(device)
+    cur_pos_shard_spec = ttnn.ShardSpec(compute_sub_core_grids, (1, b), ttnn.ShardOrientation.ROW_MAJOR)
+    cur_pos_memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cur_pos_shard_spec
+    )
+    start_indices_tt = ttnn.Tensor(torch.tensor([start_indices] * compute_sub_core_grids.num_cores()), ttnn.int32).to(
+        device, mem_config=cur_pos_memory_config
+    )
 
     tt_back = ttnn.transformer.paged_scaled_dot_product_attention_decode(
         tt_Q,
