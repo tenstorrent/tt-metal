@@ -261,6 +261,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
     for (int outer_loop = 0; outer_loop < 1; outer_loop++) {
         log_info(LogTest, "Running outer loop {}", outer_loop);
         std::vector<Tensor> device_tensors(devices.size());
+        std::vector<std::shared_ptr<distributed::MeshDevice>> single_meshes(devices.size());
 
         TensorSpec tensor_spec(
             input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), in_memory_config));
@@ -278,7 +279,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
                     host_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
 
-                auto single_mesh = mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, dev_idx));
+                single_meshes[dev_idx] = mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, dev_idx));
+                auto& single_mesh = single_meshes[dev_idx];
                 auto input_buffer = tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(single_mesh.get(), tensor_spec);
                 auto dummy_buffer = tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(single_mesh.get(), tensor_spec);
                 auto input_storage = tt::tt_metal::DeviceStorage{input_buffer, {MeshCoordinate(0, dev_idx)}};
@@ -294,10 +296,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
                 // Set output_tensor into device_tensor for allgather
                 device_tensors[dev_idx] = dispatch_ops_to_device(device, input_tensor, ttnn::QueueId(op_cq_id));
 
-                auto operation_event = std::make_shared<Event>();
-                ttnn::record_event(device->command_queue(op_cq_id), operation_event);
+                auto operation_event = ttnn::record_event(single_mesh->mesh_command_queue(op_cq_id));
                 // Enqueue the task waiting for the operation_event to the ccl`s command queue
-                ttnn::wait_for_event(device->command_queue(ccl_cq_id), operation_event);
+                ttnn::wait_for_event(single_mesh->mesh_command_queue(ccl_cq_id), operation_event);
 
                 promise->set_value();
             });
@@ -330,21 +331,22 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
             auto promise = std::make_shared<std::promise<void>>();
             futures.push_back(promise->get_future());
             boost::asio::post(pool, [&, dev_idx, device, promise]() mutable {
+                auto& single_mesh = single_meshes[dev_idx];
                 // TODO: investigate why other OPs can't be scheduled on a different command queue until CCL is finished
-                ttnn::queue_synchronize(device->command_queue(ccl_cq_id));
+                ttnn::queue_synchronize(single_mesh->mesh_command_queue(ccl_cq_id));
 
                 auto dummy_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
                 for (int j = 0; j < num_elems; j++) {
                     dummy_data[j] = bfloat16(static_cast<float>(dev_idx));
                 }
-                auto dummy_mesh = mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, dev_idx));
-                auto dummy_buffer = tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(dummy_mesh.get(), tensor_spec);
+                auto dummy_buffer = tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(single_mesh.get(), tensor_spec);
                 auto dummy_storage = tt::tt_metal::DeviceStorage{dummy_buffer, {MeshCoordinate(0, dev_idx)}};
                 Tensor dummy_tensor = Tensor(dummy_storage, tensor_spec, ReplicateTensor{}, TensorTopology{});
                 ttnn::write_buffer(ttnn::QueueId(op_cq_id), dummy_tensor, {dummy_data});
                 dispatch_ops_to_device(device, dummy_tensor, ttnn::QueueId(op_cq_id));
                 promise->set_value();
             });
+            futures.back().wait();
         }
 
         // Wait for all tasks to complete
@@ -358,10 +360,10 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
             auto promise = std::make_shared<std::promise<void>>();
             futures.push_back(promise->get_future());
             boost::asio::post(pool, [&, dev_idx, device, promise]() mutable {
-                auto ccl_event = std::make_shared<Event>();
-                ttnn::record_event(device->command_queue(ccl_cq_id), ccl_event);
+                auto& single_mesh = single_meshes[dev_idx];
+                auto ccl_event = ttnn::record_event(single_mesh->mesh_command_queue(ccl_cq_id));
                 // Enqueue the task waiting for the operation_event to the ccl`s command queue
-                ttnn::wait_for_event(device->command_queue(op_cq_id), ccl_event);
+                ttnn::wait_for_event(single_mesh->mesh_command_queue(op_cq_id), ccl_event);
 
                 promise->set_value();
             });
