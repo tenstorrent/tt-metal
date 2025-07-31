@@ -19,6 +19,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/api/ttnn/distributed/api.hpp"
 
 namespace tensor_accessor_device_tests {
 
@@ -117,10 +118,15 @@ static void test_single_core_reshard(
     SetCommonRuntimeArgs(program, writer_kernel_id, output_runtime_args);
 
     auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
-    mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+    mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
 
-    auto output_vec = output_tensor.template to_vector<T>();
+    auto output_tensor_cpu = output_tensor.cpu(true);
+
+    // Data should be only in the first shard
+    Tensor output_tensor_shard0 = ttnn::distributed::get_device_tensors(output_tensor_cpu).front();
+    auto output_vec = output_tensor_shard0.to_vector<T>();
+
     EXPECT_EQ(output_vec, src);
 }
 
@@ -183,10 +189,15 @@ static void test_multi_core_copy(const CopyParams& params, tt::tt_metal::distrib
     }
 
     auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
-    mesh_workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+    mesh_workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, true);
 
-    auto output_vec = output_tensor.template to_vector<T>();
+    auto output_tensor_cpu = output_tensor.cpu(true);
+
+    // Data should be only in the first shard
+    Tensor output_tensor_shard0 = ttnn::distributed::get_device_tensors(output_tensor_cpu).front();
+    auto output_vec = output_tensor_shard0.to_vector<T>();
+
     EXPECT_EQ(output_vec, src);
 }
 

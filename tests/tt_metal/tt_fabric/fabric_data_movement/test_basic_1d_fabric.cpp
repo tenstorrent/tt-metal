@@ -66,7 +66,7 @@ WorkerMemMap generate_worker_mem_map(tt_metal::IDevice* device, Topology topolog
     uint32_t target_address = source_l1_buffer_address;
     uint32_t notification_mailbox_address = test_results_address + TEST_RESULTS_SIZE_BYTES;
 
-    uint32_t packet_payload_size_bytes = (topology == Topology::Mesh) ? 2048 : 4096;
+    uint32_t packet_payload_size_bytes = get_tt_fabric_max_payload_size_bytes();
 
     return {
         source_l1_buffer_address,
@@ -766,7 +766,7 @@ void RunTestUnicastTGGateways(BaseFabricFixture* fixture) {
         GTEST_SKIP();
     }
 
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::ClusterType::TG) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::TG) {
         log_info(tt::LogTest, "This test is only for TG");
         GTEST_SKIP();
     }

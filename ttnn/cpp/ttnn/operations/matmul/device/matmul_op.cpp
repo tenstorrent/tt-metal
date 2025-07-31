@@ -1431,6 +1431,93 @@ std::vector<Tensor> matmul_batched_weights(
         queue_id);
 }
 
+ttnn::Shape compute_sparse_matmul_output_shape(const Tensor& input_tensor_a, const Tensor& input_tensor_b) {
+    const auto& input_shape_a = input_tensor_a.logical_shape();
+    const auto& input_shape_b = input_tensor_b.logical_shape();
+
+    const auto a_rank = input_shape_a.rank();
+    const auto b_rank = input_shape_b.rank();
+
+    // Decide the rank of the output shape based on batch dimensions in input tensors
+    // Find batched dimensions in both. Add batched dimensions from both to output rank and then add 2
+    // Batched dimensions are all dimensions except the last two
+    uint32_t a_batched_dims = (a_rank > 2) ? (a_rank - 2) : 0;
+    uint32_t b_batched_dims = (b_rank > 2) ? (b_rank - 2) : 0;
+    uint32_t output_rank = a_batched_dims + b_batched_dims + 2;
+
+    // Initialize output shape with zeros based on the output rank
+    ttnn::Shape output_shape(std::vector<uint32_t>(output_rank, 0));
+
+    // First pick the M and N dimensions from the input tensors
+    output_shape[-2] = input_shape_a[-2];
+    output_shape[-1] = input_shape_b[-1];
+
+    // Add batched dims from input B to output shape
+    for (uint32_t i = 0; i < b_batched_dims; ++i) {
+        output_shape[-3 - i] = input_shape_b[-3 - i];
+    }
+
+    // Add batched dims from input A to output shape
+    for (uint32_t i = 0; i < a_batched_dims; ++i) {
+        output_shape[-3 - b_batched_dims - i] = input_shape_a[-3 - i];
+    }
+
+    return output_shape;
+}
+
+SparseMatmul create_sparse_matmul_struct(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const Tensor& sparsity,
+    const struct SparseMatmul& parameters,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors) {
+    auto matmul_parameters = Matmul{
+        parameters.program_config,
+        /*bcast_batch=*/std::nullopt,
+        parameters.output_mem_config,
+        parameters.output_dtype,
+        parameters.compute_kernel_config,
+        /*untilize_out=*/false,
+        parameters.user_core_coord,
+        /*user_fused_activation=*/std::nullopt,
+        /*user_run_batched=*/false,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
+        parameters.output_tile,
+        parameters.global_cb,
+        parameters.sub_device_id};
+
+    auto matmul_struct =
+        create_matmul_struct(input_tensor_a, input_tensor_b, matmul_parameters, {optional_output_tensors.at(0)});
+    return SparseMatmul{
+        parameters.nnz,
+        matmul_struct.program_config,
+        matmul_struct.output_mem_config,
+        matmul_struct.output_dtype,
+        matmul_struct.compute_kernel_config,
+        matmul_struct.user_core_coord,
+        matmul_struct.output_tile,
+        matmul_struct.global_cb,
+        matmul_struct.sub_device_id};
+}
+
+Tensor sparse_matmul(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const Tensor& sparsity,
+    const struct SparseMatmul& parameters,
+    const QueueId queue_id,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return operation::run(
+               create_sparse_matmul_struct(
+                   input_tensor_a, input_tensor_b, sparsity, parameters, {optional_output_tensor}),
+               {input_tensor_a, input_tensor_b, sparsity},
+               {},
+               {optional_output_tensor},
+               queue_id)
+        .at(0);
+}
+
 void check_tensor_in_grid(const Tensor& tensor, const CoreCoord& grid_size) {
     // Validate tensor is within grid if sharded and not in DRAM
     if (tensor.memory_config().is_sharded() && tensor.memory_config().buffer_type() != BufferType::DRAM) {
@@ -2533,6 +2620,183 @@ operation::OpPerformanceModel Matmul::create_op_performance_model(
     std::vector<Tensor>& output_tensors) const {
     return ::create_op_performance_model_for_matmul(
         input_tensors, optional_input_tensors, output_tensors, this->compute_kernel_config.value());
+}
+
+void SparseMatmul::validate(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
+    const auto& sparsity = input_tensors.at(2);
+
+    const auto& ashape = input_tensor_a.padded_shape();
+    const auto& bshape = input_tensor_b.padded_shape();
+    auto in0_tile = input_tensor_a.tensor_spec().tile();
+    auto in1_tile = input_tensor_b.tensor_spec().tile();
+    auto in0_tile_shape = in0_tile.get_tile_shape();
+    auto in1_tile_shape = in1_tile.get_tile_shape();
+    auto output_tile = this->output_tile.value();
+    auto tile_width_ratio = output_tile.get_tile_shape()[1] / in1_tile_shape[1];
+    auto output_layout = Layout::TILE;
+
+    TT_FATAL(
+        ashape[-1] == bshape[-2],
+        "Dimension K (A.shape[-1] {}) and B.shape[-2] ({}) must match for A and B",
+        ashape[-1],
+        bshape[-2]);
+    TT_FATAL(
+        ashape[-2] % in0_tile_shape[0] == 0,
+        "ashape[-2] (A's rows: {}) must be divisible by in0_tile_shape[0] (A's tile height: {}) for tilization. "
+        "ashape: {}, in0_tile_shape: {}",
+        ashape[-2],
+        in0_tile_shape[0],
+        ashape,
+        in0_tile_shape);
+    TT_FATAL(
+        ashape[-1] % in0_tile_shape[1] == 0,
+        "ashape[-1] (A's cols: {}) must be divisible by in0_tile_shape[1] (A's tile width: {}) for tilization. ashape: "
+        "{}, in0_tile_shape: {}",
+        ashape[-1],
+        in0_tile_shape[1],
+        ashape,
+        in0_tile_shape);
+    TT_FATAL(
+        bshape[-2] % in1_tile_shape[0] == 0,
+        "bshape[-2] (B's rows: {}) must be divisible by in1_tile_shape[0] (B's tile height: {}) for tilization. "
+        "bshape: {}, in1_tile_shape: {}",
+        bshape[-2],
+        in1_tile_shape[0],
+        bshape,
+        in1_tile_shape);
+    TT_FATAL(
+        bshape[-1] % in1_tile_shape[1] == 0,
+        "bshape[-1] (B's cols: {}) must be divisible by in1_tile_shape[1] (B's tile width: {}) for tilization. bshape: "
+        "{}, in1_tile_shape: {}",
+        bshape[-1],
+        in1_tile_shape[1],
+        bshape,
+        in1_tile_shape);
+    TT_FATAL(this->nnz > 0, "nnz must be greater than 0");
+
+    // Check that nnz is less than or equal to the length of all batch dimensions
+    uint32_t batch_length = 1;
+    if (ashape.rank() > 2) {
+        for (int i = 0; i < ashape.rank() - 2; ++i) {
+            batch_length *= ashape[i];
+        }
+    }
+    if (bshape.rank() > 2) {
+        for (int i = 0; i < bshape.rank() - 2; ++i) {
+            batch_length *= bshape[i];
+        }
+    }
+    TT_FATAL(
+        this->nnz <= batch_length,
+        "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
+        this->nnz,
+        batch_length);
+
+    // Check that sparsity has enough entries
+    TT_FATAL(
+        sparsity.logical_volume() == batch_length,
+        "sparsity.logical_volume() ({}) must be equal to the product of all batch dimensions ({})",
+        sparsity.logical_volume(),
+        batch_length);
+}
+
+std::vector<ttnn::TensorSpec> SparseMatmul::compute_output_specs(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
+    TT_FATAL(
+        optional_output_tensors.size() <= 1,
+        "None or One Optional output tensor can be passed when accessing it "
+        "for computing SparseMatmul's output specs");
+
+    const bool is_output_tensor_given = !optional_output_tensors.empty() && optional_output_tensors.at(0).has_value();
+
+    if (is_output_tensor_given) {
+        return {optional_output_tensors.at(0)->tensor_spec()};
+    }
+
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
+
+    const auto output_shape = compute_sparse_matmul_output_shape(input_tensor_a, input_tensor_b);
+
+    const auto output_dtype = this->output_dtype.has_value() ? this->output_dtype.value() : input_tensor_a.dtype();
+
+    auto in0_tile = input_tensor_a.tensor_spec().tile();
+    auto in1_tile = input_tensor_b.tensor_spec().tile();
+    tt::tt_metal::Tile output_tile = this->output_tile.has_value()
+                                         ? this->output_tile.value()
+                                         : get_output_tile(this->output_mem_config, in0_tile, in1_tile, std::nullopt);
+
+    return {TensorSpec(
+        output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE, output_tile), this->output_mem_config))};
+}
+
+std::vector<Tensor> SparseMatmul::create_output_tensors(
+    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
+    return operation::default_create_output_tensors(*this, input_tensors, optional_output_tensors);
+}
+
+operation::CacheableMeshWorkload<std::vector<Tensor>> SparseMatmul::create_mesh_workload(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    auto matmul_parameters = Matmul{
+        this->program_config,
+        /*bcast_batch=*/std::nullopt,
+        this->output_mem_config,
+        this->output_dtype,
+        this->compute_kernel_config,
+        /*untilize_out=*/false,
+        this->user_core_coord,
+        /*user_fused_activation=*/std::nullopt,
+        /*user_run_batched=*/false,
+        /*transpose_a=*/false,
+        /*transpose_b=*/false,
+        this->output_tile,
+        this->global_cb,
+        this->sub_device_id};
+
+    const auto& input_tensor_a = input_tensors.at(0);
+    const auto& input_tensor_b = input_tensors.at(1);
+    const auto& sparsity = input_tensors.at(2);
+    auto& output_tensor = output_tensors.at(0);
+
+    auto chosen_program_config =
+        get_program_config(input_tensor_a, input_tensor_b, /*bias_single_tile_size=*/0, &matmul_parameters);
+
+    return std::visit(
+        [&](const auto& program_config) -> tt::tt_metal::operation::CacheableMeshWorkload<std::vector<Tensor>> {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, MatmulMultiCoreReuseMultiCast1DProgramConfig>) {
+                auto sparse_mcast_mm_program = sparse_matmul_multi_core_reuse_mcast_1d_optimized(
+                    input_tensor_a,
+                    input_tensor_b,
+                    sparsity,
+                    this->nnz,
+                    output_tensor,
+                    program_config.compute_with_storage_grid_size,
+                    this->compute_kernel_config.value(),
+                    program_config.in0_block_w,
+                    program_config.out_subblock_h,
+                    program_config.out_subblock_w,
+                    program_config.out_block_h,
+                    program_config.out_block_w,
+                    program_config.per_core_M,
+                    program_config.per_core_N,
+                    program_config.mcast_in0,
+                    program_config.gather_in0,
+                    this->global_cb,
+                    program_config.num_global_cb_receivers,
+                    this->sub_device_id);
+
+                return create_homogenous_mesh_workload(sparse_mcast_mm_program, tensor_coords);
+            } else {
+                TT_THROW("Unsupported program config {}", chosen_program_config);
+            }
+        },
+        chosen_program_config);
 }
 
 }  // namespace matmul

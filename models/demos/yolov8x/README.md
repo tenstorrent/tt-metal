@@ -28,7 +28,7 @@ YOLOv8 is one of the recent iterations in the YOLO series of real-time object de
 
 Use the following command to run the model :
 ```
-pytest --disable-warnings /home/ubuntu/punith/tt-metal/tests/ttnn/integration_tests/yolov8x/test_yolov8x.py::test_yolov8x_640
+pytest --disable-warnings models/demos/yolov8x/tests/pcc/test_yolov8x.py::test_yolov8x_640
 ```
 
 ### Performant Model with Trace+2CQ

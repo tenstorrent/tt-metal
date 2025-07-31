@@ -6,6 +6,7 @@
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
 #include "dev_msgs.h"
+#include <cstdint>
 #include <device_pool.hpp>
 #include <global_circular_buffer.hpp>
 #include <global_semaphore.hpp>
@@ -28,6 +29,10 @@
 #include "buffer_types.hpp"
 #include "circular_buffer_config.hpp"
 #include "data_types.hpp"
+#include "llrt/tt_cluster.hpp"
+#include <umd/device/cluster.h>
+#include <umd/device/tt_cluster_descriptor.h>
+#include <filesystem>
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "kernels/kernel_impl.hpp"
@@ -50,6 +55,7 @@
 #include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
 #include "fabric/hw/inc/fabric_routing_mode.h"
+#include <tt-metalium/graph_tracking.hpp>
 
 namespace tt {
 
@@ -168,7 +174,7 @@ void ConfigureKernelGroup(
     }
 }
 
-std::optional<uint32_t> get_semaphore_id(const Program &program, const CoreRange& core_range, CoreType core_type) {
+std::optional<uint32_t> get_semaphore_id(const Program& program, const CoreRange& core_range, CoreType core_type) {
     std::optional<uint32_t> semaphore_id = std::nullopt;
     std::vector<uint32_t> semaphore_histogram(NUM_SEMAPHORES, 0);
     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
@@ -497,6 +503,10 @@ DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uin
 }
 
 void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+    if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
+        return;
+    }
+
     size_t host_buffer_size_bytes = host_buffer.size();
     TT_FATAL(
         host_buffer_size_bytes <= buffer.size(),
@@ -942,6 +952,13 @@ chip_id_t GetPCIeDeviceID(chip_id_t device_id) {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
 }
 
+ClusterType GetClusterType() { return tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type(); }
+
+std::string SerializeClusterDescriptor() {
+    std::filesystem::path path = tt::umd::Cluster::create_cluster_descriptor()->serialize_to_file();
+    return path.string();
+}
+
 IDevice* CreateDevice(
     chip_id_t device_id,
     const uint8_t num_hw_cqs,
@@ -1263,6 +1280,17 @@ void SetRuntimeArgs(
 
 void SetRuntimeArgs(
     const Program& program,
+    KernelHandle kernel_id,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    std::initializer_list<const uint32_t> runtime_args) {
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32, program, kernel_id, core_spec, runtime_args);
+    ZoneScoped;
+    std::visit([&](auto&& core_spec) { SetRuntimeArgsImpl(program, kernel_id, core_spec, runtime_args); }, core_spec);
+}
+
+void SetRuntimeArgs(
+    const Program& program,
     KernelHandle kernel,
     const std::vector<CoreCoord>& core_spec,
     const std::vector<std::vector<uint32_t>>& runtime_args) {
@@ -1306,6 +1334,14 @@ void SetRuntimeArgs(
 }
 
 void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args) {
+    ZoneScoped;
+    if (runtime_args.size() != 0) {
+        detail::GetKernel(program, kernel_id)->set_common_runtime_args(runtime_args);
+    }
+}
+
+void SetCommonRuntimeArgs(
+    const Program& program, KernelHandle kernel_id, std::initializer_list<const uint32_t> runtime_args) {
     ZoneScoped;
     if (runtime_args.size() != 0) {
         detail::GetKernel(program, kernel_id)->set_common_runtime_args(runtime_args);

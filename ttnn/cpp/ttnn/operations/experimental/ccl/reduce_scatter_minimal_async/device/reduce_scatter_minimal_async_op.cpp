@@ -108,10 +108,11 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
     }
 
     // Each direction has a ready semaphore and there's a global sync semaphore, per link.
+    const auto num_expected_semaphores = 3;
     TT_FATAL(
-        semaphore.size() == num_links * 3,
+        semaphore.size() == num_expected_semaphores,
         "Error, semaphore size should be {} but has {}",
-        num_links * 3,
+        num_expected_semaphores,
         semaphore.size());
 }
 
@@ -210,12 +211,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_
 
 tt::tt_metal::operation::Hash ReduceScatterMinimalAsync::compute_program_hash(
     const std::vector<Tensor>& input_tensors) const {
-    log_trace(tt::LogOp, "compute_program_hash is called");
-    auto input_shape = input_tensors[0].padded_shape();
-    auto input_memory_layout = input_tensors[0].layout();
-    auto input_dtype = input_tensors[0].dtype();
-    auto input_memory_config = input_tensors[0].memory_config();
-    uint32_t semaphore_address = this->semaphore.at(0).address();
     return tt::tt_metal::operation::hash_operation<ReduceScatterMinimalAsync>(
         this->dim,
         this->num_links,
@@ -223,15 +218,12 @@ tt::tt_metal::operation::Hash ReduceScatterMinimalAsync::compute_program_hash(
         this->output_mem_config,
         this->topology,
         this->barrier_semaphore.has_value(),
+        this->sub_device_id,
         this->cluster_axis,
         this->chunks_per_sync,
         this->num_workers_per_link,
         this->num_buffers_per_channel,
-        input_shape,
-        input_memory_layout,
-        input_dtype,
-        input_memory_config,
-        semaphore_address);
+        input_tensors);
 }
 
 namespace operations {

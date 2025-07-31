@@ -32,8 +32,8 @@ namespace utils {
         case BinaryOpType::LOGADDEXP2:
         case BinaryOpType::LDEXP:
         case BinaryOpType::SQUARED_DIFFERENCE:
-        case BinaryOpType::LOGICAL_AND:
         case BinaryOpType::BIAS_GELU: return (a == DataType::FLOAT32 && b == DataType::FLOAT32);
+        case BinaryOpType::LOGICAL_AND:
         case BinaryOpType::LOGICAL_OR:
         case BinaryOpType::LOGICAL_XOR:
         case BinaryOpType::GT:
@@ -52,6 +52,7 @@ namespace utils {
         case BinaryOpType::BITWISE_AND: return ((a == DataType::INT32 && b == DataType::INT32) || (a == DataType::UINT16 && b == DataType::UINT16));
         case BinaryOpType::MAXIMUM:
         case BinaryOpType::MINIMUM:
+        case BinaryOpType::XLOGY:
         case BinaryOpType::POWER: return true;
         default: return false;
     }
