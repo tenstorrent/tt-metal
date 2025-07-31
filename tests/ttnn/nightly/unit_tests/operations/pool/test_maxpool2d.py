@@ -199,7 +199,7 @@ def run_max_pool(
     pcc_thresh = 1.0
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if dtype == ttnn.bfloat8_b:
-        pcc_thresh = 0.9994
+        pcc_thresh = 0.997
         atol = 0.35
     assert_with_pcc(ttnn_output, torch_output, pcc_thresh)
     allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)

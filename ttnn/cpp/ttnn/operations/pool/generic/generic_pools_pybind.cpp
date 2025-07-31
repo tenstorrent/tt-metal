@@ -17,17 +17,6 @@
 namespace ttnn::operations::pool {
 namespace py = pybind11;
 
-// Helper function to convert padding variant to 4-element array
-inline std::array<uint32_t, 4> convert_padding_to_4d(
-    const std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>>& padding) {
-    if (std::holds_alternative<std::array<uint32_t, 2>>(padding)) {
-        auto pad_2d = std::get<std::array<uint32_t, 2>>(padding);
-        return {pad_2d[0], pad_2d[0], pad_2d[1], pad_2d[1]};  // [h, w, h, w]
-    } else {
-        return std::get<std::array<uint32_t, 4>>(padding);
-    }
-}
-
 void bind_max_pool2d_operation(py::module& module) {
     bind_registered_operation(
         module,
@@ -107,7 +96,6 @@ void bind_max_pool2d_operation(py::module& module) {
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
                bool in_place_halo,
                QueueId queue_id) -> ttnn::Tensor {
-                auto padding_4d = convert_padding_to_4d(padding);
                 return self(
                     queue_id,
                     input_tensor,
@@ -117,7 +105,7 @@ void bind_max_pool2d_operation(py::module& module) {
                     channels,
                     kernel_size,
                     stride,
-                    padding_4d,
+                    padding,
                     dilation,
                     ceil_mode,
                     memory_config,
@@ -221,7 +209,6 @@ void bind_avg_pool2d_operation(py::module& module) {
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
                bool in_place_halo,
                QueueId queue_id) -> ttnn::Tensor {
-                auto padding_4d = convert_padding_to_4d(padding);
                 return self(
                     queue_id,
                     input_tensor,
@@ -231,7 +218,7 @@ void bind_avg_pool2d_operation(py::module& module) {
                     channels,
                     kernel_size,
                     stride,
-                    padding_4d,
+                    padding,
                     ceil_mode,
                     count_include_pad,
                     divisor_override,
