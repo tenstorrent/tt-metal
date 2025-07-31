@@ -16,7 +16,7 @@ parameters = {
             [1, 128, 150, 150, 2, 2, 2, 2, 0, 0, 1, 1, False],
             [1, 16, 25, 23, 2, 2, 2, 2, 0, 0, 1, 1, False],  # C=16
             [1, 480, 28, 28, 3, 3, 2, 2, 1, 1, 1, 1, True],
-            [1, 64, 360, 640, 3, 3, 2, 2, 1, 1, 1, 1, False],  # massive NHW
+            [1, 64, 400, 544, 3, 3, 2, 2, 1, 1, 1, 1, False],  # massive NHW
             [1, 832, 14, 14, 4, 4, 2, 2, 0, 0, 1, 1, True],  # > 800 channels, 16 kernel
             [1, 160, 30, 30, 15, 15, 1, 1, 7, 5, 1, 1, False],  # 15x15 kernel, uneven padding
             [1, 224, 20, 20, 8, 8, 6, 6, 2, 4, 1, 1, False],  # 8x8 kernel, uneven padding
@@ -83,7 +83,7 @@ def test_max_pool2d_height_shard(device, dtype, in_place, input_spec):
         ceil_mode,
     ) = input_spec
     if kernel_h == 36 and in_place:
-        pytest.skip("this case runs out of memory")
+        pytest.skip("36x36 kernel in place runs out of memory")
 
     torch_tensor_map = {}
     run_max_pool(
