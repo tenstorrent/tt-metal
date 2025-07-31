@@ -177,8 +177,8 @@ def sd_dual_attn_block(
             num_links=parallel_manager.num_links,
             topology=parallel_manager.dit_parallel_config.topology,
             cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
+            chunks_per_sync=40,
+            num_workers_per_link=3,
             num_buffers_per_channel=2,
         )
         prompt_scaled = unpadded_all_gather_async(
@@ -234,8 +234,8 @@ def sd_gated_ff_block(
             num_links=parallel_manager.num_links,
             topology=parallel_manager.dit_parallel_config.topology,
             cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
+            chunks_per_sync=40 if is_spatial else 10,
+            num_workers_per_link=3 if is_spatial else 2,
             num_buffers_per_channel=2,
         )
     result = gate * sd_feed_forward(
