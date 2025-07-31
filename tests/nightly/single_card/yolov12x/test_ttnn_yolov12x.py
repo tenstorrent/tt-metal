@@ -1,0 +1,1 @@
+../../../../models/experimental/yolov12x/tests/pcc/test_ttnn_yolov12x.py
