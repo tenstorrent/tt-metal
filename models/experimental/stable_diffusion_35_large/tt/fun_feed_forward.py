@@ -92,9 +92,9 @@ def sd_feed_forward(
             memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
             topology=parallel_manager.dit_parallel_config.topology,
             cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
-            chunks_per_sync=10,
+            chunks_per_sync=2,
             num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            num_buffers_per_channel=8 if is_spatial else 2,
         )
         # Reshape to set padding again
         result_unpadded_shape = list(result.shape)
