@@ -495,11 +495,10 @@ def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Seque
 
 
 def get_state_dicts(
-    dicts: Sequence[dict[str, torch.Tensor] | None],
     key: Any,
-    shape: Sequence[int] | None = None,
-    dtype: torch.dtype | None = None,
+    dicts: Sequence[dict[str, torch.Tensor] | None],
     concat_dim: int = 0,
+    shape: Sequence[int] | None = None,
     concat: bool = False,
 ) -> torch.Tensor:
     """Get a weight from a list of state dictionaries and combine them into a single tensor.
@@ -520,20 +519,12 @@ def get_state_dicts(
     )
     assert expected_shape is not None, "At least one dictionary must be non-empty, or a shape must be provided"
 
-    expected_dtype = (
-        next(map(lambda d: d[key].dtype, filter(lambda d: d is not None, dicts)), None) if dtype is None else dtype
-    )
-    assert expected_dtype is not None, "At least one dictionary must be non-empty, or a dtype must be provided"
-
     assert all(key in d for d in dicts if d is not None), f"Key {key} not found in all dictionaries"
     assert all(
         d[key].shape == expected_shape for d in dicts if d is not None
-    ), f"Key {key} must have the value shaped as {expected_shape} in all dictionaries; instead got {[d[key].shape if d is not None else None for d in dicts]}"
-    assert all(
-        d[key].dtype == expected_dtype for d in dicts if d is not None
-    ), f"Key {key} must have the dtype as {expected_dtype} in all dictionaries; instead got {[d[key].dtype if d is not None else None for d in dicts]}"
+    ), f"Key {key} must have the value shaped as {expected_shape} in all dictionaries"
 
-    tensors = [torch.zeros(expected_shape, dtype=dtype) if d is None else d[key] for d in dicts]
+    tensors = [torch.zeros(expected_shape) if d is None else d[key] for d in dicts]
 
     if concat:
         return torch.concat(tensors, dim=concat_dim)
