@@ -4,8 +4,6 @@
 
 from abc import abstractmethod
 
-import torch
-
 import ttnn
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.run_config import RunDecodeConfig, RunPrefillConfig
@@ -24,11 +22,6 @@ class RMSNormBase(AbstractModule):
             True if the device is supported, False otherwise.
         """
         return tuple(mesh_device.shape)[0] == 1
-
-    @classmethod
-    @abstractmethod
-    def _convert_weight(cls, torch_weight: torch.Tensor, mesh_device: ttnn.Device) -> ttnn.Tensor:
-        raise NotImplementedError("This method should be implemented in subclasses")
 
     @classmethod
     def _get_pc(
