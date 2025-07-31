@@ -3,14 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 
-import llama_models.llama3.reference_impl.generation as llama_reference_generation
 from loguru import logger
 from PIL import Image as PIL_Image
 from pkg_resources import resource_filename
 from transformers import AutoProcessor
 
+from models.common.llama_models import create_vision_mask, extract_images_from_messages, sample_top_p
 from models.tt_transformers.tt.generator import create_submeshes
 
 IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
@@ -32,7 +32,7 @@ def get_batch_sampler(temperature, top_p, tokenizer):
     def sample(logits):
         if temperature > 0:
             probs = torch.softmax(logits[:, -1] / temperature, dim=-1)
-            next_token = llama_reference_generation.sample_top_p(probs, top_p)
+            next_token = sample_top_p(probs, top_p)
         else:
             next_token = torch.argmax(logits[:, -1], dim=-1)
 
@@ -48,33 +48,6 @@ def create_random_image(width, height):
     # Generate random RGB values
     random_array = np.random.randint(0, 256, (height, width, 3), dtype=np.uint8)
     return PIL_Image.fromarray(random_array, "RGB")
-
-
-def create_vision_mask(
-    tokens: List[int],
-    vision_token: int,
-) -> List[List[int]]:
-    """https://github.com/meta-llama/llama-models/blob/v0.1.5/models/llama3/api/chat_format.py#L253-L276"""
-    vision_token_locations = [i for i, token in enumerate(tokens) if token == vision_token]
-    if len(vision_token_locations) == 0:
-        return []
-
-    if len(vision_token_locations) == 1:
-        # only one image present, unmask until end of sequence
-        return [[vision_token_locations[0], -1]]
-    vision_masks = [[loc1, loc2] for loc1, loc2 in zip(vision_token_locations[:-1], vision_token_locations[1:])]
-    # last image will attend to all subsequent text
-    vision_masks.append([vision_token_locations[-1], len(tokens)])
-
-    # if there are two or more consecutive vision tokens,
-    # they should all attend to all subsequent
-    # text present
-    last_mask_end = vision_masks[-1][1]
-    for vision_mask in vision_masks[::-1]:
-        if vision_mask[0] == vision_mask[1] - 1:
-            vision_mask[1] = last_mask_end
-        last_mask_end = vision_mask[1]
-    return vision_masks
 
 
 def create_multimodal_model(
@@ -197,8 +170,7 @@ def test_multimodal_demo_text(
     profiler = BenchmarkProfiler()
     profiler.start("run")
 
-    ckpt_dir = os.environ["LLAMA_DIR"]
-    tokenizer_path = str(Path(ckpt_dir) / "tokenizer.model")
+    ckpt_dir = os.environ["HF_MODEL"]
 
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     max_batch_size *= data_parallel  # input batch_size is interpreted as size per DP group
@@ -211,7 +183,7 @@ def test_multimodal_demo_text(
         max_seq_len=max_seq_len,
     )
     generator = Generator(model, model_args, mesh_device)
-    processor = AutoProcessor.from_pretrained("meta-llama/Llama-3.2-11B-Vision-Instruct")
+    processor = AutoProcessor.from_pretrained(ckpt_dir)
     tokenizer = processor.tokenizer
 
     xattn_caches = [model.setup_cache(model_args[i].max_batch_size) for i, model in enumerate(generator.model)]
@@ -233,10 +205,42 @@ def test_multimodal_demo_text(
 
     # Trace capture dialogs with random images
     trace_dialogs = [
-        [UserMessage(content=[ImageMedia(image=trace_img_560x560), "Describe this image."])],
-        [UserMessage(content=[ImageMedia(image=trace_img_1120x560), "What do you see in this image?"])],
-        [UserMessage(content=[ImageMedia(image=trace_img_560x1120), "What do you see in this image?"])],
-        [UserMessage(content=[ImageMedia(image=trace_img_1120x1120), "Analyze this image."])],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": trace_img_560x560},
+                    {"type": "text", "text": "Describe this image."},
+                ],
+            }
+        ],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": trace_img_1120x560},
+                    {"type": "text", "text": "What do you see in this image?"},
+                ],
+            }
+        ],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": trace_img_560x1120},
+                    {"type": "text", "text": "What do you see in this image?"},
+                ],
+            }
+        ],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": trace_img_1120x1120},
+                    {"type": "text", "text": "Analyze this image."},
+                ],
+            }
+        ],
     ]
 
     if len(trace_dialogs) < max_batch_size:
@@ -258,15 +262,23 @@ def test_multimodal_demo_text(
             [
                 {
                     "role": "user",
-                    "content": [{"type": "image"}, {"type": "text", "text": "Write a haiku for this image."}],
+                    "content": [
+                        {"type": "image", "image": img},
+                        {"type": "text", "text": "Write a haiku for this image."},
+                    ],
                 }
             ],
-            [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "What is for dinner?"}]}],
+            [
+                {
+                    "role": "user",
+                    "content": [{"type": "image", "image": img2}, {"type": "text", "text": "What is for dinner?"}],
+                }
+            ],
             [
                 {
                     "role": "user",
                     "content": [
-                        {"type": "image"},
+                        {"type": "image", "image": ocr_image},
                         {"type": "text", "text": "What is the full text of this image? Do OCR"},
                     ],
                 }
@@ -274,12 +286,15 @@ def test_multimodal_demo_text(
             [
                 {
                     "role": "user",
-                    "content": [{"type": "image"}, {"type": "text", "text": "What objects are in this image?"}],
+                    "content": [
+                        {"type": "image", "image": clutter},
+                        {"type": "text", "text": "What objects are in this image?"},
+                    ],
                 }
             ],
         ]
-        images = [[img], [img2], [ocr_image], [clutter]]
     else:
+        # for text_only_prompts system message could be added. Find "or not image_ns.has_images" in https://huggingface.co/meta-llama/Llama-3.2-11B-Vision-Instruct/blob/main/chat_template.json
         dialogs = [
             [{"role": "user", "content": [{"type": "text", "text": "Write a haiku."}]}],
             [{"role": "user", "content": [{"type": "text", "text": "What is for dinner?"}]}],
@@ -287,7 +302,7 @@ def test_multimodal_demo_text(
                 {
                     "role": "user",
                     "content": [
-                        {"type": "image"},
+                        {"type": "image", "image": ocr_image},
                         {"type": "text", "text": "What is the full text of this image? Do OCR"},
                     ],
                 }
@@ -295,20 +310,21 @@ def test_multimodal_demo_text(
             [
                 {
                     "role": "user",
-                    "content": [{"type": "image"}, {"type": "text", "text": "What objects are in this image?"}],
+                    "content": [
+                        {"type": "image", "image": clutter},
+                        {"type": "text", "text": "What objects are in this image?"},
+                    ],
                 }
             ],
         ]
-        images = [[], [], [ocr_image], [clutter]]
     if len(dialogs) < max_batch_size:
         dialogs *= max_batch_size // len(dialogs)
-        images *= max_batch_size // len(dialogs)
 
     assert len(dialogs) % max_batch_size == 0
     total_users = len(dialogs)
     num_batches = total_users // max_batch_size
 
-    sampler = get_batch_sampler(temperature, top_p, tokenizer)  # TBD: rewrite tokenizer
+    sampler = get_batch_sampler(temperature, top_p, tokenizer)
     _num_prefill_tokens = 0
     _num_decode_tokens = 0
 
@@ -316,22 +332,26 @@ def test_multimodal_demo_text(
         logger.info(f"Iteration {iter_num}")
         current_dialogs = trace_dialogs + dialogs
         for batch_idx in range(num_batches):
-            batch_dialogs = dialogs[batch_idx * max_batch_size : (batch_idx + 1) * max_batch_size]
-            batch_dialogs = [
-                processor.apply_chat_template(messages, add_generation_prompt=True) for messages in batch_dialogs
+            batch_dialogs = current_dialogs[batch_idx * max_batch_size : (batch_idx + 1) * max_batch_size]
+            for dialog in batch_dialogs:
+                for msg in dialog:
+                    content = " ".join(
+                        str(value) for content in msg["content"] for key, value in content.items() if key != "type"
+                    )
+                    print(f"{msg['role'].capitalize()}: {content}\n")
+            batch_inputs = [
+                processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
+                for messages in batch_dialogs
             ]
-            batch_images = images[batch_idx * max_batch_size : (batch_idx + 1) * max_batch_size]
-            batch_model_input = processor(text=batch_dialogs, images=batch_images, add_special_tokens=False)
 
             # Do initial prefill
             # TBD: rewrite generator since images are processed twice (in processor and generator)
-            vision_images = [images if images else None for images in batch_images]
+            vision_images = [extract_images_from_messages(messages) or None for messages in batch_dialogs]
             vision_mask = [
-                create_vision_mask(model_input, processor.image_token_id)
-                for model_input in batch_model_input["input_ids"]
+                create_vision_mask(model_input["input_ids"][0], processor.image_token_id) or None
+                for model_input in batch_inputs
             ]
-            vision_mask = [mask if mask else None for mask in vision_mask]
-            prompt_tokens = batch_model_input["input_ids"]
+            prompt_tokens = [inputs["input_ids"][0] for inputs in batch_inputs]
             # Get max length of prompts in batch
             prefill_lens = torch.tensor([len(tokens) for tokens in prompt_tokens], dtype=torch.long)
             _num_prefill_tokens += prefill_lens.sum().item()

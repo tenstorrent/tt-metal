@@ -5,16 +5,18 @@
 from dataclasses import dataclass
 
 import torch
-from llama_models.llama3.api.datatypes import InterleavedTextMedia, StopReason
-from llama_models.llama3.reference_impl.generation import (
-    ChatPrediction,
-    CompletionPrediction,
-    TokenResult,
-    sample_top_p,
-)
 from loguru import logger
 
 import ttnn
+from models.common.llama_models import (
+    CompletionMessage,
+    StopReason,
+    TokenResult,
+    create_vision_mask,
+    encode_content,
+    extract_images_from_messages,
+    sample_top_p,
+)
 from models.tt_transformers.tt.common import (
     copy_host_to_device,
     get_block_size,
@@ -37,7 +39,7 @@ class SamplingParams:
 
 
 class Generator:
-    def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
+    def __init__(self, model, model_args, mesh_device, preprocessor=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
         With model_args you have the checkpoint location, can specify max batch size
@@ -51,8 +53,7 @@ class Generator:
         self.model = model
         self.model_args = model_args
         self.mesh_device = mesh_device
-        self.tokenizer = tokenizer
-        self.formatter = formatter
+        self.preprocessor = preprocessor
         self.data_parallel = len(self.model)
 
     # Note: This function is called by vLLM
@@ -1093,15 +1094,14 @@ class Generator:
 
     def generate(
         self,
-        model_input,
+        vision_images,
+        vision_mask,
+        prompt_tokens,
         max_gen_len: int,
         temperature: float = 0.6,
         top_p: float = 0.9,
     ):
         # Do initial prefill
-        vision_images = model_input.vision.images
-        vision_mask = model_input.vision.mask
-        prompt_tokens = model_input.tokens
         prefill_len = len(prompt_tokens)
         total_len = prefill_len + max_gen_len  # Prepares mask for full length of output
 
@@ -1148,7 +1148,7 @@ class Generator:
             else:
                 next_token = torch.argmax(logits[:, -1], dim=-1)
             next_token = next_token.reshape(-1)
-            return next_token, self.tokenizer.decode(next_token.tolist())
+            return next_token, self.preprocessor.decode(next_token.tolist())
 
         next_token, text = sample(logits)
 
@@ -1188,11 +1188,19 @@ class Generator:
         if max_gen_len is None or max_gen_len == 0 or max_gen_len >= self.model[model_id].configuration.max_seq_len:
             max_gen_len = self.model[model_id].configuration.max_seq_len - 1
 
+        model_input = self.processor.apply_chat_template(
+            messages, add_generation_prompt=True, tokenize=True, return_dict=True
+        )
+        vision_images = extract_images_from_messages(messages) or None
+        vision_mask = create_vision_mask(model_input["input_ids"][0], self.processor.image_token_id) or None
+
         tokens = []
 
         stop_reason = None
         for result in self.generate(
-            model_input=self.formatter.encode_dialog_prompt(messages, tool_prompt_format=False),
+            vision_images=vision_images,
+            vision_mask=vision_mask,
+            prompt_tokens=model_input["input_ids"][0],
             max_gen_len=max_gen_len,
             temperature=temperature,
             top_p=top_p,
@@ -1206,13 +1214,13 @@ class Generator:
         if stop_reason is None:
             stop_reason = StopReason.out_of_tokens
 
-        message = self.formatter.decode_assistant_message(tokens, stop_reason)
+        message = self.preprocessor.decode(tokens, skip_special_tokens=True)
 
-        return ChatPrediction(generation=message)
+        return CompletionMessage(message)
 
     def text_completion(
         self,
-        content: InterleavedTextMedia,
+        content,
         temperature: float = 0.6,
         top_p: float = 0.9,
         max_gen_len=None,
@@ -1221,21 +1229,27 @@ class Generator:
         if max_gen_len is None or max_gen_len == 0 or max_gen_len >= self.model[model_id].configuration.max_seq_len:
             max_gen_len = self.model[model_id].configuration.max_seq_len - 1
 
-        model_input = self.formatter.encode_content(content)
+        vision_images = []
+        text = encode_content(content, vision_images, self.processor.image_token)
+        vision_images = vision_images or None
+        model_input = self.processor(text=text, images=vision_images, add_special_tokens=False)
+        vision_mask = create_vision_mask(model_input["input_ids"][0], self.processor.image_token_id) or None
 
         tokens = []
 
         for result in self.generate(
-            model_input=model_input,
+            vision_images=vision_images,
+            vision_mask=vision_mask,
+            prompt_tokens=model_input["input_ids"],
             max_gen_len=max_gen_len,
             temperature=temperature,
             top_p=top_p,
         ):
             tokens.append(result.token)
 
-        generation = self.tokenizer.decode(tokens)
+        generation = self.processor.decode(tokens, skip_special_tokens=True)
 
-        return CompletionPrediction(generation=generation)
+        return generation
 
     def _get_prefill_user_page_table(self, page_table, kv_cache, prefill_len):
         # Ensure page_table is not padded with extra blocks for paged_fill_cache to work properly

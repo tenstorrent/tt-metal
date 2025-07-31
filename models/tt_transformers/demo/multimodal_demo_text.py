@@ -5,10 +5,8 @@ import os
 from pathlib import Path
 from typing import Optional
 
-import llama_models.llama3.reference_impl.generation as llama_reference_generation
 import pytest
 from llama_models.llama3.api.chat_format import ChatFormat
-from llama_models.llama3.api.datatypes import ImageMedia
 from llama_models.llama3.api.tokenizer import Tokenizer
 from loguru import logger
 from PIL import Image as PIL_Image
@@ -19,6 +17,7 @@ import ttnn
 
 IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
 
+from models.common.llama_models import GeneratorText
 from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
 from models.tt_transformers.tt.generator import Generator
 
@@ -56,13 +55,7 @@ def test_multimodal_demo_text(
 
     logger.info(f"Creating reference model from checkpoint in '{ckpt_dir}'")
     if target == "cpu":
-        generator = llama_reference_generation.Llama.build(
-            ckpt_dir,
-            tokenizer_path=tokenizer_path,
-            max_seq_len=max_seq_len,
-            max_batch_size=max_batch_size,
-            model_parallel_size=model_parallel_size,
-        )
+        generator = GeneratorText(ckpt_dir)
     else:
         logger.info(f"Creating TT model on {mesh_device.get_num_devices()} devices")
 
@@ -86,11 +79,16 @@ def test_multimodal_demo_text(
         clutter = PIL_Image.open(f).convert("RGB")
 
     interleaved_contents = [
-        # image understanding
-        [ImageMedia(image=img), "If I had to write a haiku for this one"],
-        [ImageMedia(image=img2), "Couting the number of individual spaghetti strands in this image"],
-        [ImageMedia(image=ocr_image), "The full text in this image is as follows"],
-        [ImageMedia(image=clutter), "The count of vases, books, and miscellaneous items in this image is"],
+        [{"type": "image", "image": img}, {"type": "text", "text": "If I had to write a haiku for this one"}],
+        [
+            {"type": "image", "image": img2},
+            {"type": "text", "text": "Couting the number of individual spaghetti strands in this image"},
+        ],
+        [{"type": "image", "image": ocr_image}, {"type": "text", "text": "The full text in this image is as follows"}],
+        [
+            {"type": "image", "image": clutter},
+            {"type": "text", "text": "The count of vases, books, and miscellaneous items in this image is"},
+        ],
     ]
 
     print(f"Running text completion on {target}")
@@ -104,5 +102,5 @@ def test_multimodal_demo_text(
             )
 
             cprint(f"{content}", end="")
-            cprint(f"{result.generation}", color="yellow")
+            cprint(f"{result}", color="yellow")
             print("\n==================================\n")
