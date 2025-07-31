@@ -30,7 +30,7 @@ namespace ckernel {
  * | idst            | The index of the tile in DST register buffer to modify the computation of  | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void bitwise_not_tile(uint32_t idst) { MATH(SFPU_ONE_PARAM_KERNEL(bitwise_not, RC, APPROX, idst, param0)); }
+ALWI void bitwise_not_tile(uint32_t idst) { MATH(SFPU_UNARY_NO_PARAM_KERNEL(bitwise_not, RC, APPROX, idst)); }
 
 /**
  * Please refer to documentation for any_init.
