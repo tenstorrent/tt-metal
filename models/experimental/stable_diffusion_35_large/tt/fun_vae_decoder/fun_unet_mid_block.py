@@ -31,14 +31,24 @@ class TtUNetMidBlock2DParameters:
         *,
         dtype: ttnn.DataType | None = None,
         parallel_config: VAEParallelConfig,
+        gn_allow_sharded_compute: bool = True,  # TODO: Move into resnet specific parameters
+        mesh_sharded_input: bool = True,  # TODO: Move into resnet specific parameters
     ) -> TtUNetMidBlock2DParameters:
         return cls(
             attentions=[
-                TtAttentionParameters.from_torch(attention, dtype=dtype, parallel_config=parallel_config)
+                TtAttentionParameters.from_torch(
+                    attention, dtype=dtype, parallel_config=parallel_config, mesh_sharded_input=mesh_sharded_input
+                )
                 for attention in unet_mid_block.attentions
             ],
             resnets=[
-                TtResnetBlock2DParameters.from_torch(resnet_block, dtype=dtype, parallel_config=parallel_config)
+                TtResnetBlock2DParameters.from_torch(
+                    resnet_block,
+                    dtype=dtype,
+                    parallel_config=parallel_config,
+                    gn_allow_sharded_compute=gn_allow_sharded_compute,
+                    mesh_sharded_input=mesh_sharded_input,
+                )
                 for resnet_block in unet_mid_block.resnets
             ],
         )

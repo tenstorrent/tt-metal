@@ -26,6 +26,21 @@ def print_stats(label, data: torch.Tensor, device=None):
     )
 
 
+# TODO: Move to parallel manager
+def gn_all_gather(x, parallel_config):
+    x_g = ttnn.experimental.all_gather_async(
+        input_tensor=x,
+        dim=3,
+        multi_device_global_semaphore=parallel_config.new_gather_handles,
+        topology=ttnn.Topology.Linear,
+        mesh_device=parallel_config.device,
+        cluster_axis=1,
+        num_links=1,
+    )
+    ttnn.synchronize_device(parallel_config.device)
+    return x_g
+
+
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, topology",
     [
@@ -44,11 +59,15 @@ def print_stats(label, data: torch.Tensor, device=None):
     indirect=True,
 )
 @pytest.mark.parametrize(
-    ("batch", "in_channels", "out_channels", "height", "width", "num_groups"),
+    ("batch", "in_channels", "out_channels", "height", "width", "num_groups", "sharded_input"),
     [
-        # (1, 512, 512, 128, 128, 32),  # slice 128, output blocks 32. Need to parametize
-        # (1, 512, 512, 256, 256, 32),  # slice 128, output blocks 32. Need to parametize
-        (1, 256, 128, 1024, 1024, 32),  # slice 128, output blocks 32. Need to parametize
+        # (1, 512, 512, 128, 128, 32, True),  # slice 128, output blocks 32. Need to parametize
+        # (1, 512, 512, 128, 128, 32, False),  # slice 128, output blocks 32. Need to parametize
+        # (1, 512, 512, 256, 256, 32, True),  # slice 128, output blocks 32. Need to parametize
+        # (1, 512, 512, 256, 256, 32, False),  # slice 128, output blocks 32. Need to parametize
+        # (1, 512, 256, 512, 512, 32, True),  # slice 128, output blocks 32. Need to parametize
+        (1, 512, 256, 512, 512, 32, False),  # slice 128, output blocks 32. Need to parametize
+        (1, 512, 256, 512, 512, 32, False),  # slice 128, output blocks 32. Need to parametize
     ],
 )
 def test_resnet_block(
@@ -60,6 +79,7 @@ def test_resnet_block(
     height: int,
     width: int,
     num_groups: int,
+    sharded_input: bool,
     cfg,
     sp,
     tp,
@@ -96,13 +116,24 @@ def test_resnet_block(
     # print(torch_model)
 
     parameters = TtResnetBlock2DParameters.from_torch(
-        resnet_block=torch_model, dtype=ttnn_dtype, parallel_config=parallel_manager.vae_parallel_config
+        resnet_block=torch_model,
+        dtype=ttnn_dtype,
+        parallel_config=parallel_manager.vae_parallel_config,
+        mesh_sharded_input=sharded_input,
     )
 
     # inp = torch.randn(batch, in_channels, height, width)
     inp = torch.normal(1, 2, (batch, in_channels, height, width))
 
-    tt_inp = ttnn.from_torch(inp.permute(0, 2, 3, 1), dtype=ttnn_dtype, device=device)
+    tt_inp = ttnn.from_torch(
+        inp.permute(0, 2, 3, 1),
+        dtype=ttnn_dtype,
+        device=device,
+        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=-1) if sharded_input else None,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    # tt_inp = ttnn.from_torch(inp.permute(0, 2, 3, 1), dtype=ttnn_dtype, device=device)
 
     logger.info(print_stats("torch_input", inp))
     logger.info(print_stats("tt_input", tt_inp, device=device))
@@ -113,7 +144,8 @@ def test_resnet_block(
         out = torch_model(inp)
 
     tt_out = resnet_block(tt_inp, parameters)
-
+    if sharded_input:  # If input is sharded Resnet block will output be sharded. Need to gather output
+        tt_out = gn_all_gather(tt_out, parallel_manager.vae_parallel_config)
     tt_out_torch = to_torch(tt_out).permute(0, 3, 1, 2)
 
     logger.info(print_stats("torch", out))
