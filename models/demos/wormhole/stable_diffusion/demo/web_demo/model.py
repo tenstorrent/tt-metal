@@ -180,7 +180,7 @@ def warmup_model():
     device_id = 0
     device_params = {"l1_small_size": 11 * 8192, "trace_region_size": 789835776}
     dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
-    if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
+    if ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.N300:
         dispatch_core_type = ttnn.device.DispatchCoreType.ETH
     dispatch_core_axis = ttnn.DispatchCoreAxis.ROW
     dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
