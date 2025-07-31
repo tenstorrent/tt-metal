@@ -773,6 +773,7 @@ def test_demo_text(
                 page_table=page_table,
                 kv_cache=tt_kv_cache,
                 sampling_params=device_sampling_params,
+                update_on_device=device_sampling_params is not None,
             )
 
             # Get the next token
