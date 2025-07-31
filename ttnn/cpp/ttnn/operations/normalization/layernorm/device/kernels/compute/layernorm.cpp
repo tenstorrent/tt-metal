@@ -19,7 +19,7 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "compute_kernel_api/transpose_wh_dest.h"
 #include "compute_kernel_api/eltwise_unary/binop_with_scalar.h"
-// #include "compute_kernel_api/welford.h"
+#include "compute_kernel_api/welford.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
