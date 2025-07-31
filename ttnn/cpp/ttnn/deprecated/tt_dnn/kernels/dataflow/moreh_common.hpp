@@ -65,24 +65,6 @@ public:
     }
 };
 
-#define InterleavedAddrGenFastHelper(addr, cb, idx)                                                        \
-    ({                                                                                                     \
-        constexpr bool is_dram = (get_compile_time_arg_val(idx) == 1);                                     \
-        const InterleavedAddrGenFast<is_dram> ret = InterleavedAddrGenFastHelper_<is_dram>(addr, cb, idx); \
-        ret;                                                                                               \
-    })
-
-template <bool DRAM>
-FORCE_INLINE InterleavedAddrGenFast<DRAM> InterleavedAddrGenFastHelper_(uint32_t addr, tt::CBIndex cb, uint32_t idx) {
-    uint32_t tile_bytes = get_tile_size(cb);
-    auto data_format = get_dataformat(cb);
-
-    const InterleavedAddrGenFast<DRAM> x = {
-        .bank_base_address = addr, .page_size = tile_bytes, .data_format = data_format};
-
-    return x;
-}
-
 template <typename AddrGen>
 FORCE_INLINE void noc_async_read_tile_helper(tt::CBIndex cb, uint32_t num_tiles, uint32_t tile_idx, AddrGen addr_gen) {
     cb_reserve_back(cb, num_tiles);
