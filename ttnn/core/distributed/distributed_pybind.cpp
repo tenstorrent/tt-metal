@@ -53,9 +53,7 @@ public:
     const MeshShape& local_shape() const { return local_shape_; }
 
     int get_device_id(const MeshCoordinate& coord) const {
-        if (!device_ids_.at(coord).is_local()) {
-            TT_FATAL(false, "Device at {} is remote.", coord);
-        }
+        TT_FATAL(device_ids_.at(coord).is_local(), "Device at {} is remote.", coord);
         return device_ids_.at(coord).value();
     }
 
