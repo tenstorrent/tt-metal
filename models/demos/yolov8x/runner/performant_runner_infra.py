@@ -1,22 +1,16 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+
 import torch
 from loguru import logger
-from ultralytics import YOLO
 
 import ttnn
+from models.demos.yolov8x.common import load_torch_model
 from models.demos.yolov8x.tt.ttnn_yolov8x import TtYolov8xModel
 from models.demos.yolov8x.tt.ttnn_yolov8x_utils import custom_preprocessor
 from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-def load_torch_model():
-    torch_model = YOLO("yolov8x.pt")
-    torch_model = torch_model.model
-    torch_model.eval()
-    return torch_model
 
 
 def load_ttnn_model(device, torch_model):
@@ -40,7 +34,7 @@ class YOLOv8xPerformanceRunnerInfra:
         self.device = device
         self.batch_size = batch_size
         self.model_location_generator = model_location_generator
-        torch_model = load_torch_model()
+        torch_model = load_torch_model(model_location_generator)
         self.ttnn_yolov8_model = load_ttnn_model(device=self.device, torch_model=torch_model)
         input_shape = (1, 640, 640, 3)
         torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)

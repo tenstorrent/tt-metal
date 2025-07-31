@@ -48,24 +48,29 @@ jobs:
 
           - name: other_magic_env
             model-list:
-              - models/demos/yolov10x/tests/
+              - models/demos/yolov10x/tests/perf/
               - models/demos/sentence_bert/tests/perf/
               # This is bad. This should be referencing .../tests directory
               - models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py
-              # This is bad. This should be referencing .../tests directory
-              - models/demos/yolov11/tests/test_e2e_performant.py
+              - models/demos/yolov11/tests/perf/
               # This is bad. This should be referencing .../tests directory
               - models/demos/wormhole/bert_tiny/tests/test_performance.py
               - models/demos/yolov4/tests/perf/
-              - models/demos/yolov7/tests/
+              - models/demos/yolov7/tests/perf/
               # This is bad. This should be referencing .../tests directory
               - models/demos/wormhole/distilbert/tests/test_perf_distilbert.py
-              # This is bad. This should be referencing .../tests directory
-              - models/demos/segformer/tests/test_e2e_performant.py
+              - models/demos/segformer/tests/perf/
               - models/demos/metal_BERT_large_11/tests/
-              - models/demos/yolov8s_world/tests/
-              - models/demos/yolov8s/tests
-              - models/experimental/yolov6l/tests/
+              - models/demos/yolov8s_world/tests/perf/
+              - models/demos/yolov8s/tests/perf/
+              - models/experimental/yolov6l/tests/perf/
+              - models/demos/mobilenetv2/tests/perf/
+              - models/demos/vgg_unet/tests/
+              - models/demos/yolov9c/tests/perf/
+              - models/experimental/vanilla_unet/tests/perf/
+              - models/demos/yolov8x/tests/perf/
+              # e2e performant test is present in .../vit/demo folder only
+              - models/demos/wormhole/vit/demo/
 
           - name: tt_transformers
             model-list:

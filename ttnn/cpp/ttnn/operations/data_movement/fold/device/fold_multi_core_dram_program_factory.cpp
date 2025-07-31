@@ -19,6 +19,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "fold_device_op.hpp"
 namespace ttnn::operations::data_movement {
 
@@ -94,6 +95,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         ntiles_per_row,
         src0_cb_index,
     };
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     // Configure compile-time arguments for writer kernel
     std::vector<uint32_t> writer_compile_time_args = {
@@ -107,6 +109,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         datum_size(cb_data_format),
         src1_cb_index,
     };
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Create reader kernel for DRAM to circular buffer data movement
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -290,19 +293,10 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
             .set_page_size(cb_src0_index, aligned_stick_nbytes * stride_w * stride_h);
     auto cb_src0 = CreateCircularBuffer(program, all_cores, src_cb_config);
 
-    bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_nbytes);
-    uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_nbytes) : 0;
     // Create reader kernel
     std::vector<uint32_t> compile_time_args(
-        {stick_nbytes,
-         cb_src0_index,
-         src_stick_size_is_power_of_two,
-         src_log2_stick_size,
-         aligned_stick_nbytes,
-         stride_h,
-         stride_w,
-         input_width,
-         patches_per_core});
+        {stick_nbytes, cb_src0_index, aligned_stick_nbytes, stride_h, stride_w, input_width, patches_per_core});
+    TensorAccessorArgs(*src0_buffer).append_to(compile_time_args);
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/reader_dram2cb_for_rm_input.cpp",
