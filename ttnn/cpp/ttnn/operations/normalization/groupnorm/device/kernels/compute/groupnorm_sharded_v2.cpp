@@ -270,10 +270,64 @@ void MAIN {
                 cb_push_back(cb_ex, 1);
             }
 
+            // template <uint32_t num_tiles>
+            // void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb) {
+            //     // Precondition: in0_cb has num_tiles produced
+            //     // Precondition: in1_cb has num_tiles produced
+            //     // Postcondition: in0_cb has num_tiles produced
+            //     // Postcondition: in1_cb has num_tiles consumed
+
+            //     constexpr uint32_t dst_tiles = 1;
+
             // x - E[x]
             sub_tiles_bcast_scalar_init_short(cb_x, cb_ex_global);
-            cb_reserve_back(cb_xmm, block_hw);
+            // cb_reserve_back(cb_xmm, block_hw);
+
             cb_wait_front(cb_ex_global, 1);
+            bool print_last_tiles = true;
+            if (g == 0) {
+                // DPRINT << "Printing tiles in cb_x Before sub" << ENDL();
+                for (uint32_t i = 0; i < 5; i++) {
+                    if (!print_last_tiles) {
+                        // DPRINT << "Printing tile before sub" << i << ENDL();
+                        // tt::compute::common::print_full_tile(cb_x, i, true);
+                    } else {
+                        // DPRINT << "Printing tile before sub" << block_hw - i - 1 << ENDL();
+
+                        // tt::compute::common::print_full_tile(cb_x, block_hw - i - 1, true);
+                    }
+                }
+            }
+
+            //     add_tiles_init(in0_cb, in1_cb);
+            //     for (uint32_t i = 0; i < num_tiles; ++i) {
+            //         tile_regs_acquire();
+            //         add_tiles(in0_cb, in1_cb, 0, 0, 0);
+            //         tile_regs_commit();
+            //         cb_pop_front(in0_cb, dst_tiles);
+            //         cb_pop_front(in1_cb, dst_tiles);
+            //         cb_reserve_back(in0_cb, dst_tiles);
+            //         tile_regs_wait();
+            //         pack_tile(0, in0_cb);
+            //         cb_push_back(in0_cb, dst_tiles);
+            //         tile_regs_release();
+            //     }
+            // }
+
+            if (g == 0) {
+                UNPACK(DPRINT << "Variance print: " << ENDL();)
+                cb_wait_front(cb_x, block_hw);
+                cb_wait_front(cb_ex_global, 1);
+                // tt::compute::common::print_full_tile(cb_ex_global, 0, true);
+                UNPACK(DPRINT << "Printing tiles in cb_x before sub_inplace" << ENDL();)
+                for (uint32_t i = 0; i < 5; i++) {
+                    // UNPACK(DPRINT << "Input tile: " << i << ENDL();)
+                    //  tt::compute::common::print_full_tile(cb_x, i, true);
+                }
+            }
+
+            uint32_t num_tiles_printed = 0;
+            uint32_t tile_id = 0;
             for (uint32_t i = 0; i < block_h; i++) {
                 index_subblock_w_offset = 0;
                 for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -281,6 +335,68 @@ void MAIN {
                     for (uint32_t w = 0; w < subblock_w; w++) {
                         uint32_t index = w + index_subblock_w_offset;
                         sub_tiles_bcast_scalar(cb_x, cb_ex_global, index, 0, w);
+                        if (j == 0) {
+                            // DPRINT << "MUL RESULT w = " << w << ENDL();
+                            // dprint_tensix_dest_reg(w);
+                        }
+
+                        // if (num_tiles_printed < 5) {
+                        //     DPRINT << "Print index is: " << num_tiles_printed << " Dest index is: " << w_index <<
+                        //     ENDL(); num_tiles_printed++; dprint_tensix_dest_reg(w_index);
+                        // }
+                    }
+                    tile_regs_commit();
+                    cb_pop_front(cb_x, subblock_w);
+                    cb_reserve_back(cb_x, subblock_w);
+                    if (num_tiles_printed < 3 && g == 0) {
+                        // DPRINT << "Poping tiles" << ENDL();
+                    }
+                    tile_regs_wait();
+                    for (uint32_t k = 0; k < subblock_w; k++) {
+                        pack_tile(k, cb_x);
+                    }
+                    cb_push_back(cb_x, subblock_w);
+                    tile_regs_release();
+                    cb_wait_front(cb_x, block_hw);
+                    if (num_tiles_printed < 3 && g == 0) {
+                        // DPRINT << "Printing tiles in cb_x After sub:" << num_tiles_printed << ENDL();
+                        for (uint32_t i = 0; i < 5; i++) {
+                            if (!print_last_tiles) {
+                                // DPRINT << "Printing tile after id:" << i << ENDL();
+                                // tt::compute::common::print_full_tile(cb_x, i, true);
+                            } else {
+                                // DPRINT << "Printing tile after id:" << block_hw - i - 1<< ENDL();
+                                // tt::compute::common::print_full_tile(cb_x, block_hw - i - 1, true);
+                            }
+                        }
+                    }
+                    num_tiles_printed++;
+
+                    // index_subblock_w_offset  += subblock_w;
+                }
+                // cb_pop_front(cb_x, block_w);
+            }
+
+            // temp loop - just copy
+            copy_tile_init(cb_x);
+            cb_reserve_back(cb_xmm, block_hw);
+            cb_wait_front(cb_x, block_hw);
+
+            // if (g == 0) {
+            //     DPRINT << "Printing tiles in cb_x after sub_inplace" << ENDL();
+            //     for (uint32_t i = 0; i < 5; i++) {
+            //         DPRINT << "Output tile:" << block_hw - i - 1 << ENDL();
+            //         tt::compute::common::print_full_tile(cb_x, block_hw - i - 1, true);
+            //     }
+            // }
+
+            index_subblock_w_offset = 0;
+            for (uint32_t i = 0; i < block_h; i++) {
+                for (uint32_t j = 0; j < num_subblocks_w; j++) {
+                    tile_regs_acquire();
+                    for (uint32_t w = 0; w < subblock_w; w++) {
+                        uint32_t index = w + index_subblock_w_offset;
+                        copy_tile(cb_x, index, w);
                     }
                     tile_regs_commit();
                     tile_regs_wait();
@@ -291,11 +407,22 @@ void MAIN {
                     index_subblock_w_offset += subblock_w;
                 }
                 cb_pop_front(cb_x, block_w);
+                index_subblock_w_offset = 0;
             }
+            cb_push_back(cb_xmm, block_hw);
+
+            // if (g == 0) {
+            //     DPRINT << "Printing tiles in cb_xmm after copy" << ENDL();
+            //     for (uint32_t i = 0; i < 5; i++) {
+            //         DPRINT << "Output tile:" << block_hw - i - 1 << ENDL();
+            //         tt::compute::common::print_full_tile(cb_xmm, block_hw - i - 1, true);
+            //     }
+            // }
+
             // cb_xmm is full
             // cb_x is empty
             cb_pop_front(cb_ex_global, 1);
-            cb_push_back(cb_xmm, block_hw);
+            // cb_push_back(cb_xmm, block_hw);
 
             // zero out the garbage values by mult mask again
             reconfig_data_format_srcb(cb_ex_global, cb_input_mask);
