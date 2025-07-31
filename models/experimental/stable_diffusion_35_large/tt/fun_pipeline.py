@@ -24,6 +24,7 @@ from .clip_encoder import TtCLIPTextTransformer, TtCLIPTextTransformerParameters
 from .t5_encoder import TtT5Encoder, TtT5EncoderParameters
 from .fun_transformer import sd_transformer, TtSD3Transformer2DModelParameters
 from .parallel_config import StableDiffusionParallelManager, EncoderParallelManager
+from .fun_vae_decoder.fun_vae_decoder import sd_vae_decode, TtVaeDecoderParameters
 
 TILE_SIZE = 32
 
@@ -90,12 +91,14 @@ class TtStableDiffusion3Pipeline:
         guidance_cond: int,
         parallel_manager: StableDiffusionParallelManager,
         encoder_parallel_manager: EncoderParallelManager,
+        vae_parallel_manager: VAEParallelConfig,
         height: int,
         width: int,
         model_location_generator,
     ) -> None:
         self._mesh_device = mesh_device
         self.encoder_parallel_manager = encoder_parallel_manager
+        self.vae_parallel_manager = vae_parallel_manager
 
         model_name_checkpoint = model_location_generator(checkpoint_name, model_subdir="StableDiffusion_35_Large")
 
@@ -112,7 +115,8 @@ class TtStableDiffusion3Pipeline:
         if enable_t5_text_encoder:
             torch_text_encoder_3 = T5EncoderModel.from_pretrained(model_name_checkpoint, subfolder="text_encoder_3")
         self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(model_name_checkpoint, subfolder="scheduler")
-        self._vae = AutoencoderKL.from_pretrained(model_name_checkpoint, subfolder="vae")
+        self._torch_vae = AutoencoderKL.from_pretrained(model_name_checkpoint, subfolder="vae")
+
         torch_transformer = SD3Transformer2DModel.from_pretrained(
             model_name_checkpoint,
             subfolder="transformer",
@@ -128,7 +132,7 @@ class TtStableDiffusion3Pipeline:
         assert isinstance(self._text_encoder_1, CLIPTextModelWithProjection)
         assert isinstance(self._text_encoder_2, CLIPTextModelWithProjection)
         assert isinstance(self._scheduler, FlowMatchEulerDiscreteScheduler)
-        assert isinstance(self._vae, AutoencoderKL)
+        assert isinstance(self._torch_vae, AutoencoderKL)
         assert isinstance(torch_transformer, SD3Transformer2DModel)
 
         logger.info("creating TT-NN transformer...")
@@ -167,8 +171,8 @@ class TtStableDiffusion3Pipeline:
                     dtype=ttnn.bfloat8_b if submesh_device.get_num_devices() == 1 else ttnn.bfloat16,
                     guidance_cond=guidance_cond,
                     parallel_config=parallel_config,
-                    height=height // 2 ** (len(self._vae.config.block_out_channels) - 1),
-                    width=width // 2 ** (len(self._vae.config.block_out_channels) - 1),
+                    height=height // 2 ** (len(self._torch_vae.config.block_out_channels) - 1),
+                    width=width // 2 ** (len(self._torch_vae.config.block_out_channels) - 1),
                 )
             )
             ttnn.synchronize_device(submesh_device)
@@ -186,12 +190,12 @@ class TtStableDiffusion3Pipeline:
         self._num_channels_latents = torch_transformer.config.in_channels
         self._joint_attention_dim = torch_transformer.config.joint_attention_dim
 
-        self._block_out_channels = self._vae.config.block_out_channels
-        self._vae_scaling_factor = self._vae.config.scaling_factor
-        self._vae_shift_factor = self._vae.config.shift_factor
+        self._block_out_channels = self._torch_vae.config.block_out_channels
+        self._torch_vae_scaling_factor = self._torch_vae.config.scaling_factor
+        self._torch_vae_shift_factor = self._torch_vae.config.shift_factor
 
-        self._vae_scale_factor = 2 ** (len(self._block_out_channels) - 1)
-        self._image_processor = VaeImageProcessor(vae_scale_factor=self._vae_scale_factor)
+        self._torch_vae_scale_factor = 2 ** (len(self._block_out_channels) - 1)
+        self._image_processor = VaeImageProcessor(vae_scale_factor=self._torch_vae_scale_factor)
 
         # HACK: reshape submesh device 0 to 1D
         encoder_parallel_manager.mesh_device.reshape(
@@ -258,13 +262,26 @@ class TtStableDiffusion3Pipeline:
             )
         else:
             self._text_encoder_3 = None
+
+        # HACK: reshape submesh device 0 from 1D to 2D
+        self.encoder_parallel_manager.mesh_device.reshape(
+            ttnn.MeshShape(*self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape)
+        )
+
         self.timing_collector = None  # Set externally when timing is needed
 
         self._trace = None
 
         ttnn.synchronize_device(self.encoder_parallel_manager.mesh_device)
+
+        # HACK: reshape submesh device 0 to 1D
+        vae_parallel_manager.device.reshape(ttnn.MeshShape(*encoder_parallel_manager.tensor_parallel.mesh_shape))
+        self._vae_parameters = TtVaeDecoderParameters.from_torch(
+            torch_vae_decoder=self._torch_vae.decoder, dtype=ttnn.bfloat16, parallel_config=vae_parallel_manager
+        )
+
         # HACK: reshape submesh device 0 from 1D to 2D
-        self.encoder_parallel_manager.mesh_device.reshape(
+        vae_parallel_manager.device.reshape(
             ttnn.MeshShape(*self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape)
         )
 
@@ -307,8 +324,8 @@ class TtStableDiffusion3Pipeline:
         patch_size = 2
         latents_shape = (
             batch_size * num_images_per_prompt,
-            height // self._vae_scale_factor,
-            (width // self._vae_scale_factor) // patch_size,
+            height // self._torch_vae_scale_factor,
+            (width // self._torch_vae_scale_factor) // patch_size,
             self._num_channels_latents * patch_size,
         )
 
@@ -403,8 +420,8 @@ class TtStableDiffusion3Pipeline:
             guidance_scale = self._prepared_guidance_scale
             max_t5_sequence_length = self._prepared_max_t5_sequence_length
 
-            assert height % (self._vae_scale_factor * self.patch_size) == 0
-            assert width % (self._vae_scale_factor * self.patch_size) == 0
+            assert height % (self._torch_vae_scale_factor * self.patch_size) == 0
+            assert width % (self._torch_vae_scale_factor * self.patch_size) == 0
             assert max_t5_sequence_length <= 512  # noqa: PLR2004
             assert batch_size == len(prompt_1)
 
@@ -413,8 +430,8 @@ class TtStableDiffusion3Pipeline:
             patch_size = 2
             latents_shape = (
                 batch_size * num_images_per_prompt,
-                height // self._vae_scale_factor,
-                width // self._vae_scale_factor,
+                height // self._torch_vae_scale_factor,
+                width // self._torch_vae_scale_factor,
                 self._num_channels_latents,
             )
 
@@ -588,12 +605,32 @@ class TtStableDiffusion3Pipeline:
                 ).to(torch.float32)[
                     : tt_latents_step_list[0].shape[0],  # Slice out unnecessary concat on TP axis
                 ]
-                latents = (latents.permute([0, 3, 1, 2]) / self._vae_scaling_factor) + self._vae_shift_factor
-                with torch.no_grad():
-                    image = self._vae.decoder(latents)
-                    image = self._image_processor.postprocess(image, output_type="pt")
-                    print(f"postprocessed image shape: {image.shape}")
-                    assert isinstance(image, torch.Tensor)
+                latents = (
+                    latents.permute([0, 3, 1, 2]) / self._torch_vae_scaling_factor
+                ) + self._torch_vae_shift_factor
+                # with torch.no_grad():
+                latents = latents.permute(0, 2, 3, 1)  # channels-last
+                # HACK: reshape submesh device 0 from 2D to 1D
+                self.vae_parallel_manager.device.reshape(
+                    ttnn.MeshShape(*self.encoder_parallel_manager.tensor_parallel.mesh_shape)
+                )
+                tt_latents = ttnn.from_torch(
+                    latents,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    device=self.vae_parallel_manager.device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.vae_parallel_manager.device),
+                )
+                decoded_output = sd_vae_decode(tt_latents, self._vae_parameters)
+                decoded_output = ttnn.to_torch(ttnn.get_device_tensors(decoded_output)[0]).permute(0, 3, 1, 2)
+                # HACK: reshape submesh device 0 from 1D to 2D
+                self.vae_parallel_manager.device.reshape(
+                    ttnn.MeshShape(*self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape)
+                )
+                # image = self._torch_vae.decoder(tt_latents)
+                image = self._image_processor.postprocess(decoded_output, output_type="pt")
+                print(f"postprocessed image shape: {image.shape}")
+                assert isinstance(image, torch.Tensor)
                 image_decoding_end_time = time.time()
 
                 output = self._image_processor.numpy_to_pil(self._image_processor.pt_to_numpy(image))
