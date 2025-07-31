@@ -16,11 +16,10 @@ void kernel_main() {
     uint32_t num_blocks = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_id_in0);
-    constexpr DataFormat data_format = get_dataformat(cb_id_in0);
 
     // Initialize interleaved address generator for DRAM access
-    const InterleavedAddrGenFast<true> s = {
-        .bank_base_address = src_addr, .page_size = tile_bytes, .data_format = data_format};
+    constexpr auto src_args = TensorAccessorArgs<2>();
+    const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
 
     // Process each block of data
     uint32_t end_block_id = start_block_id + num_blocks;
