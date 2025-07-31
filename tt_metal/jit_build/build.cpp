@@ -727,7 +727,9 @@ void JitBuildState::compile_one(
     cmd += "-c -o " + obj + " " + src + " ";
     cmd += defines;
 
-    log_debug(tt::LogBuildKernels, "    g++ compile cmd: {}", cmd);
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
+        log_info(tt::LogBuildKernels, "    g++ compile cmd: {}", cmd);
+    }
 
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled() && settings) {
         log_kernel_defines_and_args(out_dir, settings->get_full_kernel_name(), defines);
@@ -778,7 +780,9 @@ void JitBuildState::link(const string& log_file, const string& out_dir, const Ji
     cmd += lflags;
     cmd += this->link_objs_;
     cmd += "-o " + out_dir + this->target_name_ + ".elf";
-    log_debug(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_log_kernels_compilation_commands()) {
+        log_info(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
+    }
     if (!tt::utils::run_command(cmd, log_file, false)) {
         build_failure(this->target_name_, "link", cmd, log_file);
     }
