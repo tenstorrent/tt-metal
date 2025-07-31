@@ -11,6 +11,7 @@ class SentenceBERTPerformantRunner:
     def __init__(
         self,
         device,
+        model_location_generator,
         device_batch_size=8,
         sequence_length=384,
         input_ids=None,
@@ -37,6 +38,7 @@ class SentenceBERTPerformantRunner:
             attention_mask=self.attention_mask,
             token_type_ids=self.token_type_ids,
             position_ids=self.position_ids,
+            model_location_generator=model_location_generator,
         )
         (
             self.tt_inputs_host,

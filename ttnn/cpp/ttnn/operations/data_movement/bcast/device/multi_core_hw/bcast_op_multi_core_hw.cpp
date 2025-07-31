@@ -11,6 +11,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace constants;
@@ -27,10 +28,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
     uint32_t W = ashape[-1];
     uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
     uint32_t bC = bshape.rank() >= 3 ? bshape[-3] : 1;
-    uint32_t bH = bshape[-2];
-    uint32_t bW = bshape[-1];
     uint32_t NC = N * C;
-    uint32_t HW = H * W;
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
@@ -101,7 +99,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(num_input_tiles * src1_single_tile_size, {{src1_cb_index, src1_cb_data_format}})
             .set_page_size(src1_cb_index, src1_single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, src1_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_device_cores, src1_cb_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = output_sharded ? num_tiles_per_shard : 2;
@@ -113,9 +111,9 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_device_cores, output_cb_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
@@ -245,10 +243,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
         uint32_t W = ashape[-1];
         uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
         uint32_t bC = bshape.rank() >= 3 ? bshape[-3] : 1;
-        uint32_t bH = bshape[-2];
-        uint32_t bW = bshape[-1];
         uint32_t NC = N * C;
-        uint32_t HW = H * W;
 
         uint32_t Wt = W / TILE_WIDTH;
         uint32_t Ht = H / TILE_HEIGHT;

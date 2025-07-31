@@ -167,6 +167,8 @@ protected:
 
 class UnitMeshMultiCQSingleDeviceProgramFixture : public UnitMeshMultiCQSingleDeviceFixture {};
 
+class UnitMeshMultiCQSingleDeviceBufferFixture : public UnitMeshMultiCQSingleDeviceFixture {};
+
 class UnitMeshMultiCQSingleDeviceTraceFixture : public UnitMeshMultiCQSingleDeviceFixture {
 protected:
     void SetUp() override {
@@ -185,8 +187,6 @@ protected:
 };
 
 class MultiCommandQueueSingleDeviceEventFixture : public MultiCommandQueueSingleDeviceFixture {};
-
-class MultiCommandQueueSingleDeviceBufferFixture : public MultiCommandQueueSingleDeviceFixture {};
 
 class MultiCommandQueueSingleDeviceProgramFixture : public MultiCommandQueueSingleDeviceFixture {};
 
@@ -288,7 +288,7 @@ protected:
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
 };
 
-class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiDeviceFixture {};
+class UnitMeshMultiCQMultiDeviceBufferFixture : public UnitMeshMultiCQMultiDeviceFixture {};
 
 class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDeviceFixture {};
 

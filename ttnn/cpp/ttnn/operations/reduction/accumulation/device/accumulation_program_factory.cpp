@@ -79,10 +79,10 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     constexpr uint32_t start_tiles = 4;
     constexpr uint32_t out_tiles = 4;
 
-    auto cb_src{create_cb(program, input_tensor.dtype(), AccumulationCB::SRC, all_cores, in_tiles)};
-    auto cb_acc{create_cb(program, output_tensor.dtype(), AccumulationCB::ACC, all_cores, op_tiles)};
-    auto cb_start{create_cb(program, output_tensor.dtype(), AccumulationCB::START, all_cores, start_tiles)};
-    auto cb_dst{create_cb(program, output_tensor.dtype(), AccumulationCB::DST, all_cores, out_tiles)};
+    create_cb(program, input_tensor.dtype(), AccumulationCB::SRC, all_cores, in_tiles);
+    create_cb(program, output_tensor.dtype(), AccumulationCB::ACC, all_cores, op_tiles);
+    create_cb(program, output_tensor.dtype(), AccumulationCB::START, all_cores, start_tiles);
+    create_cb(program, output_tensor.dtype(), AccumulationCB::DST, all_cores, out_tiles);
 
     const uint32_t src_is_dram{src_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};
     const uint32_t dst_is_dram{dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0};

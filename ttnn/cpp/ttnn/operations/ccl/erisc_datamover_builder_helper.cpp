@@ -535,7 +535,7 @@ void EdmLineFabricOpInterface::build_kernels() const {
                             device->ethernet_core_from_logical_core(edm_builder.my_eth_core_logical).y,
                             device->ethernet_core_from_logical_core(edm_builder.my_eth_core_logical).x,
                             risc_id);
-                        auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
+                        ttnn::ccl::generate_edm_kernel(
                             *program,
                             device,
                             edm_builder,

@@ -32,7 +32,7 @@ Resource link - [source](https://github.com/ultralytics/ultralytics/blob/main/ul
 
 Use the following command to run the model :
 ```
-pytest --disable-warnings tests/ttnn/integration_tests/yolov8s_world/test_ttnn_yolov8s_world.py::test_YoloModel
+pytest --disable-warnings models/demos/yolov8s_world/tests/pcc/test_ttnn_yolov8s_world.py::test_YoloModel
 ```
 ### Performant Model with Trace+2CQ
 - end-2-end perf is 89 FPS
