@@ -602,7 +602,8 @@ Tensor construct_per_core_host_tensor(const std::unordered_map<CoreCoord, std::v
     return Tensor(std::move(config_buffer), tensor_shape, DataType::UINT32, Layout::ROW_MAJOR);
 }
 
-Tensor move_per_core_config_to_device(const Tensor& host_tensor, const CoreRangeSet& grid, IDevice* device) {
+Tensor move_per_core_config_to_device(
+    const Tensor& host_tensor, const CoreRangeSet& grid, distributed::MeshDevice* device) {
     // Create shard spec for the config tensor
     // Each core gets a row of the tensor
     const std::array<uint32_t, 2> shard_shape = {1, host_tensor.logical_shape()[1]};
