@@ -80,7 +80,7 @@ def compare_benchmarks(golden_benchmarks, result_benchmarks, result_failed_bench
     print(f"# failed benchmarks: {len(result_failed_benchmarks)}")
     print(f"# benchmarks outside of expected variance: {len(underperforming_benchmarks)}")
     print(f"# mismatched benchmarks: {len(golden_benchmarks_names ^ result_benchmarks_names)}")
-    print(f"# total benchmarks: {len(result_benchmarks_names)}")
+    print(f"# total benchmarks: {len(result_benchmarks_names) + len(result_failed_benchmarks)}")
     print("----------------------------------------------------")
 
     print("Successed benchmarks: (bytes per second, result vs golden)")
