@@ -14,6 +14,22 @@ from ..parallel_config import VAEParallelConfig
 if TYPE_CHECKING:
     pass
 
+# This is essentially the same as dividing w*h by 128*128, it possible that this assumption can fail and the system hangs. Better to catch it with missing key error for now.
+num_output_blocks = {
+    (1, 128, 128, 512): 1,
+    (1, 256, 256, 512): 4,
+    (1, 512, 512, 256): 16,
+    (1, 512, 512, 512): 16,
+    (1, 1024, 1024, 128): 64,
+    (1, 1024, 1024, 256): 64,
+    (1, 128, 128, 512 // 4): 1,
+    (1, 256, 256, 512 // 4): 4,
+    (1, 512, 512, 256 // 4): 16,
+    (1, 512, 512, 512 // 4): 16,
+    (1, 1024, 1024, 128 // 4): 64,
+    (1, 1024, 1024, 256 // 4): 64,
+}
+
 
 # Assumptions: Output is always non sharded. Input sharding is expected to be configured by the caller.
 @dataclass
@@ -28,6 +44,7 @@ class TtGroupNormParameters:
     parallel_config: VAEParallelConfig
     mesh_sharded_input: bool  # used to indicate the input is sharded. Ensure the tensor shape align for this
     allow_sharded_compute: bool  # used to indicate that output is sharded
+    num_output_blocks: int | None = None  # Num output blocks to use default setup is used if not provided
 
     @classmethod
     def from_torch(
@@ -36,7 +53,9 @@ class TtGroupNormParameters:
         *,
         parallel_config: VAEParallelConfig,
         mesh_sharded_input: bool = True,
-        allow_sharded_compute: bool = True,  # override sharded compute by setting to false
+        allow_sharded_compute: bool = True,  # override sharded compute by setting to false,
+        core_grid: ttnn.CoreGrid = None,
+        num_output_blocks: int | None = None,
     ) -> TtGroupNormParameters:
         num_channels = torch_groupnorm.num_channels
         num_groups = torch_groupnorm.num_groups
@@ -59,14 +78,9 @@ class TtGroupNormParameters:
         while num_channels % (32 * grid_e) != 0:
             grid_e -= 1
 
-        opt_core_grid = ttnn.CoreGrid(y=grid_e, x=grid_e)  # Non uniform core grid causing issues with PCC
-
-        # torch_weight = ttnn.create_group_norm_weight_bias_rm(
-        #     torch_groupnorm.state_dict()["weight"], num_channels, opt_core_grid.y
-        # )
-        # torch_bias = ttnn.create_group_norm_weight_bias_rm(
-        #     torch_groupnorm.state_dict()["bias"], num_channels, opt_core_grid.y
-        # )
+        opt_core_grid = (
+            ttnn.CoreGrid(y=grid_e, x=opt_core_grid.x) if core_grid is None else core_grid
+        )  # Non uniform core grid causing issues with PCC
 
         torch_weight, mesh_mapper_weight = group_norm_weight_bias_rm_sharded(
             torch_groupnorm.state_dict()["weight"],
@@ -121,6 +135,7 @@ class TtGroupNormParameters:
             parallel_config=parallel_config,
             mesh_sharded_input=mesh_sharded_input,
             allow_sharded_compute=allow_sharded_compute,
+            num_output_blocks=num_output_blocks,
         )
 
 
@@ -156,17 +171,14 @@ def gn_all_gather(x, parameters: TtGroupNormParameters):
 
 
 def vae_group_norm(x, parameters: TtGroupNormParameters):
-    batch_size, height, width, _ = x.shape
-    channels = parameters.num_channels
-
-    # TODO: Compute optimal output blocks
-    num_out_blocks = -(
-        -width * height // (256 * parameters.core_grid.x * parameters.core_grid.y)
-    )  # Prevents next step from hanging. TODO: Investigate
+    num_out_blocks = (
+        num_output_blocks[tuple(x.shape)] if parameters.num_output_blocks is None else parameters.num_output_blocks
+    )
 
     if not parameters.allow_sharded_compute and parameters.mesh_sharded_input:
-        x = gn_all_gather(x, parameters)
+        x = parameters.parallel_config.vae_all_gather(x, sync_device=True)
 
+    batch_size, height, width, channels = x.shape
     x = x.reshape([batch_size, 1, width * height, channels])
     x = ttnn.group_norm(
         x,
@@ -182,6 +194,6 @@ def vae_group_norm(x, parameters: TtGroupNormParameters):
     )
     x = x.reshape([batch_size, height, width, channels])
     if parameters.mesh_sharded_input and parameters.allow_sharded_compute:
-        x = gn_all_gather(x, parameters)
+        x = parameters.parallel_config.vae_all_gather(x, sync_device=True)
 
     return x

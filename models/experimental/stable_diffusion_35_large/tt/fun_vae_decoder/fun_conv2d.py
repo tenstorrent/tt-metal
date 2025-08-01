@@ -230,34 +230,18 @@ def run_conv2d(x, parameters):
     return output_tensor
 
 
-def conv2d_all_gather(x, parameters):
-    if x.layout != ttnn.TILE_LAYOUT:
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-    output_tensor = ttnn.experimental.all_gather_async(
-        input_tensor=x,
-        dim=3,
-        multi_device_global_semaphore=parameters.parallel_config.new_gather_handles,
-        topology=ttnn.Topology.Linear,
-        mesh_device=parameters.parallel_config.device,
-        cluster_axis=1,  # mesh_dim,
-        num_links=1,
-    )
-    # ttnn.synchronize_device(parameters.parallel_config.device)
-    return output_tensor
-
-
 # TODO: Try out padded/unpadded variant (unpadded_all_gather_async  from utils.py)
 def vae_conv2d(x, parameters):
     start_time = time.time()
 
     if parameters.mesh_sharded_input:
-        x = conv2d_all_gather(x, parameters)
+        x = parameters.parallel_config.vae_all_gather(x, sync_device=False)
 
     if parameters.conv_parallel_strategy == ConvStrategy.TP:
         output_tensor = run_conv2d(x, parameters)
 
         if not parameters.mesh_sharded_output:  # If output is sharded, we need to gather the output
-            output_tensor = conv2d_all_gather(output_tensor, parameters)
+            output_tensor = parameters.parallel_config.vae_all_gather(output_tensor, sync_device=False)
 
     elif parameters.conv_parallel_strategy == ConvStrategy.TP_DP:
         # Get device slice
@@ -268,7 +252,7 @@ def vae_conv2d(x, parameters):
         output_tensor = ttnn.reshape(
             output_tensor, (1, 1, -1, 32)
         )  # Helps resolve the issue with padding when last 2 dims are not multiple of 32
-        output_tensor = ttnn.experimental.all_reduce_async(
+        output_tensor = ttnn.experimental.all_reduce_async(  # TODO: Move to parallel config
             input_tensor=output_tensor,
             cluster_axis=1,
             mesh_device=parameters.parallel_config.device,
