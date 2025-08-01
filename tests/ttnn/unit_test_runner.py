@@ -7,12 +7,12 @@
 import argparse
 import sys
 import pathlib
-import importlib.util
 import datetime as dt
 import os
 import json
 import subprocess
 import traceback
+import pytest
 from enum import Enum
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
 from tests.sweep_framework.framework.database import (
@@ -20,13 +20,9 @@ from tests.sweep_framework.framework.database import (
     initialize_postgres_database,
     push_run,
     update_run,
-    push_test,
-    update_test_status,
     generate_error_signature,
     map_test_status_to_run_status,
-    get_postgres_config,
 )
-import pytest
 
 
 # --- Status Enum ---
