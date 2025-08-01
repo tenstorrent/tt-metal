@@ -469,7 +469,14 @@ def discover_and_run_tests(test_path: pathlib.Path):
 def run_tests_in_file(file_path: pathlib.Path):
     """Run all tests in a file using pytest."""
     collector = ResultCollector()
-    pytest.main(["-v", str(file_path)], plugins=[collector])
+    try:
+        exit_code = pytest.main(["-v", str(file_path)], plugins=[collector])
+        if exit_code != 0:
+            print(f"Error: pytest encountered issues while running tests in {file_path}. Exit code: {exit_code}")
+    except Exception as e:
+        print(f"Exception occurred while running tests in {file_path}: {e}")
+        traceback.print_exc()
+        return {}
     return collector.test_results
 
 
