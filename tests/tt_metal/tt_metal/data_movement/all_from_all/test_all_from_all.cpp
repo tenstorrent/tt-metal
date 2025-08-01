@@ -526,9 +526,6 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From2x2DirectedIdeal) {
 /* ======== VIRTUAL CHANNELS ======== */
 
 TEST_F(DeviceFixture, TensixDataMovementAllFromAllVirtualChannels) {
-    if (arch_ == tt::ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "Skipping test on Blackhole, Issue #24584";
-    }
     uint32_t test_case_id = 155;
 
     unit_tests::dm::all_from_all::virtual_channels_test(arch_, devices_, num_devices_, test_case_id);
