@@ -2605,6 +2605,10 @@ void kernel_main() {
     auto local_sender_channels = tt::tt_fabric::EthChannelBuffers<PACKET_HEADER_TYPE, SENDER_NUM_BUFFERS_ARRAY>::make(
         std::make_index_sequence<NUM_SENDER_CHANNELS>{});
 
+    DPRINT << "NUM_SENDER_CHANNELS = " << (uint32_t)NUM_SENDER_CHANNELS << " NUM_RECEIVER_CHANNELS "
+           << (uint32_t)NUM_RECEIVER_CHANNELS << " NUM_USED_RECEIVER_CHANNELS " << (uint32_t)NUM_USED_RECEIVER_CHANNELS
+           << ENDL();
+
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_flow_control_semaphores =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
             std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
@@ -2827,10 +2831,13 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
     if constexpr (enable_ethernet_handshake) {
+        DPRINT << "enable_ethernet_handshake" << ENDL();
         if constexpr (is_handshake_sender) {
+            DPRINT << "handhake sender" << ENDL();
             erisc::datamover::handshake::sender_side_handshake(
                 handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         } else {
+            DPRINT << "handhake receiver" << ENDL();
             erisc::datamover::handshake::receiver_side_handshake(
                 handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         }
