@@ -11,7 +11,6 @@ from fastapi import FastAPI, File, UploadFile
 from PIL import Image
 
 import ttnn
-from models.demos.yolov8x.common import YOLOV8X_L1_SMALL_SIZE
 from models.demos.yolov8x.tests.yolov8x_e2e_performant import Yolov8xTrace2CQ
 from models.experimental.yolo_common.yolo_web_demo.yolo_evaluation_utils import postprocess
 

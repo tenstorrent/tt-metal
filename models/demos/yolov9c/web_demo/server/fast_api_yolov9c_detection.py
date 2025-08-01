@@ -11,7 +11,6 @@ from fastapi import FastAPI, File, UploadFile
 from PIL import Image
 
 import ttnn
-from models.demos.yolov9c.common import YOLOV9C_L1_SMALL_SIZE
 from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
 from models.experimental.yolo_common.yolo_web_demo.yolo_evaluation_utils import postprocess
 

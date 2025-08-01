@@ -14,7 +14,6 @@ from PIL import Image
 import models.demos.yolov7.reference.yolov7_model as yolov7_model
 import models.demos.yolov7.reference.yolov7_utils as yolov7_utils
 import ttnn
-from models.demos.yolov7.common import YOLOV7_L1_SMALL_SIZE
 from models.demos.yolov7.demo.demo_utils import load_coco_class_names
 from models.demos.yolov7.runner.performant_runner import YOLOv7PerformantRunner
 
