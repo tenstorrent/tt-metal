@@ -301,7 +301,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
     detail::DumpDeviceProfileResults(mesh_device->get_devices()[0]);
 }
 
-TEST_F(UnitMeshCQSingleCardFixture, DISABLED_TensixActiveEthTestSubDeviceBasicEthPrograms) {
+TEST_F(UnitMeshCQSingleCardFixture, TensixActiveEthTestSubDeviceBasicEthPrograms) {
     auto mesh_device = devices_[0];
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     uint32_t num_iters = 5;
@@ -400,12 +400,12 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
 
     // Check coordinates
     tt::tt_metal::verify_kernel_coordinates(
-        tt::BRISC, sub_device_1_cores, mesh_device->get_devices()[0], tt::tt_metal::SubDeviceId{0}, cb_addr);
+        tt::BRISC, sub_device_1_cores, mesh_device.get(), tt::tt_metal::SubDeviceId{0}, cb_addr);
     tt::tt_metal::verify_kernel_coordinates(
-        tt::NCRISC, sub_device_2_cores, mesh_device->get_devices()[0], tt::tt_metal::SubDeviceId{1}, cb_addr);
+        tt::NCRISC, sub_device_2_cores, mesh_device.get(), tt::tt_metal::SubDeviceId{1}, cb_addr);
 }
 
-TEST_F(UnitMeshCQSingleCardProgramFixture, DISABLED_TensixActiveEthTestSubDeviceMyLogicalCoordinates) {
+TEST_F(UnitMeshCQSingleCardProgramFixture, TensixActiveEthTestSubDeviceMyLogicalCoordinates) {
     auto mesh_device = devices_[0];
     CoreRangeSet sub_device_1_worker_cores{CoreRange({0, 0}, {2, 2})};
     SubDevice sub_device_1(std::array{sub_device_1_worker_cores});
@@ -480,19 +480,19 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, DISABLED_TensixActiveEthTestSubDevice
     tt::tt_metal::verify_kernel_coordinates(
         tt::RISCV::BRISC,
         sub_device_1_worker_cores,
-        mesh_device->get_devices()[0],
+        mesh_device.get(),
         tt::tt_metal::SubDeviceId{0},
         cb_addr_worker);
     tt::tt_metal::verify_kernel_coordinates(
         tt::RISCV::NCRISC,
         sub_device_2_worker_cores,
-        mesh_device->get_devices()[0],
+        mesh_device.get(),
         tt::tt_metal::SubDeviceId{1},
         cb_addr_worker);
     tt::tt_metal::verify_kernel_coordinates(
         tt::RISCV::ERISC,
         sub_device_2_eth_cores,
-        mesh_device->get_devices()[0],
+        mesh_device.get(),
         tt::tt_metal::SubDeviceId{1},
         cb_addr_eth);
 }
@@ -541,7 +541,7 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
 
         // Check coordinates
         tt::tt_metal::verify_kernel_coordinates(
-            tt::BRISC, sub_device_cores, mesh_device->get_devices()[0], tt::tt_metal::SubDeviceId{i}, cb_addr);
+            tt::BRISC, sub_device_cores, mesh_device.get(), tt::tt_metal::SubDeviceId{i}, cb_addr);
     }
 }
 
@@ -606,7 +606,6 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceProgramReuseRtas) {
 }
 
 TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
-    constexpr uint32_t k_num_iters = 5;
     auto mesh_device = device_;
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(CoreRange({3, 3}, {3, 3}))});
@@ -644,64 +643,51 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
 
     distributed::MeshWorkload mesh_workload_1 = distributed::CreateMeshWorkload();
     distributed::AddProgramToMeshWorkload(mesh_workload_1, create_program_1(), device_range);
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_1, false);
-
-    auto early_event = distributed::EnqueueRecordEventToHost(mesh_device->mesh_command_queue(1));
 
     distributed::MeshWorkload mesh_workload_2 = distributed::CreateMeshWorkload();
     distributed::AddProgramToMeshWorkload(mesh_workload_2, create_program_2(), device_range);
+
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_1, false);
+    std::array sub_device_ids_for_event = {SubDeviceId{1}};
+    auto early_event = distributed::EnqueueRecordEventToHost(mesh_device->mesh_command_queue(1), sub_device_ids_for_event);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(1), mesh_workload_2, false);
 
     // CQ 0 owns sub device 1, CQ 1 owns sub device 2.
     // This should throw because program_1 targets sub device 1 which is owned by CQ 0
-    distributed::MeshWorkload mesh_workload_fail = distributed::CreateMeshWorkload();
-    distributed::AddProgramToMeshWorkload(mesh_workload_fail, create_program_1(), device_range);
     EXPECT_THROW(
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(1), mesh_workload_fail, false),
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(1), mesh_workload_1, false),
         std::exception);
 
     // Finish allows transfering ownership of sub device 1.
     distributed::Finish(mesh_device->mesh_command_queue(0));
-    distributed::MeshWorkload mesh_workload_3 = distributed::CreateMeshWorkload();
-    distributed::AddProgramToMeshWorkload(mesh_workload_3, create_program_1(), device_range);
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(1), mesh_workload_3, false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(1), mesh_workload_1, false);
 
     // CQ 1 owns sub devices 1 and 2.
     // This should throw because program_2 targets sub device 2 which is now owned by CQ 1
-    distributed::MeshWorkload mesh_workload_fail_2 = distributed::CreateMeshWorkload();
-    distributed::AddProgramToMeshWorkload(mesh_workload_fail_2, create_program_2(), device_range);
     EXPECT_THROW(
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_fail_2, false),
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_2, false),
         std::exception);
-
     // Waiting on an event before the last program was queued does not allow transferring ownership of sub device 2.
     distributed::EnqueueWaitForEvent(mesh_device->mesh_command_queue(0), early_event);
-    distributed::MeshWorkload mesh_workload_fail_3 = distributed::CreateMeshWorkload();
-    distributed::AddProgramToMeshWorkload(mesh_workload_fail_3, create_program_2(), device_range);
     EXPECT_THROW(
-        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_fail_3, false),
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_2, false),
         std::exception);
 
     // Later event allows transferring ownership of sub device 2 to CQ 0
-    auto event1 = distributed::EnqueueRecordEventToHost(mesh_device->mesh_command_queue(1));
-    auto event2 = distributed::EnqueueRecordEventToHost(mesh_device->mesh_command_queue(1));
+    auto event1 = distributed::EnqueueRecordEventToHost(mesh_device->mesh_command_queue(1), sub_device_ids_for_event);
+    auto event2 = distributed::EnqueueRecordEventToHost(mesh_device->mesh_command_queue(1), sub_device_ids_for_event);
+    log_info(tt::LogTest, "waiting on event2");
     distributed::EnqueueWaitForEvent(mesh_device->mesh_command_queue(0), event2);
-    distributed::MeshWorkload mesh_workload_4 = distributed::CreateMeshWorkload();
-    distributed::AddProgramToMeshWorkload(mesh_workload_4, create_program_2(), device_range);
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_4, false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_2, false);
 
     distributed::Synchronize(mesh_device.get(), std::nullopt);
 
     // Synchronize allows transferring ownership of either subdevice.
-    distributed::MeshWorkload mesh_workload_5 = distributed::CreateMeshWorkload();
-    distributed::AddProgramToMeshWorkload(mesh_workload_5, create_program_1(), device_range);
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_5, false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_1, false);
+    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(1), mesh_workload_2, false);
 
-    distributed::MeshWorkload mesh_workload_6 = distributed::CreateMeshWorkload();
-    distributed::AddProgramToMeshWorkload(mesh_workload_6, create_program_2(), device_range);
-    distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(1), mesh_workload_6, false);
-
-    distributed::Synchronize(mesh_device.get(), std::nullopt);
+    distributed::Finish(mesh_device->mesh_command_queue(0));
+    distributed::Finish(mesh_device->mesh_command_queue(1));
 }
 
 }  // namespace tt::tt_metal

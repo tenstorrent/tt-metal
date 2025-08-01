@@ -115,7 +115,7 @@ private:
 
     tt::stl::SmallVector<std::unique_ptr<MeshCommandQueue>> mesh_command_queues_;
 
-    std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
+    std::shared_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
     uint32_t trace_buffers_size_ = 0;
     uint32_t max_num_eth_cores_ = 0;
     std::shared_ptr<ThreadPool> dispatch_thread_pool_;

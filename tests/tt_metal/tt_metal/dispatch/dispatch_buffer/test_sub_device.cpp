@@ -119,6 +119,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     }
 
     auto buffer_2 = distributed::MeshBuffer::create(replicated_config_3, local_config_3, mesh_device.get());
+    local_config_1.sub_device_id = SubDeviceId{1};
     EXPECT_THROW(
         distributed::MeshBuffer::create(replicated_config_1, local_config_1, mesh_device.get()), std::exception);
     EXPECT_THROW(mesh_device->clear_loaded_sub_device_manager(), std::exception);
@@ -127,16 +128,8 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
     buffer_2->deallocate();
     mesh_device->clear_loaded_sub_device_manager();
     mesh_device->load_sub_device_manager(sub_device_manager_2);
-
-    // Debug: Check how many sub-devices are actually loaded
-    log_info(tt::LogTest, "DEBUG: Active sub-device manager has {} sub-devices", mesh_device->num_sub_devices());
-    for (const auto& id : mesh_device->get_sub_device_ids()) {
-        log_info(tt::LogTest, "DEBUG: Sub-device ID: {}", (int)*id);
-    }
-    log_info(tt::LogTest, "subdevice manager ids: {}, {}", *sub_device_manager_1, *sub_device_manager_2);
-
+    
     auto buffer_3 = distributed::MeshBuffer::create(replicated_config_2, local_config_2, mesh_device.get());
-    log_info(tt::LogTest, "HERE");
     EXPECT_TRUE(buffer_3->address() <= max_addr - buffer_3->get_backing_buffer()->aligned_page_size());
     distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), buffer_3, input_2, false);
     std::vector<uint32_t> output_2;
@@ -149,9 +142,10 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocations) {
         EXPECT_TRUE(std::equal(input_2_it, input_2_it + page_size_2 / sizeof(uint32_t), readback.begin()));
         input_2_it += page_size_2 / sizeof(uint32_t);
     }
-
+    local_config_1.sub_device_id = SubDeviceId{0};
     auto buffer_4 = distributed::MeshBuffer::create(replicated_config_1, local_config_1, mesh_device.get());
     EXPECT_TRUE(buffer_4->address() <= max_addr - buffer_4->get_backing_buffer()->aligned_page_size());
+    local_config_3.sub_device_id = SubDeviceId{0};
     EXPECT_THROW(
         distributed::MeshBuffer::create(replicated_config_3, local_config_3, mesh_device.get()), std::exception);
 }
