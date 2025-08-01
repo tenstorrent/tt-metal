@@ -67,8 +67,6 @@ jobs:
             echo "Running mpirun command on multiple hosts"
             cd "${{ github.workspace }}"
             ./create_venv.sh
-            ls -l "${{ github.workspace }}/build/lib"
-            ls -l $LD_LIBRARY_PATH
             source ./python_env/bin/activate
             echo "***** DEBUG ******"
             ls -l $LD_LIBRARY_PATH
