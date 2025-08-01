@@ -17,6 +17,7 @@ enum class KernelName {
     ReaderNoBcastTST,
     ReaderNoBcastTTS,
     ReaderNoBcastTSS,
+    ReaderColBcastTTT,  // New broadcast version for TTT
     WriterNoBcastTTT,
     WriterNoBcastTST,
     WriterNoBcastTTS,
@@ -28,7 +29,7 @@ enum class KernelName {
 };
 
 struct WhereKernelConfig {
-    WhereKernelConfig(WhereVariant where_variant);
+    WhereKernelConfig(WhereVariant where_variant, WhereBroadcastType broadcast_type = WhereBroadcastType::NONE);
 
     KernelName reader_kernel;
     KernelName compute_kernel;
