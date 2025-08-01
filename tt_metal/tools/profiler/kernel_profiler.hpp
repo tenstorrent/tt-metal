@@ -39,6 +39,7 @@ namespace kernel_profiler {
 extern uint32_t wIndex;
 extern uint32_t stackSize;
 extern uint32_t traceCount;
+extern bool doPush;
 
 extern uint32_t sums[SUM_COUNT];
 extern uint32_t sumIDs[SUM_COUNT];
@@ -471,6 +472,10 @@ struct profileScopeGuaranteed {
         if constexpr (TRACE_ON_TENSIX) {
             if (profiler_control_buffer[CURRENT_TRACE_ID] == TRACE_MARK_ALL_ENDS) {
                 mark_time_at_index_inlined(end_index, get_const_id(timer_id, ZONE_END));
+#if defined(COMPILE_FOR_BRISC)
+                doPush = true;
+                profiler_data_buffer[myRiscID][ID_HH] = 0x0;
+#endif
             } else if (
                 profiler_control_buffer[CURRENT_TRACE_ID] == 0 &&
                 profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER] == 0) {
@@ -530,12 +535,14 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 
 __attribute__((noinline)) void trace_init() {
     if constexpr (TRACE_ON_TENSIX) {
-        if (traceCount > 0) {
+        if (traceCount > 0 && doPush) {
             quick_push();
         }
         traceCount++;
+        doPush = false;
         set_host_counter(traceCount);
         profiler_control_buffer[CURRENT_TRACE_ID] = TRACE_MARK_FW_START;
+        profiler_data_buffer[myRiscID][ID_HH] = 0x80000000;
     }
 }
 

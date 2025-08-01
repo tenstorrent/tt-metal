@@ -86,6 +86,7 @@ uint32_t stackSize __attribute__((used));
 uint32_t sums[SUM_COUNT] __attribute__((used));
 uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 uint32_t traceCount __attribute__((used));
+bool doPush __attribute__((used));
 }  // namespace kernel_profiler
 #endif
 

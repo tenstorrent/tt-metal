@@ -1109,6 +1109,7 @@ void DeviceProfiler::readRiscProfilerResults(
             uint32_t runHostCounterRead = 0;
 
             bool newRunStart = false;
+            bool oneStartFound = false;
 
             uint32_t opTime_H = 0;
             uint32_t opTime_L = 0;
@@ -1118,6 +1119,9 @@ void DeviceProfiler::readRiscProfilerResults(
                  index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
                 if (!newRunStart && data_buffer.at(index) == 0 && data_buffer.at(index + 1) == 0) {
                     newRunStart = true;
+                    oneStartFound = true;
+                    std::cout << "New run start found in core " << worker_core.x << "," << worker_core.y << " for risc "
+                              << riscEndIndex << std::endl;
                     opTime_H = 0;
                     opTime_L = 0;
                 } else if (newRunStart) {
@@ -1130,7 +1134,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
                     opname = getOpNameIfAvailable(device_id, runHostCounterRead);
 
-                } else {
+                } else if (oneStartFound) {
                     uint32_t timer_id = (data_buffer.at(index) >> 12) & 0x7FFFF;
                     kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
 
