@@ -511,7 +511,7 @@ void RunTestUnicastRaw(
     fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
 
     if (enable_fabric_tracing) {
-        tt_metal::detail::DumpDeviceProfileResults(sender_device);
+        tt_metal::detail::ReadDeviceProfilerResults(sender_device);
     }
 
     // Validate the status and packets processed by sender and receiver
@@ -1498,7 +1498,7 @@ void RunTestChipMCast1D(
     log_info(tt::LogTest, "All Receivers Finished");
 
     if (enable_fabric_tracing) {
-        tt_metal::detail::DumpDeviceProfileResults(sender_device);
+        tt_metal::detail::ReadDeviceProfilerResults(sender_device);
     }
 
     // Validate the status and packets processed by sender and receiver

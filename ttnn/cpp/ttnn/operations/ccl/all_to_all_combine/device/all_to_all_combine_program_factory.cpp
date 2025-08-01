@@ -266,7 +266,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     };
     for (auto& neighbor : neighbors) {
         auto neighbor_coordinate = mesh_view.find_device(neighbor->id());
-        uint32_t link_id = common::select_link(mesh_view, mesh_coordinate, neighbor_coordinate, num_links, topology);
+        uint32_t link_id = 0;
         const auto neighbor_fabric_id = get_fabric_node_id_from_physical_chip_id(neighbor->id());
         append_fabric_connection_rt_args(
             fabric_node_id, neighbor_fabric_id, link_id, program, sender_core, writer_runtime_args);
