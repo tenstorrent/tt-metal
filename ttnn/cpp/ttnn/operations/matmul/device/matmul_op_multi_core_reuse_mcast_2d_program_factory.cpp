@@ -1471,12 +1471,12 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_o
     // TODO: Move these validates to op validate and properly check for this
     TT_FATAL(
         num_blocks_x <= num_cores_x,
-        "Num output blocks along x {} must be smaller than or equal to the number of columns in compute grid {}!",
+        "Num output blocks along x ({}) must be smaller than or equal to the number of columns in compute grid ({})!",
         num_blocks_x,
         num_cores_x);
     TT_FATAL(
         num_blocks_y <= num_cores_y,
-        "Num output blocks along y {} must be smaller than or equal to the number of rows in compute grid {}!",
+        "Num output blocks along y ({}) must be smaller than or equal to the number of rows in compute grid ({})!",
         num_blocks_y,
         num_cores_y);
 
