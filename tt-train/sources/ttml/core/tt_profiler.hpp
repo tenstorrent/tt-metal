@@ -17,11 +17,11 @@ public:
     TTProfiler(TTProfiler&&) = delete;
     TTProfiler& operator=(TTProfiler&&) = delete;
 
-    void dump_results(
+    void read_results(
         ttnn::distributed::MeshDevice* device,
         const std::string& noop_identifier = "noop_identifier",
         const size_t number_of_noops = 5U,
-        tt::tt_metal::ProfilerDumpState dump_state = tt::tt_metal::ProfilerDumpState::NORMAL) const;
+        tt::tt_metal::ProfilerReadState read_state = tt::tt_metal::ProfilerReadState::NORMAL) const;
 
     void call_device_noop(
         ttnn::distributed::MeshDevice* device, size_t count, const std::string& noop_identifier) const;

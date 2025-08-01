@@ -437,7 +437,7 @@ def test_noc_event_profiler_linked_multicast_hang():
     testCommand = "build/test/tt_metal/perf_microbenchmark/dispatch/test_bw_and_latency"
     # note: this runs a long series repeated multicasts from worker {1,1} to grid {2,2},{3,3}
     # note: -m6 is multicast test mode, -link activates linked multicast
-    testCommandArgs = "-tx 3 -ty 3 -sx 2 -sy 2 -rx 1 -ry 1 -m 6 -link -profdump"
+    testCommandArgs = "-tx 3 -ty 3 -sx 2 -sy 2 -rx 1 -ry 1 -m 6 -link -profread"
     clear_profiler_runtime_artifacts()
     nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
     profilerRun = os.system(f"cd {TT_METAL_HOME} && {nocEventProfilerEnv} {testCommand} {testCommandArgs}")

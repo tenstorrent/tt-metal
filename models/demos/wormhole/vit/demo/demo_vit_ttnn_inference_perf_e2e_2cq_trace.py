@@ -110,7 +110,7 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
-    ttnn.DumpDeviceProfiler(device)
+    ttnn.ReadDeviceProfiler(device)
 
     ttnn.release_trace(device, trace_id)
 

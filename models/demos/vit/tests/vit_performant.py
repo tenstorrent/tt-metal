@@ -31,7 +31,7 @@ def run_trace_2cq_model(device, batch_size=8, model_location_generator=None):
     op_event = ttnn.record_event(device, 0)
     _ = ttnn.from_device(test_infra.run(), blocking=True)
     profiler.end("compile")
-    ttnn.DumpDeviceProfiler(device)
+    ttnn.ReadDeviceProfiler(device)
 
     profiler.start("cache")
     ttnn.wait_for_event(1, op_event)
@@ -45,7 +45,7 @@ def run_trace_2cq_model(device, batch_size=8, model_location_generator=None):
     test_infra.output_tensor.deallocate(force=True)
     _ = ttnn.from_device(test_infra.run(), blocking=True)
     profiler.end("cache")
-    ttnn.DumpDeviceProfiler(device)
+    ttnn.ReadDeviceProfiler(device)
 
     # Capture
     ttnn.wait_for_event(1, op_event)
@@ -62,7 +62,7 @@ def run_trace_2cq_model(device, batch_size=8, model_location_generator=None):
     reshard_out = ttnn.allocate_tensor_on_device(spec, device)
     ttnn.end_trace_capture(device, tid, cq_id=0)
     assert trace_input_addr == reshard_out.buffer_address()
-    ttnn.DumpDeviceProfiler(device)
+    ttnn.ReadDeviceProfiler(device)
 
     for iter in range(0, 2):
         ttnn.wait_for_event(1, op_event)
@@ -72,7 +72,7 @@ def run_trace_2cq_model(device, batch_size=8, model_location_generator=None):
         reshard_out = ttnn.reshard(tt_image_res, input_mem_config, reshard_out)
         op_event = ttnn.record_event(device, 0)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-        ttnn.DumpDeviceProfiler(device)
+        ttnn.ReadDeviceProfiler(device)
 
     ttnn.synchronize_device(device)
     if use_signpost:
@@ -93,6 +93,6 @@ def run_trace_2cq_model(device, batch_size=8, model_location_generator=None):
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
-    ttnn.DumpDeviceProfiler(device)
+    ttnn.ReadDeviceProfiler(device)
 
     ttnn.release_trace(device, tid)

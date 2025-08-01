@@ -186,7 +186,7 @@ class YoloV12x:
         x = self.a2c2f_2(x, i=10)  # 8
         x8 = x
         x8 = ttnn.to_memory_config(x8, ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.DumpDeviceProfiler(self.device)
+        ttnn.ReadDeviceProfiler(self.device)
 
         x = interleaved_to_sharded(x)
         x = ttnn.upsample(x, scale_factor=2)  # 9
@@ -223,7 +223,7 @@ class YoloV12x:
             x11 = ttnn.to_layout(x11, ttnn.ROW_MAJOR_LAYOUT)
         x = concat(-1, False, x, x11)  # 16
         ttnn.deallocate(x11)
-        ttnn.DumpDeviceProfiler(self.device)
+        ttnn.ReadDeviceProfiler(self.device)
         x = self.a2c2f_5(x, i=19)  # 17
         x17 = x
         x17 = ttnn.to_memory_config(x17, ttnn.DRAM_MEMORY_CONFIG)
@@ -235,7 +235,7 @@ class YoloV12x:
         x20 = x
         x14 = ttnn.to_memory_config(x14, ttnn.L1_MEMORY_CONFIG)
         x17 = ttnn.to_memory_config(x17, ttnn.L1_MEMORY_CONFIG)
-        ttnn.DumpDeviceProfiler(self.device)
+        ttnn.ReadDeviceProfiler(self.device)
 
         x = self.detect(x14, x17, x20)  # 21
         return x

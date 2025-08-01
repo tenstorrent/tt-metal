@@ -92,7 +92,7 @@ def test_qwen_model_perf(mesh_device, kv_cache_len, expected_compile_time, reset
     profiler.print()
     compile_and_iter_time = profiler.get("model_run_for_inference_0")
 
-    ttnn.DumpDeviceProfiler(mesh_device)
+    ttnn.ReadDeviceProfiler(mesh_device)
 
     if not os.getenv("CI") == "true":  # Enable tracy signpost support in local runs only
         signpost("Model perf run")
