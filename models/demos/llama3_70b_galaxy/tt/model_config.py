@@ -2122,6 +2122,10 @@ class TtModelArgs:
             if any([r in k for r in remv]):
                 state_dict.pop(k)
 
+        # Recursively print all keys in state_dict with dimensions
+        for k, v in state_dict.items():
+            logger.info(f"{k}: {v.shape}")
+
         return state_dict
 
     def create_dram_sharded_mem_config(self, k, n):

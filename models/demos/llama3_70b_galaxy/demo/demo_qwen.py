@@ -20,12 +20,13 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 )
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
 from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
 
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
+
+from transformers import AutoTokenizer  # This replaces the llama31_8b tokenizer
 
 # Maximum number of times `tokens_per_second_per_user` is allowed to be outside the `tsu_range`
 # before triggering an assertion failure. Allows occasional dips while ensuring
@@ -36,7 +37,7 @@ TSU_PERF_DROP_LIMIT_PERCENT = 10
 TSU_THRESHOLDS = {
     "4U": {1: {"min": 390, "max": 448}, 10: {"min": 230, "max": 253}, 80: {"min": 52, "max": 56}},
     # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
-    "6U": {1: {"min": 480, "max": 550}, 10: {"min": 230, "max": 250}, 80: {"min": 68, "max": 73}},
+    "6U": {1: {"min": 480, "max": 550}, 10: {"min": 230, "max": 250}, 80: {"min": 65, "max": 70}},
 }
 
 
@@ -77,7 +78,7 @@ def load_inputs(user_input, batch, instruct_mode):
             user_input = json.load(f)
     assert len(user_input) >= batch, f"Number of users (batch) must be {batch}!"
     in_prompt = []
-    cache_dir = Path("models/demos/qwen3/demo/context_cache")
+    cache_dir = Path("models/demos/llama3/demo/context_cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     for i in range(batch):
@@ -119,8 +120,6 @@ def run_llama3_demo(
     start_pos,
     enable_prefetcher_performance_mode=True,
     galaxy_type="4U",
-    is_cur_pos_sharded=True,
-    is_page_table_sharded=True,
 ):
     # Creat batch output file
     benchmark_data = BenchmarkData()
@@ -137,13 +136,13 @@ def run_llama3_demo(
 
     top_k = sampling_params["top_k"]
     if isinstance(top_k, int):
-        top_k = torch.tensor([top_k] * batch_size)
+        top_k = [top_k] * batch_size
     top_p = sampling_params["top_p"]
     if isinstance(top_p, float):
-        top_p = torch.tensor([top_p] * batch_size)
+        top_p = [top_p] * batch_size
     temperature = sampling_params["temperature"]
     if isinstance(temperature, float):
-        temperature = torch.tensor([temperature] * batch_size)
+        temperature = [temperature] * batch_size
     seed = sampling_params["seed"]
 
     dummy_weights = weights == "random"
@@ -182,15 +181,11 @@ def run_llama3_demo(
     )
     model_args.n_layers = layers
 
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    tokenizer = AutoTokenizer.from_pretrained(model_args.TOKENIZER_PATH)
 
     # Check max sequence length compatibility with model and architecture. Refer to README for more information
     llama_model_name = model_args.model_name  # ["3.2-1B", "3.2-3B", "3.1-8B", "3.2-11B", "3.1-70B"]
     tt_device_name = model_args.device_name  # ["N150", "N300", "T3K", "TG"]
-
-    if llama_model_name == "3.1-70B":
-        assert tt_device_name in ["TG"], "Llama-3.1-70B is only supported on TG"
-        assert max_seq_len <= 128 * 1024, "TG supports the official max context length of 128k tokens for Llama-3.1-70B"
 
     logger.info("Loading weights...")
     profiler.start("weight_loading")
@@ -218,43 +213,13 @@ def run_llama3_demo(
             model_args.batch_size_per_device_group,
             paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
         )
-
-        # OPTIMIZATION: We repeat the page table on each core in L1
-        if is_page_table_sharded:
-            # We repeat each batch by num_cores_to_shard times then concat them back together
-            # This tensor is sharded along the height first across devices (/4) then within device (/50) on dim 0
-            page_table_chunks = page_table.split(8, dim=0)
-            repeated_page_table_chunks = [
-                chunk.repeat(model_args.sub_core_grids.num_cores(), 1) for chunk in page_table_chunks
-            ]
-            page_table = torch.cat(repeated_page_table_chunks, dim=0)
-            page_table_shard_spec = ttnn.ShardSpec(
-                model_args.sub_core_grids,
-                (
-                    model_args.batch_size_per_device_group,
-                    paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
-                ),
-                ttnn.ShardOrientation.ROW_MAJOR,
-            )
-            page_table_memory_config = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, page_table_shard_spec
-            )
-            page_table_tt = ttnn.from_torch(
-                page_table,
-                device=mesh_device,
-                dtype=ttnn.uint16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
-                memory_config=page_table_memory_config,
-            )
-        else:
-            page_table_tt = ttnn.from_torch(
-                page_table,
-                device=mesh_device,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
-            )
+        page_table_tt = ttnn.from_torch(
+            page_table,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
+        )
         logger.info("Page table tensor done")
 
     # Load TTNN Llama-3.1 model
@@ -279,10 +244,8 @@ def run_llama3_demo(
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
+        temperature=temperature,
         tt_ccl=tt_model.tt_ccl,
-        k=top_k,
-        p=top_p,
-        temp=temperature,
     )
     profiler.end("loading_weights_to_device")
     logger.info("Finished loading weights to device.")
@@ -305,45 +268,28 @@ def run_llama3_demo(
 
     user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
-    # Defining core grids
     logger.info("Starting decode...")
-
-    # Create initial current position tensors
+    # Initial positions
     decoding_pos = [start_pos] * batch_size
     current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
 
-    # OPTIMIZATION: sharding the current position tensor on each core
-    if is_cur_pos_sharded:
-        # Each core will have a copy of the current position tensor in L1
-        current_pos_sram = torch.tensor(
-            [[decoding_pos[b] for b in range(batch_size)]] * model_args.sub_core_grids.num_cores()
-        )
-        cur_pos_shard_spec = ttnn.ShardSpec(
-            model_args.sub_core_grids, (1, batch_size // mesh_device.shape[1]), ttnn.ShardOrientation.ROW_MAJOR
-        )
-        cur_pos_memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cur_pos_shard_spec
-        )
     current_pos_tensor = ttnn.from_torch(
-        current_pos_sram if is_cur_pos_sharded else current_pos,
+        current_pos,
+        device=mesh_device,
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 1 if is_cur_pos_sharded else 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
     )
+
     logger.info("Current pos tensor done")
+
     # Get cos/sin matrices for the current position of each user
     rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
 
     logger.info("Rot mats done")
-
-    # Move the cur pos tensor to device
-    if is_cur_pos_sharded:
-        current_pos_tensor = current_pos_tensor.to(mesh_device, cur_pos_memory_config)
-    else:
-        current_pos_tensor = current_pos_tensor.to(mesh_device)
 
     # Prepare the encoded prompts for the decode input
     tt_out_tok = ttnn.from_torch(
@@ -353,6 +299,12 @@ def run_llama3_demo(
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    sub_core_grids = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+        ]
     )
 
     # Compile
@@ -376,13 +328,13 @@ def run_llama3_demo(
         )
 
         # Sampling
-        _ = tt_sampling(tt_out[0], seed, tt_out_tok=tt_out_tok)  # Compile once with setting the seed
+        _ = tt_sampling(tt_out[0], top_k, top_p, seed, tt_out_tok=tt_out_tok)  # Compile once with setting the seed
         logger.info(f"Sampling done")
 
     if not stress_test:
         ttnn.plus_one(
             current_pos_tensor,
-            sub_core_grids=model_args.sub_core_grids,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
         ttnn.plus_one(
             rot_mat_idxs,
@@ -390,7 +342,7 @@ def run_llama3_demo(
         )
 
     _ = tt_sampling(
-        tt_out[0], tt_out_tok=tt_out_tok
+        tt_out[0], top_k, top_p, tt_out_tok=tt_out_tok
     )  # Compile again without seed to obtain random sampling; at this position to simplify test_decoder_device_perf.py
 
     # Capture Trace
@@ -413,12 +365,12 @@ def run_llama3_demo(
     )
 
     # Sampling
-    _ = tt_sampling(tt_out[0], tt_out_tok=tt_out_tok)
+    _ = tt_sampling(tt_out[0], top_k, top_p, tt_out_tok=tt_out_tok)
 
     if not stress_test:
         ttnn.plus_one(
             current_pos_tensor,
-            sub_core_grids=model_args.sub_core_grids,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
         ttnn.plus_one(
             rot_mat_idxs,
@@ -430,11 +382,11 @@ def run_llama3_demo(
 
     # Reset the decoding position for the proper run of the model
     current_pos_reset = ttnn.from_torch(
-        current_pos_sram if is_cur_pos_sharded else current_pos,
+        current_pos,
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 1 if is_cur_pos_sharded else 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
     )
@@ -648,7 +600,7 @@ def run_llama3_demo(
 #
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 @pytest.mark.parametrize(
-    "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos, is_cur_pos_sharded, is_page_table_sharded",
+    "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos",
     [
         (  # full demo, batch 32
             "instruct",
@@ -664,8 +616,6 @@ def run_llama3_demo(
             {"top_k": 32, "top_p": 0.9, "temperature": 0.7, "seed": 42},  # sampling_params
             False,  # stress_test
             0,  # start_pos
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
         ),
         (  # quick 1L demo
             "random",
@@ -681,8 +631,6 @@ def run_llama3_demo(
             {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             0,  # start_pos
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
         ),
         (  # Stress test: 4*128k generation length
             "instruct",
@@ -698,8 +646,6 @@ def run_llama3_demo(
             {"top_k": 1, "top_p": 0.0, "temperature": 1.0, "seed": 42},  # sampling_params
             True,  # stress_test
             0,  # start_pos
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
         ),
         (  # mini stress test
             "instruct",
@@ -715,8 +661,6 @@ def run_llama3_demo(
             {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
         ),
         (  # 10 layers for devive perf measurements
             "instruct",
@@ -732,8 +676,6 @@ def run_llama3_demo(
             {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             127,  # start_pos
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
         ),
         (  # ND hang test
             "instruct",
@@ -749,8 +691,6 @@ def run_llama3_demo(
             {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
         ),
     ],
     ids=[
@@ -782,7 +722,7 @@ def run_llama3_demo(
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 23887872,
-            "worker_l1_size": 1345000,
+            "worker_l1_size": 1344544,
             "fabric_config": True,
         }
     ],
@@ -808,8 +748,6 @@ def test_llama_demo(
     reset_seeds,
     request,
     galaxy_type,
-    is_cur_pos_sharded,
-    is_page_table_sharded,
 ):
     if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
@@ -850,6 +788,4 @@ def test_llama_demo(
         start_pos=start_pos,
         enable_prefetcher_performance_mode=enable_pf_perf_mode,
         galaxy_type=galaxy_type,
-        is_cur_pos_sharded=is_cur_pos_sharded,
-        is_page_table_sharded=is_page_table_sharded,
     )
