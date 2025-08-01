@@ -42,7 +42,10 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     const auto selected_experts_k = metadata_tensor_shape[3];
     const auto experts = mapping_tensor.logical_shape()[-2];
 
-    const auto experts_per_device = tensor_return_value.logical_shape()[-1];
+    const auto& output_mapping_tensor = tensor_return_value.at(0);
+    const auto& output_reduced_tensor = tensor_return_value.at(1);
+
+    const auto experts_per_device = output_mapping_tensor.logical_shape()[-1];
 
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     const auto dram_alignment = tt::tt_metal::hal::get_dram_alignment();
@@ -56,7 +59,8 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     const auto topk_page_size_bytes = topk_tensor.tensor_spec().compute_page_size_bytes();
     const auto aligned_topk_page_size_bytes = tt::align(topk_page_size_bytes, l1_alignment);
 
-    const auto output_page_size_bytes = tensor_return_value.tensor_spec().compute_page_size_bytes();
+    const auto output_mapping_page_size_bytes = output_mapping_tensor.tensor_spec().compute_page_size_bytes();
+    const auto output_reduced_page_size_bytes = output_reduced_tensor.tensor_spec().compute_page_size_bytes();
 
     Program program{};
 
@@ -111,11 +115,11 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     const auto topk_cb_handle = CreateCircularBuffer(program, total_cores, cb_topk_config);
 
     // output staging buffer
-    const auto output_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
+    const auto output_data_format = datatype_to_dataformat_converter(output_mapping_tensor.dtype());
     const auto output_cb_id = tt::CBIndex::c_4;
     CircularBufferConfig cb_output_config =
-        CircularBufferConfig(output_page_size_bytes, {{output_cb_id, output_data_format}})
-            .set_page_size(output_cb_id, output_page_size_bytes);
+        CircularBufferConfig(output_mapping_page_size_bytes, {{output_cb_id, output_data_format}})
+            .set_page_size(output_cb_id, output_mapping_page_size_bytes);
     const auto output_cb_handle = CreateCircularBuffer(program, total_cores, cb_output_config);
 
     const auto& mesh_view = mesh_device->get_view();
@@ -159,10 +163,11 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
         output_cb_id,
         selected_experts_k,
         experts_per_device,
-        output_page_size_bytes,
+        output_mapping_page_size_bytes,
         output_datum_size_bytes,
+        operation_attributes.reduction_size,
     };
-    tt::tt_metal::TensorAccessorArgs(*tensor_return_value.buffer()).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(*output_mapping_tensor.buffer()).append_to(writer_ct_args);
 
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -173,40 +178,46 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
 
     // split work over metadata pages (batch*seq)
     const auto num_metadata_pages = metadata_tensor.buffer()->num_pages();
-    const auto
-        [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(grid, num_metadata_pages);
+    //     const auto
+    //         [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1,
+    //         num_tiles_per_core_group_2] =
+    //             tt::tt_metal::split_work_to_cores(grid, num_metadata_pages);
+
+    const auto reduction_size = operation_attributes.reduction_size;
+    const auto [core_page_increments, all_cores] =
+        split_work_to_cores_even_multiples(grid, num_metadata_pages, reduction_size);
 
     const auto mapping_tensor_addr = mapping_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address();
     const auto metadata_tensor_addr = metadata_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address();
     const auto topk_tensor_addr = topk_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address();
-    const auto output_tensor_addr = tensor_return_value.mesh_buffer()->get_device_buffer(mesh_coordinate)->address();
+    const auto output_mapping_tensor_addr =
+        output_mapping_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address();
+    const auto output_reduced_tensor_addr =
+        output_reduced_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address();
 
     uint32_t page_idx_start = 0, page_idx_end = 0;
     constexpr auto num_reader_rt_args = 5, num_writer_rt_args = 3;
-    std::vector<CoreCoord> utilized_cores;
-    for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
-        uint32_t increment = 0;
-        if (core_group_1.contains(c)) {
-            increment = num_tiles_per_core_group_1;
-        } else if (core_group_2.contains(c)) {
-            increment = num_tiles_per_core_group_2;
-        } else {
-            continue;
-        }
-        page_idx_end += increment;
+    std::vector<CoreCoord> utilized_cores = corerange_to_cores(all_cores, std::nullopt);
+    TT_ASSERT(utilized_cores.size() == core_page_increments.size());
 
+    auto cit = utilized_cores.begin();
+    for (auto increment : core_page_increments) {
+        page_idx_end += increment;
         const std::array<uint32_t, num_reader_rt_args> reader_runtime_args = {
             mapping_tensor_addr, metadata_tensor_addr, topk_tensor_addr, page_idx_start, page_idx_end};
-        tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, c, reader_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, *cit, reader_runtime_args);
+
+        const uint32_t reduction_idx_start = page_idx_start / operation_attributes.reduction_size;
 
         const std::array<uint32_t, num_writer_rt_args> writer_runtime_args = {
-            output_tensor_addr, page_idx_start, page_idx_end};
+            output_mapping_tensor_addr,
+            page_idx_start,
+            page_idx_end};  // TODO , output_reduced_tensor_addr, reduction_idx_start};
 
-        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, c, writer_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, *cit, writer_runtime_args);
 
         page_idx_start += increment;
-        utilized_cores.push_back(c);
+        ++cit;
     }
 
     return {
@@ -221,6 +232,9 @@ void MoeExpertTokenRemapDeviceOperation::Multicore::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
+    const auto& output_mapping_tensor = tensor_return_value.at(0);
+    const auto& output_reduced_tensor = tensor_return_value.at(1);
+
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& coord = range.start_coord();
         TT_FATAL(
@@ -242,7 +256,9 @@ void MoeExpertTokenRemapDeviceOperation::Multicore::override_runtime_arguments(
             reader_runtime_args.at(1) = tensor_args.metadata_tensor.mesh_buffer()->get_device_buffer(coord)->address();
             reader_runtime_args.at(2) = tensor_args.topk_tensor.mesh_buffer()->get_device_buffer(coord)->address();
 
-            writer_runtime_args.at(0) = tensor_return_value.mesh_buffer()->get_device_buffer(coord)->address();
+            writer_runtime_args.at(0) = output_mapping_tensor.mesh_buffer()->get_device_buffer(coord)->address();
+
+            // TODO
         }
     }
 };
