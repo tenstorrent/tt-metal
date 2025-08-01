@@ -8,6 +8,8 @@ import torch
 
 from models.demos.yolov7.reference.model import Yolov7_model
 
+YOLOV7_L1_SMALL_SIZE = 24576
+
 
 def load_torch_model(model_location_generator=None):
     torch_model = Yolov7_model()
