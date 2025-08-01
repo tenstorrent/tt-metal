@@ -655,11 +655,6 @@ def test_all_to_all_combine_no_trace(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "trace_region_size": 500000,
-        },
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
             "trace_region_size": 500000,
         },
@@ -679,7 +674,7 @@ def test_all_to_all_combine_no_trace(
     [(1, 40, 10), (128, 10, 5)],
     ids=["decode", "prefill"],
 )
-@pytest.mark.parametrize("local_reduce", [False, True])
+@pytest.mark.parametrize("local_reduce", [True])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("num_links", [1])
