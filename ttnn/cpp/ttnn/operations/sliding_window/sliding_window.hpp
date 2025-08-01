@@ -74,6 +74,10 @@ struct SlidingWindowConfig {
      */
     ttnn::Shape get_output_shape() const;
 
+    uint32_t get_pad_top() const;
+    uint32_t get_pad_bottom() const;
+    uint32_t get_pad_left() const;
+    uint32_t get_pad_right() const;
     uint32_t get_pad_h() const;
     uint32_t get_pad_w() const;
     uint32_t get_ceil_pad_h() const;
