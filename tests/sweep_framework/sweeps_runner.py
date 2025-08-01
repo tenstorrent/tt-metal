@@ -33,17 +33,7 @@ from framework.database import (
 )
 from sweep_utils.roofline_utils import get_updated_message
 
-try:
-    import psycopg2
-
-    PSYCOPG2_AVAILABLE = True
-except ImportError as e:
-    PSYCOPG2_AVAILABLE = False
-    logger.warning(
-        "PostgreSQL dependencies not available. If you plan to use database features, "
-        "please install psycopg2 using 'pip install psycopg2' or 'pip install psycopg2-binary'"
-    )
-
+# psycopg2 import handling is now centralized in framework/database.py
 # Constants
 PROCESS_TERMINATION_TIMEOUT_SECONDS = 5  # Time to wait for graceful process termination
 
