@@ -462,12 +462,15 @@ bool is_1d_deptwise_conv(
     return is_depthwise_conv && is_1d_conv(kernel_width, image_width) && !has_bias;
 }
 
-bool is_singlecore_skip_mcast(
+SkipMcast conv_skip_mcast(
     const OptimizedConvParallelizationConfig& parallelization_config, TensorMemoryLayout memory_layout) {
-    if (memory_layout != TensorMemoryLayout::BLOCK_SHARDED && memory_layout != TensorMemoryLayout::WIDTH_SHARDED) {
-        return false;
+    if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
+        return SkipMcast{
+            .skip_activation_mcast = parallelization_config.num_cores_c == 1,
+            .skip_weights_mcast = parallelization_config.num_cores_nhw == 1};
     }
-    return parallelization_config.num_cores_c * parallelization_config.num_cores_nhw == 1;
+    const bool skip_mcast = parallelization_config.num_cores_c * parallelization_config.num_cores_nhw == 1;
+    return SkipMcast{.skip_activation_mcast = skip_mcast, .skip_weights_mcast = skip_mcast};
 }
 
 template <typename DeviceType>
@@ -1039,7 +1042,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     for (const CBInfo& cb : cb_info) {
         if (!cb.is_globally_allocated) {
             total_CB_size += cb.cb_size_per_core();
-            log_debug(tt::LogOp, "CB: {}, size: {}", magic_enum::enum_name(cb.name), cb.cb_size_per_core());
+            log_debug(tt::LogOp, "CB: {}, size: {}", enchantum::to_string(cb.name), cb.cb_size_per_core());
         }
         if (cb.name == Conv2dCb::OUT) {
             output_size = cb.cb_size_per_core();
