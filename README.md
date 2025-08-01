@@ -31,7 +31,7 @@ Additionally, the repository includes a test environment designed to validate LL
 
 2. **Set up the test environment**
 
-    Follow the instructions in the [testing README](https://github.com/tenstorrent/tt-llk/blob/main/tests/README.md) to set up the test environment.
+    Follow the instructions in the [testing README](https://github.com/tenstorrent/tt-llk/blob/main/tests/README.md) to set up the test environment. This will also automatically configure pre-commit hooks for code quality checks.
 
 ## Software dependencies ##
 

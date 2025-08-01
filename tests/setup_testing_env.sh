@@ -78,6 +78,34 @@ download_headers() {
     echo "Headers for ${chip_arch} downloaded successfully."
 }
 
+# Function to setup pre-commit hooks
+setup_precommit() {
+    echo "Setting up pre-commit hooks..."
+
+    # Navigate to repository root (parent of tests directory)
+    local repo_root="${SCRIPT_DIR}/.."
+
+    # Check if we're in a git repository
+    if ! git -C "$repo_root" rev-parse --git-dir >/dev/null 2>&1; then
+        echo "WARNING: Not in a git repository, skipping pre-commit setup"
+        return
+    fi
+
+    # Install pre-commit if not available
+    if ! command -v pre-commit >/dev/null 2>&1; then
+        echo "Installing pre-commit..."
+        pip install pre-commit
+    fi
+
+    # Install hooks
+    echo "Installing pre-commit hooks..."
+    if (cd "$repo_root" && pre-commit install); then
+        echo "Pre-commit hooks installed successfully!"
+    else
+        echo "WARNING: Failed to install pre-commit hooks"
+    fi
+}
+
 # --- Main Script ---
 
 main() {
@@ -103,6 +131,9 @@ main() {
 
     # Download headers
     download_headers "$chip_arch"
+
+    # Setup pre-commit hooks
+    setup_precommit
 
     # Determine architecture, OS, file extension, and extraction flags
     local arch_os
@@ -180,6 +211,7 @@ main() {
     echo "$sfpi_version" > "${SCRIPT_DIR}/sfpi/sfpi.version"
     echo "SFPI successfully installed version $sfpi_version"
     echo "Setup complete. You can now run your tests."
+    echo "Pre-commit hooks have been configured for code quality checks."
 }
 
 # Execute the main function

@@ -103,7 +103,18 @@ For more details on pre-commit, you can visit the [official documentation](https
 
 ### How to Set Up Pre-commit Locally
 
-To set up pre-commit on your local machine, follow these steps:
+Pre-commit hooks are **automatically installed** when you run the testing environment setup:
+
+```bash
+cd tests
+./setup_testing_env.sh
+```
+
+This script will install pre-commit and configure the git hooks for you.
+
+#### Manual Setup (Alternative)
+
+If you prefer to set up pre-commit manually or need to reinstall it, follow these steps:
 
 1. **Install Pre-commit**:
    Ensure you have Python installed, then run:
