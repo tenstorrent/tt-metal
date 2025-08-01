@@ -103,11 +103,11 @@ void kernel_main() {
     //     l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, bbox_size, true);
 
     noc_async_write_multicast(
-        l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, bbox_size - 1, false);
+        l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, bbox_size, false);
 
     uint64_t multicast_sema_addr = multicast_addr_noc | (uint64_t)fused_op_receiver_signal_semaphore_addr[core_id];
     noc_semaphore_set_multicast(
-        fused_op_receiver_signal_semaphore_addr[core_id], multicast_sema_addr, bbox_size - 1, false);
+        fused_op_receiver_signal_semaphore_addr[core_id], multicast_sema_addr, bbox_size, false);
     noc_async_write_barrier();
 
     if (ring_index != next_core_id_to_left) {  // don't need to notify if it's the last core
