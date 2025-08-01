@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <vector>
 
 #include <tt-metalium/mesh_graph.hpp>
@@ -180,6 +181,50 @@ struct NocUnicastWriteAtomicIncFields {
 
     NocUnicastWriteFields write_fields;
     NocUnicastAtomicIncFields atomic_inc_fields;
+};
+
+struct NocUnicastScatterWriteFields {
+    static constexpr uint32_t MAX_CHUNKS = 2;
+
+    NocUnicastScatterWriteFields(
+        uint32_t payload_size_bytes,
+        const std::array<uint32_t, MAX_CHUNKS>& dst_addresses,
+        const std::array<uint16_t, MAX_CHUNKS - 1>& chunk_sizes,
+        std::optional<uint32_t> dst_noc_encoding = std::nullopt) :
+        payload_size_bytes(payload_size_bytes),
+        dst_addresses(dst_addresses),
+        chunk_sizes(chunk_sizes),
+        dst_noc_encoding(dst_noc_encoding) {}
+
+    template <bool IS_SOURCE>
+    std::vector<uint32_t> get_args() const {
+        if constexpr (IS_SOURCE) {
+            if (!this->dst_noc_encoding.has_value()) {
+                log_fatal(tt::LogTest, "dst_noc_encoding must be set for source");
+                TT_THROW("dst_noc_encoding must be set for source in NocUnicastScatterWriteFields");
+            }
+        }
+
+        std::vector<uint32_t> args;
+        args.push_back(payload_size_bytes);
+        for (uint32_t i = 0; i < MAX_CHUNKS; i++) {
+            args.push_back(dst_addresses[i]);
+        }
+        if (dst_noc_encoding.has_value()) {
+            args.push_back(dst_noc_encoding.value());
+        }
+        // Add chunk sizes (only MAX_CHUNKS-1 since last is implicit)
+        for (uint32_t i = 0; i < MAX_CHUNKS - 1; i++) {
+            args.push_back(static_cast<uint32_t>(chunk_sizes[i]));
+        }
+
+        return args;
+    }
+
+    uint32_t payload_size_bytes;
+    std::array<uint32_t, MAX_CHUNKS> dst_addresses;
+    std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes;
+    std::optional<uint32_t> dst_noc_encoding;
 };
 
 // create memory maps
@@ -372,6 +417,26 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
             const auto fused_args = fused_fields.get_args<true>();
             args.insert(args.end(), fused_args.begin(), fused_args.end());
         } break;
+        case NocSendType::NOC_UNICAST_SCATTER_WRITE: {
+            // For scatter write, we need to split the payload into chunks
+            const auto max_chunks = NocUnicastScatterWriteFields::MAX_CHUNKS;
+            const auto chunk_size = (this->parameters.payload_size_bytes + max_chunks - 1) / max_chunks;
+
+            std::array<uint32_t, max_chunks> dst_addresses;
+            for (uint32_t i = 0; i < max_chunks; i++) {
+                dst_addresses[i] = static_cast<uint32_t>(this->target_address + i * chunk_size);
+            }
+
+            std::array<uint16_t, max_chunks - 1> chunk_sizes;
+            for (uint32_t i = 0; i < max_chunks - 1; i++) {
+                chunk_sizes[i] = static_cast<uint16_t>(chunk_size);
+            }
+
+            const auto scatter_write_fields = NocUnicastScatterWriteFields(
+                this->parameters.payload_size_bytes, dst_addresses, chunk_sizes, this->dst_noc_encoding);
+            const auto scatter_write_args = scatter_write_fields.get_args<true>();
+            args.insert(args.end(), scatter_write_args.begin(), scatter_write_args.end());
+        } break;
         default: TT_FATAL(false, "Unsupported noc send type");
     }
 
@@ -422,6 +487,27 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
             const auto fused_fields = NocUnicastWriteAtomicIncFields(write_fields, atomic_inc_fields);
             const auto fused_args = fused_fields.get_args<false>();
             args.insert(args.end(), fused_args.begin(), fused_args.end());
+            break;
+        }
+        case NocSendType::NOC_UNICAST_SCATTER_WRITE: {
+            // For scatter write, we need to split the payload into chunks
+            const auto max_chunks = NocUnicastScatterWriteFields::MAX_CHUNKS;
+            const auto chunk_size = (this->parameters.payload_size_bytes + max_chunks - 1) / max_chunks;
+
+            std::array<uint32_t, max_chunks> dst_addresses;
+            for (uint32_t i = 0; i < max_chunks; i++) {
+                dst_addresses[i] = static_cast<uint32_t>(this->target_address + i * chunk_size);
+            }
+
+            std::array<uint16_t, max_chunks - 1> chunk_sizes;
+            for (uint32_t i = 0; i < max_chunks - 1; i++) {
+                chunk_sizes[i] = static_cast<uint16_t>(chunk_size);
+            }
+
+            const auto scatter_write_fields =
+                NocUnicastScatterWriteFields(this->parameters.payload_size_bytes, dst_addresses, chunk_sizes);
+            const auto scatter_write_args = scatter_write_fields.get_args<false>();
+            args.insert(args.end(), scatter_write_args.begin(), scatter_write_args.end());
             break;
         }
         default: TT_FATAL(false, "Unsupported noc send type");
