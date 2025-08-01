@@ -12,6 +12,7 @@ class DataMovementConfig:
         self.script_dir = os.path.dirname(os.path.abspath(__file__))
         self.test_info_path = os.path.join(self.script_dir, "test_mappings", "test_information.yaml")
         self.test_bounds_path = os.path.join(self.script_dir, "test_mappings", "test_bounds.yaml")
+        self.test_type_attributes_path = os.path.join(self.script_dir, "test_mappings", "test_type_attributes.yaml")
 
     def get_arch(self, arch_name=None, test_bounds=None):
         """Get architecture from command line argument or environment variable."""
