@@ -71,13 +71,20 @@ target_sources(
             common/kernels/ccl_send_reader_two_input.cpp
             common/kernels/ccl_send.cpp
             common/kernels/ccl_wait_completion.cpp
-            shared_with_host/sharded_tensor_addr_gen.hpp
-            shared_with_host/hetergeneous_data_structs.hpp
-            all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp
             common/kernels/command_processor.hpp
             common/interpreter_backends/kernel_common/io_descriptors.hpp
             common/types/ccl_types.hpp
+            common/types/ccl_types_device.hpp
+            common/types/sharding_common.hpp
+            common/interpreter_backends/kernel_common/algorithms.hpp
+            common/uops/ccl_command_device.hpp
+            common/uops/ccl_command.hpp
+            shared_with_host/sharded_tensor_addr_gen.hpp
+            shared_with_host/hetergeneous_data_structs.hpp
+            all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp
             kernel_common/sharding_addrgen.hpp
+            kernel_common/worker_edm_utils.hpp
+            kernel_common/worker_edm_adapters.hpp
 )
 
 install(
