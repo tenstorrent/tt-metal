@@ -27,6 +27,7 @@ class SoftmaxTest : public ::testing::Test {
 protected:
     void SetUp() override {
         ttml::autograd::ctx().open_device();
+        ttml::autograd::ctx().set_seed(42);
     }
 
     void TearDown() override {
@@ -51,10 +52,12 @@ TEST_F(SoftmaxTest, SoftmaxTest_Batch) {
     int32_t dim = 3U;
 
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
+    auto rng = ttml::autograd::ctx().get_generator();
+    uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
-        42);
+        seed);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
     std::cout << "Input Logits:\n";
@@ -86,10 +89,12 @@ TEST_F(SoftmaxTest, SoftmaxTest_Big_Batch) {
     int32_t dim = 3U;
 
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
+    auto rng = ttml::autograd::ctx().get_generator();
+    uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
-        42);
+        seed);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
     std::cout << "Input Logits:\n";
@@ -118,10 +123,12 @@ TEST_F(SoftmaxTest, SoftmaxTest_Huge_Batch) {
     int32_t dim = 3U;
 
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
+    auto rng = ttml::autograd::ctx().get_generator();
+    uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
-        42);
+        seed);
 
     auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
     std::cout << "Input Logits:\n";

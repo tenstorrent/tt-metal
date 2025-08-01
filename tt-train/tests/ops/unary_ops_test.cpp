@@ -20,6 +20,7 @@ class UnaryOpsTest : public ::testing::Test {
 protected:
     void SetUp() override {
         autograd::ctx().open_device();
+        autograd::ctx().set_seed(42);
     }
 
     void TearDown() override {
@@ -79,8 +80,10 @@ TEST_F(UnaryOpsTest, Silu) {
     auto W = 5;
     auto len = static_cast<float>(N * C * H * W);
     xt::xarray<float> a = xt::empty<float>({N, C, H, W});
+    auto rng = autograd::ctx().get_generator();
+    uint32_t seed = rng();
     ttml::core::parallel_generate(
-        std::span{a.data(), a.size()}, []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); }, 42);
+        std::span{a.data(), a.size()}, []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); }, seed);
     xt::xarray<float> expected_silu = {
         {{{-0.10980F, 0.38199F, 0.64114F, -0.21957F, 0.28487F},
           {0.35594F, 0.10836F, 0.10620F, -0.23011F, -0.05124F},
