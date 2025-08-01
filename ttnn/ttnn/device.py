@@ -4,9 +4,10 @@
 
 import contextlib
 from typing import Optional, List
+import os
 
 import ttnn
-import os
+from loguru import logger
 
 
 def get_device_core_grid(device):
@@ -19,7 +20,6 @@ Device = ttnn._ttnn.multi_device.MeshDevice
 Device.core_grid = property(get_device_core_grid)
 DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
 DispatchCoreAxis = ttnn._ttnn.device.DispatchCoreAxis
-DispatchCoreConfig = ttnn._ttnn.device.DispatchCoreConfig
 Arch = ttnn._ttnn.device.Arch
 DEFAULT_L1_SMALL_SIZE = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE
 DEFAULT_TRACE_REGION_SIZE = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE
@@ -59,15 +59,52 @@ GetNumPCIeDevices = ttnn._ttnn.device.GetNumPCIeDevices
 
 def get_default_dispatch_core_type():
     eth_default_dispatch_clusters = [
-        ttnn.cluster.ClusterType.N300,
-        ttnn.cluster.ClusterType.T3K,
-        ttnn.cluster.ClusterType.N300_2x2,
+        ttnn._ttnn.cluster.ClusterType.N300,
+        ttnn._ttnn.cluster.ClusterType.T3K,
+        ttnn._ttnn.cluster.ClusterType.N300_2x2,
     ]
     return (
-        ttnn.device.DispatchCoreType.ETH
-        if ttnn.cluster.get_cluster_type() in eth_default_dispatch_clusters
-        else ttnn.device.DispatchCoreType.WORKER
+        ttnn._ttnn.device.DispatchCoreType.ETH
+        if ttnn._ttnn.cluster.get_cluster_type() in eth_default_dispatch_clusters
+        else ttnn._ttnn.device.DispatchCoreType.WORKER
     )
+
+
+class DispatchCoreConfig(ttnn._ttnn.device.DispatchCoreConfig):
+    def __init__(self, type: DispatchCoreType = None, axis: DispatchCoreAxis = None):
+        if type:
+            try:
+                type = DispatchCoreType(type)
+            except ValueError:
+                valid_values = [e.value for e in ttnn._ttnn.device.DispatchCoreType]
+                raise ValueError(f"Invalid dispatch core type: {type}. Valid values are: {valid_values}")
+        if axis:
+            try:
+                axis = DispatchCoreAxis(axis)
+            except ValueError:
+                valid_values = [e.value for e in ttnn._ttnn.device.DispatchCoreAxis]
+                raise ValueError(f"Invalid dispatch core axis: {axis}. Valid values are: {valid_values}")
+        if type and axis:
+            # User provided both valid type and axis, check if they are compatible
+            if type == DispatchCoreType.ETH and axis == DispatchCoreAxis.COL:
+                raise ValueError("ETH dispatch core type cannot be used with COL axis")
+            super().__init__(type, axis)
+        elif type:
+            # User provided only valid type
+            super().__init__(type)
+        elif axis:
+            # User provided only valid axis
+            if axis == DispatchCoreAxis.COL:
+                # COL axis is not supported for ETH dispatch core type, default to WORKER
+                type = DispatchCoreType.WORKER
+            elif axis == DispatchCoreAxis.ROW:
+                # ROW axis is supported for all dispatch core types, use default type for their system
+                type = get_default_dispatch_core_type()
+            super().__init__(type, axis)
+        else:
+            # User provided no valid type or axis, use default for their system
+            type = get_default_dispatch_core_type()
+            super().__init__(type)
 
 
 def CreateDevice(
@@ -75,14 +112,10 @@ def CreateDevice(
     num_command_queues: int = 1,
     l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
-    dispatch_core_config: DispatchCoreConfig = None,
+    dispatch_core_config: DispatchCoreConfig = DispatchCoreConfig(),
     *,
     worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
 ):
-    if dispatch_core_config is None:
-        dispatch_core_type = get_default_dispatch_core_type()
-        dispatch_core_config = DispatchCoreConfig(type=dispatch_core_type)
-
     return ttnn._ttnn.device.CreateDevice(
         device_id,
         num_command_queues,
@@ -98,14 +131,10 @@ def CreateDevices(
     num_command_queues: int = 1,
     l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
-    dispatch_core_config: DispatchCoreConfig = None,
+    dispatch_core_config: DispatchCoreConfig = DispatchCoreConfig(),
     *,
     worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
 ):
-    if dispatch_core_config is None:
-        dispatch_core_type = get_default_dispatch_core_type()
-        dispatch_core_config = DispatchCoreConfig(type=dispatch_core_type)
-
     return ttnn._ttnn.device.CreateDevices(
         device_ids,
         num_command_queues,

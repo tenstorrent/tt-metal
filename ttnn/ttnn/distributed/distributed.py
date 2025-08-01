@@ -161,7 +161,7 @@ def open_mesh_device(
     l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
     num_command_queues: int = 1,
-    dispatch_core_config: ttnn.DispatchCoreConfig = None,
+    dispatch_core_config: ttnn.DispatchCoreConfig = ttnn.DispatchCoreConfig(),
     offset: Optional[ttnn.MeshCoordinate] = None,
     physical_device_ids: List[int] = [],
     worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
@@ -183,10 +183,6 @@ def open_mesh_device(
         ttnn._ttnn.multi_device.MeshDevice: The opened mesh device.
 
     """
-    if dispatch_core_config is None:
-        dispatch_core_type = ttnn.device.get_default_dispatch_core_type()
-        dispatch_core_config = ttnn.DispatchCoreConfig(type=dispatch_core_type)
-
     return ttnn._ttnn.multi_device.MeshDevice(
         mesh_shape=mesh_shape,
         l1_small_size=l1_small_size,

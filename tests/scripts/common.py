@@ -273,6 +273,9 @@ def get_updated_device_params(device_params):
     is_blackhole = ttnn.get_arch_name() == "blackhole"
     dispatch_core_axis = new_device_params.pop("dispatch_core_axis", None)
     dispatch_core_type = new_device_params.pop("dispatch_core_type", None)
+    # Special env to force worker dispatch to test dispatch from worker cores
+    if "TT_TEST_USE_WORKER_DISPATCH" in os.environ:
+        dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
 
     assert not (
         dispatch_core_axis == ttnn.DispatchCoreAxis.COL and dispatch_core_type == ttnn.device.DispatchCoreType.ETH
