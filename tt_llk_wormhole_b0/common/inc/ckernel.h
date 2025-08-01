@@ -51,18 +51,13 @@ constexpr uint KERNEL_COMPLETE    = 1;
 extern volatile uint tt_reg_ptr *reg_base;
 extern volatile uint tt_reg_ptr *pc_buf_base;
 extern volatile uint tt_reg_ptr *regfile;
-#if !defined(INSTRN_BUF_BASE)
-// Once tt_metal's submodule use of tt_llk is updated, this shim can
-// be cleaned up.
-#define INSTRN_BUFFER_TNG
 } // namespace ckernel
+
 extern volatile uint32_t __instrn_buffer[];
+
 namespace ckernel
 {
 constexpr inline volatile uint32_t(tt_reg_ptr &instrn_buffer)[] = __instrn_buffer;
-#else // defined(INSTRN_BUF_BASE)
-extern volatile uint tt_reg_ptr *instrn_buffer;
-#endif
 extern volatile uint tt_reg_ptr *mailbox_base[4];
 extern volatile uint tt_reg_ptr *dbg_event_scratch;
 extern volatile uint tt_reg_ptr *trisc_l1_mailbox;
