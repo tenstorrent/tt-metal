@@ -34,16 +34,16 @@
 
 ## Featured Models
 
-The models team is focused on developing the following models into a customer ready state; optimizations to achieve performance, accuracy, and compatibility targets are ongoing, follow each model link for more information.
+The Models team is focused on developing the following models to a customer-ready state. Ongoing work includes optimizations for performance, accuracy, and compatibility. Follow each model link for more details.
 
-Performance Metrics Notes:
-- Time to first token (TTFT) descibes in milliseconds how long it takes for the model to generate the first token.
-- T/S/U measures tokens per second per user. The T/S/U reported is the throughput of the first token generated after prefill, i.e. 1 / inter token latency.
-- T/S measures tokens per second, where T/S = T/S/U * batch.
-- Tensor Parallel (TP) and Data Parallel (DP) define parallelization factors across mulitiple devices.
-- Reported LLM performance is for an input sequence length of 128 for all models.
-- Performance numbers were collected using the tt-metal model demos (accessible via the model links). If running with a vLLM inference server, performance may be different.
-
+>[!NOTE]
+> Performance Metrics:
+> - Time to First Token (TTFT) measures the time (in milliseconds) it takes to generate the first output token after input is received.
+> - T/S/U (Tokens per Second per User): Represents the throughput of first-token generation after prefill. It is calculated as 1 / inter-token latency.
+> - T/S (Tokens per Second): Represents total token throughput, calculated as T/S = T/S/U x batch size.
+> - TP (Tensor Parallel) and DP (Data Parallel): Indicate the parallelization factors across multiple devices.
+> - Reported LLM Performance: Based on an input sequence length of 128 tokens for all models.
+> - Performance Data Source: Metrics were collected using the tt-metal model demos (linked above). Results may vary when using other runtimes such as the vLLM inference server.
 ### [Qwen 3 32B (TP=8)](./models/tt_transformers)
 | Batch | Hardware                                                 | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                            | vLLM Tenstorrent Repo Release                                                                                |
 |-------|----------------------------------------------------------|-----------|-------|-----------------|--------|---------------------------------------------------|---------------------------------------------------------------------------------------------------|
