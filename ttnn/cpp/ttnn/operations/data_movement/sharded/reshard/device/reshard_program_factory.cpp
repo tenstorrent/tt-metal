@@ -220,7 +220,7 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
     }
 
     auto output_cores = output_buffer_page_mapping.all_cores;
-    // First get output_core to vector< pair<input_core, input_page> (num_pages_in_output)
+
     std::vector<std::vector<std::optional<std::pair<CoreCoord, uint32_t>>>> output_core_to_vector_input_core_page(
         output_cores.size());
 
@@ -361,7 +361,6 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges_diff
     std::vector<std::vector<std::optional<std::pair<CoreCoord, uint32_t>>>> output_core_to_vector_input_core_page(
         output_cores.size());
 
-    // For each output core's base pages, find which input pages it needs
     for (uint32_t core_id = 0; core_id < output_cores.size(); core_id++) {
         auto& cur_output_core_pages = output_core_to_vector_input_core_page[core_id];
 
@@ -632,8 +631,7 @@ Tensor construct_per_core_host_tensor(const std::unordered_map<CoreCoord, std::v
 
         // Add padding if needed
         if (data.size() < max_width) {
-            flattened_data.insert(flattened_data.end(), max_width - data.size(),
-                                  0);  // Pad with zeros
+            flattened_data.insert(flattened_data.end(), max_width - data.size(), 0);
         }
     }
 
@@ -650,10 +648,7 @@ Tensor move_per_core_config_to_device(
     auto shard_spec = tt::tt_metal::ShardSpec(grid, shard_shape, ShardOrientation::ROW_MAJOR);
 
     // Create memory config for device tensor
-    auto mem_config = MemoryConfig(
-        TensorMemoryLayout::HEIGHT_SHARDED,  // Each core gets full rows
-        BufferType::L1,                      // Store in L1
-        shard_spec);
+    auto mem_config = MemoryConfig(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec);
 
     return host_tensor.to_device(device, mem_config);
 }
@@ -693,8 +688,8 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
         uint32_t output_page_size = output.buffer()->page_size();
         uint32_t base_page_size = std::gcd(input_page_size, output_page_size);
 
-        unit_size = base_page_size;  // Use base page size as unit
-        page_size = base_page_size;  // Use same for page size
+        unit_size = base_page_size;
+        page_size = base_page_size;
         total_size = output_shard_shape[0] * output_shard_shape[1] * output.element_size();
     }
 
@@ -731,7 +726,6 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
                                                               // previous risc core
         rt_config_map_0[core] = runtime_args_0;
 
-        // tt::tt_metal::SetRuntimeArgs(program, kernel_id_0, core, runtime_args_0);
         auto runtime_args_1 = get_runtime_args_for_given_ranges(
             physical_core_coords,
             page_stride_vector,
@@ -749,7 +743,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
 
     auto device_runtime_args_1 = move_per_core_config_to_device(runtime_args_tensor_1, output_shard_spec.grid, device);
 
-    constexpr uint32_t rt_args_cb_index_0 = 17;  // Choose available CB indices
+    constexpr uint32_t rt_args_cb_index_0 = 17;
     constexpr uint32_t rt_args_cb_index_1 = 18;
 
     // CB config for first runtime args tensor
@@ -760,7 +754,6 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
             .set_globally_allocated_address(*device_runtime_args_0.buffer());
 
     // CB config for second runtime args tensor
-
     tt::tt_metal::CircularBufferConfig cb_rt_args_config_1 =
         tt::tt_metal::CircularBufferConfig(
             device_runtime_args_1.logical_shape()[1] * sizeof(uint32_t), {{rt_args_cb_index_1, tt::DataFormat::Int32}})
