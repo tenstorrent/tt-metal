@@ -185,6 +185,7 @@ Result conv2d_DRAM(
     if (dram_slice_config.num_slices == 0) {
         auto L1_stats = device->allocator()->get_statistics(tt::tt_metal::BufferType::L1);
         uint32_t current_num_slices = 2;
+        log_info(tt::LogOp, "Conv2D DRAM Auto slice with {} free memory", L1_stats.total_free_bytes);
         while (current_num_slices < output_sliced_dim) {
             dram_slice_config.num_slices = current_num_slices;
             if (L1_stats.total_free_bytes >=
