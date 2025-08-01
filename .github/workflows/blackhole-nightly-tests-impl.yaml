@@ -39,11 +39,11 @@ jobs:
     container:
       image: ${{ inputs.docker-image }}
       env:
-        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ inputs.arch_name }}
         LOGURU_LEVEL: INFO
+        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G

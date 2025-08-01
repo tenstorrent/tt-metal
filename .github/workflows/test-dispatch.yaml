@@ -104,6 +104,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
             ${{ (inputs.arch == 'wormhole_b0' && '-e WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml') || '' }}
+            -e HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home
           run_args: |
             pip3 install pytest-repeat
             ${{ inputs.command }}

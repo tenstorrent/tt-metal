@@ -146,6 +146,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
             -e WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+            -e HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home
           run_args: ${{ matrix.test-config.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

@@ -36,12 +36,12 @@ jobs:
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
-        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         HF_MODEL: meta-llama/Llama3.3-70B-Instruct
+        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /work
@@ -83,13 +83,13 @@ jobs:
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
-        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         HF_MODEL: meta-llama/Llama3.3-70B-Instruct
         TT_METAL_ENABLE_ERISC_IRAM: 1
+        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /work
