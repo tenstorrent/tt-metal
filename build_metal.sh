@@ -49,6 +49,7 @@ show_help() {
     echo "  --enable-coverage                Instrument the binaries for code coverage."
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
+    echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
 }
 
 clean() {
@@ -93,6 +94,7 @@ configure_only="OFF"
 enable_coverage="OFF"
 enable_distributed="ON"
 with_python_bindings="ON"
+enable_fake_kernels_target="OFF"
 
 declare -a cmake_args
 
@@ -130,6 +132,7 @@ configure-only
 enable-coverage
 without-distributed
 without-python-bindings
+enable-fake-kernels-target
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -189,6 +192,8 @@ while true; do
             configure_only="ON";;
         --without-python-bindings)
             with_python_bindings="OFF";;
+        --enable-fake-kernels-target)
+            enable_fake_kernels_target="ON";;
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --disable-light-metal-trace)
@@ -379,6 +384,12 @@ if [ "$enable_distributed" = "ON" ]; then
     cmake_args+=("-DENABLE_DISTRIBUTED=ON")
 else
     cmake_args+=("-DENABLE_DISTRIBUTED=OFF")
+fi
+
+if [ "$enable_fake_kernels_target" = "ON" ]; then
+    cmake_args+=("-DENABLE_FAKE_KERNELS_TARGET=ON")
+else
+    cmake_args+=("-DENABLE_FAKE_KERNELS_TARGET=OFF")
 fi
 
 # toolchain and cxx_compiler settings would conflict with eachother

@@ -23,7 +23,7 @@ export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 
 Use the following command to run the Yolov9c model :
 ```
-pytest --disable-warnings tests/ttnn/integration_tests/yolov9c/test_ttnn_yolov9c.py::test_yolov9c
+pytest --disable-warnings models/demos/yolov9c/tests/pcc/test_ttnn_yolov9c.py::test_yolov9c
 ```
 ### Demo
 

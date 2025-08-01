@@ -31,7 +31,6 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    const auto single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
     const auto& input_shape = input.padded_shape();
 

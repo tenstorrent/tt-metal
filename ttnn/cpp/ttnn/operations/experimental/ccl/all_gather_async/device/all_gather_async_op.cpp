@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_gather_async_op.hpp"
+#include <tt-metalium/fabric.hpp>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -123,6 +124,12 @@ void AllGatherAsync::validate_with_output_tensors(
                 "We don't support input DRAM block sharding");
         }
     }
+    AllGatherAsyncVersion version = select_version(input_tensors[0]);
+    if (version == AllGatherAsyncVersion::GENERIC) {
+        TT_FATAL(
+            tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+            "Only 1D fabric config is supported for generic all gather");
+    }
 }
 
 std::vector<ttnn::TensorSpec> AllGatherAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
@@ -140,7 +147,6 @@ std::vector<Tensor> AllGatherAsync::create_output_tensors(
 
 AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor) const {
     auto input_tensor_shape = input_tensor.padded_shape();
-    auto input_tensor_buffer_layout = input_tensor.buffer()->buffer_layout();
     auto input_tensor_page_layout = input_tensor.layout();
     auto input_tensor_memory_config = input_tensor.memory_config();
     bool input_is_sharded = input_tensor_memory_config.shard_spec().has_value();

@@ -69,7 +69,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     bool enable_split_reader,
     bool enable_subblock_padding,
     bool full_inner_dim) {
-    tt::tt_metal::IDevice* device = a.device();
+    distributed::MeshDevice* device = a.device();
     TT_FATAL(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
     TT_FATAL(output_channels <= b.padded_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
@@ -328,8 +328,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         "output_channels_padded_to_tile_width {} should be less than or equal to weight_matrix_width {}",
         output_channels_padded_to_tile_width,
         weight_matrix_width);
-    uint32_t num_blocks_output_w =
-        (uint32_t)std::ceil((double)output_channels_padded_to_tile_width / (double)weight_block_w_datums);
     uint32_t last_block_width_datums = (output_channels_padded_to_tile_width % weight_block_w_datums == 0)
                                            ? weight_block_w_datums
                                            : (output_channels_padded_to_tile_width % weight_block_w_datums);
@@ -472,9 +470,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             num_blocks_out_h);
         TT_FATAL(num_cores_x == 1, "num_cores_x {} should be equal to 1", num_cores_x);
     }
-    uint32_t act_block_h_datums_last_block =
-        (per_core_out_matrix_height_ntiles - (num_blocks_act_h_per_core - 1) * act_block_h_ntiles) *
-        tt::constants::TILE_HEIGHT;
 
     std::vector<std::vector<uint16_t>> conv_sharded_input_top_left_indices =
         ttnn::operations::sliding_window::generate_sliding_window_op_config(
@@ -486,10 +481,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             enable_split_reader ? act_block_h_datums_split_last : 0);
 
     // create sharded ttnn config tensors
-    DataType indices_tt_dtype = DataType::UINT16;
-    // For 2d convs, each core in a column or row share the same specs
-    CoreCoord grid_size = parallel_config.grid.bounding_box().grid_size();
-
     Tensor conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
         conv_sharded_input_top_left_indices, parallel_config);
     conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
@@ -917,7 +908,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     // Compile compute kernel for active cores only
     // Compile blank kernel for noop cores
-    auto compute_id = CreateKernel(
+    CreateKernel(
         program,
         compute_kernel,
         all_active_cores,
