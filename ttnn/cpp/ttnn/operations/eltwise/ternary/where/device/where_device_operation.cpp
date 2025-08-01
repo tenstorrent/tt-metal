@@ -19,7 +19,7 @@ WhereDeviceOperation::program_factory_t WhereDeviceOperation::select_program_fac
 
 tt::stl::hash::hash_t WhereDeviceOperation::operation_attributes_t::to_hash() const {
     return tt::stl::hash::hash_objects_with_default_seed(
-        where_variant, memory_config, get_dtype(), compute_kernel_config);
+        where_variant, broadcast_type, memory_config, get_dtype(), compute_kernel_config);
 }
 
 void WhereDeviceOperation::validate_on_program_cache_hit(
@@ -54,22 +54,69 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(predicate_tensor.memory_config().memory_layout()),
         static_cast<int>(out_memory_config.memory_layout()));
 
-    // Validate tensor shapes based on variant
+    // Validate tensor shapes based on variant - now supporting broadcast
+    auto is_broadcastable = [](const Tensor& a, const Tensor& b) -> bool {
+        const auto& a_shape = a.logical_shape();
+        const auto& b_shape = b.logical_shape();
+
+        // Same shape is always valid
+        if (a_shape == b_shape) {
+            return true;
+        }
+
+        // Check for column broadcast: tensors have same rank and all dimensions match except width
+        if (a_shape.rank() != b_shape.rank() || a_shape.rank() < 2) {
+            return false;
+        }
+
+        auto rank = a_shape.rank();
+        auto a_w = a_shape[-1];
+        auto a_h = a_shape[-2];
+        auto b_w = b_shape[-1];
+        auto b_h = b_shape[-2];
+
+        // Check if heights match
+        if (a_h != b_h) {
+            return false;
+        }
+
+        // Check for column broadcast pattern: one has width 1, other has width > 1
+        if (!((a_w == 1 && b_w > 1) || (a_w > 1 && b_w == 1) || (a_w == b_w))) {
+            return false;
+        }
+
+        // Check that all other dimensions match
+        for (int i = 0; i < rank - 2; ++i) {
+            if (a_shape[i] != b_shape[i]) {
+                return false;
+            }
+        }
+
+        return true;
+    };
+
     if (args.where_variant == WhereVariant::TTT) {
         TT_FATAL(
-            predicate_tensor.logical_shape() == value_true_tensor.value().logical_shape(),
-            "Where TTT operation requires predicate and value_true to have same shape. Predicate: {}, Value true: {}",
+            is_broadcastable(predicate_tensor, value_true_tensor.value()),
+            "Where TTT operation requires predicate and value_true to be broadcastable. Predicate: {}, Value true: {}",
             predicate_tensor.logical_shape(),
             value_true_tensor.value().logical_shape());
         TT_FATAL(
-            predicate_tensor.logical_shape() == value_false_tensor.value().logical_shape(),
-            "Where TTT operation requires predicate and value_false to have same shape. Predicate: {}, Value false: {}",
+            is_broadcastable(predicate_tensor, value_false_tensor.value()),
+            "Where TTT operation requires predicate and value_false to be broadcastable. Predicate: {}, Value false: "
+            "{}",
             predicate_tensor.logical_shape(),
+            value_false_tensor.value().logical_shape());
+        TT_FATAL(
+            is_broadcastable(value_true_tensor.value(), value_false_tensor.value()),
+            "Where TTT operation requires value_true and value_false to be broadcastable. Value true: {}, Value false: "
+            "{}",
+            value_true_tensor.value().logical_shape(),
             value_false_tensor.value().logical_shape());
     } else if (args.where_variant == WhereVariant::TTS) {
         TT_FATAL(
-            predicate_tensor.logical_shape() == value_true_tensor.value().logical_shape(),
-            "Where TTS operation requires predicate and value_true to have same shape. Predicate: {}, Value true: {}",
+            is_broadcastable(predicate_tensor, value_true_tensor.value()),
+            "Where TTS operation requires predicate and value_true to be broadcastable. Predicate: {}, Value true: {}",
             predicate_tensor.logical_shape(),
             value_true_tensor.value().logical_shape());
         TT_FATAL(
@@ -77,8 +124,9 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
             "Where TTS operation requires value_false_scalar to be set in operation attributes");
     } else if (args.where_variant == WhereVariant::TST) {
         TT_FATAL(
-            predicate_tensor.logical_shape() == value_false_tensor.value().logical_shape(),
-            "Where TST operation requires predicate and value_false to have same shape. Predicate: {}, Value false: {}",
+            is_broadcastable(predicate_tensor, value_false_tensor.value()),
+            "Where TST operation requires predicate and value_false to be broadcastable. Predicate: {}, Value false: "
+            "{}",
             predicate_tensor.logical_shape(),
             value_false_tensor.value().logical_shape());
         TT_FATAL(
@@ -209,8 +257,34 @@ WhereDeviceOperation::invoke(
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
+    // Determine broadcast type based on tensor shapes
+    WhereBroadcastType broadcast_type = WhereBroadcastType::NONE;
+    const auto& pred_shape = predicate.logical_shape();
+    const auto& true_shape = value_true.logical_shape();
+    const auto& false_shape = value_false.logical_shape();
+
+    // Check if we have column broadcast pattern (rank >= 2 and last dimension difference)
+    if (pred_shape.rank() >= 2) {
+        bool has_col_bcast = false;
+        if ((true_shape[-1] == 1 && pred_shape[-1] > 1) || (false_shape[-1] == 1 && pred_shape[-1] > 1)) {
+            // Check if all other dimensions match (excluding the last one)
+            bool all_other_dims_match = true;
+            for (int i = 0; i < pred_shape.rank() - 1; ++i) {
+                if (true_shape[i] != pred_shape[i] || false_shape[i] != pred_shape[i]) {
+                    all_other_dims_match = false;
+                    break;
+                }
+            }
+            has_col_bcast = all_other_dims_match;
+        }
+        if (has_col_bcast) {
+            broadcast_type = WhereBroadcastType::COL_BCAST;
+        }
+    }
+
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TTT,
+        .broadcast_type = broadcast_type,
         .memory_config = memory_config.value_or(predicate.memory_config()),
         .input_dtype = predicate.dtype(),
         .dtype = output_dtype.value_or(value_true.dtype()),
@@ -236,6 +310,7 @@ WhereDeviceOperation::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TTS,
+        .broadcast_type = WhereBroadcastType::NONE,
         .memory_config = memory_config.value_or(predicate.memory_config()),
         .input_dtype = predicate.dtype(),
         .dtype = output_dtype.value_or(value_true.dtype()),
@@ -262,6 +337,7 @@ WhereDeviceOperation::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TST,
+        .broadcast_type = WhereBroadcastType::NONE,
         .memory_config = memory_config.value_or(predicate.memory_config()),
         .input_dtype = predicate.dtype(),
         .dtype = output_dtype.value_or(value_false.dtype()),

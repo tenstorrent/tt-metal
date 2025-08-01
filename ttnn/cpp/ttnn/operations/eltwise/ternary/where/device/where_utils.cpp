@@ -10,11 +10,15 @@
 
 namespace ttnn::operations::ternary {
 
-WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant) {
+WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastType broadcast_type) {
     switch (where_variant) {
         case WhereVariant::TTT:
-            reader_kernel = KernelName::ReaderNoBcastTTT;
-            compute_kernel = KernelName::ComputeNoBcastTTT;
+            if (broadcast_type == WhereBroadcastType::COL_BCAST) {
+                reader_kernel = KernelName::ReaderColBcastTTT;
+            } else {
+                reader_kernel = KernelName::ReaderNoBcastTTT;
+            }
+            compute_kernel = KernelName::ComputeNoBcastTTT;  // Same compute kernel for both
             writer_kernel = KernelName::WriterNoBcastTTT;
             break;
 
@@ -48,6 +52,7 @@ std::string get_kernel_file_path(KernelName kernel_name) {
         case KernelName::ReaderNoBcastTST: return fmt::format(dataflow, root, "ternary_reader_nobcast_tst.cpp");
         case KernelName::ReaderNoBcastTTS: return fmt::format(dataflow, root, "ternary_reader_nobcast_tts.cpp");
         case KernelName::ReaderNoBcastTSS: return fmt::format(dataflow, root, "ternary_reader_nobcast_tss.cpp");
+        case KernelName::ReaderColBcastTTT: return fmt::format(dataflow, root, "ternary_reader_colbcast_ttt.cpp");
 
         case KernelName::WriterNoBcastTTT:
             return "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"

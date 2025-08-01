@@ -17,12 +17,15 @@ enum class WhereVariant {
     TSS,  // tensor-scalar-scalar
 };
 
+enum class WhereBroadcastType { NONE, COL_BCAST };
+
 struct WhereDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct operation_attributes_t {
         WhereVariant where_variant;
+        WhereBroadcastType broadcast_type;
         tt::tt_metal::MemoryConfig memory_config;
         DataType input_dtype;
         std::optional<DataType> dtype;

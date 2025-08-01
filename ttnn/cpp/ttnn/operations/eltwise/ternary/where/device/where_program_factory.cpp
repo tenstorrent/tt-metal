@@ -135,9 +135,10 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
 
     WhereVariant variant = operation_attributes.where_variant;
+    WhereBroadcastType broadcast_type = operation_attributes.broadcast_type;
 
     // Use WhereKernelConfig to get the appropriate kernel names
-    WhereKernelConfig kernel_config(variant);
+    WhereKernelConfig kernel_config(variant, broadcast_type);
 
     auto program = CreateProgram();
 
@@ -300,13 +301,36 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             {predicate_is_dram, predicate_tensor_cb, value_false_is_dram, value_false_tensor_cb});
     } else {
         // TTT: c_0 = predicate, c_1 = value_true, c_2 = value_false
-        reader_config = tt_metal::ReaderDataMovementConfig(
-            {predicate_is_dram,
-             predicate_tensor_cb,
-             value_true_is_dram,
-             value_true_tensor_cb,
-             value_false_is_dram,
-             value_false_tensor_cb});
+        if (broadcast_type == WhereBroadcastType::COL_BCAST) {
+            // Determine which tensors need broadcast based on shapes
+            const auto& pred_shape = predicate_tensor.logical_shape();
+            const auto& true_shape = value_true_tensor.value().logical_shape();
+            const auto& false_shape = value_false_tensor.value().logical_shape();
+
+            // Check if value_true needs column broadcast (has width 1 vs predicate)
+            bool bcast_value_true = (true_shape[-1] == 1 && pred_shape[-1] > 1);
+            // Check if value_false needs column broadcast (has width 1 vs predicate)
+            bool bcast_value_false = (false_shape[-1] == 1 && pred_shape[-1] > 1);
+
+            // Add broadcast flags for column broadcast version
+            reader_config = tt_metal::ReaderDataMovementConfig(
+                {predicate_is_dram,
+                 predicate_tensor_cb,
+                 value_true_is_dram,
+                 value_true_tensor_cb,
+                 value_false_is_dram,
+                 value_false_tensor_cb,
+                 /* bcast_in1 (value_true) */ static_cast<uint32_t>(bcast_value_true),
+                 /* bcast_in2 (value_false) */ static_cast<uint32_t>(bcast_value_false)});
+        } else {
+            reader_config = tt_metal::ReaderDataMovementConfig(
+                {predicate_is_dram,
+                 predicate_tensor_cb,
+                 value_true_is_dram,
+                 value_true_tensor_cb,
+                 value_false_is_dram,
+                 value_false_tensor_cb});
+        }
     }
 
     auto reader_kernel_id = tt_metal::CreateKernel(

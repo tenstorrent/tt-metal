@@ -60,6 +60,79 @@ Tensor where_impl(
 
 inline bool have_same_shape(const Tensor& a, const Tensor& b) { return (a.logical_shape() == b.logical_shape()); }
 
+// Broadcast support utilities
+// Local broadcast type with additional UNSUPPORTED value
+enum class LocalWhereBroadcastType {
+    NONE,        // all tensors have equal shapes
+    COL_BCAST,   // column broadcast supported (e.g., [1,1,32,32] and [1,1,32,1])
+    UNSUPPORTED  // other broadcast types not yet supported
+};
+
+LocalWhereBroadcastType get_where_broadcast_type(
+    const Tensor& predicate, const Tensor& value_true, const Tensor& value_false) {
+    const auto& pred_shape = predicate.logical_shape();
+    const auto& true_shape = value_true.logical_shape();
+    const auto& false_shape = value_false.logical_shape();
+
+    // Check if all shapes are the same (no broadcast needed)
+    if (pred_shape == true_shape && pred_shape == false_shape) {
+        return LocalWhereBroadcastType::NONE;
+    }
+
+    // For now, only support column broadcast where all tensors have same rank
+    if (pred_shape.rank() != true_shape.rank() || pred_shape.rank() != false_shape.rank()) {
+        return LocalWhereBroadcastType::UNSUPPORTED;
+    }
+
+    // Check for column broadcast: one of the tensors has width 1, others have same width > 1
+    // Example: [1,1,32,32] and [1,1,32,1] -> column broadcast
+    bool has_col_bcast = false;
+
+    // Get the last dimension (width) and second-to-last dimension (height)
+    auto rank = pred_shape.rank();
+    if (rank >= 2) {
+        auto pred_w = pred_shape[-1];
+        auto pred_h = pred_shape[-2];
+        auto true_w = true_shape[-1];
+        auto true_h = true_shape[-2];
+        auto false_w = false_shape[-1];
+        auto false_h = false_shape[-2];
+
+        // Check if all heights match
+        if (pred_h == true_h && pred_h == false_h) {
+            // Check for column broadcast pattern
+            if ((pred_w == true_w && (false_w == 1 || false_w == pred_w)) ||
+                (pred_w == false_w && (true_w == 1 || true_w == pred_w)) ||
+                (true_w == false_w && (pred_w == 1 || pred_w == true_w))) {
+                // Ensure at least one tensor has width 1 and others have the same width > 1
+                bool has_width_1 = (pred_w == 1) || (true_w == 1) || (false_w == 1);
+                bool others_match = (pred_w == true_w) || (pred_w == false_w) || (true_w == false_w);
+
+                if (has_width_1 && others_match) {
+                    // Check that all other dimensions match
+                    bool other_dims_match = true;
+                    for (int i = 0; i < rank - 2; ++i) {
+                        if (pred_shape[i] != true_shape[i] || pred_shape[i] != false_shape[i]) {
+                            other_dims_match = false;
+                            break;
+                        }
+                    }
+                    if (other_dims_match) {
+                        has_col_bcast = true;
+                    }
+                }
+            }
+        }
+    }
+
+    return has_col_bcast ? LocalWhereBroadcastType::COL_BCAST : LocalWhereBroadcastType::UNSUPPORTED;
+}
+
+bool can_use_llk_with_broadcast(const Tensor& predicate, const Tensor& value_true, const Tensor& value_false) {
+    auto broadcast_type = get_where_broadcast_type(predicate, value_true, value_false);
+    return broadcast_type == LocalWhereBroadcastType::NONE || broadcast_type == LocalWhereBroadcastType::COL_BCAST;
+}
+
 }  // namespace ternary_utils
 
 Tensor WhereOperation::invoke(
@@ -85,9 +158,13 @@ Tensor WhereOperation::invoke(
             // TTT case: tensor-tensor-tensor
             const auto& t_true = std::get<Tensor>(value_true);
             const auto& t_false = std::get<Tensor>(value_false);
-            if (ternary_utils::have_same_shape(t_true, predicate) &&
-                ternary_utils::have_same_shape(predicate, t_false)) {
-                log_info(tt::LogOp, "Where LLK - TTT");
+            if (ternary_utils::can_use_llk_with_broadcast(predicate, t_true, t_false)) {
+                auto broadcast_type = ternary_utils::get_where_broadcast_type(predicate, t_true, t_false);
+                if (broadcast_type == ternary_utils::LocalWhereBroadcastType::NONE) {
+                    log_info(tt::LogOp, "Where LLK - TTT (same shape)");
+                } else if (broadcast_type == ternary_utils::LocalWhereBroadcastType::COL_BCAST) {
+                    log_info(tt::LogOp, "Where LLK - TTT (column broadcast)");
+                }
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(predicate.dtype());
                 return ttnn::prim::where(
@@ -102,8 +179,16 @@ Tensor WhereOperation::invoke(
         } else if (is_value_true_Tensor && !is_value_false_Tensor) {
             // TTS case: tensor-tensor-scalar
             const auto& t_true = std::get<Tensor>(value_true);
-            if (ternary_utils::have_same_shape(t_true, predicate)) {
-                log_info(tt::LogOp, "Where LLK - TTS");
+            // For TTS case, we only need to check if predicate and t_true can be broadcasted
+            // Create a dummy tensor with same shape as predicate for broadcast checking
+            if (ternary_utils::have_same_shape(t_true, predicate) ||
+                ternary_utils::get_where_broadcast_type(predicate, t_true, predicate) ==
+                    ternary_utils::LocalWhereBroadcastType::COL_BCAST) {
+                if (ternary_utils::have_same_shape(t_true, predicate)) {
+                    log_info(tt::LogOp, "Where LLK - TTS (same shape)");
+                } else {
+                    log_info(tt::LogOp, "Where LLK - TTS (column broadcast)");
+                }
                 float scalar_false = std::get<float>(value_false);
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(predicate.dtype());
@@ -119,8 +204,15 @@ Tensor WhereOperation::invoke(
         } else if (!is_value_true_Tensor && is_value_false_Tensor) {
             // TST case: tensor-scalar-tensor
             const auto& t_false = std::get<Tensor>(value_false);
-            if (ternary_utils::have_same_shape(predicate, t_false)) {
-                log_info(tt::LogOp, "Where LLK - TST");
+            // For TST case, we only need to check if predicate and t_false can be broadcasted
+            if (ternary_utils::have_same_shape(predicate, t_false) ||
+                ternary_utils::get_where_broadcast_type(predicate, predicate, t_false) ==
+                    ternary_utils::LocalWhereBroadcastType::COL_BCAST) {
+                if (ternary_utils::have_same_shape(predicate, t_false)) {
+                    log_info(tt::LogOp, "Where LLK - TST (same shape)");
+                } else {
+                    log_info(tt::LogOp, "Where LLK - TST (column broadcast)");
+                }
                 float scalar_true = std::get<float>(value_true);
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(predicate.dtype());
