@@ -9,6 +9,7 @@ import pytest
 from models.utility_functions import torch_random
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(
@@ -186,3 +187,60 @@ def test_unary_fmod(input_shapes, scalar, device):
         assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
     else:
         assert torch.allclose(output_tensor, torch_output_tensor, atol=0.001, rtol=0)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    ((torch.Size([1, 2, 32, 256])),),
+)
+@pytest.mark.parametrize(
+    "ttnn_fn, atol",
+    [
+        (ttnn.remainder, 1e-10),
+    ],
+)
+def test_width_sharded(device, input_shapes, ttnn_fn, atol):
+    torch.manual_seed(0)
+    high = 1000
+    low = 600
+    in_data1 = torch.rand((input_shapes), dtype=torch.bfloat16) * (high - low) + low
+    high = 900
+    low = 200
+    in_data2 = torch.rand((input_shapes), dtype=torch.bfloat16) * (high - low) + low
+
+    shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange((0, 0), (0, 7)),
+        }
+    )
+    shard_spec = ttnn.ShardSpec(shard_grid, [64, 32], ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardMode.PHYSICAL)
+    input_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+
+    input_tensor1 = ttnn.from_torch(
+        in_data1,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_mem_config,
+    )
+
+    input_tensor2 = ttnn.from_torch(
+        in_data2,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_mem_config,
+    )
+    output_tensor = ttnn_fn(
+        input_tensor1,
+        input_tensor2,
+        memory_config=input_mem_config,
+    )
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    golden_function = ttnn.get_golden_function(ttnn_fn)
+    golden_tensor = golden_function(in_data1, in_data2, device=device)
+
+    assert torch.allclose(golden_tensor, output_tensor, atol=atol)
