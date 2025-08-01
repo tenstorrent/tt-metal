@@ -383,3 +383,67 @@ def tt_sharded_distributed_rmsnorm(
     tt_stats.deallocate(True)
 
     return tt_out
+
+
+def ag_on_padded_dim_3(inp, mesh_device, tt_ccl, is_galaxy, topology):
+    ag_memory_config = inp.memory_config()
+    output_memory_config = inp.memory_config()
+    input_shape = inp.shape
+    reshape_required = input_shape[3] % 32 != 0
+
+    if is_galaxy:
+        num_links = 2
+        cluster_axis = 0
+    else:
+        num_links = 1
+        cluster_axis = None
+
+    if is_blackhole():
+        output_tensor = ttnn.all_gather(
+            inp,
+            dim=3,
+            num_links=2,
+            cluster_axis=0,
+            mesh_device=mesh_device,
+            topology=topology,
+        )
+    else:
+        if reshape_required:
+            gather_dim_input_size = input_shape[0] * input_shape[1] * input_shape[2] * input_shape[3]
+            if gather_dim_input_size % 32 != 0:
+                assert False, "AG does not support reshaped AG input shape"
+
+            ag_memory_config = ttnn.DRAM_MEMORY_CONFIG
+            inp = ttnn.reshape(
+                inp,
+                (1, 1, 1, gather_dim_input_size),
+                memory_config=ag_memory_config,
+            )
+
+        ag_output = ttnn.experimental.all_gather_async(
+            inp,
+            persistent_output_buffer=None,
+            dim=3,
+            multi_device_global_semaphore=tt_ccl.get_and_cycle_ag_semaphore_handles(),
+            num_links=num_links,
+            memory_config=ag_memory_config,
+            cluster_axis=cluster_axis,
+            topology=topology,
+            barrier_semaphore=tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
+
+        ttnn.deallocate(inp)
+
+        output_tensor = ag_output
+        if reshape_required:
+            split_size = gather_dim_input_size
+            split_tensors = ttnn.split(ag_output, split_size=split_size, dim=3)
+            split_tensors = [ttnn.reshape(tensor, input_shape) for tensor in split_tensors]
+
+            output_tensor = ttnn.concat(split_tensors, dim=3)
+            output_tensor = ttnn.to_memory_config(output_tensor, output_memory_config)
+
+    return output_tensor
