@@ -19,6 +19,7 @@
 #include <boost/asio/post.hpp>
 #include <boost/asio/thread_pool.hpp>
 
+#include "common_test_utils.hpp"
 #include "ttnn/async_runtime.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
@@ -52,8 +53,7 @@ using tt::tt_metal::distributed::MeshShape;
 // Custom Fixture using 1D Fabric on a Multi-CQ MeshDevice
 class MultiCQFabricMeshDevice2x4Fixture : public MeshDeviceFixtureBase {
 protected:
-    MultiCQFabricMeshDevice2x4Fixture() :
-        MeshDeviceFixtureBase(Config{.system_mesh_shape = MeshShape{2, 4}, .num_cqs = 2}) {
+    MultiCQFabricMeshDevice2x4Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{2, 4}, .num_cqs = 2}) {
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
     }
     void TearDown() override {
@@ -141,7 +141,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
 
                 // Enqueue multiple operations to the operation command queue
                 // Set output_tensor into device_tensor for allreduce
-                device_tensors[dev_idx] = dispatch_ops_to_device(input_tensor, ttnn::QueueId(op_cq_id));
+                device_tensors[dev_idx] =
+                    ttnn::test_utils::dispatch_ops_to_device(input_tensor, ttnn::QueueId(op_cq_id));
 
                 promise->set_value();
             });
@@ -183,7 +184,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
                 auto dummy_storage = tt::tt_metal::DeviceStorage{dummy_buffer, {MeshCoordinate(0, 0)}};
                 Tensor dummy_tensor = Tensor(dummy_storage, tensor_spec, ReplicateTensor{}, TensorTopology{});
                 ttnn::write_buffer(ttnn::QueueId(op_cq_id), dummy_tensor, {dummy_data});
-                dispatch_ops_to_device(dummy_tensor, ttnn::QueueId(op_cq_id));
+                ttnn::test_utils::dispatch_ops_to_device(dummy_tensor, ttnn::QueueId(op_cq_id));
                 promise->set_value();
             });
         }
@@ -310,7 +311,8 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
 
                 // Enqueue multiple operations to the operation command queue
                 // Set output_tensor into device_tensor for allgather
-                device_tensors[dev_idx] = dispatch_ops_to_device(input_tensor, ttnn::QueueId(op_cq_id));
+                device_tensors[dev_idx] =
+                    ttnn::test_utils::dispatch_ops_to_device(input_tensor, ttnn::QueueId(op_cq_id));
 
                 auto operation_event = ttnn::record_event(single_mesh->mesh_command_queue(op_cq_id));
                 // Enqueue the task waiting for the operation_event to the ccl`s command queue
@@ -358,7 +360,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
                 auto dummy_storage = tt::tt_metal::DeviceStorage{dummy_buffer, {MeshCoordinate(0, 0)}};
                 Tensor dummy_tensor = Tensor(dummy_storage, tensor_spec, ReplicateTensor{}, TensorTopology{});
                 ttnn::write_buffer(ttnn::QueueId(op_cq_id), dummy_tensor, {dummy_data});
-                dispatch_ops_to_device(dummy_tensor, ttnn::QueueId(op_cq_id));
+                ttnn::test_utils::dispatch_ops_to_device(dummy_tensor, ttnn::QueueId(op_cq_id));
                 promise->set_value();
             });
             futures.back().wait();

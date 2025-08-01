@@ -49,22 +49,6 @@ static constexpr size_t TEST_EDM_FABRIC_SUBDEVICE_INDEX = 1;
 using namespace tt;
 using namespace tt_metal;
 
-Tensor dispatch_ops_to_device(Tensor input_tensor, QueueId cq_id) {
-    using ttnn::operations::unary::UnaryOpType;
-    using ttnn::operations::unary::UnaryWithParam;
-
-    Tensor output_tensor = ttnn::mul_sfpu(cq_id, input_tensor, 2);
-    for (int i = 0; i < 3; i++) {
-        output_tensor = ttnn::neg(cq_id, output_tensor);
-        output_tensor = ttnn::neg(cq_id, output_tensor);
-        output_tensor = ttnn::mul_sfpu(cq_id, output_tensor, 2);
-    }
-    output_tensor = ttnn::neg(cq_id, output_tensor);
-    output_tensor = ttnn::mul_sfpu(cq_id, output_tensor, 2);
-    output_tensor = ttnn::add_sfpu(cq_id, output_tensor, 128);
-    return output_tensor;
-}
-
 SubdeviceInfo create_subdevices(const std::vector<IDevice*>& devices) {
     SubdeviceInfo subdevice_info;
     std::unordered_map<chip_id_t, SubDeviceManagerId> sub_device_manager_ids;

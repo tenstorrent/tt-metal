@@ -20,7 +20,6 @@ namespace ttnn::distributed::test {
 using namespace tt;
 using namespace tt_metal;
 
-Tensor dispatch_ops_to_device(Tensor input_tensor, QueueId cq_id);
 struct SubdeviceInfo {
     std::unordered_map<chip_id_t, SubDeviceManagerId> sub_device_managers;
     std::unordered_map<chip_id_t, SubDeviceId> worker_subdevice_id;
