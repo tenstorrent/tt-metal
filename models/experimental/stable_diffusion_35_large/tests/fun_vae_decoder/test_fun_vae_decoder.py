@@ -26,10 +26,10 @@ def print_stats(label, data: torch.Tensor, device=None):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, cfg, sp, tp, topology",
+    "mesh_device, cfg, sp, tp, topology, num_links",
     [
-        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear],
-        [(8, 4), (2, 0), (4, 0), (4, 1), ttnn.Topology.Linear],
+        [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
+        [(8, 4), (2, 0), (4, 0), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
         "t3k_cfg2_sp2_tp2",
@@ -74,6 +74,7 @@ def test_vae_decoder(
     sp,
     tp,
     topology,
+    num_links,
 ) -> None:
     cfg_factor, cfg_axis = cfg
     sp_factor, sp_axis = sp
@@ -89,6 +90,7 @@ def test_vae_decoder(
         cfg_axis=cfg_axis,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
+        num_links=num_links,
     )
     # mesh_device = device
     # torch_dtype = torch.float32
@@ -153,29 +155,18 @@ def test_vae_decoder(
     tt_out = sd_vae_decode(tt_inp, parameters)
 
     tracy.signpost("Performance pass")
-    start_time = time.time()
-    tt_out = sd_vae_decode(tt_inp, parameters)
-    end_time = time.time()
+    for i in range(10):
+        start_time = time.time()
+        tt_out = sd_vae_decode(tt_inp, parameters)
+        ttnn.synchronize_device(vae_device)
+        end_time = time.time()
+        logger.info(f"vae_decode {i} time: {end_time-start_time}")
 
-    logger.info(f"vae_decode 1 time: {end_time-start_time}")
+        tt_out_torch = to_torch(tt_out).permute(0, 3, 1, 2)
 
-    start_time = time.time()
-    tt_out = sd_vae_decode(tt_inp, parameters)
-    end_time = time.time()
-
-    logger.info(f"vae_decode 2 time: {end_time-start_time}")
-
-    start_time = time.time()
-    tt_out = sd_vae_decode(tt_inp, parameters)
-    end_time = time.time()
-
-    logger.info(f"vae_decode 3 time: {end_time-start_time}")
-
-    tt_out_torch = to_torch(tt_out).permute(0, 3, 1, 2)
-
-    logger.info(print_stats("torch", out))
-    logger.info(print_stats("tt", tt_out_torch, device=vae_device))
-    assert_quality(out, tt_out_torch, pcc=0.99, ccc=0.99)
-    print(comp_allclose(out, tt_out_torch))
-    result, output = comp_pcc(out, tt_out_torch)
-    logger.info(f"Comparison result Pass:{result}, Output {output}, in: {torch.count_nonzero(tt_out_torch)}")
+        logger.info(print_stats("torch", out))
+        logger.info(print_stats("tt", tt_out_torch, device=vae_device))
+        assert_quality(out, tt_out_torch, pcc=0.99, ccc=0.99)
+        print(comp_allclose(out, tt_out_torch))
+        result, output = comp_pcc(out, tt_out_torch)
+        logger.info(f"Comparison result Pass:{result}, Output {output}, in: {torch.count_nonzero(tt_out_torch)}")

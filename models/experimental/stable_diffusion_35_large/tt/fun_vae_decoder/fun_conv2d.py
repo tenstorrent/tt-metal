@@ -9,7 +9,6 @@ from dataclasses import dataclass
 import torch
 import ttnn
 from loguru import logger
-import time
 from ..parallel_config import VAEParallelConfig
 from enum import Enum
 
@@ -225,23 +224,21 @@ def run_conv2d(x, parameters):
         return_output_dim=True,
     )
 
-    ttnn.synchronize_device(parameters.parallel_config.device)
+    # ttnn.synchronize_device(parameters.parallel_config.device)
     output_tensor = ttnn.reshape(output_tensor, (x.shape[0], _out_height, _out_width, output_tensor.shape[3]))
     return output_tensor
 
 
 # TODO: Try out padded/unpadded variant (unpadded_all_gather_async  from utils.py)
 def vae_conv2d(x, parameters):
-    start_time = time.time()
-
     if parameters.mesh_sharded_input:
-        x = parameters.parallel_config.vae_all_gather(x, sync_device=False)
+        x = parameters.parallel_config.vae_all_gather(x)
 
     if parameters.conv_parallel_strategy == ConvStrategy.TP:
         output_tensor = run_conv2d(x, parameters)
 
         if not parameters.mesh_sharded_output:  # If output is sharded, we need to gather the output
-            output_tensor = parameters.parallel_config.vae_all_gather(output_tensor, sync_device=False)
+            output_tensor = parameters.parallel_config.vae_all_gather(output_tensor)
 
     elif parameters.conv_parallel_strategy == ConvStrategy.TP_DP:
         # Get device slice
@@ -265,7 +262,7 @@ def vae_conv2d(x, parameters):
             topology=ttnn.Topology.Linear,
             subdevice_id=None,
         )
-        ttnn.synchronize_device(parameters.parallel_config.device)
+        # ttnn.synchronize_device(parameters.parallel_config.device)
 
         output_tensor = ttnn.reshape(output_tensor, (x.shape[0], x.shape[1], x.shape[2], parameters.weight.shape[0]))
 
@@ -274,6 +271,4 @@ def vae_conv2d(x, parameters):
 
     else:
         output_tensor = run_conv2d(x, parameters)
-    end_time = time.time()
-    logger.info(f"Time taken: {end_time - start_time} seconds")
     return output_tensor
