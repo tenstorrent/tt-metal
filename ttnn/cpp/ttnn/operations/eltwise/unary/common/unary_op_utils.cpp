@@ -79,6 +79,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::LEZ:
         case UnaryOpType::GEZ:
         case UnaryOpType::NEZ: return "SFPU_OP_UNARY_COMP_INCLUDE";
+        case UnaryOpType::SOFTSHRINK:
         case UnaryOpType::HARDSIGMOID: return "SFPU_OP_ACTIVATIONS_INCLUDE";
         case UnaryOpType::WHERE_TSS: return "SFPU_OP_WHERE_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
@@ -359,6 +360,11 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             }
             break;
         case UnaryOpType::HARDSHRINK: op_init_and_name = {}; break;
+        case UnaryOpType::SOFTSHRINK:
+            op_init_and_name = {
+                "softshrink_tile_init();",
+                fmt::format("softshrink_tile({}, {}u);", idst, std::bit_cast<uint32_t>(param0))};
+            break;
         case UnaryOpType::WHERE_TSS: {
             std::string where_call;
             if (input_dtype == DataType::INT32) {
