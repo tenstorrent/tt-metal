@@ -212,7 +212,27 @@ class TtLlamaAttention(LightweightModule):
 
         # If we are using qk_norm, we need to add a layer norm to the q and k
         if self.qk_norm:
-            pass  # TODO: Implement qk_norm initialization
+            q_norm_str = f"{layer_name}.q_norm.weight"
+            k_norm_str = f"{layer_name}.k_norm.weight"
+
+            self.q_norm = RMSNorm(
+                device=self.mesh_device,
+                dim=self.head_dim,
+                state_dict=self.state_dict,
+                state_dict_prefix=self.model_config[q_norm_str],
+                weight_cache_path=weight_cache_path,
+                weight_dtype=ttnn.bfloat16,
+                weight_key="q_norm",
+            )
+            self.k_norm = RMSNorm(
+                device=self.mesh_device,
+                dim=self.head_dim,
+                state_dict=self.state_dict,
+                state_dict_prefix=self.model_config[k_norm_str],
+                weight_cache_path=weight_cache_path,
+                weight_dtype=ttnn.bfloat16,
+                weight_key="k_norm",
+            )
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
