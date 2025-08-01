@@ -124,6 +124,7 @@ template struct ExecuteUnary<UnaryOpType::TRUNC>;
 template struct ExecuteUnary<UnaryOpType::FRAC>;
 template struct ExecuteUnary<UnaryOpType::HARDSIGMOID>;
 template struct ExecuteUnary<UnaryOpType::HARDSWISH>;
+template struct ExecuteUnary<UnaryOpType::SOFTSIGN>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::invoke(

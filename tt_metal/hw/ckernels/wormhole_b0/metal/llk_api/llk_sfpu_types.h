@@ -116,4 +116,5 @@ enum SfpuType {
     lcm,
     hardsigmoid,
     where,
+    softsign,
 };

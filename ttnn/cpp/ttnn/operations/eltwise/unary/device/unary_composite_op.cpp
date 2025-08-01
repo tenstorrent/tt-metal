@@ -223,18 +223,6 @@ Tensor _sinh(const Tensor& input_a, const std::optional<MemoryConfig>& output_me
     return ttnn::multiply(nr_term, 0.5f, std::nullopt, output_mem_config);
 }
 
-// Function: softsign
-// Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softsign.html
-Tensor _softsign(const Tensor& a, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor result = ttnn::multiply(
-        a,
-        ttnn::reciprocal(
-            ttnn::add(ttnn::abs(a, output_mem_config), 1.0f, std::nullopt, output_mem_config), output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    return result;
-}
-
 Tensor _swish(const Tensor& a, const std::optional<MemoryConfig>& output_mem_config) {
     // x / (1.0f + exp(-x))
     return ttnn::silu(a);
