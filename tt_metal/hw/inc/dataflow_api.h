@@ -472,7 +472,11 @@ void cb_wait_front(int32_t operand, int32_t num_pages) {
 // clang-format on
 FORCE_INLINE
 void noc_async_read_one_packet(
-    uint64_t src_noc_addr, uint32_t dst_local_l1_addr, uint32_t size, uint8_t noc = noc_index) {
+    uint64_t src_noc_addr,
+    uint32_t dst_local_l1_addr,
+    uint32_t size,
+    uint32_t read_req_vc = 1,
+    uint8_t noc = noc_index) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -483,7 +487,7 @@ void noc_async_read_one_packet(
 
     WAYPOINT("NAOW");
     DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
-    ncrisc_noc_fast_read<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size);
+    ncrisc_noc_fast_read<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size, read_req_vc);
     WAYPOINT("NAOD");
 }
 
@@ -508,7 +512,12 @@ void noc_async_read_one_packet(
  */
 // clang-format on
 template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
-inline void noc_async_read(uint64_t src_noc_addr, uint32_t dst_local_l1_addr, uint32_t size, uint8_t noc = noc_index) {
+inline void noc_async_read(
+    uint64_t src_noc_addr,
+    uint32_t dst_local_l1_addr,
+    uint32_t size,
+    uint32_t read_req_vc = 1,
+    uint8_t noc = noc_index) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -516,11 +525,11 @@ inline void noc_async_read(uint64_t src_noc_addr, uint32_t dst_local_l1_addr, ui
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, src_noc_addr, size, -1);
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_read_one_packet(src_noc_addr, dst_local_l1_addr, size, noc);
+        noc_async_read_one_packet(src_noc_addr, dst_local_l1_addr, size, read_req_vc, noc);
     } else {
         WAYPOINT("NARW");
         DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
-        ncrisc_noc_fast_read_any_len<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size);
+        ncrisc_noc_fast_read_any_len<noc_mode>(noc, read_cmd_buf, src_noc_addr, dst_local_l1_addr, size, read_req_vc);
         WAYPOINT("NARD");
     }
 }
@@ -727,20 +736,16 @@ void noc_async_write_one_packet(
 // clang-format on
 template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
 inline void noc_async_write(
-    uint32_t src_local_l1_addr,
-    uint64_t dst_noc_addr,
-    uint32_t size,
-    uint32_t virtual_channel = 0,
-    uint8_t noc = noc_index) {
+    uint32_t src_local_l1_addr, uint64_t dst_noc_addr, uint32_t size, uint32_t vc = 0, uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, dst_noc_addr, size, NOC_UNICAST_WRITE_VC);
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_write_one_packet(src_local_l1_addr, dst_noc_addr, size, virtual_channel, noc);
+        noc_async_write_one_packet(src_local_l1_addr, dst_noc_addr, size, vc, noc);
     } else {
         WAYPOINT("NAWW");
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
         ncrisc_noc_fast_write_any_len<noc_mode>(
-            noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, virtual_channel, false, false, 1, true);
+            noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, vc, false, false, 1, true);
         WAYPOINT("NAWD");
     }
 }
