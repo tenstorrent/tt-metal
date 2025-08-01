@@ -53,7 +53,7 @@ def gather_single_test_perf(device, test_passed):
     if device.get_num_devices() > 1:
         logger.error("Multi-device perf is not supported. Failing.")
         return None
-    ttnn.DumpDeviceProfiler(device)
+    ttnn.ReadDeviceProfiler(device)
     opPerfData = get_device_data_generate_report(
         PROFILER_LOGS_DIR, None, None, None, export_csv=False, cleanup_device_log=True
     )

@@ -69,7 +69,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     bool enable_split_reader,
     bool enable_subblock_padding,
     bool full_inner_dim) {
-    tt::tt_metal::IDevice* device = a.device();
+    distributed::MeshDevice* device = a.device();
     TT_FATAL(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
     TT_FATAL(output_channels <= b.padded_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
@@ -80,7 +80,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
     const uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
-    const bool skip_mcast = is_singlecore_skip_mcast(parallelization_config, a.memory_config().memory_layout());
+    const SkipMcast& skip_mcast = conv_skip_mcast(parallelization_config, a.memory_config().memory_layout());
+    const bool skip_activation_mcast = skip_mcast.skip_activation_mcast;
+    const bool skip_weights_mcast = skip_mcast.skip_weights_mcast;
 
     const tt::DataFormat tilized_act_df = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
 
@@ -468,7 +470,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             "num_blocks_out_h_per_core {} should be equal to num_blocks_out_h {}",
             num_blocks_out_h_per_core,
             num_blocks_out_h);
-        TT_FATAL(num_cores_x == 1, "num_cores_x {} should be equal to 1", num_cores_x);
+        if (transpose_mcast) {
+            TT_FATAL(num_cores_x == 1, "num_cores_x {} should be equal to 1", num_cores_x);
+        } else {
+            TT_FATAL(num_cores_y == 1, "num_cores_y {} should be equal to 1", num_cores_y);
+        }
     }
 
     std::vector<std::vector<uint16_t>> conv_sharded_input_top_left_indices =
@@ -553,18 +559,22 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     std::vector<uint32_t> act_mcast_noc_y;
     if (block_sharded) {
         // 2D mcast
-        if (transpose_mcast && !skip_mcast) {
+        if (transpose_mcast) {
             mcast_sender_cores = CoreRange(top_left_core, CoreCoord(0, num_cores_y - 1));
-            mcast_receiver_cores = CoreRange(CoreCoord(1, 0), bottom_right_core);
-        } else if (!skip_mcast) {
+            if (!skip_weights_mcast) {
+                mcast_receiver_cores = CoreRange(CoreCoord(1, 0), bottom_right_core);
+            }
+        } else {
             mcast_sender_cores = CoreRange(top_left_core, CoreCoord(num_cores_x - 1, 0));
-            mcast_receiver_cores = CoreRange(CoreCoord(0, 1), bottom_right_core);
+            if (!skip_weights_mcast) {
+                mcast_receiver_cores = CoreRange(CoreCoord(0, 1), bottom_right_core);
+            }
         }
         weights_mcast_sender_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
         weights_mcast_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     } else {
         // 1D mcast
-        if (total_num_cores > 1) {
+        if (!skip_weights_mcast) {
             std::set<CoreRange> mcast_receiver_set;
             if (num_cores_x > 1) {
                 mcast_receiver_set.insert(CoreRange(CoreCoord(1, 0), CoreCoord(num_active_cores_x - 1, 0)));
@@ -633,7 +643,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         shard_shape,
         has_bias,
         is_conv_1d_depthwise_conv,
-        skip_mcast);
+        skip_activation_mcast);
 
     access_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).page_size = conv_sharded_input_top_left_indices[0].size();
 
@@ -752,11 +762,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     std::map<std::string, std::string> writer_defines;
     std::map<std::string, std::string> writer_mcast_sender_defines;
     std::map<std::string, std::string> compute_defines;
-    if (total_num_cores == 1) {
-        writer_mcast_sender_defines["SKIP_MCAST"] = "1";
-    }
-    if (skip_mcast) {
+    if (skip_activation_mcast) {
         reader_defines["SKIP_MCAST"] = "1";
+    }
+    if (skip_weights_mcast) {
+        writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
     if (has_bias) {
         writer_defines["FUSE_BIAS"] = "1";
@@ -857,8 +867,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         bias_ntiles_per_core,
 
         get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
-        skip_mcast ? get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index
-                   : get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
+        get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
         get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_SECOND_READER).index,
@@ -884,7 +893,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             .defines = writer_mcast_sender_defines});
 
     tt::tt_metal::KernelHandle writer_mcast_receiver_id = -1;
-    if (total_num_cores > 1) {
+    if (!skip_weights_mcast) {
         writer_mcast_receiver_id = CreateKernel(
             program,
             writer_mcast_receiver_kernel,
@@ -965,7 +974,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                     (uint32_t)bottom_core_physical.x,  // act_mcast_sender_noc_x
                 };
                 reader_rt_args.insert(
-                    reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());  // act_mcast_sender_noc_y
+                    reader_rt_args.end(),
+                    act_mcast_noc_y.begin(),
+                    act_mcast_noc_y.end());  // act_mcast_sender_noc_y
             } else {
                 CoreCoord core = {core_x_i, core_y_i};
                 auto core_physical = device->worker_core_from_logical_core(core);
@@ -990,7 +1001,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                     (uint32_t)core_physical.y,  // act_mcast_sender_noc_x
                 };
                 reader_rt_args.insert(
-                    reader_rt_args.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());  // act_mcast_sender_noc_y
+                    reader_rt_args.end(),
+                    act_mcast_noc_y.begin(),
+                    act_mcast_noc_y.end());  // act_mcast_sender_noc_y
             }
         } else {
             reader_rt_args = {(uint32_t)noop_core};
