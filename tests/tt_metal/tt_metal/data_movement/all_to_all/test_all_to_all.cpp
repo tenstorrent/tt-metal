@@ -541,7 +541,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAllVirtualChannels) {
 }
 
 TEST_F(DeviceFixture, TensixDataMovementAllToAllCustom) {
-    uint32_t test_case_id = 155;
+    uint32_t test_case_id = 160;
 
     // Custom Parameters
     uint32_t num_of_transactions = 256;

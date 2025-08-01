@@ -356,7 +356,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOneVirtualChannels) {
 }
 
 TEST_F(DeviceFixture, TensixDataMovementOneToOneCustom) {
-    uint32_t test_id = 151;
+    uint32_t test_id = 160;
 
     // Parameters
     uint32_t num_of_transactions = 256;

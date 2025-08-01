@@ -811,7 +811,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastVirtualChannels) {  // Ex
 
 TEST_F(DeviceFixture, TensixDataMovementOneToAllUnicastCustom) {
     // Parameters
-    uint32_t test_case_id = 153;
+    uint32_t test_case_id = 160;
 
     // These should always be false
     bool is_multicast = false;
