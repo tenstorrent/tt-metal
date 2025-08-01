@@ -770,11 +770,11 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         }
     }  // Profiler scope end
     if (wait_until_cores_done) {
-        detail::DumpDeviceProfileResults(device);
+        detail::ReadDeviceProfilerResults(device);
     }
 }
 
-void WaitProgramDone(IDevice* device, Program& program, bool dump_device_profile_results) {
+void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results) {
     auto device_id = device->id();
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
     std::unordered_set<CoreCoord> not_done_cores;
@@ -788,8 +788,8 @@ void WaitProgramDone(IDevice* device, Program& program, bool dump_device_profile
         }
     }
     llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
-    if (dump_device_profile_results) {
-        detail::DumpDeviceProfileResults(device);
+    if (read_device_profiler_results) {
+        detail::ReadDeviceProfilerResults(device);
     }
 }
 

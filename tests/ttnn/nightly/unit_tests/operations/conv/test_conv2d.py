@@ -3932,8 +3932,11 @@ def test_conv2d_act_dealloc(
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, shard_layout",
     (
-        (32, 32, 8, 8, WS),
-        (16, 16, 8, 4, BS),
+        (32, 32, 8, 4, HS), # single core HS
+        (32, 32, 8, 8, WS), # single core WS
+        (32, 32, 8, 4, BS), # single core BS
+        (32, 32, 8, 8, BS), # skip act mcast
+        (64, 64, 8, 4, BS), # skip weight mcast
     ),
 )
 @pytest.mark.parametrize(

@@ -616,7 +616,7 @@ int main(int argc, char** argv) {
                 EnqueueProgram(device->command_queue(), program, false);
                 Finish(device->command_queue());
                 log_debug(LogTest, "EnqueProgram done");
-                tt_metal::detail::DumpDeviceProfileResults(device);
+                tt_metal::detail::ReadDeviceProfilerResults(device);
 
                 if (single_core) {
                     uint64_t t0_to_any_riscfw_end = get_t0_to_any_riscfw_end_cycle(device, program);

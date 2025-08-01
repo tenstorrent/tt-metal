@@ -74,7 +74,7 @@ jobs:
 
           - name: tt_transformers
             model-list:
-              - models/demos/qwen/tests
+              - models/demos/qwen25_vl/tests
     name: "${{ matrix.model-group.name }} ${{ matrix.test-info.name }}"
     defaults:
       run:
