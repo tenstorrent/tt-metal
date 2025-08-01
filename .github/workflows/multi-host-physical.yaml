@@ -57,6 +57,7 @@ jobs:
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
             --privileged
+            --pid=host
           install_wheel: false
           run_args: |
             sleep 10s
