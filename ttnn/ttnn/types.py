@@ -98,3 +98,5 @@ ComputeConfigDescriptor = ttnn._ttnn.program_descriptor.ComputeConfigDescriptor
 KernelDescriptor = ttnn._ttnn.program_descriptor.KernelDescriptor
 SemaphoreDescriptor = ttnn._ttnn.program_descriptor.SemaphoreDescriptor
 ProgramDescriptor = ttnn._ttnn.program_descriptor.ProgramDescriptor
+
+TensorAccessorArgs = ttnn._ttnn.tensor_accessor_args.TensorAccessorArgs

@@ -5,6 +5,7 @@
 import math
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 
 import cv2
@@ -50,10 +51,14 @@ class LoadImages:
         files = []
         for p in sorted(path) if isinstance(path, (list, tuple)) else [path]:
             a = str(Path(p).absolute())
-            if os.path.isfile(a):
+            if os.path.isdir(a):
+                for f in os.listdir(a):
+                    if f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp")):
+                        files.append(os.path.join(a, f))
+            elif os.path.isfile(a):
                 files.append(a)
             else:
-                raise FileNotFoundError(f"{p} does not exist")
+                raise FileNotFoundError(f"{p} does not exist or is not a valid file/directory")
 
         images = []
         for f in files:
@@ -61,7 +66,6 @@ class LoadImages:
             if suffix in IMG_FORMATS:
                 images.append(f)
         ni = len(images)
-
         self.files = images
         self.nf = ni
         self.ni = ni
@@ -85,8 +89,6 @@ class LoadImages:
                     raise StopIteration
 
             path = self.files[self.count]
-
-            self.mode = "image"
             im0 = imread(path)
             if im0 is None:
                 logger.warning(f"WARNING ⚠️ Image Read Error {path}")
@@ -341,3 +343,37 @@ def load_coco_class_names():
             return [line.strip() for line in f.readlines()]
 
     raise Exception("Failed to fetch COCO class names from both online and local sources.")
+
+
+def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
+    model_save_dir = os.path.join(save_dir, model_name)
+    os.makedirs(model_save_dir, exist_ok=True)
+
+    image = cv2.imread(image_path)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    if model_name == "torch_model":
+        bounding_box_color, label_color = (0, 255, 0), (0, 255, 0)
+    else:
+        bounding_box_color, label_color = (255, 0, 0), (255, 255, 0)
+
+    boxes = result["boxes"]["xyxy"]
+    scores = result["boxes"]["conf"]
+    classes = result["boxes"]["cls"]
+    names = result["names"]
+
+    for box, score, cls in zip(boxes, scores, classes):
+        x1, y1, x2, y2 = map(int, box)
+        label = f"{names[int(cls)]} {score.item():.2f}"
+        cv2.rectangle(image, (x1, y1), (x2, y2), bounding_box_color, 3)
+        cv2.putText(image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_color, 2)
+
+    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_name = f"prediction_{timestamp}.jpg"
+    output_path = os.path.join(model_save_dir, output_name)
+
+    cv2.imwrite(output_path, image)
+
+    logger.info(f"Predictions saved to {output_path}")

@@ -136,9 +136,6 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
             return fmt::format(compute, root, is_sfpu ? "eltwise_binary_sfpu.cpp" : "eltwise_binary.cpp");
         case KernelName::ComputeScalar:
             return fmt::format(compute, root, is_sfpu ? "eltwise_binary_sfpu_scalar.cpp" : "eltwise_binary_scalar.cpp");
-        case KernelName::ComputeRowBcastNg:
-            return fmt::format(
-                compute, root_ng, is_sfpu ? "eltwise_binary_sfpu_row_bcast.cpp" : "eltwise_binary_row_bcast.cpp");
         default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
     }
 }
@@ -314,6 +311,13 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        case BinaryOpType::XLOGY:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::XLOGY;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -411,6 +415,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             return {"requant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "requant_tile"};
         case DEQUANT:
             return {"dequant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "dequant_tile"};
+        case XLOGY: return {"xlogy_binary_tile_init();", "xlogy_binary_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }

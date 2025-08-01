@@ -59,7 +59,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     CoreRange core({0, 0}, {0, 0});
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::IDevice* device = a.device();
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
@@ -137,7 +136,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
         tt::tt_metal::CircularBufferConfig(
             num_input_tiles * input_single_tile_size, {{src0_cb_index, input_cb_data_format}})
             .set_page_size(src0_cb_index, input_single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, src0_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, core, src0_cb_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = num_tiles_per_block;
@@ -145,7 +144,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
         tt::tt_metal::CircularBufferConfig(
             num_output_tiles * output_single_tile_size, {{output_cb_index, output_cb_data_format}})
             .set_page_size(output_cb_index, output_single_tile_size);
-    auto cb_output = tt::tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt::tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     uint32_t packed_pad_value = get_packed_value(a, pad_value);
     uint32_t tile_row_size_bytes = (a.dtype() == DataType::BFLOAT16) ? 64 : 128;
@@ -196,7 +195,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     std::vector<uint32_t> compute_kernel_args = {
         uint32_t(num_tiles / num_tiles_per_block), uint32_t(num_tiles_per_block)};
 
-    auto tilize_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
         core,
@@ -273,7 +272,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
     uint32_t unpadded_row_size_bytes = a.padded_shape()[-1] * a.element_size();     // Assuming bfloat16 dataformat
     uint32_t padded_row_size_bytes = output.padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
 
-    const uint32_t onetile = 1;
     if (core_range.size() > 0) {
         create_cb(
             tt::CBIndex::c_0, program, core_range, input_single_tile_size, single_block_size, input_cb_data_format);
@@ -318,7 +316,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
     }
 
     if (has_cliff_col) {
-        auto [src3_cb_index, cb_src3] = create_cb(
+        create_cb(
             tt::CBIndex::c_0,
             program,
             cliff_col_core_range,
@@ -326,7 +324,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
             single_block_size,
             input_cb_data_format);
 
-        auto [output3_cb_index, cb_output3] = create_cb(
+        create_cb(
             tt::CBIndex::c_16,
             program,
             cliff_col_core_range,
@@ -348,7 +346,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
 
     uint32_t packed_pad_value = get_packed_value(a, pad_value);
     // log2(TILE_WIDTH * data_format_size_in_bytes)
-    uint32_t shift_bits = (a.dtype() == DataType::BFLOAT16) ? 6 : 7;
 
     uint32_t num_tiles_2d = output.padded_shape()[-1] * output.padded_shape()[-2] / TILE_HW;
 
@@ -360,7 +357,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
         third_dim = log_shape[-3] * log_shape[-4];
     }
 
-    uint32_t tile_width = output.tensor_spec().tile().get_width();
     uint32_t tile_height = output.tensor_spec().tile().get_height();
 
     uint32_t total_num_rows = a.logical_shape()[-2];
@@ -392,21 +388,21 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
     // compute
 
     if (core_range.size() > 0) {
-        auto tilize_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             core_range,
             ComputeConfig{.compile_args = {single_block_size, single_block_size, third_dim}});
     }
     if (has_cliff_col && has_cliff_row) {
-        auto tilize_col_row_cliff_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             cliff_col_row_core_range,
             ComputeConfig{.compile_args = {single_block_size_cliff_col, single_block_size_cliff_row, third_dim}});
     }
     if (has_cliff_row) {
-        auto tilize_row_cliff_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             cliff_row_core_range,
@@ -414,7 +410,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
     }
 
     if (has_cliff_col) {
-        auto tilize_col_cliff_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/compute/tilize_wh.cpp",
             cliff_col_core_range,
@@ -452,7 +448,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
             single_block_size_row_arg = single_block_size;
             single_block_size_col_arg = single_block_size_cliff_col;
         }
-        uint32_t size_per_row_per_block = nblocks_per_core * TILE_WIDTH * a.element_size();
 
         //  reader runtime args
         std::vector<uint32_t> reader_rt_args = {
@@ -565,8 +560,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     uint32_t unpadded_row_size_bytes = a.padded_shape()[-1] * a.element_size();     // Assuming bfloat16 dataformat
     uint32_t padded_row_size_bytes = output.padded_shape()[-1] * a.element_size();  // Assuming bfloat16 dataformat
 
-    auto [src0_cb_index, cb_src0] = create_cb(
-        tt::CBIndex::c_0, program, all_cores, input_single_tile_size, num_tiles_per_row, input_cb_data_format);
+    create_cb(tt::CBIndex::c_0, program, all_cores, input_single_tile_size, num_tiles_per_row, input_cb_data_format);
 
     auto [output_cb_index, cb_output] = create_cb(
         tt::CBIndex::c_16, program, all_cores, output_single_tile_size, num_tiles_per_row, output_cb_data_format);
@@ -606,14 +600,14 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     /** compute
      */
     if (core_range.size() > 0) {
-        auto tilize_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
             core_range,
             ComputeConfig{.compile_args = {nblocks_per_core, num_tiles_per_row}});
     }
     if (has_cliff) {
-        auto tilize_cliff_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
             core_range_cliff,
@@ -634,7 +628,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
 
     uint32_t tile_start_id = 0;
     uint32_t row_start_id = 0;
-    uint32_t ncores_x = grid_size.x;
 
     const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
     for (uint32_t i = 0; i < ncores; ++i) {
@@ -728,8 +721,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
-    IDevice* device = a.device();
-
     auto input_shard_spec = a.shard_spec().value();
     auto output_shard_spec = output.shard_spec().value();
 
@@ -769,7 +760,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
         output_cb_data_format,
         out_sharded ? output.buffer() : nullptr);
 
-    Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
@@ -792,7 +782,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
     /** writer
      */
     KernelHandle unary_writer_kernel_id;
-    bool out_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
     std::vector<uint32_t> writer_ct_args = {
         output_cb_index,
     };
@@ -809,7 +798,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
         (uint32_t)ntiles_per_block,  // per_block_ntiles
     };
 
-    auto tilize_kernel_id = CreateKernel(
+    CreateKernel(
         program,
         "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/tilize.cpp",
         all_cores,

@@ -5,9 +5,9 @@
 #include "utils/bfloat16.h"
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
-#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
-
+#include "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp"
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 /* This kernel does:
 Top-p Cumulative Probability Filtering:
 Iteratively accumulates probabilities, comparing them against the nucleus threshold p to determine the smallest set of
@@ -211,43 +211,79 @@ uint16_t bfloat16_div(uint16_t bf16_a, uint16_t bf16_b) {
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
+    uint32_t temp_addr = get_arg_val<uint32_t>(1);
+    uint32_t k_addr = get_arg_val<uint32_t>(2);
+    uint32_t p_addr = get_arg_val<uint32_t>(3);
 
     uint32_t arg_id = 0;
     constexpr bool dst_is_dram = (bool)get_compile_time_arg_val(0);
+    constexpr bool temp_is_dram = (bool)get_compile_time_arg_val(1);
+    constexpr bool k_is_dram = (bool)get_compile_time_arg_val(2);
+    constexpr bool p_is_dram = (bool)get_compile_time_arg_val(3);
 
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_id_mask = get_compile_time_arg_val(2);
-    constexpr uint32_t scale_cb_index = get_compile_time_arg_val(3);
-    constexpr uint32_t packed_identity_scalar = get_compile_time_arg_val(4);
-    constexpr uint32_t output_final_indices_rm_cb_index = get_compile_time_arg_val(5);
-    constexpr uint32_t output_local_values_cb_index = get_compile_time_arg_val(6);
-    constexpr uint32_t output_local_indices_cb_index = get_compile_time_arg_val(7);
-    constexpr uint32_t final_indices_stick_size = get_compile_time_arg_val(8);
-    constexpr uint32_t out_stick_size = get_compile_time_arg_val(9);
-    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(10);
-    constexpr uint32_t k = get_compile_time_arg_val(11);
-    constexpr uint32_t p = get_compile_time_arg_val(12);
-    constexpr uint32_t core_id = get_compile_time_arg_val(13);
-    constexpr uint32_t ids_per_batch = get_compile_time_arg_val(14);
-
+    constexpr uint32_t cb_id_out = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_id_mask = get_compile_time_arg_val(5);
+    constexpr uint32_t scale_cb_index = get_compile_time_arg_val(6);
+    constexpr uint32_t packed_identity_scalar = get_compile_time_arg_val(7);
+    constexpr uint32_t output_final_indices_rm_cb_index = get_compile_time_arg_val(8);
+    constexpr uint32_t output_local_values_cb_index = get_compile_time_arg_val(9);
+    constexpr uint32_t output_local_indices_cb_index = get_compile_time_arg_val(10);
+    constexpr uint32_t final_indices_stick_size = get_compile_time_arg_val(11);
+    constexpr uint32_t out_stick_size = get_compile_time_arg_val(12);
+    constexpr uint32_t rand_tile_index = get_compile_time_arg_val(13);
+    constexpr uint32_t cb_id_k = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_id_p = get_compile_time_arg_val(15);
+    constexpr uint32_t cb_id_temp = get_compile_time_arg_val(16);
+    constexpr uint32_t core_id = get_compile_time_arg_val(17);
+    constexpr uint32_t ids_per_batch = get_compile_time_arg_val(18);
     // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
     generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
+    // read k, p, temp
 
+    const InterleavedAddrGen<true> addrg_k = {.bank_base_address = k_addr, .page_size = 128};
+    cb_reserve_back(cb_id_k, 1);
+    uint32_t cb_id_k_ptr = get_write_ptr(cb_id_k);
+    uint64_t k_noc_addr = get_noc_addr(0, addrg_k);
+    noc_async_read(k_noc_addr + core_id * 4, cb_id_k_ptr, 4);
+    noc_async_read_barrier();
+    cb_push_back(cb_id_k, 1);
+    volatile tt_l1_ptr uint32_t* k_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_id_k_ptr);
+    uint32_t k = k_ptr[0];
+
+    const InterleavedAddrGen<true> addrg_p = {.bank_base_address = p_addr, .page_size = 64};
+    cb_reserve_back(cb_id_p, 1);
+    uint32_t cb_id_p_ptr = get_write_ptr(cb_id_p);
+    uint64_t p_noc_addr = get_noc_addr(0, addrg_p);
+    noc_async_read(p_noc_addr + core_id * 2, cb_id_p_ptr, 2);
+    noc_async_read_barrier();
+    cb_push_back(cb_id_p, 1);
+    volatile tt_l1_ptr uint16_t* p_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_id_p_ptr);
+    uint32_t p = p_ptr[0];
+
+    const InterleavedAddrGen<true> addrg_temp = {.bank_base_address = temp_addr, .page_size = 64};
+    // cb_reserve_back(cb_id_temp, 1);
+    uint32_t cb_id_temp_ptr = get_write_ptr(cb_id_temp);
+    uint64_t temp_noc_addr = get_noc_addr(0, addrg_temp);
+    noc_async_read(temp_noc_addr + core_id * 2, cb_id_temp_ptr, 2);
+    noc_async_read_barrier();
+    // cb_push_back(cb_id_temp, 1);
+
+    volatile tt_l1_ptr uint16_t* temp_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_id_temp_ptr);
+    uint16_t temp = temp_ptr[0];
+    uint32_t temp_packed = (static_cast<uint32_t>(temp) << 16) + static_cast<uint32_t>(temp);
+    generate_bcast_unary_scalar(cb_id_temp, temp_packed);
     // generate the top-k mask
     constexpr uint32_t one = 1;
     generate_mask<cb_id_mask, one>(one, ids_per_batch / 32, k - 1);
-
     // get random number
     cb_wait_front(rand_tile_index, 1);
     uint32_t cb_rand_addr = get_write_ptr(rand_tile_index);
     volatile tt_l1_ptr uint16_t* rand_values = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_rand_addr);
     uint16_t rand = rand_values[0];
-
     // wait for compute kernel
     cb_wait_front(output_final_indices_rm_cb_index, 32);
     cb_wait_front(output_local_values_cb_index, 1);
     cb_wait_front(output_local_indices_cb_index, 1);
-
     // Use cb as L1 scratch memory
     uint32_t cb_local_values_addr = get_write_ptr(output_local_values_cb_index);
     volatile tt_l1_ptr uint16_t* local_values = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb_local_values_addr);

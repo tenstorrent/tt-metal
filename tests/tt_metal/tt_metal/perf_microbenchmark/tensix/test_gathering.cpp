@@ -40,6 +40,6 @@ int main(int argc, char** argv) {
         });
 
     tt_metal::EnqueueProgram(device->command_queue(), program, true);
-    tt_metal::detail::DumpDeviceProfileResults(device);
+    tt_metal::detail::ReadDeviceProfilerResults(device);
     tt_metal::CloseDevice(device);
 }

@@ -90,7 +90,6 @@ Tensor accumulation_invoke(
     AccumulationOp op) {
     const auto& input_shape = input_tensor.logical_shape();
     const int32_t& input_rank = input_shape.rank();
-    const auto& input_dtype = input_tensor.dtype();
 
     if (input_rank == 0 || input_tensor.logical_volume() == 0) {
         return input_tensor;

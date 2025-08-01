@@ -95,16 +95,13 @@ ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
 
     uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
 
-    auto padded_tensor_shape = input.padded_shape();
-    auto padded_tensor_volume = input.physical_volume();
+    auto tensor_shape = input.logical_shape();
+    TT_FATAL(tensor_shape.rank() == 4U, "Input tensor must be 4D");
 
-    TT_FATAL(
-        padded_tensor_volume % tt::constants::TILE_HW == 0, "Padded input tensor volume must be divisible by TILE_HW");
-    TT_FATAL(padded_tensor_shape.rank() == 4U, "Input tensor must be 4D");
-
-    uint32_t Wt = padded_tensor_shape[-1] / tt::constants::TILE_WIDTH;  // <- number of tiles in inner dimension
-    uint32_t Ht = padded_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
-    uint32_t NC = padded_tensor_shape[0] * padded_tensor_shape[1];
+    uint32_t Wt = (tensor_shape[-1] + tt::constants::TILE_WIDTH - 1U) /
+                  tt::constants::TILE_WIDTH;  // <- number of tiles in inner dimension
+    uint32_t Ht = (tensor_shape[-2] + tt::constants::TILE_HEIGHT - 1U) / tt::constants::TILE_HEIGHT;
+    uint32_t NC = tensor_shape[0] * tensor_shape[1];
     uint32_t total_rows_to_process = NC * Ht;
 
     // get number of free cores

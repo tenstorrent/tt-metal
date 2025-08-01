@@ -29,6 +29,10 @@
 #include "buffer_types.hpp"
 #include "circular_buffer_config.hpp"
 #include "data_types.hpp"
+#include "llrt/tt_cluster.hpp"
+#include <umd/device/cluster.h>
+#include <umd/device/tt_cluster_descriptor.h>
+#include <filesystem>
 #include "device.hpp"
 #include "impl/context/metal_context.hpp"
 #include "kernels/kernel_impl.hpp"
@@ -51,6 +55,7 @@
 #include <umd/device/types/xy_pair.h>
 #include "utils.hpp"
 #include "fabric/hw/inc/fabric_routing_mode.h"
+#include <tt-metalium/graph_tracking.hpp>
 
 namespace tt {
 
@@ -498,6 +503,10 @@ DeviceAddr CalculateAddressDeviceInterleavedContiguous(const Buffer& buffer, uin
 }
 
 void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+    if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
+        return;
+    }
+
     size_t host_buffer_size_bytes = host_buffer.size();
     TT_FATAL(
         host_buffer_size_bytes <= buffer.size(),
@@ -761,11 +770,11 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         }
     }  // Profiler scope end
     if (wait_until_cores_done) {
-        detail::DumpDeviceProfileResults(device);
+        detail::ReadDeviceProfilerResults(device);
     }
 }
 
-void WaitProgramDone(IDevice* device, Program& program, bool dump_device_profile_results) {
+void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results) {
     auto device_id = device->id();
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
     std::unordered_set<CoreCoord> not_done_cores;
@@ -779,8 +788,8 @@ void WaitProgramDone(IDevice* device, Program& program, bool dump_device_profile
         }
     }
     llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
-    if (dump_device_profile_results) {
-        detail::DumpDeviceProfileResults(device);
+    if (read_device_profiler_results) {
+        detail::ReadDeviceProfilerResults(device);
     }
 }
 
@@ -941,6 +950,13 @@ size_t GetNumPCIeDevices() { return tt::tt_metal::MetalContext::instance().get_c
 
 chip_id_t GetPCIeDeviceID(chip_id_t device_id) {
     return tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+}
+
+ClusterType GetClusterType() { return tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type(); }
+
+std::string SerializeClusterDescriptor() {
+    std::filesystem::path path = tt::umd::Cluster::create_cluster_descriptor()->serialize_to_file();
+    return path.string();
 }
 
 IDevice* CreateDevice(

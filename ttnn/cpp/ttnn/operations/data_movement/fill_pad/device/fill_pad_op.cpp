@@ -44,7 +44,6 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> FillPad:
 operation::ProgramWithCallbacks FillPad::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto& output_tensor = output_tensors.at(0);
     return detail::fill_pad_multi_core(input_tensor, this->fill_value);
 }
 

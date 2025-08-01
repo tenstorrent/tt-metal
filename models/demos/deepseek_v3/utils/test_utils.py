@@ -42,6 +42,7 @@ def load_reference_io_tensors_for_module(
     mode: Literal["prefill", "decode"],
     module: str,
     seq_len: int,
+    num_expand_rows: int,
     concat_dim: int = 1,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     assert mode in ["prefill", "decode"], f"Unsupported mode: {mode}"
@@ -61,7 +62,11 @@ def load_reference_io_tensors_for_module(
         assert set(io_module_paths) == {module}
         torch_input = torch.concat(torch_inputs, dim=concat_dim)
         reference_output = torch.concat(reference_outputs, dim=concat_dim)
-    return pad_tensor(torch_input, mode, seq_len), reference_output
+    torch_input.unsqueeze_(0)
+    reference_output.unsqueeze_(0)
+    return pad_tensor(torch_input, mode, seq_len).expand(
+        num_expand_rows, *(-1 for _ in range(torch_input.ndim - 1))
+    ), reference_output.expand(num_expand_rows, *(-1 for _ in range(reference_output.ndim - 1)))
 
 
 def load_reference_io(mode: Literal["prefill", "decode"], module_range: str):

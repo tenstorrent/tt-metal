@@ -49,7 +49,6 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
 
     auto device = input_buffer->device();
     auto full_grid = device->compute_with_storage_grid_size();
-    CoreCoord end_core = (*output_buffer->shard_spec().grid().ranges().rbegin()).end_coord;
     uint32_t output_core_id = 0;
     for (auto output_core : output_cores) {
         ret_map.try_emplace(output_core, std::vector<PageStride>{});
@@ -81,8 +80,6 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
                 it += stride_size;
             } else {
                 const auto start_core = it->value().first;
-                const auto start_page = it->value().second;
-                auto expected_next_page = start_page + 1;
                 Stride stride = Stride{.core = {0, 0}, .data = 0};
                 if ((it + 1) == end) {
                     ret_map[output_core].push_back(PageStride{
@@ -175,7 +172,6 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
 
                     TT_ASSERT(stride.core.x < full_grid.x and stride.core.y < full_grid.y);
                     TT_ASSERT(data_stride < output_buffer->num_pages());
-                    auto stride_start = stride_it;
                     uint32_t num_strides = 1;
                     while (stride_it != end and stride_it->has_value()) {
                         bool stride_not_complete = false;
@@ -207,7 +203,6 @@ std::unordered_map<CoreCoord, std::vector<PageStride>> get_core_page_ranges(
                         }
                         auto next_input_page = *(stride_it);
                         auto curr_input_page = *(last_it_stride);
-                        bool core_stride = ((stride.core.x != 0) or (stride.core.y != 0));
                         // TT_ASSERT(curr_input_page.has_value());
                         if (!curr_input_page.has_value() or !next_input_page.has_value() or
                             (next_input_page.value().first.x - curr_input_page.value().first.x != stride.core.x) or
@@ -305,7 +300,6 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     const auto remote_shard_spec = remote_tensor.shard_spec().value();
     const auto& all_cores = local_shard_spec.grid;
 
-    auto local_core_type = local_tensor.buffer()->core_type();
     auto remote_core_type = remote_tensor.buffer()->core_type();
     constexpr uint32_t cb_index = tt::CBIndex::c_0;
     constexpr uint32_t cb_scratch_index = tt::CBIndex::c_1;
@@ -377,7 +371,7 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
             tt::tt_metal::CircularBufferConfig(
                 remote_units_per_shard * remote_unit_size_padded, {{cb_scratch_index, data_format}})
                 .set_page_size(cb_scratch_index, unit_size);
-        auto cb_scratch = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_scratch_config);
+        tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_scratch_config);
     }
 
     uint32_t remote_core_idx = 0;
@@ -513,7 +507,6 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
 
     for (const auto& core : cores) {
         const auto& page_stride_vector = output_core_to_page_range_pair.at(core);
-        uint32_t num_ranges = page_stride_vector.size();
         auto runtime_args_0 = get_runtime_args_for_given_ranges(
             physical_core_coords,
             page_stride_vector,
@@ -571,7 +564,6 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
     const auto remote_shard_spec = remote_tensor.shard_spec().value();
     const auto& all_cores = local_shard_spec.grid;
 
-    const auto local_core_type = local_tensor.buffer()->core_type();
     const auto remote_core_type = remote_tensor.buffer()->core_type();
     bool interface_with_dram = (remote_core_type == CoreType::DRAM);
     const auto local_cores = corerange_to_cores(
@@ -584,7 +576,6 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
 
     TT_FATAL(local_tensor.layout() == Layout::ROW_MAJOR, "Expected row major tensor");
     const uint32_t unit_size = local_shard_spec.shape[1] * local_tensor.element_size();  // width * element size
-    const uint32_t local_units_per_shard = local_shard_spec.shape[0];                    // height
     const uint32_t remote_units_per_shard = remote_shard_spec.shape[0];                  // height
     const uint32_t total_size = remote_units_per_shard * unit_size;
 

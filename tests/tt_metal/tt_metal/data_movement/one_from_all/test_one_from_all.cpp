@@ -197,10 +197,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromAllDirectedIdeal) {
     // Parameters
     // Ideal: Less transactions, more data per transaction
     uint32_t num_of_transactions = 1;
-    if (max_transmittable_pages % (num_of_transactions * total_subordinate_cores) != 0) {
-        log_error(tt::LogTest, "Max transmittable pages not evenly divisible by transactions and subordinate cores");
-    }
-    uint32_t transaction_size_pages = max_transmittable_pages / num_of_transactions / total_subordinate_cores;
+    uint32_t transaction_size_pages = max_transmittable_pages / (num_of_transactions * total_subordinate_cores);
 
     // Test config
     unit_tests::dm::core_to_core::OneFromAllConfig test_config = {

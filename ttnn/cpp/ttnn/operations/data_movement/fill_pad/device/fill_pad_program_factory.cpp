@@ -8,6 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 #include "fill_pad_program_factory.hpp"
@@ -48,13 +49,12 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, problem_size);
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
 
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_page_size * 2, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, cb_page_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     bool src_is_dram = tens_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
@@ -96,6 +96,8 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
     if (sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_time_args);
         compute_defines["SHARDED"] = "1";
+    } else {
+        tt::tt_metal::TensorAccessorArgs(*tens_buffer).append_to(writer_compile_time_args);
     }
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(

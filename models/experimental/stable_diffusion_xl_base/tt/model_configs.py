@@ -790,6 +790,34 @@ class ModelOptimisations:
             packer_l1_acc=True,
         )
 
+        self.compute_configs["CONV_LOFI_FP32_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+        self.compute_configs["CONV_HIFI2_FP32_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+        self.compute_configs["CONV_HIFI2_NO_FP32_NO_L1_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+
+        self.compute_configs["CONV_HIFI2_NO_FP32_COMPUTE_CONFIG"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
     def get_matmul_config(self, matmul_path):
         if matmul_path is None:
             return None
@@ -1046,6 +1074,36 @@ class ModelOptimisations:
                 return self.conv_configs["ABH_512_NO_ADB_DRAM"]
             else:
                 return self.conv_configs["DEFAULT_DRAM"]
+
+    def get_conv_compute_config(self, module_path):
+        if not ("decoder" in module_path):
+            if "conv_in" in module_path or "conv_out" in module_path:
+                return self.compute_configs["CONV_HIFI2_NO_FP32_NO_L1_COMPUTE_CONFIG"]
+            if "resnets" in module_path:
+                conv1_no_fp32 = {
+                    "down_blocks.2.resnets",
+                    "down_blocks.0",
+                    "down_blocks.1.resnets.0",
+                    "up_blocks.0",
+                    "mid_block",
+                }
+                conv2_no_fp32 = {"down_blocks.2.resnets", "down_blocks.0", "up_blocks.0", "mid_block"}
+
+                if "conv1" in module_path and any(s in module_path for s in conv1_no_fp32):
+                    return self.compute_configs["CONV_HIFI2_NO_FP32_COMPUTE_CONFIG"]
+                if "conv2" in module_path and any(s in module_path for s in conv2_no_fp32):
+                    return self.compute_configs["CONV_HIFI2_NO_FP32_COMPUTE_CONFIG"]
+
+                return self.compute_configs["CONV_HIFI2_FP32_COMPUTE_CONFIG"]
+            if "upsamplers" in module_path:
+                if "up_blocks.0" in module_path:
+                    return self.compute_configs["CONV_HIFI2_NO_FP32_COMPUTE_CONFIG"]
+                else:
+                    return self.compute_configs["CONV_HIFI2_FP32_COMPUTE_CONFIG"]
+
+            return self.compute_configs["CONV_HIFI2_FP32_COMPUTE_CONFIG"]
+        else:
+            return self.compute_configs["CONV_LOFI_FP32_COMPUTE_CONFIG"]
 
     def get_conv_output_dtype(self):
         return self.conv_output_dtype

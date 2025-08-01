@@ -12,7 +12,7 @@ run_tg_llama3.3-70b_tests() {
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
 
   # Force ERISC IRAM so it's enabled for all tests to keep erisc wrapper kernels consistent
-  LLAMA_DIR=$llama70b TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_subdevices/tests/unit_tests ; fail+=$?
+  LLAMA_DIR=$llama70b TT_METAL_ENABLE_ERISC_IRAM=1 FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/tests/unit_tests ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

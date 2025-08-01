@@ -7,9 +7,9 @@ import os
 import pytest
 import torch
 from loguru import logger
-from ultralytics import YOLO
 
 import ttnn
+from models.demos.yolov10x.common import load_torch_model
 from models.demos.yolov10x.demo.demo_utils import (
     LoadImages,
     load_coco_class_names,
@@ -48,13 +48,13 @@ from models.utility_functions import disable_persistent_kernel_cache, run_for_wo
         "True",
     ],
 )
-def test_demo_ttnn(device, source, model_type, use_pretrained_weight):
+def test_demo_ttnn(device, source, model_type, use_pretrained_weight, model_location_generator):
     disable_persistent_kernel_cache()
 
     if model_type == "torch_model":
         state_dict = None
         if use_pretrained_weight:
-            torch_model = YOLO("yolov10x.pt")
+            torch_model = load_torch_model(model_location_generator)
             state_dict = torch_model.state_dict()
 
             torch_model = YOLOv10()

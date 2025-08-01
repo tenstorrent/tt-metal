@@ -582,8 +582,8 @@ void run(
     }
 
     for (const auto& link : device_helper.unique_links) {
-        // Only dump profile results from sender
-        tt_metal::detail::DumpDeviceProfileResults(device_helper.devices.at(link.sender.chip));
+        // Only read profiler results from sender
+        tt_metal::detail::ReadDeviceProfilerResults(device_helper.devices.at(link.sender.chip));
 
         switch (params.benchmark_type) {
             case BenchmarkType::EthOnlyUniDir:

@@ -33,19 +33,19 @@ Semantic segmentation: [source](https://huggingface.co/nvidia/segformer-b0-finet
 
 - Use the following command to run the Segformer Encoder model (Classification):
   ```python
-  pytest tests/ttnn/integration_tests/segformer/test_segformer_encoder.py
+  pytest models/demos/segformer/tests/pcc/test_segformer_encoder.py
   ```
 
 
 - Use the following command to run the Segformer Decoder model:
   ```python
-  pytest tests/ttnn/integration_tests/segformer/test_segformer_decode_head.py
+  pytest models/demos/segformer/tests/pcc/test_segformer_decode_head.py
   ```
 
 
 - Use the following command to run the Segformer full model (Segmentation):
   ```python
-  pytest tests/ttnn/integration_tests/segformer/test_segformer_for_semantic_segmentation.py
+  pytest models/demos/segformer/tests/pcc/test_segformer_for_semantic_segmentation.py
   ```
 
 ### Segformer Semantic Segmentation Performant Demo
@@ -79,5 +79,5 @@ Semantic segmentation: [source](https://huggingface.co/nvidia/segformer-b0-finet
 Use the following command to run Model performant running with Trace+2CQ
 
 ```
-pytest models/demos/segformer/tests/test_e2e_performant.py
+pytest models/demos/segformer/tests/perf/test_e2e_performant.py
 ```

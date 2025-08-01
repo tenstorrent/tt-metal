@@ -243,6 +243,8 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
 
     auto kernel_dims =
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second});
+
+    const SkipMcast& skip_mcast = conv_skip_mcast(parallelization_config, memory_config.memory_layout());
     conv_op_l1_usage l1_usage = calculate_L1_usage(
         compute_kernel_config,
         block_config,
@@ -266,7 +268,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             kernel_dims[1],
             sliding_window_config.get_output_shape()[2],
             has_bias),
-        is_singlecore_skip_mcast(parallelization_config, input_tensor_a.memory_config().memory_layout()));
+        skip_mcast.skip_activation_mcast);
 
     TT_FATAL(
         actual_cb_size == l1_usage.CB_allocation_size,

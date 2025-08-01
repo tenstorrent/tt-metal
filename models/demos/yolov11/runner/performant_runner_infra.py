@@ -5,28 +5,13 @@
 
 import torch
 from loguru import logger
-from ultralytics import YOLO
 
 import ttnn
-from models.demos.yolov11.reference import yolov11
+from models.demos.yolov11.common import load_torch_model
 from models.demos.yolov11.tt import ttnn_yolov11
 from models.demos.yolov11.tt.model_preprocessing import create_yolov11_model_parameters
 from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-def load_torch_model(use_weights_from_ultralytics=True, weights="yolo11n.pt"):
-    if use_weights_from_ultralytics:
-        torch_model = YOLO(weights)
-        torch_model.eval()
-        state_dict = {k.replace("model.", "", 1): v for k, v in torch_model.state_dict().items()}
-
-    torch_model = yolov11.YoloV11()
-    torch_model.eval()
-    if use_weights_from_ultralytics:
-        torch_model.load_state_dict(state_dict)
-
-    return torch_model
 
 
 class YOLOv11PerformanceRunnerInfra:
@@ -51,7 +36,7 @@ class YOLOv11PerformanceRunnerInfra:
         self.model_location_generator = model_location_generator
         self.torch_input_tensor = torch_input_tensor
 
-        self.torch_model = load_torch_model()
+        self.torch_model = load_torch_model(model_location_generator)
 
         self.torch_input_tensor = (
             torch.randn((1, 3, 640, 640), dtype=torch.float32)

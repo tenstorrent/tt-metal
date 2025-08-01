@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import logging
@@ -12,6 +12,7 @@ from fastapi import FastAPI, File, UploadFile
 from PIL import Image
 
 import ttnn
+from models.demos.yolov8s_world.common import YOLOV8SWORLD_L1_SMALL_SIZE
 from models.demos.yolov8s_world.runner.performant_runner import YOLOv8sWorldPerformantRunner
 from models.experimental.yolo_common.yolo_web_demo.yolo_evaluation_utils import postprocess
 
@@ -53,7 +54,7 @@ async def startup():
         device = ttnn.CreateDevice(
             device_id,
             dispatch_core_config=get_dispatch_core_config(),
-            l1_small_size=24576,
+            l1_small_size=YOLOV8SWORLD_L1_SMALL_SIZE,
             trace_region_size=3211264,
             num_command_queues=2,
         )
@@ -61,7 +62,9 @@ async def startup():
         model = YOLOv8sWorldPerformantRunner(device, 1)
     else:
         device_id = 0
-        device = ttnn.CreateDevice(device_id, l1_small_size=24576, trace_region_size=3211264, num_command_queues=2)
+        device = ttnn.CreateDevice(
+            device_id, l1_small_size=YOLOV8SWORLD_L1_SMALL_SIZE, trace_region_size=3211264, num_command_queues=2
+        )
         device.enable_program_cache()
         model = YOLOv8sWorldPerformantRunner(device, 1)
     model._capture_yolov8s_world_trace_2cqs()

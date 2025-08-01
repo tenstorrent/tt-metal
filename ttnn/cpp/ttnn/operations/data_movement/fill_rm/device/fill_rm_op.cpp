@@ -7,6 +7,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
@@ -26,7 +27,6 @@ operation::ProgramWithCallbacks fill_rm_single_core(
     uint32_t wFill,
     float val_hi,
     float val_lo) {
-    tt::tt_metal::IDevice* device = any.device();
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     CoreRange core({0, 0}, {0, 0});
 
@@ -42,15 +42,15 @@ operation::ProgramWithCallbacks fill_rm_single_core(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(num_cb_tiles * single_tile_size, {{0, cb_data_format}})
             .set_page_size(0, single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     tt::tt_metal::CircularBufferConfig cb_src1_config =
         tt::tt_metal::CircularBufferConfig(num_cb_tiles * single_tile_size, {{1, cb_data_format}})
             .set_page_size(1, single_tile_size);
-    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*dst_buffer).append_to(reader_compile_time_args);
 
     tt::tt_metal::KernelHandle binary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

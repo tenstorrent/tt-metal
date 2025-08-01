@@ -6,6 +6,7 @@
 
 #include "llk_math_eltwise_unary_sfpu_params.h"
 #include "llk_math_eltwise_unary_sfpu_init.h"
+#include "ckernel_sfpu_softsign.h"
 
 namespace ckernel {
 
@@ -24,4 +25,17 @@ inline void llk_math_eltwise_unary_sfpu_hardsigmoid(uint dst_index, int vector_m
         dst_index,
         vector_mode);
 }
+
+// softsign
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_softsign_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::softsign, APPROXIMATE>(ckernel::sfpu::init_softsign<APPROXIMATE>);
+}
+
+template <bool APPROXIMATE, int ITERATIONS = 8>
+inline void llk_math_eltwise_unary_sfpu_softsign(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::calculate_softsign<APPROXIMATE, ITERATIONS>, dst_index, vector_mode);
+}
+
 }  // namespace ckernel

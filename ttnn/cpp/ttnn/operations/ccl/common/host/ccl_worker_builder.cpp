@@ -264,19 +264,15 @@ size_t generate_ccl_tensor_slice_command_args(
     std::size_t num_command_args_added = 0;
     auto const args_index_old = args_out.size();
     if (!last_tensor_slice.has_value()) {
-        const std::size_t args_index_old = args_out.size();
         // push back Command Header
         // push back arg 0 header
         log_trace(tt::LogOp, "Generating full tensor spec command args");
         add_ccl_command_arg_to_runtime_args<ttnn::ccl::cmd::CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>(
             current_tensor_slice, args_out);
-        const size_t args_index_new = args_out.size();
         // We can reused cached values for the first slice
         num_command_args_added++;
     } else {
         auto const& last_slice = last_tensor_slice.value();
-        const std::size_t args_index_old = args_out.size();
-        auto header_index = args_out.size();
 
         // tensor shape
         if (last_slice.tensor_shape != current_tensor_slice.tensor_shape) {
@@ -851,7 +847,7 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
         num_packet_headers_storable * packet_header_size_bytes,
         packet_header_size_bytes,
         worker_core_range);
-    auto reserved_packet_header_CB_handle = CreateCircularBuffer(program, worker_core_range, cb_config);
+    CreateCircularBuffer(program, worker_core_range, cb_config);
 
     {  // CT ARGS
         std::vector<uint32_t> ct_args = {my_chip_id.value_or(0xFFFF), reserved_packet_header_CB_index};
@@ -1431,7 +1427,6 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
     const std::size_t num_commands_expected = this->input_tensor_partition.partition_size;
 
     auto const& tensor_shape = worker_slice.tensor_shape;
-    auto const& tensor_slice_shape = worker_slice.tensor_slice_shape;
 
     auto num_slices = input_tensor_partition.partition_size;
     auto start_slice_index = input_tensor_partition.partition_index;
@@ -1478,7 +1473,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
 
     auto const& addr_gen_rt_args = ttnn::ccl::legacy_emit_address_generator_runtime_args(this->device, input_tensor);
     std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
-    for (auto const& arg : addr_gen_rt_args) {
+    for ([[maybe_unused]] auto const& arg : addr_gen_rt_args) {
         log_trace(tt::LogOp, "ccl_send_reader arg[{}]: addr_gen_rt_args[] {}", logged_arg_idx, args[logged_arg_idx]);
         logged_arg_idx++;
     }

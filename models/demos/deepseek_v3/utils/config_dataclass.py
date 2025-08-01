@@ -108,8 +108,8 @@ class AllGatherAsyncConfig(OpConfigBase):
     mesh_device: ConfigDevice
     cluster_axis: int
     dim: int
-    multi_device_global_semaphore: object
-    num_links: int
+    multi_device_global_semaphore: object | None = None
+    num_links: int | None = None
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
     topology: ttnn.Topology = ttnn.Topology.Linear
 
@@ -121,10 +121,10 @@ class ReduceScatterAsyncConfig(OpConfigBase):
     mesh_device: ConfigDevice
     cluster_axis: int
     dim: int
-    from_remote_multi_device_global_semaphore: object
-    to_remote_multi_device_global_semaphore: object
     math_op: ttnn.ReduceType
-    num_links: int
+    from_remote_multi_device_global_semaphore: object | None = None
+    to_remote_multi_device_global_semaphore: object | None = None
+    num_links: int | None = None
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
     topology: ttnn.Topology = ttnn.Topology.Linear
 

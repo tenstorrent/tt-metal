@@ -46,26 +46,6 @@ def test_binary_hypot_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_binary_xlogy_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
-
-    output_tensor = ttnn.xlogy(input_tensor1, input_tensor2)
-    golden_function = ttnn.get_golden_function(ttnn.xlogy)
-    golden_tensor = golden_function(in_data1, in_data2)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
 def test_binary_nextafter_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)

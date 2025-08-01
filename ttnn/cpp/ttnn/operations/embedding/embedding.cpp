@@ -33,7 +33,6 @@ ttnn::Tensor EmbeddingOperation::invoke(
         mutable_weight = ttnn::to_layout(mutable_weight, ttnn::ROW_MAJOR_LAYOUT);
     }
     auto hidden_embedding_dim = mutable_weight.logical_shape()[-1];
-    auto padded_hidden_embedding_dim = mutable_weight.padded_shape()[-1];
     auto weight = ttnn::unsqueeze_to_4D(mutable_weight);
 
     // If indices tensor is 1 dimensional, batch size is 1

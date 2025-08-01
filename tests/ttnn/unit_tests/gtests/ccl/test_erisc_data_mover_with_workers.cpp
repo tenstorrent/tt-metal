@@ -156,7 +156,7 @@ void generate_receiver_worker_kernels(
         tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_size, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, page_size);
 
-    tt_metal::CBHandle receiver_workers_cb = CreateCircularBuffer(program, worker_core, cb_src0_config);
+    CreateCircularBuffer(program, worker_core, cb_src0_config);
     std::vector<uint32_t> receiver_worker_writer_compile_args{
         dest_is_dram,  //
         num_pages,     //
@@ -270,7 +270,7 @@ void generate_sender_worker_kernels(
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(2 * num_pages_per_edm_buffer * page_size, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, page_size);
-    tt_metal::CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_core, cb_src0_config);
+    CreateCircularBuffer(program, worker_core, cb_src0_config);
     auto sender_worker_reader_kernel = tt_metal::CreateKernel(
         program,
         "tests/ttnn/unit_tests/gtests/ccl/kernels/erisc_datamover_sender_worker_reader.cpp",
@@ -365,7 +365,6 @@ bool RunWriteBWTest(
         sender_device, test_config.size_bytes, test_config.page_size_bytes, test_config.input_buffer_type});
     auto remote_input_buffer = CreateBuffer(tt_metal::InterleavedBufferConfig{
         receiver_device, test_config.size_bytes, test_config.page_size_bytes, test_config.input_buffer_type});
-    bool input_is_dram = test_config.input_buffer_type == tt_metal::BufferType::DRAM;
 
     tt_metal::detail::WriteToBuffer(local_input_buffer, inputs);
     tt_metal::detail::WriteToBuffer(remote_input_buffer, inputs);
@@ -394,7 +393,6 @@ bool RunWriteBWTest(
         local_output_buffers.push_back(output_buffer);
     }
 
-    bool output_is_dram = test_config.output_buffer_type == tt_metal::BufferType::DRAM;
     for (const auto& buffer_id : local_output_buffers) {
         tt_metal::detail::WriteToBuffer(buffer_id, all_zeros);
     }
@@ -404,10 +402,7 @@ bool RunWriteBWTest(
 
     uint32_t erisc_handshake_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
 
-    uint32_t chip0_next_buffer_address = erisc_handshake_address + 16;
     std::vector<uint32_t> chip0_edm_args = {erisc_handshake_address};
-    uint32_t chip0_sender_channels_offset = 0;
-    uint32_t chip0_arg_sender_num_channels = 1;
 
     ////////////////////////////////////////////////////////////////////////////
     // EDM Builder Setup
@@ -604,8 +599,8 @@ bool RunWriteBWTest(
         tt_metal::Finish(sender_device->command_queue());
         tt_metal::Finish(receiver_device->command_queue());
     }
-    // tt::tt_metal::detail::DumpDeviceProfileResults(receiver_device);
-    // tt::tt_metal::detail::DumpDeviceProfileResults(sender_device);
+    // tt::tt_metal::detail::ReadDeviceProfilerResults(receiver_device);
+    // tt::tt_metal::detail::ReadDeviceProfilerResults(sender_device);
     log_info(tt::LogTest, "Reading back outputs");
 
     auto is_output_correct = [&all_zeros, &inputs](const std::shared_ptr<tt_metal::Buffer>& output_buffer) {
@@ -691,7 +686,6 @@ int TestEntrypoint(
     auto eth_sender_core_iter_end = active_eth_cores.end();
     chip_id_t device_id = std::numeric_limits<chip_id_t>::max();
     tt_xy_pair eth_receiver_core;
-    bool initialized = false;
     tt_xy_pair eth_sender_core;
     do {
         TT_FATAL(eth_sender_core_iter != eth_sender_core_iter_end, "Error");
@@ -746,7 +740,6 @@ TEST(
     const uint32_t num_pages_total = 100000;
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
-    const bool merge_message_and_signal = true;
     auto termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED;
 
     auto result = TestEntrypoint(
@@ -775,7 +768,6 @@ TEST(
     const uint32_t num_pages_total = 100000;
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
-    const bool merge_message_and_signal = true;
     auto termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED;
 
     auto result = TestEntrypoint(
@@ -804,7 +796,6 @@ TEST(
     const uint32_t num_pages_total = 100000;
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
-    const bool merge_message_and_signal = true;
     auto termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED;
 
     auto result = TestEntrypoint(
@@ -833,7 +824,6 @@ TEST(
     const uint32_t num_pages_total = 100000;
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
-    const bool merge_message_and_signal = true;
     auto termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED;
 
     auto result = TestEntrypoint(
@@ -862,7 +852,6 @@ TEST(
     const uint32_t num_pages_total = 100000;
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
-    const bool merge_message_and_signal = true;
     auto termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED;
 
     auto result = TestEntrypoint(
@@ -891,7 +880,6 @@ TEST(
     const uint32_t num_pages_total = 100000;
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
-    const bool merge_message_and_signal = true;
     auto termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED;
 
     auto result = TestEntrypoint(
@@ -920,7 +908,6 @@ TEST(
     const uint32_t num_pages_total = 100000;
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
-    const bool merge_message_and_signal = true;
     auto termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED;
 
     auto result = TestEntrypoint(
@@ -949,7 +936,6 @@ TEST(
     const uint32_t num_pages_total = 100000;
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
-    const bool merge_message_and_signal = true;
     auto termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED;
 
     auto result = TestEntrypoint(
@@ -978,7 +964,6 @@ TEST(
     const uint32_t num_pages_total = 100000;
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
-    const bool merge_message_and_signal = true;
     auto termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::MESSAGE_COUNT_REACHED;
 
     auto result = TestEntrypoint(
@@ -1011,7 +996,6 @@ TEST(
     const uint32_t num_pages_total = 100000;
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
-    const bool merge_message_and_signal = true;
     auto termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED;
 
     auto result = TestEntrypoint(
@@ -1040,7 +1024,6 @@ TEST(
     const uint32_t num_pages_total = 100000;
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
-    const bool merge_message_and_signal = true;
     auto termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED;
 
     auto result = TestEntrypoint(
@@ -1069,7 +1052,6 @@ TEST(
     const uint32_t num_pages_total = 100000;
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
-    const bool merge_message_and_signal = true;
     auto termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED;
 
     auto result = TestEntrypoint(
@@ -1098,7 +1080,6 @@ TEST(
     const uint32_t num_pages_total = 100000;
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
-    const bool merge_message_and_signal = true;
     auto termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED;
 
     auto result = TestEntrypoint(
@@ -1127,7 +1108,6 @@ TEST(
     const uint32_t num_pages_total = 100000;
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
-    const bool merge_message_and_signal = true;
     auto termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED;
 
     auto result = TestEntrypoint(
@@ -1156,7 +1136,6 @@ TEST(
     const uint32_t num_pages_total = 100000;
     const bool src_is_dram = true;
     const bool dest_is_dram = true;
-    const bool merge_message_and_signal = true;
     auto termination_mode = ttnn::ccl::EriscDataMoverTerminationMode::WORKER_INITIATED;
 
     auto result = TestEntrypoint(

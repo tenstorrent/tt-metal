@@ -4,6 +4,8 @@
 
 #include "upsample_op.hpp"
 
+#include "tt-metalium/buffer_types.hpp"
+#include "ttnn/tensor/enum_types.hpp"
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -16,8 +18,15 @@ void UpSample::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to copy need to be allocated in buffers on device!");
-    // TT_FATAL(input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED, "Error");
-    TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Input tensor layout should be ROW_MAJOR");
+    if (input_tensor_a.layout() == Layout::TILE) {
+        TT_FATAL(mode_ == "nearest", "Only nearest upsample mode is supported for tiled inputs");
+        TT_FATAL(
+            input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Only interleaved memory layout is supported for tiled input");
+        TT_FATAL(
+            input_tensor_a.padded_shape() == input_tensor_a.logical_shape(),
+            "Only tile aligned tile input is currently supported");
+    }
     TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16, "Input tensor data type should be BFLOAT16");
     if (input_tensor_a.memory_config().is_sharded()) {
         TT_FATAL(
@@ -54,6 +63,8 @@ std::vector<TensorSpec> UpSample::compute_output_specs(const std::vector<Tensor>
 
     ttnn::Shape output_shape = ttnn::Shape({out_n, out_h, out_w, out_c});
 
+    Layout output_layout = Layout::ROW_MAJOR;  // upsample only outputs row major data
+
     if (output_mem_config_.is_sharded()) {
         TT_FATAL(
             input.memory_config().is_sharded(),
@@ -71,10 +82,10 @@ std::vector<TensorSpec> UpSample::compute_output_specs(const std::vector<Tensor>
         shard_spec.shape = {
             input.shard_spec()->shape[0] * scale_factor_h_ * scale_factor_w_, input.shard_spec()->shape[1]};
         MemoryConfig mem_config = output_mem_config_.with_shard_spec(shard_spec);
-        return {TensorSpec(output_shape, TensorLayout(input.dtype(), PageConfig(input.layout()), mem_config))};
+        return {TensorSpec(output_shape, TensorLayout(input.dtype(), PageConfig(output_layout), mem_config))};
     }
 
-    return {TensorSpec(output_shape, TensorLayout(input.dtype(), PageConfig(input.layout()), output_mem_config_))};
+    return {TensorSpec(output_shape, TensorLayout(input.dtype(), PageConfig(output_layout), output_mem_config_))};
 }
 
 operation::ProgramWithCallbacks UpSample::create_program(

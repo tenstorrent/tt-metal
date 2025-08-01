@@ -21,7 +21,6 @@ void Tilize::validate(const std::vector<Tensor>& input_tensors) const {
 
     auto width = input_tensor_a.padded_shape()[-1];
     uint32_t stick_s = width;
-    uint32_t num_sticks = input_tensor_a.physical_volume() / width;
     TT_FATAL(
         input_tensor_a.dtype() == DataType::BFLOAT16 or input_tensor_a.dtype() == DataType::FLOAT32 or
             input_tensor_a.dtype() == DataType::UINT32 or input_tensor_a.dtype() == DataType::INT32,

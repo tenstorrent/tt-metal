@@ -27,3 +27,4 @@ Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B fo
 Each test case has multiple runs, and each run has a unique runtime host id, assigned by a global counter.
 
 1. Loopback Packet Sizes: Tests loopback
+2. Loopback Directed Ideal: Tests the most optimal data movement setup on the core itself that reduces the number of transactions while maximizing transaction size to minimize the effects of initialization overhead.

@@ -74,8 +74,6 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         operation_attributes.cross_device_semaphore.has_value(),
         "Cross device semaphore must be specified at the moment");
-
-    TT_FATAL(operation_attributes.topology == tt::tt_fabric::Topology::Linear, "Topology must be linear at the moment");
 }
 
 void AllToAllDispatchDeviceOperation::validate_on_program_cache_hit(

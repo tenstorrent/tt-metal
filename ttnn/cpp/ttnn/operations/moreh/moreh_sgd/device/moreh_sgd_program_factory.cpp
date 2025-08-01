@@ -6,6 +6,7 @@
 
 #include "moreh_sgd_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -117,14 +118,17 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
 
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(is_dram(param_in)),
-        static_cast<uint32_t>(is_dram(grad)),
-        static_cast<uint32_t>(momentum_buffer_in.has_value() ? is_dram(momentum_buffer_in.value()) : 0)};
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*param_in.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*grad.buffer()).append_to(reader_compile_time_args);
+    if (momentum_buffer_in.has_value()) {
+        TensorAccessorArgs(*momentum_buffer_in->buffer()).append_to(reader_compile_time_args);
+    }
 
-    std::vector<uint32_t> writer_compile_time_args{static_cast<uint32_t>(is_dram(param_out))};
+    std::vector<uint32_t> writer_compile_time_args;
+    TensorAccessorArgs(*param_out.buffer()).append_to(writer_compile_time_args);
     if (has_momentum_buffer_out) {
-        writer_compile_time_args.push_back(static_cast<uint32_t>(is_dram(momentum_buffer_out.value())));
+        TensorAccessorArgs(*momentum_buffer_out->buffer()).append_to(writer_compile_time_args);
     }
 
     const auto reader_kernel_file =

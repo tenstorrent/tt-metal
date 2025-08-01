@@ -119,7 +119,8 @@ inline auto run_with_autoformat(
 }
 
 namespace detail {
-IDevice* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors = {});
+distributed::MeshDevice* get_device(
+    const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors = {});
 }
 
 }  // namespace operation

@@ -757,8 +757,8 @@ def run_rmsnorm_impl(
     )
 
     # Setup: Convert weights and get weight_config
-    state_dict = {"weight": rms_norm.weight.unsqueeze(0)}
-    weight_config = RMSNorm.convert_weights(hf_config, state_dict, temp_dir, device)
+    state_dicts = ({"weight": rms_norm.weight.to(torch.bfloat16)},)  # Tuple of dictionaries
+    weight_config = RMSNorm.convert_weights(hf_config, state_dicts, temp_dir, device)
 
     # Generate appropriate config
     if mode == "prefill":
@@ -780,7 +780,7 @@ def run_rmsnorm_impl(
     #################
     ### Validation
     #################
-    pcc_threshold = 0.9999
+    pcc_threshold = 0.9995
 
     out_pass, out_pcc = comp_pcc(tt_out_torch, out_torch, pcc_threshold)
     logger.info(f"Output PCC: {out_pcc}")

@@ -118,6 +118,14 @@ tt::tt_metal::operation::ProgramWithCallbacks LayerNormPostAllGather::create_pro
     auto& output_tensor = output_tensors.at(0);
 
     return layernorm_post_allgather_multi_core(
-        a, stats, gamma, beta, output_tensor, this->norm_type, this->eps, this->compute_kernel_config);
+        a,
+        stats,
+        gamma,
+        beta,
+        output_tensor,
+        this->norm_type,
+        this->eps,
+        this->compute_kernel_config,
+        this->use_2d_core_grid);
 }
 }  // namespace ttnn::operations::normalization

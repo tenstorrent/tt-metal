@@ -57,8 +57,8 @@ DeviceOperation
 DeviceStorage
 DeviceZoneScopedN
 DstMode
-DumpDeviceProfileResults
-DumpMeshDeviceProfileResults
+ReadDeviceProfilerResults
+ReadMeshDeviceProfilerResults
 ENDL
 ETH
 EltwiseUnary

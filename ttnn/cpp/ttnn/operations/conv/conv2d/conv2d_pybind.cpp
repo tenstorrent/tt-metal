@@ -37,7 +37,7 @@ void py_bind_conv2d(py::module& module) {
         :param ttnn.Tensor input_tensor:  The input tensor. This must be in the format [N, H, W, C]. It can be on host or device.
         :param ttnn.Tensor weight_tensor: The weight tensor. The weights can be passed in the same format as PyTorch, [out_channels, in_channels, kernel_height, kernel_width]. The op w
         :param ttnn.Tensor, None bias_tensor:   Optional bias tensor. Default: None
-        :param ttnn.IDevice device:  The device to use.
+        :param ttnn.MeshDevice device:  The device to use.
         :param int in_channels:  Number of input channels.
         :param int out_channels:  Number of output channels.
         :param int batch_size:  Batch size.
@@ -62,78 +62,6 @@ void py_bind_conv2d(py::module& module) {
         :rtype: [ttnn.Tensor, Tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and it's height and width, if return_weights_and_bias = True
         :rtype: [ttnn.Tensor, Tuple[int, int], Tuple[ttnn.Tensor, ttnn.Tensor]]: The output tensor, and it's height and width, if return_output_dim = True and return_weights_and_bias = True
         )doc",
-        ttnn::pybind_overload_t{
-            [](const decltype(ttnn::conv2d)& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weight_tensor,
-               ttnn::IDevice* device,
-               uint32_t in_channels,
-               uint32_t out_channels,
-               uint32_t batch_size,
-               uint32_t input_height,
-               uint32_t input_width,
-               std::array<uint32_t, 2> kernel_size,
-               std::array<uint32_t, 2> stride,
-               std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
-               std::array<uint32_t, 2> dilation,
-               uint32_t groups,
-               const std::optional<const DataType>& dtype,
-               std::optional<const ttnn::Tensor> bias_tensor,
-               const std::optional<const Conv2dConfig>& conv_config,
-               const std::optional<const DeviceComputeKernelConfig>& compute_config,
-               const std::optional<const MemoryConfig>& memory_config,
-               const std::optional<const Conv2dSliceConfig>& slice_config_,
-               bool return_output_dim,
-               bool return_weights_and_bias,
-               QueueId queue_id) -> ResultWithOptions {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    weight_tensor,
-                    device,
-                    in_channels,
-                    out_channels,
-                    batch_size,
-                    input_height,
-                    input_width,
-                    kernel_size,
-                    stride,
-                    padding,
-                    dilation,
-                    groups,
-                    dtype,
-                    bias_tensor,
-                    conv_config,
-                    compute_config,
-                    memory_config,
-                    slice_config_,
-                    return_output_dim,
-                    return_weights_and_bias);
-            },
-            py::kw_only(),
-            py::arg("input_tensor"),
-            py::arg("weight_tensor"),
-            py::arg("device"),
-            py::arg("in_channels"),
-            py::arg("out_channels"),
-            py::arg("batch_size"),
-            py::arg("input_height"),
-            py::arg("input_width"),
-            py::arg("kernel_size"),
-            py::arg("stride") = std::array<uint32_t, 2>{1, 1},
-            py::arg("padding") = std::array<uint32_t, 2>{0, 0},
-            py::arg("dilation") = std::array<uint32_t, 2>{1, 1},
-            py::arg("groups") = 1,
-            py::arg("dtype") = std::nullopt,
-            py::arg("bias_tensor") = std::nullopt,
-            py::arg("conv_config") = std::nullopt,
-            py::arg("compute_config") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("slice_config") = std::nullopt,
-            py::arg("return_output_dim") = false,
-            py::arg("return_weights_and_bias") = false,
-            py::arg("queue_id") = DefaultQueueId},
-
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv2d)& self,
                const ttnn::Tensor& input_tensor,
@@ -205,33 +133,6 @@ void py_bind_conv2d(py::module& module) {
             py::arg("return_output_dim") = false,
             py::arg("return_weights_and_bias") = false,
             py::arg("queue_id") = DefaultQueueId});
-
-    module.def(
-        "prepare_conv_weights",
-        prepare_conv_weights<ttnn::IDevice>,
-        py::kw_only(),
-        py::arg("weight_tensor"),
-        py::arg("input_memory_config"),
-        py::arg("input_layout"),
-        py::arg("weights_format"),
-        py::arg("in_channels"),
-        py::arg("out_channels"),
-        py::arg("batch_size"),
-        py::arg("input_height"),
-        py::arg("input_width"),
-        py::arg("kernel_size"),
-        py::arg("stride"),
-        py::arg("padding"),
-        py::arg("dilation"),
-        py::arg("has_bias"),
-        py::arg("groups"),
-        py::arg("device"),
-        py::arg("input_dtype"),
-        py::arg("output_dtype") = std::nullopt,
-        py::arg("conv_config") = std::nullopt,
-        py::arg("compute_config") = std::nullopt,
-        py::arg("slice_config") = std::nullopt);
-
     module.def(
         "prepare_conv_weights",
         prepare_conv_weights<ttnn::MeshDevice>,
@@ -257,29 +158,6 @@ void py_bind_conv2d(py::module& module) {
         py::arg("conv_config") = std::nullopt,
         py::arg("compute_config") = std::nullopt,
         py::arg("slice_config") = std::nullopt);
-
-    module.def(
-        "prepare_conv_bias",
-        prepare_conv_bias<ttnn::IDevice>,
-        py::kw_only(),
-        py::arg("bias_tensor"),
-        py::arg("input_memory_config"),
-        py::arg("input_layout"),
-        py::arg("in_channels"),
-        py::arg("out_channels"),
-        py::arg("batch_size"),
-        py::arg("input_height"),
-        py::arg("input_width"),
-        py::arg("kernel_size"),
-        py::arg("stride"),
-        py::arg("padding"),
-        py::arg("dilation"),
-        py::arg("groups"),
-        py::arg("device"),
-        py::arg("input_dtype"),
-        py::arg("output_dtype") = std::nullopt,
-        py::arg("conv_config") = std::nullopt,
-        py::arg("compute_config") = std::nullopt);
 
     module.def(
         "prepare_conv_bias",

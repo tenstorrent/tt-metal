@@ -223,18 +223,6 @@ Tensor _sinh(const Tensor& input_a, const std::optional<MemoryConfig>& output_me
     return ttnn::multiply(nr_term, 0.5f, std::nullopt, output_mem_config);
 }
 
-// Function: softsign
-// Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softsign.html
-Tensor _softsign(const Tensor& a, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor result = ttnn::multiply(
-        a,
-        ttnn::reciprocal(
-            ttnn::add(ttnn::abs(a, output_mem_config), 1.0f, std::nullopt, output_mem_config), output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    return result;
-}
-
 Tensor _swish(const Tensor& a, const std::optional<MemoryConfig>& output_mem_config) {
     // x / (1.0f + exp(-x))
     return ttnn::silu(a);
@@ -295,16 +283,6 @@ Tensor _normalize(const Tensor& y, const std::optional<MemoryConfig>& output_mem
     Tensor recip_std_y = ttnn::reciprocal(std_y, output_mem_config);
     Tensor z = ttnn::multiply(y_minus_mean_y, recip_std_y, std::nullopt, output_mem_config);
     return z;
-}
-
-// Function @hard_swish
-// use transformation y = x * hardsigmoid( x ) by broadcast
-// Ref: PyTorch
-// hard swish(x) = x*hardsigmoid(x,scale,shift)
-Tensor _hardswish(const Tensor& a, float value_1, float value_2, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor a_sigmoid = ttnn::hardsigmoid(a, output_mem_config);
-    Tensor result_sq = ttnn::multiply(a_sigmoid, a, std::nullopt, output_mem_config);
-    return result_sq;
 }
 
 // Function Clip

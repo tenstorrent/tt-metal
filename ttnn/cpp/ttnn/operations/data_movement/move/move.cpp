@@ -21,10 +21,7 @@ bool can_deallocate(const Tensor& input_tensor) {
         [&input_tensor](auto&& storage) {
             using T = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<T, DeviceStorage>) {
-                if (storage.mesh_buffer) {
-                    return storage.mesh_buffer.use_count() == 1;
-                }
-                return storage.buffer.use_count() == 1;
+                return storage.mesh_buffer.use_count() == 1;
             } else {
                 return false;
             }
@@ -141,7 +138,6 @@ static inline Tensor move_sharded(
         return {input_tensor};
     }
     auto shard_spec = input_tensor.shard_spec().value();
-    auto shard_shape = shard_spec.shape;
     auto shard_grid = shard_spec.grid;
     auto input_dtype = input_tensor.dtype();
     auto input_layout = input_tensor.layout();
