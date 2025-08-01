@@ -147,7 +147,7 @@ def test_topk(N, C, H, W, dim, k, dtype, sorted, largest, device, sub_core_grids
 @pytest.mark.parametrize(
     "pass_indices_tensor",
     [
-        False,
+        True,
     ],
 )
 @pytest.mark.parametrize(
