@@ -688,6 +688,15 @@ std::pair<uint32_t, std::array<uint32_t, 2>> tensor_coord_to_height_sharded_coor
     return std::make_pair(which_shard, shard_coord);
 }
 
+uint32_t get_num_pages(const ttnn::Tensor& tensor) {
+    if (tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
+        return tt::div_up(tensor.padded_shape().volume(), tensor.padded_shape()[-1]);
+    } else {
+        const auto& tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+        return tt::div_up(tensor.padded_shape().volume(), tile_shape[0] * tile_shape[1]);
+    }
+}
+
 }  // namespace data_movement
 }  // namespace operations
 }  // namespace ttnn
