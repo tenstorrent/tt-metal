@@ -50,7 +50,7 @@ auto get_tt_l1_ptr_based_on_data_format(const uint32_t addr) {
         // We need a value-dependent expression (gcc-12) that is not
         // tautologically false (gcc-15)
         static_assert(
-            data_format != DataFormat::Float16_b, "Unsupported data format in get_tt_l1_ptr_based_on_data_format");
+            data_format == DataFormat::Float16_b, "Unsupported data format in get_tt_l1_ptr_based_on_data_format");
     }
 }
 
@@ -89,7 +89,7 @@ auto get_default_value() {
     } else {
         // We need a value-dependent expression (gcc-12) that is not
         // tautologically false (gcc-15)
-        static_assert(data_format != DataFormat::Float16_b, "Unsupported data format");
+        static_assert(data_format == DataFormat::Float16_b, "Unsupported data format");
     }
 }
 
@@ -188,7 +188,7 @@ void compare_values(
     } else {
         // We need a value-dependent expression (gcc-12) that is not
         // tautologically false (gcc-15)
-        static_assert(data_format != DataFormat::Float16_b, "Unsupported data format in compare_values");
+        static_assert(data_format == DataFormat::Float16_b, "Unsupported data format in compare_values");
     }
 }
 

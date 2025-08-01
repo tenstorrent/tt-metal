@@ -98,7 +98,7 @@ inline void find_argmax_for_core(
             } else {
                 // We need a value-dependent expression (gcc-12) that is not
                 // tautologically false (gcc-15)
-                static_assert(data_format != DataFormat::Float16_b, "Unsupported data format in find_argmax_for_core");
+                static_assert(data_format == DataFormat::Float16_b, "Unsupported data format in find_argmax_for_core");
             }
         }
 
@@ -196,7 +196,7 @@ inline uint32_t find_argmax_from_intermediate_outputs(
             // We need a value-dependent expression (gcc-12) that is not
             // tautologically false (gcc-15)
             static_assert(
-                data_format != DataFormat::Float16_b,
+                data_format == DataFormat::Float16_b,
                 "Unsupported data format in find_argmax_from_intermediate_outputs");
         }
     }
