@@ -55,11 +55,11 @@ int main() {
 
         // Run 1
         RunCustomCycle(device, PROFILER_OP_SUPPORT_COUNT);
-        tt_metal::detail::DumpDeviceProfileResults(device);
+        tt_metal::detail::ReadDeviceProfilerResults(device);
 
         // Run 2
         RunCustomCycle(device, PROFILER_OP_SUPPORT_COUNT);
-        tt_metal::detail::DumpDeviceProfileResults(device);
+        tt_metal::detail::ReadDeviceProfilerResults(device);
 
         pass &= tt_metal::CloseDevice(device);
 
