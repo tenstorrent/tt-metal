@@ -182,30 +182,6 @@ def test_fun_conv2d(
         out = torch_model(inp)
 
     tt_out = vae_conv2d(tt_inp, parameters)
-    """
-    [tt_final_out, tt_out_] = vae_conv2d(tt_inp, parameters)
-    torch_final=None
-    for idx in range(4):
-        logger.info(f" Current index: {idx}..................................")
-        tt_out = ttnn.get_device_tensors(tt_out_)[idx]
-
-        tt_out_torch = to_torch(tt_out).permute(0, 3, 1, 2)
-        start = 32*idx
-        torch_sharded = torch.nn.functional.conv2d(inp[:,start:start+32,:,:], torch_model.weight[:,start:start+32,:,:],torch_model.bias, stride=1, padding=1, dilation=1, groups=1)
-        if torch_final is None:
-            torch_final = tt_out_torch
-        else:
-            torch_final = torch_final + tt_out_torch
-
-        #logger.info(print_stats("torch", out))
-        #logger.info(print_stats("tt", tt_out_torch, device=device))
-        #logger.info(print_stats("t_sharded", torch_sharded, device=device))
-        #assert_quality(tt_out_torch, torch_sharded, pcc=0.94, ccc=0.94)
-        #logger.info(comp_allclose(out, tt_out_torch))
-        #result, output = comp_pcc(out, tt_out_torch)
-        #logger.info(f"Comparison result Pass:{result}, Output {output}, in: {torch.count_nonzero(tt_out_torch)}")
-
-    """
 
     if mesh_sharded_output:
         tt_out = gn_all_gather(tt_out, parallel_manager.vae_parallel_config)

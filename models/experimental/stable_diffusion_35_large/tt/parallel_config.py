@@ -31,6 +31,22 @@ class VAEParallelConfig(NamedTuple):
     reduce_from_semaphore: ttnn._ttnn.global_semaphore.global_sempahore  # for reduce_from
     reduce_to_semaphore: ttnn._ttnn.global_semaphore.global_sempahore  # for reduce_to
 
+    def vae_all_gather(self, x: ttnn.Tensor, sync_device: bool = True) -> ttnn.Tensor:
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)  # All gather requires tile layout
+        x_g = ttnn.experimental.all_gather_async(
+            input_tensor=x,
+            dim=3,
+            multi_device_global_semaphore=self.new_gather_handles,
+            topology=ttnn.Topology.Linear,
+            mesh_device=self.device,
+            cluster_axis=1,
+            num_links=1,
+        )
+        if sync_device:
+            ttnn.synchronize_device(self.device)
+        return x_g
+
 
 def create_vae_parallel_config(
     vae_device: ttnn.MeshDevice,
