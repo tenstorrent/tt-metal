@@ -215,9 +215,6 @@ constexpr auto softshrink = ttnn::register_operation<
 constexpr auto logit = ttnn::register_operation<
     "ttnn::logit",
     operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::LOGIT>>();
-constexpr auto celu = ttnn::register_operation<
-    "ttnn::celu",
-    operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::CELU>>();
 constexpr auto tril = ttnn::register_operation<
     "ttnn::tril",
     operations::unary::ExecuteUnaryCompositeOpWithInt<operations::unary::UnaryCompositeOpType::TRIL>>();

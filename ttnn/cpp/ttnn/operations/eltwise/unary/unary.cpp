@@ -211,6 +211,7 @@ template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_NE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_EQ>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LE>;
+template struct ExecuteUnaryWithFloatParameter<UnaryOpType::CELU>;
 
 template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MINIMUM>::invoke<float>(
     QueueId, const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);
