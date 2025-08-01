@@ -1040,24 +1040,25 @@ def test_demo_text(
             step_warm_up_num_iterations=None,
             target=None,
         )
-        benchmark_data.add_measurement(
-            profiler,
-            0,
-            "inference_decode",
-            "top1_token_accuracy",
-            acc[0] * 100,
-            step_warm_up_num_iterations=None,
-            target=None,
-        )
-        benchmark_data.add_measurement(
-            profiler,
-            0,
-            "inference_decode",
-            "top5_token_accuracy",
-            acc[1] * 100,
-            step_warm_up_num_iterations=None,
-            target=None,
-        )
+        if token_accuracy:
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                "inference_decode",
+                "top1_token_accuracy",
+                acc[0] * 100,
+                step_warm_up_num_iterations=None,
+                target=None,
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                "inference_decode",
+                "top5_token_accuracy",
+                acc[1] * 100,
+                step_warm_up_num_iterations=None,
+                target=None,
+            )
         benchmark_data.save_partial_run_json(
             profiler,
             run_type=f"{tt_device_name}-demo",
