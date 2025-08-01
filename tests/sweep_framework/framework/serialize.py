@@ -4,7 +4,92 @@
 
 from ttnn import *
 import json
+import importlib
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
+
+
+# Whitelist of allowed modules and types for secure deserialization
+ALLOWED_MODULES = {
+    "ttnn",
+    "ttnn.types",
+    "ttnn.tensor",
+    "ttnn.operations",
+    "ttnn.core",
+    "ttnn.device",
+    "ttnn.layout",
+    "ttnn.memory_config",
+    # Add other trusted modules as needed
+}
+
+ALLOWED_TYPES = {
+    # Built-in safe types
+    "int",
+    "float",
+    "str",
+    "bool",
+    "list",
+    "dict",
+    "tuple",
+    # TTNN specific types that might appear without module prefix
+    "DataType",
+    "Layout",
+    "MemoryConfig",
+    "BufferType",
+    "TensorMemoryLayout",
+    "ShardSpec",
+    "CoreRangeSet",
+    "CoreRange",
+    "CoreCoord",
+    "ShardOrientation",
+}
+
+
+def safe_get_type(type_string):
+    """
+    Safely get a type from a string without using eval().
+    Only allows whitelisted modules and types.
+    """
+    try:
+        # Handle built-in types
+        if type_string in ALLOWED_TYPES:
+            return eval(type_string)  # Safe for built-in types
+
+        # Handle module.ClassName format
+        if "." in type_string:
+            module_path, class_name = type_string.rsplit(".", 1)
+
+            # Check if module is in whitelist
+            root_module = module_path.split(".")[0]
+            if root_module not in ALLOWED_MODULES:
+                raise ValueError(f"Module {root_module} not in whitelist")
+
+            # Import module and get class
+            module = importlib.import_module(module_path)
+            return getattr(module, class_name)
+        else:
+            # Single name, check if it's an allowed type
+            if type_string in ALLOWED_TYPES:
+                return eval(type_string)  # Safe for whitelisted types
+            else:
+                raise ValueError(f"Type {type_string} not in whitelist")
+    except (ImportError, AttributeError, ValueError) as e:
+        logger.error(f"Failed to safely get type {type_string}: {e}")
+        raise ValueError(f"Invalid or disallowed type: {type_string}")
+
+
+def safe_eval_literal(value_string):
+    """
+    Safely evaluate string literals without arbitrary code execution.
+    Only handles basic Python literals.
+    """
+    import ast
+
+    try:
+        # ast.literal_eval only evaluates literals, not arbitrary expressions
+        return ast.literal_eval(value_string)
+    except (ValueError, SyntaxError):
+        # If it's not a valid literal, return as string
+        return value_string
 
 
 def convert_enum_values_to_strings(data):
@@ -53,11 +138,11 @@ def serialize(object, warnings=[]):
 
 def deserialize(object):
     if isinstance(object, dict):
-        type = eval(object["type"])
-        return type.from_json(object["data"])
+        type_cls = safe_get_type(object["type"])
+        return type_cls.from_json(object["data"])
     else:
         try:
-            return eval(object)
+            return safe_eval_literal(object)
         except:
             return str(object)
 
@@ -86,17 +171,17 @@ def serialize_for_postgres(object, warnings=[]):
 
 def deserialize_for_postgres(object):
     if isinstance(object, dict):
-        type = eval(object["type"])
+        type_cls = safe_get_type(object["type"])
         data = object["data"]
         # If data is a dict/object, convert it back to JSON string for from_json method
         if isinstance(data, (dict, list)):
             # Convert string enum values back to integers for from_json
             data = convert_enum_strings_to_values(data)
             data = json.dumps(data)
-        return type.from_json(data)
+        return type_cls.from_json(data)
     else:
         try:
-            return eval(object)
+            return safe_eval_literal(object)
         except:
             return str(object)
 
