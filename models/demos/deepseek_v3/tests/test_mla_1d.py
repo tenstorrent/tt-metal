@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from random import randint
 
 import pytest
@@ -141,7 +142,7 @@ def get_cache_on_host(tt_cache: ttnn.Tensor, row_idx: int, mesh_device: ttnn.Mes
     select_devices = slice(row_idx * mesh_shape[1], (row_idx + 1) * mesh_shape[1])
 
     host_cache = []
-    for i, t in enumerate(ttnn.get_device_tensors(tt_cache)[select_devices]):  # Only get from first row of mesh_device
+    for i, t in enumerate(ttnn.get_device_tensors(tt_cache)[select_devices]):
         host_t = t.cpu().to_torch()
         host_cache.append(host_t)
     host_cache = torch.concat(host_cache, dim=0)
@@ -154,6 +155,7 @@ def get_cache_on_host(tt_cache: ttnn.Tensor, row_idx: int, mesh_device: ttnn.Mes
     [
         ("decode", 1, 32),
         ("prefill", 128, 1),
+        ("prefill", 2048, 1),
     ],
 )
 @pytest.mark.parametrize(
@@ -179,6 +181,10 @@ def test_forward_pass(
     tmp_path,
     mesh_device,
 ):
+    # Hang workaround for large shapes
+    if seq_len > 1024:
+        os.environ["TT_MM_THROTTLE_PERF"] = "5"
+
     hf_config = hf_config_short
     mesh_shape = list(mesh_device.shape)
 
@@ -242,11 +248,9 @@ def test_forward_pass(
     if mode == "decode":
         # TT Shape: [1, seq_len, batch_size, hidden_size]
         torch_input = torch_input.permute(1, 0, 2)
-    torch_input = torch_input.unsqueeze(0)
 
-    # TODO: Need to handle padding for batch
     tt_input = ttnn.from_torch(
-        torch_input,
+        torch_input.unsqueeze(0),
         device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=mesh_shape),
         dtype=ttnn.bfloat16,
@@ -254,7 +258,6 @@ def test_forward_pass(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    tt_page_table, page_table = None, None
     tt_page_table, page_table = MLA1D.create_page_table(
         MLA1D.MAX_BATCH_SIZE,
         dp_factor=dp_factor,
@@ -370,7 +373,7 @@ def test_forward_pass(
 
         all_passing = all_passing and kv_passing and pe_passing
 
-        # Check the rest of the cache is empty
+        # Check if the rest of the cache is empty
         row_idxs = list(range(mesh_shape[0]))
         row_idxs.remove(cur_row_idx)
 

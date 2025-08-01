@@ -90,8 +90,8 @@ class MLA1D(AbstractModule):
 
         def convert_linear_weight(
             hf_name: str | None,
-            shape: tuple[int, ...] | None,
-            mesh_dims: tuple[int, ...],
+            shape: tuple[int] | None,
+            mesh_dims: tuple[int],
             dtype: ttnn.DataType = ttnn.bfloat8_b,
             mem_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
             layout: ttnn.Layout = ttnn.TILE_LAYOUT,
@@ -1119,9 +1119,7 @@ class MLA1D(AbstractModule):
         page_table: ttnn.Tensor,
         row_idx: int,
     ) -> ttnn.Tensor:
-        """Forward pass of the MLP.
-
-        Prefill mode we reshape to respect cfg["max_rows"] and generate program configs from the seq-len lambda.
+        """Forward pass of MLA1D in prefill mode.
 
         Args:
             x: Input tensor
