@@ -58,7 +58,7 @@ def test_embedding_forward_pass(
         reference_output = reference_model(torch_input)
     else:
         state_dict = load_state_dict(model_path, module_path)
-        torch_input, reference_output = load_reference_io_tensors_for_module(mode, module_path, seq_len)
+        torch_input, reference_output = load_reference_io_tensors_for_module(mode, module_path, seq_len, 1)
         torch_input.unsqueeze_(0)
         reference_output.unsqueeze_(0)
 

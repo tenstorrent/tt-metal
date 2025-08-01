@@ -201,7 +201,7 @@ def test_forward_pass(
     weight_config = MLA1D.convert_weights(hf_config, state_dicts, tmp_path, mesh_device)
 
     # Generate appropriate configs
-    ccl = CCL1D(hf_config, mesh_device)
+    ccl = CCL1D(mesh_row)
     if mode == "prefill":
         model_config = MLA1D.prefill_model_config(hf_config, mesh_device)
     else:
