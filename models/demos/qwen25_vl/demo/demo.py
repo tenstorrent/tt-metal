@@ -422,8 +422,6 @@ def test_demo(
         profiler.end(f"compile_prefill", iteration=batch_idx)
         logger.info("Finished prefill warmup")
 
-        logger.info("KV cache reset after warmup to prevent interference between users")
-
         logger.info(f"Starting prefill...")
         profiler.start(f"inference_prefill", iteration=batch_idx)
         logits = generator.prefill_forward_text(
@@ -572,6 +570,7 @@ def test_demo(
         profiler.end(f"inference_decode", iteration=batch_idx)
 
         # when doing repeating batches, set kv-caches to zero, to avoid context leaking
+        logger.info("KV cache reset after warmup to prevent interference between users")
         if batch_idx != 0:
             for layer in model.layers:
                 k_cache, v_cache = layer.attention.layer_past
