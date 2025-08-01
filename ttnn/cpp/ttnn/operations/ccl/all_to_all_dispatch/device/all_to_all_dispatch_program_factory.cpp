@@ -438,7 +438,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
                 reader_runtime_args[7]);
             tt::tt_fabric::append_fabric_connection_rt_args(
                 src_fabric_node_id,
-                mesh_device->get_device_fabric_node_id(neighbor_coordinate),
+                mesh_device->get_fabric_node_id(neighbor_coordinate),
                 link_id,
                 program,
                 sender_cores.at(i),
