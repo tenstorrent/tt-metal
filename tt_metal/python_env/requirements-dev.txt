@@ -39,7 +39,7 @@ transformers == 4.53.0
 huggingface-hub >= 0.30.0
 
 # For PostgreSQL database connectivity
-psycopg-binary
+psycopg-binary == 3.2.9
 
 # testing
 pytest==7.2.2
