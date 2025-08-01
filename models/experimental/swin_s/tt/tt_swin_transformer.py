@@ -87,11 +87,11 @@ class TtSwinTransformer:
             if i_stage % 2 == 0:
                 for j in range(len(self.layers[i_stage])):
                     output_tensor = self.layers[i_stage][j](output_tensor)
-                ttnn.DumpDeviceProfiler(self.device)
+                ttnn.ReadDeviceProfiler(self.device)
             else:
                 output_tensor = self.layers[i_stage](output_tensor)
 
-        ttnn.DumpDeviceProfiler(self.device)
+        ttnn.ReadDeviceProfiler(self.device)
         if self.norm_layer is None:
             output_tensor = ttnn.layer_norm(
                 output_tensor,

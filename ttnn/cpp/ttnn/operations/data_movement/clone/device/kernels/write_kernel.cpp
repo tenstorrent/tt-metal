@@ -10,13 +10,9 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(2);
 
     constexpr uint32_t dst_cb_id = get_compile_time_arg_val(0);
-    constexpr bool output_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr auto dst_args = TensorAccessorArgs<1>();
 
-    const InterleavedAddrGenFast<output_is_dram> s = {
-        .bank_base_address = output_buffer_address,
-        .page_size = get_tile_size(dst_cb_id),
-        .data_format = get_dataformat(dst_cb_id),
-    };
+    const auto s = TensorAccessor(dst_args, output_buffer_address, get_tile_size(dst_cb_id));
 
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {

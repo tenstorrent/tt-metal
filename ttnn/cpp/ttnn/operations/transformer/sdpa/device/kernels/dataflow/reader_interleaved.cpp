@@ -238,7 +238,7 @@ void kernel_main() {
                     if constexpr (is_chunked) {
                         // Use page table to read V chunk
                         const uint32_t k_chunk_start_row_num = k_chunk * Sk_chunk_t;
-                        read_paged_chunk_with_padding<NKH, block_size_t, vDHt>(
+                        read_paged_chunk_with_padding<NKH, block_size_t, DHt>(
                             v_reader,
                             cb_v_in,
                             kv_head,
