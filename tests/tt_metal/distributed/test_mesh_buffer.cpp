@@ -452,7 +452,8 @@ TEST_F(MeshBufferTestSuite, DistributedHostBufferReadWriteWithFloat32ToBfloat16C
                     });
                 }
             }
-            mesh_device_->mesh_command_queue().enqueue_write_with_conversion(buf, DataFormat::Float16_b, host_buffer, DataFormat::Float32, false);
+            mesh_device_->mesh_command_queue().enqueue_write_with_conversion(
+                buf, DataFormat::Float16_b, host_buffer, DataFormat::Float32, false);
             // Generate golden vector
             std::vector<bfloat16> golden_vec(num_random_tiles * single_tile_size / sizeof(uint16_t), 0);
             std::transform(src_vec.begin(), src_vec.end(), golden_vec.begin(), [](float f) { return bfloat16(f); });
@@ -633,7 +634,6 @@ TEST_F(MeshBufferTestSuite, RowMajorShardingAndReplicationWithFloat32ToBfloat16C
         EXPECT_EQ(dst_vec, golden_vec_uint16);
     }
 }
-
 
 TEST_F(MeshBufferTestSuite, ColMajorShardingAndReplication) {
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);

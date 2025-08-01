@@ -313,11 +313,16 @@ void MeshCommandQueueBase::enqueue_write_shards_with_conversion(
     this->enqueue_write_shards_nolock(mesh_buffer, data_format, shard_data_transfers, src_data_format, blocking);
 }
 
-static BufferRegion buffer_region_from_host_buffer(const HostBuffer& host_buffer, tt::DataFormat data_format, tt::DataFormat src_data_format) {
+static BufferRegion buffer_region_from_host_buffer(
+    const HostBuffer& host_buffer, tt::DataFormat data_format, tt::DataFormat src_data_format) {
     size_t src_element_size = datum_size(src_data_format);
     size_t dst_element_size = datum_size(data_format);
     size_t src_size = host_buffer.view_bytes().size();
-    TT_FATAL(src_size % src_element_size == 0, "Source size {} must be a multiple of source element size {}", src_size, src_element_size);
+    TT_FATAL(
+        src_size % src_element_size == 0,
+        "Source size {} must be a multiple of source element size {}",
+        src_size,
+        src_element_size);
     return BufferRegion(0, src_size * dst_element_size / src_element_size);
 }
 
