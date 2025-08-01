@@ -52,6 +52,8 @@ enum class HalL1MemAddrType : uint8_t {
     INTERMESH_ETH_LINK_STATUS,
     TENSIX_ROUTING_TABLE,
     TENSIX_FABRIC_CONNECTIONS,
+    FABRIC_LITE_CONFIG,
+    LOCAL_L1_INIT_SCRATCH,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 
