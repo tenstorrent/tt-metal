@@ -91,13 +91,13 @@ protected:
 class MeshTraceTest2x4 : public MeshDeviceFixtureBase {
 protected:
     MeshTraceTest2x4() :
-        MeshDeviceFixtureBase(Config{.system_mesh_shape = MeshShape{2, 4}, .trace_region_size = (64 << 20)}) {}
+        MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{2, 4}, .trace_region_size = (64 << 20)}) {}
 };
 
 class MeshTraceTest4x8 : public MeshDeviceFixtureBase {
 protected:
     MeshTraceTest4x8() :
-        MeshDeviceFixtureBase(Config{.system_mesh_shape = MeshShape{4, 8}, .trace_region_size = (64 << 20)}) {}
+        MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{4, 8}, .trace_region_size = (64 << 20)}) {}
 };
 
 TEST_F(MeshTraceTestSuite, Sanity) {
