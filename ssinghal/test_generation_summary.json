@@ -1,0 +1,259 @@
+{
+  "generated_tests": [
+    {
+      "operator": "softplus",
+      "file": "ssinghal/tests/test_softplus.py",
+      "occurrences": 72,
+      "unique_shapes": 11
+    },
+    {
+      "operator": "tanh",
+      "file": "ssinghal/tests/test_tanh.py",
+      "occurrences": 72,
+      "unique_shapes": 11
+    },
+    {
+      "operator": "Mish",
+      "file": "ssinghal/tests/test_mish.py",
+      "occurrences": 72,
+      "unique_shapes": 11
+    },
+    {
+      "operator": "add",
+      "file": "ssinghal/tests/test_add.py",
+      "occurrences": 680,
+      "unique_shapes": 89
+    },
+    {
+      "operator": "cat",
+      "file": "ssinghal/tests/test_cat.py",
+      "occurrences": 112,
+      "unique_shapes": 50
+    },
+    {
+      "operator": "leakyrelu",
+      "file": "ssinghal/tests/test_leakyrelu.py",
+      "occurrences": 35,
+      "unique_shapes": 8
+    },
+    {
+      "operator": "MaxPool2d",
+      "file": "ssinghal/tests/test_maxpool2d.py",
+      "occurrences": 30,
+      "unique_shapes": 13
+    },
+    {
+      "operator": "SiLU",
+      "file": "ssinghal/tests/test_silu.py",
+      "occurrences": 101,
+      "unique_shapes": 16
+    },
+    {
+      "operator": "Concat",
+      "file": "ssinghal/tests/test_concat.py",
+      "occurrences": 35,
+      "unique_shapes": 16
+    },
+    {
+      "operator": "view",
+      "file": "ssinghal/tests/test_view.py",
+      "occurrences": 1347,
+      "unique_shapes": 210
+    },
+    {
+      "operator": "permute",
+      "file": "ssinghal/tests/test_permute.py",
+      "occurrences": 393,
+      "unique_shapes": 97
+    },
+    {
+      "operator": "clone",
+      "file": "ssinghal/tests/test_clone.py",
+      "occurrences": 368,
+      "unique_shapes": 63
+    },
+    {
+      "operator": "sigmoid",
+      "file": "ssinghal/tests/test_sigmoid.py",
+      "occurrences": 305,
+      "unique_shapes": 27
+    },
+    {
+      "operator": "copy",
+      "file": "ssinghal/tests/test_copy.py",
+      "occurrences": 6,
+      "unique_shapes": 3
+    },
+    {
+      "operator": "silu",
+      "file": "ssinghal/tests/test_silu.py",
+      "occurrences": 616,
+      "unique_shapes": 79
+    },
+    {
+      "operator": "splitwithsizes",
+      "file": "ssinghal/tests/test_splitwithsizes.py",
+      "occurrences": 21,
+      "unique_shapes": 6
+    },
+    {
+      "operator": "softmax",
+      "file": "ssinghal/tests/test_softmax.py",
+      "occurrences": 19,
+      "unique_shapes": 6
+    },
+    {
+      "operator": "unsqueeze",
+      "file": "ssinghal/tests/test_unsqueeze.py",
+      "occurrences": 29,
+      "unique_shapes": 20
+    },
+    {
+      "operator": "bmm",
+      "file": "ssinghal/tests/test_bmm.py",
+      "occurrences": 122,
+      "unique_shapes": 52
+    },
+    {
+      "operator": "addmm",
+      "file": "ssinghal/tests/test_addmm.py",
+      "occurrences": 299,
+      "unique_shapes": 29
+    },
+    {
+      "operator": "Linear",
+      "file": "ssinghal/tests/test_linear.py",
+      "occurrences": 431,
+      "unique_shapes": 43
+    },
+    {
+      "operator": "linalgvectornorm",
+      "file": "ssinghal/tests/test_linalgvectornorm.py",
+      "occurrences": 51,
+      "unique_shapes": 7
+    },
+    {
+      "operator": "clampmin",
+      "file": "ssinghal/tests/test_clampmin.py",
+      "occurrences": 51,
+      "unique_shapes": 7
+    },
+    {
+      "operator": "expand",
+      "file": "ssinghal/tests/test_expand.py",
+      "occurrences": 311,
+      "unique_shapes": 56
+    },
+    {
+      "operator": "unsafeview",
+      "file": "ssinghal/tests/test_unsafeview.py",
+      "occurrences": 509,
+      "unique_shapes": 69
+    },
+    {
+      "operator": "relu",
+      "file": "ssinghal/tests/test_relu.py",
+      "occurrences": 185,
+      "unique_shapes": 25
+    },
+    {
+      "operator": "Dropout",
+      "file": "ssinghal/tests/test_dropout.py",
+      "occurrences": 66,
+      "unique_shapes": 17
+    },
+    {
+      "operator": "GELU",
+      "file": "ssinghal/tests/test_gelu.py",
+      "occurrences": 1,
+      "unique_shapes": 1
+    },
+    {
+      "operator": "Identity",
+      "file": "ssinghal/tests/test_identity.py",
+      "occurrences": 5,
+      "unique_shapes": 4
+    },
+    {
+      "operator": "topk",
+      "file": "ssinghal/tests/test_topk.py",
+      "occurrences": 1,
+      "unique_shapes": 1
+    },
+    {
+      "operator": "transpose",
+      "file": "ssinghal/tests/test_transpose.py",
+      "occurrences": 36,
+      "unique_shapes": 6
+    },
+    {
+      "operator": "div",
+      "file": "ssinghal/tests/test_div.py",
+      "occurrences": 1,
+      "unique_shapes": 1
+    },
+    {
+      "operator": "mul",
+      "file": "ssinghal/tests/test_mul.py",
+      "occurrences": 35,
+      "unique_shapes": 16
+    },
+    {
+      "operator": "clamp",
+      "file": "ssinghal/tests/test_clamp.py",
+      "occurrences": 3,
+      "unique_shapes": 1
+    },
+    {
+      "operator": "log",
+      "file": "ssinghal/tests/test_log.py",
+      "occurrences": 1,
+      "unique_shapes": 1
+    },
+    {
+      "operator": "stack",
+      "file": "ssinghal/tests/test_stack.py",
+      "occurrences": 1,
+      "unique_shapes": 1
+    },
+    {
+      "operator": "mean",
+      "file": "ssinghal/tests/test_mean.py",
+      "occurrences": 5,
+      "unique_shapes": 1
+    },
+    {
+      "operator": "hardtanh",
+      "file": "ssinghal/tests/test_hardtanh.py",
+      "occurrences": 35,
+      "unique_shapes": 12
+    },
+    {
+      "operator": "Sigmoid",
+      "file": "ssinghal/tests/test_sigmoid.py",
+      "occurrences": 75,
+      "unique_shapes": 21
+    },
+    {
+      "operator": "ReLU",
+      "file": "ssinghal/tests/test_relu.py",
+      "occurrences": 1,
+      "unique_shapes": 1
+    },
+    {
+      "operator": "GELUActivation",
+      "file": "ssinghal/tests/test_geluactivation.py",
+      "occurrences": 56,
+      "unique_shapes": 8
+    },
+    {
+      "operator": "mm",
+      "file": "ssinghal/tests/test_mm.py",
+      "occurrences": 22,
+      "unique_shapes": 10
+    }
+  ],
+  "skipped_tests": [],
+  "total_generated": 42,
+  "total_skipped": 0
+}

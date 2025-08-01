@@ -1,0 +1,3095 @@
+{
+  "summary_statistics": {
+    "total_operators_tested": 5,
+    "total_tests_run": 496,
+    "total_passed": 338,
+    "total_failed": 117,
+    "total_skipped": 41,
+    "operators_with_oom": 0,
+    "operators_with_type_errors": 0,
+    "operators_with_other_failures": 1
+  },
+  "detailed_results": {
+    "add": {
+      "operator": "add",
+      "status": "completed",
+      "total_tests": 89,
+      "passed": 84,
+      "failed": 0,
+      "skipped": 5,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": [
+        {
+          "input_shape": "input_shape1",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape2",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape3",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape4",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape5",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape6",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape7",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape8",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape9",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape10",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape11",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape12",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape13",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape14",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape15",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape16",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape17",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape18",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape19",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape20",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape21",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape22",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape23",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape24",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape25",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape26",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape27",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape28",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape29",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape30",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape31",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape32",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape33",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape34",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape35",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape36",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape37",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape38",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape39",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape40",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape41",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape43",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape44",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape45",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape46",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape47",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape48",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape49",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape50",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape51",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape52",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape53",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape54",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape55",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape56",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape57",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape58",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape59",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape60",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape61",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape62",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape63",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape65",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape68",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape69",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape70",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape71",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape72",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape73",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape74",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape75",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape76",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape77",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape78",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape79",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape80",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape81",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape82",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape83",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape84",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape85",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape86",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape87",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape88",
+          "status": "passed",
+          "reason": null
+        }
+      ]
+    },
+    "silu": {
+      "operator": "silu",
+      "status": "completed",
+      "total_tests": 79,
+      "passed": 76,
+      "failed": 0,
+      "skipped": 3,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": [
+        {
+          "input_shape": "input_shape1",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape2",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape3",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape4",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape5",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape6",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape7",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape8",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape9",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape10",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape11",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape12",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape13",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape14",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape15",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape16",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape17",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape18",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape19",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape20",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape21",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape22",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape23",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape24",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape25",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape26",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape27",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape28",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape29",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape30",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape31",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape33",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape34",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape35",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape36",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape37",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape38",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape39",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape40",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape41",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape42",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape43",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape44",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape45",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape46",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape47",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape48",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape49",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape50",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape52",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape53",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape54",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape55",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape56",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape57",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape58",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape59",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape60",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape61",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape62",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape63",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape64",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape65",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape66",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape67",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape68",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape69",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape70",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape71",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape72",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape73",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape74",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape75",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape76",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape77",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape78",
+          "status": "passed",
+          "reason": null
+        }
+      ]
+    },
+    "relu": {
+      "operator": "relu",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "sigmoid": {
+      "operator": "sigmoid",
+      "status": "completed",
+      "total_tests": 21,
+      "passed": 20,
+      "failed": 0,
+      "skipped": 1,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": [
+        {
+          "input_shape": "input_shape0",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape1",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape2",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape3",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape4",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape5",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape6",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape7",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape8",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape9",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape10",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape11",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape12",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape13",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape14",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape15",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape16",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape17",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape18",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape19",
+          "status": "passed",
+          "reason": null
+        }
+      ]
+    },
+    "view": {
+      "operator": "view",
+      "status": "completed",
+      "total_tests": 210,
+      "passed": 72,
+      "failed": 117,
+      "skipped": 21,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [
+        {
+          "input_shape": "input_shape0",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape1",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape2",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape6",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape7",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape8",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape11",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape15",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape19",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape29",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape35",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape49",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape50",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape51",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape52",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape56",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape58",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape59",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape64",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape65",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape74",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape75",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape76",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape80",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape85",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape93",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape95",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape104",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape107",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape110",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape112",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape114",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape116",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape119",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape120",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape121",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape123",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape125",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape127",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape128",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape130",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape131",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape132",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape141",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape143",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape145",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape148",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape152",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape155",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape157",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape159",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape160",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape165",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape167",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape169",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape170",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape175",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape183",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape185",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape187",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape188",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape191",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape192",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape194",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape196",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape197",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape200",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape201",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape203",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape205",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape206",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape209",
+          "status": "failed",
+          "reason": "other_failure"
+        }
+      ],
+      "test_details": [
+        {
+          "input_shape": "input_shape3",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape4",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape5",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape9",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape10",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape13",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape17",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape20",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape21",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape22",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape23",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape24",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape25",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape26",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape27",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape28",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape30",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape31",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape32",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape33",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape34",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape36",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape38",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape39",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape43",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape44",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape45",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape46",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape47",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape53",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape54",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape55",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape57",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape60",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape61",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape62",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape63",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape66",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape67",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape68",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape69",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape70",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape71",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape72",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape73",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape77",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape78",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape79",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape81",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape82",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape83",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape84",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape86",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape87",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape88",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape89",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape90",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape91",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape92",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape94",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape96",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape97",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape98",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape100",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape103",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape105",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape106",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape108",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape109",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape113",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape115",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape117",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape118",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape124",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape126",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape129",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape133",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape135",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape138",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape139",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape140",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape142",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape144",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape146",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape149",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape150",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape151",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape153",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape154",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape156",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape158",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape161",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape162",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape163",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape164",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape166",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape168",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape171",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape172",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape173",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape174",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape176",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape178",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape181",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape182",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape184",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape186",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape189",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape190",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape193",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape195",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape198",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape199",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape202",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape204",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape207",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape208",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape0",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape1",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape2",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape6",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape7",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape8",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape11",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape15",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape19",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape29",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape35",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape49",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape50",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape51",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape52",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape56",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape58",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape59",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape64",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape65",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape74",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape75",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape76",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape80",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape85",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape93",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape95",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape104",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape107",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape110",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape112",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape114",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape116",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape119",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape120",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape121",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape123",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape125",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape127",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape128",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape130",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape131",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape132",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape141",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape143",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape145",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape148",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape152",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape155",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape157",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape159",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape160",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape165",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape167",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape169",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape170",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape175",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape183",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape185",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape187",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape188",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape191",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape192",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape194",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape196",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape197",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape200",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape201",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape203",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape205",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape206",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape209",
+          "status": "failed",
+          "reason": "other_failure"
+        }
+      ]
+    },
+    "permute": {
+      "operator": "permute",
+      "status": "completed",
+      "total_tests": 97,
+      "passed": 86,
+      "failed": 0,
+      "skipped": 11,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": [
+        {
+          "input_shape": "input_shape0",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape1",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape2",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape3",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape4",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape6",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape7",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape9",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape10",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape11",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape12",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape13",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape14",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape15",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape16",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape17",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape18",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape19",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape20",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape21",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape22",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape25",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape26",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape27",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape28",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape29",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape31",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape32",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape33",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape34",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape35",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape36",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape37",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape38",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape39",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape40",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape41",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape42",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape43",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape44",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape45",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape48",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape49",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape50",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape51",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape52",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape53",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape54",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape55",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape56",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape57",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape58",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape59",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape60",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape61",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape62",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape63",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape64",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape65",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape68",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape69",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape70",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape71",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape72",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape73",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape74",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape75",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape76",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape77",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape78",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape79",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape80",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape81",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape84",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape85",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape86",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape87",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape88",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape89",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape90",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape91",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape92",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape93",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape94",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape95",
+          "status": "passed",
+          "reason": null
+        },
+        {
+          "input_shape": "input_shape96",
+          "status": "passed",
+          "reason": null
+        }
+      ]
+    }
+  },
+  "failure_analysis": {
+    "oom_failures": {},
+    "type_errors": {},
+    "other_failures": {
+      "view": [
+        {
+          "input_shape": "input_shape0",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape1",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape2",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape6",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape7",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape8",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape11",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape15",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape19",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape29",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape35",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape49",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape50",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape51",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape52",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape56",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape58",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape59",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape64",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape65",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape74",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape75",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape76",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape80",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape85",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape93",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape95",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape104",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape107",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape110",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape112",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape114",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape116",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape119",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape120",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape121",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape123",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape125",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape127",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape128",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape130",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape131",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape132",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape141",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape143",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape145",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape148",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape152",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape155",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape157",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape159",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape160",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape165",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape167",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape169",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape170",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape175",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape183",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape185",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape187",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape188",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape191",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape192",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape194",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape196",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape197",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape200",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape201",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape203",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape205",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape206",
+          "status": "failed",
+          "reason": "other_failure"
+        },
+        {
+          "input_shape": "input_shape209",
+          "status": "failed",
+          "reason": "other_failure"
+        }
+      ]
+    }
+  }
+}

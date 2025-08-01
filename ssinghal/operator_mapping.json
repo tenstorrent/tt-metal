@@ -1,0 +1,428 @@
+{
+  "add": {
+    "ttnn_function": "ttnn.add",
+    "torch_function": "torch.add",
+    "num_inputs": 2,
+    "category": "elementwise",
+    "supported": true
+  },
+  "mul": {
+    "ttnn_function": "ttnn.mul",
+    "torch_function": "torch.mul",
+    "num_inputs": 2,
+    "category": "elementwise",
+    "supported": true
+  },
+  "div": {
+    "ttnn_function": "ttnn.div",
+    "torch_function": "torch.div",
+    "num_inputs": 2,
+    "category": "elementwise",
+    "supported": true
+  },
+  "clone": {
+    "ttnn_function": "ttnn.clone",
+    "torch_function": "torch.clone",
+    "num_inputs": 1,
+    "category": "tensor_ops",
+    "supported": true
+  },
+  "copy": {
+    "ttnn_function": "ttnn.copy",
+    "torch_function": "torch.copy_",
+    "num_inputs": 2,
+    "category": "tensor_ops",
+    "supported": true
+  },
+  "relu": {
+    "ttnn_function": "ttnn.relu",
+    "torch_function": "torch.relu",
+    "num_inputs": 1,
+    "category": "activation",
+    "supported": true
+  },
+  "silu": {
+    "ttnn_function": "ttnn.silu",
+    "torch_function": "torch.nn.functional.silu",
+    "num_inputs": 1,
+    "category": "activation",
+    "supported": true
+  },
+  "sigmoid": {
+    "ttnn_function": "ttnn.sigmoid",
+    "torch_function": "torch.sigmoid",
+    "num_inputs": 1,
+    "category": "activation",
+    "supported": true
+  },
+  "tanh": {
+    "ttnn_function": "ttnn.tanh",
+    "torch_function": "torch.tanh",
+    "num_inputs": 1,
+    "category": "activation",
+    "supported": true
+  },
+  "softmax": {
+    "ttnn_function": "ttnn.softmax",
+    "torch_function": "torch.softmax",
+    "num_inputs": 1,
+    "category": "activation",
+    "supported": true
+  },
+  "softplus": {
+    "ttnn_function": "ttnn.softplus",
+    "torch_function": "torch.nn.functional.softplus",
+    "num_inputs": 1,
+    "category": "activation",
+    "supported": true
+  },
+  "leakyrelu": {
+    "ttnn_function": "ttnn.leaky_relu",
+    "torch_function": "torch.nn.functional.leaky_relu",
+    "num_inputs": 1,
+    "category": "activation",
+    "supported": true
+  },
+  "hardtanh": {
+    "ttnn_function": "ttnn.hardtanh",
+    "torch_function": "torch.nn.functional.hardtanh",
+    "num_inputs": 1,
+    "category": "activation",
+    "supported": true
+  },
+  "GELU": {
+    "ttnn_function": "ttnn.gelu",
+    "torch_function": "torch.nn.functional.gelu",
+    "num_inputs": 1,
+    "category": "activation",
+    "supported": true
+  },
+  "GELUActivation": {
+    "ttnn_function": "ttnn.gelu",
+    "torch_function": "torch.nn.functional.gelu",
+    "num_inputs": 1,
+    "category": "activation",
+    "supported": true
+  },
+  "SiLU": {
+    "ttnn_function": "ttnn.silu",
+    "torch_function": "torch.nn.functional.silu",
+    "num_inputs": 1,
+    "category": "activation",
+    "supported": true
+  },
+  "ReLU": {
+    "ttnn_function": "ttnn.relu",
+    "torch_function": "torch.nn.functional.relu",
+    "num_inputs": 1,
+    "category": "activation",
+    "supported": true
+  },
+  "Sigmoid": {
+    "ttnn_function": "ttnn.sigmoid",
+    "torch_function": "torch.nn.functional.sigmoid",
+    "num_inputs": 1,
+    "category": "activation",
+    "supported": true
+  },
+  "Mish": {
+    "ttnn_function": "ttnn.mish",
+    "torch_function": "torch.nn.functional.mish",
+    "num_inputs": 1,
+    "category": "activation",
+    "supported": true
+  },
+  "view": {
+    "ttnn_function": "ttnn.reshape",
+    "torch_function": "torch.view",
+    "num_inputs": 1,
+    "category": "shape",
+    "supported": true,
+    "note": "Requires shape parameter"
+  },
+  "unsafeview": {
+    "ttnn_function": "ttnn.reshape",
+    "torch_function": "torch.view",
+    "num_inputs": 1,
+    "category": "shape",
+    "supported": true,
+    "note": "Requires shape parameter"
+  },
+  "permute": {
+    "ttnn_function": "ttnn.permute",
+    "torch_function": "torch.permute",
+    "num_inputs": 1,
+    "category": "shape",
+    "supported": true,
+    "note": "Requires permutation dims"
+  },
+  "transpose": {
+    "ttnn_function": "ttnn.transpose",
+    "torch_function": "torch.transpose",
+    "num_inputs": 1,
+    "category": "shape",
+    "supported": true,
+    "note": "Requires dim0, dim1"
+  },
+  "unsqueeze": {
+    "ttnn_function": "ttnn.unsqueeze",
+    "torch_function": "torch.unsqueeze",
+    "num_inputs": 1,
+    "category": "shape",
+    "supported": true,
+    "note": "Requires dim parameter"
+  },
+  "expand": {
+    "ttnn_function": "ttnn.expand",
+    "torch_function": "torch.expand",
+    "num_inputs": 1,
+    "category": "shape",
+    "supported": true,
+    "note": "Requires size parameter"
+  },
+  "mm": {
+    "ttnn_function": "ttnn.matmul",
+    "torch_function": "torch.mm",
+    "num_inputs": 2,
+    "category": "linalg",
+    "supported": true
+  },
+  "bmm": {
+    "ttnn_function": "ttnn.matmul",
+    "torch_function": "torch.bmm",
+    "num_inputs": 2,
+    "category": "linalg",
+    "supported": true
+  },
+  "addmm": {
+    "ttnn_function": "ttnn.addmm",
+    "torch_function": "torch.addmm",
+    "num_inputs": 3,
+    "category": "linalg",
+    "supported": true
+  },
+  "Linear": {
+    "ttnn_function": "ttnn.linear",
+    "torch_function": "torch.nn.functional.linear",
+    "num_inputs": 2,
+    "category": "linalg",
+    "supported": true,
+    "note": "Requires weight, optional bias"
+  },
+  "mean": {
+    "ttnn_function": "ttnn.mean",
+    "torch_function": "torch.mean",
+    "num_inputs": 1,
+    "category": "reduction",
+    "supported": true
+  },
+  "linalgvectornorm": {
+    "ttnn_function": "ttnn.norm",
+    "torch_function": "torch.linalg.vector_norm",
+    "num_inputs": 1,
+    "category": "reduction",
+    "supported": true
+  },
+  "cat": {
+    "ttnn_function": "ttnn.concat",
+    "torch_function": "torch.cat",
+    "num_inputs": "variable",
+    "category": "concat",
+    "supported": true,
+    "note": "Requires dim parameter"
+  },
+  "Concat": {
+    "ttnn_function": "ttnn.concat",
+    "torch_function": "torch.cat",
+    "num_inputs": "variable",
+    "category": "concat",
+    "supported": true
+  },
+  "stack": {
+    "ttnn_function": "ttnn.stack",
+    "torch_function": "torch.stack",
+    "num_inputs": "variable",
+    "category": "concat",
+    "supported": true
+  },
+  "splitwithsizes": {
+    "ttnn_function": "ttnn.split",
+    "torch_function": "torch.split",
+    "num_inputs": 1,
+    "category": "concat",
+    "supported": true,
+    "note": "Requires split_sizes, dim"
+  },
+  "clamp": {
+    "ttnn_function": "ttnn.clip",
+    "torch_function": "torch.clamp",
+    "num_inputs": 1,
+    "category": "elementwise",
+    "supported": true,
+    "note": "Requires min, max"
+  },
+  "clampmin": {
+    "ttnn_function": "ttnn.clip",
+    "torch_function": "torch.clamp_min",
+    "num_inputs": 1,
+    "category": "elementwise",
+    "supported": true,
+    "note": "Requires min value"
+  },
+  "MaxPool2d": {
+    "ttnn_function": "ttnn.max_pool2d",
+    "torch_function": "torch.nn.functional.max_pool2d",
+    "num_inputs": 1,
+    "category": "pooling",
+    "supported": true,
+    "note": "Requires kernel_size"
+  },
+  "AdaptiveAvgPool2d": {
+    "ttnn_function": "ttnn.adaptive_avg_pool2d",
+    "torch_function": "torch.nn.functional.adaptive_avg_pool2d",
+    "num_inputs": 1,
+    "category": "pooling",
+    "supported": false,
+    "note": "May not be directly supported"
+  },
+  "AdaptiveAvgPool1d": {
+    "ttnn_function": "ttnn.adaptive_avg_pool1d",
+    "torch_function": "torch.nn.functional.adaptive_avg_pool1d",
+    "num_inputs": 1,
+    "category": "pooling",
+    "supported": false,
+    "note": "May not be directly supported"
+  },
+  "AdaptiveMaxPool2d": {
+    "ttnn_function": "ttnn.adaptive_max_pool2d",
+    "torch_function": "torch.nn.functional.adaptive_max_pool2d",
+    "num_inputs": 1,
+    "category": "pooling",
+    "supported": false,
+    "note": "May not be directly supported"
+  },
+  "Upsample": {
+    "ttnn_function": "ttnn.upsample",
+    "torch_function": "torch.nn.functional.interpolate",
+    "num_inputs": 1,
+    "category": "shape",
+    "supported": false,
+    "note": "May not be directly supported"
+  },
+  "upsamplenearest2d": {
+    "ttnn_function": "ttnn.upsample_nearest2d",
+    "torch_function": "torch.nn.functional.interpolate",
+    "num_inputs": 1,
+    "category": "shape",
+    "supported": false,
+    "note": "May not be directly supported"
+  },
+  "Dropout": {
+    "ttnn_function": "ttnn.dropout",
+    "torch_function": "torch.nn.functional.dropout",
+    "num_inputs": 1,
+    "category": "regularization",
+    "supported": true
+  },
+  "log": {
+    "ttnn_function": "ttnn.log",
+    "torch_function": "torch.log",
+    "num_inputs": 1,
+    "category": "elementwise",
+    "supported": true
+  },
+  "roll": {
+    "ttnn_function": "ttnn.roll",
+    "torch_function": "torch.roll",
+    "num_inputs": 1,
+    "category": "shape",
+    "supported": false,
+    "note": "May not be directly supported"
+  },
+  "topk": {
+    "ttnn_function": "ttnn.topk",
+    "torch_function": "torch.topk",
+    "num_inputs": 1,
+    "category": "reduction",
+    "supported": true
+  },
+  "constantpadnd": {
+    "ttnn_function": "ttnn.pad",
+    "torch_function": "torch.nn.functional.pad",
+    "num_inputs": 1,
+    "category": "shape",
+    "supported": false,
+    "note": "May not be directly supported"
+  },
+  "Tensor": {
+    "ttnn_function": null,
+    "torch_function": null,
+    "num_inputs": 0,
+    "category": "meta",
+    "supported": false,
+    "note": "Meta operation - tensor creation"
+  },
+  "TensorScalar": {
+    "ttnn_function": null,
+    "torch_function": null,
+    "num_inputs": 0,
+    "category": "meta",
+    "supported": false,
+    "note": "Meta operation - scalar tensor"
+  },
+  "Scalar": {
+    "ttnn_function": null,
+    "torch_function": null,
+    "num_inputs": 0,
+    "category": "meta",
+    "supported": false,
+    "note": "Meta operation - scalar value"
+  },
+  "int": {
+    "ttnn_function": null,
+    "torch_function": null,
+    "num_inputs": 0,
+    "category": "meta",
+    "supported": false,
+    "note": "Type conversion"
+  },
+  "dim": {
+    "ttnn_function": null,
+    "torch_function": null,
+    "num_inputs": 0,
+    "category": "meta",
+    "supported": false,
+    "note": "Dimension query"
+  },
+  "asstrided": {
+    "ttnn_function": null,
+    "torch_function": "torch.as_strided",
+    "num_inputs": 1,
+    "category": "meta",
+    "supported": false,
+    "note": "Low-level stride manipulation"
+  },
+  "Identity": {
+    "ttnn_function": "ttnn.identity",
+    "torch_function": "torch.nn.Identity",
+    "num_inputs": 1,
+    "category": "special",
+    "supported": true
+  },
+  "SwinDropPath": {
+    "ttnn_function": null,
+    "torch_function": null,
+    "num_inputs": 1,
+    "category": "special",
+    "supported": false,
+    "note": "Swin transformer specific dropout"
+  },
+  "ContrastiveHead": {
+    "ttnn_function": null,
+    "torch_function": null,
+    "num_inputs": 1,
+    "category": "special",
+    "supported": false,
+    "note": "Custom head layer"
+  }
+}

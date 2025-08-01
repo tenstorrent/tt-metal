@@ -1,0 +1,1206 @@
+{
+  "summary": {
+    "total_oom_failures": 41,
+    "operators_with_oom": 5,
+    "unique_problematic_shapes": 35,
+    "memory_statistics": {
+      "min_memory_MB": 21.56,
+      "max_memory_MB": 16000.0,
+      "avg_memory_MB": 826.790975609756,
+      "total_failures": 41
+    }
+  },
+  "failures_by_operator": {
+    "add": [
+      {
+        "operator": "add",
+        "input_shape": "[1, 64, 640, 400]",
+        "total_memory_B": 34078720,
+        "total_memory_MB": 32.5,
+        "per_bank_memory_B": 532480,
+        "per_bank_memory_KB": 520.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "add",
+        "input_shape": "[1, 256, 320, 200]",
+        "total_memory_B": 36700160,
+        "total_memory_MB": 35.0,
+        "per_bank_memory_B": 573440,
+        "per_bank_memory_KB": 560.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "add",
+        "input_shape": "[1334, 4, 49, 49]",
+        "total_memory_B": 267739136,
+        "total_memory_MB": 255.34,
+        "per_bank_memory_B": 4184064,
+        "per_bank_memory_KB": 4086.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "add",
+        "input_shape": "[1, 1334, 4, 49, 49]",
+        "total_memory_B": 43712512,
+        "total_memory_MB": 41.69,
+        "per_bank_memory_B": 684032,
+        "per_bank_memory_KB": 668.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "add",
+        "input_shape": "[345, 8, 49, 49]",
+        "total_memory_B": 69242880,
+        "total_memory_MB": 66.04,
+        "per_bank_memory_B": 1083392,
+        "per_bank_memory_KB": 1058.0,
+        "num_banks": 64
+      }
+    ],
+    "silu": [
+      {
+        "operator": "silu",
+        "input_shape": "[1, 80, 640, 400]",
+        "total_memory_B": 51118080,
+        "total_memory_MB": 48.75,
+        "per_bank_memory_B": 798720,
+        "per_bank_memory_KB": 780.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "silu",
+        "input_shape": "[1, 96, 640, 400]",
+        "total_memory_B": 51118080,
+        "total_memory_MB": 48.75,
+        "per_bank_memory_B": 798720,
+        "per_bank_memory_KB": 780.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "silu",
+        "input_shape": "[1, 144, 640, 400]",
+        "total_memory_B": 85196800,
+        "total_memory_MB": 81.25,
+        "per_bank_memory_B": 1331200,
+        "per_bank_memory_KB": 1300.0,
+        "num_banks": 64
+      }
+    ],
+    "sigmoid": [
+      {
+        "operator": "sigmoid",
+        "input_shape": "[1, 1, 1280, 800]",
+        "total_memory_B": 65536000,
+        "total_memory_MB": 62.5,
+        "per_bank_memory_B": 1024000,
+        "per_bank_memory_KB": 1000.0,
+        "num_banks": 64
+      }
+    ],
+    "view": [
+      {
+        "operator": "view",
+        "input_shape": "[4, 80, 50, 32, 1, 1]",
+        "total_memory_B": 1048576000,
+        "total_memory_MB": 1000.0,
+        "per_bank_memory_B": 16384000,
+        "per_bank_memory_KB": 16000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[1, 4, 80, 50, 80, 1]",
+        "total_memory_B": 98304000,
+        "total_memory_MB": 93.75,
+        "per_bank_memory_B": 1536000,
+        "per_bank_memory_KB": 1500.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[2, 160, 100, 32, 1, 1]",
+        "total_memory_B": 2097152000,
+        "total_memory_MB": 2000.0,
+        "per_bank_memory_B": 32768000,
+        "per_bank_memory_KB": 32000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[1, 2, 160, 100, 80, 1]",
+        "total_memory_B": 196608000,
+        "total_memory_MB": 187.5,
+        "per_bank_memory_B": 3072000,
+        "per_bank_memory_KB": 3000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[8, 40, 25, 32, 1, 1]",
+        "total_memory_B": 524288000,
+        "total_memory_MB": 500.0,
+        "per_bank_memory_B": 8192000,
+        "per_bank_memory_KB": 8000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[40, 25, 512, 1, 1]",
+        "total_memory_B": 1048576000,
+        "total_memory_MB": 1000.0,
+        "per_bank_memory_B": 16384000,
+        "per_bank_memory_KB": 16000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[80, 50, 512, 1, 1]",
+        "total_memory_B": 4194304000,
+        "total_memory_MB": 4000.0,
+        "per_bank_memory_B": 65536000,
+        "per_bank_memory_KB": 64000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[160, 100, 512, 1, 1]",
+        "total_memory_B": 16777216000,
+        "total_memory_MB": 16000.0,
+        "per_bank_memory_B": 262144000,
+        "per_bank_memory_KB": 256000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[1, 80, 160, 100, 1]",
+        "total_memory_B": 104857600,
+        "total_memory_MB": 100.0,
+        "per_bank_memory_B": 1638400,
+        "per_bank_memory_KB": 1600.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[1, 1, 64000, 32]",
+        "total_memory_B": 131072000,
+        "total_memory_MB": 125.0,
+        "per_bank_memory_B": 2048000,
+        "per_bank_memory_KB": 2000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[1, 1, 64000, 1000]",
+        "total_memory_B": 4194304000,
+        "total_memory_MB": 4000.0,
+        "per_bank_memory_B": 65536000,
+        "per_bank_memory_KB": 64000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[1, 64000, 1, 32]",
+        "total_memory_B": 131072000,
+        "total_memory_MB": 125.0,
+        "per_bank_memory_B": 2048000,
+        "per_bank_memory_KB": 2000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[1, 2, 16000, 1000]",
+        "total_memory_B": 1048576000,
+        "total_memory_MB": 1000.0,
+        "per_bank_memory_B": 16384000,
+        "per_bank_memory_KB": 16000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[1, 5, 4000, 1000]",
+        "total_memory_B": 262144000,
+        "total_memory_MB": 250.0,
+        "per_bank_memory_B": 4096000,
+        "per_bank_memory_KB": 4000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[1334, 7, 7, 128]",
+        "total_memory_B": 76496896,
+        "total_memory_MB": 72.95,
+        "per_bank_memory_B": 1196032,
+        "per_bank_memory_KB": 1168.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[1334, 4, 49, 49]",
+        "total_memory_B": 267739136,
+        "total_memory_MB": 255.34,
+        "per_bank_memory_B": 4184064,
+        "per_bank_memory_KB": 4086.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[1334, 49, 4, 32]",
+        "total_memory_B": 133869568,
+        "total_memory_MB": 127.67,
+        "per_bank_memory_B": 2093056,
+        "per_bank_memory_KB": 2044.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[345, 8, 49, 49]",
+        "total_memory_B": 22609920,
+        "total_memory_MB": 21.56,
+        "per_bank_memory_B": 354304,
+        "per_bank_memory_KB": 346.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[1000, 8, 8, 128]",
+        "total_memory_B": 65536000,
+        "total_memory_MB": 62.5,
+        "per_bank_memory_B": 1024000,
+        "per_bank_memory_KB": 1000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[1000, 4, 64, 64]",
+        "total_memory_B": 262144000,
+        "total_memory_MB": 250.0,
+        "per_bank_memory_B": 4096000,
+        "per_bank_memory_KB": 4000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[1000, 64, 4, 32]",
+        "total_memory_B": 131072000,
+        "total_memory_MB": 125.0,
+        "per_bank_memory_B": 2048000,
+        "per_bank_memory_KB": 2000.0,
+        "num_banks": 64
+      }
+    ],
+    "permute": [
+      {
+        "operator": "permute",
+        "input_shape": "[4, 80, 50, 1, 1, 80]",
+        "total_memory_B": 98304000,
+        "total_memory_MB": 93.75,
+        "per_bank_memory_B": 1536000,
+        "per_bank_memory_KB": 1500.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "permute",
+        "input_shape": "[2, 160, 100, 1, 1, 80]",
+        "total_memory_B": 196608000,
+        "total_memory_MB": 187.5,
+        "per_bank_memory_B": 3072000,
+        "per_bank_memory_KB": 3000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "permute",
+        "input_shape": "[1, 512, 80, 50, 1]",
+        "total_memory_B": 167772160,
+        "total_memory_MB": 160.0,
+        "per_bank_memory_B": 2621440,
+        "per_bank_memory_KB": 2560.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "permute",
+        "input_shape": "[1, 512, 160, 100, 1]",
+        "total_memory_B": 671088640,
+        "total_memory_MB": 640.0,
+        "per_bank_memory_B": 10485760,
+        "per_bank_memory_KB": 10240.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "permute",
+        "input_shape": "[160, 100, 1, 1, 80]",
+        "total_memory_B": 98304000,
+        "total_memory_MB": 93.75,
+        "per_bank_memory_B": 1536000,
+        "per_bank_memory_KB": 1500.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "permute",
+        "input_shape": "[1, 64000, 1, 32]",
+        "total_memory_B": 131072000,
+        "total_memory_MB": 125.0,
+        "per_bank_memory_B": 2048000,
+        "per_bank_memory_KB": 2000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "permute",
+        "input_shape": "[1, 1, 64000, 32]",
+        "total_memory_B": 131072000,
+        "total_memory_MB": 125.0,
+        "per_bank_memory_B": 2048000,
+        "per_bank_memory_KB": 2000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "permute",
+        "input_shape": "[1334, 49, 4, 32]",
+        "total_memory_B": 133869568,
+        "total_memory_MB": 127.67,
+        "per_bank_memory_B": 2093056,
+        "per_bank_memory_KB": 2044.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "permute",
+        "input_shape": "[1334, 4, 49, 32]",
+        "total_memory_B": 133869568,
+        "total_memory_MB": 127.67,
+        "per_bank_memory_B": 2093056,
+        "per_bank_memory_KB": 2044.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "permute",
+        "input_shape": "[1000, 64, 4, 32]",
+        "total_memory_B": 131072000,
+        "total_memory_MB": 125.0,
+        "per_bank_memory_B": 2048000,
+        "per_bank_memory_KB": 2000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "permute",
+        "input_shape": "[1000, 4, 64, 32]",
+        "total_memory_B": 131072000,
+        "total_memory_MB": 125.0,
+        "per_bank_memory_B": 2048000,
+        "per_bank_memory_KB": 2000.0,
+        "num_banks": 64
+      }
+    ]
+  },
+  "failures_by_shape": {
+    "[1, 64, 640, 400]": [
+      {
+        "operator": "add",
+        "input_shape": "[1, 64, 640, 400]",
+        "total_memory_B": 34078720,
+        "total_memory_MB": 32.5,
+        "per_bank_memory_B": 532480,
+        "per_bank_memory_KB": 520.0,
+        "num_banks": 64
+      }
+    ],
+    "[1, 256, 320, 200]": [
+      {
+        "operator": "add",
+        "input_shape": "[1, 256, 320, 200]",
+        "total_memory_B": 36700160,
+        "total_memory_MB": 35.0,
+        "per_bank_memory_B": 573440,
+        "per_bank_memory_KB": 560.0,
+        "num_banks": 64
+      }
+    ],
+    "[1334, 4, 49, 49]": [
+      {
+        "operator": "add",
+        "input_shape": "[1334, 4, 49, 49]",
+        "total_memory_B": 267739136,
+        "total_memory_MB": 255.34,
+        "per_bank_memory_B": 4184064,
+        "per_bank_memory_KB": 4086.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[1334, 4, 49, 49]",
+        "total_memory_B": 267739136,
+        "total_memory_MB": 255.34,
+        "per_bank_memory_B": 4184064,
+        "per_bank_memory_KB": 4086.0,
+        "num_banks": 64
+      }
+    ],
+    "[1, 1334, 4, 49, 49]": [
+      {
+        "operator": "add",
+        "input_shape": "[1, 1334, 4, 49, 49]",
+        "total_memory_B": 43712512,
+        "total_memory_MB": 41.69,
+        "per_bank_memory_B": 684032,
+        "per_bank_memory_KB": 668.0,
+        "num_banks": 64
+      }
+    ],
+    "[345, 8, 49, 49]": [
+      {
+        "operator": "add",
+        "input_shape": "[345, 8, 49, 49]",
+        "total_memory_B": 69242880,
+        "total_memory_MB": 66.04,
+        "per_bank_memory_B": 1083392,
+        "per_bank_memory_KB": 1058.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "view",
+        "input_shape": "[345, 8, 49, 49]",
+        "total_memory_B": 22609920,
+        "total_memory_MB": 21.56,
+        "per_bank_memory_B": 354304,
+        "per_bank_memory_KB": 346.0,
+        "num_banks": 64
+      }
+    ],
+    "[1, 80, 640, 400]": [
+      {
+        "operator": "silu",
+        "input_shape": "[1, 80, 640, 400]",
+        "total_memory_B": 51118080,
+        "total_memory_MB": 48.75,
+        "per_bank_memory_B": 798720,
+        "per_bank_memory_KB": 780.0,
+        "num_banks": 64
+      }
+    ],
+    "[1, 96, 640, 400]": [
+      {
+        "operator": "silu",
+        "input_shape": "[1, 96, 640, 400]",
+        "total_memory_B": 51118080,
+        "total_memory_MB": 48.75,
+        "per_bank_memory_B": 798720,
+        "per_bank_memory_KB": 780.0,
+        "num_banks": 64
+      }
+    ],
+    "[1, 144, 640, 400]": [
+      {
+        "operator": "silu",
+        "input_shape": "[1, 144, 640, 400]",
+        "total_memory_B": 85196800,
+        "total_memory_MB": 81.25,
+        "per_bank_memory_B": 1331200,
+        "per_bank_memory_KB": 1300.0,
+        "num_banks": 64
+      }
+    ],
+    "[1, 1, 1280, 800]": [
+      {
+        "operator": "sigmoid",
+        "input_shape": "[1, 1, 1280, 800]",
+        "total_memory_B": 65536000,
+        "total_memory_MB": 62.5,
+        "per_bank_memory_B": 1024000,
+        "per_bank_memory_KB": 1000.0,
+        "num_banks": 64
+      }
+    ],
+    "[4, 80, 50, 32, 1, 1]": [
+      {
+        "operator": "view",
+        "input_shape": "[4, 80, 50, 32, 1, 1]",
+        "total_memory_B": 1048576000,
+        "total_memory_MB": 1000.0,
+        "per_bank_memory_B": 16384000,
+        "per_bank_memory_KB": 16000.0,
+        "num_banks": 64
+      }
+    ],
+    "[1, 4, 80, 50, 80, 1]": [
+      {
+        "operator": "view",
+        "input_shape": "[1, 4, 80, 50, 80, 1]",
+        "total_memory_B": 98304000,
+        "total_memory_MB": 93.75,
+        "per_bank_memory_B": 1536000,
+        "per_bank_memory_KB": 1500.0,
+        "num_banks": 64
+      }
+    ],
+    "[2, 160, 100, 32, 1, 1]": [
+      {
+        "operator": "view",
+        "input_shape": "[2, 160, 100, 32, 1, 1]",
+        "total_memory_B": 2097152000,
+        "total_memory_MB": 2000.0,
+        "per_bank_memory_B": 32768000,
+        "per_bank_memory_KB": 32000.0,
+        "num_banks": 64
+      }
+    ],
+    "[1, 2, 160, 100, 80, 1]": [
+      {
+        "operator": "view",
+        "input_shape": "[1, 2, 160, 100, 80, 1]",
+        "total_memory_B": 196608000,
+        "total_memory_MB": 187.5,
+        "per_bank_memory_B": 3072000,
+        "per_bank_memory_KB": 3000.0,
+        "num_banks": 64
+      }
+    ],
+    "[8, 40, 25, 32, 1, 1]": [
+      {
+        "operator": "view",
+        "input_shape": "[8, 40, 25, 32, 1, 1]",
+        "total_memory_B": 524288000,
+        "total_memory_MB": 500.0,
+        "per_bank_memory_B": 8192000,
+        "per_bank_memory_KB": 8000.0,
+        "num_banks": 64
+      }
+    ],
+    "[40, 25, 512, 1, 1]": [
+      {
+        "operator": "view",
+        "input_shape": "[40, 25, 512, 1, 1]",
+        "total_memory_B": 1048576000,
+        "total_memory_MB": 1000.0,
+        "per_bank_memory_B": 16384000,
+        "per_bank_memory_KB": 16000.0,
+        "num_banks": 64
+      }
+    ],
+    "[80, 50, 512, 1, 1]": [
+      {
+        "operator": "view",
+        "input_shape": "[80, 50, 512, 1, 1]",
+        "total_memory_B": 4194304000,
+        "total_memory_MB": 4000.0,
+        "per_bank_memory_B": 65536000,
+        "per_bank_memory_KB": 64000.0,
+        "num_banks": 64
+      }
+    ],
+    "[160, 100, 512, 1, 1]": [
+      {
+        "operator": "view",
+        "input_shape": "[160, 100, 512, 1, 1]",
+        "total_memory_B": 16777216000,
+        "total_memory_MB": 16000.0,
+        "per_bank_memory_B": 262144000,
+        "per_bank_memory_KB": 256000.0,
+        "num_banks": 64
+      }
+    ],
+    "[1, 80, 160, 100, 1]": [
+      {
+        "operator": "view",
+        "input_shape": "[1, 80, 160, 100, 1]",
+        "total_memory_B": 104857600,
+        "total_memory_MB": 100.0,
+        "per_bank_memory_B": 1638400,
+        "per_bank_memory_KB": 1600.0,
+        "num_banks": 64
+      }
+    ],
+    "[1, 1, 64000, 32]": [
+      {
+        "operator": "view",
+        "input_shape": "[1, 1, 64000, 32]",
+        "total_memory_B": 131072000,
+        "total_memory_MB": 125.0,
+        "per_bank_memory_B": 2048000,
+        "per_bank_memory_KB": 2000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "permute",
+        "input_shape": "[1, 1, 64000, 32]",
+        "total_memory_B": 131072000,
+        "total_memory_MB": 125.0,
+        "per_bank_memory_B": 2048000,
+        "per_bank_memory_KB": 2000.0,
+        "num_banks": 64
+      }
+    ],
+    "[1, 1, 64000, 1000]": [
+      {
+        "operator": "view",
+        "input_shape": "[1, 1, 64000, 1000]",
+        "total_memory_B": 4194304000,
+        "total_memory_MB": 4000.0,
+        "per_bank_memory_B": 65536000,
+        "per_bank_memory_KB": 64000.0,
+        "num_banks": 64
+      }
+    ],
+    "[1, 64000, 1, 32]": [
+      {
+        "operator": "view",
+        "input_shape": "[1, 64000, 1, 32]",
+        "total_memory_B": 131072000,
+        "total_memory_MB": 125.0,
+        "per_bank_memory_B": 2048000,
+        "per_bank_memory_KB": 2000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "permute",
+        "input_shape": "[1, 64000, 1, 32]",
+        "total_memory_B": 131072000,
+        "total_memory_MB": 125.0,
+        "per_bank_memory_B": 2048000,
+        "per_bank_memory_KB": 2000.0,
+        "num_banks": 64
+      }
+    ],
+    "[1, 2, 16000, 1000]": [
+      {
+        "operator": "view",
+        "input_shape": "[1, 2, 16000, 1000]",
+        "total_memory_B": 1048576000,
+        "total_memory_MB": 1000.0,
+        "per_bank_memory_B": 16384000,
+        "per_bank_memory_KB": 16000.0,
+        "num_banks": 64
+      }
+    ],
+    "[1, 5, 4000, 1000]": [
+      {
+        "operator": "view",
+        "input_shape": "[1, 5, 4000, 1000]",
+        "total_memory_B": 262144000,
+        "total_memory_MB": 250.0,
+        "per_bank_memory_B": 4096000,
+        "per_bank_memory_KB": 4000.0,
+        "num_banks": 64
+      }
+    ],
+    "[1334, 7, 7, 128]": [
+      {
+        "operator": "view",
+        "input_shape": "[1334, 7, 7, 128]",
+        "total_memory_B": 76496896,
+        "total_memory_MB": 72.95,
+        "per_bank_memory_B": 1196032,
+        "per_bank_memory_KB": 1168.0,
+        "num_banks": 64
+      }
+    ],
+    "[1334, 49, 4, 32]": [
+      {
+        "operator": "view",
+        "input_shape": "[1334, 49, 4, 32]",
+        "total_memory_B": 133869568,
+        "total_memory_MB": 127.67,
+        "per_bank_memory_B": 2093056,
+        "per_bank_memory_KB": 2044.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "permute",
+        "input_shape": "[1334, 49, 4, 32]",
+        "total_memory_B": 133869568,
+        "total_memory_MB": 127.67,
+        "per_bank_memory_B": 2093056,
+        "per_bank_memory_KB": 2044.0,
+        "num_banks": 64
+      }
+    ],
+    "[1000, 8, 8, 128]": [
+      {
+        "operator": "view",
+        "input_shape": "[1000, 8, 8, 128]",
+        "total_memory_B": 65536000,
+        "total_memory_MB": 62.5,
+        "per_bank_memory_B": 1024000,
+        "per_bank_memory_KB": 1000.0,
+        "num_banks": 64
+      }
+    ],
+    "[1000, 4, 64, 64]": [
+      {
+        "operator": "view",
+        "input_shape": "[1000, 4, 64, 64]",
+        "total_memory_B": 262144000,
+        "total_memory_MB": 250.0,
+        "per_bank_memory_B": 4096000,
+        "per_bank_memory_KB": 4000.0,
+        "num_banks": 64
+      }
+    ],
+    "[1000, 64, 4, 32]": [
+      {
+        "operator": "view",
+        "input_shape": "[1000, 64, 4, 32]",
+        "total_memory_B": 131072000,
+        "total_memory_MB": 125.0,
+        "per_bank_memory_B": 2048000,
+        "per_bank_memory_KB": 2000.0,
+        "num_banks": 64
+      },
+      {
+        "operator": "permute",
+        "input_shape": "[1000, 64, 4, 32]",
+        "total_memory_B": 131072000,
+        "total_memory_MB": 125.0,
+        "per_bank_memory_B": 2048000,
+        "per_bank_memory_KB": 2000.0,
+        "num_banks": 64
+      }
+    ],
+    "[4, 80, 50, 1, 1, 80]": [
+      {
+        "operator": "permute",
+        "input_shape": "[4, 80, 50, 1, 1, 80]",
+        "total_memory_B": 98304000,
+        "total_memory_MB": 93.75,
+        "per_bank_memory_B": 1536000,
+        "per_bank_memory_KB": 1500.0,
+        "num_banks": 64
+      }
+    ],
+    "[2, 160, 100, 1, 1, 80]": [
+      {
+        "operator": "permute",
+        "input_shape": "[2, 160, 100, 1, 1, 80]",
+        "total_memory_B": 196608000,
+        "total_memory_MB": 187.5,
+        "per_bank_memory_B": 3072000,
+        "per_bank_memory_KB": 3000.0,
+        "num_banks": 64
+      }
+    ],
+    "[1, 512, 80, 50, 1]": [
+      {
+        "operator": "permute",
+        "input_shape": "[1, 512, 80, 50, 1]",
+        "total_memory_B": 167772160,
+        "total_memory_MB": 160.0,
+        "per_bank_memory_B": 2621440,
+        "per_bank_memory_KB": 2560.0,
+        "num_banks": 64
+      }
+    ],
+    "[1, 512, 160, 100, 1]": [
+      {
+        "operator": "permute",
+        "input_shape": "[1, 512, 160, 100, 1]",
+        "total_memory_B": 671088640,
+        "total_memory_MB": 640.0,
+        "per_bank_memory_B": 10485760,
+        "per_bank_memory_KB": 10240.0,
+        "num_banks": 64
+      }
+    ],
+    "[160, 100, 1, 1, 80]": [
+      {
+        "operator": "permute",
+        "input_shape": "[160, 100, 1, 1, 80]",
+        "total_memory_B": 98304000,
+        "total_memory_MB": 93.75,
+        "per_bank_memory_B": 1536000,
+        "per_bank_memory_KB": 1500.0,
+        "num_banks": 64
+      }
+    ],
+    "[1334, 4, 49, 32]": [
+      {
+        "operator": "permute",
+        "input_shape": "[1334, 4, 49, 32]",
+        "total_memory_B": 133869568,
+        "total_memory_MB": 127.67,
+        "per_bank_memory_B": 2093056,
+        "per_bank_memory_KB": 2044.0,
+        "num_banks": 64
+      }
+    ],
+    "[1000, 4, 64, 32]": [
+      {
+        "operator": "permute",
+        "input_shape": "[1000, 4, 64, 32]",
+        "total_memory_B": 131072000,
+        "total_memory_MB": 125.0,
+        "per_bank_memory_B": 2048000,
+        "per_bank_memory_KB": 2000.0,
+        "num_banks": 64
+      }
+    ]
+  },
+  "all_failures": [
+    {
+      "operator": "add",
+      "input_shape": "[1, 64, 640, 400]",
+      "total_memory_B": 34078720,
+      "total_memory_MB": 32.5,
+      "per_bank_memory_B": 532480,
+      "per_bank_memory_KB": 520.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "add",
+      "input_shape": "[1, 256, 320, 200]",
+      "total_memory_B": 36700160,
+      "total_memory_MB": 35.0,
+      "per_bank_memory_B": 573440,
+      "per_bank_memory_KB": 560.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "add",
+      "input_shape": "[1334, 4, 49, 49]",
+      "total_memory_B": 267739136,
+      "total_memory_MB": 255.34,
+      "per_bank_memory_B": 4184064,
+      "per_bank_memory_KB": 4086.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "add",
+      "input_shape": "[1, 1334, 4, 49, 49]",
+      "total_memory_B": 43712512,
+      "total_memory_MB": 41.69,
+      "per_bank_memory_B": 684032,
+      "per_bank_memory_KB": 668.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "add",
+      "input_shape": "[345, 8, 49, 49]",
+      "total_memory_B": 69242880,
+      "total_memory_MB": 66.04,
+      "per_bank_memory_B": 1083392,
+      "per_bank_memory_KB": 1058.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "silu",
+      "input_shape": "[1, 80, 640, 400]",
+      "total_memory_B": 51118080,
+      "total_memory_MB": 48.75,
+      "per_bank_memory_B": 798720,
+      "per_bank_memory_KB": 780.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "silu",
+      "input_shape": "[1, 96, 640, 400]",
+      "total_memory_B": 51118080,
+      "total_memory_MB": 48.75,
+      "per_bank_memory_B": 798720,
+      "per_bank_memory_KB": 780.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "silu",
+      "input_shape": "[1, 144, 640, 400]",
+      "total_memory_B": 85196800,
+      "total_memory_MB": 81.25,
+      "per_bank_memory_B": 1331200,
+      "per_bank_memory_KB": 1300.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "sigmoid",
+      "input_shape": "[1, 1, 1280, 800]",
+      "total_memory_B": 65536000,
+      "total_memory_MB": 62.5,
+      "per_bank_memory_B": 1024000,
+      "per_bank_memory_KB": 1000.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[4, 80, 50, 32, 1, 1]",
+      "total_memory_B": 1048576000,
+      "total_memory_MB": 1000.0,
+      "per_bank_memory_B": 16384000,
+      "per_bank_memory_KB": 16000.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[1, 4, 80, 50, 80, 1]",
+      "total_memory_B": 98304000,
+      "total_memory_MB": 93.75,
+      "per_bank_memory_B": 1536000,
+      "per_bank_memory_KB": 1500.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[2, 160, 100, 32, 1, 1]",
+      "total_memory_B": 2097152000,
+      "total_memory_MB": 2000.0,
+      "per_bank_memory_B": 32768000,
+      "per_bank_memory_KB": 32000.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[1, 2, 160, 100, 80, 1]",
+      "total_memory_B": 196608000,
+      "total_memory_MB": 187.5,
+      "per_bank_memory_B": 3072000,
+      "per_bank_memory_KB": 3000.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[8, 40, 25, 32, 1, 1]",
+      "total_memory_B": 524288000,
+      "total_memory_MB": 500.0,
+      "per_bank_memory_B": 8192000,
+      "per_bank_memory_KB": 8000.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[40, 25, 512, 1, 1]",
+      "total_memory_B": 1048576000,
+      "total_memory_MB": 1000.0,
+      "per_bank_memory_B": 16384000,
+      "per_bank_memory_KB": 16000.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[80, 50, 512, 1, 1]",
+      "total_memory_B": 4194304000,
+      "total_memory_MB": 4000.0,
+      "per_bank_memory_B": 65536000,
+      "per_bank_memory_KB": 64000.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[160, 100, 512, 1, 1]",
+      "total_memory_B": 16777216000,
+      "total_memory_MB": 16000.0,
+      "per_bank_memory_B": 262144000,
+      "per_bank_memory_KB": 256000.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[1, 80, 160, 100, 1]",
+      "total_memory_B": 104857600,
+      "total_memory_MB": 100.0,
+      "per_bank_memory_B": 1638400,
+      "per_bank_memory_KB": 1600.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[1, 1, 64000, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[1, 1, 64000, 1000]",
+      "total_memory_B": 4194304000,
+      "total_memory_MB": 4000.0,
+      "per_bank_memory_B": 65536000,
+      "per_bank_memory_KB": 64000.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[1, 64000, 1, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[1, 2, 16000, 1000]",
+      "total_memory_B": 1048576000,
+      "total_memory_MB": 1000.0,
+      "per_bank_memory_B": 16384000,
+      "per_bank_memory_KB": 16000.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[1, 5, 4000, 1000]",
+      "total_memory_B": 262144000,
+      "total_memory_MB": 250.0,
+      "per_bank_memory_B": 4096000,
+      "per_bank_memory_KB": 4000.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[1334, 7, 7, 128]",
+      "total_memory_B": 76496896,
+      "total_memory_MB": 72.95,
+      "per_bank_memory_B": 1196032,
+      "per_bank_memory_KB": 1168.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[1334, 4, 49, 49]",
+      "total_memory_B": 267739136,
+      "total_memory_MB": 255.34,
+      "per_bank_memory_B": 4184064,
+      "per_bank_memory_KB": 4086.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[1334, 49, 4, 32]",
+      "total_memory_B": 133869568,
+      "total_memory_MB": 127.67,
+      "per_bank_memory_B": 2093056,
+      "per_bank_memory_KB": 2044.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[345, 8, 49, 49]",
+      "total_memory_B": 22609920,
+      "total_memory_MB": 21.56,
+      "per_bank_memory_B": 354304,
+      "per_bank_memory_KB": 346.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[1000, 8, 8, 128]",
+      "total_memory_B": 65536000,
+      "total_memory_MB": 62.5,
+      "per_bank_memory_B": 1024000,
+      "per_bank_memory_KB": 1000.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[1000, 4, 64, 64]",
+      "total_memory_B": 262144000,
+      "total_memory_MB": 250.0,
+      "per_bank_memory_B": 4096000,
+      "per_bank_memory_KB": 4000.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "view",
+      "input_shape": "[1000, 64, 4, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "permute",
+      "input_shape": "[4, 80, 50, 1, 1, 80]",
+      "total_memory_B": 98304000,
+      "total_memory_MB": 93.75,
+      "per_bank_memory_B": 1536000,
+      "per_bank_memory_KB": 1500.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "permute",
+      "input_shape": "[2, 160, 100, 1, 1, 80]",
+      "total_memory_B": 196608000,
+      "total_memory_MB": 187.5,
+      "per_bank_memory_B": 3072000,
+      "per_bank_memory_KB": 3000.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "permute",
+      "input_shape": "[1, 512, 80, 50, 1]",
+      "total_memory_B": 167772160,
+      "total_memory_MB": 160.0,
+      "per_bank_memory_B": 2621440,
+      "per_bank_memory_KB": 2560.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "permute",
+      "input_shape": "[1, 512, 160, 100, 1]",
+      "total_memory_B": 671088640,
+      "total_memory_MB": 640.0,
+      "per_bank_memory_B": 10485760,
+      "per_bank_memory_KB": 10240.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "permute",
+      "input_shape": "[160, 100, 1, 1, 80]",
+      "total_memory_B": 98304000,
+      "total_memory_MB": 93.75,
+      "per_bank_memory_B": 1536000,
+      "per_bank_memory_KB": 1500.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "permute",
+      "input_shape": "[1, 64000, 1, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "permute",
+      "input_shape": "[1, 1, 64000, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "permute",
+      "input_shape": "[1334, 49, 4, 32]",
+      "total_memory_B": 133869568,
+      "total_memory_MB": 127.67,
+      "per_bank_memory_B": 2093056,
+      "per_bank_memory_KB": 2044.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "permute",
+      "input_shape": "[1334, 4, 49, 32]",
+      "total_memory_B": 133869568,
+      "total_memory_MB": 127.67,
+      "per_bank_memory_B": 2093056,
+      "per_bank_memory_KB": 2044.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "permute",
+      "input_shape": "[1000, 64, 4, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "num_banks": 64
+    },
+    {
+      "operator": "permute",
+      "input_shape": "[1000, 4, 64, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "num_banks": 64
+    }
+  ]
+}

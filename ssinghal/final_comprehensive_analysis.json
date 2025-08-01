@@ -1,0 +1,2981 @@
+{
+  "summary_statistics": {
+    "total_operators_tested": 15,
+    "total_tests_run": 779,
+    "total_passed": 556,
+    "total_failed": 164,
+    "total_skipped": 59,
+    "operators_with_oom": 15,
+    "total_oom_failures": 118
+  },
+  "detailed_results": {
+    "topk": {
+      "operator": "topk",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "dropout": {
+      "operator": "dropout",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [
+        {
+          "input_shape": "[1, 1, 64000, 1000]",
+          "total_memory_B": 4194304000,
+          "total_memory_MB": 4000.0,
+          "per_bank_memory_B": 65536000,
+          "per_bank_memory_KB": 64000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1, 2, 16000, 1000]",
+          "total_memory_B": 1048576000,
+          "total_memory_MB": 1000.0,
+          "per_bank_memory_B": 16384000,
+          "per_bank_memory_KB": 16000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1, 5, 4000, 1000]",
+          "total_memory_B": 262144000,
+          "total_memory_MB": 250.0,
+          "per_bank_memory_B": 4096000,
+          "per_bank_memory_KB": 4000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1334, 4, 49, 49]",
+          "total_memory_B": 267739136,
+          "total_memory_MB": 255.34,
+          "per_bank_memory_B": 4184064,
+          "per_bank_memory_KB": 4086.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1000, 4, 64, 64]",
+          "total_memory_B": 262144000,
+          "total_memory_MB": 250.0,
+          "per_bank_memory_B": 4096000,
+          "per_bank_memory_KB": 4000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1, 1, 64000, 1000]",
+          "total_memory_B": 4194304000,
+          "total_memory_MB": 4000.0,
+          "per_bank_memory_B": 65536000,
+          "per_bank_memory_KB": 64000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1, 2, 16000, 1000]",
+          "total_memory_B": 1048576000,
+          "total_memory_MB": 1000.0,
+          "per_bank_memory_B": 16384000,
+          "per_bank_memory_KB": 16000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1, 5, 4000, 1000]",
+          "total_memory_B": 262144000,
+          "total_memory_MB": 250.0,
+          "per_bank_memory_B": 4096000,
+          "per_bank_memory_KB": 4000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1334, 4, 49, 49]",
+          "total_memory_B": 267739136,
+          "total_memory_MB": 255.34,
+          "per_bank_memory_B": 4184064,
+          "per_bank_memory_KB": 4086.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1000, 4, 64, 64]",
+          "total_memory_B": 262144000,
+          "total_memory_MB": 250.0,
+          "per_bank_memory_B": 4096000,
+          "per_bank_memory_KB": 4000.0,
+          "reason": "out_of_memory"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "expand": {
+      "operator": "expand",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [
+        {
+          "input_shape": "[1, 1, 64000, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1, 1, 64000, 1000]",
+          "total_memory_B": 4194304000,
+          "total_memory_MB": 4000.0,
+          "per_bank_memory_B": 65536000,
+          "per_bank_memory_KB": 64000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1, 2, 16000, 1000]",
+          "total_memory_B": 1048576000,
+          "total_memory_MB": 1000.0,
+          "per_bank_memory_B": 16384000,
+          "per_bank_memory_KB": 16000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1, 5, 4000, 1000]",
+          "total_memory_B": 262144000,
+          "total_memory_MB": 250.0,
+          "per_bank_memory_B": 4096000,
+          "per_bank_memory_KB": 4000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1334, 4, 32, 49]",
+          "total_memory_B": 174850048,
+          "total_memory_MB": 166.75,
+          "per_bank_memory_B": 2732032,
+          "per_bank_memory_KB": 2668.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1334, 4, 49, 32]",
+          "total_memory_B": 133869568,
+          "total_memory_MB": 127.67,
+          "per_bank_memory_B": 2093056,
+          "per_bank_memory_KB": 2044.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1334, 4, 49, 49]",
+          "total_memory_B": 267739136,
+          "total_memory_MB": 255.34,
+          "per_bank_memory_B": 4184064,
+          "per_bank_memory_KB": 4086.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1000, 4, 64, 1]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1000, 4, 32, 64]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1000, 4, 64, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1000, 4, 64, 64]",
+          "total_memory_B": 262144000,
+          "total_memory_MB": 250.0,
+          "per_bank_memory_B": 4096000,
+          "per_bank_memory_KB": 4000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1, 1, 64000, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1, 1, 64000, 1000]",
+          "total_memory_B": 4194304000,
+          "total_memory_MB": 4000.0,
+          "per_bank_memory_B": 65536000,
+          "per_bank_memory_KB": 64000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1, 2, 16000, 1000]",
+          "total_memory_B": 1048576000,
+          "total_memory_MB": 1000.0,
+          "per_bank_memory_B": 16384000,
+          "per_bank_memory_KB": 16000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1, 5, 4000, 1000]",
+          "total_memory_B": 262144000,
+          "total_memory_MB": 250.0,
+          "per_bank_memory_B": 4096000,
+          "per_bank_memory_KB": 4000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1334, 4, 32, 49]",
+          "total_memory_B": 174850048,
+          "total_memory_MB": 166.75,
+          "per_bank_memory_B": 2732032,
+          "per_bank_memory_KB": 2668.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1334, 4, 49, 32]",
+          "total_memory_B": 133869568,
+          "total_memory_MB": 127.67,
+          "per_bank_memory_B": 2093056,
+          "per_bank_memory_KB": 2044.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1334, 4, 49, 49]",
+          "total_memory_B": 267739136,
+          "total_memory_MB": 255.34,
+          "per_bank_memory_B": 4184064,
+          "per_bank_memory_KB": 4086.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1000, 4, 64, 1]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1000, 4, 32, 64]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1000, 4, 64, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1000, 4, 64, 64]",
+          "total_memory_B": 262144000,
+          "total_memory_MB": 250.0,
+          "per_bank_memory_B": 4096000,
+          "per_bank_memory_KB": 4000.0,
+          "reason": "out_of_memory"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "unsqueeze": {
+      "operator": "unsqueeze",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "gelu": {
+      "operator": "gelu",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "view": {
+      "operator": "view",
+      "status": "completed",
+      "total_tests": 210,
+      "passed": 72,
+      "failed": 117,
+      "skipped": 21,
+      "oom_failures": [
+        {
+          "input_shape": "[4, 80, 50, 32, 1, 1]",
+          "total_memory_B": 1048576000,
+          "total_memory_MB": 1000.0,
+          "per_bank_memory_B": 16384000,
+          "per_bank_memory_KB": 16000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1, 4, 80, 50, 80, 1]",
+          "total_memory_B": 98304000,
+          "total_memory_MB": 93.75,
+          "per_bank_memory_B": 1536000,
+          "per_bank_memory_KB": 1500.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[2, 160, 100, 32, 1, 1]",
+          "total_memory_B": 2097152000,
+          "total_memory_MB": 2000.0,
+          "per_bank_memory_B": 32768000,
+          "per_bank_memory_KB": 32000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1, 2, 160, 100, 80, 1]",
+          "total_memory_B": 196608000,
+          "total_memory_MB": 187.5,
+          "per_bank_memory_B": 3072000,
+          "per_bank_memory_KB": 3000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[8, 40, 25, 32, 1, 1]",
+          "total_memory_B": 524288000,
+          "total_memory_MB": 500.0,
+          "per_bank_memory_B": 8192000,
+          "per_bank_memory_KB": 8000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[40, 25, 512, 1, 1]",
+          "total_memory_B": 1048576000,
+          "total_memory_MB": 1000.0,
+          "per_bank_memory_B": 16384000,
+          "per_bank_memory_KB": 16000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[80, 50, 512, 1, 1]",
+          "total_memory_B": 4194304000,
+          "total_memory_MB": 4000.0,
+          "per_bank_memory_B": 65536000,
+          "per_bank_memory_KB": 64000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[160, 100, 512, 1, 1]",
+          "total_memory_B": 16777216000,
+          "total_memory_MB": 16000.0,
+          "per_bank_memory_B": 262144000,
+          "per_bank_memory_KB": 256000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1, 80, 160, 100, 1]",
+          "total_memory_B": 104857600,
+          "total_memory_MB": 100.0,
+          "per_bank_memory_B": 1638400,
+          "per_bank_memory_KB": 1600.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1, 1, 64000, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1, 1, 64000, 1000]",
+          "total_memory_B": 4194304000,
+          "total_memory_MB": 4000.0,
+          "per_bank_memory_B": 65536000,
+          "per_bank_memory_KB": 64000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1, 64000, 1, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1, 2, 16000, 1000]",
+          "total_memory_B": 1048576000,
+          "total_memory_MB": 1000.0,
+          "per_bank_memory_B": 16384000,
+          "per_bank_memory_KB": 16000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1, 5, 4000, 1000]",
+          "total_memory_B": 262144000,
+          "total_memory_MB": 250.0,
+          "per_bank_memory_B": 4096000,
+          "per_bank_memory_KB": 4000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1334, 7, 7, 128]",
+          "total_memory_B": 76496896,
+          "total_memory_MB": 72.95,
+          "per_bank_memory_B": 1196032,
+          "per_bank_memory_KB": 1168.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1334, 4, 49, 49]",
+          "total_memory_B": 267739136,
+          "total_memory_MB": 255.34,
+          "per_bank_memory_B": 4184064,
+          "per_bank_memory_KB": 4086.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1334, 49, 4, 32]",
+          "total_memory_B": 133869568,
+          "total_memory_MB": 127.67,
+          "per_bank_memory_B": 2093056,
+          "per_bank_memory_KB": 2044.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[345, 8, 49, 49]",
+          "total_memory_B": 22609920,
+          "total_memory_MB": 21.56,
+          "per_bank_memory_B": 354304,
+          "per_bank_memory_KB": 346.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1000, 8, 8, 128]",
+          "total_memory_B": 65536000,
+          "total_memory_MB": 62.5,
+          "per_bank_memory_B": 1024000,
+          "per_bank_memory_KB": 1000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1000, 4, 64, 64]",
+          "total_memory_B": 262144000,
+          "total_memory_MB": 250.0,
+          "per_bank_memory_B": 4096000,
+          "per_bank_memory_KB": 4000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1000, 64, 4, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[4, 80, 50, 32, 1, 1]",
+          "total_memory_B": 1048576000,
+          "total_memory_MB": 1000.0,
+          "per_bank_memory_B": 16384000,
+          "per_bank_memory_KB": 16000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1, 4, 80, 50, 80, 1]",
+          "total_memory_B": 98304000,
+          "total_memory_MB": 93.75,
+          "per_bank_memory_B": 1536000,
+          "per_bank_memory_KB": 1500.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[2, 160, 100, 32, 1, 1]",
+          "total_memory_B": 2097152000,
+          "total_memory_MB": 2000.0,
+          "per_bank_memory_B": 32768000,
+          "per_bank_memory_KB": 32000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1, 2, 160, 100, 80, 1]",
+          "total_memory_B": 196608000,
+          "total_memory_MB": 187.5,
+          "per_bank_memory_B": 3072000,
+          "per_bank_memory_KB": 3000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[8, 40, 25, 32, 1, 1]",
+          "total_memory_B": 524288000,
+          "total_memory_MB": 500.0,
+          "per_bank_memory_B": 8192000,
+          "per_bank_memory_KB": 8000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[40, 25, 512, 1, 1]",
+          "total_memory_B": 1048576000,
+          "total_memory_MB": 1000.0,
+          "per_bank_memory_B": 16384000,
+          "per_bank_memory_KB": 16000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[80, 50, 512, 1, 1]",
+          "total_memory_B": 4194304000,
+          "total_memory_MB": 4000.0,
+          "per_bank_memory_B": 65536000,
+          "per_bank_memory_KB": 64000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[160, 100, 512, 1, 1]",
+          "total_memory_B": 16777216000,
+          "total_memory_MB": 16000.0,
+          "per_bank_memory_B": 262144000,
+          "per_bank_memory_KB": 256000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1, 80, 160, 100, 1]",
+          "total_memory_B": 104857600,
+          "total_memory_MB": 100.0,
+          "per_bank_memory_B": 1638400,
+          "per_bank_memory_KB": 1600.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1, 1, 64000, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1, 1, 64000, 1000]",
+          "total_memory_B": 4194304000,
+          "total_memory_MB": 4000.0,
+          "per_bank_memory_B": 65536000,
+          "per_bank_memory_KB": 64000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1, 64000, 1, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1, 2, 16000, 1000]",
+          "total_memory_B": 1048576000,
+          "total_memory_MB": 1000.0,
+          "per_bank_memory_B": 16384000,
+          "per_bank_memory_KB": 16000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1, 5, 4000, 1000]",
+          "total_memory_B": 262144000,
+          "total_memory_MB": 250.0,
+          "per_bank_memory_B": 4096000,
+          "per_bank_memory_KB": 4000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1334, 7, 7, 128]",
+          "total_memory_B": 76496896,
+          "total_memory_MB": 72.95,
+          "per_bank_memory_B": 1196032,
+          "per_bank_memory_KB": 1168.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1334, 4, 49, 49]",
+          "total_memory_B": 267739136,
+          "total_memory_MB": 255.34,
+          "per_bank_memory_B": 4184064,
+          "per_bank_memory_KB": 4086.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1334, 49, 4, 32]",
+          "total_memory_B": 133869568,
+          "total_memory_MB": 127.67,
+          "per_bank_memory_B": 2093056,
+          "per_bank_memory_KB": 2044.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[345, 8, 49, 49]",
+          "total_memory_B": 22609920,
+          "total_memory_MB": 21.56,
+          "per_bank_memory_B": 354304,
+          "per_bank_memory_KB": 346.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1000, 8, 8, 128]",
+          "total_memory_B": 65536000,
+          "total_memory_MB": 62.5,
+          "per_bank_memory_B": 1024000,
+          "per_bank_memory_KB": 1000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1000, 4, 64, 64]",
+          "total_memory_B": 262144000,
+          "total_memory_MB": 250.0,
+          "per_bank_memory_B": 4096000,
+          "per_bank_memory_KB": 4000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        },
+        {
+          "input_shape": "[1000, 64, 4, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "view"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "cat": {
+      "operator": "cat",
+      "status": "completed",
+      "total_tests": 50,
+      "passed": 48,
+      "failed": 0,
+      "skipped": 2,
+      "oom_failures": [
+        {
+          "input_shape": "[1, 128, 640, 400]",
+          "total_memory_B": 68157440,
+          "total_memory_MB": 65.0,
+          "per_bank_memory_B": 1064960,
+          "per_bank_memory_KB": 1040.0,
+          "reason": "out_of_memory",
+          "operator": "cat"
+        },
+        {
+          "input_shape": "[1, 64, 1280, 800]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "cat"
+        },
+        {
+          "input_shape": "[1, 128, 640, 400]",
+          "total_memory_B": 68157440,
+          "total_memory_MB": 65.0,
+          "per_bank_memory_B": 1064960,
+          "per_bank_memory_KB": 1040.0,
+          "reason": "out_of_memory",
+          "operator": "cat"
+        },
+        {
+          "input_shape": "[1, 64, 1280, 800]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "cat"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "stack": {
+      "operator": "stack",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "div": {
+      "operator": "div",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "clamp": {
+      "operator": "clamp",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "silu": {
+      "operator": "silu",
+      "status": "completed",
+      "total_tests": 79,
+      "passed": 76,
+      "failed": 0,
+      "skipped": 3,
+      "oom_failures": [
+        {
+          "input_shape": "[1, 80, 640, 400]",
+          "total_memory_B": 51118080,
+          "total_memory_MB": 48.75,
+          "per_bank_memory_B": 798720,
+          "per_bank_memory_KB": 780.0,
+          "reason": "out_of_memory",
+          "operator": "silu"
+        },
+        {
+          "input_shape": "[1, 96, 640, 400]",
+          "total_memory_B": 51118080,
+          "total_memory_MB": 48.75,
+          "per_bank_memory_B": 798720,
+          "per_bank_memory_KB": 780.0,
+          "reason": "out_of_memory",
+          "operator": "silu"
+        },
+        {
+          "input_shape": "[1, 144, 640, 400]",
+          "total_memory_B": 85196800,
+          "total_memory_MB": 81.25,
+          "per_bank_memory_B": 1331200,
+          "per_bank_memory_KB": 1300.0,
+          "reason": "out_of_memory",
+          "operator": "silu"
+        },
+        {
+          "input_shape": "[1, 80, 640, 400]",
+          "total_memory_B": 51118080,
+          "total_memory_MB": 48.75,
+          "per_bank_memory_B": 798720,
+          "per_bank_memory_KB": 780.0,
+          "reason": "out_of_memory",
+          "operator": "silu"
+        },
+        {
+          "input_shape": "[1, 96, 640, 400]",
+          "total_memory_B": 51118080,
+          "total_memory_MB": 48.75,
+          "per_bank_memory_B": 798720,
+          "per_bank_memory_KB": 780.0,
+          "reason": "out_of_memory",
+          "operator": "silu"
+        },
+        {
+          "input_shape": "[1, 144, 640, 400]",
+          "total_memory_B": 85196800,
+          "total_memory_MB": 81.25,
+          "per_bank_memory_B": 1331200,
+          "per_bank_memory_KB": 1300.0,
+          "reason": "out_of_memory",
+          "operator": "silu"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "add": {
+      "operator": "add",
+      "status": "completed",
+      "total_tests": 89,
+      "passed": 84,
+      "failed": 0,
+      "skipped": 5,
+      "oom_failures": [
+        {
+          "input_shape": "[1, 64, 640, 400]",
+          "total_memory_B": 34078720,
+          "total_memory_MB": 32.5,
+          "per_bank_memory_B": 532480,
+          "per_bank_memory_KB": 520.0,
+          "reason": "out_of_memory",
+          "operator": "add"
+        },
+        {
+          "input_shape": "[1, 256, 320, 200]",
+          "total_memory_B": 36700160,
+          "total_memory_MB": 35.0,
+          "per_bank_memory_B": 573440,
+          "per_bank_memory_KB": 560.0,
+          "reason": "out_of_memory",
+          "operator": "add"
+        },
+        {
+          "input_shape": "[1334, 4, 49, 49]",
+          "total_memory_B": 267739136,
+          "total_memory_MB": 255.34,
+          "per_bank_memory_B": 4184064,
+          "per_bank_memory_KB": 4086.0,
+          "reason": "out_of_memory",
+          "operator": "add"
+        },
+        {
+          "input_shape": "[1, 1334, 4, 49, 49]",
+          "total_memory_B": 43712512,
+          "total_memory_MB": 41.69,
+          "per_bank_memory_B": 684032,
+          "per_bank_memory_KB": 668.0,
+          "reason": "out_of_memory",
+          "operator": "add"
+        },
+        {
+          "input_shape": "[345, 8, 49, 49]",
+          "total_memory_B": 69242880,
+          "total_memory_MB": 66.04,
+          "per_bank_memory_B": 1083392,
+          "per_bank_memory_KB": 1058.0,
+          "reason": "out_of_memory",
+          "operator": "add"
+        },
+        {
+          "input_shape": "[1, 64, 640, 400]",
+          "total_memory_B": 34078720,
+          "total_memory_MB": 32.5,
+          "per_bank_memory_B": 532480,
+          "per_bank_memory_KB": 520.0,
+          "reason": "out_of_memory",
+          "operator": "add"
+        },
+        {
+          "input_shape": "[1, 256, 320, 200]",
+          "total_memory_B": 36700160,
+          "total_memory_MB": 35.0,
+          "per_bank_memory_B": 573440,
+          "per_bank_memory_KB": 560.0,
+          "reason": "out_of_memory",
+          "operator": "add"
+        },
+        {
+          "input_shape": "[1334, 4, 49, 49]",
+          "total_memory_B": 267739136,
+          "total_memory_MB": 255.34,
+          "per_bank_memory_B": 4184064,
+          "per_bank_memory_KB": 4086.0,
+          "reason": "out_of_memory",
+          "operator": "add"
+        },
+        {
+          "input_shape": "[1, 1334, 4, 49, 49]",
+          "total_memory_B": 43712512,
+          "total_memory_MB": 41.69,
+          "per_bank_memory_B": 684032,
+          "per_bank_memory_KB": 668.0,
+          "reason": "out_of_memory",
+          "operator": "add"
+        },
+        {
+          "input_shape": "[345, 8, 49, 49]",
+          "total_memory_B": 69242880,
+          "total_memory_MB": 66.04,
+          "per_bank_memory_B": 1083392,
+          "per_bank_memory_KB": 1058.0,
+          "reason": "out_of_memory",
+          "operator": "add"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "addmm": {
+      "operator": "addmm",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [
+        {
+          "input_shape": "[64000, 512]",
+          "total_memory_B": 65536000,
+          "total_memory_MB": 62.5,
+          "per_bank_memory_B": 1024000,
+          "per_bank_memory_KB": 1000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[16000, 1024]",
+          "total_memory_B": 32768000,
+          "total_memory_MB": 31.25,
+          "per_bank_memory_B": 512000,
+          "per_bank_memory_KB": 500.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[64000, 512]",
+          "total_memory_B": 65536000,
+          "total_memory_MB": 62.5,
+          "per_bank_memory_B": 1024000,
+          "per_bank_memory_KB": 1000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[16000, 1024]",
+          "total_memory_B": 32768000,
+          "total_memory_MB": 31.25,
+          "per_bank_memory_B": 512000,
+          "per_bank_memory_KB": 500.0,
+          "reason": "out_of_memory"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "geluactivation": {
+      "operator": "geluactivation",
+      "status": "completed",
+      "total_tests": 8,
+      "passed": 7,
+      "failed": 0,
+      "skipped": 1,
+      "oom_failures": [
+        {
+          "input_shape": "[1, 64000, 512]",
+          "total_memory_B": 65536000,
+          "total_memory_MB": 62.5,
+          "per_bank_memory_B": 1024000,
+          "per_bank_memory_KB": 1000.0,
+          "reason": "out_of_memory",
+          "operator": "geluactivation"
+        },
+        {
+          "input_shape": "[1, 64000, 512]",
+          "total_memory_B": 65536000,
+          "total_memory_MB": 62.5,
+          "per_bank_memory_B": 1024000,
+          "per_bank_memory_KB": 1000.0,
+          "reason": "out_of_memory",
+          "operator": "geluactivation"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "transpose": {
+      "operator": "transpose",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "tanh": {
+      "operator": "tanh",
+      "status": "completed",
+      "total_tests": 11,
+      "passed": 10,
+      "failed": 0,
+      "skipped": 1,
+      "oom_failures": [
+        {
+          "input_shape": "[1, 32, 1280, 800]",
+          "total_memory_B": 65536000,
+          "total_memory_MB": 62.5,
+          "per_bank_memory_B": 1024000,
+          "per_bank_memory_KB": 1000.0,
+          "reason": "out_of_memory",
+          "operator": "tanh"
+        },
+        {
+          "input_shape": "[1, 32, 1280, 800]",
+          "total_memory_B": 65536000,
+          "total_memory_MB": 62.5,
+          "per_bank_memory_B": 1024000,
+          "per_bank_memory_KB": 1000.0,
+          "reason": "out_of_memory",
+          "operator": "tanh"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "clone": {
+      "operator": "clone",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "mish": {
+      "operator": "mish",
+      "status": "completed",
+      "total_tests": 11,
+      "passed": 10,
+      "failed": 0,
+      "skipped": 1,
+      "oom_failures": [
+        {
+          "input_shape": "[1, 32, 1280, 800]",
+          "total_memory_B": 65536000,
+          "total_memory_MB": 62.5,
+          "per_bank_memory_B": 1024000,
+          "per_bank_memory_KB": 1000.0,
+          "reason": "out_of_memory",
+          "operator": "mish"
+        },
+        {
+          "input_shape": "[1, 32, 1280, 800]",
+          "total_memory_B": 65536000,
+          "total_memory_MB": 62.5,
+          "per_bank_memory_B": 1024000,
+          "per_bank_memory_KB": 1000.0,
+          "reason": "out_of_memory",
+          "operator": "mish"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "log": {
+      "operator": "log",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "hardtanh": {
+      "operator": "hardtanh",
+      "status": "completed",
+      "total_tests": 12,
+      "passed": 11,
+      "failed": 0,
+      "skipped": 1,
+      "oom_failures": [
+        {
+          "input_shape": "[1, 96, 640, 400]",
+          "total_memory_B": 51118080,
+          "total_memory_MB": 48.75,
+          "per_bank_memory_B": 798720,
+          "per_bank_memory_KB": 780.0,
+          "reason": "out_of_memory",
+          "operator": "hardtanh"
+        },
+        {
+          "input_shape": "[1, 96, 640, 400]",
+          "total_memory_B": 51118080,
+          "total_memory_MB": 48.75,
+          "per_bank_memory_B": 798720,
+          "per_bank_memory_KB": 780.0,
+          "reason": "out_of_memory",
+          "operator": "hardtanh"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "mm": {
+      "operator": "mm",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "linear": {
+      "operator": "linear",
+      "status": "completed",
+      "total_tests": 43,
+      "passed": 42,
+      "failed": 0,
+      "skipped": 1,
+      "oom_failures": [
+        {
+          "input_shape": "[1, 8000]",
+          "total_memory_B": 128000000,
+          "total_memory_MB": 122.07,
+          "per_bank_memory_B": 2000896,
+          "per_bank_memory_KB": 1954.0,
+          "reason": "out_of_memory",
+          "operator": "linear"
+        },
+        {
+          "input_shape": "[1, 8000]",
+          "total_memory_B": 128000000,
+          "total_memory_MB": 122.07,
+          "per_bank_memory_B": 2000896,
+          "per_bank_memory_KB": 1954.0,
+          "reason": "out_of_memory",
+          "operator": "linear"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "linalgvectornorm": {
+      "operator": "linalgvectornorm",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [
+        {
+          "input_shape": "[1000, 4, 64, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1000, 4, 64, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "clampmin": {
+      "operator": "clampmin",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [
+        {
+          "input_shape": "[1000, 4, 64, 1]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1000, 4, 64, 1]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "concat": {
+      "operator": "concat",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "relu": {
+      "operator": "relu",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "mul": {
+      "operator": "mul",
+      "status": "completed",
+      "total_tests": 16,
+      "passed": 15,
+      "failed": 0,
+      "skipped": 1,
+      "oom_failures": [
+        {
+          "input_shape": "[8, 32, 300, 3, 4]",
+          "total_memory_B": 157286400,
+          "total_memory_MB": 150.0,
+          "per_bank_memory_B": 2457600,
+          "per_bank_memory_KB": 2400.0,
+          "reason": "out_of_memory",
+          "operator": "mul"
+        },
+        {
+          "input_shape": "[8, 32, 300, 3, 4]",
+          "total_memory_B": 157286400,
+          "total_memory_MB": 150.0,
+          "per_bank_memory_B": 2457600,
+          "per_bank_memory_KB": 2400.0,
+          "reason": "out_of_memory",
+          "operator": "mul"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "identity": {
+      "operator": "identity",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "softplus": {
+      "operator": "softplus",
+      "status": "completed",
+      "total_tests": 11,
+      "passed": 10,
+      "failed": 0,
+      "skipped": 1,
+      "oom_failures": [
+        {
+          "input_shape": "[1, 32, 1280, 800]",
+          "total_memory_B": 65536000,
+          "total_memory_MB": 62.5,
+          "per_bank_memory_B": 1024000,
+          "per_bank_memory_KB": 1000.0,
+          "reason": "out_of_memory",
+          "operator": "softplus"
+        },
+        {
+          "input_shape": "[1, 32, 1280, 800]",
+          "total_memory_B": 65536000,
+          "total_memory_MB": 62.5,
+          "per_bank_memory_B": 1024000,
+          "per_bank_memory_KB": 1000.0,
+          "reason": "out_of_memory",
+          "operator": "softplus"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "sigmoid": {
+      "operator": "sigmoid",
+      "status": "completed",
+      "total_tests": 21,
+      "passed": 20,
+      "failed": 0,
+      "skipped": 1,
+      "oom_failures": [
+        {
+          "input_shape": "[1, 1, 1280, 800]",
+          "total_memory_B": 65536000,
+          "total_memory_MB": 62.5,
+          "per_bank_memory_B": 1024000,
+          "per_bank_memory_KB": 1000.0,
+          "reason": "out_of_memory",
+          "operator": "sigmoid"
+        },
+        {
+          "input_shape": "[1, 1, 1280, 800]",
+          "total_memory_B": 65536000,
+          "total_memory_MB": 62.5,
+          "per_bank_memory_B": 1024000,
+          "per_bank_memory_KB": 1000.0,
+          "reason": "out_of_memory",
+          "operator": "sigmoid"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "splitwithsizes": {
+      "operator": "splitwithsizes",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "mean": {
+      "operator": "mean",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "maxpool2d": {
+      "operator": "maxpool2d",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [
+        {
+          "input_shape": "[1, 64, 1280, 800]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1, 64, 1280, 800]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "leakyrelu": {
+      "operator": "leakyrelu",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "permute": {
+      "operator": "permute",
+      "status": "completed",
+      "total_tests": 97,
+      "passed": 86,
+      "failed": 0,
+      "skipped": 11,
+      "oom_failures": [
+        {
+          "input_shape": "[4, 80, 50, 1, 1, 80]",
+          "total_memory_B": 98304000,
+          "total_memory_MB": 93.75,
+          "per_bank_memory_B": 1536000,
+          "per_bank_memory_KB": 1500.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[2, 160, 100, 1, 1, 80]",
+          "total_memory_B": 196608000,
+          "total_memory_MB": 187.5,
+          "per_bank_memory_B": 3072000,
+          "per_bank_memory_KB": 3000.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[1, 512, 80, 50, 1]",
+          "total_memory_B": 167772160,
+          "total_memory_MB": 160.0,
+          "per_bank_memory_B": 2621440,
+          "per_bank_memory_KB": 2560.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[1, 512, 160, 100, 1]",
+          "total_memory_B": 671088640,
+          "total_memory_MB": 640.0,
+          "per_bank_memory_B": 10485760,
+          "per_bank_memory_KB": 10240.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[160, 100, 1, 1, 80]",
+          "total_memory_B": 98304000,
+          "total_memory_MB": 93.75,
+          "per_bank_memory_B": 1536000,
+          "per_bank_memory_KB": 1500.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[1, 64000, 1, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[1, 1, 64000, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[1334, 49, 4, 32]",
+          "total_memory_B": 133869568,
+          "total_memory_MB": 127.67,
+          "per_bank_memory_B": 2093056,
+          "per_bank_memory_KB": 2044.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[1334, 4, 49, 32]",
+          "total_memory_B": 133869568,
+          "total_memory_MB": 127.67,
+          "per_bank_memory_B": 2093056,
+          "per_bank_memory_KB": 2044.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[1000, 64, 4, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[1000, 4, 64, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[4, 80, 50, 1, 1, 80]",
+          "total_memory_B": 98304000,
+          "total_memory_MB": 93.75,
+          "per_bank_memory_B": 1536000,
+          "per_bank_memory_KB": 1500.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[2, 160, 100, 1, 1, 80]",
+          "total_memory_B": 196608000,
+          "total_memory_MB": 187.5,
+          "per_bank_memory_B": 3072000,
+          "per_bank_memory_KB": 3000.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[1, 512, 80, 50, 1]",
+          "total_memory_B": 167772160,
+          "total_memory_MB": 160.0,
+          "per_bank_memory_B": 2621440,
+          "per_bank_memory_KB": 2560.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[1, 512, 160, 100, 1]",
+          "total_memory_B": 671088640,
+          "total_memory_MB": 640.0,
+          "per_bank_memory_B": 10485760,
+          "per_bank_memory_KB": 10240.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[160, 100, 1, 1, 80]",
+          "total_memory_B": 98304000,
+          "total_memory_MB": 93.75,
+          "per_bank_memory_B": 1536000,
+          "per_bank_memory_KB": 1500.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[1, 64000, 1, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[1, 1, 64000, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[1334, 49, 4, 32]",
+          "total_memory_B": 133869568,
+          "total_memory_MB": 127.67,
+          "per_bank_memory_B": 2093056,
+          "per_bank_memory_KB": 2044.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[1334, 4, 49, 32]",
+          "total_memory_B": 133869568,
+          "total_memory_MB": 127.67,
+          "per_bank_memory_B": 2093056,
+          "per_bank_memory_KB": 2044.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[1000, 64, 4, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        },
+        {
+          "input_shape": "[1000, 4, 64, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "permute"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "copy": {
+      "operator": "copy",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "bmm": {
+      "operator": "bmm",
+      "status": "completed",
+      "total_tests": 52,
+      "passed": 41,
+      "failed": 9,
+      "skipped": 2,
+      "oom_failures": [
+        {
+          "input_shape": "[1, 64000, 1000]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "bmm"
+        },
+        {
+          "input_shape": "[2, 16000, 1000]",
+          "total_memory_B": 65536000,
+          "total_memory_MB": 62.5,
+          "per_bank_memory_B": 1024000,
+          "per_bank_memory_KB": 1000.0,
+          "reason": "out_of_memory",
+          "operator": "bmm"
+        },
+        {
+          "input_shape": "[1, 64000, 1000]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "bmm"
+        },
+        {
+          "input_shape": "[2, 16000, 1000]",
+          "total_memory_B": 65536000,
+          "total_memory_MB": 62.5,
+          "per_bank_memory_B": 1024000,
+          "per_bank_memory_KB": 1000.0,
+          "reason": "out_of_memory",
+          "operator": "bmm"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "unsafeview": {
+      "operator": "unsafeview",
+      "status": "completed",
+      "total_tests": 69,
+      "passed": 24,
+      "failed": 38,
+      "skipped": 7,
+      "oom_failures": [
+        {
+          "input_shape": "[4, 2, 1000, 1000]",
+          "total_memory_B": 262144000,
+          "total_memory_MB": 250.0,
+          "per_bank_memory_B": 4096000,
+          "per_bank_memory_KB": 4000.0,
+          "reason": "out_of_memory",
+          "operator": "unsafeview"
+        },
+        {
+          "input_shape": "[1, 64000, 1000]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "unsafeview"
+        },
+        {
+          "input_shape": "[1334, 4, 32, 49]",
+          "total_memory_B": 174850048,
+          "total_memory_MB": 166.75,
+          "per_bank_memory_B": 2732032,
+          "per_bank_memory_KB": 2668.0,
+          "reason": "out_of_memory",
+          "operator": "unsafeview"
+        },
+        {
+          "input_shape": "[1334, 4, 49, 32]",
+          "total_memory_B": 133869568,
+          "total_memory_MB": 127.67,
+          "per_bank_memory_B": 2093056,
+          "per_bank_memory_KB": 2044.0,
+          "reason": "out_of_memory",
+          "operator": "unsafeview"
+        },
+        {
+          "input_shape": "[1000, 4, 32, 64]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "unsafeview"
+        },
+        {
+          "input_shape": "[1000, 4, 64, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "unsafeview"
+        },
+        {
+          "input_shape": "[1000, 4, 64, 64]",
+          "total_memory_B": 262144000,
+          "total_memory_MB": 250.0,
+          "per_bank_memory_B": 4096000,
+          "per_bank_memory_KB": 4000.0,
+          "reason": "out_of_memory",
+          "operator": "unsafeview"
+        },
+        {
+          "input_shape": "[4, 2, 1000, 1000]",
+          "total_memory_B": 262144000,
+          "total_memory_MB": 250.0,
+          "per_bank_memory_B": 4096000,
+          "per_bank_memory_KB": 4000.0,
+          "reason": "out_of_memory",
+          "operator": "unsafeview"
+        },
+        {
+          "input_shape": "[1, 64000, 1000]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "unsafeview"
+        },
+        {
+          "input_shape": "[1334, 4, 32, 49]",
+          "total_memory_B": 174850048,
+          "total_memory_MB": 166.75,
+          "per_bank_memory_B": 2732032,
+          "per_bank_memory_KB": 2668.0,
+          "reason": "out_of_memory",
+          "operator": "unsafeview"
+        },
+        {
+          "input_shape": "[1334, 4, 49, 32]",
+          "total_memory_B": 133869568,
+          "total_memory_MB": 127.67,
+          "per_bank_memory_B": 2093056,
+          "per_bank_memory_KB": 2044.0,
+          "reason": "out_of_memory",
+          "operator": "unsafeview"
+        },
+        {
+          "input_shape": "[1000, 4, 32, 64]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "unsafeview"
+        },
+        {
+          "input_shape": "[1000, 4, 64, 32]",
+          "total_memory_B": 131072000,
+          "total_memory_MB": 125.0,
+          "per_bank_memory_B": 2048000,
+          "per_bank_memory_KB": 2000.0,
+          "reason": "out_of_memory",
+          "operator": "unsafeview"
+        },
+        {
+          "input_shape": "[1000, 4, 64, 64]",
+          "total_memory_B": 262144000,
+          "total_memory_MB": 250.0,
+          "per_bank_memory_B": 4096000,
+          "per_bank_memory_KB": 4000.0,
+          "reason": "out_of_memory",
+          "operator": "unsafeview"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    },
+    "softmax": {
+      "operator": "softmax",
+      "status": "unknown",
+      "total_tests": 0,
+      "passed": 0,
+      "failed": 0,
+      "skipped": 0,
+      "oom_failures": [
+        {
+          "input_shape": "[1, 2, 1000, 1000]",
+          "total_memory_B": 65536000,
+          "total_memory_MB": 62.5,
+          "per_bank_memory_B": 1024000,
+          "per_bank_memory_KB": 1000.0,
+          "reason": "out_of_memory"
+        },
+        {
+          "input_shape": "[1, 2, 1000, 1000]",
+          "total_memory_B": 65536000,
+          "total_memory_MB": 62.5,
+          "per_bank_memory_B": 1024000,
+          "per_bank_memory_KB": 1000.0,
+          "reason": "out_of_memory"
+        }
+      ],
+      "type_errors": [],
+      "other_failures": [],
+      "test_details": []
+    }
+  },
+  "all_oom_failures": [
+    {
+      "input_shape": "[4, 80, 50, 32, 1, 1]",
+      "total_memory_B": 1048576000,
+      "total_memory_MB": 1000.0,
+      "per_bank_memory_B": 16384000,
+      "per_bank_memory_KB": 16000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1, 4, 80, 50, 80, 1]",
+      "total_memory_B": 98304000,
+      "total_memory_MB": 93.75,
+      "per_bank_memory_B": 1536000,
+      "per_bank_memory_KB": 1500.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[2, 160, 100, 32, 1, 1]",
+      "total_memory_B": 2097152000,
+      "total_memory_MB": 2000.0,
+      "per_bank_memory_B": 32768000,
+      "per_bank_memory_KB": 32000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1, 2, 160, 100, 80, 1]",
+      "total_memory_B": 196608000,
+      "total_memory_MB": 187.5,
+      "per_bank_memory_B": 3072000,
+      "per_bank_memory_KB": 3000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[8, 40, 25, 32, 1, 1]",
+      "total_memory_B": 524288000,
+      "total_memory_MB": 500.0,
+      "per_bank_memory_B": 8192000,
+      "per_bank_memory_KB": 8000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[40, 25, 512, 1, 1]",
+      "total_memory_B": 1048576000,
+      "total_memory_MB": 1000.0,
+      "per_bank_memory_B": 16384000,
+      "per_bank_memory_KB": 16000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[80, 50, 512, 1, 1]",
+      "total_memory_B": 4194304000,
+      "total_memory_MB": 4000.0,
+      "per_bank_memory_B": 65536000,
+      "per_bank_memory_KB": 64000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[160, 100, 512, 1, 1]",
+      "total_memory_B": 16777216000,
+      "total_memory_MB": 16000.0,
+      "per_bank_memory_B": 262144000,
+      "per_bank_memory_KB": 256000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1, 80, 160, 100, 1]",
+      "total_memory_B": 104857600,
+      "total_memory_MB": 100.0,
+      "per_bank_memory_B": 1638400,
+      "per_bank_memory_KB": 1600.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1, 1, 64000, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1, 1, 64000, 1000]",
+      "total_memory_B": 4194304000,
+      "total_memory_MB": 4000.0,
+      "per_bank_memory_B": 65536000,
+      "per_bank_memory_KB": 64000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1, 64000, 1, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1, 2, 16000, 1000]",
+      "total_memory_B": 1048576000,
+      "total_memory_MB": 1000.0,
+      "per_bank_memory_B": 16384000,
+      "per_bank_memory_KB": 16000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1, 5, 4000, 1000]",
+      "total_memory_B": 262144000,
+      "total_memory_MB": 250.0,
+      "per_bank_memory_B": 4096000,
+      "per_bank_memory_KB": 4000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1334, 7, 7, 128]",
+      "total_memory_B": 76496896,
+      "total_memory_MB": 72.95,
+      "per_bank_memory_B": 1196032,
+      "per_bank_memory_KB": 1168.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1334, 4, 49, 49]",
+      "total_memory_B": 267739136,
+      "total_memory_MB": 255.34,
+      "per_bank_memory_B": 4184064,
+      "per_bank_memory_KB": 4086.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1334, 49, 4, 32]",
+      "total_memory_B": 133869568,
+      "total_memory_MB": 127.67,
+      "per_bank_memory_B": 2093056,
+      "per_bank_memory_KB": 2044.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[345, 8, 49, 49]",
+      "total_memory_B": 22609920,
+      "total_memory_MB": 21.56,
+      "per_bank_memory_B": 354304,
+      "per_bank_memory_KB": 346.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1000, 8, 8, 128]",
+      "total_memory_B": 65536000,
+      "total_memory_MB": 62.5,
+      "per_bank_memory_B": 1024000,
+      "per_bank_memory_KB": 1000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1000, 4, 64, 64]",
+      "total_memory_B": 262144000,
+      "total_memory_MB": 250.0,
+      "per_bank_memory_B": 4096000,
+      "per_bank_memory_KB": 4000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1000, 64, 4, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[4, 80, 50, 32, 1, 1]",
+      "total_memory_B": 1048576000,
+      "total_memory_MB": 1000.0,
+      "per_bank_memory_B": 16384000,
+      "per_bank_memory_KB": 16000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1, 4, 80, 50, 80, 1]",
+      "total_memory_B": 98304000,
+      "total_memory_MB": 93.75,
+      "per_bank_memory_B": 1536000,
+      "per_bank_memory_KB": 1500.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[2, 160, 100, 32, 1, 1]",
+      "total_memory_B": 2097152000,
+      "total_memory_MB": 2000.0,
+      "per_bank_memory_B": 32768000,
+      "per_bank_memory_KB": 32000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1, 2, 160, 100, 80, 1]",
+      "total_memory_B": 196608000,
+      "total_memory_MB": 187.5,
+      "per_bank_memory_B": 3072000,
+      "per_bank_memory_KB": 3000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[8, 40, 25, 32, 1, 1]",
+      "total_memory_B": 524288000,
+      "total_memory_MB": 500.0,
+      "per_bank_memory_B": 8192000,
+      "per_bank_memory_KB": 8000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[40, 25, 512, 1, 1]",
+      "total_memory_B": 1048576000,
+      "total_memory_MB": 1000.0,
+      "per_bank_memory_B": 16384000,
+      "per_bank_memory_KB": 16000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[80, 50, 512, 1, 1]",
+      "total_memory_B": 4194304000,
+      "total_memory_MB": 4000.0,
+      "per_bank_memory_B": 65536000,
+      "per_bank_memory_KB": 64000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[160, 100, 512, 1, 1]",
+      "total_memory_B": 16777216000,
+      "total_memory_MB": 16000.0,
+      "per_bank_memory_B": 262144000,
+      "per_bank_memory_KB": 256000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1, 80, 160, 100, 1]",
+      "total_memory_B": 104857600,
+      "total_memory_MB": 100.0,
+      "per_bank_memory_B": 1638400,
+      "per_bank_memory_KB": 1600.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1, 1, 64000, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1, 1, 64000, 1000]",
+      "total_memory_B": 4194304000,
+      "total_memory_MB": 4000.0,
+      "per_bank_memory_B": 65536000,
+      "per_bank_memory_KB": 64000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1, 64000, 1, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1, 2, 16000, 1000]",
+      "total_memory_B": 1048576000,
+      "total_memory_MB": 1000.0,
+      "per_bank_memory_B": 16384000,
+      "per_bank_memory_KB": 16000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1, 5, 4000, 1000]",
+      "total_memory_B": 262144000,
+      "total_memory_MB": 250.0,
+      "per_bank_memory_B": 4096000,
+      "per_bank_memory_KB": 4000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1334, 7, 7, 128]",
+      "total_memory_B": 76496896,
+      "total_memory_MB": 72.95,
+      "per_bank_memory_B": 1196032,
+      "per_bank_memory_KB": 1168.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1334, 4, 49, 49]",
+      "total_memory_B": 267739136,
+      "total_memory_MB": 255.34,
+      "per_bank_memory_B": 4184064,
+      "per_bank_memory_KB": 4086.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1334, 49, 4, 32]",
+      "total_memory_B": 133869568,
+      "total_memory_MB": 127.67,
+      "per_bank_memory_B": 2093056,
+      "per_bank_memory_KB": 2044.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[345, 8, 49, 49]",
+      "total_memory_B": 22609920,
+      "total_memory_MB": 21.56,
+      "per_bank_memory_B": 354304,
+      "per_bank_memory_KB": 346.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1000, 8, 8, 128]",
+      "total_memory_B": 65536000,
+      "total_memory_MB": 62.5,
+      "per_bank_memory_B": 1024000,
+      "per_bank_memory_KB": 1000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1000, 4, 64, 64]",
+      "total_memory_B": 262144000,
+      "total_memory_MB": 250.0,
+      "per_bank_memory_B": 4096000,
+      "per_bank_memory_KB": 4000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1000, 64, 4, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "view"
+    },
+    {
+      "input_shape": "[1, 128, 640, 400]",
+      "total_memory_B": 68157440,
+      "total_memory_MB": 65.0,
+      "per_bank_memory_B": 1064960,
+      "per_bank_memory_KB": 1040.0,
+      "reason": "out_of_memory",
+      "operator": "cat"
+    },
+    {
+      "input_shape": "[1, 64, 1280, 800]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "cat"
+    },
+    {
+      "input_shape": "[1, 128, 640, 400]",
+      "total_memory_B": 68157440,
+      "total_memory_MB": 65.0,
+      "per_bank_memory_B": 1064960,
+      "per_bank_memory_KB": 1040.0,
+      "reason": "out_of_memory",
+      "operator": "cat"
+    },
+    {
+      "input_shape": "[1, 64, 1280, 800]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "cat"
+    },
+    {
+      "input_shape": "[1, 80, 640, 400]",
+      "total_memory_B": 51118080,
+      "total_memory_MB": 48.75,
+      "per_bank_memory_B": 798720,
+      "per_bank_memory_KB": 780.0,
+      "reason": "out_of_memory",
+      "operator": "silu"
+    },
+    {
+      "input_shape": "[1, 96, 640, 400]",
+      "total_memory_B": 51118080,
+      "total_memory_MB": 48.75,
+      "per_bank_memory_B": 798720,
+      "per_bank_memory_KB": 780.0,
+      "reason": "out_of_memory",
+      "operator": "silu"
+    },
+    {
+      "input_shape": "[1, 144, 640, 400]",
+      "total_memory_B": 85196800,
+      "total_memory_MB": 81.25,
+      "per_bank_memory_B": 1331200,
+      "per_bank_memory_KB": 1300.0,
+      "reason": "out_of_memory",
+      "operator": "silu"
+    },
+    {
+      "input_shape": "[1, 80, 640, 400]",
+      "total_memory_B": 51118080,
+      "total_memory_MB": 48.75,
+      "per_bank_memory_B": 798720,
+      "per_bank_memory_KB": 780.0,
+      "reason": "out_of_memory",
+      "operator": "silu"
+    },
+    {
+      "input_shape": "[1, 96, 640, 400]",
+      "total_memory_B": 51118080,
+      "total_memory_MB": 48.75,
+      "per_bank_memory_B": 798720,
+      "per_bank_memory_KB": 780.0,
+      "reason": "out_of_memory",
+      "operator": "silu"
+    },
+    {
+      "input_shape": "[1, 144, 640, 400]",
+      "total_memory_B": 85196800,
+      "total_memory_MB": 81.25,
+      "per_bank_memory_B": 1331200,
+      "per_bank_memory_KB": 1300.0,
+      "reason": "out_of_memory",
+      "operator": "silu"
+    },
+    {
+      "input_shape": "[1, 64, 640, 400]",
+      "total_memory_B": 34078720,
+      "total_memory_MB": 32.5,
+      "per_bank_memory_B": 532480,
+      "per_bank_memory_KB": 520.0,
+      "reason": "out_of_memory",
+      "operator": "add"
+    },
+    {
+      "input_shape": "[1, 256, 320, 200]",
+      "total_memory_B": 36700160,
+      "total_memory_MB": 35.0,
+      "per_bank_memory_B": 573440,
+      "per_bank_memory_KB": 560.0,
+      "reason": "out_of_memory",
+      "operator": "add"
+    },
+    {
+      "input_shape": "[1334, 4, 49, 49]",
+      "total_memory_B": 267739136,
+      "total_memory_MB": 255.34,
+      "per_bank_memory_B": 4184064,
+      "per_bank_memory_KB": 4086.0,
+      "reason": "out_of_memory",
+      "operator": "add"
+    },
+    {
+      "input_shape": "[1, 1334, 4, 49, 49]",
+      "total_memory_B": 43712512,
+      "total_memory_MB": 41.69,
+      "per_bank_memory_B": 684032,
+      "per_bank_memory_KB": 668.0,
+      "reason": "out_of_memory",
+      "operator": "add"
+    },
+    {
+      "input_shape": "[345, 8, 49, 49]",
+      "total_memory_B": 69242880,
+      "total_memory_MB": 66.04,
+      "per_bank_memory_B": 1083392,
+      "per_bank_memory_KB": 1058.0,
+      "reason": "out_of_memory",
+      "operator": "add"
+    },
+    {
+      "input_shape": "[1, 64, 640, 400]",
+      "total_memory_B": 34078720,
+      "total_memory_MB": 32.5,
+      "per_bank_memory_B": 532480,
+      "per_bank_memory_KB": 520.0,
+      "reason": "out_of_memory",
+      "operator": "add"
+    },
+    {
+      "input_shape": "[1, 256, 320, 200]",
+      "total_memory_B": 36700160,
+      "total_memory_MB": 35.0,
+      "per_bank_memory_B": 573440,
+      "per_bank_memory_KB": 560.0,
+      "reason": "out_of_memory",
+      "operator": "add"
+    },
+    {
+      "input_shape": "[1334, 4, 49, 49]",
+      "total_memory_B": 267739136,
+      "total_memory_MB": 255.34,
+      "per_bank_memory_B": 4184064,
+      "per_bank_memory_KB": 4086.0,
+      "reason": "out_of_memory",
+      "operator": "add"
+    },
+    {
+      "input_shape": "[1, 1334, 4, 49, 49]",
+      "total_memory_B": 43712512,
+      "total_memory_MB": 41.69,
+      "per_bank_memory_B": 684032,
+      "per_bank_memory_KB": 668.0,
+      "reason": "out_of_memory",
+      "operator": "add"
+    },
+    {
+      "input_shape": "[345, 8, 49, 49]",
+      "total_memory_B": 69242880,
+      "total_memory_MB": 66.04,
+      "per_bank_memory_B": 1083392,
+      "per_bank_memory_KB": 1058.0,
+      "reason": "out_of_memory",
+      "operator": "add"
+    },
+    {
+      "input_shape": "[1, 64000, 512]",
+      "total_memory_B": 65536000,
+      "total_memory_MB": 62.5,
+      "per_bank_memory_B": 1024000,
+      "per_bank_memory_KB": 1000.0,
+      "reason": "out_of_memory",
+      "operator": "geluactivation"
+    },
+    {
+      "input_shape": "[1, 64000, 512]",
+      "total_memory_B": 65536000,
+      "total_memory_MB": 62.5,
+      "per_bank_memory_B": 1024000,
+      "per_bank_memory_KB": 1000.0,
+      "reason": "out_of_memory",
+      "operator": "geluactivation"
+    },
+    {
+      "input_shape": "[1, 32, 1280, 800]",
+      "total_memory_B": 65536000,
+      "total_memory_MB": 62.5,
+      "per_bank_memory_B": 1024000,
+      "per_bank_memory_KB": 1000.0,
+      "reason": "out_of_memory",
+      "operator": "tanh"
+    },
+    {
+      "input_shape": "[1, 32, 1280, 800]",
+      "total_memory_B": 65536000,
+      "total_memory_MB": 62.5,
+      "per_bank_memory_B": 1024000,
+      "per_bank_memory_KB": 1000.0,
+      "reason": "out_of_memory",
+      "operator": "tanh"
+    },
+    {
+      "input_shape": "[1, 32, 1280, 800]",
+      "total_memory_B": 65536000,
+      "total_memory_MB": 62.5,
+      "per_bank_memory_B": 1024000,
+      "per_bank_memory_KB": 1000.0,
+      "reason": "out_of_memory",
+      "operator": "mish"
+    },
+    {
+      "input_shape": "[1, 32, 1280, 800]",
+      "total_memory_B": 65536000,
+      "total_memory_MB": 62.5,
+      "per_bank_memory_B": 1024000,
+      "per_bank_memory_KB": 1000.0,
+      "reason": "out_of_memory",
+      "operator": "mish"
+    },
+    {
+      "input_shape": "[1, 96, 640, 400]",
+      "total_memory_B": 51118080,
+      "total_memory_MB": 48.75,
+      "per_bank_memory_B": 798720,
+      "per_bank_memory_KB": 780.0,
+      "reason": "out_of_memory",
+      "operator": "hardtanh"
+    },
+    {
+      "input_shape": "[1, 96, 640, 400]",
+      "total_memory_B": 51118080,
+      "total_memory_MB": 48.75,
+      "per_bank_memory_B": 798720,
+      "per_bank_memory_KB": 780.0,
+      "reason": "out_of_memory",
+      "operator": "hardtanh"
+    },
+    {
+      "input_shape": "[1, 8000]",
+      "total_memory_B": 128000000,
+      "total_memory_MB": 122.07,
+      "per_bank_memory_B": 2000896,
+      "per_bank_memory_KB": 1954.0,
+      "reason": "out_of_memory",
+      "operator": "linear"
+    },
+    {
+      "input_shape": "[1, 8000]",
+      "total_memory_B": 128000000,
+      "total_memory_MB": 122.07,
+      "per_bank_memory_B": 2000896,
+      "per_bank_memory_KB": 1954.0,
+      "reason": "out_of_memory",
+      "operator": "linear"
+    },
+    {
+      "input_shape": "[8, 32, 300, 3, 4]",
+      "total_memory_B": 157286400,
+      "total_memory_MB": 150.0,
+      "per_bank_memory_B": 2457600,
+      "per_bank_memory_KB": 2400.0,
+      "reason": "out_of_memory",
+      "operator": "mul"
+    },
+    {
+      "input_shape": "[8, 32, 300, 3, 4]",
+      "total_memory_B": 157286400,
+      "total_memory_MB": 150.0,
+      "per_bank_memory_B": 2457600,
+      "per_bank_memory_KB": 2400.0,
+      "reason": "out_of_memory",
+      "operator": "mul"
+    },
+    {
+      "input_shape": "[1, 32, 1280, 800]",
+      "total_memory_B": 65536000,
+      "total_memory_MB": 62.5,
+      "per_bank_memory_B": 1024000,
+      "per_bank_memory_KB": 1000.0,
+      "reason": "out_of_memory",
+      "operator": "softplus"
+    },
+    {
+      "input_shape": "[1, 32, 1280, 800]",
+      "total_memory_B": 65536000,
+      "total_memory_MB": 62.5,
+      "per_bank_memory_B": 1024000,
+      "per_bank_memory_KB": 1000.0,
+      "reason": "out_of_memory",
+      "operator": "softplus"
+    },
+    {
+      "input_shape": "[1, 1, 1280, 800]",
+      "total_memory_B": 65536000,
+      "total_memory_MB": 62.5,
+      "per_bank_memory_B": 1024000,
+      "per_bank_memory_KB": 1000.0,
+      "reason": "out_of_memory",
+      "operator": "sigmoid"
+    },
+    {
+      "input_shape": "[1, 1, 1280, 800]",
+      "total_memory_B": 65536000,
+      "total_memory_MB": 62.5,
+      "per_bank_memory_B": 1024000,
+      "per_bank_memory_KB": 1000.0,
+      "reason": "out_of_memory",
+      "operator": "sigmoid"
+    },
+    {
+      "input_shape": "[4, 80, 50, 1, 1, 80]",
+      "total_memory_B": 98304000,
+      "total_memory_MB": 93.75,
+      "per_bank_memory_B": 1536000,
+      "per_bank_memory_KB": 1500.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[2, 160, 100, 1, 1, 80]",
+      "total_memory_B": 196608000,
+      "total_memory_MB": 187.5,
+      "per_bank_memory_B": 3072000,
+      "per_bank_memory_KB": 3000.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[1, 512, 80, 50, 1]",
+      "total_memory_B": 167772160,
+      "total_memory_MB": 160.0,
+      "per_bank_memory_B": 2621440,
+      "per_bank_memory_KB": 2560.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[1, 512, 160, 100, 1]",
+      "total_memory_B": 671088640,
+      "total_memory_MB": 640.0,
+      "per_bank_memory_B": 10485760,
+      "per_bank_memory_KB": 10240.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[160, 100, 1, 1, 80]",
+      "total_memory_B": 98304000,
+      "total_memory_MB": 93.75,
+      "per_bank_memory_B": 1536000,
+      "per_bank_memory_KB": 1500.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[1, 64000, 1, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[1, 1, 64000, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[1334, 49, 4, 32]",
+      "total_memory_B": 133869568,
+      "total_memory_MB": 127.67,
+      "per_bank_memory_B": 2093056,
+      "per_bank_memory_KB": 2044.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[1334, 4, 49, 32]",
+      "total_memory_B": 133869568,
+      "total_memory_MB": 127.67,
+      "per_bank_memory_B": 2093056,
+      "per_bank_memory_KB": 2044.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[1000, 64, 4, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[1000, 4, 64, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[4, 80, 50, 1, 1, 80]",
+      "total_memory_B": 98304000,
+      "total_memory_MB": 93.75,
+      "per_bank_memory_B": 1536000,
+      "per_bank_memory_KB": 1500.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[2, 160, 100, 1, 1, 80]",
+      "total_memory_B": 196608000,
+      "total_memory_MB": 187.5,
+      "per_bank_memory_B": 3072000,
+      "per_bank_memory_KB": 3000.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[1, 512, 80, 50, 1]",
+      "total_memory_B": 167772160,
+      "total_memory_MB": 160.0,
+      "per_bank_memory_B": 2621440,
+      "per_bank_memory_KB": 2560.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[1, 512, 160, 100, 1]",
+      "total_memory_B": 671088640,
+      "total_memory_MB": 640.0,
+      "per_bank_memory_B": 10485760,
+      "per_bank_memory_KB": 10240.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[160, 100, 1, 1, 80]",
+      "total_memory_B": 98304000,
+      "total_memory_MB": 93.75,
+      "per_bank_memory_B": 1536000,
+      "per_bank_memory_KB": 1500.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[1, 64000, 1, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[1, 1, 64000, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[1334, 49, 4, 32]",
+      "total_memory_B": 133869568,
+      "total_memory_MB": 127.67,
+      "per_bank_memory_B": 2093056,
+      "per_bank_memory_KB": 2044.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[1334, 4, 49, 32]",
+      "total_memory_B": 133869568,
+      "total_memory_MB": 127.67,
+      "per_bank_memory_B": 2093056,
+      "per_bank_memory_KB": 2044.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[1000, 64, 4, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[1000, 4, 64, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "permute"
+    },
+    {
+      "input_shape": "[1, 64000, 1000]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "bmm"
+    },
+    {
+      "input_shape": "[2, 16000, 1000]",
+      "total_memory_B": 65536000,
+      "total_memory_MB": 62.5,
+      "per_bank_memory_B": 1024000,
+      "per_bank_memory_KB": 1000.0,
+      "reason": "out_of_memory",
+      "operator": "bmm"
+    },
+    {
+      "input_shape": "[1, 64000, 1000]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "bmm"
+    },
+    {
+      "input_shape": "[2, 16000, 1000]",
+      "total_memory_B": 65536000,
+      "total_memory_MB": 62.5,
+      "per_bank_memory_B": 1024000,
+      "per_bank_memory_KB": 1000.0,
+      "reason": "out_of_memory",
+      "operator": "bmm"
+    },
+    {
+      "input_shape": "[4, 2, 1000, 1000]",
+      "total_memory_B": 262144000,
+      "total_memory_MB": 250.0,
+      "per_bank_memory_B": 4096000,
+      "per_bank_memory_KB": 4000.0,
+      "reason": "out_of_memory",
+      "operator": "unsafeview"
+    },
+    {
+      "input_shape": "[1, 64000, 1000]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "unsafeview"
+    },
+    {
+      "input_shape": "[1334, 4, 32, 49]",
+      "total_memory_B": 174850048,
+      "total_memory_MB": 166.75,
+      "per_bank_memory_B": 2732032,
+      "per_bank_memory_KB": 2668.0,
+      "reason": "out_of_memory",
+      "operator": "unsafeview"
+    },
+    {
+      "input_shape": "[1334, 4, 49, 32]",
+      "total_memory_B": 133869568,
+      "total_memory_MB": 127.67,
+      "per_bank_memory_B": 2093056,
+      "per_bank_memory_KB": 2044.0,
+      "reason": "out_of_memory",
+      "operator": "unsafeview"
+    },
+    {
+      "input_shape": "[1000, 4, 32, 64]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "unsafeview"
+    },
+    {
+      "input_shape": "[1000, 4, 64, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "unsafeview"
+    },
+    {
+      "input_shape": "[1000, 4, 64, 64]",
+      "total_memory_B": 262144000,
+      "total_memory_MB": 250.0,
+      "per_bank_memory_B": 4096000,
+      "per_bank_memory_KB": 4000.0,
+      "reason": "out_of_memory",
+      "operator": "unsafeview"
+    },
+    {
+      "input_shape": "[4, 2, 1000, 1000]",
+      "total_memory_B": 262144000,
+      "total_memory_MB": 250.0,
+      "per_bank_memory_B": 4096000,
+      "per_bank_memory_KB": 4000.0,
+      "reason": "out_of_memory",
+      "operator": "unsafeview"
+    },
+    {
+      "input_shape": "[1, 64000, 1000]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "unsafeview"
+    },
+    {
+      "input_shape": "[1334, 4, 32, 49]",
+      "total_memory_B": 174850048,
+      "total_memory_MB": 166.75,
+      "per_bank_memory_B": 2732032,
+      "per_bank_memory_KB": 2668.0,
+      "reason": "out_of_memory",
+      "operator": "unsafeview"
+    },
+    {
+      "input_shape": "[1334, 4, 49, 32]",
+      "total_memory_B": 133869568,
+      "total_memory_MB": 127.67,
+      "per_bank_memory_B": 2093056,
+      "per_bank_memory_KB": 2044.0,
+      "reason": "out_of_memory",
+      "operator": "unsafeview"
+    },
+    {
+      "input_shape": "[1000, 4, 32, 64]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "unsafeview"
+    },
+    {
+      "input_shape": "[1000, 4, 64, 32]",
+      "total_memory_B": 131072000,
+      "total_memory_MB": 125.0,
+      "per_bank_memory_B": 2048000,
+      "per_bank_memory_KB": 2000.0,
+      "reason": "out_of_memory",
+      "operator": "unsafeview"
+    },
+    {
+      "input_shape": "[1000, 4, 64, 64]",
+      "total_memory_B": 262144000,
+      "total_memory_MB": 250.0,
+      "per_bank_memory_B": 4096000,
+      "per_bank_memory_KB": 4000.0,
+      "reason": "out_of_memory",
+      "operator": "unsafeview"
+    }
+  ]
+}

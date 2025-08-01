@@ -1,0 +1,9 @@
+{
+  "summary": {
+    "total_operators_with_oom": 0,
+    "total_oom_failures": 0
+  },
+  "failures_by_operator": {},
+  "failures_by_shape": {},
+  "memory_analysis": {}
+}

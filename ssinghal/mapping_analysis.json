@@ -1,0 +1,653 @@
+{
+  "statistics": {
+    "total_operators": 57,
+    "supported": 42,
+    "unsupported": 15,
+    "meta_operations": 6,
+    "by_category": {
+      "activation": {
+        "supported": 14,
+        "unsupported": 0
+      },
+      "elementwise": {
+        "supported": 6,
+        "unsupported": 0
+      },
+      "concat": {
+        "supported": 4,
+        "unsupported": 0
+      },
+      "pooling": {
+        "supported": 1,
+        "unsupported": 3
+      },
+      "shape": {
+        "supported": 6,
+        "unsupported": 4
+      },
+      "tensor_ops": {
+        "supported": 2,
+        "unsupported": 0
+      },
+      "meta": {
+        "supported": 0,
+        "unsupported": 6
+      },
+      "linalg": {
+        "supported": 4,
+        "unsupported": 0
+      },
+      "reduction": {
+        "supported": 3,
+        "unsupported": 0
+      },
+      "special": {
+        "supported": 1,
+        "unsupported": 2
+      },
+      "regularization": {
+        "supported": 1,
+        "unsupported": 0
+      }
+    }
+  },
+  "detailed_analysis": {
+    "softplus": {
+      "occurrences": 72,
+      "mapping": {
+        "ttnn_function": "ttnn.softplus",
+        "torch_function": "torch.nn.functional.softplus",
+        "num_inputs": 1,
+        "category": "activation",
+        "supported": true
+      }
+    },
+    "tanh": {
+      "occurrences": 72,
+      "mapping": {
+        "ttnn_function": "ttnn.tanh",
+        "torch_function": "torch.tanh",
+        "num_inputs": 1,
+        "category": "activation",
+        "supported": true
+      }
+    },
+    "Mish": {
+      "occurrences": 72,
+      "mapping": {
+        "ttnn_function": "ttnn.mish",
+        "torch_function": "torch.nn.functional.mish",
+        "num_inputs": 1,
+        "category": "activation",
+        "supported": true
+      }
+    },
+    "add": {
+      "occurrences": 680,
+      "mapping": {
+        "ttnn_function": "ttnn.add",
+        "torch_function": "torch.add",
+        "num_inputs": 2,
+        "category": "elementwise",
+        "supported": true
+      }
+    },
+    "cat": {
+      "occurrences": 112,
+      "mapping": {
+        "ttnn_function": "ttnn.concat",
+        "torch_function": "torch.cat",
+        "num_inputs": "variable",
+        "category": "concat",
+        "supported": true,
+        "note": "Requires dim parameter"
+      }
+    },
+    "leakyrelu": {
+      "occurrences": 35,
+      "mapping": {
+        "ttnn_function": "ttnn.leaky_relu",
+        "torch_function": "torch.nn.functional.leaky_relu",
+        "num_inputs": 1,
+        "category": "activation",
+        "supported": true
+      }
+    },
+    "MaxPool2d": {
+      "occurrences": 30,
+      "mapping": {
+        "ttnn_function": "ttnn.max_pool2d",
+        "torch_function": "torch.nn.functional.max_pool2d",
+        "num_inputs": 1,
+        "category": "pooling",
+        "supported": true,
+        "note": "Requires kernel_size"
+      }
+    },
+    "Upsample": {
+      "occurrences": 14,
+      "mapping": {
+        "ttnn_function": "ttnn.upsample",
+        "torch_function": "torch.nn.functional.interpolate",
+        "num_inputs": 1,
+        "category": "shape",
+        "supported": false,
+        "note": "May not be directly supported"
+      }
+    },
+    "SiLU": {
+      "occurrences": 101,
+      "mapping": {
+        "ttnn_function": "ttnn.silu",
+        "torch_function": "torch.nn.functional.silu",
+        "num_inputs": 1,
+        "category": "activation",
+        "supported": true
+      }
+    },
+    "Concat": {
+      "occurrences": 35,
+      "mapping": {
+        "ttnn_function": "ttnn.concat",
+        "torch_function": "torch.cat",
+        "num_inputs": "variable",
+        "category": "concat",
+        "supported": true
+      }
+    },
+    "view": {
+      "occurrences": 1347,
+      "mapping": {
+        "ttnn_function": "ttnn.reshape",
+        "torch_function": "torch.view",
+        "num_inputs": 1,
+        "category": "shape",
+        "supported": true,
+        "note": "Requires shape parameter"
+      }
+    },
+    "permute": {
+      "occurrences": 393,
+      "mapping": {
+        "ttnn_function": "ttnn.permute",
+        "torch_function": "torch.permute",
+        "num_inputs": 1,
+        "category": "shape",
+        "supported": true,
+        "note": "Requires permutation dims"
+      }
+    },
+    "clone": {
+      "occurrences": 368,
+      "mapping": {
+        "ttnn_function": "ttnn.clone",
+        "torch_function": "torch.clone",
+        "num_inputs": 1,
+        "category": "tensor_ops",
+        "supported": true
+      }
+    },
+    "sigmoid": {
+      "occurrences": 305,
+      "mapping": {
+        "ttnn_function": "ttnn.sigmoid",
+        "torch_function": "torch.sigmoid",
+        "num_inputs": 1,
+        "category": "activation",
+        "supported": true
+      }
+    },
+    "Tensor": {
+      "occurrences": 518,
+      "mapping": {
+        "ttnn_function": null,
+        "torch_function": null,
+        "num_inputs": 0,
+        "category": "meta",
+        "supported": false,
+        "note": "Meta operation - tensor creation"
+      }
+    },
+    "TensorScalar": {
+      "occurrences": 3,
+      "mapping": {
+        "ttnn_function": null,
+        "torch_function": null,
+        "num_inputs": 0,
+        "category": "meta",
+        "supported": false,
+        "note": "Meta operation - scalar tensor"
+      }
+    },
+    "copy": {
+      "occurrences": 6,
+      "mapping": {
+        "ttnn_function": "ttnn.copy",
+        "torch_function": "torch.copy_",
+        "num_inputs": 2,
+        "category": "tensor_ops",
+        "supported": true
+      }
+    },
+    "silu": {
+      "occurrences": 616,
+      "mapping": {
+        "ttnn_function": "ttnn.silu",
+        "torch_function": "torch.nn.functional.silu",
+        "num_inputs": 1,
+        "category": "activation",
+        "supported": true
+      }
+    },
+    "splitwithsizes": {
+      "occurrences": 21,
+      "mapping": {
+        "ttnn_function": "ttnn.split",
+        "torch_function": "torch.split",
+        "num_inputs": 1,
+        "category": "concat",
+        "supported": true,
+        "note": "Requires split_sizes, dim"
+      }
+    },
+    "int": {
+      "occurrences": 183,
+      "mapping": {
+        "ttnn_function": null,
+        "torch_function": null,
+        "num_inputs": 0,
+        "category": "meta",
+        "supported": false,
+        "note": "Type conversion"
+      }
+    },
+    "softmax": {
+      "occurrences": 19,
+      "mapping": {
+        "ttnn_function": "ttnn.softmax",
+        "torch_function": "torch.softmax",
+        "num_inputs": 1,
+        "category": "activation",
+        "supported": true
+      }
+    },
+    "unsqueeze": {
+      "occurrences": 29,
+      "mapping": {
+        "ttnn_function": "ttnn.unsqueeze",
+        "torch_function": "torch.unsqueeze",
+        "num_inputs": 1,
+        "category": "shape",
+        "supported": true,
+        "note": "Requires dim parameter"
+      }
+    },
+    "bmm": {
+      "occurrences": 122,
+      "mapping": {
+        "ttnn_function": "ttnn.matmul",
+        "torch_function": "torch.bmm",
+        "num_inputs": 2,
+        "category": "linalg",
+        "supported": true
+      }
+    },
+    "dim": {
+      "occurrences": 10,
+      "mapping": {
+        "ttnn_function": null,
+        "torch_function": null,
+        "num_inputs": 0,
+        "category": "meta",
+        "supported": false,
+        "note": "Dimension query"
+      }
+    },
+    "AdaptiveMaxPool2d": {
+      "occurrences": 3,
+      "mapping": {
+        "ttnn_function": "ttnn.adaptive_max_pool2d",
+        "torch_function": "torch.nn.functional.adaptive_max_pool2d",
+        "num_inputs": 1,
+        "category": "pooling",
+        "supported": false,
+        "note": "May not be directly supported"
+      }
+    },
+    "addmm": {
+      "occurrences": 299,
+      "mapping": {
+        "ttnn_function": "ttnn.addmm",
+        "torch_function": "torch.addmm",
+        "num_inputs": 3,
+        "category": "linalg",
+        "supported": true
+      }
+    },
+    "Linear": {
+      "occurrences": 431,
+      "mapping": {
+        "ttnn_function": "ttnn.linear",
+        "torch_function": "torch.nn.functional.linear",
+        "num_inputs": 2,
+        "category": "linalg",
+        "supported": true,
+        "note": "Requires weight, optional bias"
+      }
+    },
+    "linalgvectornorm": {
+      "occurrences": 51,
+      "mapping": {
+        "ttnn_function": "ttnn.norm",
+        "torch_function": "torch.linalg.vector_norm",
+        "num_inputs": 1,
+        "category": "reduction",
+        "supported": true
+      }
+    },
+    "clampmin": {
+      "occurrences": 51,
+      "mapping": {
+        "ttnn_function": "ttnn.clip",
+        "torch_function": "torch.clamp_min",
+        "num_inputs": 1,
+        "category": "elementwise",
+        "supported": true,
+        "note": "Requires min value"
+      }
+    },
+    "expand": {
+      "occurrences": 311,
+      "mapping": {
+        "ttnn_function": "ttnn.expand",
+        "torch_function": "torch.expand",
+        "num_inputs": 1,
+        "category": "shape",
+        "supported": true,
+        "note": "Requires size parameter"
+      }
+    },
+    "ContrastiveHead": {
+      "occurrences": 3,
+      "mapping": {
+        "ttnn_function": null,
+        "torch_function": null,
+        "num_inputs": 1,
+        "category": "special",
+        "supported": false,
+        "note": "Custom head layer"
+      }
+    },
+    "unsafeview": {
+      "occurrences": 509,
+      "mapping": {
+        "ttnn_function": "ttnn.reshape",
+        "torch_function": "torch.view",
+        "num_inputs": 1,
+        "category": "shape",
+        "supported": true,
+        "note": "Requires shape parameter"
+      }
+    },
+    "upsamplenearest2d": {
+      "occurrences": 2,
+      "mapping": {
+        "ttnn_function": "ttnn.upsample_nearest2d",
+        "torch_function": "torch.nn.functional.interpolate",
+        "num_inputs": 1,
+        "category": "shape",
+        "supported": false,
+        "note": "May not be directly supported"
+      }
+    },
+    "relu": {
+      "occurrences": 185,
+      "mapping": {
+        "ttnn_function": "ttnn.relu",
+        "torch_function": "torch.relu",
+        "num_inputs": 1,
+        "category": "activation",
+        "supported": true
+      }
+    },
+    "constantpadnd": {
+      "occurrences": 38,
+      "mapping": {
+        "ttnn_function": "ttnn.pad",
+        "torch_function": "torch.nn.functional.pad",
+        "num_inputs": 1,
+        "category": "shape",
+        "supported": false,
+        "note": "May not be directly supported"
+      }
+    },
+    "Dropout": {
+      "occurrences": 66,
+      "mapping": {
+        "ttnn_function": "ttnn.dropout",
+        "torch_function": "torch.nn.functional.dropout",
+        "num_inputs": 1,
+        "category": "regularization",
+        "supported": true
+      }
+    },
+    "GELU": {
+      "occurrences": 1,
+      "mapping": {
+        "ttnn_function": "ttnn.gelu",
+        "torch_function": "torch.nn.functional.gelu",
+        "num_inputs": 1,
+        "category": "activation",
+        "supported": true
+      }
+    },
+    "Identity": {
+      "occurrences": 5,
+      "mapping": {
+        "ttnn_function": "ttnn.identity",
+        "torch_function": "torch.nn.Identity",
+        "num_inputs": 1,
+        "category": "special",
+        "supported": true
+      }
+    },
+    "topk": {
+      "occurrences": 1,
+      "mapping": {
+        "ttnn_function": "ttnn.topk",
+        "torch_function": "torch.topk",
+        "num_inputs": 1,
+        "category": "reduction",
+        "supported": true
+      }
+    },
+    "transpose": {
+      "occurrences": 36,
+      "mapping": {
+        "ttnn_function": "ttnn.transpose",
+        "torch_function": "torch.transpose",
+        "num_inputs": 1,
+        "category": "shape",
+        "supported": true,
+        "note": "Requires dim0, dim1"
+      }
+    },
+    "div": {
+      "occurrences": 1,
+      "mapping": {
+        "ttnn_function": "ttnn.div",
+        "torch_function": "torch.div",
+        "num_inputs": 2,
+        "category": "elementwise",
+        "supported": true
+      }
+    },
+    "mul": {
+      "occurrences": 35,
+      "mapping": {
+        "ttnn_function": "ttnn.mul",
+        "torch_function": "torch.mul",
+        "num_inputs": 2,
+        "category": "elementwise",
+        "supported": true
+      }
+    },
+    "clamp": {
+      "occurrences": 3,
+      "mapping": {
+        "ttnn_function": "ttnn.clip",
+        "torch_function": "torch.clamp",
+        "num_inputs": 1,
+        "category": "elementwise",
+        "supported": true,
+        "note": "Requires min, max"
+      }
+    },
+    "Scalar": {
+      "occurrences": 1,
+      "mapping": {
+        "ttnn_function": null,
+        "torch_function": null,
+        "num_inputs": 0,
+        "category": "meta",
+        "supported": false,
+        "note": "Meta operation - scalar value"
+      }
+    },
+    "log": {
+      "occurrences": 1,
+      "mapping": {
+        "ttnn_function": "ttnn.log",
+        "torch_function": "torch.log",
+        "num_inputs": 1,
+        "category": "elementwise",
+        "supported": true
+      }
+    },
+    "stack": {
+      "occurrences": 1,
+      "mapping": {
+        "ttnn_function": "ttnn.stack",
+        "torch_function": "torch.stack",
+        "num_inputs": "variable",
+        "category": "concat",
+        "supported": true
+      }
+    },
+    "mean": {
+      "occurrences": 5,
+      "mapping": {
+        "ttnn_function": "ttnn.mean",
+        "torch_function": "torch.mean",
+        "num_inputs": 1,
+        "category": "reduction",
+        "supported": true
+      }
+    },
+    "AdaptiveAvgPool2d": {
+      "occurrences": 78,
+      "mapping": {
+        "ttnn_function": "ttnn.adaptive_avg_pool2d",
+        "torch_function": "torch.nn.functional.adaptive_avg_pool2d",
+        "num_inputs": 1,
+        "category": "pooling",
+        "supported": false,
+        "note": "May not be directly supported"
+      }
+    },
+    "hardtanh": {
+      "occurrences": 35,
+      "mapping": {
+        "ttnn_function": "ttnn.hardtanh",
+        "torch_function": "torch.nn.functional.hardtanh",
+        "num_inputs": 1,
+        "category": "activation",
+        "supported": true
+      }
+    },
+    "Sigmoid": {
+      "occurrences": 75,
+      "mapping": {
+        "ttnn_function": "ttnn.sigmoid",
+        "torch_function": "torch.nn.functional.sigmoid",
+        "num_inputs": 1,
+        "category": "activation",
+        "supported": true
+      }
+    },
+    "ReLU": {
+      "occurrences": 1,
+      "mapping": {
+        "ttnn_function": "ttnn.relu",
+        "torch_function": "torch.nn.functional.relu",
+        "num_inputs": 1,
+        "category": "activation",
+        "supported": true
+      }
+    },
+    "GELUActivation": {
+      "occurrences": 56,
+      "mapping": {
+        "ttnn_function": "ttnn.gelu",
+        "torch_function": "torch.nn.functional.gelu",
+        "num_inputs": 1,
+        "category": "activation",
+        "supported": true
+      }
+    },
+    "mm": {
+      "occurrences": 22,
+      "mapping": {
+        "ttnn_function": "ttnn.matmul",
+        "torch_function": "torch.mm",
+        "num_inputs": 2,
+        "category": "linalg",
+        "supported": true
+      }
+    },
+    "SwinDropPath": {
+      "occurrences": 24,
+      "mapping": {
+        "ttnn_function": null,
+        "torch_function": null,
+        "num_inputs": 1,
+        "category": "special",
+        "supported": false,
+        "note": "Swin transformer specific dropout"
+      }
+    },
+    "roll": {
+      "occurrences": 51,
+      "mapping": {
+        "ttnn_function": "ttnn.roll",
+        "torch_function": "torch.roll",
+        "num_inputs": 1,
+        "category": "shape",
+        "supported": false,
+        "note": "May not be directly supported"
+      }
+    },
+    "asstrided": {
+      "occurrences": 2,
+      "mapping": {
+        "ttnn_function": null,
+        "torch_function": "torch.as_strided",
+        "num_inputs": 1,
+        "category": "meta",
+        "supported": false,
+        "note": "Low-level stride manipulation"
+      }
+    },
+    "AdaptiveAvgPool1d": {
+      "occurrences": 2,
+      "mapping": {
+        "ttnn_function": "ttnn.adaptive_avg_pool1d",
+        "torch_function": "torch.nn.functional.adaptive_avg_pool1d",
+        "num_inputs": 1,
+        "category": "pooling",
+        "supported": false,
+        "note": "May not be directly supported"
+      }
+    }
+  }
+}
