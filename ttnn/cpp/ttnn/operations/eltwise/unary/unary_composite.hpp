@@ -172,9 +172,6 @@ constexpr auto multigammaln = ttnn::register_operation<
 constexpr auto sinh = ttnn::register_operation<
     "ttnn::sinh",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SINH>>();
-constexpr auto softsign = ttnn::register_operation<
-    "ttnn::softsign",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SOFTSIGN>>();
 constexpr auto swish = ttnn::register_operation<
     "ttnn::swish",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SWISH>>();
