@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings_common.hpp"
+#include "ttnn/operations/embedding/device/kernels/dataflow/embeddings_common.hpp"
 #include "debug/dprint.h"
 
 void kernel_main() {

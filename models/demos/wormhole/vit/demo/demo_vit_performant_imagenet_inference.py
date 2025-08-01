@@ -5,10 +5,9 @@
 
 import pytest
 import torch
-import transformers
 from loguru import logger
 from tqdm import tqdm
-from transformers import AutoImageProcessor
+from transformers import AutoImageProcessor, ViTConfig
 
 import ttnn
 from models.demos.vit.tests.vit_performant_imagenet import VitTrace2CQ
@@ -28,7 +27,6 @@ NUM_VALIDATION_IMAGES_IMAGENET = 49920
 )
 def test_run_vit_trace_2cqs_inference(
     mesh_device,
-    use_program_cache,
     batch_size_per_device,
     iterations,
     imagenet_label_dict,
@@ -50,12 +48,13 @@ def test_run_vit_trace_2cqs_inference(
         vit_trace_2cq.initialize_vit_trace_2cqs_inference(
             mesh_device,
             batch_size_per_device,
+            model_location_generator=model_location_generator,
         )
         profiler.end(f"compile")
 
         model_version = "google/vit-base-patch16-224"
         image_processor = AutoImageProcessor.from_pretrained(model_version)
-        config = transformers.ViTConfig.from_pretrained(model_version)
+        config = ViTConfig.from_pretrained(model_version)
 
         logger.info("ImageNet-1k validation Dataset")
         input_loc = str(model_location_generator("ImageNet_data"))
@@ -135,7 +134,6 @@ def test_run_vit_trace_2cqs_inference(
 @pytest.mark.parametrize("expected_accuracy", [0.80])
 def test_run_vit_trace_2cqs_accuracy(
     mesh_device,
-    use_program_cache,
     batch_size_per_device,
     iterations,
     imagenet_label_dict,
@@ -145,7 +143,6 @@ def test_run_vit_trace_2cqs_accuracy(
 ):
     test_run_vit_trace_2cqs_inference(
         mesh_device,
-        use_program_cache,
         batch_size_per_device,
         iterations,
         imagenet_label_dict,

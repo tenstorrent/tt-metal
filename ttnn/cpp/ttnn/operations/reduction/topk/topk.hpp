@@ -17,12 +17,13 @@ struct ExecuteTopK {
     static std::vector<Tensor> invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
-        const uint32_t k,
-        const int8_t dim,
-        const bool largest,
-        const bool sorted,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<CoreRangeSet>& sub_core_grids,
+        uint32_t k,
+        int8_t dim,
+        bool largest,
+        bool sorted,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+        const std::optional<Tensor>& indices_tensor = std::nullopt,
         std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors = std::nullopt);
 };
 

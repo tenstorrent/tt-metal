@@ -53,19 +53,16 @@ public:
      * Expected that *buffer_index_ptr is initialized outside of this object
      */
     EthChannelBuffer(
-        size_t channel_base_address,
-        size_t buffer_size_bytes,
-        size_t header_size_bytes,
-        size_t eth_transaction_ack_word_addr,  // Assume for receiver channel, this address points to a chunk of memory
-                                               // that can fit 2 eth_channel_syncs cfor ack
-        uint8_t channel_id) :
+        size_t channel_base_address, size_t buffer_size_bytes, size_t header_size_bytes, uint8_t channel_id) :
         buffer_size_in_bytes(buffer_size_bytes),
         max_eth_payload_size_in_bytes(buffer_size_in_bytes),
         channel_id(channel_id) {
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
             this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
-            for (size_t j = 0; j < this->max_eth_payload_size_in_bytes; j++) {
-                reinterpret_cast<volatile uint8_t*>(this->buffer_addresses[i])[j] = 0;
+// need to avoid unrolling to keep code size within limits
+#pragma GCC unroll 1
+            for (size_t j = 0; j < sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t); j++) {
+                reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
             }
         }
         set_cached_next_buffer_slot_addr(this->buffer_addresses[0]);
@@ -99,14 +96,6 @@ public:
     }
 #endif
 
-    FORCE_INLINE bool needs_to_send_channel_sync() const { return this->need_to_send_channel_sync; }
-
-    FORCE_INLINE void set_need_to_send_channel_sync(bool need_to_send_channel_sync) {
-        this->need_to_send_channel_sync = need_to_send_channel_sync;
-    }
-
-    FORCE_INLINE void clear_need_to_send_channel_sync() { this->need_to_send_channel_sync = false; }
-
     FORCE_INLINE size_t get_cached_next_buffer_slot_addr() const { return this->cached_next_buffer_slot_addr; }
 
     FORCE_INLINE void set_cached_next_buffer_slot_addr(size_t next_buffer_slot_addr) {
@@ -134,7 +123,6 @@ struct EthChannelBufferTuple {
         const size_t channel_base_address[],
         const size_t buffer_size_bytes,
         const size_t header_size_bytes,
-        const size_t eth_transaction_ack_word_addr,
         const size_t channel_base_id) {
         size_t idx = 0;
 
@@ -144,7 +132,6 @@ struct EthChannelBufferTuple {
                       channel_base_address[idx],
                       buffer_size_bytes,
                       header_size_bytes,
-                      eth_transaction_ack_word_addr,
                       static_cast<uint8_t>(channel_base_id + idx)),
                   ++idx),
                  ...);
@@ -257,10 +244,12 @@ struct EdmChannelWorkerInterface {
         noc_semaphore_inc<posted>(worker_semaphore_address, 1, tt::tt_fabric::worker_handshake_noc);
     }
 
+    template <uint8_t MY_ETH_CHANNEL = USE_DYNAMIC_CREDIT_ADDR>
     FORCE_INLINE void cache_producer_noc_addr() {
         invalidate_l1_cache();
         const auto& worker_info = *worker_location_info_ptr;
-        uint64_t worker_semaphore_address = get_noc_addr(
+        uint64_t worker_semaphore_address;
+        worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
         this->cached_worker_semaphore_address = worker_semaphore_address;
     }

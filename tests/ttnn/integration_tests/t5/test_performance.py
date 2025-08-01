@@ -45,7 +45,7 @@ def get_expected_times(model_name, functional_t5):
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [128])
 @pytest.mark.parametrize("functional_t5", [ttnn_functional_t5, ttnn_optimized_functional_t5])
-def test_t5_for_conditional_generation(device, use_program_cache, model_name, batch_size, sequence_size, functional_t5):
+def test_t5_for_conditional_generation(device, model_name, batch_size, sequence_size, functional_t5):
     disable_persistent_kernel_cache()
 
     config = transformers.T5Config.from_pretrained(model_name)

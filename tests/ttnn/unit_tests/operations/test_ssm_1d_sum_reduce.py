@@ -64,7 +64,7 @@ def test_ssm_reduce(H, W, latent_size, dtype, out_mem_config, in_mem_config, dev
     run_ssm_1d_sum_reduce(H, W, latent_size, dtype, out_mem_config, in_mem_config, device)
 
 
-def test_ssm_1d_sum_reduce_with_program_cache(device, use_program_cache):
+def test_ssm_1d_sum_reduce_with_program_cache(device):
     H, W, latent = 32, 163840, 32
     mem_config = ttnn.L1_MEMORY_CONFIG
     dtype = ttnn.bfloat16

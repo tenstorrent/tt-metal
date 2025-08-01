@@ -61,7 +61,7 @@ void ProfilerNoopOperation::validate_on_program_cache_miss(
 
     const auto& input_tensor = tensor_args.input;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
-    check_tensor(input_tensor, "Input", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+    check_tensor(input_tensor, "Input", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::BFLOAT16);
     if (preallocated_output_tensor.has_value()) {
         check_tensor(
             preallocated_output_tensor.value(),
@@ -98,7 +98,7 @@ ProfilerNoopOperation::tensor_return_value_t ProfilerNoopOperation::create_outpu
     return output_tensor;
 }
 
-tt::stl::hash::hash_t ProfilerNoopOperation::compute_program_hash(
+ttsl::hash::hash_t ProfilerNoopOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_logical_shape = input_tensor.logical_shape();
@@ -108,9 +108,11 @@ tt::stl::hash::hash_t ProfilerNoopOperation::compute_program_hash(
 }
 
 std::tuple<operation_attributes_t, tensor_args_t> ProfilerNoopOperation::invoke(
-    const ttnn::Tensor& input_tensor, const std::optional<ttnn::Tensor>& preallocated_output) {
+    const ttnn::Tensor& input_tensor,
+    const std::string& identifier,
+    const std::optional<ttnn::Tensor>& preallocated_output) {
     return {
-        operation_attributes_t{},
+        operation_attributes_t{.identifier = identifier},
         tensor_args_t{
             .input = input_tensor,
             .preallocated_output = preallocated_output,

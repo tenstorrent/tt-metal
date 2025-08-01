@@ -41,7 +41,6 @@ class Conv:
 
     def __call__(self, device, input_tensor):
         conv_config = ttnn.Conv2dConfig(
-            dtype=self.dtype,
             weights_dtype=ttnn.bfloat16,
             activation=self.activation,
             shard_layout=self.shard_layout,
@@ -75,6 +74,7 @@ class Conv:
             groups=self.groups,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.dtype,
         )
 
         output_tensor = ttnn.reshape(

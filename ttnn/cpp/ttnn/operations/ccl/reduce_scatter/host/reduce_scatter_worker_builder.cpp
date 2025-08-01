@@ -5,13 +5,13 @@
 #include <cstdint>
 #include <iterator>
 
-#include "cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp"
+#include "ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp"
 #include "hostdevcommon/kernel_structs.h"
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "ttnn/operations/ccl/common/uops/ccl_command.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 
 namespace ttnn {
 namespace ccl {
@@ -410,9 +410,7 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_sender_kernel_rt_a
 }
 
 
-static void convert_slices_to_ccl_commands() {
 
-}
 
 // Moved to (and updated in) ccl_worker_builder.cpp
 /*
@@ -567,7 +565,6 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_
     const std::size_t num_commands_expected = this->topology_config.ring_size - 1;
 
     auto const& tensor_shape = this->worker_input_slice.tensor_shape;
-    auto const& tensor_slice_shape = this->worker_input_slice.tensor_slice_shape;
 
     auto num_slices = topology_config.ring_size;
     auto start_slice_index = topology_config.ring_index == 0 ? topology_config.ring_size - 1 : 0;
@@ -600,7 +597,7 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_
 
     auto const& edm_interface_args = ttnn::ccl::emit_runtime_args(edm_interface);
     std::ranges::copy(edm_interface_args, std::back_inserter(args));
-    for (auto const& arg : edm_interface_args) {
+    for ([[maybe_unused]] auto const& arg : edm_interface_args) {
         log_trace(tt::LogOp, "ccl_send arg[{}]: edm_interface_args[] {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
     }
 
@@ -612,7 +609,7 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_
 
     auto const& addr_gen_rt_args = ttnn::ccl::legacy_emit_address_generator_runtime_args(this->device, input_tensor);
     std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
-    for (auto const& arg : addr_gen_rt_args) {
+    for ([[maybe_unused]] auto const& arg : addr_gen_rt_args) {
         log_trace(tt::LogOp, "ccl_send arg[{}]: addr_gen_rt_args[] {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
     }
 

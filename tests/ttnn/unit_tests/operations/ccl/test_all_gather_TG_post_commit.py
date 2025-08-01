@@ -12,7 +12,7 @@ from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
-NUM_BUFFERS = 8
+NUM_BUFFERS = 16
 
 
 def report_mismatches(golden, actual, max_printable=None):
@@ -75,7 +75,7 @@ def run_with_trace(
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
             topology=all_gather_topology,
-            multi_device_global_semaphore=ccl_semaphore_handles[0]
+            multi_device_global_semaphore=[ccl_semaphore_handles[0], ccl_semaphore_handles[1]]
             if type(ccl_semaphore_handles) == list
             else ccl_semaphore_handles,
             persistent_output_tensor=persistent_output_tensor,
@@ -108,7 +108,10 @@ def run_with_trace(
                     cluster_axis=cluster_axis,
                     mesh_device=mesh_device,
                     topology=all_gather_topology,
-                    multi_device_global_semaphore=ccl_semaphore_handles[i % NUM_BUFFERS]
+                    multi_device_global_semaphore=[
+                        ccl_semaphore_handles[i % NUM_BUFFERS],
+                        ccl_semaphore_handles[(i + 1) % NUM_BUFFERS],
+                    ]
                     if type(ccl_semaphore_handles) == list
                     else ccl_semaphore_handles,
                     persistent_output_tensor=persistent_output_tensor,
@@ -171,7 +174,6 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     input_dtype,
     layout,
     buffer_type: ttnn.BufferType,
-    use_program_cache,
     function_level_defaults,
     input_shard_spec: ttnn.ShardSpec = None,
     output_shard_spec: ttnn.ShardSpec = None,
@@ -186,6 +188,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     # New all-gather-async and persistent fabric params
     use_all_gather_async=False,
     use_persistent_output=False,
+    linear=True,
 ):
     if use_persistent_output and not use_all_gather_async:
         pytest.skip("Persistent output tensor requires all-gather-async")
@@ -239,8 +242,6 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
     ttnn_tensor = ttnn.to_memory_config(ttnn_tensor, input_mem_config)
-    # TODO: Take as an arg
-    linear = True
     if linear:
         all_gather_topology = ttnn.Topology.Linear
         wrap_mesh = False
@@ -411,7 +412,6 @@ def test_line_all_gather_on_TG_rows_post_commit(
     input_dtype,
     layout,
     buffer_type,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters=1,
@@ -428,7 +428,6 @@ def test_line_all_gather_on_TG_rows_post_commit(
         input_dtype,
         layout,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,
@@ -472,7 +471,6 @@ def test_line_all_gather_on_TG_cols_post_commit(
     input_dtype,
     layout,
     buffer_type,
-    use_program_cache,
     function_level_defaults,
     replication_factor,
     num_iters=1,
@@ -489,7 +487,6 @@ def test_line_all_gather_on_TG_cols_post_commit(
         input_dtype,
         layout,
         buffer_type,
-        use_program_cache,
         function_level_defaults,
         num_iters=num_iters,
         num_all_gather_instances=replication_factor,

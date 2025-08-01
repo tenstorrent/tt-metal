@@ -440,11 +440,12 @@ class resnetBlock2D:
             hidden_states = ttnn.to_memory_config(hidden_states, self.conv1_input_memory_config)
 
             conv_config = ttnn.Conv2dConfig(
-                dtype=ttnn.bfloat8_b,
                 weights_dtype=ttnn.bfloat8_b,
                 activation="",
                 shard_layout=self.conv1_shard_layout,
                 reshard_if_not_optimal=False,
+                enable_act_double_buffer=True,
+                enable_weights_double_buffer=True,
             )
             compute_config = ttnn.init_device_compute_kernel_config(
                 self.device.arch(),
@@ -481,12 +482,14 @@ class resnetBlock2D:
                     input_layout=hidden_states.get_layout(),
                     has_bias=True,
                     **conv_kwargs_1,
+                    input_dtype=ttnn.bfloat8_b,
                 )
                 self.conv1s_bias[0] = ttnn.prepare_conv_bias(
                     bias_tensor=self.conv1s_bias[0],
                     input_memory_config=hidden_states.memory_config(),
                     input_layout=hidden_states.get_layout(),
                     **conv_kwargs_1,
+                    input_dtype=ttnn.bfloat8_b,
                 )
                 self.conv1s_weights[0] = ttnn.to_device(self.conv1s_weights[0], self.device)
                 self.conv1s_bias[0] = ttnn.to_device(self.conv1s_bias[0], self.device)
@@ -497,6 +500,7 @@ class resnetBlock2D:
                 bias_tensor=self.conv1s_bias[0],
                 **conv_kwargs_1,
                 compute_config=compute_config,
+                dtype=ttnn.bfloat8_b,
             )
 
         else:
@@ -538,11 +542,12 @@ class resnetBlock2D:
                 # split_hidden_states[i] = self.conv1s[i](split_hidden_states[i])
 
                 conv_config = ttnn.Conv2dConfig(
-                    dtype=ttnn.bfloat8_b,
                     weights_dtype=ttnn.bfloat8_b,
                     activation="",
                     shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                     reshard_if_not_optimal=False,
+                    enable_act_double_buffer=True,
+                    enable_weights_double_buffer=True,
                 )
                 compute_config = ttnn.init_device_compute_kernel_config(
                     self.device.arch(),
@@ -577,12 +582,14 @@ class resnetBlock2D:
                         input_layout=split_hidden_states[i].get_layout(),
                         has_bias=True,
                         **conv_kwargs_2,
+                        input_dtype=ttnn.bfloat8_b,
                     )
                     self.conv1s_bias[i] = ttnn.prepare_conv_bias(
                         bias_tensor=self.conv1s_bias[i],
                         input_memory_config=split_hidden_states[i].memory_config(),
                         input_layout=split_hidden_states[i].get_layout(),
                         **conv_kwargs_2,
+                        input_dtype=ttnn.bfloat8_b,
                     )
 
                     self.conv1s_weights[i] = ttnn.to_device(self.conv1s_weights[i], self.device)
@@ -599,6 +606,7 @@ class resnetBlock2D:
                     compute_config=compute_config,
                     return_output_dim=True,
                     return_weights_and_bias=False,
+                    dtype=ttnn.bfloat8_b,
                 )
                 if i != 0:
                     split_hidden_states[i] = ttnn.add(
@@ -691,11 +699,12 @@ class resnetBlock2D:
         # hidden_states = self.conv2(hidden_states)
 
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat8_b,
             weights_dtype=ttnn.bfloat8_b,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             reshard_if_not_optimal=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
         )
         compute_config = get_default_compute_config(self.device)
         if self.conv2_config_override and "act_block_h" in self.conv2_config_override:
@@ -724,12 +733,14 @@ class resnetBlock2D:
                 input_layout=hidden_states.get_layout(),
                 has_bias=True,
                 **conv_kwargs_3,
+                input_dtype=ttnn.bfloat8_b,
             )
             self.conv2_bias = ttnn.prepare_conv_bias(
                 bias_tensor=self.conv2_bias,
                 input_memory_config=hidden_states.memory_config(),
                 input_layout=hidden_states.get_layout(),
                 **conv_kwargs_3,
+                input_dtype=ttnn.bfloat8_b,
             )
 
             self.conv2_weights = ttnn.to_device(self.conv2_weights, self.device)
@@ -743,6 +754,7 @@ class resnetBlock2D:
             compute_config=compute_config,
             return_output_dim=True,
             return_weights_and_bias=False,
+            dtype=ttnn.bfloat8_b,
         )
         use_in_shortcut = in_channels != out_channels if use_in_shortcut is None else use_in_shortcut
 
@@ -758,11 +770,12 @@ class resnetBlock2D:
             #     )
             # input_tensor = self.conv_shortcut(input_tensor)
             conv_config = ttnn.Conv2dConfig(
-                dtype=ttnn.bfloat8_b,
                 weights_dtype=ttnn.bfloat8_b,
                 activation="",
                 shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
                 reshard_if_not_optimal=False,
+                enable_act_double_buffer=True,
+                enable_weights_double_buffer=True,
             )
             compute_config = ttnn.init_device_compute_kernel_config(
                 self.device.arch(),
@@ -794,12 +807,14 @@ class resnetBlock2D:
                     input_layout=input_tensor.get_layout(),
                     has_bias=True,
                     **conv_kwargs_4,
+                    input_dtype=ttnn.bfloat8_b,
                 )
                 self.conv_shortcut_bias = ttnn.prepare_conv_bias(
                     bias_tensor=self.conv_shortcut_bias,
                     input_memory_config=input_tensor.memory_config(),
                     input_layout=input_tensor.get_layout(),
                     **conv_kwargs_4,
+                    input_dtype=ttnn.bfloat8_b,
                 )
                 self.conv_shortcut_weights = ttnn.to_device(self.conv_shortcut_weights, self.device)
                 self.conv_shortcut_bias = ttnn.to_device(self.conv_shortcut_bias, self.device)
@@ -815,6 +830,7 @@ class resnetBlock2D:
                 compute_config=compute_config,
                 return_output_dim=True,
                 return_weights_and_bias=False,
+                dtype=ttnn.bfloat8_b,
             )
 
         if ttnn.get_memory_config(input_tensor) != ttnn.get_memory_config(hidden_states):

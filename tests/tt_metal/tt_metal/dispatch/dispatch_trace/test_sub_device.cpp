@@ -12,6 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include "command_queue_fixture.hpp"
 #include "dispatch_test_utils.hpp"
 #include "gtest/gtest.h"
@@ -36,7 +37,7 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms
 
     // Compile the programs
     EnqueueProgram(device->command_queue(), waiter_program, false);
-    device->set_sub_device_stall_group({SubDeviceId{0}});
+    device->set_sub_device_stall_group({{SubDeviceId{0}}});
     // Test blocking on one sub-device
     EnqueueProgram(device->command_queue(), syncer_program, true);
     EnqueueProgram(device->command_queue(), incrementer_program, false);
@@ -57,7 +58,7 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms
 
     // Capture trace on one sub-device while another sub-device is running a program
     EnqueueProgram(device->command_queue(), waiter_program, false);
-    device->set_sub_device_stall_group({SubDeviceId{0}});
+    device->set_sub_device_stall_group({{SubDeviceId{0}}});
     auto tid_3 = BeginTraceCapture(device, device->command_queue().id());
     EnqueueProgram(device->command_queue(), syncer_program, false);
     EnqueueProgram(device->command_queue(), incrementer_program, false);
@@ -85,7 +86,7 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms
         ReplayTrace(device, device->command_queue().id(), tid_3, false);
     }
     Synchronize(device);
-    detail::DumpDeviceProfileResults(device);
+    detail::ReadDeviceProfilerResults(device);
 }
 
 TEST_F(CommandQueueSingleCardTraceFixture, TensixActiveEthTestSubDeviceTraceBasicEthPrograms) {
@@ -107,7 +108,7 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixActiveEthTestSubDeviceTraceBasi
 
     // Compile the programs
     EnqueueProgram(device->command_queue(), waiter_program, false);
-    device->set_sub_device_stall_group({SubDeviceId{0}});
+    device->set_sub_device_stall_group({{SubDeviceId{0}}});
     // Test blocking on one sub-device
     EnqueueProgram(device->command_queue(), syncer_program, true);
     EnqueueProgram(device->command_queue(), incrementer_program, false);
@@ -167,7 +168,7 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixActiveEthTestSubDeviceTraceProg
 
     // Compile the programs
     EnqueueProgram(device->command_queue(), waiter_program_1, false);
-    device->set_sub_device_stall_group({SubDeviceId{0}});
+    device->set_sub_device_stall_group({{SubDeviceId{0}}});
     EnqueueProgram(device->command_queue(), syncer_program_1, false);
     EnqueueProgram(device->command_queue(), incrementer_program_1, false);
     device->reset_sub_device_stall_group();
@@ -192,7 +193,7 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixActiveEthTestSubDeviceTraceProg
 
     // Compile the programs
     EnqueueProgram(device->command_queue(), waiter_program_2, false);
-    device->set_sub_device_stall_group({SubDeviceId{0}});
+    device->set_sub_device_stall_group({{SubDeviceId{0}}});
     EnqueueProgram(device->command_queue(), syncer_program_2, false);
     EnqueueProgram(device->command_queue(), incrementer_program_2, false);
     device->reset_sub_device_stall_group();
@@ -263,7 +264,7 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceIllegalOperations)
 
     // Compile the programs
     EnqueueProgram(device->command_queue(), waiter_program_1, false);
-    device->set_sub_device_stall_group({SubDeviceId{0}});
+    device->set_sub_device_stall_group({{SubDeviceId{0}}});
     // Test blocking on one sub-device
     EnqueueProgram(device->command_queue(), syncer_program_1, false);
     EnqueueProgram(device->command_queue(), incrementer_program_1, false);
@@ -284,7 +285,7 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceIllegalOperations)
         create_basic_sync_program(device, sub_device_2, sub_device_1);
 
     EnqueueProgram(device->command_queue(), waiter_program_2, false);
-    device->set_sub_device_stall_group({SubDeviceId{0}});
+    device->set_sub_device_stall_group({{SubDeviceId{0}}});
     EnqueueProgram(device->command_queue(), syncer_program_2, false);
     EnqueueProgram(device->command_queue(), incrementer_program_2, false);
     device->reset_sub_device_stall_group();

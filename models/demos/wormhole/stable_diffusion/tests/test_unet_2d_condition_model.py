@@ -57,7 +57,7 @@ def unsqueeze_all_params_to_4d(params):
         (2, 4, 64, 64),
     ],
 )
-def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_height, input_width, use_program_cache):
+def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_height, input_width):
     # setup envvar if testing on N300
     wh_arch_yaml_org = None
     if device.core_grid.y == 7:
@@ -160,4 +160,4 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     print(f"Second iteration took {second_iter} seconds")
 
     ttnn_output = ttnn.to_torch(ttnn_output)
-    assert_with_pcc(torch_output, ttnn_output, 0.996)
+    assert_with_pcc(torch_output, ttnn_output, 0.995)

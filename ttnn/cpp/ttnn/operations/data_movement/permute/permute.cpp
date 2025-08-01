@@ -25,7 +25,6 @@ ttnn::Tensor permute_impl(
     const MemoryConfig& output_mem_config,
     const std::optional<float>& pad_value) {
     // Get the device
-    IDevice* device = a.device();
     uint32_t rank = a.logical_shape().rank();
 
     auto prim_permute = [&](const ttnn::Tensor& input) -> ttnn::Tensor {
@@ -196,7 +195,7 @@ ttnn::Tensor ExecutePermute::invoke(
     const auto input_layout = input_tensor.layout();
     auto output_tensor =
         detail::permute_launch(itensor, iorder, memory_config.value_or(input_tensor.memory_config()), pad_value);
-    output_tensor = ttnn::to_layout(output_tensor, input_layout, std::nullopt, std::nullopt, (IDevice*)nullptr);
+    output_tensor = ttnn::to_layout(output_tensor, input_layout);
 
     if (input_rank < 4) {
         output_tensor = ttnn::squeeze_from_4D(output_tensor, input_rank);

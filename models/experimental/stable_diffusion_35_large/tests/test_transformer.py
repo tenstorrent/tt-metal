@@ -31,7 +31,6 @@ TILE_SIZE = 32
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192, "trace_region_size": 15157248}], indirect=True)
-@pytest.mark.usefixtures("use_program_cache")
 def test_transformer(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -146,7 +145,7 @@ def test_transformer(
     #     )
     # profiler.end(f"run")
     # devices = mesh_device.get_devices()
-    # ttnn.DumpDeviceProfiler(devices[0])
+    # ttnn.ReadDeviceProfiler(devices[0])
     # total_time = profiler.get("run")
     # avg_time = total_time / num_measurement_iterations
     # print(f" TOTAL TIME: {total_time} AVG TIME: {avg_time}\n")

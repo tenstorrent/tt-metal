@@ -20,7 +20,7 @@ void AllReduce::validate(const std::vector<Tensor>& input_tensors) const {
 
 std::vector<ttnn::TensorSpec> AllReduce::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    auto shape = input_tensor.logical_shape();
+    const auto& shape = input_tensor.logical_shape();
     TensorSpec spec(
         shape,
         tt::tt_metal::TensorLayout(
@@ -454,8 +454,6 @@ Tensor all_reduce(
     uint32_t num_devices = devices.size();
     TT_FATAL(num_devices > 1, "all_reduce op will only work for num_devices > 1, but has {}", num_devices);
 
-    bool is_linear = topology == ttnn::ccl::Topology::Linear;
-
     // Choose the appropriate strategy
     AllReduceStrategy strategy = choose_all_reduce_strategy(input_tensor, num_devices, num_links, topology);
 
@@ -493,8 +491,6 @@ std::vector<Tensor> all_reduce(
     }
     uint32_t num_devices = devices.size();
     TT_FATAL(num_devices > 1, "all_reduce op will only work for num_devices > 1, but has {}", num_devices);
-
-    bool is_linear = topology == ttnn::ccl::Topology::Linear;
 
     // Choose the appropriate strategy
     AllReduceStrategy strategy = choose_all_reduce_strategy(input_tensors.at(0), num_devices, num_links, topology);

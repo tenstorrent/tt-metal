@@ -4,8 +4,8 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -15,19 +15,16 @@ void kernel_main() {
     uint32_t num_shards = get_arg_val<uint32_t>(4);
 
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-
-    constexpr bool dst0_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr bool dst_stick_size_is_pow2 = get_compile_time_arg_val(2) == 1;
-    constexpr uint32_t dst_log_base_2_of_page_size = get_compile_time_arg_val(3);
+    constexpr uint32_t page_size = get_compile_time_arg_val(1);
 
     typedef ShardedInfo<
+        get_compile_time_arg_val(2),
+        get_compile_time_arg_val(3),
         get_compile_time_arg_val(4),
         get_compile_time_arg_val(5),
         get_compile_time_arg_val(6),
         get_compile_time_arg_val(7),
-        get_compile_time_arg_val(8),
-        get_compile_time_arg_val(9),
-        get_compile_time_arg_val(10)>
+        get_compile_time_arg_val(8)>
         tensor_shard_info;
 
     const auto [mapping_table, rt_increment] =

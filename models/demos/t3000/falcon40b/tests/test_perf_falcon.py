@@ -176,7 +176,7 @@ def run_test_FalconCausalLM_end_to_end(
         signpost("WARMUP_RUNS")
 
     for _ in range(warmup_iterations):
-        ttnn.DumpDeviceProfiler(mesh_device)
+        ttnn.ReadDeviceProfiler(mesh_device)
         if llm_mode == "prefill":
             model_inputs = torch.split(model_input, 1)
             tt_inputs, tt_attention_mask = zip(
@@ -220,7 +220,7 @@ def run_test_FalconCausalLM_end_to_end(
     ttnn.synchronize_device(mesh_device)
 
     # Run for perf iteration - profiler enabled
-    ttnn.DumpDeviceProfiler(mesh_device)
+    ttnn.ReadDeviceProfiler(mesh_device)
     profiler.enable()
     enable_persistent_kernel_cache()
     logger.info(f"Enable profiler and enable binary and compile cache")
@@ -350,7 +350,6 @@ def test_perf_bare_metal(
     model_location_generator,
     get_tt_cache_path,
     t3k_mesh_device,
-    use_program_cache,
     is_ci_env,
 ):
     if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):
@@ -422,7 +421,6 @@ def test_device_perf_bare_metal(
     model_location_generator,
     get_tt_cache_path,
     t3k_mesh_device,
-    use_program_cache,
     is_ci_env,
 ):
     if llm_mode == "prefill" and (model_config_str not in ["BFLOAT8_B-DRAM", "BFLOAT16-DRAM"] or num_devices != 8):

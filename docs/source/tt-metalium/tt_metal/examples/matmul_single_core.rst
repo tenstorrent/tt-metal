@@ -7,7 +7,7 @@ Now that we have a basic understanding of how to use the TT Metal API and buildi
 
 This example introduces the concept of using separate data movement and compute kernels that communicate through circular buffers. The compute kernel uses the powerful matrix engine to perform efficient tile-wise matrix multiplication, while data movement kernels handle reading input data from DRAM and writing results back.
 
-We'll go through this code section by section. The full source code for this example is available under the ``tt_metal/programming_examples/matmul_single_core/`` directory.
+We'll go through this code section by section. The full source code for this example is available under the ``tt_metal/programming_examples/matmul/matmul_single_core/`` directory.
 
 Building the example can be done by adding a ``--build-programming-examples`` flag to the build script or adding the ``-DBUILD_PROGRAMMING_EXAMPLES=ON`` flag to the cmake command and results in the ``matmul_single_core`` executable in the ``build/programming_examples`` directory. For example:
 
@@ -16,6 +16,8 @@ Building the example can be done by adding a ``--build-programming-examples`` fl
     export TT_METAL_HOME=</path/to/tt-metal>
     ./build_metal.sh --build-programming-examples
     ./build/programming_examples/matmul_single_core
+
+.. _mm_single_core_device_initialization:
 
 Device Initialization & Program Setup
 -------------------------------------
@@ -162,18 +164,23 @@ The matrix multiplication is performed by a pipeline of three specialized kernel
 .. code-block:: cpp
 
     // Reader kernel - reads tiles from DRAM into circular buffers
+    std::vector<uint32_t> reader_args;
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_args});
 
     // Writer kernel - writes result tiles from circular buffer to DRAM
+    std::vector<uint32_t> writer_args;
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_args});
 
     // Compute kernel - performs matrix multiplication using the matrix engine
     MathFidelity math_fidelity = MathFidelity::HiFi4;
@@ -212,14 +219,10 @@ maps tiles in the row-major order of the matrices in DRAM to read into the circu
 
         // Declare address in which we stored the source matrices. We have set the exact same format between CBs and DRAM
         // buffers in the host code, so we can use the same address for both DRAM and CBs.
-        const InterleavedAddrGenFast<true> s0 = {
-            .bank_base_address = src0_addr,
-            .page_size = get_tile_size(cb_id_in0),
-            .data_format = get_dataformat(cb_id_in0)};
-        const InterleavedAddrGenFast<true> s1 = {
-            .bank_base_address = src1_addr,
-            .page_size = get_tile_size(cb_id_in1),
-            .data_format = get_dataformat(cb_id_in1)};
+        constexpr auto s0_args = TensorAccessorArgs<0>();
+        const auto s0 = TensorAccessor(s0_args, src0_addr, get_tile_size(cb_id_in0));
+        constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
+        const auto s1 = TensorAccessor(s1_args, src1_addr, get_tile_size(cb_id_in1));
 
         // Loop through the dimensions of the matrices. Read them and push to the circular buffers.
         // Dimension names are called M, N and K. `t` in `mt` means tile.
@@ -323,11 +326,8 @@ The writer kernel consumes tiles from the output circular buffer ``cb_id_out0`` 
 
         constexpr uint32_t cb_id_out0 = 16;
 
-
-        const InterleavedAddrGenFast<true> s = {
-            .bank_base_address = dst_addr,
-            .page_size = get_tile_size(cb_id_out0),
-            .data_format = get_dataformat(cb_id_out0)};
+        constexpr auto s_args = TensorAccessorArgs<0>();
+        const auto s = TensorAccessor(s_args, dst_addr, get_tile_size(cb_id_out0));
 
         for (uint32_t mt = 0; mt < Mt; ++mt) {
             for (uint32_t nt = 0; nt < Nt; ++nt) {
@@ -342,7 +342,9 @@ The writer kernel consumes tiles from the output circular buffer ``cb_id_out0`` 
         }
     }
 
-Kernel exexution and result verification
+.. _mm_single_core_kernel_execution:
+
+Kernel execution and result verification
 ----------------------------------------
 
 On the host side, runtime arguments are configured for each kernel. These typically include DRAM buffer addresses (for A, B, and C) and tile counts (``Mt``, ``Kt``, ``Nt``) that define the scope of the operation for the current invocation.
@@ -394,3 +396,5 @@ This single-core matrix multiplication example highlights several key architectu
 * **Separation of data movement and compute**: By using dedicated RISC-V processors for data movement (reader/writer kernels) and the matrix engine for computation, complex data orchestration patterns do not sacrifice compute throughput. The data movement processors can handle complex access patterns while the compute units remain fully utilized.
 * **Tiled operations**: The hardware is optimized for tiled operations, making tile-based algorithms essential for achieving peak performance. All matrices are processed in tile units, matching the natural granularity of the underlying hardware accelerators.
 * **Pipelined data movement**: The circular buffer architecture with double buffering enables overlapped execution - while the compute kernel processes current tiles, the data movement kernels can simultaneously fetch the next set of tiles. This pipelining ensures efficient utilization of compute resources by minimizing idle time.
+
+Next we will explore the :ref:`MatMul_Multi_Core example <MatMul_Multi_Core example>`, which extends these concepts to a multi-core setup, demonstrating how to scale matrix multiplication across multiple Tensix cores for even greater performance.

@@ -9,12 +9,12 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
-#include "cpp/ttnn/operations/data_movement/slice/slice.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "cpp/ttnn/operations/data_movement/pad/pad.hpp"
+#include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
 #include <tt-metalium/constants.hpp>
 
-#include "cpp/ttnn/operations/experimental/reshape/view.hpp"
+#include "ttnn/operations/experimental/reshape/view.hpp"
 
 #include "fold.hpp"
 
@@ -172,8 +172,6 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     auto padded_w = w + pad_w * 2;  // front and end padding
     auto padded_h32 = tt::round_up(padded_h, TILE_HEIGHT);
     auto padded_w32 = tt::round_up(padded_w, TILE_HEIGHT);
-    auto pad_h_right = padded_h32 - (h + pad_h);
-    auto pad_w_right = padded_w32 - (w + pad_w);
     auto target_h = padded_h / stride_h;
     auto target_w = padded_w / stride_w;
     auto target_c = padded_c * stride_h * stride_w;

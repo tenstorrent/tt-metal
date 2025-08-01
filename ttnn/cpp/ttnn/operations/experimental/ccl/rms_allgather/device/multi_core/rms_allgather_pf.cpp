@@ -23,13 +23,13 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/fabric.hpp>
 
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
-#include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
+#include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
 
-#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-#include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+#include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 
 #include <sstream>
 #include <type_traits>
@@ -50,7 +50,6 @@ inline bool is_dram(const Tensor& input_tensor) {
 inline bool is_dram(const std::optional<const Tensor>& input_tensor) {
     return input_tensor.has_value() ? is_dram(input_tensor.value()) : true;
 }
-inline bool is_dram(const Buffer* b) { return b->buffer_type() == BufferType::DRAM; }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
@@ -78,7 +77,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    bool use_noc1_only) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t block_wt_resharded = output.shard_spec().value().shape[1] / TILE_WIDTH;
     bool skip_write_back = output.shard_spec().value() == a.shard_spec().value();
@@ -88,8 +88,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     ////////////////////////////////////////////////////////////////////////////
     ttnn::MeshDevice* mesh_device = a.mesh_device();
     tt::tt_metal::Program program{};
-    bool is_first_chip = ring_index == 0;
-    bool is_last_chip = ring_index == ring_size - 1;
     uint32_t output_page_size = 0;
     uint32_t stats_page_size;
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
@@ -143,7 +141,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
 
     static constexpr auto num_packet_headers_storable = 8;
-    static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(mesh_device->arch(), compute_kernel_config);
@@ -196,14 +194,11 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     log_debug(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
 
     // tensor shape
-    const auto shape = a.padded_shape();
-    uint32_t M = a.physical_volume() / shape[-1];
+    const auto& shape = a.padded_shape();
     uint32_t K = shape[-1];
-    uint32_t Mt = M / TILE_WIDTH;
     uint32_t Kt = K / TILE_WIDTH;
     // block
     uint32_t block_w = block_wt * TILE_WIDTH;
-    uint32_t block_h = TILE_HEIGHT;
     uint32_t num_blocks = 0;
 
     auto bbox = shard_spec.grid.bounding_box();
@@ -254,7 +249,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     // post_all_gather_stats_block_tiles
     uint32_t post_all_gather_stats_block_tiles = 1;
     uint32_t num_distributed_devices = 1;
-    uint32_t pre_num_distributed_devices = 1;
     if (stats.has_value()) {
         post_all_gather_stats_block_tiles = stats.value().padded_shape()[-1] / TILE_WIDTH;
         num_distributed_devices = post_all_gather_stats_block_tiles;
@@ -271,13 +265,10 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     uint32_t in5_CB_size = in0_block_tiles * gamma_single_tile_size / 1;
     // itermediate buffers change later
     uint32_t x_CB_size = in0_block_tiles * single_tile_size;
-    uint32_t xmm_CB_size = in0_block_tiles * single_tile_size;
     uint32_t ex_partial_CB_size = in0_block_tiles * single_tile_size / block_wt;
     uint32_t ex_CB_size = ex_partial_CB_size;
     uint32_t ex_global_CB_size = ex_partial_CB_size;
     uint32_t ex_external_CB_size = tt::div_up(Kt, block_wt) * single_tile_size;
-    uint32_t xmm2_CB_size = in0_block_tiles * single_tile_size;
-    uint32_t ex2pe_CB_size = single_tile_size;
     uint32_t stats_cb_size = post_all_gather_stats_block_tiles * single_tile_size;
     uint32_t stats_reduced_cb_size = single_tile_size;
     // output buffer size
@@ -295,7 +286,6 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
     uint32_t num_cores_x = grid_size.x;
     uint32_t num_cores_y = grid_size.y;
-    uint32_t num_cores = num_cores_x * num_cores_y;
     uint32_t num_cores_all_to_all = 1;
     uint32_t num_blocks_first_stage = num_blocks;
     uint32_t num_blocks_second_stage = 0;
@@ -400,8 +390,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     auto stats_filled_semaphore = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
     // reader defines
-    std::map<string, string> reader_mcast_sender_defines;
-    std::map<string, string> reader_mcast_receiver_defines;
+    std::map<std::string, std::string> reader_mcast_sender_defines;
+    std::map<std::string, std::string> reader_mcast_receiver_defines;
     if (gamma.has_value()) {
         reader_mcast_sender_defines["FUSE_GAMMA"] = "1";
         reader_mcast_receiver_defines["FUSE_GAMMA"] = "1";
@@ -409,7 +399,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
     // compute defines
     // reader defines
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     if (b.has_value()) {
         compute_defines["FUSE_PRE_ADD"] = "1";
     }
@@ -471,7 +461,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             num_packet_headers_storable * packet_header_size_bytes * 2,
             {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
             .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    auto reserved_packet_header_CB_handle = CreateCircularBuffer(program, all_cores, cb_reserved_packet_header_config);
+    CreateCircularBuffer(program, all_cores, cb_reserved_packet_header_config);
 
     uint32_t updated_residual_index = tt::CBIndex::c_21;
     uint32_t original_input_index = tt::CBIndex::c_22;
@@ -703,12 +693,16 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     writer_compile_time_args.push_back(signaling_cb);
     writer_compile_time_args.push_back(num_blocks);
 
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(mesh_device->arch());
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(mesh_device->arch());
+    tt::tt_metal::NOC reader_noc = NOC::NOC_1;
+    tt::tt_metal::NOC writer_noc = NOC::NOC_1;
+    if (!use_noc1_only) {
+        reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(mesh_device->arch());
+        writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(mesh_device->arch());
 
-    if (!skip_write_back) {
-        reader_noc = NOC::NOC_0;
-        writer_noc = NOC::NOC_1;
+        if (!skip_write_back) {
+            reader_noc = NOC::NOC_0;
+            writer_noc = NOC::NOC_1;
+        }
     }
 
     // compute kernel compile time args
@@ -750,7 +744,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     std::string reciever_reader_kernel_file =
         "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/rms_receiver_reader.cpp";
 
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     if (skip_write_back) {
         writer_defines["SKIP_WRITE_BACK"] = "1";
     }
@@ -762,6 +756,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = reader_noc,
+            .noc_mode =
+                (use_noc1_only) ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = reader_mcast_sender_compile_time_args,
             .defines = reader_mcast_sender_defines});
     KernelHandle reader_mcast_receiver_kernels_id_all_to_all = -1;
@@ -774,6 +770,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = reader_noc,
+                .noc_mode =
+                    (use_noc1_only) ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
                 .compile_args = reader_mcast_receiver_all_to_all_compile_time_args,
                 .defines = reader_mcast_receiver_defines});
     }
@@ -785,6 +783,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = reader_noc,
+                .noc_mode =
+                    (use_noc1_only) ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
                 .compile_args = reader_mcast_receiver_compile_time_args,
                 .defines = reader_mcast_receiver_defines});
     }
@@ -799,6 +799,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = writer_noc,
+            .noc_mode =
+                (use_noc1_only) ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = writer_compile_time_args,
             .defines = writer_defines});
     KernelHandle writer_mcast_receiver_kernels_id = -1;
@@ -811,6 +813,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = writer_noc,
+                .noc_mode =
+                    (use_noc1_only) ? tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC : tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
                 .compile_args = writer_compile_time_args,
                 .defines = writer_defines});
     }
@@ -1035,14 +1039,22 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
 
             all_gather_rts.push_back(forward_device.has_value());
             if (forward_device.has_value()) {
+                const auto target_device_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
+                const auto forward_device_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    target_device->id(), forward_device.value()->id(), i, program, {core}, all_gather_rts);
+                    target_device_fabric_node_id, forward_device_fabric_node_id, i, program, {core}, all_gather_rts);
             }
 
             all_gather_rts.push_back(backward_device.has_value());
             if (backward_device.has_value()) {
+                const auto target_device_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(target_device->id());
+                const auto backward_device_fabric_node_id =
+                    tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
                 tt::tt_fabric::append_fabric_connection_rt_args(
-                    target_device->id(), backward_device.value()->id(), i, program, {core}, all_gather_rts);
+                    target_device_fabric_node_id, backward_device_fabric_node_id, i, program, {core}, all_gather_rts);
             }
         }
         // Set writer runtime args
@@ -1216,8 +1228,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             const auto src_buffer_a = input_tensors.at(0).buffer();
-            const auto b_tensor = optional_input_tensors.at(0);
-            const auto gamma_tensor = optional_input_tensors.at(1);
+            const auto& b_tensor = optional_input_tensors.at(0);
+            const auto& gamma_tensor = optional_input_tensors.at(1);
             const auto stats_tensor = optional_input_tensors.at(2).value();
             const auto dst_buffer = output_tensors.at(0).buffer();
             bool skip_write_back =

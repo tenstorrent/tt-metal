@@ -152,8 +152,8 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
     log_debug(tt::LogOp, "Wt: {}", Wt);
     log_debug(tt::LogOp, "St: {}", St);
 
-    std::optional<ShardSpec> input1_shard_spec = input_tensor1.shard_spec();
-    std::optional<ShardSpec> input2_shard_spec = input_tensor2.shard_spec();
+    const std::optional<ShardSpec>& input1_shard_spec = input_tensor1.shard_spec();
+    const std::optional<ShardSpec>& input2_shard_spec = input_tensor2.shard_spec();
     bool row_major = input1_shard_spec.value().orientation == ShardOrientation::ROW_MAJOR;
     CoreRangeSet input1_cores = input1_shard_spec.value().grid;
     CoreRangeSet input2_cores = input2_shard_spec.value().grid;
@@ -616,8 +616,8 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
     log_debug(tt::LogOp, "Wt: {}", Wt);
     log_debug(tt::LogOp, "St: {}", St);
 
-    const auto input1_shard_spec_opt = input_tensor1.shard_spec();
-    const auto input2_shard_spec_opt = input_tensor2.shard_spec();
+    const auto& input1_shard_spec_opt = input_tensor1.shard_spec();
+    const auto& input2_shard_spec_opt = input_tensor2.shard_spec();
 
     TT_FATAL(input1_shard_spec_opt.has_value(), "input1_shard_spec is not available");
     TT_FATAL(input2_shard_spec_opt.has_value(), "input2_shard_spec is not available");

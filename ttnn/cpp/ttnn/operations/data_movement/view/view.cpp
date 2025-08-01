@@ -3,12 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "view.hpp"
-#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+#include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
-    auto layout = tensor.layout();
     auto tensor_shape = tensor.logical_shape();
     // First Case, No reshape Required
     if (tensor_shape == shape) {

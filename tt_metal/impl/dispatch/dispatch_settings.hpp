@@ -26,17 +26,17 @@ namespace tt::tt_metal {
 class DispatchSettings {
 public:
     // Returns the default settings for WORKER cores
-    static DispatchSettings worker_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs);
+    static DispatchSettings worker_defaults(const tt::Cluster& cluster, uint32_t num_hw_cqs);
 
     // Returns the default settings for ETH cores
-    static DispatchSettings eth_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs);
+    static DispatchSettings eth_defaults(const tt::Cluster& cluster, uint32_t num_hw_cqs);
 
     // Returns the default settings
-    static DispatchSettings defaults(const CoreType& core_type, const tt::Cluster& cluster, const uint32_t num_hw_cqs);
+    static DispatchSettings defaults(const CoreType& core_type, const tt::Cluster& cluster, uint32_t num_hw_cqs);
 
     // Returns the settings for a core type and number hw cqs. The values can be modified, but customization must occur
     // before command queue kernels are created.
-    static DispatchSettings& get(const CoreType& core_type, const uint32_t num_hw_cqs);
+    static DispatchSettings& get(const CoreType& core_type, uint32_t num_hw_cqs);
 
     // Reset the settings
     static void initialize(const tt::Cluster& cluster);
@@ -76,9 +76,6 @@ public:
 
     // Setter for dispatch_s_buffer_size and update dispatch_s_buffer_pages
     DispatchSettings& dispatch_s_buffer_size(uint32_t val);
-
-    // Setter for tunneling_buffer_size and update tunneling_buffer_pages
-    DispatchSettings& tunneling_buffer_size(uint32_t val);
 
     // Sets pointer values based on L1 alignment
     DispatchSettings& with_alignment(uint32_t l1_alignment);
@@ -173,10 +170,6 @@ public:
     uint32_t dispatch_pages_;  // total buffer size / page size
     uint32_t dispatch_s_buffer_size_;
     uint32_t dispatch_s_buffer_pages_;  // dispatch_s_buffer_size_ / DISPATCH_S_BUFFER_LOG_PAGE_SIZE
-
-    // packet_mux, packet_demux, vc_eth_tunneler, vc_packet_router
-    uint32_t tunneling_buffer_size_;
-    uint32_t tunneling_buffer_pages_;  // tunneling_buffer_size_ / PREFETCH_D_BUFFER_LOG_PAGE_SIZE
 
     CoreType core_type_;  // Which core this settings is for
 };

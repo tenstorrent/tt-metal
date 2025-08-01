@@ -30,7 +30,7 @@ TEST_F(DropoutTest, TestSeed) {
     float prob = 0.5F;
     xt::random::seed(42);
     auto* device = &ttml::autograd::ctx().get_device();
-    device->enable_program_cache();
+
     auto shapes = {std::vector<int>{64, 1, 256, 384}, std::vector<int>{1, 1, 32, 32}};
     for (auto& shape : shapes) {
         fmt::println("Testing shape: {}", shape);
@@ -61,7 +61,6 @@ TEST_F(DropoutTest, TestProb) {
     float scale = 1.0F;
     float prob = 0.2F;
     auto* device = &ttml::autograd::ctx().get_device();
-    device->enable_program_cache();
     xt::xarray<float> xtensor_a = xt::ones<float>({64, 1, 256, 384});
     std::vector<float> ratios;
     ratios.reserve(100);
@@ -109,7 +108,6 @@ TEST_F(DropoutTest, TestKeepRatioApproximatelyNormal) {
     xt::xarray<float> xtensor_a = xt::ones<float>({1, 1, 64, 64});
 
     auto* device = &ttml::autograd::ctx().get_device();
-    device->enable_program_cache();
     auto input_tensor = ttml::core::from_xtensor(xtensor_a, device);
 
     xt::xarray<int> keep_count = xt::zeros<int>(xtensor_a.shape());

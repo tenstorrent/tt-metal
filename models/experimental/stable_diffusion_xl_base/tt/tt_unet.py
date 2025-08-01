@@ -26,7 +26,13 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
 class TtUNet2DConditionModel(nn.Module):
     # During testing it was observed that setting conv_weights to bfloat16 + HiFi4 leads to much better image quality.
     # Other weights seem not to have as an impact on it.
-    def __init__(self, device, state_dict, module_path, model_config, transformer_weights_dtype=ttnn.bfloat16):
+    def __init__(
+        self,
+        device,
+        state_dict,
+        module_path,
+        model_config,
+    ):
         super().__init__()
 
         self.device = device
@@ -40,11 +46,12 @@ class TtUNet2DConditionModel(nn.Module):
         self.time_proj = TtTimesteps(device, 320, True, 0, 1)
         self.add_time_proj = TtTimesteps(device, 256, True, 0, 1)
 
+        # Initialze embeddings with attention_weights_dtype for the time being.
         self.time_embedding = TtTimestepEmbedding(
-            device, state_dict, "time_embedding", linear_weights_dtype=transformer_weights_dtype
+            device, state_dict, "time_embedding", linear_weights_dtype=model_config.attention_weights_dtype
         )
         self.add_embedding = TtTimestepEmbedding(
-            device, state_dict, "add_embedding", linear_weights_dtype=transformer_weights_dtype
+            device, state_dict, "add_embedding", linear_weights_dtype=model_config.attention_weights_dtype
         )
 
         self.down_blocks = []
@@ -59,7 +66,6 @@ class TtUNet2DConditionModel(nn.Module):
                 10,
                 640,
                 True,
-                transformer_weights_dtype=transformer_weights_dtype,
             )
         )
         self.down_blocks.append(
@@ -72,7 +78,6 @@ class TtUNet2DConditionModel(nn.Module):
                 20,
                 1280,
                 False,
-                transformer_weights_dtype=transformer_weights_dtype,
             )
         )
 
@@ -84,7 +89,6 @@ class TtUNet2DConditionModel(nn.Module):
             1280,
             20,
             1280,
-            transformer_weights_dtype=transformer_weights_dtype,
         )
 
         self.up_blocks = []
@@ -98,7 +102,6 @@ class TtUNet2DConditionModel(nn.Module):
                 20,
                 1280,
                 True,
-                transformer_weights_dtype=transformer_weights_dtype,
             )
         )
         self.up_blocks.append(
@@ -111,7 +114,6 @@ class TtUNet2DConditionModel(nn.Module):
                 10,
                 640,
                 True,
-                transformer_weights_dtype=transformer_weights_dtype,
             )
         )
         self.up_blocks.append(TtUpBlock2D(device, state_dict, "up_blocks.2", model_config))
@@ -125,34 +127,29 @@ class TtUNet2DConditionModel(nn.Module):
         conv_weights_out = state_dict["conv_out.weight"]
         conv_bias_out = state_dict["conv_out.bias"].unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
+        self.conv_output_dtype = model_config.get_conv_output_dtype()
         self.conv1_config = model_config.get_conv_config(conv_path="conv_in")
+        self.compute1_config = model_config.get_conv_compute_config(module_path="conv_in")
         (
-            self.compute1_config,
             self.tt_conv1_weights,
             self.tt_conv1_bias,
             self.conv1_params,
         ) = prepare_conv_params(
-            device,
             conv_weights_in,
             conv_bias_in,
             self.conv1_config.weights_dtype,
-            fp32_dest_acc_en=(self.conv1_config.weights_dtype == ttnn.bfloat8_b)
-            and (self.conv1_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         )
 
         self.conv2_config = model_config.get_conv_config(conv_path="conv_out")
+        self.compute2_config = model_config.get_conv_compute_config(module_path="conv_out")
         (
-            self.compute2_config,
             self.tt_conv2_weights,
             self.tt_conv2_bias,
             self.conv2_params,
         ) = prepare_conv_params(
-            device,
             conv_weights_out,
             conv_bias_out,
             self.conv2_config.weights_dtype,
-            fp32_dest_acc_en=(self.conv2_config.weights_dtype == ttnn.bfloat8_b)
-            and (self.conv2_config.shard_layout != ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
         )
 
         self.norm_core_grid = ttnn.CoreGrid(y=8, x=8)
@@ -166,14 +163,12 @@ class TtUNet2DConditionModel(nn.Module):
             self.device, norm_weights_out.shape[0], self.norm_groups, self.norm_core_grid.y
         )
 
-    def forward(self, sample, input_shape, timestep, encoder_hidden_states, added_cond_kwargs):
+    def forward(self, sample, input_shape, timestep, encoder_hidden_states, time_ids, text_embeds):
         B, C, H, W = input_shape
 
         temb = self.time_proj.forward(timestep)
         temb = self.time_embedding.forward(temb)
 
-        text_embeds = added_cond_kwargs.get("text_embeds")
-        time_ids = added_cond_kwargs.get("time_ids")
         temb_add = self.add_time_proj.forward(time_ids)
         temb_add = ttnn.to_layout(temb_add, ttnn.ROW_MAJOR_LAYOUT)
         temb_add = ttnn.reshape(temb_add, (text_embeds.shape[0], -1))
@@ -181,7 +176,7 @@ class TtUNet2DConditionModel(nn.Module):
         temb_add = ttnn.to_layout(temb_add, ttnn.TILE_LAYOUT)
         temb_add = self.add_embedding.forward(temb_add)
 
-        temb = ttnn.add(temb, temb_add)
+        temb = ttnn.add(temb, temb_add, use_legacy=False)
         ttnn.deallocate(temb_add)
 
         [sample, [H, W], [self.tt_conv1_weights, self.tt_conv1_bias]] = ttnn.conv2d(
@@ -204,6 +199,7 @@ class TtUNet2DConditionModel(nn.Module):
             memory_config=None,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         C = self.conv1_params["output_channels"]
 
@@ -212,7 +208,7 @@ class TtUNet2DConditionModel(nn.Module):
 
         temb = ttnn.typecast(temb, dtype=ttnn.bfloat16)
 
-        ttnn.DumpDeviceProfiler(self.device)
+        ttnn.ReadDeviceProfiler(self.device)
         for i, down_block in enumerate(self.down_blocks):
             if i == 0:
                 sample, [C, H, W], block_residuals = down_block.forward(sample, [B, C, H, W], temb=temb)
@@ -222,12 +218,12 @@ class TtUNet2DConditionModel(nn.Module):
                 )
 
             residuals += block_residuals
-        ttnn.DumpDeviceProfiler(self.device)
+        ttnn.ReadDeviceProfiler(self.device)
 
         sample, [C, H, W] = self.mid_block.forward(
             sample, [B, C, H, W], temb=temb, encoder_hidden_states=encoder_hidden_states
         )
-        ttnn.DumpDeviceProfiler(self.device)
+        ttnn.ReadDeviceProfiler(self.device)
 
         encoder_hidden_states = ttnn.to_memory_config(encoder_hidden_states, ttnn.DRAM_MEMORY_CONFIG)
         for i, up_block in enumerate(self.up_blocks):
@@ -250,7 +246,7 @@ class TtUNet2DConditionModel(nn.Module):
                     encoder_hidden_states=encoder_hidden_states,
                 )
 
-        ttnn.DumpDeviceProfiler(self.device)
+        ttnn.ReadDeviceProfiler(self.device)
 
         sample = ttnn.to_layout(sample, ttnn.ROW_MAJOR_LAYOUT)
 
@@ -298,6 +294,7 @@ class TtUNet2DConditionModel(nn.Module):
             memory_config=None,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         C = self.conv2_params["output_channels"]
 

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -42,9 +42,14 @@ def process_single_image(image_path, mask_path, model, output_dir, model_type="t
             predict = model(X)
     else:
         # X = torch.from_numpy(X).float()
+
+        n, c, h, w = X.shape
         X = X.permute(0, 2, 3, 1)
-        ttnn_input = ttnn.from_torch(X, dtype=ttnn.bfloat16)
-        predict = model(ttnn_input)
+        X = X.reshape(1, 1, h * w * n, c)
+        ttnn_input = ttnn.from_torch(X, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ttnn_input = ttnn.pad(ttnn_input, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
+
+        predict = model.execute_vgg_unet_trace_2cqs_inference(ttnn_input)
         predict = ttnn.to_torch(predict)
         predict = predict.permute(0, 3, 1, 2)
         predict = predict.reshape(1, 1, 256, 256)
@@ -128,8 +133,11 @@ def prediction(test, model, model_type):
                 predict = model(X)
         else:
             X = torch.from_numpy(X).float()
-            ttnn_input = ttnn.from_torch(X, dtype=ttnn.bfloat16)
-            predict = model(ttnn_input)
+            n, h, w, c = X.shape
+            X = X.reshape(1, 1, h * w * n, c)
+            ttnn_input = ttnn.from_torch(X, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+            ttnn_input = ttnn.pad(ttnn_input, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
+            predict = model.execute_vgg_unet_trace_2cqs_inference(ttnn_input)
             predict = ttnn.to_torch(predict)
             predict = predict.permute(0, 3, 1, 2)
             predict = predict.reshape(1, 1, 256, 256)
@@ -150,7 +158,7 @@ def prediction(test, model, model_type):
     return pd.DataFrame({"image_path": image_id, "predicted_mask": mask, "has_mask": has_mask})
 
 
-def preprocess(path):
+def preprocess(path, mode="default", max_samples=None):
     base_path = path
     relative_path = "lgg-mri-segmentation/kaggle_3m/"
 
@@ -218,25 +226,31 @@ def preprocess(path):
     brain_df_train["mask"] = brain_df_train["mask"].apply(lambda x: str(x))
     brain_df_train.info()
 
-    brain_df_mask = brain_df[brain_df["mask"] == 1]
+    brain_df_mask = brain_df[brain_df["mask"] == 1].reset_index(drop=True)
     brain_df_mask.shape
 
-    X_train, X_val = train_test_split(brain_df_mask, test_size=0.15)
-    X_test, X_val = train_test_split(X_val, test_size=0.5)
+    if mode == "eval":
+        if max_samples is not None:
+            return brain_df_mask.iloc[:max_samples]
+        return brain_df_mask
+    else:
+        X_train, x_val = train_test_split(brain_df_mask, test_size=0.15)
+        x_test, x_val = train_test_split(x_val, test_size=0.5)
+        if max_samples is not None:
+            return x_test.iloc[:max_samples]
+        return x_test
 
-    return X_test
 
-
-def postprocess(df_pred, X_test, model_type):
+def postprocess(df_pred, x_test, model_type):
     # merging original and prediction df
-    df_pred = X_test.merge(df_pred, on="image_path")
+    df_pred = x_test.merge(df_pred, on="image_path")
     df_pred.head(10)
 
     # Define the output folder
     if model_type == "torch_model":
-        output_folder = "models/experimental/vgg_unet/demo/output_images"
+        output_folder = "models/demos/vgg_unet/demo/output_images"
     else:
-        output_folder = "models/experimental/vgg_unet/demo/output_images_ttnn"
+        output_folder = "models/demos/vgg_unet/demo/output_images_ttnn"
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
 

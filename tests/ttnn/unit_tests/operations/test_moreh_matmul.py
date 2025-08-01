@@ -307,7 +307,7 @@ def test_moreh_matmul_wo_output(params, use_randint, dtype, compute_kernel_optio
         ),  # batched matmul
     ),
 )
-def test_moreh_matmul_enable_cache(params, device, use_program_cache):
+def test_moreh_matmul_enable_cache(params, device):
     torch.manual_seed(3072)
     for i in range(4):
         # change input's transpose option

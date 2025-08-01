@@ -142,7 +142,7 @@ rms_norm_parametrization_ids = ["rmsnorm", "layernorm"]
 
 
 def run_test_distributed_layernorm_with_program_cache_and_checks(
-    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, mesh_device, use_program_cache, iterations, has_weights=True
+    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, mesh_device, iterations, has_weights=True
 ):
     if mesh_device.get_num_devices() < n_devices:
         pytest.skip("Not T3000!")
@@ -171,10 +171,10 @@ def run_test_distributed_layernorm_with_program_cache_and_checks(
 @pytest.mark.parametrize("n_devices", [8])
 @pytest.mark.parametrize("is_rmsnorm", rms_norm_parametrizations, ids=rms_norm_parametrization_ids)
 def test_distributed_layernorm_with_program_cache(
-    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, iterations, t3k_mesh_device, use_program_cache
+    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, iterations, t3k_mesh_device
 ):
     run_test_distributed_layernorm_with_program_cache_and_checks(
-        inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, t3k_mesh_device, use_program_cache, iterations=iterations
+        inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, t3k_mesh_device, iterations=iterations
     )
 
 
@@ -187,7 +187,7 @@ def test_distributed_layernorm_with_program_cache(
 @pytest.mark.parametrize("is_rmsnorm", rms_norm_parametrizations, ids=rms_norm_parametrization_ids)
 @pytest.mark.parametrize("has_weights", [True, False], ids=["has_weights", "no_weights"])
 def test_distributed_layernorm_with_program_cache_4chip(
-    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, iterations, pcie_mesh_device, use_program_cache, has_weights
+    inp_shape, n_devices, is_rmsnorm, dtype, stats_dtype, iterations, pcie_mesh_device, has_weights
 ):
     if not has_weights and is_rmsnorm:
         pytest.skip("RMSNorm does not support no weights")
@@ -198,7 +198,6 @@ def test_distributed_layernorm_with_program_cache_4chip(
         dtype,
         stats_dtype,
         pcie_mesh_device,
-        use_program_cache,
         iterations=iterations,
         has_weights=has_weights,
     )

@@ -200,15 +200,20 @@ def run_all_to_all_impl(
 
     for i in range(num_iters if not reuse_inputs else 1):
         output_tensor = torch.rand(logical_shape).bfloat16()
-
         output_tensor_goldens_list.append(torch.chunk(output_tensor, num_devices, out_dim))
-        input_tensors = torch.chunk(output_tensor, num_devices, in_dim)
-        tt_input_tensors = []
-        for i, t in enumerate(input_tensors):
-            tt_input_tensors.append(ttnn.Tensor(t, input_dtype).to(layout))
-            logger.info(f"using device {mesh_device.get_device_ids()[i]}")
-
-        input_tensor_mesh = ttnn.aggregate_as_tensor(tt_input_tensors).to(mesh_device, input_mem_config)
+        input_tensor_mesh = ttnn.from_torch(
+            output_tensor,
+            device=mesh_device,
+            layout=layout,
+            dtype=input_dtype,
+            memory_config=input_mem_config,
+            mesh_mapper=ttnn.create_mesh_mapper(
+                mesh_device,
+                ttnn.MeshMapperConfig(
+                    [ttnn.PlacementReplicate(), ttnn.PlacementShard(in_dim)], ttnn.MeshShape(1, num_devices)
+                ),
+            ),
+        )
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
@@ -320,7 +325,6 @@ def test_all_to_all(
     layout,
     mem_config,
     num_iters,
-    use_program_cache,
     function_level_defaults,
     do_check,
     reuse_inputs,

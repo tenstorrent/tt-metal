@@ -15,7 +15,7 @@ struct MorehMatmul {
         const std::optional<Tensor>& output,
         const std::optional<const Tensor>& bias,
         const std::optional<MemoryConfig>& memory_config,
-        const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config);
+        std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 };
 }  // namespace ttnn::operations::moreh::moreh_matmul
 

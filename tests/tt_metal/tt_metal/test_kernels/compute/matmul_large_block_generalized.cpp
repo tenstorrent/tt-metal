@@ -10,7 +10,7 @@
 
 inline void tilize_activation(
     uint32_t in0_cb, uint32_t in0_subblock_h, uint32_t in0_block_w, uint32_t in0_num_subblocks, uint32_t out_cb) {
-    tilize_init_short(in0_cb, in0_block_w, out_cb);
+    tilize_init(in0_cb, in0_block_w, out_cb);
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
         for (uint32_t h = 0; h < in0_subblock_h; h++) {
@@ -57,7 +57,7 @@ inline void reblock_and_untilize(
         cb_push_back(reblock_cb_id, out_block_w);
 
         // Untilize
-        untilize_init_short(reblock_cb_id);
+        untilize_init(reblock_cb_id);
         cb_wait_front(reblock_cb_id, out_block_w);
         cb_reserve_back(out_cb_id, out_block_w);
         untilize_block(reblock_cb_id, out_block_w, out_cb_id);

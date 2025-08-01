@@ -21,10 +21,10 @@ Note the current compatibility matrix:
 | Device               | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
 |----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
 | Galaxy (Wormhole 4U) | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.10.1.0                          | v2.2.3 or lower       | v1.1.3, `mesh` config          |
-| Galaxy (Wormhole 6U) | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.15 or above      | N/A                            |
-| Wormhole             | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | N/A                            |
-| T3000 (Wormhole)     | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.17.0.0 (v80.17.0.0)             | v3.0.12 or above      | v1.2.5 or above, `mesh` config |
-| Blackhole            | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.18.0.0 (v80.18.0.0)             | v3.0.12 or above      | N/A                            |
+| Galaxy (Wormhole 6U) | Ubuntu 22.04    | 3.10     | v2.0.0 or above    | fw_pack-18.6.0.fwbundle (v18.6.0)          | v3.0.20 or above      | N/A                            |
+| Wormhole             | Ubuntu 22.04    | 3.10     | v2.0.0 or above    | fw_pack-18.3.0.fwbundle (v18.3.0)          | v3.0.20 or above      | N/A                            |
+| T3000 (Wormhole)     | Ubuntu 22.04    | 3.10     | v2.0.0 or above    | fw_pack-18.3.0.fwbundle (v18.3.0)          | v3.0.20 or above      | v1.2.5 or above, `mesh` config |
+| Blackhole            | Ubuntu 22.04    | 3.10     | v2.1.0 or above    | fw_pack-18.5.0.fwbundle (v18.5.0)          | v3.0.20 or above      | N/A                            |
 
 #### Install System-level Dependencies
 For Ubuntu users. You can use the script provided in our repo to install build and runtime dependencies along with a working copy of Clang 17.
@@ -39,7 +39,7 @@ For users on other Linux distributions, please consult the `install_dependencies
 
 > [!IMPORTANT]
 >
-> Building with Clang 17 and GCC 12 is supported. Later versions, while not officially supported, should work. For Ubuntu 22.04 users, the default compiler is GCC 11 and Clang 14. Please install a newer compiler to ensure a successful build (the dependency installaion script will install Clang 17 for you).
+> Building with Clang 17 and GCC 12 is supported. Later versions, while not officially supported, should work. For Ubuntu 22.04 users, the default compiler is GCC 11 and Clang 14. Please install a newer compiler to ensure a successful build (the dependency installation script will install Clang 17 for you).
 
 
 ---
@@ -64,7 +64,7 @@ sudo modprobe tenstorrent
 cd ..
 ```
 
-- For more information visit Tenstorrents [TT-KMD GitHub repository](https://github.com/tenstorrent/tt-kmd).
+- For more information visit Tenstorrent's [TT-KMD GitHub repository](https://github.com/tenstorrent/tt-kmd).
 
 ---
 
@@ -93,7 +93,7 @@ pip install git+https://github.com/tenstorrent/tt-flash.git
   tt-flash flash --fw-tar $fw_pack
   ```
 
-- For more information visit Tenstorrent's [TT-Firmware GitHub Repository](https://github.com/tenstorrent/tt-firmware) and [TT-Flash Github Repository](https://github.com/tenstorrent/tt-flash).
+- For more information visit Tenstorrent's [TT-Firmware GitHub Repository](https://github.com/tenstorrent/tt-firmware) and [TT-Flash GitHub Repository](https://github.com/tenstorrent/tt-flash).
 
 ---
 
@@ -132,23 +132,72 @@ Once hardware and system software are installed, verify that the system has been
 
 ### TT-NN / TT-Metalium Installation
 
-#### There are three options for installing TT-Metalium:
+#### There are four options for installing TT-Metalium:
 
-- [Option 1: From Source](#option-1-from-source)
+- [Option 1: From Binaries](#binaries)
+
+  Install pre-built binaries for quick setup and immediate access to TT-NN APIs and AI models.
+
+- [Option 2: From Docker Release Image](#docker-release-image)
+
+  Installing from Docker Release Image is a quick way to access our APIs and start running AI models.
+
+- [Option 3: From Source](#source)
 
   Installing from source gets developers closer to the metal and the source code.
 
-- [Option 2: From Docker Release Image](#option-2-from-docker-release-image)
+- [Option 4: From Anaconda](#anaconda)
 
-  Installing from Docker Release Image is the quickest way to access our APIs and to start running AI models.
-
-- [Option 3: From Wheel](#option-3-from-wheel)
-
-  Install from wheel as an alternative method to get quick access to our APIs and to running AI models.
+  Installing from Anaconda can be convenient for ML Developers who prefer that workflow.
 
 ---
 
-### Option 1: From Source
+### Binaries
+Install from wheel for quick access to `ttnn` Python APIs and to get an AI model running.
+All binaries support only Linux and distros with glibc 2.34 or newer.
+
+#### Step 1. Install the Latest Wheel:
+
+- Install the wheel using `pip`:
+
+  ```sh
+  pip install ttnn
+  ```
+
+#### Step 2. (For models users only) Set Up Environment for Models:
+
+To try our pre-built models in `models/`, you must:
+
+  - Install their required dependencies
+  - Set appropriate environment variables
+  - Set the CPU performance governor to ensure high performance on the host
+
+- This is done by executing the following:
+  ```sh
+  export PYTHONPATH=$(pwd)
+  pip install -r tt_metal/python_env/requirements-dev.txt
+  sudo apt-get install cpufrequtils
+  sudo cpupower frequency-set -g performance
+  ```
+
+---
+
+### Docker Release Image
+
+Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-release-amd64) page
+
+```sh
+docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc
+docker run -it --rm --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc bash
+```
+
+- For more information on the Docker Release Images, visit our [Docker registry page](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-release-amd64).
+
+- You are all set! Try some [TT-NN Basic Examples](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) next.
+
+---
+
+### Source
 Install from source if you are a developer who wants to be close to the metal and the source code. Recommended for running the demo models.
 
 #### Step 1. Clone the Repository:
@@ -181,7 +230,7 @@ ninja
 ninja install # Installs to build directory by default, required for Python environment
 ```
 
-#### Step 3. Crate a virtual environment and (optional) documentation.
+#### Step 3. Create a virtual environment and (optional) documentation.
 
 - (recommended) For an out-of-the-box virtual environment to use, execute:
 ```
@@ -189,56 +238,20 @@ ninja install # Installs to build directory by default, required for Python envi
 source python_env/bin/activate
 ```
 
-- (optional) Software dependencies for profiling use:
-  - Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)
-
 - Continue to [You Are All Set!](#you-are-all-set)
 
 ---
 
-### Option 2: From Docker Release Image
-Installing from Docker Release Image is the quickest way to access our APIs and to start running AI models.
+### Anaconda
+Anaconda is another virtual environment manager. There is a community driven recipe [here](https://github.com/conda-forge/tt-metalium-feedstock). There is support for Python 3.10, 3.11, and 3.12.
+All binaries support only Linux and distros with glibc 2.34 or newer.
 
-Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-release-amd64) page
+#### Step 1. Install the Latest Package:
 
-```sh
-docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc
-docker run -it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc bash
-```
-
-- For more information on the Docker Release Images, visit our [Docker registry page](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-release-amd64).
-
-- You are all set! Try some [TT-NN Basic Examples](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) next.
-
----
-
-### Option 3: From Wheel
-Install from wheel for quick access to our APIs and to get an AI model running
-
-#### Step 1. Download and Install the Latest Wheel:
-
-- Navigate to our [releases page](https://github.com/tenstorrent/tt-metal/releases/latest) and download the latest wheel file for the Tenstorrent card architecture you have installed.
-
-- Install the wheel using your Python environment manager of choice. For example, to install with `pip`:
+- Install the package using `conda`:
 
   ```sh
-  pip install <wheel_file.whl>
-  ```
-
-#### Step 2. (For models users only) Set Up Environment for Models:
-
-To try our pre-built models in `models/`, you must:
-
-  - Install their required dependencies
-  - Set appropriate environment variables
-  - Set the CPU performance governor to ensure high performance on the host
-
-- This is done by executing the following:
-  ```sh
-  export PYTHONPATH=$(pwd)
-  pip install -r tt_metal/python_env/requirements-dev.txt
-  sudo apt-get install cpufrequtils
-  sudo cpupower frequency-set -g performance
+  conda create -n metalium python=3.10 tt-metalium -c conda-forge
   ```
 
 ---
@@ -265,3 +278,28 @@ To try our pre-built models in `models/`, you must:
 
 ### Interested in Contributing?
 - For more information on development and contributing, visit Tenstorrent's [CONTRIBUTING.md page](https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md).
+
+---
+
+## Virtual Machine Requirements
+
+> [!IMPORTANT]
+>
+> If you are running this software in a virtual machine, additional configuration is required.
+
+### Overview
+This software requires an IOMMU (Input-Output Memory Management Unit) to be enabled at the host level to ensure proper memory isolation and device passthrough support. On virtual machines, this translates to enabling the virtual IOMMU (vIOMMU) feature in the hypervisor.
+
+### Why It Matters
+- Enables secure and efficient DMA operations
+- Required for PCIe passthrough to guest VMs (e.g., for hardware accelerators)
+- Prevents host memory corruption by restricting device access
+
+### Requirements for VMs
+To run this software reliably in a VM:
+
+- The host machine must have IOMMU support enabled (e.g., `intel_iommu=on` or `amd_iommu=on` in kernel parameters)
+
+- The virtual machine must be provisioned with a vIOMMU
+
+- The vIOMMU must support DMA remapping (Intel VT-d, AMD-Vi)

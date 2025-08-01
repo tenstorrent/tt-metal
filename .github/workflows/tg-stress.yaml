@@ -41,7 +41,6 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
-        TT_METAL_ENABLE_ERISC_IRAM: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /work
@@ -64,7 +63,7 @@ jobs:
         run: |
           for i in {1..5}; do
             echo "🔁 Run #$i"
-            timeout --preserve-status 1200 pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "nd-hang-test"
+            timeout --preserve-status 1200 pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "nd-hang-test"
           done
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
@@ -111,7 +110,7 @@ jobs:
         run: |
           for i in {1..5}; do
             echo "🔁 Run #$i"
-            timeout --preserve-status 1200 pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "nd-hang-test"
+            timeout --preserve-status 1200 pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "nd-hang-test"
           done
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}

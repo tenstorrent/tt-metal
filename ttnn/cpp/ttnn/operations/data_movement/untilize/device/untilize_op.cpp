@@ -7,6 +7,7 @@
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "untilize_program_factory.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
 
@@ -35,12 +36,6 @@ void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
     // Input must be in valid tile layout
     TT_FATAL(tensor_width % TILE_WIDTH == 0, "Width must be evenly divisible into tiles");
     TT_FATAL(tensor_height % TILE_HEIGHT == 0, "Height must be evenly divisible into tiles");
-
-    // Only support interleaved or sharded memory layouts
-    TT_FATAL(
-        input_memory_layout != TensorMemoryLayout::SINGLE_BANK, "Input memory layout must be interleaved or sharded");
-    TT_FATAL(
-        output_memory_layout != TensorMemoryLayout::SINGLE_BANK, "Output memory layout must be interleaved or sharded");
 
     // Special conditions for sub_core_grids special case
     if (this->sub_core_grids.has_value()) {
@@ -150,6 +145,32 @@ std::vector<ttnn::TensorSpec> Untilize::compute_output_specs(const std::vector<T
             this->output_mem_config,
             input_tensor.logical_shape(),
             input_tensor.padded_shape()))};
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> Untilize::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = output_tensors.at(0);
+    uint32_t tile_width = input_tensor.tensor_spec().tile().get_width();
+    uint32_t tile_height = input_tensor.tensor_spec().tile().get_height();
+    uint32_t single_tile_size = tile_width * tile_height * input_tensor.element_size();
+    uint32_t num_tiles = std::ceil((float)input_tensor.physical_volume() / (float)single_tile_size);
+    int compute_cycles = 0;
+    const int max_tiles_per_row = 8;
+    const int latency_untilize = 390;      // measured latency for untilize_block
+    const int latency_pack_untilize = 80;  // measured latency for pack_untilize_block
+    if (std::ceil((float)input_tensor.padded_shape()[-1] / (float)tile_width) <= max_tiles_per_row) {
+        compute_cycles = num_tiles * latency_pack_untilize;
+    } else {
+        compute_cycles = num_tiles * latency_untilize;
+    }
+
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor, false, compute_cycles);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
 }
 
 operation::ProgramWithCallbacks Untilize::create_program(

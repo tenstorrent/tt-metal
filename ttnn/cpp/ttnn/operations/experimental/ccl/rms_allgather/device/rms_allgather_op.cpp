@@ -51,7 +51,6 @@ void RMSAllGather::validate(
     uint32_t input_height = a.tensor_spec().tile().get_tile_shape()[0];
     const auto& b = optional_input_tensors.at(0);
     const auto& gamma = optional_input_tensors.at(1);
-    const auto& stats = optional_input_tensors.at(2);
     TT_FATAL(
         this->output_mem_config.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR,
         "Minimal version requires row major sharding orientation");
@@ -138,16 +137,14 @@ void RMSAllGather::validate(
                 TT_FATAL(a.memory_config().memory_layout() == this->output_mem_config.memory_layout(), "Error");
 
                 // tensor shape
-                const auto shape = a.padded_shape();
+                const auto& shape = a.padded_shape();
                 uint32_t M = a.physical_volume() / shape[-1];
                 uint32_t K = shape[-1];
 
                 uint32_t Mt = M / input_height;
                 uint32_t Kt = K / input_width;
                 // block
-                uint32_t block_w = program_config.block_w * input_width;
                 const auto shard_spec = a.shard_spec().value();
-                uint32_t num_subblocks_w = program_config.block_w / program_config.subblock_w;
                 // check dims
                 TT_FATAL(
                     program_config.block_w % program_config.subblock_w == 0,
@@ -162,7 +159,6 @@ void RMSAllGather::validate(
 
                 TT_FATAL(M == input_height, "Minimal version assumes (1,1,TILE_HEIGHT,N) shape");
                 TT_FATAL(program_config.block_h == 1, "Minimal version assumes block_h is 1");
-                bool row_wise = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
                 TT_FATAL(
                     tt::div_up(Kt, shard_spec.num_cores()) == program_config.block_w,
                     "block_w must equal to K / num_cores.");
@@ -316,7 +312,8 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program_at(
                     device_index,
                     this->topology,
                     this->semaphore,
-                    this->sub_device_id);
+                    this->sub_device_id,
+                    this->use_noc1_only);
             } else {
                 TT_FATAL(false, "Program Config does not match");
 
@@ -343,7 +340,8 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program_at(
                     device_index,
                     this->topology,
                     this->semaphore,
-                    this->sub_device_id);
+                    this->sub_device_id,
+                    this->use_noc1_only);
             }
         },
         this->program_config);

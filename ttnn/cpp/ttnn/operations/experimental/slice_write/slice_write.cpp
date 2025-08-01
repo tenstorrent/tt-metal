@@ -11,10 +11,10 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "cpp/ttnn/operations/creation.hpp"
-#include "cpp/ttnn/operations/data_movement/copy/copy.hpp"
-#include "cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
-#include "cpp/ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
+#include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::experimental {
 
@@ -35,24 +35,14 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     TT_FATAL(padded_output_shape.rank() == 4, "Output tensor must have rank 4");
 
     bool no_step = step[0] == 1 && step[1] == 1 && step[2] == 1 && step[3] == 1;
-    bool starts_zero = begins[0] == 0 && begins[1] == 0 && begins[2] == 0 && begins[3] == 0;
-    bool ends_max = ends[0] == padded_output_shape[0] && ends[1] == padded_output_shape[1] &&
-                    ends[2] == padded_output_shape[2] && ends[3] == padded_output_shape[3];
 
     TT_FATAL(no_step, "Slice Write does not support strides");
 
     bool rm_only = !no_step && input_tensor.layout() == Layout::TILE;
     ttnn::Tensor input = input_tensor;
     if (rm_only) {
-        input = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (IDevice*)nullptr);
+        input = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR);
     }
-    TT_FATAL(
-        (!input_tensor.is_sharded()) ||
-            (input_tensor.is_sharded() &&
-             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) ||
-            (input_tensor.is_sharded() &&
-             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED),
-        "Slice Write currently supports Interleaved or Height & Block Sharding for input tensors.");
 
     TT_FATAL(!output_tensor.is_sharded(), "Slice Write currently doesn't support sharded output tensors.");
     const bool tiled = input.layout() == Layout::TILE;
@@ -86,11 +76,9 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
 
     // Sharding is only 2D.
     if (input.is_sharded() && logical_input_shape[0] == 1 && logical_input_shape[1] == 1) {
-        uint32_t calc_nhw_volume = actual_shape[0] * actual_shape[1] * actual_shape[2];
         auto shard_spec = input_tensor.shard_spec().value();
 
         auto input_cores = shard_spec.grid;
-        auto input_shard_shape = shard_spec.shape;
         bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
         bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
         auto total_cores = shard_spec.grid;
@@ -102,15 +90,6 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
                 num_cores_nhw = total_cores.bounding_box().grid_size().x;
             }
         }
-
-        uint32_t input_nhw_volume = shard_spec.shape[0] * num_cores_nhw;
-        uint32_t calc_nhw_volume_padded =
-            tt::round_up(tt::div_up(calc_nhw_volume, num_cores_nhw), tt::constants::TILE_HEIGHT) * num_cores_nhw;
-        TT_FATAL(
-            input_nhw_volume == calc_nhw_volume_padded,
-            "Input tensor size {} does not match the size of the slice being written {}",
-            input_nhw_volume,
-            calc_nhw_volume_padded);
 
     } else {
         for (int i = 0; i < 4; i++) {
@@ -128,7 +107,7 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     }
 
     if (on_device) {
-        auto memory_config = output_tensor.memory_config();
+        const auto& memory_config = output_tensor.memory_config();
 
         // Check for in-place unpad optimization
         if (input.is_sharded() && input.memory_config() == memory_config && padded_input_shape.rank() > 1) {

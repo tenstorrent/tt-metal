@@ -142,6 +142,8 @@ private:
     std::vector<DeviceAddr> dram_bases_;
     std::vector<uint32_t> dram_sizes_;
     std::vector<uint32_t> mem_alignments_;
+    std::vector<uint32_t> mem_read_alignments_;
+    std::vector<uint32_t> mem_write_alignments_;
     std::vector<uint32_t> mem_alignments_with_pcie_;
     uint32_t num_nocs_;
     uint32_t noc_addr_node_id_bits_;
@@ -268,6 +270,9 @@ public:
     uint32_t get_dev_size(HalDramMemAddrType addr_type) const;
 
     uint32_t get_alignment(HalMemType memory_type) const;
+    uint32_t get_read_alignment(HalMemType memory_type) const;
+    uint32_t get_write_alignment(HalMemType memory_type) const;
+
     // Returns an alignment that is aligned with PCIE and the given memory type
     uint32_t get_common_alignment_with_pcie(HalMemType memory_type) const;
 
@@ -275,7 +280,9 @@ public:
 
     bool get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const;
 
-    uint32_t get_num_risc_processors() const;
+    uint32_t get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const;
+
+    uint32_t get_total_num_risc_processors() const;
 
     const HalJitBuildConfig& get_jit_build_config(
         uint32_t programmable_core_type_index, uint32_t processor_class_idx, uint32_t processor_type_idx) const;
@@ -385,6 +392,18 @@ inline uint32_t Hal::get_alignment(HalMemType memory_type) const {
     return this->mem_alignments_[index];
 }
 
+inline uint32_t Hal::get_read_alignment(HalMemType memory_type) const {
+    uint32_t index = utils::underlying_type<HalMemType>(memory_type);
+    TT_ASSERT(index < this->mem_read_alignments_.size());
+    return this->mem_read_alignments_[index];
+}
+
+inline uint32_t Hal::get_write_alignment(HalMemType memory_type) const {
+    uint32_t index = utils::underlying_type<HalMemType>(memory_type);
+    TT_ASSERT(index < this->mem_write_alignments_.size());
+    return this->mem_write_alignments_[index];
+}
+
 inline uint32_t Hal::get_common_alignment_with_pcie(HalMemType memory_type) const {
     uint32_t index = utils::underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_alignments_with_pcie_.size());
@@ -397,6 +416,18 @@ inline bool Hal::get_supports_cbs(uint32_t programmable_core_type_index) const {
 
 inline bool Hal::get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const {
     return this->core_info_[programmable_core_type_index].supports_receiving_multicast_cmds_;
+}
+
+inline uint32_t Hal::get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const {
+    const uint32_t num_processor_classes =
+        this->core_info_[utils::underlying_type<HalProgrammableCoreType>(programmable_core_type)]
+            .get_processor_classes_count();
+    uint32_t num_riscs = 0;
+    for (uint32_t processor_class_idx = 0; processor_class_idx < num_processor_classes; processor_class_idx++) {
+        num_riscs += this->core_info_[utils::underlying_type<HalProgrammableCoreType>(programmable_core_type)]
+                         .get_processor_types_count(processor_class_idx);
+    }
+    return num_riscs;
 }
 
 inline const HalJitBuildConfig& Hal::get_jit_build_config(

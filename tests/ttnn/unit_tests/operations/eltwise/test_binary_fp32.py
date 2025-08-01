@@ -6,6 +6,10 @@ import torch
 import ttnn
 
 import pytest
+from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
+    data_gen_with_range,
+    compare_pcc,
+)
 
 
 @pytest.mark.parametrize(
@@ -390,40 +394,21 @@ def test_bitwise(device, ttnn_function):
 
 
 @pytest.mark.parametrize(
-    "ttnn_function",
-    [
-        ttnn.bitwise_left_shift,
-    ],
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
 )
-def test_bitwise_left_shift(device, ttnn_function):
-    x_torch = torch.tensor([[99, 3, 100, 1, 72, 0, -100, 22, 12, 1000]], dtype=torch.int32)
-    y_torch = torch.tensor([[1, 2, 31, 4, 5, 0, -20, 1, -3, -25]], dtype=torch.int32)
-    golden_fn = ttnn.get_golden_function(ttnn_function)
-    z_torch = golden_fn(x_torch, y_torch)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn_function(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_out)
+@pytest.mark.parametrize("use_legacy", [True, False])
+def test_binary_xlogy_ttnn(input_shapes, device, use_legacy):
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
+    in_data2, input_tensor2 = data_gen_with_range(input_shapes, -150, 150, device)
 
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
-    assert status
+    output_tensor = ttnn.xlogy(input_tensor1, input_tensor2, use_legacy=use_legacy)
+    golden_function = ttnn.get_golden_function(ttnn.xlogy)
+    golden_tensor = golden_function(in_data1, in_data2)
 
-
-@pytest.mark.parametrize(
-    "ttnn_function",
-    [
-        ttnn.bitwise_right_shift,
-    ],
-)
-def test_bitwise_right_shift(device, ttnn_function):
-    x_torch = torch.tensor([[19, 3, 101, 21, 47, 0]], dtype=torch.int32)
-    y_torch = torch.tensor([[5, 2, 31, 4, 5, 0]], dtype=torch.int32)
-    golden_fn = ttnn.get_golden_function(ttnn_function)
-    z_torch = golden_fn(x_torch, y_torch)
-    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    z_tt_out = ttnn_function(x_tt, y_tt)
-    tt_out = ttnn.to_torch(z_tt_out)
-
-    status = ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= 0.999
-    assert status
+    comp_pass = compare_pcc([output_tensor], [golden_tensor])
+    assert comp_pass

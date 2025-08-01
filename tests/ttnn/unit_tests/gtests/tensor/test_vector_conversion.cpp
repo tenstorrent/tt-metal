@@ -91,14 +91,14 @@ TYPED_TEST(VectorConversionTest, InvalidSize) {
     auto input = arange<TypeParam>(0, 42, 1);
 
     ASSERT_NE(input.size(), shape.volume());
-    EXPECT_ANY_THROW(Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>())));
+    EXPECT_ANY_THROW((void)Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>())));
 }
 
 TYPED_TEST(VectorConversionTest, InvalidDtype) {
     ttnn::Shape shape{32, 32};
     auto input = arange<TypeParam>(0, shape.volume(), 1);
 
-    EXPECT_ANY_THROW(Tensor::from_vector(
+    EXPECT_ANY_THROW((void)Tensor::from_vector(
         input,
         get_tensor_spec(
             shape,
@@ -200,7 +200,7 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, InvalidSize) {
     auto input = arange<TypeParam>(0, 42, 1);
 
     ASSERT_NE(input.size(), shape.volume());
-    EXPECT_ANY_THROW(Tensor::from_borrowed_data(
+    EXPECT_ANY_THROW((void)Tensor::from_borrowed_data(
         tt::stl::Span<TypeParam>(input),
         shape,
         /*on_creation_callback=*/[]() {},
@@ -222,7 +222,8 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Roundtrip) {
         EXPECT_EQ(ctor_count, 1);
         EXPECT_EQ(dtor_count, 0);
         {
-            Tensor copy(tensor.storage(), tensor.tensor_spec(), tensor.distributed_tensor_config());
+            Tensor copy(
+                tensor.storage(), tensor.tensor_spec(), tensor.distributed_tensor_config(), tensor.tensor_topology());
             EXPECT_EQ(ctor_count, 2);
             EXPECT_EQ(dtor_count, 0);
         }
@@ -254,7 +255,8 @@ TYPED_TEST(BorrowedStorageVectorConversionTest, Callbacks) {
     EXPECT_EQ(ctor_count, 1);
     EXPECT_EQ(dtor_count, 0);
     {
-        Tensor copy(tensor.storage(), tensor.tensor_spec(), tensor.distributed_tensor_config());
+        Tensor copy(
+            tensor.storage(), tensor.tensor_spec(), tensor.distributed_tensor_config(), tensor.tensor_topology());
         EXPECT_EQ(ctor_count, 2);
         EXPECT_EQ(dtor_count, 0);
     }
@@ -284,8 +286,8 @@ class BlockFloatVectorConversionTest : public ::testing::TestWithParam<DataType>
 TEST_P(BlockFloatVectorConversionTest, InvalidLayout) {
     ttnn::Shape shape{32, 32};
     // Block float types are only supported in TILE layout.
-    EXPECT_ANY_THROW(
-        Tensor::from_vector(std::vector<float>(shape.volume()), get_tensor_spec(shape, GetParam(), Layout::ROW_MAJOR)));
+    EXPECT_ANY_THROW((void)Tensor::from_vector(
+        std::vector<float>(shape.volume()), get_tensor_spec(shape, GetParam(), Layout::ROW_MAJOR)));
 }
 
 TEST_P(BlockFloatVectorConversionTest, Roundtrip) {

@@ -9,6 +9,11 @@ void kernel_main() {
 
 	constexpr uint32_t shard_cb_id = get_compile_time_arg_val(0);
     constexpr bool write_to_dram = get_compile_time_arg_val(1);
+    constexpr bool unaligned = get_compile_time_arg_val(2);
+    constexpr uint32_t unit_size = get_compile_time_arg_val(3);
+    constexpr uint32_t local_unit_size_padded = get_compile_time_arg_val(4);
+    constexpr uint32_t remote_unit_size_padded = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_scratch_index = get_compile_time_arg_val(6);
 
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t read_offset = get_arg_val<uint32_t>(1);
@@ -20,7 +25,8 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_writes; ++i) {
         uint32_t bank_id = args[args_idx++];
         uint32_t addr = dst_addr + args[args_idx++];
-        uint32_t write_size = args[args_idx++];
+        uint32_t units_to_transfer = args[args_idx++];
+        uint32_t write_size = units_to_transfer * unit_size;
         noc_async_write(l1_read_addr, get_noc_addr_from_bank_id<write_to_dram>(bank_id, addr), write_size);
         l1_read_addr += write_size;
     }

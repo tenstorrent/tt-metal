@@ -20,7 +20,6 @@ class TtCrossAttnDownBlock2D(nn.Module):
         num_attn_heads,
         out_dim,
         has_downsample=False,
-        transformer_weights_dtype=ttnn.bfloat16,
     ):
         super().__init__()
 
@@ -39,7 +38,6 @@ class TtCrossAttnDownBlock2D(nn.Module):
                     query_dim,
                     num_attn_heads,
                     out_dim,
-                    weights_dtype=transformer_weights_dtype,
                 )
             )
 
@@ -77,7 +75,7 @@ class TtCrossAttnDownBlock2D(nn.Module):
             residual = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
             output_states = output_states + (residual,)
 
-        ttnn.DumpDeviceProfiler(self.device)
+        ttnn.ReadDeviceProfiler(self.device)
 
         if self.downsamplers is not None:
             hidden_states, [C, H, W] = self.downsamplers.forward(hidden_states, [B, C, H, W])

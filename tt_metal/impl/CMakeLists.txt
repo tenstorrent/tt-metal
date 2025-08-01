@@ -8,6 +8,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/device/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer_distribution_spec.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/buffer_page_mapping.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/buffers/tensor_accessor_args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/circular_buffer_config.cpp
@@ -55,10 +57,6 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/prefetch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/dispatch_s.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/mux.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/demux.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/eth_router.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/eth_tunneler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/kernel_config/relay_mux.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/util/dispatch_settings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/debug/dprint_server.cpp
@@ -96,11 +94,13 @@ set(FLATBUFFER_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/program_types.fbs
 )
 
+set(GENERATED_HEADERS)
 foreach(FBS_FILE ${FLATBUFFER_SCHEMAS})
     GENERATE_FBS_HEADER(${FBS_FILE})
-    list(APPEND IMPL_SRC ${FBS_GENERATED_HEADER_FILE})
+    list(APPEND GENERATED_HEADERS ${FBS_GENERATED_HEADER_FILE})
 endforeach()
 
+list(APPEND IMPL_SRC ${GENERATED_HEADERS})
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
 

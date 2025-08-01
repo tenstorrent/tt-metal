@@ -46,10 +46,10 @@ ttnn::Tensor convert_tile_to_rm(
           (tensor.dtype() == DataType::BFLOAT8_B)),
         "illegal dimensions for a bfloat8 tensor");
     auto new_tensor = (tensor.dtype() == DataType::BFLOAT8_B) ? ttnn::typecast(tensor, DataType::BFLOAT16) : tensor;
-    new_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (IDevice*)nullptr);
+    new_tensor = ttnn::to_layout(tensor, ttnn::ROW_MAJOR_LAYOUT);
     new_tensor =
         ReshapeViewOperation::invoke(queue_id, new_tensor, logical_shape, padded_shape, memory_config, pad_value);
-    new_tensor = ttnn::to_layout(new_tensor, ttnn::TILE_LAYOUT, new_tensor.dtype(), memory_config, (IDevice*)nullptr);
+    new_tensor = ttnn::to_layout(new_tensor, ttnn::TILE_LAYOUT, new_tensor.dtype(), memory_config);
     new_tensor = (tensor.dtype() == DataType::BFLOAT8_B) ? ttnn::typecast(new_tensor, tensor.dtype()) : new_tensor;
     return new_tensor;
 }
@@ -61,7 +61,6 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     const MemoryConfig& memory_config,
     const QueueId queue_id) {
     auto temp_tensor = tensor;
-    auto intermediate_mem_config = tensor.memory_config();
     auto intermediate_out_memory_config = memory_config;
     if (tensor.memory_config().is_sharded()) {
         MemoryConfig temp_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};

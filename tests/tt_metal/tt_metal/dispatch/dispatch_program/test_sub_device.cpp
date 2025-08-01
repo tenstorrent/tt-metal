@@ -26,6 +26,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/data_types.hpp>
 #include "dispatch_test_utils.hpp"
@@ -201,14 +202,14 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
 
     for (uint32_t i = 0; i < k_num_iters; i++) {
         EnqueueProgram(device->command_queue(), waiter_program, false);
-        device->set_sub_device_stall_group({SubDeviceId{0}});
+        device->set_sub_device_stall_group({{SubDeviceId{0}}});
         // Test blocking on one sub-device
         EnqueueProgram(device->command_queue(), syncer_program, true);
         EnqueueProgram(device->command_queue(), incrementer_program, false);
         device->reset_sub_device_stall_group();
     }
     Synchronize(device);
-    detail::DumpDeviceProfileResults(device);
+    detail::ReadDeviceProfilerResults(device);
 }
 
 TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
@@ -230,7 +231,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
     // Run programs on sub-device manager 1
     for (uint32_t i = 0; i < k_num_iters; i++) {
         EnqueueProgram(device->command_queue(), waiter_program, false);
-        device->set_sub_device_stall_group({SubDeviceId{0}});
+        device->set_sub_device_stall_group({{SubDeviceId{0}}});
         // Test blocking on one sub-device
         EnqueueProgram(device->command_queue(), syncer_program, true);
         EnqueueProgram(device->command_queue(), incrementer_program, false);
@@ -242,14 +243,14 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
     device->load_sub_device_manager(sub_device_manager_2);
     for (uint32_t i = 0; i < k_num_iters; i++) {
         EnqueueProgram(device->command_queue(), waiter_program, false);
-        device->set_sub_device_stall_group({SubDeviceId{1}});
+        device->set_sub_device_stall_group({{SubDeviceId{1}}});
         // Test blocking on one sub-device
         EnqueueProgram(device->command_queue(), syncer_program, true);
         EnqueueProgram(device->command_queue(), incrementer_program, false);
         device->reset_sub_device_stall_group();
     }
     Synchronize(device);
-    detail::DumpDeviceProfileResults(device);
+    detail::ReadDeviceProfilerResults(device);
 }
 
 TEST_F(CommandQueueSingleCardFixture, TensixActiveEthTestSubDeviceBasicEthPrograms) {
@@ -271,14 +272,14 @@ TEST_F(CommandQueueSingleCardFixture, TensixActiveEthTestSubDeviceBasicEthProgra
 
     for (uint32_t i = 0; i < num_iters; i++) {
         EnqueueProgram(device->command_queue(), waiter_program, false);
-        device->set_sub_device_stall_group({SubDeviceId{0}});
+        device->set_sub_device_stall_group({{SubDeviceId{0}}});
         // Test blocking on one sub-device
         EnqueueProgram(device->command_queue(), syncer_program, true);
         EnqueueProgram(device->command_queue(), incrementer_program, false);
         device->reset_sub_device_stall_group();
     }
     Synchronize(device);
-    detail::DumpDeviceProfileResults(device);
+    detail::ReadDeviceProfilerResults(device);
 }
 
 // Ensure each core in the sub device aware of their own logical coordinate. Same binary used in multiple sub devices.
@@ -385,7 +386,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixActiveEthTestSubDeviceMyLogic
             }});
 
     EnqueueProgram(device->command_queue(), program_1, false);
-    device->set_sub_device_stall_group({SubDeviceId{0}});
+    device->set_sub_device_stall_group({{SubDeviceId{0}}});
     EnqueueProgram(device->command_queue(), program_2, false);
     Finish(device->command_queue());
     device->reset_sub_device_stall_group();

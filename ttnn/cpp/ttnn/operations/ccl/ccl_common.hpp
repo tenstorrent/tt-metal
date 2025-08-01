@@ -16,7 +16,7 @@
 #include <tt-metalium/program.hpp>
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/erisc_datamover_builder.hpp>
-#include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 namespace ttnn {
 namespace ccl {
@@ -64,9 +64,9 @@ class EriscDatamoverBuilder;
 
 std::vector<ttnn::Tensor> unpad_output_tensor(
     const std::vector<ttnn::Tensor>& output_tensor,
-    const uint32_t num_devices,
+    uint32_t num_devices,
     const ttnn::SmallVector<uint32_t>& unpad_elements,
-    const int dim);
+    int dim);
 
 class LineTopology {
    public:
@@ -392,7 +392,6 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
         TT_THROW("deprecated code path for ");
     }
 
-   public:
     std::vector<tt_xy_pair> get_worker_slice_shapes() const { return this->worker_slice_shapes; }
     uint32_t get_worker_slice_size_bytes(std::size_t worker_index) {
         TT_ASSERT(this->worker_slice_shapes.size() > worker_index, "Invalid worker index {} in `worker_slice_shapes` of size {}", worker_index, worker_slice_shapes.size());
@@ -497,8 +496,8 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
 
         if (row_major) {
             this->num_cols = input_tensor.padded_shape()[-1];
-            auto input_shape = input_tensor.padded_shape();
-            auto output_shape = output_tensor.padded_shape();
+            const auto& input_shape = input_tensor.padded_shape();
+            const auto& output_shape = output_tensor.padded_shape();
             this->num_rows =
                 std::accumulate(input_shape.cbegin() + slice_dim, input_shape.cend() - 1, 1, std::multiplies<uint32_t>());
             this->row_offset =
@@ -507,7 +506,7 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
                 num_rows;
         } else {
             auto input_shape = input_tensor.padded_shape();
-            auto output_shape = output_tensor.padded_shape();
+            const auto& output_shape = output_tensor.padded_shape();
             auto input_tile = input_tensor.tensor_spec().tile();
             auto output_tile = output_tensor.tensor_spec().tile();
             this->num_cols = input_shape[-1] / input_tile.get_width();
@@ -562,22 +561,21 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
     }
 };
 
-
 tt::tt_metal::KernelHandle generate_edm_kernel(
-   tt::tt_metal::Program& program,
-    tt::tt_metal::IDevice const* device,
-    tt::tt_fabric::FabricEriscDatamoverBuilder const& edm_builder,
-    CoreCoord const& eth_core,
-    tt::tt_metal::DataMovementProcessor const risc_id,
+    tt::tt_metal::Program& program,
+    const tt::tt_metal::IDevice* device,
+    const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
+    const CoreCoord& eth_core,
+    tt::tt_metal::DataMovementProcessor risc_id,
     tt::tt_metal::NOC noc_id);
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
-   tt::tt_metal::Program& program,
-    IDevice const* device,
-    EriscDatamoverBuilder const& edm_builder,
-    CoreCoord const& eth_core,
-    tt::tt_metal::DataMovementProcessor const risc_id,
-    tt::tt_metal:: NOC noc_id);
+    tt::tt_metal::Program& program,
+    const IDevice* device,
+    const EriscDatamoverBuilder& edm_builder,
+    const CoreCoord& eth_core,
+    tt::tt_metal::DataMovementProcessor risc_id,
+    tt::tt_metal::NOC noc_id);
 
 void generate_edm_kernels_for_ring_or_linear_topology(
    tt::tt_metal::Program& program,
@@ -706,6 +704,17 @@ private:
 };
 
 std::tuple<size_t, size_t, bool> get_forward_backward_configuration(size_t ring_size, size_t ring_index, Topology topology);
+
+// Forward/backward devices are assumed to be neighbors for 1D fabric for now
+std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backward_line_unicast_configuration(Topology topology, IDevice* src_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device);
+
+std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
+    size_t ring_size, size_t ring_index, Topology topology, bool static_alternate);
+
+// Forward/backward devices are assumed to be neighbors for 1D fabric for now
+std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backward_line_mcast_configuration(
+    Topology topology, IDevice* src_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device, uint32_t num_targets_forward, uint32_t num_targets_backward);
+
 
 }  // namespace ccl
 }  // namespace ttnn

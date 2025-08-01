@@ -174,10 +174,10 @@ bool logical_matches_physical(const TensorSpec& tensor_spec);
 //                           Data reader, writer, and initializers
 // ======================================================================================
 
-std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec);
-
 std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
+
+HostBuffer allocate_host_buffer(const TensorSpec& tensor_spec);
 
 template <typename T>
 void read_data_from_device_buffer(CommandQueue& cq, Buffer& device_buffer, void* host_buffer_data, bool blocking) {
@@ -201,13 +201,9 @@ template <typename T>
 Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename T>
-Tensor to_device(
-    const Tensor& tensor,
-    IDevice* target_device,
-    const MemoryConfig& memory_config,
-    QueueId cq_id = ttnn::DefaultQueueId);
+void copy_to_host_tensor(
+    const Tensor& device_tensor, Tensor& host_tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
 
-// TODO: #17215 - This will eventually subsume `to_device`, when "mesh buffer" backed tensors become the default.
 template <typename T>
 Tensor to_device_mesh_tensor(
     const Tensor& tensor,
@@ -216,7 +212,7 @@ Tensor to_device_mesh_tensor(
     QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename T>
-void copy_to_mesh_tensor(const Tensor& host_tensor, Tensor& mesh_tensor, QueueId cq_id = ttnn::DefaultQueueId);
+void copy_to_device_tensor(const Tensor& host_tensor, Tensor& device_tensor, QueueId cq_id = ttnn::DefaultQueueId);
 
 // ======================================================================================
 //                                  .to_layout()
@@ -256,10 +252,7 @@ enum class TensorPrintProfile {
 extern TensorPrintProfile TTNN_TENSOR_PRINT_PROFILE;
 
 template <typename T>
-std::string to_string(
-    const Tensor& tensor,
-    std::optional<DataType> original_dtype = std::nullopt,
-    std::optional<Layout> original_layout = std::nullopt);
+std::string to_string(const Tensor& tensor);
 
 template <typename T>
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id);

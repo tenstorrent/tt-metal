@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include "moreh_sum_backward_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
@@ -56,7 +58,7 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     tensor_return_value_t& output_tensor) {
     auto output_grad = tensor_args.output_grad;
     auto input = tensor_args.input;
-    auto input_grad = output_tensor;
+    const auto& input_grad = output_tensor;
 
     auto dims = operation_attributes.dims;
     auto keepdim = operation_attributes.keepdim;
@@ -73,7 +75,6 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format = datatype_to_dataformat_converter(output_grad.dtype());
-    const auto single_tile_size{tt::tt_metal::detail::TileSize(cb_data_format)};
 
     const auto& input_grad_shape = input_grad.padded_shape();
     const auto& input_grad_shape_wo_padding = input_grad.logical_shape();
@@ -155,13 +156,13 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1, need_bcast_dim[0], need_bcast_dim[1]};
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
     const auto compute_kernel_file =
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum_backward/device/kernels/moreh_sum_backward.cpp";
-    const auto compute_kernel_1_id = CreateComputeKernel(
+    CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_cols_per_core_group_1, compute_args_group_1},
@@ -233,7 +234,7 @@ void MorehSumBackwardOperation::ProgramFactory::override_runtime_arguments(
     auto output_grad_buffer = tensor_args.output_grad.buffer();
     auto input_grad_buffer = tensor_return_value.buffer();
 
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
+    for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         {

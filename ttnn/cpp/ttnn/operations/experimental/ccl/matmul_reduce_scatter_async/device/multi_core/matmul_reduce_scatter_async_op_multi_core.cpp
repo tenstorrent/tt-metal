@@ -19,7 +19,7 @@
 #include <sstream>
 #include <type_traits>
 
-#include "cpp/ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_op.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
@@ -47,6 +47,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
     const uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const CoreCoord core_grid_offset,
 
@@ -80,8 +81,12 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
             ring_index,
             topology,
             semaphore,
+            barrier_semaphore,
             sub_device_id,
             reduce_scatter_fused_op_signaler,
+            std::nullopt,
+            std::nullopt,
+            std::nullopt,
             core_grid_offset);
     const auto reduce_scatter_override_runtime_arguments_callback =
         reduce_scatter_program_with_callbacks.override_runtime_arguments_callback;

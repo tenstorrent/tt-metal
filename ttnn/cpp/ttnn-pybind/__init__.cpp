@@ -17,12 +17,14 @@
 #include "ttnn-pybind/fabric.hpp"
 #include "ttnn-pybind/global_circular_buffer.hpp"
 #include "ttnn-pybind/global_semaphore.hpp"
+#include "ttnn-pybind/mesh_socket.hpp"
 #include "ttnn-pybind/operations/copy.hpp"
 #include "ttnn-pybind/operations/core.hpp"
 #include "ttnn-pybind/operations/creation.hpp"
 #include "ttnn-pybind/operations/trace.hpp"
 #include "ttnn-pybind/profiler.hpp"
 #include "ttnn-pybind/program_descriptors.hpp"
+#include "ttnn-pybind/tensor_accessor_args.hpp"
 #include "ttnn-pybind/reports.hpp"
 #include "ttnn-pybind/tensor.hpp"
 #include "ttnn-pybind/types.hpp"
@@ -58,7 +60,6 @@
 #include "ttnn/operations/matmul/matmul_pybind.hpp"
 #include "ttnn/operations/moreh/moreh_pybind.hpp"
 #include "ttnn/operations/normalization/normalization_pybind.hpp"
-#include "ttnn/operations/pool/downsample/downsample_pybind.hpp"
 #include "ttnn/operations/pool/generic/generic_pools_pybind.hpp"
 #include "ttnn/operations/pool/global_avg_pool/global_avg_pool_pybind.hpp"
 #include "ttnn/operations/pool/upsample/upsample_pybind.hpp"
@@ -67,6 +68,7 @@
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
 #include "ttnn/operations/uniform/uniform_pybind.hpp"
+#include "ttnn/operations/rand/rand_pybind.hpp"
 
 namespace ttnn::operations {
 
@@ -147,7 +149,6 @@ void py_module(py::module& module) {
     pool::py_module(m_pool);
     avgpool::py_module(m_pool);
     upsample::py_module(m_pool);
-    downsample::py_bind_downsample(m_pool);
 
     auto m_normalization = module.def_submodule("normalization", "normalization operations");
     normalization::py_module(m_normalization);
@@ -187,6 +188,9 @@ void py_module(py::module& module) {
 
     auto m_generic = module.def_submodule("generic", "ttnn generic operation interface");
     generic::bind_generic_operation(m_generic);
+
+    auto m_rand = module.def_submodule("rand", "ttnn rand operation");
+    rand::bind_rand_operation(m_rand);
 }
 }  // namespace ttnn::operations
 
@@ -217,11 +221,13 @@ PYBIND11_MODULE(_ttnn, module) {
     auto m_events = module.def_submodule("events", "ttnn events");
     auto m_global_circular_buffer = module.def_submodule("global_circular_buffer", "ttnn global circular buffer");
     auto m_global_semaphore = module.def_submodule("global_semaphore", "ttnn global semaphore");
+    auto m_mesh_socket = module.def_submodule("mesh_socket", "ttnn mesh socket");
     auto m_profiler = module.def_submodule("profiler", "Submodule defining the profiler");
     auto m_reports = module.def_submodule("reports", "ttnn reports");
     auto m_operations = module.def_submodule("operations", "ttnn Operations");
     auto m_fabric = module.def_submodule("fabric", "Fabric instantiation APIs");
     auto m_program_descriptors = module.def_submodule("program_descriptor", "Program descriptors types");
+    auto m_tensor_accessor_args = module.def_submodule("tensor_accessor_args", "Tensor accessor args types");
 
     // TYPES
     ttnn::tensor::tensor_mem_config_module_types(m_tensor);
@@ -230,6 +236,7 @@ PYBIND11_MODULE(_ttnn, module) {
 
     ttnn::types::py_module_types(m_types);
     ttnn::activation::py_module_types(m_activation);
+    ttnn::cluster::py_cluster_module_types(m_cluster);
     ttnn::core::py_module_types(m_core);
     ttnn::device::py_device_module_types(m_device);
     ttnn::fabric::py_bind_fabric_api(m_fabric);
@@ -237,8 +244,10 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::events::py_module_types(m_events);
     ttnn::global_circular_buffer::py_module_types(m_global_circular_buffer);
     ttnn::global_semaphore::py_module_types(m_global_semaphore);
+    ttnn::mesh_socket::py_module_types(m_mesh_socket);
     ttnn::reports::py_module_types(m_reports);
     ttnn::program_descriptors::py_module_types(m_program_descriptors);
+    ttnn::tensor_accessor_args::py_module_types(m_tensor_accessor_args);
 
     // FUNCTIONS / OPERATIONS
     ttnn::tensor::tensor_mem_config_module(m_tensor);
@@ -262,8 +271,10 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::events::py_module(m_events);
     ttnn::global_circular_buffer::py_module(m_global_circular_buffer);
     ttnn::global_semaphore::py_module(m_global_semaphore);
+    ttnn::mesh_socket::py_module(m_mesh_socket);
     ttnn::profiler::py_module(m_profiler);
     ttnn::reports::py_module(m_reports);
+    ttnn::tensor_accessor_args::py_module(m_tensor_accessor_args);
 
     // ttnn operations have to come before the deprecated ones,
     // because ttnn defines additional type bindings.

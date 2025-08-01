@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,6 +10,7 @@
 #include <tt-metalium/hal.hpp>
 
 #include "transpose_program_factory.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -28,10 +29,9 @@ void Transpose::validate(const std::vector<Tensor>& input_tensors) const {
         this->dim == TransposeOpDim::HC || this->dim == TransposeOpDim::WH || this->dim == TransposeOpDim::CN,
         "Transpose HC, WH, CN are the only supported transpose operations. Transpose {} is not supported.",
         (int)this->dim);
-    const auto shape = input_tensor.padded_shape();
+    const auto& shape = input_tensor.padded_shape();
     bool row_major = input_tensor.layout() == Layout::ROW_MAJOR;
     uint32_t W = shape[3], H = shape[2], C = shape[1], N = shape[0];
-    uint32_t HW = H * W;
     if (not row_major) {
         TT_FATAL(
             W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0,
@@ -116,7 +116,7 @@ void Transpose::validate(const std::vector<Tensor>& input_tensors) const {
                 W * input_tensor.element_size(),
                 BUFFER_ALIGNMENT);
         }
-        TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32, "Error");
+        TT_FATAL(input_tensor.dtype() == DataType::BFLOAT16 || input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::INT32, "Unsupported data type for input tensor");
         TT_FATAL(
             !(input_tensor.is_sharded() && input_tensor.layout() == Layout::TILE),
             "HC transpose does not support sharded+tilized inputs");
@@ -235,6 +235,17 @@ operation::ProgramWithCallbacks Transpose::create_program(
             return detail::transpose_cn_multi_core(input_tensor, output_tensor);
         default: TT_THROW("Unsupported parallelization strategy");
     }
+}
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> Transpose::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = output_tensors.at(0);
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
 }
 
 TransposeOpParallelizationStrategy Transpose::get_parallelization_strategy(

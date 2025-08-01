@@ -1675,13 +1675,25 @@ void py_module(py::module& module) {
         R"doc(\mathrm{{output\_tensor}}_i = \verb|atan|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
-
+    bind_unary_composite(
+        module,
+        ttnn::atanh,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|atanh|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(BFLOAT16, BFLAOT8_B, FLOAT32)doc");
     bind_unary_operation(
         module,
         ttnn::cos,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|cos|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation(
+        module,
+        ttnn::acosh,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|acosh|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+
     bind_unary_operation(
         module,
         ttnn::erfinv,
@@ -1713,6 +1725,12 @@ void py_module(py::module& module) {
         module,
         ttnn::trunc,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|trunc|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation(
+        module,
+        ttnn::frac,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|frac|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation(
@@ -1825,7 +1843,7 @@ void py_module(py::module& module) {
         ttnn::logical_not,
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{!input\_tensor_i}})doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32)doc");
     bind_unary_operation(
         module,
         ttnn::ltz,
@@ -1938,6 +1956,24 @@ void py_module(py::module& module) {
         R"doc(\mathrm{{output\_tensor}}_i = \verb|rad2deg|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation(
+        module,
+        ttnn::asinh,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|asinh|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation(
+        module,
+        ttnn::hardsigmoid,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|hardsigmoid|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation(
+        module,
+        ttnn::hardswish,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|hardswish|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     //  Unaries with fast_and_approximate_mode
     bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp, R"doc(BFLOAT16, BFLOAT8_B)doc");
@@ -2055,33 +2091,6 @@ void py_module(py::module& module) {
     bind_identity(module, ttnn::identity);
 
     // unary composite imported into ttnn
-    bind_unary_composite(
-        module,
-        ttnn::acosh,
-        R"doc(Performs acosh function on :attr:`input_tensor`.)doc",
-        "",
-        R"doc(BFLOAT16)doc",
-        R"doc(TILE)doc",
-        R"doc(2, 3, 4)doc",
-        R"doc(System memory is not supported.)doc");
-    bind_unary_composite(
-        module,
-        ttnn::asinh,
-        R"doc(Performs asinh function on :attr:`input_tensor`.)doc",
-        "",
-        R"doc(BFLOAT16)doc",
-        R"doc(TILE)doc",
-        R"doc(2, 3, 4)doc",
-        R"doc(System memory is not supported.)doc");
-    bind_unary_composite(
-        module,
-        ttnn::atanh,
-        R"doc(Performs atanh function on :attr:`input_tensor`.)doc",
-        "",
-        R"doc(BFLOAT16)doc",
-        R"doc(TILE)doc",
-        R"doc(2, 3, 4)doc",
-        R"doc(System memory is not supported.)doc");
     bind_unary_composite(module, ttnn::cbrt, R"doc(Performs cbrt function on :attr:`input_tensor`.)doc");
     bind_unary_composite(
         module,
@@ -2145,7 +2154,7 @@ void py_module(py::module& module) {
         ttnn::logical_not_,
         R"doc(Performs logical_not inplace function on :attr:`input_tensor`.)doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32)doc");
     bind_unary_composite(
         module,
         ttnn::normalize_global,
@@ -2156,18 +2165,6 @@ void py_module(py::module& module) {
         R"doc(4)doc",
         "",
         R"doc(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16))doc");
-    bind_unary_composite(
-        module,
-        ttnn::frac,
-        R"doc(Performs frac function on :attr:`input_tensor`.)doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-
-    bind_unary_composite_floats_with_default(
-        module, ttnn::hardswish, "scale", "Scale value", 1.0f / 6.0f, "shift", "Shift value", 0.5f);
-
-    bind_unary_composite_floats_with_default(
-        module, ttnn::hardsigmoid, "scale", "Scale value", 1.0f / 6.0f, "shift", "Shift value", 0.5f);
 
     bind_hardtanh(module, ttnn::hardtanh, "min_val", "min value", -1.0f, "max_val", "max value", 1.0f);
 

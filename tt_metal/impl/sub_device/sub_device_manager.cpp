@@ -26,6 +26,7 @@
 #include "impl/context/metal_context.hpp"
 #include "trace/trace.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"
+#include <tt-metalium/control_plane.hpp>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/xy_pair.h>
 #include "vector_aligned.hpp"
@@ -80,7 +81,7 @@ SubDeviceManager::~SubDeviceManager() {
             allocator->clear();
             // Deallocate all buffers
             // This is done to set buffer object status to Deallocated
-            const auto& allocated_buffers = allocator->get_allocated_buffers();
+            const auto allocated_buffers = allocator->get_allocated_buffers();
             for (auto buf = allocated_buffers.begin(); buf != allocated_buffers.end();) {
                 tt::tt_metal::DeallocateBuffer(*(*(buf++)));
             }
@@ -150,7 +151,7 @@ std::shared_ptr<TraceBuffer> SubDeviceManager::get_trace(uint32_t tid) {
 
 bool SubDeviceManager::has_allocations() const {
     for (const auto& allocator : sub_device_allocators_) {
-        if (allocator && allocator->get_allocated_buffers().size() > 0) {
+        if (allocator && allocator->get_num_allocated_buffers() > 0) {
             return true;
         }
     }
@@ -208,7 +209,7 @@ void SubDeviceManager::validate_sub_devices() const {
             const auto& eth_cores = sub_device.cores(HalProgrammableCoreType::ACTIVE_ETH);
             uint32_t num_eth_cores = 0;
             const auto& device_eth_cores =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_active_ethernet_cores(device_->id());
+                tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_->id());
             for (const auto& dev_eth_core : device_eth_cores) {
                 if (eth_cores.contains(dev_eth_core)) {
                     num_eth_cores++;

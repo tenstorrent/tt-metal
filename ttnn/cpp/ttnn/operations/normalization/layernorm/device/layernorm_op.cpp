@@ -57,7 +57,14 @@ void LayerNorm::validate(
             TT_FATAL(
                 (gamma.value().padded_shape()[-1] == TILE_WIDTH &&
                  gamma.value().physical_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH),
-                "Error");
+                "Gamma's last padded dim needs to equal tile width and gamma's volume needs to align with last padded "
+                "dim of input. Error with gamma.value().padded_shape(): {}, TILE_WIDTH: {}, "
+                "gamma.value().physical_volume(): {}, "
+                "a.padded_shape(): {}",
+                gamma.value().padded_shape(),
+                TILE_WIDTH,
+                gamma.value().physical_volume(),
+                a.padded_shape());
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device(), "Error");
@@ -140,7 +147,7 @@ void LayerNorm::validate(
                 TT_FATAL(a.memory_config().memory_layout() == this->output_mem_config.memory_layout(), "Error");
 
                 // tensor shape
-                const auto shape = a.padded_shape();
+                const auto& shape = a.padded_shape();
                 uint32_t M = a.physical_volume() / shape[-1];
                 uint32_t K = shape[-1];
                 uint32_t Mt = M / TILE_WIDTH;

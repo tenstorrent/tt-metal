@@ -3,9 +3,16 @@
 set -eo pipefail
 
 FLAVOR=`grep '^ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
-VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
-MAJOR=${VERSION%.*}
 ARCH=`uname -m`
+
+# VERSION_ID and BUILD_ID are standard within /etc/os-release but both optional
+source /etc/os-release
+VERSION="unknown-version"
+if [[ -v "$VERSION_ID" ]]; then
+    VERSION="${VERSION_ID}"
+elif [[ -v "$BUILD_ID" ]]; then
+    VERSION="${BUILD_ID}"
+fi
 
 # Function to display help
 show_help() {
@@ -42,11 +49,12 @@ show_help() {
     echo "  --enable-coverage                Instrument the binaries for code coverage."
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
+    echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
 }
 
 clean() {
     echo "INFO: Removing build artifacts!"
-    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build_ASan* build_TSan* build built
+    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build_ASan* build_TSan* build built .cpmcache
     rm -rf ~/.cache/tt-metal-cache /tmp/tt-metal-cache
     if [[ ! -z $TT_METAL_CACHE ]]; then
         echo "User has TT_METAL_CACHE set, please make sure you delete it in order to delete all artifacts!"
@@ -86,6 +94,7 @@ configure_only="OFF"
 enable_coverage="OFF"
 enable_distributed="ON"
 with_python_bindings="ON"
+enable_fake_kernels_target="OFF"
 
 declare -a cmake_args
 
@@ -123,6 +132,7 @@ configure-only
 enable-coverage
 without-distributed
 without-python-bindings
+enable-fake-kernels-target
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -182,6 +192,8 @@ while true; do
             configure_only="ON";;
         --without-python-bindings)
             with_python_bindings="OFF";;
+        --enable-fake-kernels-target)
+            enable_fake_kernels_target="ON";;
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --disable-light-metal-trace)
@@ -361,6 +373,9 @@ fi
 
 if [ "$with_python_bindings" = "ON" ]; then
     cmake_args+=("-DWITH_PYTHON_BINDINGS=ON")
+    cmake_args+=("-DPython3_EXECUTABLE=$(which python3)")
+    cmake_args+=("-DPython3_INCLUDE_DIR=$(python3 -c "from sysconfig import get_paths as gp; print(gp()['include'])")")
+    cmake_args+=("-DPython3_LIBRARY=$(python3 -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR') + '/libpython' + sysconfig.get_config_var('LDVERSION') + '.so')")")
 else
     cmake_args+=("-DWITH_PYTHON_BINDINGS=OFF")
 fi
@@ -369,6 +384,12 @@ if [ "$enable_distributed" = "ON" ]; then
     cmake_args+=("-DENABLE_DISTRIBUTED=ON")
 else
     cmake_args+=("-DENABLE_DISTRIBUTED=OFF")
+fi
+
+if [ "$enable_fake_kernels_target" = "ON" ]; then
+    cmake_args+=("-DENABLE_FAKE_KERNELS_TARGET=ON")
+else
+    cmake_args+=("-DENABLE_FAKE_KERNELS_TARGET=OFF")
 fi
 
 # toolchain and cxx_compiler settings would conflict with eachother

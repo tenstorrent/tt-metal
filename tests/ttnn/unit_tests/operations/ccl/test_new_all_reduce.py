@@ -15,7 +15,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_i
     num_cores_to_rectangle_grid,
     round_up,
 )
-from models.demos.llama3_subdevices.tt.model_config import (
+from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -67,6 +67,7 @@ def run_all_reduce_impl(
     trace_mode=False,
     validate_all=True,
     profiler=BenchmarkProfiler(),
+    linear=True,
 ):
     cluster_shape = (8, 4)
 
@@ -79,8 +80,6 @@ def run_all_reduce_impl(
     ##################################
     ##### Set up fabric stuff
     ##################################
-
-    linear = True
     if linear:
         all_reduce_topology = ttnn.Topology.Linear
         wrap_mesh = False
@@ -362,7 +361,6 @@ def test_all_reduce(
     num_iters,
     warmup_iters,
     trace_mode,
-    use_program_cache,
     function_level_defaults,
 ):
     if output_shape == [1, 1, 32, 16 * 1024] and input_dtype == ttnn.bfloat16:
@@ -452,7 +450,6 @@ def test_all_reduce_loopback(
     num_iters,
     warmup_iters,
     trace_mode,
-    use_program_cache,
     function_level_defaults,
 ):
     if mesh_device.get_num_devices() != 32:

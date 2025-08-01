@@ -15,6 +15,11 @@
 #include "assert.hpp"
 #include <tt-logger/tt-logger.hpp>
 
+auto fmt::formatter<tt::tt_fabric::FabricNodeId>::format(
+    const tt::tt_fabric::FabricNodeId& node_id, format_context& ctx) const -> format_context::iterator {
+    return fmt::format_to(ctx.out(), "(M{}, D{})", *node_id.mesh_id, node_id.chip_id);
+}
+
 namespace tt::tt_fabric {
 
 FabricNodeId::FabricNodeId(MeshId mesh_id, std::uint32_t chip_id) {
@@ -65,43 +70,75 @@ RoutingTableGenerator::RoutingTableGenerator(const std::string& mesh_graph_desc_
 }
 
 void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConnectivity& intra_mesh_connectivity) {
+    const auto get_shorter_direction_on_row_or_col = [&](std::uint32_t mesh_id_val,
+                                                         std::uint32_t src_chip_id,
+                                                         std::uint32_t dst_chip_id,
+                                                         RoutingDirection a,
+                                                         RoutingDirection b) -> RoutingDirection {
+        // Loop through intra_mesh_connectivity starting with a or b direction and return direction that matches
+        // dst_chip_id_first In case of tie, this function is returning a
+        std::uint32_t curr_a = src_chip_id, curr_b = src_chip_id;
+        bool a_valid = true, b_valid = true;
+        while (a_valid or b_valid) {
+            if (intra_mesh_connectivity[mesh_id_val][curr_a].contains(dst_chip_id) and
+                intra_mesh_connectivity[mesh_id_val][curr_a].at(dst_chip_id).port_direction == a) {
+                return a;
+            } else if (
+                intra_mesh_connectivity[mesh_id_val][curr_b].contains(dst_chip_id) and
+                intra_mesh_connectivity[mesh_id_val][curr_b].at(dst_chip_id).port_direction == b) {
+                return b;
+            } else {
+                a_valid = false;
+                b_valid = false;
+                for (const auto& [next_chip_id, edge] : intra_mesh_connectivity[mesh_id_val][curr_a]) {
+                    if (edge.port_direction == a) {
+                        curr_a = next_chip_id;
+                        a_valid = true;
+                        break;
+                    }
+                }
+                for (const auto& [next_chip_id, edge] : intra_mesh_connectivity[mesh_id_val][curr_b]) {
+                    if (edge.port_direction == b) {
+                        curr_b = next_chip_id;
+                        b_valid = true;
+                        break;
+                    }
+                }
+            }
+        }
+        TT_ASSERT(
+            false,
+            "No valid direction found for src_chip_id {} and dst_chip_id {} in mesh_id {}. "
+            "This should not happen, check the intra_mesh_connectivity.",
+            src_chip_id,
+            dst_chip_id,
+            mesh_id_val);
+        return RoutingDirection::NONE;  // This line should never be reached
+    };
     for (std::uint32_t mesh_id_val = 0; mesh_id_val < this->intra_mesh_table_.size(); mesh_id_val++) {
         MeshId mesh_id{mesh_id_val};
         for (chip_id_t src_chip_id = 0; src_chip_id < this->intra_mesh_table_[mesh_id_val].size(); src_chip_id++) {
             for (chip_id_t dst_chip_id = 0; dst_chip_id < this->intra_mesh_table_[mesh_id_val].size(); dst_chip_id++) {
-                int row_size = this->mesh_graph->get_mesh_shape(mesh_id)[1];
-                uint32_t src_x = src_chip_id / row_size;
-                uint32_t src_y = src_chip_id % row_size;
-                uint32_t dst_x = dst_chip_id / row_size;
-                uint32_t dst_y = dst_chip_id % row_size;
-
+                auto src_mesh_coord = this->mesh_graph->chip_to_coordinate(mesh_id, src_chip_id);
+                auto dst_mesh_coord = this->mesh_graph->chip_to_coordinate(mesh_id, dst_chip_id);
                 uint32_t next_chip_id;
                 // X first routing, traverse rows first
-                if (src_x > dst_x) {
-                    // Move North
-                    next_chip_id = src_chip_id - row_size;
-                    this->intra_mesh_table_[*mesh_id][src_chip_id][dst_chip_id] =
-                        intra_mesh_connectivity[*mesh_id][src_chip_id].at(next_chip_id).port_direction;
+                if (src_mesh_coord[0] != dst_mesh_coord[0]) {
+                    // If source and destination are in different rows, we need to move in the X direction first
+                    // Move North or South
+                    MeshCoordinate target_coord_on_column(dst_mesh_coord[0], src_mesh_coord[1]);
+                    auto target_chip_id = this->mesh_graph->coordinate_to_chip(mesh_id, target_coord_on_column);
+                    auto direction = get_shorter_direction_on_row_or_col(
+                        mesh_id_val, src_chip_id, target_chip_id, RoutingDirection::N, RoutingDirection::S);
+                    this->intra_mesh_table_[*mesh_id][src_chip_id][dst_chip_id] = direction;
                     // TODO: today we are not updating the weight of the edge, should we use weight to balance
                     //  routing traffic?
                     //  intra_mesh_connectivity[mesh_id][src_chip_id][next_chip_id].weight += 1;
-                } else if (src_x < dst_x) {
-                    // Move South
-                    next_chip_id = src_chip_id + row_size;
-                    this->intra_mesh_table_[*mesh_id][src_chip_id][dst_chip_id] =
-                        intra_mesh_connectivity[*mesh_id][src_chip_id].at(next_chip_id).port_direction;
-                    // intra_mesh_connectivity[mesh_id][src_chip_id][next_chip_id].weight += 1;
-                } else if (src_y < dst_y) {
-                    // Move East
-                    next_chip_id = src_chip_id + 1;
-                    this->intra_mesh_table_[*mesh_id][src_chip_id][dst_chip_id] =
-                        intra_mesh_connectivity[*mesh_id][src_chip_id].at(next_chip_id).port_direction;
-                    // intra_mesh_connectivity[mesh_id][src_chip_id][next_chip_id].weight += 1;
-                } else if (src_y > dst_y) {
-                    // Move West
-                    next_chip_id = src_chip_id - 1;
-                    this->intra_mesh_table_[*mesh_id][src_chip_id][dst_chip_id] =
-                        intra_mesh_connectivity[*mesh_id][src_chip_id].at(next_chip_id).port_direction;
+                } else if (src_mesh_coord[1] != dst_mesh_coord[1]) {
+                    // Move East or West
+                    auto direction = get_shorter_direction_on_row_or_col(
+                        mesh_id_val, src_chip_id, dst_chip_id, RoutingDirection::E, RoutingDirection::W);
+                    this->intra_mesh_table_[*mesh_id][src_chip_id][dst_chip_id] = direction;
                     // intra_mesh_connectivity[mesh_id][src_chip_id][next_chip_id].weight += 1;
                 } else {
                     // No movement
@@ -117,7 +154,7 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
 // Shortest Path
 // TODO: Put into mesh algorithms?
 std::vector<std::vector<std::vector<std::pair<chip_id_t, MeshId>>>> RoutingTableGenerator::get_paths_to_all_meshes(
-    MeshId src, const InterMeshConnectivity& inter_mesh_connectivity) {
+    MeshId src, const InterMeshConnectivity& inter_mesh_connectivity) const {
     // TODO: add more tests for this
     std::uint32_t num_meshes = inter_mesh_connectivity.size();
     // avoid vector<bool> specialization
@@ -183,7 +220,6 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
         MeshId src_mesh_id{src_mesh_id_val};
         auto paths = get_paths_to_all_meshes(src_mesh_id, inter_mesh_connectivity);
         MeshShape mesh_shape = this->mesh_graph->get_mesh_shape(src_mesh_id);
-        std::uint32_t ns_size = mesh_shape[0];
         std::uint32_t ew_size = mesh_shape[1];
         for (chip_id_t src_chip_id = 0; src_chip_id < this->inter_mesh_table_[src_mesh_id_val].size(); src_chip_id++) {
             for (std::uint32_t dst_mesh_id_val = 0; dst_mesh_id_val < this->inter_mesh_table_.size(); dst_mesh_id_val++) {
@@ -263,6 +299,7 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
                     //    }
                     //  }
                 }
+                mesh_to_exit_nodes_[dst_mesh_id].push_back(FabricNodeId(MeshId{src_mesh_id}, exit_chip_id));
             }
         }
     }
@@ -301,5 +338,13 @@ void RoutingTableGenerator::print_routing_tables() const {
         }
     }
     log_debug(tt::LogFabric, "{}", ss.str());
+}
+
+const std::vector<FabricNodeId>& RoutingTableGenerator::get_exit_nodes_routing_to_mesh(MeshId mesh_id) const {
+    auto it = this->mesh_to_exit_nodes_.find(mesh_id);
+    if (it != this->mesh_to_exit_nodes_.end()) {
+        return it->second;
+    }
+    TT_THROW("No exit nodes found for mesh_id {}", *mesh_id);
 }
 }  // namespace tt::tt_fabric

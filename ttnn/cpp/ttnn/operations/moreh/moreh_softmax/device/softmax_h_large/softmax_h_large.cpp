@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
+#include <string>
+
+#include "ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_softmax {
@@ -29,7 +31,6 @@ MorehSoftmaxOperation::MorehSoftmaxHLargeFactory::create(
 
     auto num = input.physical_volume() / H / W;
     uint32_t num_cols_tiles = num * Wt;
-    uint32_t core_w = core_range.end_coord.x - core_range.start_coord.x + 1;
     uint32_t core_h = core_range.end_coord.y - core_range.start_coord.y + 1;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -65,8 +66,8 @@ MorehSoftmaxOperation::MorehSoftmaxHLargeFactory::create(
     bool src_is_dram = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool dst_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    std::map<string, string> reader_defines;
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
 
     auto reader_kernel_id = CreateReadKernel(
         program,
@@ -81,7 +82,7 @@ MorehSoftmaxOperation::MorehSoftmaxHLargeFactory::create(
         {dst_is_dram},
         writer_defines);
 
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     if (op == MorehSoftmaxOp::SOFTMAX || op == MorehSoftmaxOp::LOGSOFTMAX) {
         compute_defines["SOFTMAX"] = "1";
     } else {

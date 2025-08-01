@@ -20,7 +20,6 @@ class TtCrossAttnUpBlock2D(nn.Module):
         num_attn_heads,
         out_dim,
         has_upsample=False,
-        transformer_weights_dtype=ttnn.bfloat16,
     ):
         super().__init__()
 
@@ -39,7 +38,6 @@ class TtCrossAttnUpBlock2D(nn.Module):
                     query_dim,
                     num_attn_heads,
                     out_dim,
-                    weights_dtype=transformer_weights_dtype,
                 )
             )
 
@@ -87,7 +85,7 @@ class TtCrossAttnUpBlock2D(nn.Module):
                 hidden_states, [B, C, H, W], encoder_hidden_states=encoder_hidden_states, attention_mask=attention_mask
             )
 
-        ttnn.DumpDeviceProfiler(self.device)
+        ttnn.ReadDeviceProfiler(self.device)
 
         if self.upsamplers is not None:
             hidden_states = ttnn.reshape(hidden_states, [B, H, W, C])

@@ -1,0 +1,27 @@
+namespace tt.tt_fabric.flatbuffer;
+
+table MeshId {
+  value: uint32;
+}
+
+table HostRankId {
+  value: uint32;
+}
+
+table EthChanDescriptor {
+    board_id: uint64;
+    chan_id: uint32;
+}
+
+table EthernetLink {
+    local_chan: EthChanDescriptor;
+    remote_chan: EthChanDescriptor;
+}
+
+table IntermeshLinkTable {
+  local_mesh_id: MeshId;
+  local_host_rank_id: HostRankId;
+  intermesh_links: [EthernetLink];
+}
+
+root_type IntermeshLinkTable;

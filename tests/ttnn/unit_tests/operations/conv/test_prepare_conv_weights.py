@@ -23,7 +23,6 @@ def prepare_conv_weights_func(
     pad_h,
     pad_w,
     config_override,
-    on_device,
     device,
     groups,
     is_owned,
@@ -71,12 +70,10 @@ def prepare_conv_weights_func(
         tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16) if has_bias else None
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=ttnn.bfloat16,
         weights_dtype=weights_dtype,
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
-        preprocess_weights_on_device=on_device,
         enable_kernel_stride_folding=enable_kernel_stride_folding,
     )
     compute_config = ttnn.init_device_compute_kernel_config(device.arch())
@@ -110,9 +107,6 @@ def prepare_conv_weights_func(
     }
 
     tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
-    if on_device:
-        tt_weight_tensor = ttnn.to_device(tt_weight_tensor, device)
-        tt_bias_tensor = ttnn.to_device(tt_bias_tensor, device) if has_bias else None
 
     tt_weight_tensor_formatted = ttnn.prepare_conv_weights(
         weight_tensor=tt_weight_tensor,
@@ -120,10 +114,14 @@ def prepare_conv_weights_func(
         input_memory_config=ttnn.L1_MEMORY_CONFIG,
         has_bias=has_bias,
         **conv_kwargs,
+        input_dtype=ttnn.bfloat16,
     )
     tt_bias_tensor_formatted = (
         ttnn.prepare_conv_bias(
-            bias_tensor=tt_bias_tensor, input_memory_config=tt_input_tensor.memory_config(), **conv_kwargs
+            bias_tensor=tt_bias_tensor,
+            input_memory_config=tt_input_tensor.memory_config(),
+            **conv_kwargs,
+            input_dtype=ttnn.bfloat16,
         )
         if has_bias
         else None
@@ -138,6 +136,7 @@ def prepare_conv_weights_func(
         bias_tensor=tt_bias_tensor_formatted,
         **conv_kwargs,
         compute_config=compute_config,
+        dtype=ttnn.bfloat16,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -203,7 +202,6 @@ def prepare_conv_weights_func(
         (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, None, 1),
     ),
 )
-@pytest.mark.parametrize("on_device", [True, False], ids=["on_device", "on_host"])
 @pytest.mark.parametrize("is_owned", [True, False], ids=["owned_storage", "borrowed_storage"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
 def test_prepare_conv_weights(
@@ -219,7 +217,6 @@ def test_prepare_conv_weights(
     pad_h,
     pad_w,
     config_override,
-    on_device,
     device,
     groups,
     is_owned,
@@ -237,7 +234,6 @@ def test_prepare_conv_weights(
         pad_h,
         pad_w,
         config_override,
-        on_device,
         device,
         groups,
         is_owned,
@@ -251,7 +247,6 @@ def test_prepare_conv_weights(
         (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, None, 1),
     ),
 )
-@pytest.mark.parametrize("on_device", [True, False], ids=["on_device", "on_host"])
 @pytest.mark.parametrize("weights_dtype", [None, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("torch_weights_dtype", [ttnn.float32])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
@@ -270,7 +265,6 @@ def test_conv_weights_dtype(
     config_override,
     device,
     groups,
-    on_device,
     weights_dtype,
     torch_weights_dtype,
 ):
@@ -287,7 +281,6 @@ def test_conv_weights_dtype(
         pad_h,
         pad_w,
         config_override,
-        on_device,
         device,
         groups,
         False,
@@ -354,7 +347,6 @@ def test_prepare_bias(
     tt_bias_tensor = ttnn.from_torch(torch_bias_tensor, ttnn.bfloat16) if has_bias else None
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
         enable_act_double_buffer=False,
         enable_split_reader=False,
@@ -391,10 +383,12 @@ def test_prepare_bias(
 
     tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
 
-    tt_bias_tensor = ttnn.to_device(tt_bias_tensor, device)
     tt_bias_tensor_formatted = (
         ttnn.prepare_conv_bias(
-            bias_tensor=tt_bias_tensor, input_memory_config=tt_input_tensor.memory_config(), **conv_kwargs
+            bias_tensor=tt_bias_tensor,
+            input_memory_config=tt_input_tensor.memory_config(),
+            **conv_kwargs,
+            input_dtype=ttnn.bfloat16,
         )
         if has_bias
         else None
@@ -408,6 +402,7 @@ def test_prepare_bias(
         bias_tensor=tt_bias_tensor_formatted,
         **conv_kwargs,
         compute_config=compute_config,
+        dtype=ttnn.bfloat16,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -470,8 +465,7 @@ def test_conv_dram(
         padding[0],
         padding[1],
         config,
-        True,
-        device=device,
+        device,
         groups=1,
         is_owned=False,
         slice_config=ttnn.Conv2dSliceConfig(
@@ -491,7 +485,6 @@ def test_conv_dram(
         (1, 768, 3, 384, 512, 32, 32, 32, 32),
     ),
 )
-@pytest.mark.parametrize("on_device", [True, False], ids=["on_device", "on_host"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2**15}], indirect=True)
 def test_prepare_conv_weights_with_fold(
     batch_size,
@@ -503,7 +496,6 @@ def test_prepare_conv_weights_with_fold(
     filter_width,
     stride_h,
     stride_w,
-    on_device,
     device,
 ):
     pad_h = 0
@@ -523,7 +515,6 @@ def test_prepare_conv_weights_with_fold(
         pad_h,
         pad_w,
         None,
-        on_device,
         device,
         groups,
         is_owned=False,

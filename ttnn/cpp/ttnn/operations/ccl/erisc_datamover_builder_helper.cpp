@@ -50,11 +50,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
     bool build_in_worker_connection_mode,
     Topology topology,
     bool is_galaxy,
-    bool en_dateline_sender_extra_buffer,
-    bool en_dateline_receiver_extra_buffer,
-    bool en_dateline_upstream_sender_extra_buffer,
-    bool en_dateline_upstream_receiver_extra_buffer,
-    bool en_dateline_upstream_adjcent_sender_extra_buffer) :
+    const tt::tt_fabric::FabricRouterBufferConfig& edm_buffer_config) :
     device_sequence(device_sequence), programs(program_sequence) {
     if (topology == Topology::Ring) {
         TT_FATAL(device_sequence.size() > 2, "Ring topology only supports more than 2 devices");
@@ -155,24 +151,23 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
                         tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
                 }
             }
+
+            auto edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
+            // change to long axis variantion, and using more buffer slots.
+            if (device_sequence.size() >=
+                tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
+                edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Long;
+            }
             // if ring topology set extra buffer on dateline edms.
             auto src_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
                 .edm_type = src_device_edm_type,
-                .enable_dateline_sender_extra_buffer_slots = en_dateline_sender_extra_buffer,
-                .enable_dateline_receiver_extra_buffer_slots = en_dateline_receiver_extra_buffer,
-                .enable_dateline_upstream_sender_extra_buffer_slots = en_dateline_upstream_sender_extra_buffer,
-                .enable_dateline_upstream_receiver_extra_buffer_slots = en_dateline_upstream_receiver_extra_buffer,
-                .enable_dateline_upstream_adjacent_sender_extra_buffer_slots =
-                    en_dateline_upstream_adjcent_sender_extra_buffer,
+                .edm_axis = edm_axis,
+                .edm_buffer_config = edm_buffer_config,
             };
             auto dest_edm_options = tt::tt_fabric::FabricEriscDatamoverOptions{
                 .edm_type = dest_device_edm_type,
-                .enable_dateline_sender_extra_buffer_slots = en_dateline_sender_extra_buffer,
-                .enable_dateline_receiver_extra_buffer_slots = en_dateline_receiver_extra_buffer,
-                .enable_dateline_upstream_sender_extra_buffer_slots = en_dateline_upstream_sender_extra_buffer,
-                .enable_dateline_upstream_receiver_extra_buffer_slots = en_dateline_upstream_receiver_extra_buffer,
-                .enable_dateline_upstream_adjacent_sender_extra_buffer_slots =
-                    en_dateline_upstream_adjcent_sender_extra_buffer,
+                .edm_axis = edm_axis,
+                .edm_buffer_config = edm_buffer_config,
             };
             const auto src_curr_edm_config =
                 tt::tt_fabric::FabricEriscDatamoverConfig(edm_buffer_size, topology, src_edm_options);
@@ -267,7 +262,7 @@ EdmLineFabricOpInterface::EdmLineFabricOpInterface(
 
                     for (size_t l = 0; l < num_links; l++) {
                         auto& edm = direction_edm[l];
-                        auto edm_noc_vc = l & edm.config.MAX_EDM_NOC_VC;
+                        auto edm_noc_vc = edm.config.DEFAULT_NOC_VC + (l % edm.config.NUM_EDM_NOC_VCS);
                         edm.config.edm_noc_vc = edm_noc_vc;
                     }
                 }
@@ -524,6 +519,11 @@ void EdmLineFabricOpInterface::build_kernels() const {
                 direction == FORWARD ? edm_builders_forward_direction : edm_builders_backward_direction;
             if (edm_builders.find(device->id()) != edm_builders.end()) {
                 for (auto& edm_builder : edm_builders.at(device->id())) {
+                    auto noc_ids = std::array<tt::tt_metal::NOC, 2>{tt::tt_metal::NOC::NOC_0, tt::tt_metal::NOC::NOC_1};
+                    TT_FATAL(
+                        edm_builder.get_configured_risc_count() <= 2,
+                        "EDM builder has {} risc cores but only a maximum of 2 are supported",
+                        edm_builder.get_configured_risc_count());
                     for (uint32_t risc_id = 0; risc_id < edm_builder.get_configured_risc_count(); risc_id++) {
                         log_trace(
                             tt::LogOp,
@@ -535,13 +535,13 @@ void EdmLineFabricOpInterface::build_kernels() const {
                             device->ethernet_core_from_logical_core(edm_builder.my_eth_core_logical).y,
                             device->ethernet_core_from_logical_core(edm_builder.my_eth_core_logical).x,
                             risc_id);
-                        auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
+                        ttnn::ccl::generate_edm_kernel(
                             *program,
                             device,
                             edm_builder,
                             edm_builder.my_eth_core_logical,
                             static_cast<tt::tt_metal::DataMovementProcessor>(risc_id),
-                            tt::tt_metal::NOC::NOC_0);
+                            noc_ids[risc_id]);
                     }
                 }
             }

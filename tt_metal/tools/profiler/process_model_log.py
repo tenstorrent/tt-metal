@@ -6,6 +6,7 @@ import os
 import subprocess
 from pathlib import Path
 import pandas as pd
+from loguru import logger
 
 from tt_metal.tools.profiler.common import PROFILER_ARTIFACTS_DIR, PROFILER_SCRIPTS_ROOT, generate_reports_folder
 
@@ -58,8 +59,10 @@ def run_device_profiler(command, output_logs_subdir, check_test_return_code=True
         check_return_code = "--check-exit-code"
     if device_analysis_types:
         assert type(device_analysis_types) == list
-        device_analysis_opt = [f" -a {analysis}" for analysis in device_analysis_types]
+        device_analysis_opt_list = [f" -a {analysis}" for analysis in device_analysis_types]
+        device_analysis_opt = "".join(device_analysis_opt_list)
     profiler_cmd = f"python3 -m tracy -p -r -o {output_profiler_dir} {check_return_code} {device_analysis_opt} -t 5000 -m {command}"
+    logger.info(profiler_cmd)
     subprocess.run([profiler_cmd], shell=True, check=True)
 
 

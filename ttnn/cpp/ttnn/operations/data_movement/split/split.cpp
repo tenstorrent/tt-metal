@@ -21,7 +21,7 @@ constexpr auto TWO_CHUNKS = 2;
 constexpr auto RANK_FOUR = 4;
 
 std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {
-    auto input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
     auto padded_input_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_shape);
     ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
         .pad_shape = padded_input_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
@@ -30,14 +30,14 @@ std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor& input_ten
 }
 
 std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {
-    const auto shape = input_tensor.padded_shape();
+    const auto& shape = input_tensor.padded_shape();
     const bool pre_post_reshape = shape[0] > 1;
 
     if (!pre_post_reshape) {
         return impl_split_last_dim_two_chunks_tiled(input_tensor, mem_config);
     }
 
-    const int W = 1, Z = shape[0] * shape[1], Y = shape[2], X = shape[3];
+    const int Y = shape[2], X = shape[3];
     const Tensor& reshaped_tensor =
         ttnn::reshape_on_device(input_tensor, ttnn::SmallVector<int32_t>{1, -1, Y, X}, mem_config);
 

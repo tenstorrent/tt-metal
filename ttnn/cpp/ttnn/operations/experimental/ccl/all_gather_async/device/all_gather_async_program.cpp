@@ -17,13 +17,13 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
-#include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
+#include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
 
-#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-#include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+#include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 #include <sstream>
 #include <type_traits>
 #include <ranges>
@@ -174,7 +174,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
-    tt::tt_metal::CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
+    CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
 
     // Create Tensor slicer
     // read the entire input tensor (partition size = 1, partition index = 0)

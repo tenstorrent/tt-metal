@@ -5,6 +5,7 @@
 #pragma once
 
 #include <umd/device/types/cluster_descriptor_types.h>
+#include "context/metal_context.hpp"
 #include "gtest/gtest.h"
 #include <map>
 #include <tt-metalium/host_api.hpp>
@@ -15,7 +16,6 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/device_pool.hpp>
-#include "llrt.hpp"
 
 namespace tt::tt_metal {
 
@@ -27,7 +27,6 @@ private:
 public:
     // A function to run a program, according to which dispatch mode is set.
     void RunProgram(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program, const bool skip_finish = false) {
-        const uint64_t program_id = program.get_id();
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device, program);
         } else {
@@ -82,9 +81,8 @@ protected:
         this->DetectDispatchMode();
         // Must set up all available devices
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        auto num_devices = tt::tt_metal::GetNumAvailableDevices();
         std::vector<chip_id_t> ids;
-        for (unsigned int id = 0; id < num_devices; id++) {
+        for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
             ids.push_back(id);
         }
         const auto& dispatch_core_config =
@@ -108,6 +106,7 @@ protected:
             tt::tt_metal::detail::CloseDevices(id_to_device_);
             id_to_device_.clear();
             devices_.clear();
+            MetalContext::instance().teardown();
         }
     }
 

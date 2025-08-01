@@ -90,7 +90,7 @@ tt::tt_metal::Program initialize_program_data_movement_rta(
 
     uint32_t rta_base_dm = get_runtime_arg_addr(
         device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1), tt::RISCV::BRISC, common_rtas);
-    std::map<string, string> dm_defines = {
+    std::map<std::string, std::string> dm_defines = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_unique_rt_args)},
         {"RESULTS_ADDR", std::to_string(rta_base_dm)}};
@@ -160,6 +160,7 @@ std::pair<tt::tt_metal::Program, std::vector<tt::tt_metal::KernelHandle>> initia
     tt::tt_metal::Program program = tt_metal::CreateProgram();
     std::vector<tt::tt_metal::KernelHandle> kernel_ids;
 
+    kernel_ids.reserve(core_range_sets.size());
     for (const auto& core_range_set : core_range_sets) {
         kernel_ids.push_back(initialize_program_compute(device, program, core_range_set, num_unique_rt_args, num_common_rt_args));
     }
@@ -212,7 +213,7 @@ void verify_results(
 
         // Verify Unique RT Args (per core)
         for (const auto& logical_core : kernel->cores_with_runtime_args()) {
-            auto expected_rt_args = core_to_rt_args.at(logical_core);
+            const auto& expected_rt_args = core_to_rt_args.at(logical_core);
             auto rt_args = kernel->runtime_args(logical_core);
             EXPECT_EQ(rt_args, expected_rt_args) << "(unique rta)";
 
@@ -425,6 +426,7 @@ TEST_F(DeviceFixture, TensixSetRuntimeArgsVaryingLengthPerCore) {
                     uint32_t val_offset = x * 100 + y * 10;
                     uint32_t num_rt_args = 2 + x + y;
                     std::vector<uint32_t> initial_runtime_args;
+                    initial_runtime_args.reserve(num_rt_args);
                     for (uint32_t i = 0; i < num_rt_args; i++) {
                         initial_runtime_args.push_back(101 + val_offset + (i * 66));
                     }
@@ -452,16 +454,16 @@ TEST_F(DeviceFixture, TensixIllegalTooManyRuntimeArgs) {
         auto [program, kernel] = unit_tests::runtime_args::initialize_program_compute(
             this->devices_.at(id), core_range_set, 0, 0);  // Kernel isn't run here.
 
-        // Set 100 unique args, then try to set 300 common args and fail.
+        // Set 100 unique args, then try to set max_runtime_args + 1 common args and fail.
         std::vector<uint32_t> initial_runtime_args(100);
         SetRuntimeArgs(program, kernel, core_range_set, initial_runtime_args);
-        std::vector<uint32_t> common_runtime_args(300);
+        std::vector<uint32_t> common_runtime_args(tt::tt_metal::max_runtime_args + 1);
         EXPECT_ANY_THROW(SetCommonRuntimeArgs(program, 0, common_runtime_args));
 
-        // Set 100 common args, then try to set another 300 unique args and fail.
+        // Set 100 common args, then try to set another tt::tt_metal::max_runtime_args + 1 unique args and fail.
         std::vector<uint32_t> more_common_runtime_args(100);
         SetCommonRuntimeArgs(program, kernel, more_common_runtime_args);
-        std::vector<uint32_t> more_unique_args(300);
+        std::vector<uint32_t> more_unique_args(tt::tt_metal::max_runtime_args + 1);
         EXPECT_ANY_THROW(SetRuntimeArgs(program, 0, core_range_set, more_unique_args));
     }
 }

@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <exception>
@@ -174,8 +175,8 @@ void run(
         tt_metal::Finish(device0->command_queue());
         tt_metal::Finish(device1->command_queue());
     }
-    tt::tt_metal::detail::DumpDeviceProfileResults(device0);
-    tt::tt_metal::detail::DumpDeviceProfileResults(device1);
+    tt::tt_metal::detail::ReadDeviceProfilerResults(device0);
+    tt::tt_metal::detail::ReadDeviceProfilerResults(device1);
 }
 
 int main(int argc, char** argv) {

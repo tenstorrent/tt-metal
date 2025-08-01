@@ -1,1 +1,0 @@
-../../../../models/experimental/sentence_bert/tests/test_sentence_bert_e2e_performant.py

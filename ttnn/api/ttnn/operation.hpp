@@ -249,7 +249,7 @@ struct ProfilerInfo {
 
 inline MemoryConfig DEFAULT_OUTPUT_MEMORY_CONFIG;
 
-static void set_default_operation_output_memory_config(const MemoryConfig& memory_config) {
+inline void set_default_operation_output_memory_config(const MemoryConfig& memory_config) {
     DEFAULT_OUTPUT_MEMORY_CONFIG = memory_config;
 }
 
@@ -476,7 +476,7 @@ auto default_create_output_tensors(
 template <class OutputTensorsT = Tensors>
 class DeviceOperation final {
 public:
-    using storage_t = std::array<std::byte, 1152>;
+    using storage_t = std::array<std::byte, 1240>;
     using OutputTensors = OutputTensorsT;
     using ComputedSpecs = std::vector<ttnn::TensorSpec>;
 

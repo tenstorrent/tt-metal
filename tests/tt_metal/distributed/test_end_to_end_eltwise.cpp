@@ -85,7 +85,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
 
     bool fp32_dest_acc_en = false;
     bool math_approx_mode = false;
-    std::map<string, string> binary_defines = {
+    std::map<std::string, std::string> binary_defines = {
         {"ELTWISE_OP", op_id_to_op_define[eltwise_op_index]},
         {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op_index]}};
     auto eltwise_binary_kernel = CreateKernel(
@@ -110,14 +110,13 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
 
 namespace tt::tt_metal::distributed::test {
 
-using MeshEndToEndT3kTests = T3000MeshDeviceFixture;
+using MeshEndToEnd2x4Tests = MeshDevice2x4Fixture;
 using ::testing::Each;
 using ::testing::Eq;
 using ::testing::FloatEq;
 using ::testing::Pointwise;
 
-TEST_F(MeshEndToEndT3kTests, ProgramDispatchTest) {
-
+TEST_F(MeshEndToEnd2x4Tests, ProgramDispatchTest) {
     auto& cq = mesh_device_->mesh_command_queue();
 
     uint8_t cq_id = cq.id();
@@ -155,7 +154,7 @@ TEST_F(MeshEndToEndT3kTests, ProgramDispatchTest) {
     Finish(cq);
 }
 
-TEST_F(MeshEndToEndT3kTests, BufferRoundtripTest) {
+TEST_F(MeshEndToEnd2x4Tests, BufferRoundtripTest) {
     using tt::tt_metal::distributed::ShardedBufferConfig;
 
     auto& cq = mesh_device_->mesh_command_queue();
@@ -171,11 +170,8 @@ TEST_F(MeshEndToEndT3kTests, BufferRoundtripTest) {
     uint32_t distributed_buffer_size_bytes =
         mesh_device_->num_rows() * 32 * mesh_device_->num_cols() * 32 * tile_size_bytes;
 
-    auto local_buffer_config = DeviceLocalBufferConfig{
-        .page_size = tile_size_bytes,
-        .buffer_type = BufferType::L1,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = false};
+    auto local_buffer_config =
+        DeviceLocalBufferConfig{.page_size = tile_size_bytes, .buffer_type = BufferType::L1, .bottom_up = false};
     auto distributed_buffer_config = ShardedBufferConfig{
         .global_size = distributed_buffer_size_bytes,
         .global_buffer_shape = distributed_buffer_shape,
@@ -193,7 +189,7 @@ TEST_F(MeshEndToEndT3kTests, BufferRoundtripTest) {
     EXPECT_THAT(read_back_data, Pointwise(Eq(), src_data));
 }
 
-TEST_F(MeshEndToEndT3kTests, UntracedEltwiseAddTest) {
+TEST_F(MeshEndToEnd2x4Tests, UntracedEltwiseAddTest) {
     constexpr uint8_t kAddOpId = 0;
 
     auto shard_shape = Shape2D{32, 32};
@@ -203,11 +199,8 @@ TEST_F(MeshEndToEndT3kTests, UntracedEltwiseAddTest) {
     auto tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
     auto distributed_buffer_size_bytes = mesh_device_->num_rows() * mesh_device_->num_cols() * tile_size_bytes;
 
-    auto local_buffer_config = DeviceLocalBufferConfig{
-        .page_size = tile_size_bytes,
-        .buffer_type = BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = false};
+    auto local_buffer_config =
+        DeviceLocalBufferConfig{.page_size = tile_size_bytes, .buffer_type = BufferType::DRAM, .bottom_up = false};
     auto distributed_buffer_config = tt::tt_metal::distributed::ShardedBufferConfig{
         .global_size = distributed_buffer_size_bytes,
         .global_buffer_shape = distributed_buffer_shape,
@@ -249,17 +242,17 @@ TEST_F(MeshEndToEndT3kTests, UntracedEltwiseAddTest) {
     }
 }
 
-class MeshEndToEndT3kTraceTests : public MeshDeviceFixtureBase {
+class MeshEndToEnd2x4TraceTests : public MeshDeviceFixtureBase {
 protected:
-    MeshEndToEndT3kTraceTests() :
+    MeshEndToEnd2x4TraceTests() :
         MeshDeviceFixtureBase(Config{
-            .mesh_device_types = {MeshDeviceFixtureBase::MeshDeviceType::T3000},
+            .system_mesh_shape = MeshShape{2, 4},
             .num_cqs = 2,
             .trace_region_size = 3072,  // 1024 per workload necessary
         }) {}
 };
 
-TEST_F(MeshEndToEndT3kTraceTests, EltwiseAddTest) {
+TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
     constexpr uint8_t kAddOpId = 0;
 
     auto shard_shape = Shape2D{32, 32};
@@ -269,11 +262,8 @@ TEST_F(MeshEndToEndT3kTraceTests, EltwiseAddTest) {
     auto tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
     auto distributed_buffer_size_bytes = mesh_device_->num_rows() * mesh_device_->num_cols() * tile_size_bytes;
 
-    auto local_buffer_config = DeviceLocalBufferConfig{
-        .page_size = tile_size_bytes,
-        .buffer_type = BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = false};
+    auto local_buffer_config =
+        DeviceLocalBufferConfig{.page_size = tile_size_bytes, .buffer_type = BufferType::DRAM, .bottom_up = false};
     auto distributed_buffer_config = tt::tt_metal::distributed::ShardedBufferConfig{
         .global_size = distributed_buffer_size_bytes,
         .global_buffer_shape = distributed_buffer_shape,
@@ -326,7 +316,7 @@ TEST_F(MeshEndToEndT3kTraceTests, EltwiseAddTest) {
     }
 }
 
-TEST_F(MeshEndToEndT3kTraceTests, EltwiseMulTest) {
+TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
     constexpr uint8_t kMulOpId = 1;
 
     auto shard_shape = Shape2D{32, 32};
@@ -336,11 +326,8 @@ TEST_F(MeshEndToEndT3kTraceTests, EltwiseMulTest) {
     auto tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
     auto distributed_buffer_size_bytes = mesh_device_->num_rows() * mesh_device_->num_cols() * tile_size_bytes;
 
-    auto local_buffer_config = DeviceLocalBufferConfig{
-        .page_size = tile_size_bytes,
-        .buffer_type = BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = false};
+    auto local_buffer_config =
+        DeviceLocalBufferConfig{.page_size = tile_size_bytes, .buffer_type = BufferType::DRAM, .bottom_up = false};
     auto distributed_buffer_config = tt::tt_metal::distributed::ShardedBufferConfig{
         .global_size = distributed_buffer_size_bytes,
         .global_buffer_shape = distributed_buffer_shape,
@@ -394,7 +381,7 @@ TEST_F(MeshEndToEndT3kTraceTests, EltwiseMulTest) {
 
 MATCHER_P(Bfloat16Eq, calculated, "") { return arg.to_float() == calculated; }
 
-TEST_F(MeshEndToEndT3kTraceTests, SimulEltwiseTest) {
+TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
 
@@ -429,10 +416,7 @@ TEST_F(MeshEndToEndT3kTraceTests, SimulEltwiseTest) {
 
     // Specify data layout on a single physical device
     DeviceLocalBufferConfig per_device_buffer_config{
-        .page_size = single_tile_size,
-        .buffer_type = tt_metal::BufferType::DRAM,
-        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-        .bottom_up = true};
+        .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = true};
 
     // Allocate buffers in distributed memory space for first MeshWorkload
     auto add_src0_buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());

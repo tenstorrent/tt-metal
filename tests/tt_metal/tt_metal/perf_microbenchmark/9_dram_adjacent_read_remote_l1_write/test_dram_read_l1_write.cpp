@@ -12,6 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/util.hpp>
 #include <algorithm>
 #include <array>
@@ -362,8 +363,11 @@ uint32_t get_dram_bandwidth(tt::ARCH arch) {
 }
 
 void get_optimal_dram_bank_to_reader_assignment(
-    IDevice* device, std::vector<CoreCoord>& all_worker_cores_ordered, CoreRangeSet& all_worker_cores) {
-    all_worker_cores_ordered = device->get_optimal_dram_bank_to_logical_worker_assignment();
+    IDevice* device,
+    std::vector<CoreCoord>& all_worker_cores_ordered,
+    CoreRangeSet& all_worker_cores,
+    tt_metal::NOC noc) {
+    all_worker_cores_ordered = device->get_optimal_dram_bank_to_logical_worker_assignment(noc);
     std::set<CoreRange> all_cores_set;
     for (const auto& worker_core : all_worker_cores_ordered) {
         all_cores_set.insert(CoreRange(worker_core));
@@ -551,7 +555,8 @@ int main(int argc, char** argv) {
         std::vector<CoreCoord> all_dram_reader_cores_ordered;
         CoreRangeSet all_l1_receiver_cores;
         std::vector<CoreCoord> all_l1_writer_cores_ordered;
-        get_optimal_dram_bank_to_reader_assignment(device, all_dram_reader_cores_ordered, all_dram_reader_cores);
+        get_optimal_dram_bank_to_reader_assignment(
+            device, all_dram_reader_cores_ordered, all_dram_reader_cores, tt_metal::NOC::NOC_0);
 
         if (device->arch() == tt::ARCH::BLACKHOLE) {
             get_l1_writer_core_coords_blackhole(
@@ -639,7 +644,7 @@ int main(int argc, char** argv) {
             auto t_begin = std::chrono::steady_clock::now();
             EnqueueProgram(device->command_queue(), program, false);
             Finish(device->command_queue());
-            tt_metal::detail::DumpDeviceProfileResults(device);
+            tt_metal::detail::ReadDeviceProfilerResults(device);
             auto t_end = std::chrono::steady_clock::now();
             auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
             dram_bandwidth.push_back((input_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));

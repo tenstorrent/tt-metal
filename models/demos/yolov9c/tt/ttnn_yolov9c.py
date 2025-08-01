@@ -67,6 +67,7 @@ class TtYOLOv9cConv2D:
         self.conv_transpose = conv_transpose
         self.output_padding = conv.output_padding if conv_transpose else None
         self.enable_autopad = enable_autopad
+        self.activation_dtype = activation_dtype
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -76,7 +77,6 @@ class TtYOLOv9cConv2D:
             math_approx_mode=False,
         )
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=activation_dtype,
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
@@ -132,6 +132,7 @@ class TtYOLOv9cConv2D:
                 compute_config=self.compute_config,
                 return_output_dim=True,
                 return_weights_and_bias=True,
+                dtype=self.activation_dtype,
             )
             hw = output_height * output_width
             if x.shape[2] != hw:
@@ -161,6 +162,7 @@ class TtYOLOv9cConv2D:
                 output_padding=(1, 1),
                 dilation=(1, 1),
                 mirror_kernel=True,
+                dtype=self.activation_dtype,
             )
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
             x = ttnn.reshape(x, (x.shape[0], output_height, output_width, x.shape[3]))
@@ -732,6 +734,19 @@ class YoloV9:
             self.segment_detect = TtnnDetect(device, parameters.model_args.model[22], parameters.model[22])  # 22
 
     def __call__(self, x):
+        N, C, H, W = x.shape
+        ## Padding from image channels (3) to min channels (16)
+        min_channels = 16
+        if C < min_channels:
+            channel_padding_needed = min_channels - C
+            nchw = ttnn.pad(x, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
+        else:
+            nchw = x
+        nhwc = ttnn.permute(nchw, (0, 2, 3, 1))  # NCHW -> NHWC
+        ttnn.deallocate(nchw)
+        ttnn.deallocate(x)
+        nhwc = ttnn.reallocate(nhwc)
+        x = ttnn.reshape(nhwc, [1, 1, nhwc.shape[0] * nhwc.shape[1] * nhwc.shape[2], nhwc.shape[-1]])
         x = self.conv1(x)  # 0
         x = self.conv2(x)  # 1
         x = self.repncspelan4_1(x)  # 2

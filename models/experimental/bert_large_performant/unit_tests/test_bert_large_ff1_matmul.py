@@ -170,7 +170,7 @@ def test_bert_large_ff1_matmul_test(
     )
 
 
-def test_bert_large_ff1_matmul_with_program_cache(device, use_program_cache):
+def test_bert_large_ff1_matmul_with_program_cache(device):
     dtype = ttnn.bfloat8_b
     mem_config = ttnn.DRAM_MEMORY_CONFIG
     for _ in range(2):

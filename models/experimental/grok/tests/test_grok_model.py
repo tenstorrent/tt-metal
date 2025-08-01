@@ -40,7 +40,7 @@ from models.experimental.grok.reference.configuration_grok1 import Grok1Config
     "iterations",
     (1, 2, 10),
 )
-def test_grok_model_inference(t3k_mesh_device, use_program_cache, reset_seeds, iterations, n_layers, validation_type):
+def test_grok_model_inference(t3k_mesh_device, reset_seeds, iterations, n_layers, validation_type):
     pcc = 0.97
     dtype = ttnn.bfloat8_b
 
@@ -201,7 +201,7 @@ def test_grok_model_inference(t3k_mesh_device, use_program_cache, reset_seeds, i
     (1, 2, 4, 8, 16, 32, 64),
 )
 @pytest.mark.timeout(60 * 30 * 64)
-def test_grok_model_layers(t3k_mesh_device, use_program_cache, reset_seeds, n_layers):
+def test_grok_model_layers(t3k_mesh_device, reset_seeds, n_layers):
     pcc = 0.97
 
     model_args = TtModelArgs(t3k_mesh_device)

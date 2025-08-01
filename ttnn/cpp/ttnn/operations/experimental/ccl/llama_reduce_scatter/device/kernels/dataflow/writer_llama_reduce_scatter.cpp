@@ -12,22 +12,7 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-
 constexpr bool flush = false;
-
-template <uint8_t noc_ind = noc_index>
-FORCE_INLINE std::uint64_t static_noc_multicast_addr(
-    std::uint32_t noc_x_start,
-    std::uint32_t noc_y_start,
-    std::uint32_t noc_x_end,
-    std::uint32_t noc_y_end,
-    std::uint32_t addr) {
-    if constexpr (noc_ind == 0) {
-        return get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, addr);
-    } else {
-        return get_noc_multicast_addr(noc_x_end, noc_y_end, noc_x_start, noc_y_start, addr);
-    }
-}
 
 template <bool ring_topology>
 FORCE_INLINE uint32_t distance(uint32_t chip_id, uint32_t target_device_id, uint32_t num_devices) {
@@ -64,24 +49,23 @@ void kernel_main() {
     size_t rt_arg_idx = 0;
 
     // Define all compile-time arguments at the beginning
-    constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t fabric_sender_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t fabric_receiver_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t accumulator_cb_id = get_compile_time_arg_val(4);
-    constexpr uint32_t output_tensor_cb_id = get_compile_time_arg_val(5);
-    constexpr uint32_t chip_id = get_compile_time_arg_val(6);
-    constexpr uint32_t tiles_per_core_width = get_compile_time_arg_val(7);
-    constexpr uint32_t tiles_per_core_width_output = get_compile_time_arg_val(8);
-    constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(9);
-    constexpr uint32_t input_shard_cores_per_device = get_compile_time_arg_val(10);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(11);
-    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(12);
-    constexpr uint32_t output_cores_per_device = get_compile_time_arg_val(13);
-    constexpr uint32_t packet_receiver_core_x = get_compile_time_arg_val(14);
-    constexpr uint32_t packet_receiver_core_y = get_compile_time_arg_val(15);
-    constexpr uint32_t num_packet_worker_cores = get_compile_time_arg_val(16);
-    constexpr bool ring_topology = (bool)get_compile_time_arg_val(17);
+    constexpr uint32_t fabric_sender_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t fabric_receiver_cb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t accumulator_cb_id = get_compile_time_arg_val(3);
+    constexpr uint32_t output_tensor_cb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t chip_id = get_compile_time_arg_val(5);
+    constexpr uint32_t tiles_per_core_width = get_compile_time_arg_val(6);
+    constexpr uint32_t tiles_per_core_width_output = get_compile_time_arg_val(7);
+    constexpr uint32_t num_pages_per_packet = get_compile_time_arg_val(8);
+    constexpr uint32_t input_shard_cores_per_device = get_compile_time_arg_val(9);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(10);
+    constexpr uint32_t page_size_bytes = get_compile_time_arg_val(11);
+    constexpr uint32_t output_cores_per_device = get_compile_time_arg_val(12);
+    constexpr uint32_t packet_receiver_core_x = get_compile_time_arg_val(13);
+    constexpr uint32_t packet_receiver_core_y = get_compile_time_arg_val(14);
+    constexpr uint32_t num_packet_worker_cores = get_compile_time_arg_val(15);
+    constexpr bool ring_topology = (bool)get_compile_time_arg_val(16);
     // Derived compile-time constants
     constexpr uint32_t input_tensor_cores = input_shard_cores_per_device * num_devices;
     constexpr uint32_t num_packets_total_per_device =
@@ -106,7 +90,6 @@ void kernel_main() {
     uint32_t sender_packet_start = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_packet_end = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t sender_total_num_pages = get_arg_val<uint32_t>(rt_arg_idx++);
-
     if (sender_core) {
         auto fabric_connection =
             FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
@@ -120,7 +103,7 @@ void kernel_main() {
         auto* sem_inc_packet_header =
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr + packet_header_size);
         const uint64_t sem_noc_addr =
-            get_noc_addr(packet_receiver_core_x, packet_receiver_core_y, receiver_semaphore_address);
+            safe_get_noc_addr(packet_receiver_core_x, packet_receiver_core_y, receiver_semaphore_address, 0);
         sem_inc_packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
             sem_noc_addr,
             static_cast<uint16_t>(1),  // increment 1
@@ -151,13 +134,14 @@ void kernel_main() {
 
                 const uint32_t receiver_core_x = packet_worker_cores[packet][x_index];
                 const uint32_t receiver_core_y = packet_worker_cores[packet][y_index];
-                const uint64_t noc0_dest_noc_addr = get_noc_addr(receiver_core_x, receiver_core_y, packet_offset);
+                const uint64_t noc0_dest_noc_addr =
+                    safe_get_noc_addr(receiver_core_x, receiver_core_y, packet_offset, 0);
 
                 cb_wait_front(fabric_sender_cb_id, curr_packet_num_pages);
                 const auto sender_l1_addr = get_read_ptr(fabric_sender_cb_id);
 
                 const uint64_t sem_noc_addr =
-                    get_noc_addr(receiver_core_x, receiver_core_y, receiver_semaphore_address);
+                    safe_get_noc_addr(receiver_core_x, receiver_core_y, receiver_semaphore_address, 0);
                 unicast_packet_header->to_noc_fused_unicast_write_atomic_inc(
                     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
                         noc0_dest_noc_addr, sem_noc_addr, 1, 32, flush),

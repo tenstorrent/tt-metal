@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include <vector>
 
 #include "moreh_sum_device_operation.hpp"
@@ -15,7 +16,7 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     auto input = tensor_args.input;
-    auto output = output_tensor;
+    const auto& output = output_tensor;
     auto dim = operation_attributes.dim;
 
     auto memory_config = operation_attributes.memory_config;
@@ -25,10 +26,8 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
     auto program = Program();
 
     const auto cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    const auto single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
-    const auto input_shape = input.padded_shape();
-    const auto input_shape_without_padding = input.logical_shape();
+    const auto& input_shape = input.padded_shape();
     const auto [Wt, Ht, inner_tile_size, reduce_tile_size] =
         extract_and_scale_spatial_dims(input_shape, static_cast<uint32_t>(dim));
     const auto num_reduce_input_tile = input_shape[dim];
@@ -83,7 +82,7 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(is_dram(input))};
-    std::map<string, string> reader_defines;
+    std::map<std::string, std::string> reader_defines;
     reader_defines["USE_FPU"] = "1";
     std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(is_dram(output))};
     const auto reader_kernel_file =
@@ -98,7 +97,7 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
     //                      ComputeKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
     const std::vector<uint32_t> compute_args_group_1{num_cols_per_core_group_1, num_reduce_input_tile};
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     if (fp32_dest_acc_en) {
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
@@ -110,7 +109,7 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
         compute_kernel_file =
             "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_nc_impl_kernels/moreh_sum_nc_gs.cpp";
     }
-    const auto compute_kernel_1_id = CreateComputeKernel(
+    CreateComputeKernel(
         program,
         compute_kernel_file,
         {core_group_1, num_cols_per_core_group_1, compute_args_group_1},

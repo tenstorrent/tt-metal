@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
 #include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/fabric.hpp>
 #include "ttnn/global_semaphore.hpp"
 
 #include <ranges>
@@ -90,6 +91,9 @@ void ReduceScatterAsync::validate_with_output_tensors(
             }
         }
     }
+    TT_FATAL(
+        tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()),
+        "Only 1D fabric config is supported for generic reduce scatter");
 }
 
 std::vector<ttnn::TensorSpec> ReduceScatterAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
@@ -153,6 +157,20 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program_at(
         devices = this->devices;
     }
 
+    std::optional<size_t> num_links = this->num_links_preferred;
+
+    if (!num_links.has_value()) {
+        if (this->cluster_axis.has_value()) {
+            auto row_or_col = this->cluster_axis.value() == 0 ? coord[1] : coord[0];
+            num_links = tt::tt_fabric::experimental::get_number_of_available_routing_planes(
+                *mesh_device, this->cluster_axis.value(), row_or_col);
+        } else {
+            TT_FATAL(
+                false,
+                "Reduce scatter with undefined number of links and non-cluster axis API is currently not supported");
+        }
+    }
+
     auto target_device =
         input_tensors[0].mesh_device() ? input_tensors[0].mesh_device()->get_device(coord) : input_tensors[0].device();
 
@@ -199,7 +217,7 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program_at(
         this->ring_size,
         config.device_index,
         this->topology,
-        this->num_links_preferred,
+        num_links.value(),
         this->from_remote_sem,
         this->to_remote_sem,
         this->sub_device_id);
@@ -311,7 +329,7 @@ Tensor reduce_scatter_impl(
     ttnn::operations::binary::BinaryOpType binary_op_type = convert_reduce_type_to_eltwise_type(reduce_op);
     int16_t rank = input_tensor.logical_shape().rank();
     int16_t scatter_dim = (dim < 0) ? rank + dim : dim;
-    const auto mesh_view = mesh_device.get_view();
+    const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(),
         "reduce-scatter invoked with cluster_axis API on >2D mesh, which is currently unsupported");
@@ -463,4 +481,4 @@ std::vector<Tensor> reduce_scatter(
 }  // namespace experimental
 }  // namespace operations
 
-};  // namespace ttnn
+}  // namespace ttnn

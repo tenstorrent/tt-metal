@@ -13,6 +13,7 @@ struct BatchNormOperation {
     struct operation_attributes_t {
         const float eps;
         const MemoryConfig memory_config;
+        const DeviceComputeKernelConfig compute_kernel_config;
 
         DataType input_dtype;
         std::optional<DataType> dtype;
@@ -67,11 +68,12 @@ struct BatchNormOperation {
         const Tensor& input,
         const Tensor& batch_mean,
         const Tensor& batch_var,
-        const float eps,
+        float eps,
         std::optional<Tensor> weight,
         std::optional<Tensor> bias,
         std::optional<Tensor> output,
-        const std::optional<MemoryConfig>& memory_config);
+        const std::optional<MemoryConfig>& memory_config,
+        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
 };
 }  // namespace ttnn::operations::normalization
 

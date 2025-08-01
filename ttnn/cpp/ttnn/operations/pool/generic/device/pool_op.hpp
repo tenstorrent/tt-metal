@@ -28,6 +28,7 @@ struct Pool2D {
         MemoryConfig memory_config_;
         bool count_include_pad_;
         std::optional<int32_t> divisor_override_;
+        uint32_t memory_used;
     };
 
     struct tensor_args_t {
@@ -41,10 +42,10 @@ struct Pool2D {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle reader0_kernel;
             tt::tt_metal::KernelHandle reader1_kernel;
+            tt::tt_metal::KernelHandle compute_kernel;
             tt::tt_metal::CBHandle raw_in_cb;
             tt::tt_metal::CBHandle cb_out;
             uint32_t ncores;
-            uint32_t ncores_w;
             tt::tt_metal::DeviceStorage reader_indices_storage;
             tt::tt_metal::DeviceStorage scalar_config_storage;
         };
@@ -80,7 +81,8 @@ struct Pool2D {
         DataType output_dtype,
         MemoryConfig memory_config,
         bool count_include_pad,
-        std::optional<int32_t> divisor_override);
+        std::optional<int32_t> divisor_override,
+        uint32_t memory_used);
 };
 
 }  // namespace pool

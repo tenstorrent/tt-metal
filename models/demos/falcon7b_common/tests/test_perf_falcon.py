@@ -68,7 +68,6 @@ class TestParametrized:
         model_location_generator,
         get_tt_cache_path,
         device,
-        use_program_cache,
     ):
         if is_e75(device) and batch == 32:
             pytest.skip("Falcon batch 32 is not supported on E75")
@@ -198,7 +197,6 @@ class TestParametrized:
         model_location_generator,
         get_tt_cache_path,
         mesh_device,
-        use_program_cache,
     ):
         if llm_mode == "prefill":
             expected_output_pcc, expected_k_cache_pcc, expected_v_cache_pcc = PREFILL_CONFIG_TO_PCC[
@@ -250,7 +248,6 @@ class TestParametrized:
     @skip_for_grayskull()
     def test_perf_t3000_bare_metal(
         self,
-        use_program_cache,
         model_version,
         llm_mode,
         batch,

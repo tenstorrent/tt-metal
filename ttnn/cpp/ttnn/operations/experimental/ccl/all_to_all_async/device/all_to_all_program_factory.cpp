@@ -18,13 +18,13 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
-#include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
-#include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
+#include "ttnn/operations/ccl/common/uops/command_lowering.hpp"
 
-#include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
-#include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
+#include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
 #include <sstream>
 #include <type_traits>
 #include <ranges>
@@ -73,10 +73,11 @@ auto create_sender_buffers(
     auto cb_src0_handle = CreateCircularBuffer(program, sender_core_range, cb_src0_config);
 
     // Packet header buffer
-    auto header_buffer_config = tt::tt_metal::CircularBufferConfig(
-                                    PACKET_HEADER_BUFFER_SIZE * sizeof(tt::tt_fabric::PacketHeader) * 2,
-                                    {{tt::CB::c_in1, tt::DataFormat::RawUInt32}})
-                                    .set_page_size(tt::CB::c_in1, sizeof(tt::tt_fabric::PacketHeader));
+    auto header_buffer_config =
+        tt::tt_metal::CircularBufferConfig(
+            PACKET_HEADER_BUFFER_SIZE * tt::tt_fabric::get_tt_fabric_packet_header_size_bytes() * 2,
+            {{tt::CB::c_in1, tt::DataFormat::RawUInt32}})
+            .set_page_size(tt::CB::c_in1, tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
 
     auto header_buffer_handle = CreateCircularBuffer(program, sender_core_range, header_buffer_config);
 
@@ -208,9 +209,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
 
     // Create buffers
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    auto [sender_buffer, header_buffer] =
-        all_to_all_detail::create_sender_buffers(program, sender_worker_core_range, cb_pages, page_size, data_format);
-    auto receiver_buffer = all_to_all_detail::create_receiver_buffer(
+    all_to_all_detail::create_sender_buffers(program, sender_worker_core_range, cb_pages, page_size, data_format);
+    all_to_all_detail::create_receiver_buffer(
         program, receiver_worker_core_range, pages_per_packet, page_size, data_format);
 
     const auto [chunk_granularity, chunk_num_tiles, num_chunks_per_shard] = all_to_all_detail::calculate_chunk_params(
@@ -230,7 +230,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
     TT_FATAL(num_chunks_per_shard < 32, "num_chunks_per_shard must be < 32, got {}", num_chunks_per_shard);
     TT_FATAL(chunk_granularity >= 4, "chunk_granularity must be >= 4, got {}", chunk_granularity);
 
-    const uint32_t receiver_num_pages = pages_per_packet * 3;  // triple buffering
     const uint32_t receiver_cb_index = tt::CB::c_in0;
 
     /**
@@ -270,14 +269,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
      */
 
     // Tensor Info
-    const auto input_tensor_layout = input_tensor.buffer()->buffer_layout();
     const auto input_tensor_buffer_type = input_tensor.buffer()->buffer_type();
-    const auto input_tensor_page_layout = input_tensor.layout();
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
-    const auto output_tensor_layout = output_buffer.buffer()->buffer_layout();
     const auto output_tensor_buffer_type = output_buffer.buffer()->buffer_type();
-    const auto output_tensor_page_layout = output_buffer.layout();
-    const auto output_tensor_num_pages = output_buffer.buffer()->num_pages();
 
     const uint32_t N_DRAM_BANKS = device->num_dram_channels();
 
@@ -379,7 +373,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         receiver_reader_kernel_config);
 
     // Determine output shape and fracturing
-    const auto input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
     const auto in_row_tiles = input_shape[2] / tt::constants::TILE_HEIGHT;
     const auto in_col_tiles = input_shape[3] / tt::constants::TILE_WIDTH;
     auto output_shape = output_buffer.padded_shape();
@@ -485,13 +479,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         }
         writer_rt_args.push_back(forward_device.has_value());
         if (forward_device.has_value()) {
+            const auto sender_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+            const auto forward_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(forward_device.value()->id());
             tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_device->id(), forward_device.value()->id(), link, program, {core}, writer_rt_args);
+                sender_fabric_node_id, forward_device_fabric_node_id, link, program, {core}, writer_rt_args);
         }
         writer_rt_args.push_back(backward_device.has_value());
         if (backward_device.has_value()) {
+            const auto sender_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(sender_device->id());
+            const auto backward_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(backward_device.value()->id());
             tt::tt_fabric::append_fabric_connection_rt_args(
-                sender_device->id(), backward_device.value()->id(), link, program, {core}, writer_rt_args);
+                sender_fabric_node_id, backward_device_fabric_node_id, link, program, {core}, writer_rt_args);
         }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
 

@@ -22,7 +22,6 @@ namespace {
 std::string tensorMemoryLayoutToString(TensorMemoryLayout layout) {
     switch (layout) {
         case TensorMemoryLayout::INTERLEAVED: return "INTERLEAVED";
-        case TensorMemoryLayout::SINGLE_BANK: return "SINGLE_BANK";
         case TensorMemoryLayout::HEIGHT_SHARDED: return "HEIGHT_SHARDED";
         case TensorMemoryLayout::WIDTH_SHARDED: return "WIDTH_SHARDED";
         case TensorMemoryLayout::BLOCK_SHARDED: return "BLOCK_SHARDED";
@@ -477,6 +476,16 @@ nlohmann::json GraphProcessor::end_graph_capture() {
 bool ProcessorHooks::hook_allocate(const tt::tt_metal::Buffer* buffer) { return do_block; }
 
 bool ProcessorHooks::hook_deallocate(tt::tt_metal::Buffer* buffer) { return do_block; }
+
+bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::Buffer* buffer) { return do_block; }
+
+bool ProcessorHooks::hook_write_to_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) { return do_block; }
+
+bool ProcessorHooks::hook_read_from_device(tt::tt_metal::Buffer* buffer) { return do_block; }
+
+bool ProcessorHooks::hook_read_from_device(const tt::tt_metal::distributed::MeshBuffer* mesh_buffer) {
+    return do_block;
+}
 
 bool ProcessorHooks::hook_program(tt::tt_metal::Program*) { return do_block; }
 

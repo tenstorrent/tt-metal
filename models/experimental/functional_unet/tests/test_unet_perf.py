@@ -10,9 +10,6 @@ from ttnn.device import is_wormhole_b0
 
 from models.perf.perf_utils import prep_perf_report
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
-from models.utility_functions import (
-    skip_for_grayskull,
-)
 
 from models.experimental.functional_unet.tests.common import UNET_TRACE_REGION_SIZE, UNET_L1_SMALL_REGION_SIZE
 from models.experimental.functional_unet.tests.test_unet_model import run_unet_model
@@ -24,21 +21,21 @@ UNET_DEVICE_TEST_TOTAL_ITERATIONS = 4
 @pytest.mark.parametrize("groups", [4])
 @pytest.mark.parametrize("iterations", [UNET_DEVICE_TEST_TOTAL_ITERATIONS])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": UNET_L1_SMALL_REGION_SIZE}], indirect=True)
-def test_unet_model(batch, groups, device, iterations, use_program_cache, reset_seeds):
+def test_unet_model(batch, groups, device, iterations, reset_seeds):
     if (
         not is_wormhole_b0(device)
         and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 110
+        and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 130
     ):
-        pytest.skip(f"Shallow UNet only support 110 cores on BH (was {device.compute_with_storage_grid_size()})")
+        pytest.skip(f"Shallow UNet only support 110 or 130 cores on BH (was {device.compute_with_storage_grid_size()})")
     device.disable_and_clear_program_cache()  # Needed to give consistent device perf between iterations
     run_unet_model(batch, groups, device, iterations)
 
 
-@skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch, groups, expected_device_perf_fps",
-    ((1, 4, 1425.0),),
+    ((1, 4, 1589.0),),
 )
 def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: float):
     command = f"pytest models/experimental/functional_unet/tests/test_unet_perf.py::test_unet_model"
@@ -63,7 +60,6 @@ def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: flo
     )
 
 
-@skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params",
@@ -78,7 +74,7 @@ def test_unet_perf_device(batch: int, groups: int, expected_device_perf_fps: flo
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations, expected_compile_time, expected_throughput",
-    ((1, 4, 256, 30.0, 1260.0),),
+    ((1, 4, 256, 30.0, 1373.0),),
 )
 def test_unet_trace_perf(
     batch: int,
@@ -87,21 +83,21 @@ def test_unet_trace_perf(
     expected_compile_time: float,
     expected_throughput: float,
     device,
-    use_program_cache,
     reset_seeds,
 ):
     if (
         not is_wormhole_b0(device)
         and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 110
+        and device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y != 130
     ):
-        pytest.skip(f"shallow unet only support 110 cores on bh (was {device.compute_with_storage_grid_size()})")
+        pytest.skip(f"Shallow UNet only support 110 or 130 cores on BH (was {device.compute_with_storage_grid_size()})")
 
     from models.experimental.functional_unet.tests.test_unet_trace import (
         test_unet_trace_2cq,
     )
 
     logger.info(f"Invoking underlying model test for {iterations} iterations...")
-    result = test_unet_trace_2cq(batch, groups, iterations, device, use_program_cache, reset_seeds)
+    result = test_unet_trace_2cq(batch, groups, iterations, device, reset_seeds)
 
     total_num_samples = result.batch * result.groups * result.num_devices
     expected_inference_time = total_num_samples / expected_throughput
@@ -119,7 +115,6 @@ def test_unet_trace_perf(
     ), f"Expected end-to-end performance to exceed {expected_throughput:.2f} fps but was {result.get_fps():.2f} fps"
 
 
-@skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
     "device_params",
@@ -133,7 +128,7 @@ def test_unet_trace_perf(
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "batch, groups, iterations, expected_compile_time, expected_throughput", ((1, 4, 256, 30.0, 2419.0),)
+    "batch, groups, iterations, expected_compile_time, expected_throughput", ((1, 4, 256, 30.0, 2646.0),)
 )
 def test_unet_trace_perf_multi_device(
     batch: int,
@@ -142,7 +137,6 @@ def test_unet_trace_perf_multi_device(
     expected_compile_time: float,
     expected_throughput: float,
     mesh_device,
-    use_program_cache,
     reset_seeds,
 ):
     from models.experimental.functional_unet.tests.test_unet_trace import (
@@ -152,7 +146,7 @@ def test_unet_trace_perf_multi_device(
     model_name = "unet_shallow-trace_2cq_same_io-multi_device"
 
     logger.info(f"Invoking underlying model test for {iterations} iterations...")
-    result = test_unet_trace_2cq_multi_device(batch, groups, iterations, mesh_device, use_program_cache, reset_seeds)
+    result = test_unet_trace_2cq_multi_device(batch, groups, iterations, mesh_device, reset_seeds)
 
     total_num_samples = result.batch * result.groups * result.num_devices
     expected_inference_time = total_num_samples / expected_throughput

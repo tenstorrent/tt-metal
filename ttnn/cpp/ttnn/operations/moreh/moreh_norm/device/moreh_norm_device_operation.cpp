@@ -29,12 +29,12 @@ inline void validate_input_tensor_with_dim(const Tensor& input, int64_t dim) {
 }
 
 inline void validate_output_tensor_with_keepdim(const Tensor& input, const Tensor& output, int64_t dim, bool keepdim) {
-    const auto input_shape = input.padded_shape();
-    const auto input_shape_wo_padding = input.logical_shape();
+    const auto& input_shape = input.padded_shape();
+    const auto& input_shape_wo_padding = input.logical_shape();
     const auto input_rank = input_shape.rank();
 
-    const auto output_shape = output.padded_shape();
-    const auto output_shape_wo_padding = output.logical_shape();
+    const auto& output_shape = output.padded_shape();
+    const auto& output_shape_wo_padding = output.logical_shape();
     const auto output_rank = output_shape.rank();
 
     const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);
@@ -111,7 +111,6 @@ MorehNormOperation::program_factory_t MorehNormOperation::select_program_factory
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto dim = operation_attributes.dim;
     const auto input_rank = tensor_args.input.padded_shape().rank();
-    auto INF = std::numeric_limits<float>::infinity();
     if (dim == input_rank - 1) {
         return ProgramFactoryWOther{};
     } else if (dim == input_rank - 2) {

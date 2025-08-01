@@ -36,6 +36,7 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
@@ -1113,7 +1114,7 @@ int main(int argc, char** argv) {
         Finish(device->command_queue());
         auto end = std::chrono::high_resolution_clock::now();
         duration = end - start;
-        tt_metal::detail::DumpDeviceProfileResults(device);
+        tt_metal::detail::ReadDeviceProfilerResults(device);
 
         uint64_t num_of_matmul_ops =
             (2 * static_cast<uint64_t>(Kt) * 32 - 1) * (static_cast<uint64_t>(Mt) * static_cast<uint64_t>(Nt) * 1024);

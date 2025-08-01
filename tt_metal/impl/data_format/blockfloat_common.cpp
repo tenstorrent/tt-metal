@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/core/span.hpp>
 #include <tt-metalium/blockfloat_common.hpp>
 #include <tt_stl/span.hpp>
 #include <array>
@@ -322,7 +321,6 @@ std::vector<uint32_t> pack_fp32_vec_as_bfp_tiles(
     auto face_H = tile.has_value() ? tile->get_face_shape()[0] : tt::constants::FACE_HEIGHT;
     auto face_W = tile.has_value() ? tile->get_face_shape()[1] : tt::constants::FACE_WIDTH;
     auto tile_HW = tile_H * tile_W;
-    auto face_HW = face_H * face_W;
     auto subtiles_in_tile_row = tile_H / face_H;
     auto subtiles_in_tile_col = tile_W / face_W;
     auto subtile_rows = face_H;

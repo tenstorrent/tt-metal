@@ -27,6 +27,7 @@ class Buffer;
 // Fwd declares
 enum class BufferType;
 
+// THREAD SAFETY: Allocator is thread safe.
 class Allocator {
 public:
     Allocator(const AllocatorConfig& alloc_config);
@@ -38,7 +39,8 @@ public:
     void deallocate_buffer(Buffer* buffer);
     void deallocate_buffers();
 
-    const std::unordered_set<Buffer*>& get_allocated_buffers() const;
+    std::unordered_set<Buffer*> get_allocated_buffers() const;
+    size_t get_num_allocated_buffers() const;
 
     uint32_t get_num_banks(const BufferType& buffer_type) const;
     DeviceAddr get_bank_size(const BufferType& buffer_type) const;
@@ -84,6 +86,8 @@ protected:
 private:
     void verify_safe_allocation() const;
 
+    mutable std::mutex mutex_;
+
     // Set to true if allocating a buffer is unsafe. This happens when a live trace on device can corrupt
     // memory allocated by the user (memory used by trace is not tracked in the allocator once the trace is captured).
     bool allocations_unsafe_ = false;
@@ -98,7 +102,7 @@ private:
     std::unordered_map<BufferType, std::unordered_map<CoreCoord, std::vector<uint32_t>>> logical_core_to_bank_ids_;
     std::unordered_set<Buffer*> allocated_buffers_;
 
-    AllocatorConfig config_;
+    const AllocatorConfig config_;
 };
 
 }  // namespace tt_metal

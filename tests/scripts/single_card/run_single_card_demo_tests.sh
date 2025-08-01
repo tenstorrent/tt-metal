@@ -21,13 +21,58 @@ run_qwen7b_func() {
 
 }
 
-run_segformer_func() {
+run_qwen25_vl_func() {
+  fail=0
 
+  # install qwen25_vl requirements
+  pip install -r models/demos/qwen25_vl/reference/requirements.txt
+
+  # export PYTEST_ADDOPTS for concise pytest output
+  export PYTEST_ADDOPTS="--tb=short"
+
+  # Qwen2.5-VL-3B
+  qwen25_vl_3b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-3B-Instruct/
+  # todo)) Qwen2.5-VL-7B-Instruct
+
+  # simple generation-accuracy tests for qwen25_vl_3b
+  MESH_DEVICE=N300 HF_MODEL=$qwen25_vl_3b WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 600 || fail=1
+  echo "LOG_METAL: demo/combined.py tests for $qwen25_vl_3b on N300 completed"
+
+  # complete demo tests
+  for qwen_dir in "$qwen25_vl_3b"; do
+    MESH_DEVICE=N300 HF_MODEL=$qwen_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/qwen25_vl/demo/demo.py --timeout 600 || fail=1
+    echo "LOG_METAL: Tests for $qwen_dir on N300 completed"
+  done
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
+run_segformer_func() {
   #Segformer Segmentation Demo
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py --timeout 600; fail+=$?
 
+  ## Commenting out Segformer Classification Demo. Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
   #Segformer Classification Demo
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py --timeout 600; fail+=$?
+  # WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py --timeout 600; fail+=$?
+
+}
+
+run_sentencebert_func() {
+
+  #SentenceBERT Demo
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference --timeout 600; fail+=$?
+
+  #SentenceBERT eval
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/sentence_bert/demo/dataset_evaluation.py::test_sentence_bert_eval --timeout 600; fail+=$?
+
+}
+
+run_yolov11_func() {
+
+ #Yolov11 Demo
+ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/yolov11/demo/demo.py --timeout 600; fail+=$?
 
 }
 
@@ -54,9 +99,14 @@ run_llama3_func() {
 
 }
 
+## comment out ufld_v2 from CI tests for now unitl dataset_evaluation test failure is debugged.
 run_ufld_v2_func() {
   #ufld_v2
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/demo/demo.py --timeout 600
+  #ufld_v2 eval
+  ## Commenting out UFLDv2 eval since CIv2 does not support dataset download from Kaggle
+  # Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
+  #WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/demo/dataset_evaluation.py --timeout 1500
 }
 run_vgg_func() {
 
@@ -216,22 +266,30 @@ run_yolov9c_perf() {
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov9c/demo/demo.py --timeout 600
 
 }
+run_yolov8s_perf() {
 
-run_mobilenetv2_func(){
-
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -k "pretrained_weight_true" models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo --timeout 600
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov8s/demo/demo.py --timeout 600
 
 }
+
+# commenting out the test from CI due to HF issue. TODO explore AWS alternative suggested by infra team.
+# Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
+# run_mobilenetv2_perf(){
+
+#  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo --timeout 600
+
+# }
 
 run_yolov8s_world_perf() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/experimental/yolov8s_world/demo/demo.py --timeout 600
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov8s_world/demo/demo.py --timeout 600
 
 }
 
+#comment out vanilla unet for now unitl data and weights loading issues are resolved.
 run_vanilla_unet_demo() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_vanilla_unet/demo/demo.py::test_unet_demo_single_image
+ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/vanilla_unet/demo/demo.py::test_unet_demo_single_image
 
 }
 run_yolov8x_perf() {
@@ -239,13 +297,32 @@ run_yolov8x_perf() {
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov8x/demo/demo.py --timeout 600
 
 }
+run_yolov4_perf() {
+## Removed coco dataset evaluation for now because CIv2 does not support downloading of the dataset.
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4 --timeout 600
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4_dp --timeout 600
+}
+run_yolov10x_demo() {
 
-
-run_vgg_unet_demo() {
-
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/vgg_unet/demo/demo.py --timeout 600
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings  models/demos/yolov10x/demo/demo.py --timeout 600
 
 }
+
+run_yolov7_demo() {
+
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/yolov7/demo/demo.py --timeout 600
+
+}
+
+# Commenting out VGG_Unet Demo since CIv2 does not support dataset download from Kaggle
+# Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
+# run_vgg_unet_demo() {
+
+#  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/vgg_unet/demo/demo.py --timeout 600
+
+# }
+
+
 
 main() {
   # For CI pipeline - source func commands but don't execute tests if not invoked directly

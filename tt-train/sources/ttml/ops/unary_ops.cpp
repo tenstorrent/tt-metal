@@ -14,6 +14,7 @@
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/operations.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
 namespace ttml::ops {
@@ -50,10 +51,12 @@ autograd::TensorPtr gelu(const autograd::TensorPtr& tensor) {
     return out;
 }
 
-autograd::TensorPtr silu(const autograd::TensorPtr& tensor) {
+autograd::TensorPtr silu(const autograd::TensorPtr& tensor, bool use_composite_bw) {
     auto out = autograd::create_tensor(ttnn::silu(tensor->get_value()));
-    autograd::GradFunction grad = [tensor, out]() {
-        auto res = ttnn::silu_bw(out->get_grad(), tensor->get_value());
+    autograd::GradFunction grad = [tensor, out, use_composite_bw]() {
+        auto res = use_composite_bw ? ttnn::silu_bw(out->get_grad(), tensor->get_value())
+                                    : std::vector<std::optional<ttnn::Tensor>>(
+                                          {ttml::metal::silu_bw(tensor->get_value(), out->get_grad())});
         assert(res.size() == 1U && "Silu backward should return only one gradient");
         tensor->add_grad(res.front().value());
     };
@@ -107,7 +110,7 @@ autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim
 }
 
 autograd::TensorPtr mean(const autograd::TensorPtr& tensor) {
-    auto shape = core::create_shape({1, 1, 1, 1});
+    auto shape = ttnn::Shape({1, 1, 1, 1});
     autograd::TensorPtr out = autograd::create_tensor(core::from_vector({0.F}, shape, &autograd::ctx().get_device()));
     ttnn::moreh_mean(
         tensor->get_value(),
@@ -140,7 +143,7 @@ autograd::TensorPtr broadcast_batch(const autograd::TensorPtr& tensor, uint32_t 
         return tensor;
     }
     auto out = ttml::autograd::create_tensor();
-    auto repeats = core::create_shape({new_batch_dim, 1, 1, 1});
+    auto repeats = ttnn::Shape({new_batch_dim, 1, 1, 1});
     // currently assuming tensor came with shape: {1,X,Y,Z} and we want to get {B,X,Y,Z}
     out->set_value(ttnn::repeat(tensor->get_value(), repeats));
 

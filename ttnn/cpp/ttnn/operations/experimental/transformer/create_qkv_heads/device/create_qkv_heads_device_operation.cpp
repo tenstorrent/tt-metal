@@ -18,7 +18,7 @@ void CreateQKVHeadsDeviceOperation::validate(const std::vector<Tensor>& input_te
         "Unsupported data format");
     TT_FATAL(input_tensor.layout() == Layout::TILE, "Error");
     TT_FATAL(input_tensor.is_sharded(), "Operands to TM must be sharded");
-    const auto input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
     TT_FATAL(input_shape[1] == 1, "Unsupported input shape");
 
     auto bbox = input_tensor.shard_spec().value().grid.bounding_box();
@@ -52,7 +52,7 @@ void CreateQKVHeadsDeviceOperation::validate(const std::vector<Tensor>& input_te
 std::vector<ttnn::TensorSpec> CreateQKVHeadsDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.padded_shape();
 
     const auto q_shape = ttnn::Shape{input_shape[0], this->num_q_heads, input_shape[2], this->head_dim};
     const auto v_shape = ttnn::Shape{input_shape[0], this->num_kv_heads, input_shape[2], this->head_dim};

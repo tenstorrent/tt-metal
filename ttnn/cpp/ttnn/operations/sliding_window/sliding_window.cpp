@@ -441,6 +441,7 @@ static std::vector<uint16_t> serialize_gather_config(const GatherConfig& config)
 // Flatten a list of configs and ensure they are uniform lengths by padding
 static std::vector<std::vector<uint16_t>> serialize_gather_configs(const std::vector<GatherConfig>& configs) {
     std::vector<std::vector<uint16_t>> serialized_configs;
+    serialized_configs.reserve(configs.size());
     for (const auto& config : configs) {
         serialized_configs.push_back(serialize_gather_config(config));
     }
@@ -543,7 +544,6 @@ static GatherConfig quantize_transfers_along_block_boundaries(const GatherConfig
             uint32_t dst_offset = transfer.dst_id;
             uint32_t length = transfer.size;
             while (length > 0) {
-                const uint32_t block_id = src_offset / block_size;
                 const uint32_t offset_in_block = src_offset % block_size;
                 const uint32_t remaining_in_block = block_size - offset_in_block;
                 const uint32_t transfer_size = (length <= remaining_in_block) ? length : remaining_in_block;
@@ -703,7 +703,6 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     std::vector<GatherConfig> ordered_gather_configs0;
     std::vector<GatherConfig> ordered_gather_configs1;
     std::vector<uint16_t> number_of_blocks_per_core;
-    int core = 0;
     for (const auto& config : gather_configs) {
         if (use_blocking) {
             const auto quantized = quantize_transfers_along_block_boundaries(config, block_size);
@@ -746,7 +745,17 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
         return flattened_config;
     };
 
-    auto flattened_pad_config = flatten_pad_config(pad_config);
+    std::vector<std::vector<uint32_pair_t>> pad_config0(num_cores_nhw);
+    std::vector<std::vector<uint32_pair_t>> pad_config1(num_cores_nhw);
+    for (int core_idx = 0; core_idx < pad_config.size(); core_idx++) {
+        const auto& config = pad_config[core_idx];
+        auto middle = config.begin() + config.size() / 2;
+        pad_config0[core_idx] = std::vector<uint32_pair_t>(config.begin(), middle);
+        pad_config1[core_idx] = std::vector<uint32_pair_t>(middle, config.end());
+    }
+
+    auto flattened_pad_config0 = flatten_pad_config(pad_config0);
+    auto flattened_pad_config1 = flatten_pad_config(pad_config1);
 
     auto align_config = [](auto& config, size_t align_granularity = 1, uint16_t align_value = 0) {
         size_t max_len = 0;
@@ -758,7 +767,6 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
             max_len = align_amount > 0 ? max_len + align_granularity - align_amount : max_len;
         }
         for (auto& core_config : config) {
-            size_t curr_len = core_config.size();
             size_t extend_amount = max_len - core_config.size();
             if (extend_amount > 0) {
                 std::vector<uint16_t> extend_v(extend_amount, align_value);
@@ -767,10 +775,15 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
         }
     };
 
-    align_config(flattened_pad_config, 2);
+    align_config(flattened_pad_config0, 2);
+    align_config(flattened_pad_config1, 2);
 
     return HaloGatherKernelConfig{
-        flattened_pad_config, serialized_gather_configs0, serialized_gather_configs1, number_of_blocks_per_core};
+        flattened_pad_config0,
+        flattened_pad_config1,
+        serialized_gather_configs0,
+        serialized_gather_configs1,
+        number_of_blocks_per_core};
 }
 
 std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplace_halo_kernel_config_tensors(
@@ -991,10 +1004,6 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
         max_len += 3;  // account for the null plug
 
         std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
-        int num_cores_x = device->compute_with_storage_grid_size().x;
-        int num_cores_y = device->compute_with_storage_grid_size().y;
-        int num_cores = num_cores_x * num_cores_y;
-        CoreCoord noc_00 = core_id_to_noc_coords(0);
         int max_ref_size = 0;  // track the max remote ref size for sizing the remote temp tensor
         for (const auto& core_config : config) {
             std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
@@ -1013,7 +1022,6 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
                 flat_data[1][idx2++] = nocy;
                 len_idx2 = idx2;
                 flat_data[1][idx2++] = 0;
-                int ref_ind = nocx - noc_00.x + (nocy - noc_00.y) * num_cores_x;
                 for (size_t i = 0; i < subdata.size(); ++i) {
                     auto [src_start, dst_start, length] = subdata[i];
                     if (vector_id || in_place) {
@@ -1056,7 +1064,6 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
             max_len = align_amount > 0 ? max_len + align_granularity - align_amount : max_len;
         }
         for (auto& core_config : config) {
-            size_t curr_len = core_config.size();
             size_t extend_amount = max_len - core_config.size();
             if (extend_amount > 0) {
                 std::vector<uint16_t> extend_v(extend_amount, align_value);
@@ -1149,14 +1156,12 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
 
     uint32_t indices_length_per_core = sharded_input_top_left_indices[0].size();
     for (uint32_t core_idx = 1; core_idx < shard_boundaries.size(); core_idx++) {
-        const auto& [output_shard_start, output_shard_end] = shard_boundaries[core_idx].output_range;
         if (sharded_input_top_left_indices[core_idx].size() > indices_length_per_core) {
             indices_length_per_core = sharded_input_top_left_indices[core_idx].size();
         }
     }
     if (pad_cores) {
         for (uint32_t core_idx = 0; core_idx < shard_boundaries.size(); core_idx++) {
-            const auto& [output_shard_start, output_shard_end] = shard_boundaries[core_idx].output_range;
             // Pad indices for this core if not equal to other cores
             if (sharded_input_top_left_indices.size() == core_idx) {
                 sharded_input_top_left_indices.push_back(std::vector<uint16_t>());
@@ -1256,7 +1261,10 @@ Tensor construct_on_host_config_tensor(
 }
 
 Tensor move_config_tensor_to_device(
-    const Tensor& config_tensor, const ParallelConfig& p_config, bool is_block_sharded, IDevice* device) {
+    const Tensor& config_tensor,
+    const ParallelConfig& p_config,
+    bool is_block_sharded,
+    distributed::MeshDevice* device) {
     auto shard_shape = std::array<uint32_t, 2>({1, (uint32_t)config_tensor.logical_shape()[-1]});
     log_debug(tt::LogOp, "shard_shape: ({}, {})", shard_shape[0], shard_shape[1]);
     auto config_shard_orientation =
