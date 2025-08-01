@@ -17,7 +17,7 @@
 #include <optional>
 #include <set>
 #include <sstream>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 
 #include "tt_fabric_test_config.hpp"
 #include "tt_fabric_test_common.hpp"
@@ -878,9 +878,9 @@ private:
 
         // Write data rows (header already written in initialize_csv_file)
         for (const auto& result : bandwidth_results_) {
-            csv_stream << config.name << "," << magic_enum::enum_name(config.fabric_setup.topology) << ","
+            csv_stream << config.name << "," << enchantum::to_string(config.fabric_setup.topology) << ","
                        << result.num_devices << "," << result.device_id << "," << config.fabric_setup.num_links << ","
-                       << magic_enum::enum_name(result.direction) << "," << result.total_traffic_count << ","
+                       << enchantum::to_string(result.direction) << "," << result.total_traffic_count << ","
                        << result.num_packets << "," << result.packet_size << "," << result.cycles << "," << std::fixed
                        << std::setprecision(6) << result.bandwidth_gb_s << "," << std::fixed << std::setprecision(3)
                        << result.packets_per_second << "\n";
@@ -909,7 +909,7 @@ private:
             }
             num_devices_str += "]";
 
-            summary_csv_stream << config.name << "," << magic_enum::enum_name(config.fabric_setup.topology) << ",\""
+            summary_csv_stream << config.name << "," << enchantum::to_string(config.fabric_setup.topology) << ",\""
                                << num_devices_str << "\"," << config.fabric_setup.num_links << "," << result.packet_size
                                << "," << result.cycles << "," << std::fixed << std::setprecision(6)
                                << result.bandwidth_gb_s << "," << std::fixed << std::setprecision(3)
