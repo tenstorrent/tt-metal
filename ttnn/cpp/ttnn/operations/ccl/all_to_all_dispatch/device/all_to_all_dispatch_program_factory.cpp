@@ -263,9 +263,9 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         tt::tt_metal::CircularBufferConfig(cb_sizes[5], {{packet_header_cb_id, tt::DataFormat::RawUInt32}})
             .set_page_size(packet_header_cb_id, cb_page_sizes[5]);
 
-    auto subdevice_core_range_set = operation_attributes.subdevice_core_range_set;
+    auto worker_core_range_set = operation_attributes.worker_core_range_set;
 
-    auto subdevice_cores = corerange_to_cores(subdevice_core_range_set);
+    auto subdevice_cores = corerange_to_cores(worker_core_range_set);
     TT_FATAL(
         subdevice_cores.size() >= num_links,
         "Not enough cores {} to send all links {}",
@@ -275,7 +275,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     uint32_t tokens_per_core = tt::div_up(tokens_per_device, num_links);
     uint32_t num_cores = std::min(num_links, tt::div_up(tokens_per_device, tokens_per_core));
     auto sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
-        subdevice_cores.at(0), num_cores, subdevice_core_range_set, true);
+        subdevice_cores.at(0), num_cores, worker_core_range_set, true);
     std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
 
     // create circular buffers

@@ -12,6 +12,7 @@
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/fabric.hpp>
 
 namespace ttnn::operations::ccl {
 
@@ -59,7 +60,7 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
     } else {
         std::array<ttnn::TensorSpec, 2> specs = AllToAllDispatchDeviceOperation::compute_output_specs(
             AllToAllDispatchDeviceOperation::operation_attributes_t{
-                .subdevice_core_range_set = subdevice_core_range_set,
+                .worker_core_range_set = subdevice_core_range_set,
                 .output_mem_config = memory_config_,
                 .axis = axis,
                 .num_links = num_links_,
