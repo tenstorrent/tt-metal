@@ -84,8 +84,8 @@ jobs:
         id: check-branch
         run: |
           MIRRORED_BRANCH="${{ inputs.mirrored_branch }}"
-          cd ${{ github.workspace }}
           cd ${{ env.SUBMODULE_PATH }}
+          git remote set-url origin https://${{ secrets.TEMP_METAL_PAT }}@github.com/tenstorrent/tt-llk.git
           if git fetch origin "$MIRRORED_BRANCH" 2>/dev/null; then
             echo "branch-exists=true" >> $GITHUB_OUTPUT
             echo "✅ Mirrored branch '$MIRRORED_BRANCH' exists in submodule"
@@ -100,8 +100,8 @@ jobs:
           MIRRORED_BRANCH="${{ inputs.mirrored_branch }}"
           TEST_BRANCH_NAME="test-llk-$MIRRORED_BRANCH-$(date +%s)"
           # Setup test branch in submodule
-          cd ${{ github.workspace }}
           cd ${{ env.SUBMODULE_PATH }}
+          git remote set-url origin https://${{ secrets.TEMP_METAL_PAT }}@github.com/tenstorrent/tt-llk.git
           git checkout -b "$TEST_BRANCH_NAME" "origin/$MIRRORED_BRANCH"
           git push origin "$TEST_BRANCH_NAME"
           # Setup parent repository with submodule reference
@@ -230,8 +230,8 @@ jobs:
           TEST_BRANCH_NAME="${{ needs.setup-and-test.outputs.test-branch-name }}"
           PARENT_BRANCH_NAME="${{ needs.setup-and-test.outputs.parent-branch-name }}"
           # Clean up test branch in submodule
-          cd ${{ github.workspace }}
           cd $SUBMODULE_PATH
+          git remote set-url origin https://${{ secrets.TEMP_METAL_PAT }}@github.com/tenstorrent/tt-llk.git
           git push origin --delete "$TEST_BRANCH_NAME" 2>/dev/null || echo "Test branch already deleted or doesn't exist"
           # Clean up parent branch
           cd ${{ github.workspace }}
