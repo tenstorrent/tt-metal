@@ -1400,6 +1400,14 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
         std::filesystem::remove(log_path);
     }
 
+    const std::string noc_events_report_path =
+        tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_report_path();
+    if (!noc_events_report_path.empty()) {
+        this->noc_trace_data_output_dir = std::filesystem::path(noc_events_report_path);
+    } else {
+        this->noc_trace_data_output_dir = this->output_dir;
+    }
+
     this->is_last_fd_dump_done = false;
     this->current_zone_it = this->device_events.begin();
 
@@ -1499,7 +1507,8 @@ void DeviceProfiler::processResults(
         readRiscProfilerResults(device, virtual_core, data_source, metadata);
     }
 
-    if (rtoptions.get_profiler_noc_events_enabled() && state == ProfilerDumpState::NORMAL) {
+    if (rtoptions.get_profiler_noc_events_enabled() &&
+        (state == ProfilerDumpState::NORMAL || state == ProfilerDumpState::LAST_FD_DUMP)) {
         const nlohmann::ordered_json noc_trace_json_log = convertNocTracePacketsToJson(
             device_data_points.begin() + num_device_data_points_before_reading, device_data_points.end());
         FabricRoutingLookup routing_lookup(device);
@@ -1511,23 +1520,29 @@ void DeviceProfiler::processResults(
 }
 
 void DeviceProfiler::dumpRoutingInfo() const {
-    // if defined, used profiler_noc_events_report_path to to dump routing info. otherwise use output_dir
-    std::string rpt_path = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_report_path();
-    if (rpt_path.empty()) {
-        rpt_path = output_dir.string();
+    std::filesystem::create_directories(noc_trace_data_output_dir);
+    if (!std::filesystem::is_directory(noc_trace_data_output_dir)) {
+        log_error(
+            tt::LogMetal,
+            "Could not dump topology to '{}' because the directory path could not be created!",
+            noc_trace_data_output_dir);
+        return;
     }
 
-    tt::tt_metal::dumpRoutingInfo(std::filesystem::path(rpt_path) / "topology.json");
+    tt::tt_metal::dumpRoutingInfo(noc_trace_data_output_dir / "topology.json");
 }
 
 void DeviceProfiler::dumpClusterCoordinates() const {
-    // if defined, used profiler_noc_events_report_path to to dump cluster coordinates. otherwise use output_dir
-    std::string rpt_path = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_report_path();
-    if (rpt_path.empty()) {
-        rpt_path = output_dir.string();
+    std::filesystem::create_directories(noc_trace_data_output_dir);
+    if (!std::filesystem::is_directory(noc_trace_data_output_dir)) {
+        log_error(
+            tt::LogMetal,
+            "Could not dump cluster coordinates to '{}' because the directory path could not be created!",
+            noc_trace_data_output_dir);
+        return;
     }
 
-    tt::tt_metal::dumpClusterCoordinatesAsJson(std::filesystem::path(rpt_path) / "cluster_coordinates.json");
+    tt::tt_metal::dumpClusterCoordinatesAsJson(noc_trace_data_output_dir / "cluster_coordinates.json");
 }
 
 bool isSyncInfoNewer(const SyncInfo& old_info, const SyncInfo& new_info) {
@@ -1544,15 +1559,9 @@ void DeviceProfiler::dumpDeviceResults() const {
     const std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
     dumpDeviceResultsToCSV(device_data_points, device_arch, device_core_frequency, log_path);
 
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_enabled()) {
-        // if defined, use profiler_noc_events_report_path to dump noc traces. otherwise use output_dir
-        std::string rpt_path = tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_noc_events_report_path();
-        if (rpt_path.empty()) {
-            rpt_path = output_dir.string();
-        }
-        dumpJsonNocTraces(noc_trace_data, device_id, std::filesystem::path(rpt_path));
+    if (!noc_trace_data.empty()) {
+        dumpJsonNocTraces(noc_trace_data, device_id, noc_trace_data_output_dir);
     }
-
 #endif
 }
 
