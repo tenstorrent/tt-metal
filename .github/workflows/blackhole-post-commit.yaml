@@ -291,14 +291,16 @@ jobs:
       product: tt-nn
 
   test-ttnn-tutorials:
-    needs: build-artifact
+    needs: [build-artifact, generate-matrix]
     secrets: inherit
     uses: ./.github/workflows/ttnn-tutorials-post-commit.yaml
     strategy:
       fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
     with:
       arch: blackhole
-      runner-label: ${{ inputs.runner-label || 'BH' }}
+      runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
