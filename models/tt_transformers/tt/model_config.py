@@ -446,6 +446,8 @@ class ModelArgs:
         self.tile_size = 32
         self.is_70b = False
         self.is_90b = False
+        self.use_pre_ffn: bool = False
+        self.use_post_ffn: bool = False
         self.from_hf_url = False  # updated below if true
         self.prefill_len_cutoff = 512 if is_blackhole() else 1024
         self.dummy_weights = dummy_weights
@@ -505,10 +507,8 @@ class ModelArgs:
         self.consolidated_weights_path = self.CKPT_DIR + "/consolidated.00.pth"
         self.tokenizer_path = self.TOKENIZER_PATH + "/tokenizer.model"
 
-        self.instruct = instruct
         # If the weights file contain the keyword `instruct` also set self.instruct to true
-        if "instruct" in self.CKPT_DIR.lower():
-            self.instruct = True
+        self.instruct = instruct or any(word in self.CKPT_DIR.lower() for word in ["it", "instruct"])
 
         # Check for supported batches since previous logic that contained the check was removed because it was unused
         supported_batches = {1, 2, 4, 8, 16, 32}
@@ -1392,7 +1392,10 @@ class ModelArgs:
 
     def _set_model_specific_params(self):
         # Gemma3 specific params
-        self.rms_norm_add_unit_offset = "gemma-3" in self.base_model_name.lower()
+        if "gemma-3" in self.base_model_name.lower():
+            self.rms_norm_add_unit_offset = True
+            self.use_post_ffn = True
+            self.use_pre_ffn = True
 
     def _set_params_from_dict(self, config, is_hf=False):
         # Try to get text_config, if it doesn't exist everything is text config
