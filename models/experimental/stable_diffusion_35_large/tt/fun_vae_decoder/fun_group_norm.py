@@ -155,28 +155,13 @@ def group_norm_weight_bias_rm_sharded(
     return tensor_to_shard, mesh_mapper
 
 
-# TODO: Move to parallel manager
-def gn_all_gather(x, parameters: TtGroupNormParameters):
-    x_g = ttnn.experimental.all_gather_async(
-        input_tensor=x,
-        dim=3,
-        multi_device_global_semaphore=parameters.parallel_config.new_gather_handles,
-        topology=ttnn.Topology.Linear,
-        mesh_device=parameters.parallel_config.device,
-        cluster_axis=1,
-        num_links=1,
-    )
-    ttnn.synchronize_device(parameters.parallel_config.device)
-    return x_g
-
-
 def vae_group_norm(x, parameters: TtGroupNormParameters):
     num_out_blocks = (
         num_output_blocks[tuple(x.shape)] if parameters.num_output_blocks is None else parameters.num_output_blocks
     )
 
     if not parameters.allow_sharded_compute and parameters.mesh_sharded_input:
-        x = parameters.parallel_config.vae_all_gather(x, sync_device=True)
+        x = parameters.parallel_config.vae_all_gather(x)
 
     batch_size, height, width, channels = x.shape
     x = x.reshape([batch_size, 1, width * height, channels])
@@ -194,6 +179,6 @@ def vae_group_norm(x, parameters: TtGroupNormParameters):
     )
     x = x.reshape([batch_size, height, width, channels])
     if parameters.mesh_sharded_input and parameters.allow_sharded_compute:
-        x = parameters.parallel_config.vae_all_gather(x, sync_device=True)
+        x = parameters.parallel_config.vae_all_gather(x)
 
     return x
