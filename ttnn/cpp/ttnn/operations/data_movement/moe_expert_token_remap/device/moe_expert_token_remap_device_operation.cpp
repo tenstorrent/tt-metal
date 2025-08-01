@@ -99,9 +99,10 @@ std::
         const ttnn::Tensor& mapping_tensor,
         const ttnn::Tensor& metadata_tensor,
         const std::optional<ttnn::MemoryConfig>& output_mem_config,
-        const std::optional<ttnn::Tensor>& optional_output_tensor) {
+        const std::optional<ttnn::Tensor>& optional_output_tensor,
+        const uint32_t reduction_size) {
     return {
-        operation_attributes_t{.output_mem_config = output_mem_config},
+        operation_attributes_t{.output_mem_config = output_mem_config, .reduction_size = reduction_size},
         tensor_args_t{
             .topk_tensor = topk_tensor,
             .mapping_tensor = mapping_tensor,

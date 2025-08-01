@@ -15,10 +15,14 @@
 #include "ttnn/decorators.hpp"
 
 namespace ttnn::operations::data_movement {
+namespace detail {
+constexpr uint32_t REDUCTION_SIZE = 16;
+}  // namespace detail
 
 struct MoeExpertTokenRemapDeviceOperation {
     struct operation_attributes_t {
         const std::optional<MemoryConfig> output_mem_config;
+        const uint32_t reduction_size;
 
         static constexpr auto attribute_names = std::forward_as_tuple("output_mem_config");
         auto attribute_values() const { return std::forward_as_tuple(output_mem_config); };
@@ -86,7 +90,8 @@ struct MoeExpertTokenRemapDeviceOperation {
         const ttnn::Tensor& mapping_tensor,
         const ttnn::Tensor& metadata_tensor,
         const std::optional<ttnn::MemoryConfig>& output_mem_config,
-        const std::optional<ttnn::Tensor>& optional_output_tensor);
+        const std::optional<ttnn::Tensor>& optional_output_tensor,
+        const uint32_t reduction_size = detail::REDUCTION_SIZE);
 };
 }  // namespace ttnn::operations::data_movement
 

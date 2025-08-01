@@ -162,7 +162,6 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
         output_datum_size_bytes,
     };
 
-    std::vector<uint32_t> writer_compile_time_args = {/*TODO CT ARGS*/};
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/moe_expert_token_remap/device/kernels/dataflow/"
@@ -172,9 +171,14 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
 
     // split work over metadata pages (batch*seq)
     const auto num_metadata_pages = metadata_tensor.buffer()->num_pages();
-    const auto
-        [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-            tt::tt_metal::split_work_to_cores(grid, num_metadata_pages);
+    //     const auto
+    //         [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1,
+    //         num_tiles_per_core_group_2] =
+    //             tt::tt_metal::split_work_to_cores(grid, num_metadata_pages);
+
+    const auto reduction_size = operation_attributes.reduction_size;
+    const auto [core_page_increments, all_cores] =
+        split_work_to_cores_even_multiples(grid, num_metadata_pages, reduction_size);
 
     const auto mapping_tensor_addr = mapping_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address();
     const auto metadata_tensor_addr = metadata_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address();
@@ -183,29 +187,23 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
 
     uint32_t page_idx_start = 0, page_idx_end = 0;
     constexpr auto num_reader_rt_args = 5, num_writer_rt_args = 3;
-    std::vector<CoreCoord> utilized_cores;
-    for (auto c : corerange_to_cores(all_cores, std::nullopt)) {
-        uint32_t increment = 0;
-        if (core_group_1.contains(c)) {
-            increment = num_tiles_per_core_group_1;
-        } else if (core_group_2.contains(c)) {
-            increment = num_tiles_per_core_group_2;
-        } else {
-            continue;
-        }
-        page_idx_end += increment;
+    std::vector<CoreCoord> utilized_cores = corerange_to_cores(all_cores, std::nullopt);
+    TT_ASSERT(utilized_cores.size() == core_page_increments.size());
 
+    auto cit = utilized_cores.begin();
+    for (auto increment : core_page_increments) {
+        page_idx_end += increment;
         const std::array<uint32_t, num_reader_rt_args> reader_runtime_args = {
             mapping_tensor_addr, metadata_tensor_addr, topk_tensor_addr, page_idx_start, page_idx_end};
-        tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, c, reader_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, ternary_reader_kernel_id, *cit, reader_runtime_args);
 
         const std::array<uint32_t, num_writer_rt_args> writer_runtime_args = {
             output_tensor_addr, page_idx_start, page_idx_end};
 
-        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, c, writer_runtime_args);
+        tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, *cit, writer_runtime_args);
 
         page_idx_start += increment;
-        utilized_cores.push_back(c);
+        ++cit;
     }
 
     return {
