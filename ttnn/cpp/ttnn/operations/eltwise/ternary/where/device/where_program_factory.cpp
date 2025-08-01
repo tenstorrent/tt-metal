@@ -333,8 +333,19 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         }
     }
 
+    // Create reader defines for broadcast kernels
+    std::map<std::string, std::string> reader_defines;
+    if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
+        reader_defines = make_ternary_dataflow_defines(
+            predicate_tensor.dtype(), value_true_tensor.value().dtype(), value_false_tensor.value().dtype());
+    }
+
     auto reader_kernel_id = tt_metal::CreateKernel(
-        program, get_kernel_file_path(kernel_config.reader_kernel), all_device_cores, reader_config);
+        program,
+        get_kernel_file_path(kernel_config.reader_kernel),
+        all_device_cores,
+        reader_defines.empty() ? reader_config
+                               : tt_metal::ReaderDataMovementConfig(reader_config.compile_args, reader_defines));
 
     // WRITER KERNEL - Use kernel path from utils
     auto writer_kernel_id = tt_metal::CreateKernel(

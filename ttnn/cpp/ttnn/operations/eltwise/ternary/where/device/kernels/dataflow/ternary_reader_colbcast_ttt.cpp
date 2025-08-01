@@ -4,33 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-
-// Fill tile with first column for broadcast
-FORCE_INLINE void fill_tile_with_first_column(uint32_t cb_id) {
-    // Tile with 4 faces (16x16) and 32-bit elements
-    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
-
-    constexpr uint32_t num_rows = 16;             // Number of rows per face
-    constexpr uint32_t face_row_stride = 16;      // Elements per row
-    constexpr uint32_t face_size = 256;           // Total elements per face (16x16)
-    constexpr uint32_t face_offset_stride = 512;  // Total elements per pair of faces (2x16x16)
-
-    // Iterate over face pairs (0,1) and (2,3)
-    for (uint32_t k = 0, face_offset = 0; k < 2; ++k, face_offset += face_offset_stride) {
-        for (uint32_t row = 0, row_offset = 0; row < num_rows; ++row, row_offset += face_row_stride) {
-            uint32_t left_dst_offset = face_offset + row_offset;      // Left face (0 or 2)
-            uint32_t right_dst_offset = left_dst_offset + face_size;  // Right face (1 or 3)
-
-            // Read the first column value for the current row from the left face
-            auto src_val = ptr[left_dst_offset];
-
-            for (uint32_t col = 0; col < face_row_stride; ++col) {
-                ptr[left_dst_offset + col] = src_val;   // left face
-                ptr[right_dst_offset + col] = src_val;  // right face
-            }
-        }
-    }
-}
+#include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
     // same arg indices as in reader_binary_diff_lenghts for compat
@@ -103,10 +77,10 @@ void kernel_main() {
 
         // Apply broadcast fill if needed
         if constexpr (bcast_in1) {
-            fill_tile_with_first_column(cb_id_in1);
+            FILL_TILE_WITH_FIRST_COLUMN(cb_id_in1);
         }
         if constexpr (bcast_in2) {
-            fill_tile_with_first_column(cb_id_in2);
+            FILL_TILE_WITH_FIRST_COLUMN_B(cb_id_in2);
         }
 
         cb_push_back(cb_id_in0, onetile);
