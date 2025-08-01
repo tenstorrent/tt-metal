@@ -2,25 +2,27 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device_fixture.hpp"
+#include "multi_device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_metal {
 
 using namespace std;
 using namespace tt;
-using namespace tt::test_utils;
+using namespace test_utils;
 
 namespace unit_tests::dm::core_to_core {
 
 // Test config, i.e. test parameters
 struct OneToOneConfig {
     uint32_t test_id = 0;
-    CoreCoord master_core_coord = CoreCoord();
-    CoreCoord subordinate_core_coord = CoreCoord();
+    CoreCoord master_core_coord = {0, 0};
+    CoreCoord subordinate_core_coord = {0, 0};
     uint32_t num_of_transactions = 0;
     uint32_t pages_per_transaction = 0;
     uint32_t bytes_per_page = 0;
@@ -33,10 +35,13 @@ struct OneToOneConfig {
 };
 
 /// @brief Does L1 Sender Core --> L1 Receiver Core
-/// @param device
+/// @param mesh_device - MeshDevice to run the test on
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
+bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OneToOneConfig& test_config) {
+    // Get the actual device for this single-device test
+    IDevice* device = mesh_device->get_device(0);
+
     /* ================ SETUP ================ */
 
     // Program
@@ -54,19 +59,18 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     // Obtain L1 Address for Storing Data
     // NOTE: We don't know if the whole block of memory is actually available.
     //       This is something that could probably be checked
-    L1AddressInfo master_l1_info =
-        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, test_config.master_core_coord);
+    L1AddressInfo master_l1_info = unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.master_core_coord);
     L1AddressInfo subordinate_l1_info =
-        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, test_config.subordinate_core_coord);
+        unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.subordinate_core_coord);
     // Checks that both master and subordinate cores have the same L1 base address and size
     if (master_l1_info.base_address != subordinate_l1_info.base_address ||
         master_l1_info.size != subordinate_l1_info.size) {
-        log_error(tt::LogTest, "Mismatch in L1 address or size between master and subordinate cores");
+        log_error(LogTest, "Mismatch in L1 address or size between master and subordinate cores");
         return false;
     }
     // Check if the L1 size is sufficient for the test configuration
     if (master_l1_info.size < bytes_per_transaction) {
-        log_error(tt::LogTest, "Insufficient L1 size for the test configuration");
+        log_error(LogTest, "Insufficient L1 size for the test configuration");
         return false;
     }
     // Assigns a "safe" L1 local address for the master and subordinate cores
@@ -100,7 +104,7 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     SetRuntimeArgs(program, sender_kernel, master_core_set, {physical_subordinate_core.x, physical_subordinate_core.y});
 
     // Assign unique id
-    log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     /* ================ RUNNING THE PROGRAM ================ */
@@ -111,20 +115,28 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
     // l1_data_format is assumed to be bfloat16
     size_t element_size_bytes = bfloat16::SIZEOF;
     uint32_t num_elements = bytes_per_transaction / element_size_bytes;
-    std::vector<uint32_t> packed_input = tt::test_utils::generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+    vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f, 100.0f, num_elements, chrono::system_clock::now().time_since_epoch().count());
-    std::vector<uint32_t> packed_golden = packed_input;
+    vector<uint32_t> packed_golden = packed_input;
 
     // Write Input to Master L1
-    tt_metal::detail::WriteToDeviceL1(device, test_config.master_core_coord, l1_base_address, packed_input);
+    detail::WriteToDeviceL1(device, test_config.master_core_coord, l1_base_address, packed_input);
     MetalContext::instance().get_cluster().l1_barrier(device->id());
 
-    // LAUNCH THE PROGRAM
-    detail::LaunchProgram(device, program);
+    // LAUNCH THE PROGRAM - Use mesh workload approach
+    auto mesh_workload = distributed::CreateMeshWorkload();
+    vector<uint32_t> coord_data = {0, 0};
+    auto target_devices =
+        distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
+    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
+    Finish(cq);
 
     // Record Output from Subordinate L1
-    std::vector<uint32_t> packed_output;
-    tt_metal::detail::ReadFromDeviceL1(
+    vector<uint32_t> packed_output;
+    detail::ReadFromDeviceL1(
         device, test_config.subordinate_core_coord, l1_base_address, bytes_per_transaction, packed_output);
 
     // Compare output with golden vector
@@ -132,10 +144,10 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
         packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
 
     if (!pcc) {
-        log_error(tt::LogTest, "PCC Check failed");
-        log_info(tt::LogTest, "Golden vector");
+        log_error(LogTest, "PCC Check failed");
+        log_info(LogTest, "Golden vector");
         print_vector<uint32_t>(packed_golden);
-        log_info(tt::LogTest, "Output vector");
+        log_info(LogTest, "Output vector");
         print_vector<uint32_t>(packed_output);
     }
 
@@ -145,18 +157,21 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
 }  // namespace unit_tests::dm::core_to_core
 
 /* ========== Test case for one to one data movement; Test id = 4 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToOnePacketSizes) {
     // Test ID
     uint32_t test_id = 4;
 
+    auto mesh_device = get_mesh_device();
+    IDevice* device = mesh_device->get_device(0);
+
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        unit_tests::dm::compute_physical_constraints(mesh_device);
 
     // Parameters
     uint32_t max_transactions = 256;
     uint32_t max_pages_per_transaction =
-        arch_ == tt::ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
+        device->arch() == ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
 
     // Cores
     CoreCoord master_core_coord = {0, 0};
@@ -182,9 +197,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
             };
 
             // Run
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-            }
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
         }
     }
 }
@@ -198,13 +211,16 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOnePacketSizes) {
         3. Core locations with minimal number of hops
 */
 
-TEST_F(DeviceFixture, TensixDataMovementOneToOneDirectedIdeal) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToOneDirectedIdeal) {
     // Test ID (Arbitrary)
     uint32_t test_id = 50;
 
+    auto mesh_device = get_mesh_device();
+    IDevice* device = mesh_device->get_device(0);
+
     // Physical Constraints
     auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        unit_tests::dm::compute_physical_constraints(mesh_device);
 
     // Adjustable Parameters
     // Ideal: Less transactions, more data per transaction
@@ -229,9 +245,7 @@ TEST_F(DeviceFixture, TensixDataMovementOneToOneDirectedIdeal) {
     };
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-    }
+    EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
 }  // namespace tt::tt_metal
