@@ -1,3 +1,7 @@
+allocation_policies:
+    receiver:
+      max_configs_per_core: 4
+
 Tests:
   - name: "LinearMulticast"
     benchmark_mode: true

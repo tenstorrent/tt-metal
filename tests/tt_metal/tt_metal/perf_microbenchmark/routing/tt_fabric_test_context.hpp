@@ -421,7 +421,7 @@ public:
 
         // Write summary header
         summary_csv_stream << "test_name,ftype,ntype,topology,num_devices,num_links,packet_size,cycles,bandwidth_gb_s,"
-                              "packets_per_second\n";
+                              "packets_per_second,tolerance_percent\n";
         summary_csv_stream.close();
 
         log_info(tt::LogTest, "Initialized summary CSV file: {}", csv_summary_file_path_.string());
@@ -462,6 +462,40 @@ public:
     bool has_test_failures() const { return has_test_failures_; }
 
     const std::vector<std::string>& get_all_failed_tests() const { return all_failed_tests_; }
+
+    // Determine tolerance percentage by looking up from golden CSV entries
+    double get_tolerance_percent(
+        const std::string& test_name,
+        const std::string& ftype,
+        const std::string& ntype,
+        const std::string& topology,
+        const std::string& num_devices,
+        uint32_t num_links,
+        uint32_t packet_size) const {
+        // Search for matching entry in golden CSV
+        auto golden_it =
+            std::find_if(golden_csv_entries_.begin(), golden_csv_entries_.end(), [&](const GoldenCsvEntry& golden) {
+                return golden.test_name == test_name && golden.ftype == ftype && golden.ntype == ntype &&
+                       golden.topology == topology && golden.num_devices == num_devices &&
+                       golden.num_links == num_links && golden.packet_size == packet_size;
+            });
+
+        if (golden_it != golden_csv_entries_.end()) {
+            return golden_it->tolerance_percent;
+        }
+
+        log_warning(
+            tt::LogTest,
+            "No golden entry found for tolerance lookup: {}, {}, {}, {}, {}, {}, {} - using default 5.0%",
+            test_name,
+            ftype,
+            ntype,
+            topology,
+            num_devices,
+            num_links,
+            packet_size);
+        return 0.0;
+    }
 
 private:
     void reset_local_variables() {
@@ -988,11 +1022,22 @@ private:
             }
             num_devices_str += "]";
 
-            summary_csv_stream << config.name << "," << ftype_str << "," << ntype_str << ","
-                               << enchantum::to_string(config.fabric_setup.topology) << ",\"" << num_devices_str
-                               << "\"," << config.fabric_setup.num_links << "," << result.packet_size << ","
-                               << result.cycles << "," << std::fixed << std::setprecision(6) << result.bandwidth_gb_s
-                               << "," << std::fixed << std::setprecision(3) << result.packets_per_second << "\n";
+            std::string topology_str = enchantum::to_string(config.fabric_setup.topology).data();
+            double tolerance = get_tolerance_percent(
+                config.name,
+                ftype_str,
+                ntype_str,
+                topology_str,
+                num_devices_str,
+                config.fabric_setup.num_links,
+                result.packet_size);
+
+            summary_csv_stream << config.name << "," << ftype_str << "," << ntype_str << "," << topology_str << ",\""
+                               << num_devices_str << "\"," << config.fabric_setup.num_links << "," << result.packet_size
+                               << "," << result.cycles << "," << std::fixed << std::setprecision(6)
+                               << result.bandwidth_gb_s << "," << std::fixed << std::setprecision(3)
+                               << result.packets_per_second << "," << std::fixed << std::setprecision(1) << tolerance
+                               << "\n";
         }
 
         summary_csv_stream.close();
