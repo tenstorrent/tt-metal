@@ -8,7 +8,7 @@ from loguru import logger
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.demos.yolov8s_world.common import load_torch_model
+from models.demos.yolov8s_world.common import YOLOV8SWORLD_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov8s_world.reference import yolov8s_world
 from models.demos.yolov8s_world.tt.ttnn_yolov8s_world import (
     TtC2f,
@@ -33,7 +33,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         True,
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8SWORLD_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("input_tensor", [(torch.rand((1, 3, 640, 640)))], ids=["input_tensor1"])
 @run_for_wormhole_b0()
 def test_Conv(device, input_tensor, use_pretrained_weight, reset_seeds, model_location_generator):
@@ -81,7 +81,7 @@ def test_Conv(device, input_tensor, use_pretrained_weight, reset_seeds, model_lo
         True,
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8SWORLD_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("input_tensor", [(torch.rand((1, 64, 160, 160)))], ids=["input_tensor1"])
 @run_for_wormhole_b0()
 def test_C2f(device, input_tensor, use_pretrained_weight, reset_seeds, model_location_generator):
@@ -134,7 +134,7 @@ def test_C2f(device, input_tensor, use_pretrained_weight, reset_seeds, model_loc
         True,
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8SWORLD_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("input_tensor", [(torch.rand((1, 512, 20, 20)))], ids=["input_tensor1"])
 @run_for_wormhole_b0()
 def test_SPPF(device, input_tensor, use_pretrained_weight, reset_seeds, model_location_generator):
@@ -179,7 +179,7 @@ def test_SPPF(device, input_tensor, use_pretrained_weight, reset_seeds, model_lo
         True,
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8SWORLD_L1_SMALL_SIZE}], indirect=True)
 @run_for_wormhole_b0()
 def test_MaxSigmoidAttnBlock(device, use_pretrained_weight, reset_seeds, model_location_generator):
     x = torch.randn(1, 128, 40, 40)
@@ -241,7 +241,7 @@ def test_MaxSigmoidAttnBlock(device, use_pretrained_weight, reset_seeds, model_l
         True,
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8SWORLD_L1_SMALL_SIZE}], indirect=True)
 @run_for_wormhole_b0()
 def test_C2fAttn(device, use_pretrained_weight, reset_seeds, model_location_generator):
     x = torch.randn(1, 768, 40, 40)
@@ -307,7 +307,7 @@ def test_C2fAttn(device, use_pretrained_weight, reset_seeds, model_location_gene
         True,
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8SWORLD_L1_SMALL_SIZE}], indirect=True)
 @run_for_wormhole_b0()
 def test_ImagePoolingAttn(device, use_pretrained_weight, reset_seeds, model_location_generator):
     x = [torch.randn(1, 128, 80, 80), torch.randn(1, 256, 40, 40), torch.randn(1, 512, 20, 20)]
@@ -371,7 +371,7 @@ def test_ImagePoolingAttn(device, use_pretrained_weight, reset_seeds, model_loca
         True,
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8SWORLD_L1_SMALL_SIZE}], indirect=True)
 @run_for_wormhole_b0()
 def test_ContrastiveHead(device, use_pretrained_weight, reset_seeds, model_location_generator):
     x = torch.randn(1, 512, 80, 80)
@@ -419,7 +419,7 @@ def test_ContrastiveHead(device, use_pretrained_weight, reset_seeds, model_locat
         True,
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8SWORLD_L1_SMALL_SIZE}], indirect=True)
 @run_for_wormhole_b0()
 def test_WorldDetect(device, use_pretrained_weight, reset_seeds, model_location_generator):
     x = [torch.randn(1, 128, 80, 80), torch.randn(1, 256, 40, 40), torch.randn(1, 512, 20, 20)]
@@ -545,7 +545,7 @@ def test_WorldDetect(device, use_pretrained_weight, reset_seeds, model_location_
         True,
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8SWORLD_L1_SMALL_SIZE}], indirect=True)
 @run_for_wormhole_b0()
 def test_WorldModel(device, use_pretrained_weight, reset_seeds, model_location_generator):
     x = torch.randn(1, 3, 640, 640)
@@ -614,7 +614,7 @@ def test_WorldModel(device, use_pretrained_weight, reset_seeds, model_location_g
         True,
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8SWORLD_L1_SMALL_SIZE}], indirect=True)
 @run_for_wormhole_b0()
 def test_YoloModel(device, use_pretrained_weight, reset_seeds, model_location_generator):
     x = torch.randn(1, 3, 640, 640)
