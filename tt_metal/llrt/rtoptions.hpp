@@ -85,6 +85,7 @@ struct WatcherSettings {
     bool phys_coords = false;
     bool text_start = false;
     bool skip_logging = false;
+    bool noc_sanitize_linked_transaction = false;
     int interval_ms = 0;
 };
 
@@ -108,6 +109,9 @@ class RunTimeOptions {
 
     bool is_visible_devices_env_var_set = false;
     std::vector<uint32_t> visible_devices;
+
+    bool is_custom_fabric_mesh_graph_desc_path_set = false;
+    std::string custom_fabric_mesh_graph_desc_path;
 
     bool build_map_enabled = false;
 
@@ -185,6 +189,16 @@ class RunTimeOptions {
     // Force disables using DMA for reads and writes
     bool disable_dma_ops = false;
 
+    // Forces MetalContext re-init on Device creation. Workaround for upstream issues that require re-init each time
+    // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
+    bool force_context_reinit = false;
+
+    // feature flag to enable 2-erisc mode with fabric on Blackhole, until it is enabled by default
+    bool enable_2_erisc_mode_with_fabric = false;
+
+    // Log kernels compilation commands
+    bool log_kernels_compilation_commands = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -226,6 +240,12 @@ public:
     inline void set_watcher_text_start(bool text_start) { watcher_settings.text_start = text_start; }
     inline bool get_watcher_skip_logging() const { return watcher_settings.skip_logging; }
     inline void set_watcher_skip_logging(bool skip_logging) { watcher_settings.skip_logging = skip_logging; }
+    inline bool get_watcher_noc_sanitize_linked_transaction() const {
+        return watcher_settings.noc_sanitize_linked_transaction;
+    }
+    inline void set_watcher_noc_sanitize_linked_transaction(bool enabled) {
+        watcher_settings.noc_sanitize_linked_transaction = enabled;
+    }
     inline const std::set<std::string>& get_watcher_disabled_features() const { return watcher_disabled_features; }
     inline bool watcher_status_disabled() const { return watcher_feature_disabled(watcher_waypoint_str); }
     inline bool watcher_noc_sanitize_disabled() const { return watcher_feature_disabled(watcher_noc_sanitize_str); }
@@ -389,9 +409,6 @@ public:
     inline unsigned get_num_hw_cqs() const { return num_hw_cqs; }
     inline void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
 
-    inline bool get_fd_fabric() const { return fd_fabric_en && !using_slow_dispatch; }
-    inline void set_fd_fabric(bool enable) { fd_fabric_en = enable; }
-
     inline uint32_t get_watcher_debug_delay() const { return watcher_debug_delay; }
     inline void set_watcher_debug_delay(uint32_t delay) { watcher_debug_delay = delay; }
 
@@ -435,6 +452,19 @@ public:
 
     inline bool get_disable_dma_ops() const { return disable_dma_ops; }
     inline void set_disable_dma_ops(bool disable) { disable_dma_ops = disable; }
+
+    inline bool get_force_context_reinit() const { return force_context_reinit; }
+
+    // Feature flag to specify if fabric is enabled in 2-erisc mode or not.
+    // if true, then the fabric router is parallelized across two eriscs in the Ethernet core
+    inline bool get_is_fabric_2_erisc_mode_enabled() const { return enable_2_erisc_mode_with_fabric; }
+
+    inline bool is_custom_fabric_mesh_graph_desc_path_specified() const {
+        return is_custom_fabric_mesh_graph_desc_path_set;
+    }
+    inline std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
+
+    inline bool get_log_kernels_compilation_commands() const { return log_kernels_compilation_commands; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -275,7 +275,7 @@ public:
 
     bool bottom_up() const { return bottom_up_; }
 
-    DeviceAddr page_address(uint32_t bank_id, uint32_t page_index) const;
+    DeviceAddr page_address(DeviceAddr bank_id, DeviceAddr page_index) const;
 
     uint32_t alignment() const;
     DeviceAddr aligned_page_size() const;
@@ -327,7 +327,7 @@ private:
     void deallocate_impl();
     friend void DeallocateBuffer(Buffer& buffer);
 
-    DeviceAddr translate_page_address(uint64_t offset, uint32_t bank_id) const;
+    DeviceAddr translate_page_address(DeviceAddr offset, uint32_t bank_id) const;
 
     IDevice* const device_;
     const DeviceAddr size_;  // Size in bytes

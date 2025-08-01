@@ -69,16 +69,6 @@ protected:
         DebugToolsFixture::TearDown();
         ExtraTearDown();
 
-        // If test induced a dprint error, re-initialize the context. If the test brought down the whole server/context,
-        // then no need to do this since it'll re-init for the next test.
-        if (MetalContext::instance().dprint_server() and MetalContext::instance().dprint_server()->hang_detected()) {
-            // Special case for watcher_dump testing, keep the error for watcher dump to look at later. TODO: remove
-            // when watcher_dump is removed.
-            if (getenv("TT_METAL_WATCHER_KEEP_ERRORS") == nullptr) {
-                MetalContext::instance().reinitialize();
-            }
-        }
-
         // Reset DPrint settings
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_cores(tt::llrt::RunTimeDebugFeatureDprint, {});
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, false);
@@ -149,7 +139,6 @@ protected:
     bool watcher_previous_auto_unpause;
     bool watcher_previous_noinline;
     bool test_mode_previous;
-    bool reset_server = false;
     void SetUp() override {
         // Enable watcher for this test, save the previous state so we can restore it later.
         watcher_previous_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
@@ -166,6 +155,7 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_auto_unpause(true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noinline(true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
+        tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noc_sanitize_linked_transaction(true);
 
         // Parent class initializes devices and any necessary flags
         DebugToolsFixture::SetUp();
@@ -176,18 +166,6 @@ protected:
         // Parent class tears down devices
         DebugToolsFixture::TearDown();
 
-        // If test induced a watcher error, re-initialize the context.
-        if (MetalContext::instance().watcher_server() and
-                MetalContext::instance().watcher_server()->killed_due_to_error() or
-            reset_server) {
-            // Special case for watcher_dump testing, keep the error for watcher dump to look at later. TODO: remove
-            // when watcher_dump is removed.
-            if (getenv("TT_METAL_WATCHER_KEEP_ERRORS") == nullptr) {
-                MetalContext::instance().reinitialize();
-                reset_server = false;
-            }
-        }
-
         // Reset watcher settings to their previous values
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_interval(watcher_previous_interval);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_dump_all(watcher_previous_dump_all);
@@ -196,9 +174,6 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noinline(watcher_previous_noinline);
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(test_mode_previous);
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(watcher_previous_enabled);
-        if (MetalContext::instance().watcher_server()) {
-            MetalContext::instance().watcher_server()->set_killed_due_to_error_flag(false);
-        }
     }
 
     void RunTestOnDevice(

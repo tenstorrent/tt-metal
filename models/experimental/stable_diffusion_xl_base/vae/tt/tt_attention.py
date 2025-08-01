@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
 import torch.nn as nn
 import ttnn
 
@@ -23,6 +24,7 @@ class TtAttention(nn.Module):
         out_dim: int = None,
         kv_heads=None,
         dim_head: int = 64,
+        weights_dtype=ttnn.bfloat16,
     ):
         super().__init__()
         self.device = device
@@ -40,8 +42,8 @@ class TtAttention(nn.Module):
 
         self.sdpa_program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-            q_chunk_size=32,
-            k_chunk_size=32,
+            q_chunk_size=64,
+            k_chunk_size=64,
             exp_approx_mode=False,
         )
 
@@ -49,13 +51,13 @@ class TtAttention(nn.Module):
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=True,
             fp32_dest_acc_en=True,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
-            packer_l1_acc=False,
+            packer_l1_acc=True,
         )
 
         norm_weights = state_dict[f"{module_path}.group_norm.weight"]
@@ -70,17 +72,27 @@ class TtAttention(nn.Module):
         v_weights = state_dict[f"{module_path}.to_v.weight"].unsqueeze(0).unsqueeze(0)
         v_bias = state_dict[f"{module_path}.to_v.bias"]
 
+        fused_qkv_weights = torch.cat(
+            [
+                torch.transpose(q_weights, -2, -1),
+                torch.transpose(k_weights, -2, -1),
+                torch.transpose(v_weights, -2, -1),
+            ],
+            dim=-1,
+        )
+        self.tt_qkv_weights = ttnn.from_torch(fused_qkv_weights, weights_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+        fused_qkv_bias = torch.concat(
+            [q_bias, k_bias, v_bias],
+            dim=-1,
+        ).unsqueeze(0)
+        self.tt_qkv_bias = ttnn.from_torch(fused_qkv_bias, weights_dtype, device=device, layout=ttnn.TILE_LAYOUT)
+
         out_weights = state_dict[f"{module_path}.to_out.0.weight"].unsqueeze(0).unsqueeze(0)
         out_bias = state_dict[f"{module_path}.to_out.0.bias"]
 
-        self.tt_q_weights, self.tt_q_bias = prepare_linear_params(device, q_weights, q_bias, ttnn.bfloat16)
-        self.tt_k_weights, self.tt_k_bias = prepare_linear_params(device, k_weights, k_bias, ttnn.bfloat16)
-        self.tt_v_weights, self.tt_v_bias = prepare_linear_params(device, v_weights, v_bias, ttnn.bfloat16)
         self.tt_out_weights, self.tt_out_bias = prepare_linear_params(device, out_weights, out_bias, ttnn.bfloat16)
 
     def forward(self, input_tensor, input_shape, encoder_hidden_states=None):
-        B, C, H, W = input_shape
-
         hidden_states = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
         hidden_states = ttnn.group_norm(
             hidden_states,
@@ -94,50 +106,37 @@ class TtAttention(nn.Module):
             inplace=False,
             num_out_blocks=self.num_out_blocks,
         )
-        if encoder_hidden_states is None:
-            encoder_hidden_states = hidden_states
 
-        query = ttnn.linear(
+        assert encoder_hidden_states is None, "VAE does self attention only"
+        encoder_hidden_states = hidden_states
+
+        qkv_fused = ttnn.linear(
             hidden_states,
-            self.tt_q_weights,
-            bias=self.tt_q_bias,
+            self.tt_qkv_weights,
+            bias=self.tt_qkv_bias,
+            dtype=ttnn.bfloat16,
             compute_kernel_config=self.compute_kernel_config,
         )
-        key = ttnn.linear(
-            encoder_hidden_states,
-            self.tt_k_weights,
-            bias=self.tt_k_bias,
-            compute_kernel_config=self.compute_kernel_config,
+
+        (
+            q_heads,
+            k_heads,
+            v_heads,
+        ) = ttnn.experimental.nlp_create_qkv_heads(
+            qkv_fused, num_heads=self.heads, transpose_k_heads=False, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        value = ttnn.linear(
-            encoder_hidden_states,
-            self.tt_v_weights,
-            bias=self.tt_v_bias,
-            compute_kernel_config=self.compute_kernel_config,
-        )
-        inner_dim = list(key.shape)[-1]
-        head_dim = inner_dim // self.heads
-
-        query = ttnn.reshape(query, [B, -1, self.heads, head_dim])
-        query = ttnn.transpose(query, 1, 2)
-
-        key = ttnn.reshape(key, [B, -1, self.heads, head_dim])
-        key = ttnn.transpose(key, 1, 2)
-
-        value = ttnn.reshape(value, [B, -1, self.heads, head_dim])
-        value = ttnn.transpose(value, 1, 2)
+        ttnn.deallocate(qkv_fused)
 
         hidden_states = ttnn.transformer.scaled_dot_product_attention(
-            query,
-            key,
-            value,
+            q_heads,
+            k_heads,
+            v_heads,
             is_causal=False,
             attn_mask=None,
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.sdpa_compute_kernel_config,
         )
-        hidden_states = ttnn.transpose(hidden_states, 1, 2)
-        hidden_states = ttnn.reshape(hidden_states, [B, -1, self.heads * head_dim])
+        hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         hidden_states = ttnn.linear(
             hidden_states,

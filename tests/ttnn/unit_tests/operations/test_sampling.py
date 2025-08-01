@@ -14,7 +14,6 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     compute_kernel_ids,
     get_lib_dtype,
 )
-from models.utility_functions import skip_for_blackhole
 
 
 def check_determinism(input_values_tensor, input_indices_tensor, k, p, seed, sub_core_grids):
@@ -139,7 +138,6 @@ def run_sampling(shape, k, p, seed, device, sub_core_grids=None):
     )
 
 
-@skip_for_blackhole("Requires wormhole_b0 to run. Issue #19640")
 @pytest.mark.parametrize(
     "shape",
     [
@@ -164,7 +162,6 @@ def test_sampling_callback(shape, k, p, seed, device):
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
 
 
-@skip_for_blackhole("Requires wormhole_b0 to run. Issue #19640")
 @pytest.mark.parametrize(
     "shape",
     [

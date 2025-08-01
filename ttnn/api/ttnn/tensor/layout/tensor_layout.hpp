@@ -23,7 +23,11 @@ using Strides = std::vector<size_t>;
 // shape) And provides information required to physically lay out the tensor in memory
 class TensorLayout {
 public:
-    TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config);
+    TensorLayout(
+        DataType dtype,
+        const PageConfig& page_config,
+        const MemoryConfig& memory_config,
+        const Alignment& alignment = {});
 
     // static method makes it easy to find and remove all of its usages in the codebase - thats why it is not a
     // constructor
@@ -93,10 +97,6 @@ public:
         DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
 
 private:
-    // Private to not expose alignment parameter to the public API
-    TensorLayout(
-        DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
-
     void initialize_alignment();
 
     DataType dtype_ = DataType::BFLOAT16;

@@ -9,8 +9,8 @@
 #include "fabric_edm_packet_header.hpp"
 #include "fd_kernel.hpp"
 #include "tt_metal/impl/dispatch/system_memory_manager.hpp"
-#include "tt_metal/fabric/fabric_mux_config.hpp"
 #include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/fabric.hpp>
 
 namespace tt::tt_metal {
 

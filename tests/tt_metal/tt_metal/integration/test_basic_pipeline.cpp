@@ -80,6 +80,7 @@ void create_and_run_row_pipeline(tt_metal::IDevice* device, const PipelineRowCon
     TT_FATAL(num_tiles % block_size_tiles == 0, "Error");
 
     std::vector<CoreCoord> cores;
+    cores.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; i++) {
         cores.push_back({i, 0});
     }

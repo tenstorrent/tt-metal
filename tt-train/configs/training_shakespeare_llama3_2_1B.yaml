@@ -13,7 +13,7 @@ training_config:
   use_kahan_summation: false
   use_clip_grad_norm: true
   clip_grad_norm_max_norm: 1.0
-  tokenizer_path: "data/llama3_2_1B_tokenizer.json"
+  tokenizer_path: "data/tinyllama-tokenizer.json" # using tinyllama tokenizer because the real Meta tokenizer is gated on HF.
   tokenizer_type: "bpe"
   transformer_config:
     num_heads: 32
@@ -22,9 +22,9 @@ training_config:
     intermediate_dim: 8192
     dropout_prob: 0.0
     num_blocks: 16
-    vocab_size: 128256
+    vocab_size: 32000 # not using Meta vocab size (128256), see comment about tokenizer choice above.
     max_sequence_length: 2048
-    runner_type: default
+    runner_type: memory_efficient
     theta: 500000.0
 
     rope_scaling:

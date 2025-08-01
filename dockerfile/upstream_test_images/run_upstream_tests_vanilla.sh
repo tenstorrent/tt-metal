@@ -13,9 +13,12 @@ test_suite_bh_single_pcie_metal_unit_tests() {
     ARCH_NAME=blackhole TT_METAL_SLOW_DISPATCH_MODE=1 ./tests/scripts/run_cpp_fd2_tests.sh
     # I wonder why we can't put these in the validation suite?
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=CommandQueueSingleCardProgramFixture.*
+    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardProgramFixture.*
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=CommandQueueProgramFixture.*
-    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=RandomProgramFixture.*
+    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQProgramFixture.*
+    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=*RandomProgramFixture.*
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=CommandQueueSingleCardBufferFixture.* # Tests EnqueueRead/EnqueueWrite Buffer from DRAM/L1
+
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_api --gtest_filter=*SimpleDram*:*SimpleL1* # Executable is dependent on arch (provided through GitHub CI workflow scripts)
 }
 
@@ -24,6 +27,14 @@ test_suite_bh_single_pcie_small_ml_model_tests() {
     echo "[upstream-tests] Running BH upstream small model tests"
     pytest --disable-warnings --input-path="models/demos/whisper/demo/dataset/conditional_generation" models/demos/whisper/demo/demo.py::test_demo_for_conditional_generation
     pytest models/demos/blackhole/resnet50/tests/upstream_pipeline
+}
+
+test_suite_bh_single_pcie_didt_tests() {
+    echo "[upstream-tests] Running BH upstream didt tests"
+    pytest tests/didt/test_resnet_conv.py::test_resnet_conv -k "1chips" --didt-workload-iterations 100 --determinism-check-interval 1
+    pytest tests/didt/test_ff1_matmul.py::test_ff1_matmul -k "without_gelu and 1chips" --didt-workload-iterations 100 --determinism-check-interval 1
+    pytest tests/didt/test_ff1_matmul.py::test_ff1_matmul -k "with_gelu and 1chips" --didt-workload-iterations 100 --determinism-check-interval 1
+    pytest tests/didt/test_lm_head_matmul.py::test_lm_head_matmul -k "1chips" --didt-workload-iterations 100 --determinism-check-interval 1
 }
 
 verify_llama_dir_() {
@@ -75,13 +86,24 @@ test_suite_bh_llmbox_llama_demo_tests() {
     verify_llama_dir_
 
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 4
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel 4 --max_generated_tokens 220
+}
+
+test_suite_bh_llmbox_llama_stress_tests() {
+    echo "[upstream-tests] Running BH LLMBox upstream Llama stress model tests"
+
+    verify_llama_dir_
+
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel 4 --max_generated_tokens 22000
 }
 
 test_suite_wh_6u_metal_unit_tests() {
     echo "[upstream-tests] running WH 6U upstream metalium unit tests. Note that skips should be treated as failures"
     ./build/test/tt_metal/tt_fabric/test_system_health
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardFixture.*"
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UntiMeshCQSingleCardFixture.*"
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardProgramFixture.*"
+    TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="UnitMeshCQSingleCardProgramFixture.*"
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN=1 ./build/test/tt_metal/unit_tests_dispatch --gtest_filter="CommandQueueSingleCardBufferFixture.ShardedBufferLarge*ReadWrites"
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
 }
@@ -105,13 +127,13 @@ test_suite_wh_6u_llama_demo_tests() {
 
     verify_llama_dir_
 
-    pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick"
-    pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_model_prefill.py
-    pytest models/demos/llama3_subdevices/demo/text_demo.py -k "repeat"
+    pytest models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k "quick"
+    pytest models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
+    pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat"
     # Some AssertionError: Throughput is out of targets 49 - 53 t/s/u in 200 iterations
     # assert 200 <= 20
-    # pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "full"
-    pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "mini-stress-test"
+    # pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full"
+    pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "mini-stress-test"
 }
 
 test_suite_wh_6u_llama_long_stress_tests() {
@@ -121,7 +143,7 @@ test_suite_wh_6u_llama_long_stress_tests() {
     verify_llama_dir_
 
     # This will take almost 3 hours. Ensure that the tensors are cached in the LLAMA_DIR.
-    pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "stress-test and not mini-stress-test"
+    pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "stress-test and not mini-stress-test"
 }
 
 # Define test suite mappings for different hardware topologies
@@ -130,11 +152,13 @@ declare -A hw_topology_test_suites
 # Store test suites as newline-separated lists
 hw_topology_test_suites["blackhole"]="test_suite_bh_single_pcie_python_unit_tests
 test_suite_bh_single_pcie_metal_unit_tests
+test_suite_bh_single_pcie_didt_tests
 test_suite_bh_single_pcie_small_ml_model_tests
 test_suite_bh_single_pcie_llama_demo_tests" # NOTE: This test MUST be last because of the requirements install currently in the llama tests
 
 hw_topology_test_suites["blackhole_no_models"]="test_suite_bh_single_pcie_python_unit_tests
-test_suite_bh_single_pcie_metal_unit_tests"
+test_suite_bh_single_pcie_metal_unit_tests
+test_suite_bh_single_pcie_didt_tests"
 
 hw_topology_test_suites["blackhole_llmbox"]="
 test_suite_bh_llmbox_metal_unit_tests

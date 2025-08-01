@@ -27,7 +27,8 @@ std::vector<CBInfo> get_cb_info(
     DataType output_datatype,
     std::array<uint32_t, 2> conv_input_shard_shape,
     bool enable_bias,
-    bool is_1d_depthwise_conv) {
+    bool is_1d_depthwise_conv,
+    bool skip_act_cb_create) {
     const uint32_t num_cbs = static_cast<uint32_t>(Conv2dCb::COUNT);
     std::vector<CBInfo> cb_info;
     cb_info.reserve(num_cbs);
@@ -134,11 +135,13 @@ std::vector<CBInfo> get_cb_info(
             sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? input_tile_size : output_tile_size;
         const tt::DataFormat act_cb_data_format =
             sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? conv_input_df : output_df;
+        const bool overlap_act_cb = sharding_scheme != TensorMemoryLayout::HEIGHT_SHARDED && skip_act_cb_create;
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT,
-            .num_pages = act_cb_num_tiles,
+            .num_pages = overlap_act_cb ? 0 : act_cb_num_tiles,
             .page_size = act_cb_tile_size,
-            .data_format = act_cb_data_format});
+            .data_format = act_cb_data_format,
+            .overlapped_by_cb = overlap_act_cb ? std::optional<Conv2dCb>(Conv2dCb::ACT_TILIZED) : std::nullopt});
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT_SECOND_READER,
             .num_pages = act_block_split_num_tiles,
@@ -154,7 +157,6 @@ std::vector<CBInfo> get_cb_info(
         .data_format = output_df});
 
     // Tilized act CB
-    const uint32_t tlized_act_cb_num_tiles = act_block_num_tiles;
     cb_info.emplace_back(CBInfo{
         .name = Conv2dCb::ACT_TILIZED,
         .num_pages = act_block_num_tiles,
@@ -177,7 +179,8 @@ std::vector<CBInfo> get_cb_info(
             row_major_act_cb_num_tiles = act_block_num_tiles;
         }
 
-        const bool overlap_act_cb = sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && conv_input_df == output_df;
+        const bool overlap_act_cb =
+            sharding_scheme == TensorMemoryLayout::BLOCK_SHARDED && conv_input_df == output_df && !skip_act_cb_create;
         cb_info.emplace_back(CBInfo{
             .name = Conv2dCb::ACT_ROW_MAJOR_BFLOAT16,
             .num_pages = overlap_act_cb ? 0 : row_major_act_cb_num_tiles,

@@ -172,9 +172,6 @@ constexpr auto multigammaln = ttnn::register_operation<
 constexpr auto sinh = ttnn::register_operation<
     "ttnn::sinh",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SINH>>();
-constexpr auto softsign = ttnn::register_operation<
-    "ttnn::softsign",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SOFTSIGN>>();
 constexpr auto swish = ttnn::register_operation<
     "ttnn::swish",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SWISH>>();
@@ -187,14 +184,6 @@ constexpr auto std_hw = ttnn::register_operation<
 constexpr auto normalize_hw = ttnn::register_operation<
     "ttnn::normalize_hw",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_HW>>();
-
-constexpr auto hardswish = ttnn::register_operation<
-    "ttnn::hardswish",
-    operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::HARDSWISH>>();
-constexpr auto hardsigmoid = ttnn::register_operation<
-    "ttnn::hardsigmoid",
-    operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::HARDSIGMOID>>();
-
 constexpr auto hardtanh = ttnn::register_operation<
     "ttnn::hardtanh",
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::HARDTANH>>();
@@ -217,9 +206,6 @@ constexpr auto geglu = ttnn::register_operation<
 constexpr auto swiglu = ttnn::register_operation<
     "ttnn::swiglu",
     operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::SWIGLU>>();
-constexpr auto hardshrink = ttnn::register_operation<
-    "ttnn::hardshrink",
-    operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::HARDSHRINK>>();
 constexpr auto logical_not_ = ttnn::register_operation<
     "ttnn::logical_not_",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LOGICAL_NOT_>>();
@@ -247,8 +233,5 @@ constexpr auto rpow = ttnn::register_operation<
 constexpr auto normalize_global = ttnn::register_operation<
     "ttnn::normalize_global",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_GLOBAL>>();
-constexpr auto frac = ttnn::register_operation<
-    "ttnn::frac",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::FRAC>>();
 
 }  // namespace ttnn

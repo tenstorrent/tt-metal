@@ -41,7 +41,6 @@ count_loc git_hooks
 count_loc reg_scripts
 count_loc release
 count_loc tools
-count_loc tt_gdb
 echo
 echo
 

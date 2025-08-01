@@ -217,7 +217,7 @@ def prepare_generator_args(
 # optimization (ModelOptimizations): Optimization level to use for the model (performance or accuracy)
 # MESH_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel, token_accuracy",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only, data_parallel, token_accuracy, stress_test",
     [
         (  # Batch-1 run (Latency) - single user, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -233,6 +233,7 @@ def prepare_generator_args(
             False,  # ci_only
             1,
             False,  # token_accuracy
+            False,  # stress_test
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -248,8 +249,9 @@ def prepare_generator_args(
             False,  # ci_only
             1,  # data_parallel
             False,  # token_accuracy
+            False,  # stress_test
         ),
-        (  # Long-context 64k run - Single user, long prompt (may vary based on the model's tokenizer)
+        (  # long-context-64k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -263,8 +265,9 @@ def prepare_generator_args(
             False,  # ci_only
             1,  # data_parallel
             False,  # token_accuracy
+            False,  # stress_test
         ),
-        (  # Long-context 32k run - Single user, long prompt (may vary based on the model's tokenizer)
+        (  # Long-context-32k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -278,8 +281,9 @@ def prepare_generator_args(
             False,  # ci_only
             1,  # data_parallel
             False,  # token_accuracy
+            False,  # stress_test
         ),
-        (  # Long-context 16k run - Single user, long prompt (may vary based on the model's tokenizer)
+        (  # Long-context-16k run - Single user, long prompt (may vary based on the model's tokenizer)
             "models/tt_transformers/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -293,8 +297,9 @@ def prepare_generator_args(
             False,  # ci_only
             1,  # data_parallel
             False,  # token_accuracy
+            False,  # stress_test
         ),
-        (  # Batch-1 run (Reasoning) - single user, small prompt, long thinking time
+        (  # reasoning-1 - single user, small prompt, long thinking time
             "models/tt_transformers/demo/input_data_questions_reasoning.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -311,8 +316,9 @@ def prepare_generator_args(
             False,  # ci_only
             1,  # data_parallel
             False,  # token_accuracy
+            False,  # stress_test
         ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
+        (  # ci-1 [CI-only] - Measures the performance of a single user over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -326,8 +332,9 @@ def prepare_generator_args(
             True,  # ci_only
             1,  # data_parallel
             False,  # token_accuracy
+            False,  # stress_test
         ),
-        (  # CI Batch-32 run - Measures the performance of a 32 users over 4096 iterations
+        (  # ci-32 [CI-only] - Measures the performance of 32 users over 4096 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -341,8 +348,9 @@ def prepare_generator_args(
             True,  # ci_only
             1,  # data_parallel
             False,  # token_accuracy
+            False,  # stress_test
         ),
-        (  # Batch-1 run (Latency) - single user, small prompt
+        (  # DP-4-b1 - single user, data-parallel=4, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -356,8 +364,9 @@ def prepare_generator_args(
             False,  # ci_only
             4,  # data_parallel
             False,  # token_accuracy
+            False,  # stress_test
         ),
-        (  # Batch-1 run (Latency) - single user, small prompt
+        (  # DP-8-b1 - single user, data-parallel=8, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -371,8 +380,9 @@ def prepare_generator_args(
             False,  # ci_only
             8,  # data_parallel
             False,  # token_accuracy
+            False,  # stress_test
         ),
-        (  # Batch-32 run (Throughput) - 32 users, small prompt
+        (  # DP-4-b32 - 32 users, data-parallel=4, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -386,8 +396,9 @@ def prepare_generator_args(
             False,  # ci_only
             4,  # data_parallel
             False,  # token_accuracy
+            False,  # stress_test
         ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
+        (  # ci-b1-DP-4 [CI-Only] - single user, data-parallel=4, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -401,8 +412,9 @@ def prepare_generator_args(
             True,  # ci_only
             4,  # data_parallel
             False,  # token_accuracy
+            False,  # stress_test
         ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
+        (  # ci-b1-DP-8 [CI-Only] - single user, data-parallel=8, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -416,8 +428,9 @@ def prepare_generator_args(
             True,  # ci_only
             8,  # data_parallel
             False,  # token_accuracy
+            False,  # stress_test
         ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 200 iterations
+        (  # ci-b1-DP-16 [CI-Only] - single user, data-parallel=16, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -431,8 +444,9 @@ def prepare_generator_args(
             True,  # ci_only
             16,  # data_parallel
             False,  # token_accuracy
+            False,  # stress_test
         ),
-        (  # CI Batch-1 run - Measures the performance of a single user over 200 iterations
+        (  # ci-b1-DP-32 [CI-Only] - single user, data-parallel=32, small prompt
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -446,8 +460,9 @@ def prepare_generator_args(
             True,  # ci_only
             32,  # data_parallel
             False,  # token_accuracy
+            False,  # stress_test
         ),
-        (  # CI stress test batch-1 run - Runs a short prefill (128) and exhaust the KV cache (128K), by running 50000 iterations
+        (  # ci-stress-1 [CI-only] stress test - Runs a short prefill (128) and loops the same iteration over 50000 times
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -461,6 +476,7 @@ def prepare_generator_args(
             True,  # ci_only
             1,  # data_parallel
             False,  # token_accuracy
+            True,  # stress_test
         ),
         (  # CI Batch-1 run - Measures token matching accuracy of a single user over 500 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -506,7 +522,7 @@ def prepare_generator_args(
     ],
     ids=["performance", "accuracy"],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 26000000, "num_command_queues": 1}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 30000000, "num_command_queues": 1}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -535,6 +551,7 @@ def test_demo_text(
     reset_seeds,
     request,
     token_accuracy,
+    stress_test,
 ):
     """
     Simple demo with limited dependence on reference code.
@@ -569,6 +586,10 @@ def test_demo_text(
     sampling_params = request.config.getoption("--sampling_params") or sampling_params
     json_config_file = request.config.getoption("--decoder_config_file")
     token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
+    stress_test = request.config.getoption("--stress_test") or stress_test
+
+    if stress_test and token_accuracy:
+        pytest.skip("Stress test cannot be run with token accuracy mode")
 
     if json_config_file:
         optimizations = parse_decoder_json(json_config_file)
@@ -731,10 +752,8 @@ def test_demo_text(
 
         user_done = [False] * global_batch_size  # Keeps track when a user reaches EoD token
 
-        # TODO Argmax on device is only supported for batch_size=1 (per submesh)
-        argmax_on_device = (
-            False if (global_batch_size // data_parallel > 1 or sampling_params["temperature"] != 0) else True
-        )
+        # Currently only supporting greedy decoding (temperature=0) on device
+        argmax_on_device = sampling_params["temperature"] == 0
         if argmax_on_device:
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
         else:
@@ -798,7 +817,8 @@ def test_demo_text(
                 f"Iteration {iteration}: {1000*decode_iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({global_batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
             )
 
-            current_pos += 1
+            if not stress_test:  # During stress test runs we will iterate over the same position for X iterations
+                current_pos += 1
             # Save output token to print out later
             for user in range(global_batch_size):
                 user_tok = out_tok[user].item()
@@ -1079,28 +1099,30 @@ def test_demo_text(
             # and observed/0.95 for TTFT (lower is better) to allow 5% buffer + 5% room for growth
             ci_target_ttft = {
                 # N150 targets (milliseconds) - lower is better
-                "N150_Llama3.2-1B": 26,
-                "N150_Llama3.2-3B": 57,
-                "N150_Llama3.1-8B": 112,
+                "N150_Llama-3.2-1B": 22,
+                "N150_Llama-3.2-3B": 57,
+                "N150_Llama-3.1-8B": 112,
                 # "N150_Mistral-7B": 106, # https://github.com/tenstorrent/tt-metal/issues/24963
                 # N300 targets
                 # "N300_Qwen2.5-7B": 150,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
                 # T3K targets
-                "T3K_Llama3.1-70B": 181,
+                "T3K_Llama-3.1-70B": 181,
+                # "T3K_Qwen2.5-Coder-32B": 180,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
                 # "T3K_Qwen2.5-72B": 211,  # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
                 # "T3K_Qwen3-32B": 250, # too much variability in CI (https://github.com/tenstorrent/tt-metal/issues/24754)
             }
             ci_target_decode_tok_s_u = {
                 # N150 targets - higher is better
-                "N150_Llama3.2-1B": 58,
-                "N150_Llama3.2-3B": 35,
-                "N150_Llama3.1-8B": 21,
+                "N150_Llama-3.2-1B": 66,
+                "N150_Llama-3.2-3B": 35,
+                "N150_Llama-3.1-8B": 21,
                 "N150_Mistral-7B": 23,
                 # N300 targets
                 "N300_Qwen2.5-7B": 20,
                 # T3K targets
-                "T3K_Llama3.1-70B": 14,
+                "T3K_Llama-3.1-70B": 14,
                 "T3K_Qwen2.5-72B": 13,
+                "T3K_Qwen2.5-Coder-32B": 21,
                 "T3K_Qwen3-32B": 20,
             }
 

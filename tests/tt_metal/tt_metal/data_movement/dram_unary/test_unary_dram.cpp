@@ -19,12 +19,11 @@ namespace unit_tests::dm::dram {
 struct DramConfig {
     uint32_t test_id = 0;
     uint32_t num_of_transactions = 0;
-    uint32_t transaction_size_pages = 0;
-    uint32_t page_size_bytes = 0;
+    uint32_t pages_per_transaction = 0;
+    uint32_t bytes_per_page = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
-    CoreRangeSet cores = CoreRangeSet();
-    array<uint32_t, 2> tensor_shape_in_pages = {0, 0};
-    array<uint32_t, 2> num_dram_banks = {0, 0};
+    CoreCoord core_coord = {0, 0};
+    uint32_t dram_channel = 0;
 };
 
 /// @brief Does Dram --> Reader --> L1 CB --> Writer --> Dram.
@@ -32,76 +31,57 @@ struct DramConfig {
 /// @param test_config - Configuration of the test -- see struct
 /// @return
 bool run_dm(IDevice* device, const DramConfig& test_config) {
+    // SETUP
+
     // Program
     Program program = CreateProgram();
 
-    // DRAM Buffers
-    const uint32_t transaction_size_bytes = test_config.transaction_size_pages * test_config.page_size_bytes;
-    const size_t total_size_bytes =
-        test_config.num_of_transactions * test_config.transaction_size_pages * test_config.page_size_bytes;
+    const size_t total_size_bytes = test_config.pages_per_transaction * test_config.bytes_per_page;
 
-    InterleavedBufferConfig interleaved_dram_config{
-        .device = device,
-        .size = transaction_size_bytes,
-        .page_size = transaction_size_bytes,
-        .buffer_type = BufferType::DRAM};
-    std::shared_ptr<Buffer> input_dram_buffer;
-    if (!test_config.num_dram_banks[0]) {
-        input_dram_buffer = CreateBuffer(interleaved_dram_config);
-    } else {
-        ShardSpecBuffer shard_spec = ShardSpecBuffer(
-            test_config.cores,
-            {test_config.tensor_shape_in_pages[0] * 4 / test_config.num_dram_banks[0],
-             test_config.tensor_shape_in_pages[1] * (device->arch() == ARCH::BLACKHOLE ? 8 : 4) /
-                 test_config.num_dram_banks[1]},
-            ShardOrientation::ROW_MAJOR,
-            {4, (device->arch() == ARCH::BLACKHOLE) ? 8 : 4},
-            test_config.tensor_shape_in_pages);
-        ShardedBufferConfig sharded_dram_config{
-            .device = device,
-            .size = transaction_size_bytes,
-            .page_size = test_config.page_size_bytes,
-            .buffer_type = BufferType::DRAM,
-            .buffer_layout = TensorMemoryLayout::BLOCK_SHARDED,
-            .shard_parameters = shard_spec};
-        input_dram_buffer = CreateBuffer(sharded_dram_config);
-    }
-    uint32_t input_dram_byte_address = input_dram_buffer->address();
-    auto output_dram_buffer = CreateBuffer(interleaved_dram_config);
-    uint32_t output_dram_byte_address = output_dram_buffer->address();
+    // DRAM Address
+    DramAddressInfo dram_info = tt::tt_metal::unit_tests::dm::get_dram_address_and_size(device);
 
-    uint8_t l1_cb_index = CBIndex::c_0;
+    uint32_t input_dram_address = dram_info.base_address;
+    uint32_t output_dram_address = input_dram_address + total_size_bytes;
+
+    // L1 Address
+    L1AddressInfo l1_info = tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, test_config.core_coord);
+
+    uint32_t l1_address = l1_info.base_address;
+
+    // Redundant but as an extra measure add a check to ensure both addresses are within DRAM bounds
+    // Checks also needed for L1 maybe
+
+    // Initialize semaphore ID
+    CoreRangeSet core_range_set = CoreRangeSet({CoreRange(test_config.core_coord)});
+    const uint32_t sem_id = CreateSemaphore(program, core_range_set, 0);
 
     // Compile-time arguments for kernels
     vector<uint32_t> reader_compile_args = {
-        (uint32_t)input_dram_byte_address,
-        (uint32_t)0,
+        (uint32_t)test_config.test_id,
         (uint32_t)test_config.num_of_transactions,
-        (uint32_t)test_config.transaction_size_pages,
-        (uint32_t)test_config.page_size_bytes,
-        (uint32_t)l1_cb_index,
-        (uint32_t)test_config.test_id};
+        (uint32_t)test_config.pages_per_transaction,
+        (uint32_t)test_config.bytes_per_page,
+        (uint32_t)input_dram_address,
+        (uint32_t)test_config.dram_channel,
+        (uint32_t)l1_address,
+        (uint32_t)sem_id};
 
     vector<uint32_t> writer_compile_args = {
-        (uint32_t)output_dram_byte_address,
-        (uint32_t)0,
+        (uint32_t)test_config.test_id,
         (uint32_t)test_config.num_of_transactions,
-        (uint32_t)test_config.transaction_size_pages,
-        (uint32_t)test_config.page_size_bytes,
-        (uint32_t)l1_cb_index,
-        (uint32_t)test_config.test_id};
-
-    // Create circular buffers
-    CircularBufferConfig l1_cb_config =
-        CircularBufferConfig(transaction_size_bytes, {{l1_cb_index, test_config.l1_data_format}})
-            .set_page_size(l1_cb_index, transaction_size_bytes);
-    auto l1_cb = CreateCircularBuffer(program, test_config.cores, l1_cb_config);
+        (uint32_t)test_config.pages_per_transaction,
+        (uint32_t)test_config.bytes_per_page,
+        (uint32_t)output_dram_address,
+        (uint32_t)test_config.dram_channel,
+        (uint32_t)l1_address,
+        (uint32_t)sem_id};
 
     // Kernels
     auto reader_kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/reader_unary.cpp",
-        test_config.cores,
+        test_config.core_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::RISCV_1_default,
@@ -110,7 +90,7 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
     auto writer_kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/data_movement/dram_unary/kernels/writer_unary.cpp",
-        test_config.cores,
+        test_config.core_coord,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
@@ -120,23 +100,30 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
-    // Input
-    vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
-        -100.0f,
-        100.0f,
-        transaction_size_bytes / bfloat16::SIZEOF,
-        chrono::system_clock::now().time_since_epoch().count());
+    // RUNNING THE PROGRAM
 
-    // Golden output
+    // Setup Input and Golden Output
+    vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+        -100.0f, 100.0f, total_size_bytes / bfloat16::SIZEOF, chrono::system_clock::now().time_since_epoch().count());
+
     // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
     vector<uint32_t> packed_golden = packed_input;
 
-    // Launch program and record outputs
-    vector<uint32_t> packed_output;
-    detail::WriteToBuffer(input_dram_buffer, packed_input);
+    // Write Input to DRAM
+    detail::WriteToDeviceDRAMChannel(device, test_config.dram_channel, input_dram_address, packed_input);
     MetalContext::instance().get_cluster().dram_barrier(device->id());
+
+    // Launch the program
     detail::LaunchProgram(device, program);
-    detail::ReadFromBuffer(output_dram_buffer, packed_output);
+
+    // Read Intermediate Output from L1 (for debugging purposes)
+    vector<uint32_t> packed_intermediate_output;
+    detail::ReadFromDeviceL1(device, test_config.core_coord, l1_address, total_size_bytes, packed_intermediate_output);
+
+    // Read Output from DRAM
+    vector<uint32_t> packed_output;
+    detail::ReadFromDeviceDRAMChannel(
+        device, test_config.dram_channel, output_dram_address, total_size_bytes, packed_output);
 
     // Results comparison
     bool pcc = is_close_packed_vectors<bfloat16, uint32_t>(
@@ -152,157 +139,131 @@ bool run_dm(IDevice* device, const DramConfig& test_config) {
 
     return pcc;
 }
-}  // namespace unit_tests::dm::dram
 
-/* ========== Test case for varying transaction numbers and sizes; Test id = 0 ========== */
-TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedPacketSizes) {
+void directed_ideal_test(
+    tt::ARCH arch_,
+    std::vector<IDevice*>& devices_,
+    uint32_t num_devices_,
+    uint32_t test_case_id,
+    CoreCoord core_coord = {0, 0},
+    uint32_t dram_channel = 0) {
     // Physical Constraints
-    auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
-
-    // Parameters
-    uint32_t max_transactions = 256;
-    uint32_t max_transaction_size_pages =
-        arch_ == tt::ARCH::BLACKHOLE ? 1024 : 2048;  // Max total transaction size == 64 KB
-
-    // Cores
-    CoreRange core_range({0, 0}, {0, 0});
-    CoreRangeSet core_range_set({core_range});
-
-    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
-        for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;
-             transaction_size_pages *= 2) {
-            if (transaction_size_pages > max_transmittable_pages) {
-                continue;
-            }
-
-            // Test config
-            unit_tests::dm::dram::DramConfig test_config = {
-                .test_id = 0,
-                .num_of_transactions = num_of_transactions,
-                .transaction_size_pages = transaction_size_pages,
-                .page_size_bytes = page_size_bytes,
-                .l1_data_format = DataFormat::Float16_b,
-                .cores = core_range_set};
-
-            // Run
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-            }
-        }
-    }
-}
-
-/* ========== Test case for varying core locations; Test id = 1 ========== */
-TEST_F(DeviceFixture, TensixDataMovementDRAMInterleavedCoreLocations) {
-    uint32_t num_of_transactions = 128;     // Bound for testing different number of transactions
-    uint32_t transaction_size_pages = 128;  // Bound for testing different transaction sizes
-    uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // =Flit size: 32 bytes for WH, 64 for BH
-
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        // Cores
-        auto grid_size = devices_.at(id)->compute_with_storage_grid_size();
-        log_info(tt::LogTest, "Grid size x: {}, y: {}", grid_size.x, grid_size.y);
-
-        for (unsigned int x = 0; x < grid_size.x; x++) {
-            for (unsigned int y = 0; y < grid_size.y; y++) {
-                CoreRangeSet core_range_set(CoreRange({x, y}, {x, y}));
-
-                // Test config
-                unit_tests::dm::dram::DramConfig test_config = {
-                    .test_id = 1,
-                    .num_of_transactions = num_of_transactions,
-                    .transaction_size_pages = transaction_size_pages,
-                    .page_size_bytes = page_size_bytes,
-                    .l1_data_format = DataFormat::Float16_b,
-                    .cores = core_range_set};
-
-                // Run
-                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-            }
-        }
-    }
-}
-
-/* ========== Sharded dram buffer test; Test id = 2 ========== */
-TEST_F(DeviceFixture, TensixDataMovementDRAMSharded) {
-    // Parameters
-    uint32_t max_tensor_dim_pages = 1;  // Arbitrary tensor for sharding
-    uint32_t page_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 64 : 32;  // =Flit size: 32 bytes for WH, 64 for BH
-
-    // 2 * 1024 * 1024 * 1024   = dram bank size / max shard size
-    // x * x * 64        = shard size where x is one dim of tensor_shape_in_pages
-    // x * x <= 1024 * 1024 * 32 this many pages should be able to fit on one dram bank
-    // max x => 1024 * 4 = 4096
-    // Fails when one dram bank size is set to 4GB (DRAM error)
-
-    // L1 capacity is 1 MB, error when shard size cannot exceed that (L1 error)
-    // So 1024 * 1024 / 64 = x * x = 128 * 128 => x = 128
-
-    // Fails: (when num dram banks isnt 1, 1), possibly due to the noc_addr_from_bank_id function in kernel
-    // TODO: Expand test case to cover multiple dram banks
-
-    // Cores
-    CoreRange core_range({0, 0}, {0, 0});
-    CoreRangeSet core_range_set({core_range});
-
-    uint32_t transaction_size_pages = 1;
-    for (uint32_t tensor_dim_size = 1; tensor_dim_size <= max_tensor_dim_pages; tensor_dim_size *= 2) {
-        array<uint32_t, 2> tensor_shape_in_pages = {tensor_dim_size, tensor_dim_size};
-        uint32_t num_of_transactions = tensor_dim_size * tensor_dim_size / transaction_size_pages;
-        for (uint32_t dram_banks_dim_ratio = 1; dram_banks_dim_ratio <= tensor_dim_size; dram_banks_dim_ratio *= 2) {
-            uint32_t dram_banks_dim_size = tensor_dim_size / dram_banks_dim_ratio;
-            array<uint32_t, 2> num_dram_banks = {dram_banks_dim_size, dram_banks_dim_size};
-
-            // Test config
-            unit_tests::dm::dram::DramConfig test_config = {
-                .test_id = 2,
-                .num_of_transactions = num_of_transactions,
-                .transaction_size_pages = transaction_size_pages,
-                .page_size_bytes = page_size_bytes,
-                .l1_data_format = DataFormat::Float16_b,
-                .cores = core_range_set,
-                .tensor_shape_in_pages = tensor_shape_in_pages,
-                .num_dram_banks = num_dram_banks};
-
-            log_info(tt::LogTest, "Tensor shape in pages: {}", tensor_shape_in_pages);
-            log_info(tt::LogTest, "Number of dram banks: {}", num_dram_banks);
-
-            // Run
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-            }
-        }
-    }
-}
-
-/* ========== Directed ideal test case; Test id = 3 ========== */
-TEST_F(DeviceFixture, TensixDataMovementDRAMDirectedIdeal) {
-    // Physical Constraints
-    auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
+    auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
 
     // Parameters
     uint32_t num_of_transactions = 1;
-    uint32_t transaction_size_pages = max_transmittable_pages / num_of_transactions;
-
-    // Cores
-    CoreRange core_range({0, 0}, {0, 0});
-    CoreRangeSet core_range_set({core_range});
+    uint32_t pages_per_transaction = max_transmittable_pages;
 
     // Test config
     unit_tests::dm::dram::DramConfig test_config = {
-        .test_id = 3,
+        .test_id = test_case_id,
         .num_of_transactions = num_of_transactions,
-        .transaction_size_pages = transaction_size_pages,
-        .page_size_bytes = page_size_bytes,
+        .pages_per_transaction = pages_per_transaction,
+        .bytes_per_page = bytes_per_page,
         .l1_data_format = DataFormat::Float16_b,
-        .cores = core_range_set};
+        .core_coord = core_coord,
+        .dram_channel = dram_channel};
 
     // Run
     for (unsigned int id = 0; id < num_devices_; id++) {
         EXPECT_TRUE(run_dm(devices_.at(id), test_config));
     }
+}
+
+void packet_sizes_test(
+    tt::ARCH arch_,
+    std::vector<IDevice*>& devices_,
+    uint32_t num_devices_,
+    uint32_t test_case_id,
+    CoreCoord core_coord = {0, 0},
+    uint32_t dram_channel = 0) {
+    auto [bytes_per_page, max_reservable_bytes, max_reservable_pages] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+
+    // Parameters
+    uint32_t max_transactions = 256;
+    uint32_t max_pages_per_transaction = 256;
+
+    for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
+        for (uint32_t pages_per_transaction = 1; pages_per_transaction <= max_pages_per_transaction;
+             pages_per_transaction *= 2) {
+            if (num_of_transactions * pages_per_transaction * bytes_per_page >= max_reservable_bytes) {
+                continue;
+            }
+
+            // Test config
+            unit_tests::dm::dram::DramConfig test_config = {
+                .test_id = test_case_id,
+                .num_of_transactions = num_of_transactions,
+                .pages_per_transaction = pages_per_transaction,
+                .bytes_per_page = bytes_per_page,
+                .l1_data_format = DataFormat::Float16_b,
+                .core_coord = core_coord,
+                .dram_channel = dram_channel};
+
+            // Run
+            for (unsigned int id = 0; id < num_devices_; id++) {
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            }
+        }
+    }
+}
+
+}  // namespace unit_tests::dm::dram
+
+/* ========== Test case for varying transaction numbers and sizes; Test id = 0 ========== */
+TEST_F(DeviceFixture, TensixDataMovementDRAMPacketSizes) {
+    unit_tests::dm::dram::packet_sizes_test(
+        arch_,
+        devices_,
+        num_devices_,
+        0,      // Test case ID
+        {0, 0}  // Core coordinates (default)
+    );
+}
+
+/* ========== Test case for varying core locations; Test id = 1 ========== */
+TEST_F(DeviceFixture, TensixDataMovementDRAMCoreLocations) {
+    uint32_t test_case_id = 1;
+
+    CoreCoord core_coord;
+    uint32_t dram_channel = 0;
+
+    // Cores
+    auto grid_size = devices_.at(0)->compute_with_storage_grid_size();  // May need to fix this in a bit
+    log_info(tt::LogTest, "Grid size x: {}, y: {}", grid_size.x, grid_size.y);
+
+    for (unsigned int x = 0; x < grid_size.x; x++) {
+        for (unsigned int y = 0; y < grid_size.y; y++) {
+            core_coord = {x, y};
+
+            unit_tests::dm::dram::directed_ideal_test(
+                arch_, devices_, num_devices_, test_case_id, core_coord, dram_channel);
+        }
+    }
+}
+
+// DRAM channels
+
+/* ========== Test case for varying DRAM channels; Test id = 2 ========== */
+TEST_F(DeviceFixture, TensixDataMovementDRAMChannels) {
+    uint32_t test_case_id = 2;
+
+    CoreCoord core_coord = {0, 0};
+
+    for (unsigned int dram_channel = 0; dram_channel < devices_.at(0)->num_dram_channels(); dram_channel++) {
+        unit_tests::dm::dram::directed_ideal_test(
+            arch_, devices_, num_devices_, test_case_id, core_coord, dram_channel);
+    }
+}
+
+/* ========== Directed ideal test case; Test id = 3 ========== */
+TEST_F(DeviceFixture, TensixDataMovementDRAMDirectedIdeal) {
+    // Test ID (Arbitrary)
+    uint32_t test_id = 3;
+
+    unit_tests::dm::dram::directed_ideal_test(arch_, devices_, num_devices_, test_id);
 }
 
 }  // namespace tt::tt_metal

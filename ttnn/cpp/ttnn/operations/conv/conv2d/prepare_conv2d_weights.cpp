@@ -53,7 +53,10 @@ template <typename T, typename Fn>
 Tensor convert_tensor(const Tensor& input_tensor, const Fn& compute, const TensorSpec& output_spec) {
     TT_FATAL(is_cpu_tensor(input_tensor), "convert_tensor only supports cpu tensors");
     return Tensor(
-        input_tensor.host_storage().transform(compute), output_spec, input_tensor.distributed_tensor_config());
+        input_tensor.host_storage().transform(compute),
+        output_spec,
+        input_tensor.distributed_tensor_config(),
+        input_tensor.tensor_topology());
 }
 
 template <typename Func, typename... Args>
@@ -604,10 +607,11 @@ static Tensor to_folded_weight_layout(const Tensor& conv_weight_tensor, std::arr
             TensorSpec(
                 output_shape,
                 tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{})),
-            conv_weight_tensor.distributed_tensor_config());
+            conv_weight_tensor.distributed_tensor_config(),
+            conv_weight_tensor.tensor_topology());
     };
 
-    auto storage = conv_weight_tensor.host_storage();
+    const auto& storage = conv_weight_tensor.host_storage();
     switch (dtype) {
         case DataType::FLOAT32: return fold_weights.template operator()<float>(storage);
         case DataType::BFLOAT16: return fold_weights.template operator()<bfloat16>(storage);
@@ -803,7 +807,8 @@ static OptimizedConvBlockConfig get_opt_block_config(
         kernel_size[0],
         kernel_size[1],
         get_fp32_dest_acc_en(compute_config),
-        conv_config.enable_split_reader);
+        conv_config.enable_split_reader,
+        conv_config.full_inner_dim);
 }
 
 static uint32_t calculate_out_channels_padded(uint32_t out_channels, const ParallelConfig& output_parallel_config) {
@@ -966,7 +971,6 @@ static ttnn::Tensor prepare_conv_weights_internal(
     const auto& original_weights_shape = weight_tensor_.logical_shape();
     uint32_t original_weights_out_channels = original_weights_shape[0];
     uint32_t original_weights_in_channels = original_weights_shape[1];
-    uint32_t original_weights_window_h = original_weights_shape[2];
     uint32_t original_weights_window_w = original_weights_shape[3];
 
     const bool is_conv1d = is_1d_conv(original_weights_window_w, params.input_width);
@@ -1223,29 +1227,6 @@ ttnn::Tensor prepare_conv_bias(
     return prepared_bias.value();  // We know bias exists since we passed it
 }
 
-template ttnn::Tensor prepare_conv_weights<IDevice>(
-    const ttnn::Tensor& weight_tensor,
-    const ttnn::MemoryConfig& input_memory_config,
-    Layout input_layout,
-    const std::string& weights_format,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
-    std::array<uint32_t, 2> dilation,
-    const bool has_bias,
-    uint32_t groups,
-    IDevice* device,
-    DataType input_dtype,
-    const std::optional<const DataType>& output_dtype,
-    const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
-
 template ttnn::Tensor prepare_conv_weights<MeshDevice>(
     const ttnn::Tensor& weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
@@ -1269,12 +1250,6 @@ template ttnn::Tensor prepare_conv_weights<MeshDevice>(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
 
-template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device<IDevice>(
-    const ttnn::Tensor& weight_tensor,
-    const std::optional<const ttnn::Tensor>& bias_tensor,
-    Conv2dWeightsBiasPrepConfig& params,
-    IDevice* device);
-
 template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>>
 prepare_conv_weights_biases_and_move_to_device<MeshDevice>(
     const ttnn::Tensor& weight_tensor,
@@ -1282,39 +1257,12 @@ prepare_conv_weights_biases_and_move_to_device<MeshDevice>(
     Conv2dWeightsBiasPrepConfig& params,
     MeshDevice* device);
 
-template std::optional<ttnn::Tensor> prepare_conv_bias_internal<IDevice>(
-    const std::optional<const ttnn::Tensor>& bias_tensor,
-    uint32_t out_channels,
-    const Conv2dWeightsBiasPrepConfig& params,
-    DataType weight_dtype,
-    IDevice* device);
-
 template std::optional<ttnn::Tensor> prepare_conv_bias_internal<MeshDevice>(
     const std::optional<const ttnn::Tensor>& bias_tensor,
     uint32_t out_channels,
     const Conv2dWeightsBiasPrepConfig& params,
     DataType weight_dtype,
     MeshDevice* device);
-
-template ttnn::Tensor prepare_conv_bias<IDevice>(
-    const ttnn::Tensor& bias_tensor,
-    const ttnn::MemoryConfig& input_memory_config,
-    Layout input_layout,
-    uint32_t in_channels,
-    uint32_t out_channels,
-    uint32_t batch_size,
-    uint32_t input_height,
-    uint32_t input_width,
-    std::array<uint32_t, 2> kernel_size,
-    std::array<uint32_t, 2> stride,
-    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
-    std::array<uint32_t, 2> dilation,
-    uint32_t groups,
-    IDevice* device,
-    DataType input_dtype,
-    const std::optional<const DataType>& output_dtype,
-    const std::optional<const Conv2dConfig>& conv_config_,
-    const std::optional<const DeviceComputeKernelConfig>& compute_config_);
 
 template ttnn::Tensor prepare_conv_bias<MeshDevice>(
     const ttnn::Tensor& bias_tensor,
