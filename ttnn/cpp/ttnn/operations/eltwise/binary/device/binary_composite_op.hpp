@@ -14,7 +14,6 @@ namespace ttnn::operations::binary {
 
 enum class BinaryCompositeOpType {
     HYPOT,
-    XLOGY,
     NEXTAFTER,
     ISCLOSE,
     ATAN2,
@@ -25,7 +24,6 @@ enum class BinaryCompositeOpType {
 };
 
 Tensor _hypot(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _xlogy(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _atan2(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _nextafter(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _isclose(const Tensor&, const Tensor&, float, float, bool, const std::optional<MemoryConfig>&);
@@ -44,13 +42,6 @@ template <>
 struct OpHandler<BinaryCompositeOpType::HYPOT> {
     static Tensor handle(const Tensor& t1, const Tensor& t2, const std::optional<MemoryConfig>& mem_cfg) {
         return _hypot(t1, t2, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<BinaryCompositeOpType::XLOGY> {
-    static Tensor handle(const Tensor& t1, const Tensor& t2, const std::optional<MemoryConfig>& mem_cfg) {
-        return _xlogy(t1, t2, mem_cfg);
     }
 };
 

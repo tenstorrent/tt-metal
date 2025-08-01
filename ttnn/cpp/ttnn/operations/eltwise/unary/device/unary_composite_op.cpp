@@ -296,16 +296,6 @@ Tensor _normalize(const Tensor& y, const std::optional<MemoryConfig>& output_mem
     return z;
 }
 
-// Function @hard_swish
-// use transformation y = x * hardsigmoid( x ) by broadcast
-// Ref: PyTorch
-// hard swish(x) = x*hardsigmoid(x,scale,shift)
-Tensor _hardswish(const Tensor& a, float value_1, float value_2, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor a_sigmoid = ttnn::hardsigmoid(a, output_mem_config);
-    Tensor result_sq = ttnn::multiply(a_sigmoid, a, std::nullopt, output_mem_config);
-    return result_sq;
-}
-
 // Function Clip
 // use clip y = min( max( x, min_value), max_value) by broadcast
 // Ref: https://pytorch.org/docs/stable/generated/torch.clamp.html#torch.clamp

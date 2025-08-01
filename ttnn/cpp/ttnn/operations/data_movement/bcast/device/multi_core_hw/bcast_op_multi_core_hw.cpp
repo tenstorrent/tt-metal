@@ -11,6 +11,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace constants;
@@ -110,14 +111,11 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_device_cores, output_cb_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool src1_is_dram = src1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
-
     bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
 
     std::map<std::string, std::string> reader_defines;
+    std::vector<uint32_t> reader_compile_time_args;
     std::map<std::string, std::string> bcast_compute_defines = bcast_op_utils::get_defines(BcastOpDim::HW, bcast_math);
     if (bnc1) {
         reader_defines["BCAST_SCALAR"] = "1";
@@ -125,7 +123,10 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
     }
     if (src0_sharded) {
         reader_defines["IN0_SHARDED"] = "1";
+    } else {
+        TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     }
+    TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
     KernelHandle binary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/bcast/device/kernels/dataflow/"
