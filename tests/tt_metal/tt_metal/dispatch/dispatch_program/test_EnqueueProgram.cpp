@@ -1393,7 +1393,7 @@ auto CQFabricConfigsToTest = ::testing::Values(
 INSTANTIATE_TEST_SUITE_P(CommandQueueMultiDevice, DISABLED_CQMultiDeviceOnFabricFixture, CQFabricConfigsToTest);
 
 INSTANTIATE_TEST_SUITE_P(
-    MultiCommandQueueMultiDevice, DISABLED_MultiCQMultiDeviceOnFabricFixture, CQFabricConfigsToTest);
+    MultiCommandQueueMultiDevice, DISABLED_UnitMeshMultiCQMultiDeviceOnFabricFixture, CQFabricConfigsToTest);
 
 TEST_P(DISABLED_CQMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
     for (const auto& device : devices_) {
@@ -1401,7 +1401,7 @@ TEST_P(DISABLED_CQMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) 
     }
 }
 
-TEST_P(DISABLED_MultiCQMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
+TEST_P(DISABLED_UnitMeshMultiCQMultiDeviceOnFabricFixture, TensixTestBasicDispatchFunctions) {
     for (const auto& device : devices_) {
         for (int cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
             local_test_functions::test_basic_dispatch_functions(device, cq_id);
