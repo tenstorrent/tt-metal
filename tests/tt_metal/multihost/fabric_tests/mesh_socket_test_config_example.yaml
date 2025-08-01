@@ -118,3 +118,13 @@ tests:
             receiver:
               mesh_coord: [1, 1]
               core_coord: [1, 1]
+  - name: "all_to_all_pattern_test"
+    num_iterations: 3
+    num_ranks: 2
+    memory_config:
+      fifo_size: 1024
+      page_size: 256
+      data_size: 2048
+      num_transactions: 10
+    pattern_expansions:
+      - type: "all_to_all"

@@ -13,6 +13,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/fabric.hpp>
+#include <tt-metalium/mesh_graph.hpp>
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "tests/tt_metal/test_utils/test_common.hpp"
 
@@ -102,7 +103,7 @@ struct ParsedTestConfig {
 struct MeshSocketTestConfiguration {
     std::optional<PhysicalMeshConfig> physical_mesh_config;
     FabricConfig fabric_config;
-    std::vector<ParsedTestConfig> tests;
+    std::vector<TestConfig> tests;
 };
 
 class CmdlineParser {
@@ -130,7 +131,8 @@ public:
 
     // Two-stage parsing: YAML -> TestConfig -> ParsedTestConfig
     std::vector<TestConfig> parse_raw_test_configs(const YAML::Node& tests_node);
-    std::vector<ParsedTestConfig> expand_test_configs(const std::vector<TestConfig>& test_configs);
+    std::vector<ParsedTestConfig> expand_test_configs(
+        const std::vector<TestConfig>& test_configs, const tt::tt_fabric::MeshGraph& mesh_graph);
 
     // Validation methods
     static void validate_configuration(const MeshSocketTestConfiguration& config);
@@ -150,10 +152,20 @@ private:
     PatternExpansionConfig parse_pattern_expansion(const YAML::Node& node);
 
     // Pattern expansion methods
-    std::vector<ParsedTestConfig> expand_test_config(const TestConfig& test_config);
-    std::vector<TestSocketConfig> expand_pattern(const PatternExpansionConfig& pattern);
-    std::vector<TestSocketConfig> expand_all_to_all_pattern(const PatternExpansionConfig& pattern);
-    std::vector<TestSocketConfig> expand_random_pairing_pattern(const PatternExpansionConfig& pattern);
+    std::vector<ParsedTestConfig> expand_test_config(
+        const TestConfig& test_config, const tt::tt_fabric::MeshGraph& mesh_graph);
+    std::vector<TestSocketConfig> expand_pattern(
+        const PatternExpansionConfig& pattern,
+        const TestConfig& test_config,
+        const tt::tt_fabric::MeshGraph& mesh_graph);
+    std::vector<TestSocketConfig> expand_all_to_all_pattern(
+        const PatternExpansionConfig& pattern,
+        const TestConfig& test_config,
+        const tt::tt_fabric::MeshGraph& mesh_graph);
+    std::vector<TestSocketConfig> expand_random_pairing_pattern(
+        const PatternExpansionConfig& pattern,
+        const TestConfig& test_config,
+        const tt::tt_fabric::MeshGraph& mesh_graph);
 
     // Memory config expansion methods
     std::vector<ParsedMemoryConfig> expand_memory_config(const MemoryConfig& memory_config);

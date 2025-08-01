@@ -98,6 +98,11 @@ private:
     void setup_fabric_configuration();
 
     /**
+     * @brief Expand test configurations from TestConfig to ParsedTestConfig
+     */
+    void expand_test_configurations();
+
+    /**
      * @brief Create MeshSockets for a given test configuration
      *
      * @param test The test configuration
@@ -158,6 +163,7 @@ private:
 
     // Configuration and state
     MeshSocketTestConfiguration config_;
+    std::vector<ParsedTestConfig> expanded_tests_;
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
     bool is_initialized_;
     tt::tt_metal::distributed::multihost::Rank local_rank_;

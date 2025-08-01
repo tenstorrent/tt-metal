@@ -17,7 +17,7 @@
 namespace tt::tt_fabric::mesh_socket_tests {
 
 MeshSocketTestRunner::MeshSocketTestRunner(const MeshSocketTestConfiguration& config) :
-    config_(config), mesh_device_(nullptr), is_initialized_(false), control_plane_ptr_(nullptr) {
+    config_(config), expanded_tests_(), mesh_device_(nullptr), is_initialized_(false), control_plane_ptr_(nullptr) {
     log_info(tt::LogTest, "MeshSocketTestRunner created with {} tests", config_.tests.size());
 }
 
@@ -54,6 +54,9 @@ void MeshSocketTestRunner::initialize() {
     mesh_shape_ = control_plane_ptr_->get_physical_mesh_shape(
         control_plane_ptr_->get_user_physical_mesh_ids()[0], MeshScope::GLOBAL);
 
+    // Expand test configurations now that fabric is set up
+    expand_test_configurations();
+
     // Initialize MeshDevice
     initialize_mesh_device();
 
@@ -66,18 +69,18 @@ void MeshSocketTestRunner::run_all_tests() {
         throw std::runtime_error("MeshSocketTestRunner not initialized. Call initialize() first.");
     }
 
-    log_info(tt::LogTest, "Running all {} tests...", config_.tests.size());
+    log_info(tt::LogTest, "Running all {} expanded tests...", expanded_tests_.size());
 
-    for (size_t i = 0; i < config_.tests.size(); ++i) {
-        const auto& test = config_.tests[i];
-        log_info(tt::LogTest, "=== Running Test {}/{}: '{}' ===", i + 1, config_.tests.size(), test.name);
+    for (size_t i = 0; i < expanded_tests_.size(); ++i) {
+        const auto& test = expanded_tests_[i];
+        log_info(tt::LogTest, "=== Running Test {}/{}: '{}' ===", i + 1, expanded_tests_.size(), test.name);
 
         run_test(test);
         Finish(mesh_device_->mesh_command_queue(0));
         log_info(tt::LogTest, "✓ Test '{}' completed successfully", test.name);
     }
 
-    log_info(tt::LogTest, "All tests completed successfully!");
+    log_info(tt::LogTest, "All {} tests completed successfully!", expanded_tests_.size());
 }
 
 void MeshSocketTestRunner::cleanup() {
@@ -232,6 +235,20 @@ void MeshSocketTestRunner::setup_fabric_configuration() {
 
     // Set the fabric configuration
     tt::tt_fabric::SetFabricConfig(fabric_config);
+}
+
+void MeshSocketTestRunner::expand_test_configurations() {
+    log_info(tt::LogTest, "Expanding test configurations...");
+
+    // Get the mesh graph from the control plane
+    const auto& mesh_graph = control_plane_ptr_->get_mesh_graph();
+
+    // Use the parser's expand_test_configs method
+    MeshSocketYamlParser parser;
+    expanded_tests_ = parser.expand_test_configs(config_.tests, mesh_graph);
+
+    log_info(
+        tt::LogTest, "Expanded {} tests into {} test configurations", config_.tests.size(), expanded_tests_.size());
 }
 
 std::vector<tt::tt_metal::distributed::MeshSocket> MeshSocketTestRunner::create_sockets_for_test(
