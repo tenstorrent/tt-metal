@@ -1187,8 +1187,7 @@ private:
         }
 
         if (!failed_tests_.empty()) {
-            log_error(
-                tt::LogTest, "The following tests failed golden comparison (tolerance: {}%):", tolerance_percent_);
+            TT_THROW("The following tests failed golden comparison (tolerance: {}%):", tolerance_percent_);
             for (const auto& failed_test : failed_tests_) {
                 log_error(tt::LogTest, "  - {}", failed_test);
             }
