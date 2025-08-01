@@ -16,6 +16,7 @@ from scipy.stats import pearsonr, spearmanr
 from tqdm import tqdm
 
 import ttnn
+from models.demos.sentence_bert.common import load_torch_model
 from models.demos.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
 from models.demos.sentence_bert.runner.performant_runner import SentenceBERTPerformantRunner
 
@@ -39,16 +40,19 @@ def load_sts_tr(split="test"):
     "model_name, sequence_length,batch_size,num_samples",
     [("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", 384, 8, 4)],
 )
-def test_sentence_bert_eval(device, model_name, sequence_length, batch_size, num_samples, start=0, end=7):
+def test_sentence_bert_eval(
+    device, model_name, sequence_length, batch_size, num_samples, model_location_generator, start=0, end=7
+):
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
-    transformers_model = transformers.AutoModel.from_pretrained(model_name).eval()
     config = transformers.BertConfig.from_pretrained(model_name)
     dataset = load_sts_tr("test")
     true_scores = []
     ref_pred_scores = []
     ttnn_pred_scores = []
     reference_module = BertModel(config).to(torch.bfloat16)
-    reference_module.load_state_dict(transformers_model.state_dict())
+    reference_module = load_torch_model(
+        reference_module, target_prefix="", model_location_generator=model_location_generator
+    )
     ttnn_module = None
     for i in tqdm(range(num_samples), desc="Evaluating"):
         example = dataset[i]
@@ -76,6 +80,7 @@ def test_sentence_bert_eval(device, model_name, sequence_length, batch_size, num
         if ttnn_module is None:
             ttnn_module = SentenceBERTPerformantRunner(
                 device=device,
+                model_location_generator=model_location_generator,
                 input_ids=input_ids,
                 extended_mask=extended_mask,
                 attention_mask=attention_mask,

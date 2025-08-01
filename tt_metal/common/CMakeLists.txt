@@ -30,9 +30,8 @@ target_link_libraries(
     common
     PUBLIC
         nlohmann_json::nlohmann_json
-        magic_enum::magic_enum
+        enchantum::enchantum
         fmt::fmt-header-only
-        span
         small_vector
         TT::STL
         umd::Firmware

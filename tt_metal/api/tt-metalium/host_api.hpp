@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <initializer_list>
 #include <variant>
 #include <vector>
 
@@ -276,7 +277,8 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
  * | total_size | New size of the circular buffer in bytes                                                 | uint32_t                     |             | Yes      |
  */
 // clang-format on
-void UpdateDynamicCircularBufferAddressAndTotalSize(Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
+void UpdateDynamicCircularBufferAddressAndTotalSize(
+    Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
 
 // clang-format off
 /**
@@ -452,7 +454,7 @@ using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
 // clang-format off
 /**
  * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
- * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
  *
  * Return value: void
  *
@@ -472,8 +474,29 @@ void SetRuntimeArgs(
 
 // clang-format off
 /**
- * Set multiple runtime arguments of a kernel at once during runtime, each mapping to a specific core. The runtime args for each core may be unique.
+ * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
  * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                                                   | Valid Range                                                         | Required |
+ * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
+ * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any logical Tensix core coordinate(s) on which the kernel is placed | Yes      |
+ * | runtime_args | The runtime args to be written                                         | initializer_list<const uint32_t>                       |                                                                     | Yes      |
+ */
+// clang-format on
+void SetRuntimeArgs(
+    const Program& program,
+    KernelHandle kernel,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    std::initializer_list<const uint32_t> runtime_args);
+
+// clang-format off
+/**
+ * Set multiple runtime arguments of a kernel at once during runtime, each mapping to a specific core. The runtime args for each core may be unique.
+ * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
  *
  * Return value: void
  *
@@ -494,7 +517,7 @@ void SetRuntimeArgs(
 // clang-format off
 /**
  * Set runtime args for a kernel that are sent to the specified cores using the command queue. This API must be used when Asynchronous Command Queue Mode is enabled.
- * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
  *
  * Return value: void
  *
@@ -515,7 +538,7 @@ void SetRuntimeArgs(
 // clang-format off
 /**
  * Set multiple runtime arguments of a kernel using the command queue. Each core can have distinct arguments. This API must be used when Asynchronous Command Queue Mode is enabled.
- * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
  *
  * Return value: void
  * | Argument     | Description                                                            | Type                                                   | Valid Range                                                                | Required |
@@ -535,7 +558,7 @@ void SetRuntimeArgs(
 // clang-format off
 /**
  * Set common (shared by all cores) runtime args for a kernel that are sent to all cores during runtime. This API needs to be called to update the common runtime args for the kernel.
- * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
  *
  * Return value: void
  *
@@ -547,6 +570,23 @@ void SetRuntimeArgs(
  */
 // clang-format on
 void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args);
+
+// clang-format off
+/**
+ * Set common (shared by all cores) runtime args for a kernel that are sent to all cores during runtime. This API needs to be called to update the common runtime args for the kernel.
+ * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                                                   | Valid Range                                                         | Required |
+ * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
+ * | runtime_args | The runtime args to be written                                         | std::initializer_list<const uint32_t>                  |                                                                     | Yes      |
+ */
+// clang-format on
+void SetCommonRuntimeArgs(
+    const Program& program, KernelHandle kernel_id, std::initializer_list<const uint32_t> runtime_args);
 
 // clang-format off
 /**
@@ -928,7 +968,7 @@ void LoadTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id, const TraceDes
 
 // clang-format off
 /**
- * Read device side profiler data for all devices in the mesh device and dump results into device side CSV log
+ * Read device side profiler data for all devices in the mesh device
  *
  * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
  *
@@ -937,13 +977,13 @@ void LoadTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id, const TraceDes
  * | Argument      | Description                                           | Type                     | Valid Range               | Required |
  * |---------------|-------------------------------------------------------|--------------------------|---------------------------|----------|
  * | mesh_device   | The mesh device containing the devices to be profiled | MeshDevice&              |                           | Yes      |
- * | state         | The dump state to use for this profiler dump          | ProfilerDumpState        |                           | No       |
+ * | state         | The state to use for this profiler read               | ProfilerReadState        |                           | No       |
  * | metadata      | Metadata to include in the profiler results           | ProfilerOptionalMetadata |                           | No       |
  * */
 // clang-format on
-void DumpMeshDeviceProfileResults(
+void ReadMeshDeviceProfilerResults(
     distributed::MeshDevice& mesh_device,
-    ProfilerDumpState state = ProfilerDumpState::NORMAL,
+    ProfilerReadState state = ProfilerReadState::NORMAL,
     const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
 // clang-format off

@@ -62,9 +62,9 @@ auto args = TensorAccessorArgs<base_idx_cta, base_idx_crta>();
 // runtime base index can be a runtime variable too:
 auto args = TensorAccessorArgs<base_idx_cta>(base_idx_crta);
 
-constexpr uint32_t new_base_idx_cta = base_idx_cta + args.compile_time_args_skip();
+constexpr uint32_t new_base_idx_cta = args.next_compile_time_args_offset();
 // new_base_idx_crta might be constexpr if rank and number of banks are static
-uint32_t new_base_idx_crta = base_idx_crta + args.runtime_args_skip();
+uint32_t new_base_idx_crta = args.next_common_runtime_args_offset();
 
 // Create a TensorAccessor with runtime page size
 auto tensor_accessor = TensorAccessor(args, bank_base_address, page_size);

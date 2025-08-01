@@ -9,6 +9,7 @@ import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3.utils.config_helpers import get_state_dicts
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -20,8 +21,8 @@ from models.demos.deepseek_v3.utils.run_config import (
 )
 
 
-class AbstractModule(ABC):  # TODO: update the doc
-    """Abstract base class for Deepseek submodules.
+class AbstractModule(ABC):
+    f"""Abstract base class for Deepseek submodules.
 
     This class defines the common interface for submodules. The modules are not instantiated directly, but rather
     used as a namespace for the methods that define the model's behavior in prefill and decode. This is to make it easy
@@ -33,6 +34,10 @@ class AbstractModule(ABC):  # TODO: update the doc
     - `prefill_model_config` - generates the model configuration for prefill mode.
     - `decode_model_config` - generates the model configuration for decode mode.
     - `convert_weights` - converts PyTorch weights to TTNN format and saves them to the specified path.
+      The weights are in a form of a list of PyTorch state dictionaries. For submodules that can act as a collection
+      of layers, for example MLP, the length of the list is expected to be the same as the dimension 0 of the mesh device.
+      Use `{get_state_dicts.__module__}` for a convenient way to concatenate the weights from the state dictionaries into
+      a single PyTorch tensor.
     - `create_state` (optional) - creates a new state for the module, which is used to store persistent model state.
 
     Typical usage by a caller would be:
@@ -49,7 +54,9 @@ class AbstractModule(ABC):  # TODO: update the doc
     dictionaries, where the keys are operator names. In `ModelPrefillConfig` and `ModelDecodeConfig`, the
     operator-specific configurations are dataclasses that inherit from `OpConfigBase`. They behave exactly like
     dictionaries, in that they can be string-addressed, but with the added benefit of restricting the keys to only
-    the ones allowed by the operators.
+    the ones allowed by the operators. They are meant to be serializable into e.g. json, so they should not contain any
+    runtime-dependent data. Importantly, this excludes the mesh device and any objects that hold references to
+    the constructs on the device.
 
     The `OpConfigBase` dataclasses are meant to provide a clear interface for the operator arguments. They are designed
     to be kwargs-destructured into the operator calls, e.g. `ttnn.linear(x, **cfg["w1"])`. This allows for a clean and
@@ -119,7 +126,6 @@ class AbstractModule(ABC):  # TODO: update the doc
 
         Args:
             hf_config: HuggingFace model configuration object
-            mesh_device: TTNN mesh device
 
         Returns:
             ModelPrefillConfig containing operator configurations for prefill mode
@@ -137,7 +143,6 @@ class AbstractModule(ABC):  # TODO: update the doc
 
         Args:
             hf_config: HuggingFace model configuration object
-            mesh_device: TTNN mesh device
 
         Returns:
             ModelDecodeConfig containing operator configurations for decode mode
@@ -151,17 +156,19 @@ class AbstractModule(ABC):  # TODO: update the doc
     def convert_weights(
         cls,
         hf_config: PretrainedConfig,
-        state_dict: dict[str, torch.Tensor],
+        state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
         """Convert PyTorch weights to TTNN format for 1D tensor parallelism.
-        Subclasses must implement this method to convert the PyTorch state dict to a TTNN-compatible format and
+        Subclasses must implement this method to convert a tuple of PyTorch state dicts to a TTNN-compatible format and
         return a (nested) dictionary of paths created from the `ttnn.Tensor`s saved using `save_and_get_path`.
 
         Args:
             hf_config: HuggingFace model configuration object
-            state_dict: PyTorch state dict for this layer
+            state_dicts: Tuple of PyTorch state dicts for the layers of this submodule. This is assumed to have
+                         the same length as the dimension 0 of the mesh device. If there is a None instead of a dict,
+                         this is supposed to be filled with padding.
             output_path: Path to save converted weights
             mesh_device: TTNN mesh device
 

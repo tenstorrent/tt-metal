@@ -489,6 +489,85 @@ void bind_unary_operation_with_float_parameter(
 }
 
 template <typename unary_operation_t>
+void bind_unary_operation_with_float_parameter_default(
+    py::module& module,
+    const unary_operation_t& operation,
+    const std::string_view& parameter_name,
+    const std::string_view& parameter_doc,
+    const float parameter_default,
+    const std::string_view& info_doc,
+    const std::string_view& supported_dtype = "BFLOAT16",
+    const std::string_view& note = "") {
+    auto doc = fmt::format(
+        R"doc(
+        Applies {0} to :attr:`input_tensor` element-wise with {2}.
+
+        {4}
+
+        .. math::
+            \mathrm{{output\_tensor}}_i = \verb|{0}|(\mathrm{{input\_tensor}}_i, \verb|{2}|)
+
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
+
+        Keyword Args:
+            {2} (float): Defaults to `{3}`.
+            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to `0`.
+
+        Returns:
+            ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - {6}
+                 - TILE
+                 - 2, 3, 4
+
+            {7}
+
+        Example:
+            >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+            >>> {2} = 3
+            >>> output = {1}(tensor, {2}={2})
+        )doc",
+        operation.base_name(),
+        operation.python_fully_qualified_name(),
+        parameter_name,
+        parameter_default,
+        parameter_doc,
+        info_doc,
+        supported_dtype,
+        note);
+
+    bind_registered_operation(
+        module,
+        operation,
+        doc,
+        ttnn::pybind_overload_t{
+            [](const unary_operation_t& self,
+               const Tensor& input_tensor,
+               const float parameter,
+               const std::optional<MemoryConfig>& memory_config,
+               const std::optional<ttnn::Tensor>& output_tensor,
+               QueueId queue_id) { return self(queue_id, input_tensor, parameter, memory_config, output_tensor); },
+            py::arg("input_tensor"),
+            py::kw_only(),
+            py::arg(parameter_name.data()) = parameter_default,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("output_tensor") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId});
+}
+
+template <typename unary_operation_t>
 void bind_unary_operation_with_int_parameter(
     py::module& module,
     const unary_operation_t& operation,
@@ -1968,6 +2047,18 @@ void py_module(py::module& module) {
         R"doc(\mathrm{{output\_tensor}}_i = \verb|hardsigmoid|(\mathrm{{input\_tensor}}_i))doc",
         "",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation(
+        module,
+        ttnn::hardswish,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|hardswish|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
+    bind_unary_operation(
+        module,
+        ttnn::softsign,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|softsign|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     //  Unaries with fast_and_approximate_mode
     bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::exp, R"doc(BFLOAT16, BFLOAT8_B)doc");
@@ -2017,6 +2108,14 @@ void py_module(py::module& module) {
         "This will carry out ReLU operation at min value instead of the standard 0",
         R"doc(BFLOAT16)doc",
         R"doc(System memory is not supported.)doc");
+    bind_unary_operation_with_float_parameter_default(
+        module,
+        ttnn::celu,
+        "alpha",
+        "The alpha parameter for the CELU function",
+        1.0f,
+        "",
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
 
     // Unary ops with dim parameter
     bind_unary_operation_with_dim_parameter(
@@ -2124,7 +2223,6 @@ void py_module(py::module& module) {
         R"doc(Performs sinh function on :attr:`input_tensor`.)doc",
         "[supported range -9 to 9].",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_composite(module, ttnn::softsign, R"doc(Performs softsign function on :attr:`input_tensor`.)doc");
     bind_unary_composite(
         module,
         ttnn::swish,
@@ -2159,9 +2257,6 @@ void py_module(py::module& module) {
         R"doc(4)doc",
         "",
         R"doc(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16))doc");
-
-    bind_unary_composite_floats_with_default(
-        module, ttnn::hardswish, "scale", "Scale value", 1.0f / 6.0f, "shift", "Shift value", 0.5f);
 
     bind_hardtanh(module, ttnn::hardtanh, "min_val", "min value", -1.0f, "max_val", "max value", 1.0f);
 
@@ -2231,9 +2326,6 @@ void py_module(py::module& module) {
 
     bind_unary_composite_float_with_default(
         module, ttnn::softshrink, "lambd", "lambd value", 0.5f, R"doc(BFLOAT16, BFLOAT8_B)doc");
-
-    bind_unary_composite_float_with_default(
-        module, ttnn::celu, "alpha", "alpha value", 1.0f, R"doc(BFLOAT16, BFLOAT8_B)doc");
 
     bind_unary_composite_float_with_default(module, ttnn::logit, "eps", "eps", 0.0f, R"doc(BFLOAT16)doc");
 

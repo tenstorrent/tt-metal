@@ -22,7 +22,6 @@ TanhAccurateShardedProgramFactory::cached_program_t TanhAccurateShardedProgramFa
     const auto& input = tensor_args.input;
 
     tt::tt_metal::Program program = CreateProgram();
-    tt::tt_metal::IDevice* device = input.device();
 
     auto shard_spec = input.shard_spec().value();
     auto all_cores = shard_spec.grid;
@@ -81,49 +80,49 @@ TanhAccurateShardedProgramFactory::cached_program_t TanhAccurateShardedProgramFa
     tt::tt_metal::CircularBufferConfig cb_im1_config =
         tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{im1_cb_index, act_df}})
             .set_page_size(im1_cb_index, in_cb_pagesize);
-    auto cb_im1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im1_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im1_config);
 
     // exp(2x)
     uint32_t im2_cb_index = tt::CBIndex::c_3;
     tt::tt_metal::CircularBufferConfig cb_im2_config =
         tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{im2_cb_index, act_df}})
             .set_page_size(im2_cb_index, in_cb_pagesize);
-    auto cb_im2 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im2_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im2_config);
 
     // exp(2x) - 1
     uint32_t im3_cb_index = tt::CBIndex::c_4;
     tt::tt_metal::CircularBufferConfig cb_im3_config =
         tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{im3_cb_index, act_df}})
             .set_page_size(im3_cb_index, in_cb_pagesize);
-    auto cb_im3 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im3_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im3_config);
 
     // recip(exp(2x) + 1)
     uint32_t im4_cb_index = tt::CBIndex::c_5;
     tt::tt_metal::CircularBufferConfig cb_im4_config =
         tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{im4_cb_index, act_df}})
             .set_page_size(im4_cb_index, in_cb_pagesize);
-    auto cb_im4 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im4_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im4_config);
 
     // exp(2x) - 1 * recip(exp(2x) - 1)
     uint32_t im5_cb_index = tt::CBIndex::c_6;
     tt::tt_metal::CircularBufferConfig cb_im5_config =
         tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{im5_cb_index, act_df}})
             .set_page_size(im5_cb_index, in_cb_pagesize);
-    auto cb_im5 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im5_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im5_config);
 
     // output for x > 3.5
     uint32_t im6_cb_index = tt::CBIndex::c_7;
     tt::tt_metal::CircularBufferConfig cb_im6_config =
         tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{im6_cb_index, act_df}})
             .set_page_size(im6_cb_index, in_cb_pagesize);
-    auto cb_im6 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im6_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im6_config);
 
     // output for x <= 3.5
     uint32_t im7_cb_index = tt::CBIndex::c_8;
     tt::tt_metal::CircularBufferConfig cb_im7_config =
         tt::tt_metal::CircularBufferConfig(in_cb_pagesize * in_cb_npages, {{im7_cb_index, act_df}})
             .set_page_size(im7_cb_index, in_cb_pagesize);
-    auto cb_im7 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im7_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_im7_config);
 
     // output sharded CB
     uint32_t out_cb_id = tt::CBIndex::c_2;
@@ -169,7 +168,7 @@ TanhAccurateShardedProgramFactory::cached_program_t TanhAccurateShardedProgramFa
     std::map<std::string, std::string> unary_defines;
     auto path = "ttnn/cpp/ttnn/operations/eltwise/unary/tanh_accurate/device/kernels/compute/tanh_accurate.cpp";
 
-    auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         path,
         all_cores,

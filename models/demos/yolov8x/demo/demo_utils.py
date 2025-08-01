@@ -5,6 +5,7 @@
 import math
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 
 import cv2
@@ -13,6 +14,8 @@ import requests
 import torch
 import torchvision
 from loguru import logger
+
+import ttnn
 
 
 def imread(filename: str, flags: int = cv2.IMREAD_COLOR):
@@ -27,10 +30,14 @@ class LoadImages:
         files = []
         for p in sorted(path) if isinstance(path, (list, tuple)) else [path]:
             a = str(Path(p).absolute())
-            if os.path.isfile(a):
+            if os.path.isdir(a):
+                for f in os.listdir(a):
+                    if f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp")):
+                        files.append(os.path.join(a, f))
+            elif os.path.isfile(a):
                 files.append(a)
             else:
-                raise FileNotFoundError(f"{p} does not exist")
+                raise FileNotFoundError(f"{p} does not exist or is not a valid file/directory")
 
         images = []
         for f in files:
@@ -62,8 +69,6 @@ class LoadImages:
                     raise StopIteration
 
             path = self.files[self.count]
-
-            self.mode = "image"
             im0 = imread(path)
             if im0 is None:
                 logger.warning(f"WARNING ⚠️ Image Read Error {path}")
@@ -112,7 +117,6 @@ def LetterBox(img, new_shape=(320, 320), auto=False, scaleFill=False, scaleup=Tr
     top, bottom = int(round(dh - 0.1)) if center else 0, int(round(dh + 0.1))
     left, right = int(round(dw - 0.1)) if center else 0, int(round(dw + 0.1))
     img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=(114, 114, 114))
-
     return img
 
 
@@ -167,6 +171,8 @@ def non_max_suppression(
     in_place=True,
     rotated=False,
 ):
+    CONF_IDX = 4
+    CLASS_IDX = 5
     assert 0 <= conf_thres <= 1, f"Invalid Confidence threshold {conf_thres}, valid values are between 0.0 and 1.0"
     assert 0 <= iou_thres <= 1, f"Invalid IoU {iou_thres}, valid values are between 0.0 and 1.0"
 
@@ -174,11 +180,10 @@ def non_max_suppression(
         prediction = prediction[0]
     if classes is not None:
         classes = torch.tensor(classes, device=prediction.device)
-
     if prediction.shape[-1] == 6:
-        output = [pred[pred[:, 4] > conf_thres][:max_det] for pred in prediction]
+        output = [pred[pred[:, CONF_IDX] > conf_thres][:max_det] for pred in prediction]
         if classes is not None:
-            output = [pred[(pred[:, 5:6] == classes).any(1)] for pred in output]
+            output = [pred[(pred[:, CLASS_IDX : CLASS_IDX + 1] == classes).any(1)] for pred in output]
         return output
 
     bs = prediction.shape[0]
@@ -201,7 +206,6 @@ def non_max_suppression(
     output = [torch.zeros((0, 6 + nm), device=prediction.device)] * bs
     for xi, x in enumerate(prediction):
         x = x[xc[xi]]
-
         if not x.shape[0]:
             continue
 
@@ -215,21 +219,19 @@ def non_max_suppression(
             x = torch.cat((box, conf, j.float(), mask), 1)[conf.view(-1) > conf_thres]
 
         if classes is not None:
-            x = x[(x[:, 5:6] == classes).any(1)]
+            x = x[(x[:, CLASS_IDX : CLASS_IDX + 1] == classes).any(1)]
 
         n = x.shape[0]
         if not n:
             continue
         if n > max_nms:
-            x = x[x[:, 4].argsort(descending=True)[:max_nms]]
+            x = x[x[:, CONF_IDX].argsort(descending=True)[:max_nms]]
 
-        c = x[:, 5:6] * (0 if agnostic else max_wh)
-        scores = x[:, 4]
-
+        c = x[:, CLASS_IDX : CLASS_IDX + 1] * (0 if agnostic else max_wh)
+        scores = x[:, CONF_IDX]
         boxes = x[:, :4] + c
         i = torchvision.ops.nms(boxes, scores, iou_thres)
         i = i[:max_det]
-
         output[xi] = x[i]
         if (time.time() - t) > time_limit:
             logger.warning(f"WARNING ⚠️ NMS time limit {time_limit:.3f}s exceeded")
@@ -302,7 +304,6 @@ def postprocess(preds, img, orig_imgs, batch, names):
 def load_coco_class_names():
     url = "https://raw.githubusercontent.com/pjreddie/darknet/master/data/coco.names"
     path = f"models/demos/yolov4/demo/coco.names"
-    response = requests.get(url)
     try:
         response = requests.get(url, timeout=5)
         if response.status_code == 200:
@@ -314,3 +315,50 @@ def load_coco_class_names():
             return [line.strip() for line in f.readlines()]
 
     raise Exception("Failed to fetch COCO class names from both online and local sources.")
+
+
+def get_mesh_mappers(device):
+    if device.get_num_devices() > 1:
+        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+        weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+    else:
+        inputs_mesh_mapper = None
+        weights_mesh_mapper = None
+        output_mesh_composer = None
+    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
+
+
+def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
+    model_save_dir = os.path.join(save_dir, model_name)
+    os.makedirs(model_save_dir, exist_ok=True)
+
+    image = cv2.imread(image_path)
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+    if model_name == "torch_model":
+        bounding_box_color, label_color = (0, 255, 0), (0, 255, 0)
+    else:
+        bounding_box_color, label_color = (255, 0, 0), (255, 255, 0)
+
+    boxes = result["boxes"]["xyxy"]
+    scores = result["boxes"]["conf"]
+    classes = result["boxes"]["cls"]
+    names = result["names"]
+
+    for box, score, cls in zip(boxes, scores, classes):
+        x1, y1, x2, y2 = map(int, box)
+        label = f"{names[int(cls)]} {score.item():.2f}"
+        cv2.rectangle(image, (x1, y1), (x2, y2), bounding_box_color, 3)
+        cv2.putText(image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, label_color, 2)
+
+    image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+
+    image_base = os.path.splitext(os.path.basename(image_path))[0]
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_name = f"{image_base}_prediction_{timestamp}.jpg"
+    output_path = os.path.join(model_save_dir, output_name)
+
+    cv2.imwrite(output_path, image)
+
+    logger.info(f"Predictions saved to {output_path}")

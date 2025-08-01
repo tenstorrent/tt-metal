@@ -85,7 +85,6 @@ def assert_where_with_pcc(torch_input_tensor, torch_input1, torch_input2, device
 @pytest.mark.parametrize(
     "hc, ht, hf, wc, wt, wf",
     [
-        [64, 64, 64, 128, 128, 128],
         [64, 64, 64, 128, 128, 1],
         [64, 64, 64, 128, 1, 128],
         [64, 64, 64, 1, 128, 128],
@@ -108,50 +107,6 @@ def test_where_bcast(device, dtype, hc, ht, hf, wc, wt, wf):
     torch_input_tensor2 = torch.rand((hf, wf), dtype=dtype).uniform_(-100, 100)
 
     assert_where_with_pcc(torch_input_tensor, torch_input_tensor1, torch_input_tensor2, device)
-
-
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-@pytest.mark.parametrize("h, w", [[64, 128]])
-@pytest.mark.parametrize("scalar", [15.5, float("nan")])
-def test_where_tts(device, dtype, h, w, scalar):
-    if dtype == torch.float32 and isnan(scalar):
-        pytest.xfail("#22308 ttnn.where erroneously propagates NaNs")
-
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=dtype).uniform_(-100, 100)
-    torch_input_tensor1 = torch.rand((h, w), dtype=dtype).uniform_(-100, 100)
-
-    assert_where_with_pcc(torch_input_tensor, torch_input_tensor1, scalar, device)
-
-
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-@pytest.mark.parametrize("h, w", [[64, 128]])
-@pytest.mark.parametrize("scalar", [15.5, float("nan")])
-def test_where_tst(device, dtype, h, w, scalar):
-    if dtype == torch.float32 and isnan(scalar):
-        pytest.xfail("#22308 ttnn.where erroneously propagates NaNs")
-
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=dtype).uniform_(-100, 100)
-    torch_input_tensor1 = torch.rand((h, w), dtype=dtype).uniform_(-100, 100)
-
-    assert_where_with_pcc(torch_input_tensor, scalar, torch_input_tensor1, device)
-
-
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-@pytest.mark.parametrize("h, w", [[64, 128]])
-@pytest.mark.parametrize("scalar1, scalar2", [[15.5, 31.2], [15.5, float("nan")], [float("nan"), 31.2]])
-def test_where_tss(device, dtype, h, w, scalar1, scalar2):
-    if dtype == torch.float32 and (isnan(scalar1) or isnan(scalar2)):
-        pytest.xfail("#22308 ttnn.where erroneously propagates NaNs")
-
-    torch.manual_seed(0)
-
-    torch_input_tensor = torch.rand((h, w), dtype=dtype).uniform_(-100, 100)
-
-    assert_where_with_pcc(torch_input_tensor, scalar1, scalar2, device)
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])

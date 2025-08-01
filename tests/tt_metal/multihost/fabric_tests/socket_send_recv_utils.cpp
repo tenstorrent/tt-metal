@@ -109,8 +109,7 @@ void test_socket_send_recv(
                     src_vec,
                     connection.sender_core.device_coord);
 
-                auto sender_fabric_node_id =
-                    mesh_device_->get_device_fabric_node_id(connection.sender_core.device_coord);
+                auto sender_fabric_node_id = mesh_device_->get_fabric_node_id(connection.sender_core.device_coord);
                 auto recv_fabric_node_id =
                     socket.get_fabric_node_id(SocketEndpoint::RECEIVER, connection.receiver_core.device_coord);
 
@@ -169,21 +168,12 @@ void test_socket_send_recv(
             for (const auto& connection : socket.get_config().socket_connection_config) {
                 auto sender_fabric_node_id =
                     socket.get_fabric_node_id(SocketEndpoint::SENDER, connection.sender_core.device_coord);
-                auto recv_fabric_node_id =
-                    mesh_device_->get_device_fabric_node_id(connection.receiver_core.device_coord);
+                auto recv_fabric_node_id = mesh_device_->get_fabric_node_id(connection.receiver_core.device_coord);
 
                 auto recv_program = CreateProgram();
 
                 auto recv_virtual_coord = recv_data_buffer->device()->worker_core_from_logical_core(recv_core);
                 auto output_virtual_coord = recv_data_buffer->device()->worker_core_from_logical_core(recv_core);
-
-                tt::tt_metal::CircularBufferConfig recv_cb_packet_header_config =
-                    tt::tt_metal::CircularBufferConfig(
-                        packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::UInt32}})
-                        .set_page_size(tt::CB::c_in0, packet_header_size_bytes);
-
-                auto recv_packet_header_CB_handle =
-                    CreateCircularBuffer(recv_program, recv_core, recv_cb_packet_header_config);
 
                 KernelHandle recv_kernel = CreateKernel(
                     recv_program,
@@ -194,7 +184,6 @@ void test_socket_send_recv(
                         .noc = NOC::RISCV_0_default,
                         .compile_args = {
                             static_cast<uint32_t>(socket.get_config_buffer()->address()),
-                            static_cast<uint32_t>(reserved_packet_header_CB_index),
                             static_cast<uint32_t>(page_size),
                             static_cast<uint32_t>(data_size),
                             static_cast<uint32_t>(recv_virtual_coord.x),

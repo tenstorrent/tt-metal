@@ -44,6 +44,7 @@
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/impl/device/dispatch.hpp"
 #include <umd/device/types/xy_pair.h>
+#include <tt-metalium/graph_tracking.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -372,7 +373,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     mesh_workload.set_last_used_command_queue_for_testing(this);
 
     if (blocking) {
-        this->finish_nolock({sub_device_id});
+        this->finish_nolock({{sub_device_id}});
     }
 }
 
@@ -382,6 +383,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     uint32_t size_bytes,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScoped;
     auto lock = lock_api_function_();
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
@@ -412,6 +414,7 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     uint32_t size_bytes,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScoped;
     auto lock = lock_api_function_();
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
@@ -463,8 +466,13 @@ void FDMeshCommandQueue::write_shard_to_device(
     const void* src,
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScoped;
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture. trace id: {}", trace_id_.value());
+
+    if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
+        return;
+    }
 
     auto device_buffer = buffer.get_device_buffer(device_coord);
     auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
@@ -481,11 +489,16 @@ void FDMeshCommandQueue::read_shard_from_device(
     const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScoped;
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
+    if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(&buffer)) {
+        return;
+    }
+
     auto device_buffer = buffer.get_device_buffer(device_coord);
-    auto shard_view = device_buffer->view(BufferRegion(0, device_buffer->size()));
+    auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
 
     auto device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
@@ -686,6 +699,7 @@ MultiProducerSingleConsumerQueue<CompletionReaderVariant>& FDMeshCommandQueue::g
 
 void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor& read_buffer_descriptor) {
     auto reader_lambda = [this](IDevice* device, uint32_t num_reads) {
+        ZoneScopedN("copy_buffer_data_to_user_space lambda");
         auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
         chip_id_t mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());

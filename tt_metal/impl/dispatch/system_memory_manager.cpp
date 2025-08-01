@@ -25,6 +25,7 @@
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/xy_pair.h>
+#include <tracy/Tracy.hpp>
 
 enum class CoreType;
 
@@ -363,6 +364,10 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
     // Helper to wait for fetch queue space, if needed
     uint32_t fence;
     auto wait_for_fetch_q_space = [&]() {
+        if (this->prefetch_q_dev_ptrs[cq_id] != this->prefetch_q_dev_fences[cq_id]) {
+            return;
+        }
+        ZoneScopedN("wait_for_fetch_q_space");
         // Loop until space frees up
         while (this->prefetch_q_dev_ptrs[cq_id] == this->prefetch_q_dev_fences[cq_id]) {
             tt::tt_metal::MetalContext::instance().get_cluster().read_core(

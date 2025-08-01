@@ -454,16 +454,16 @@ TEST_F(DeviceFixture, TensixIllegalTooManyRuntimeArgs) {
         auto [program, kernel] = unit_tests::runtime_args::initialize_program_compute(
             this->devices_.at(id), core_range_set, 0, 0);  // Kernel isn't run here.
 
-        // Set 100 unique args, then try to set 300 common args and fail.
+        // Set 100 unique args, then try to set max_runtime_args + 1 common args and fail.
         std::vector<uint32_t> initial_runtime_args(100);
         SetRuntimeArgs(program, kernel, core_range_set, initial_runtime_args);
-        std::vector<uint32_t> common_runtime_args(300);
+        std::vector<uint32_t> common_runtime_args(tt::tt_metal::max_runtime_args + 1);
         EXPECT_ANY_THROW(SetCommonRuntimeArgs(program, 0, common_runtime_args));
 
-        // Set 100 common args, then try to set another 300 unique args and fail.
+        // Set 100 common args, then try to set another tt::tt_metal::max_runtime_args + 1 unique args and fail.
         std::vector<uint32_t> more_common_runtime_args(100);
         SetCommonRuntimeArgs(program, kernel, more_common_runtime_args);
-        std::vector<uint32_t> more_unique_args(300);
+        std::vector<uint32_t> more_unique_args(tt::tt_metal::max_runtime_args + 1);
         EXPECT_ANY_THROW(SetRuntimeArgs(program, 0, core_range_set, more_unique_args));
     }
 }

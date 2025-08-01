@@ -59,7 +59,6 @@ std::vector<ttnn::TensorSpec> FastReduceNCDeviceOperation::compute_output_specs(
 
     const auto& input = input_tensors.at(0);
     const auto& input_shape = input.padded_shape();
-    const auto input_rank = input_shape.rank();
 
     // keepdim=true
     auto output_shape = input_shape;

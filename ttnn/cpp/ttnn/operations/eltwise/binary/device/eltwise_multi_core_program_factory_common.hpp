@@ -155,7 +155,6 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
     }
 
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
 
     std::vector<std::vector<uint32_t>> binary_reader_args;
     std::vector<std::vector<uint32_t>> eltwise_binary_args;

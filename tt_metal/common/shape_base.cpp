@@ -59,7 +59,7 @@ tt::stl::Span<const uint32_t> ShapeBase::view() const {
     // `Span` constructor requires a contiguous range of data.
     static_assert(
         std::is_base_of_v<std::random_access_iterator_tag, std::iterator_traits<decltype(begin)>::iterator_category>);
-    return tt::stl::Span(&*begin, std::distance(begin, end));
+    return tt::stl::Span<const uint32_t>(begin, end);
 }
 
 bool ShapeBase::operator==(const ShapeBase& other) const = default;

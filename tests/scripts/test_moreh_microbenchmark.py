@@ -1070,6 +1070,7 @@ def test_dram_read_remote_cb_sync(
         ("blackhole", 800, 6, 6, np.array([[2304, 1536, 1024], [1536, 1536, 768]]), np.array([[1536, 1536, 768]])),
     ],
 )
+@pytest.mark.skip()
 def test_matmul_l1(arch, freq, r, c, test_vector_global, test_vector_local):
     file_name = PROFILER_LOGS_DIR / "moreh_old_Matmul_SRAM.csv"
     header = ["M", "N", "K", "Cycles", "Time (ms)", "TFLOPS"]

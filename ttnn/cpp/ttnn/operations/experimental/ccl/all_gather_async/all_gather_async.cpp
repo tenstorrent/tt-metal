@@ -18,7 +18,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool use_optimal_ccl_for_llama) {
+    bool use_optimal_ccl_for_llama,
+    const std::optional<GlobalSemaphore>& barrier_semaphore) {
     return ttnn::operations::experimental::ccl::all_gather_async(
         input_tensor,
         dim,
@@ -27,7 +28,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
         memory_config,
         topology,
         subdevice_id,
-        use_optimal_ccl_for_llama);
+        use_optimal_ccl_for_llama,
+        barrier_semaphore);
 }
 
 ttnn::Tensor ExecuteAllGatherAsync::invoke(
@@ -40,7 +42,11 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis,
-    bool use_optimal_ccl_for_llama) {
+    bool use_optimal_ccl_for_llama,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    std::optional<uint32_t> chunks_per_sync,
+    std::optional<uint32_t> num_workers_per_link,
+    std::optional<uint32_t> num_buffers_per_channel) {
     return ttnn::operations::experimental::ccl::all_gather_async(
         input_tensor,
         persistent_output_buffer,
@@ -51,7 +57,11 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
         topology,
         subdevice_id,
         cluster_axis,
-        use_optimal_ccl_for_llama);
+        use_optimal_ccl_for_llama,
+        barrier_semaphore,
+        chunks_per_sync,
+        num_workers_per_link,
+        num_buffers_per_channel);
 }
 
 std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
@@ -62,7 +72,8 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool use_optimal_ccl_for_llama) {
+    bool use_optimal_ccl_for_llama,
+    const std::optional<GlobalSemaphore>& barrier_semaphore) {
     return ttnn::operations::experimental::ccl::all_gather_async(
         input_tensors,
         dim,
@@ -71,7 +82,8 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
         memory_config,
         topology,
         subdevice_id,
-        use_optimal_ccl_for_llama);
+        use_optimal_ccl_for_llama,
+        barrier_semaphore);
 }
 
 ttnn::Tensor ExecuteAllGatherAsync::invoke(
@@ -85,7 +97,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool use_optimal_ccl_for_llama) {
+    bool use_optimal_ccl_for_llama,
+    const std::optional<GlobalSemaphore>& barrier_semaphore) {
     return ttnn::operations::experimental::ccl::all_gather_async(
         input_tensor,
         dim,
@@ -97,7 +110,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
         memory_config,
         num_preferred_links,
         subdevice_id,
-        use_optimal_ccl_for_llama);
+        use_optimal_ccl_for_llama,
+        barrier_semaphore);
 }
 
 std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
@@ -111,7 +125,8 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    bool use_optimal_ccl_for_llama) {
+    bool use_optimal_ccl_for_llama,
+    const std::optional<GlobalSemaphore>& barrier_semaphore) {
     return ttnn::operations::experimental::ccl::all_gather_async(
         input_tensors,
         dim,
@@ -123,7 +138,8 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
         memory_config,
         num_preferred_links,
         subdevice_id,
-        use_optimal_ccl_for_llama);
+        use_optimal_ccl_for_llama,
+        barrier_semaphore);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

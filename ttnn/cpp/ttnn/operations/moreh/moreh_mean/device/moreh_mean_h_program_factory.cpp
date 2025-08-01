@@ -27,8 +27,6 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
     const auto& shape = input.padded_shape();
 
     auto device = input.device();
-    auto kernel_config_val =
-        init_device_compute_kernel_config(device->arch(), compute_kernel_config, MathFidelity::HiFi4);
 
     auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
@@ -63,7 +61,6 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
 
     auto fp32_dest_acc_en_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
     uint32_t num_input_tiles = 2;
-    uint32_t num_output_tiles = 2;
     CreateCircularBuffer(
         program,
         all_cores,
@@ -78,7 +75,7 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
         });
 
     float scaler = 1.0f / origin_H;
-    auto bfloat_scaler_value = *(new class bfloat16(scaler));
+    bfloat16 bfloat_scaler_value(scaler);
     auto packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
     std::vector<uint32_t> reader_compile_time_args = {
         static_cast<uint32_t>(is_dram(input)), Ht, Wt, HtWt, packed_scaler_value};
@@ -188,7 +185,7 @@ void MorehMeanOperation::MorehMeanHFactory::override_runtime_arguments(
     auto src_buffer_address = tensor_args.input.buffer()->address();
     auto dst_buffer_address = tensor_return_value.buffer()->address();
 
-    for (uint32_t i = 0, num_tiles_read = 0; i < num_cores; i++) {
+    for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};
 
         {

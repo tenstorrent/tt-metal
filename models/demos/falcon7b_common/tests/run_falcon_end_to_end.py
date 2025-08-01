@@ -12,10 +12,10 @@ from sklearn.metrics import top_k_accuracy_score
 import ttnn
 from models.demos.falcon7b_common.tests.test_utils import (
     concat_device_out_layer_present,
-    dump_device_profiler,
     get_num_devices,
     get_rand_falcon_inputs,
     load_hf_model,
+    read_device_profiler,
 )
 from models.demos.falcon7b_common.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.falcon7b_common.tt.falcon_common import PytorchFalconCausalLM
@@ -227,8 +227,8 @@ def run_test_FalconCausalLM_end_to_end(
         ttnn.synchronize_device(mesh_device)
         profiler.end("first_model_run_with_compile", force_enable=e2e_perf)
 
-        # Dump device profiler data before second run to avoid exceeding profiler memory limits when using tracy
-        dump_device_profiler(mesh_device)
+        # Read device profiler data before second run to avoid exceeding profiler memory limits when using tracy
+        read_device_profiler(mesh_device)
 
         del tt_out
         del tt_layer_past

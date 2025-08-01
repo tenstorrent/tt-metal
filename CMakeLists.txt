@@ -159,7 +159,7 @@ target_link_libraries(
 )
 
 add_compile_options(
-    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-mavx2>"
+    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=x86-64-v3>"
     -fPIC
     -fvisibility-inlines-hidden
     -Wall

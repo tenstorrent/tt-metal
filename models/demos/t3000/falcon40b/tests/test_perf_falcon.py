@@ -176,7 +176,7 @@ def run_test_FalconCausalLM_end_to_end(
         signpost("WARMUP_RUNS")
 
     for _ in range(warmup_iterations):
-        ttnn.DumpDeviceProfiler(mesh_device)
+        ttnn.ReadDeviceProfiler(mesh_device)
         if llm_mode == "prefill":
             model_inputs = torch.split(model_input, 1)
             tt_inputs, tt_attention_mask = zip(
@@ -220,7 +220,7 @@ def run_test_FalconCausalLM_end_to_end(
     ttnn.synchronize_device(mesh_device)
 
     # Run for perf iteration - profiler enabled
-    ttnn.DumpDeviceProfiler(mesh_device)
+    ttnn.ReadDeviceProfiler(mesh_device)
     profiler.enable()
     enable_persistent_kernel_cache()
     logger.info(f"Enable profiler and enable binary and compile cache")

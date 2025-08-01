@@ -124,7 +124,10 @@ public:
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
     void set_global_sync_val(uint32_t global_sync_val) { global_sync_val_ = global_sync_val; }
     RoutingDirection get_forwarding_direction(const std::unordered_map<RoutingDirection, uint32_t>& hops) const;
+    RoutingDirection get_forwarding_direction(const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const;
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(const RoutingDirection& direction) const;
+    std::vector<uint32_t> get_forwarding_link_indices_in_direction(
+        const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id, const RoutingDirection& direction) const;
     void validate_results() const;
     void set_sync_core(CoreCoord coord) { sync_core_coord_ = coord; };
     void set_local_runtime_args_for_core(
@@ -237,25 +240,24 @@ inline TestSender::TestSender(
 inline void TestSender::add_config(TestTrafficSenderConfig config) {
     std::optional<RoutingDirection> outgoing_direction;
     std::vector<uint32_t> outgoing_link_indices;
-
     // either we will have hops specified or the dest node id
-    if (true /* config.hops.has_value() */) {
-        outgoing_direction = this->test_device_ptr_->get_forwarding_direction(config.hops);
+    if (config.hops.has_value()) {
+        outgoing_direction = this->test_device_ptr_->get_forwarding_direction(config.hops.value());
         outgoing_link_indices =
             this->test_device_ptr_->get_forwarding_link_indices_in_direction(outgoing_direction.value());
     } else {
-        // TODO: figure out if we need this
-        /*
         const auto dst_node_id = config.dst_node_ids[0];
-        outgoing_direction =
-            this->test_device_ptr_->route_manager_->get_forwarding_direction(my_node_id, dst_node_id);
-        TT_FATAL(outgoing_direction.has_value(), "No forwarding direction found for {} from {}", dst_node_id,
-        my_node_id); outgoing_link_indices =
-            this->test_device_ptr_->route_manager_->get_forwarding_link_indices_in_direction(
-                my_node_id, dst_node_id, outgoing_direction.value());
-        TT_FATAL(!outgoing_link_indices.empty(), "No forwarding link indices found for {} from {}", dst_node_id,
-        my_node_id);
-        */
+        const auto src_node_id = this->test_device_ptr_->get_node_id();
+        outgoing_direction = this->test_device_ptr_->get_forwarding_direction(src_node_id, dst_node_id);
+        TT_FATAL(
+            outgoing_direction.has_value(), "No forwarding direction found for {} from {}", dst_node_id, src_node_id);
+        outgoing_link_indices = this->test_device_ptr_->get_forwarding_link_indices_in_direction(
+            src_node_id, dst_node_id, outgoing_direction.value());
+        TT_FATAL(
+            !outgoing_link_indices.empty(),
+            "No forwarding link indices found for {} from {}",
+            dst_node_id,
+            src_node_id);
     }
 
     std::optional<uint32_t> fabric_connection_idx;
@@ -288,7 +290,7 @@ inline void TestSender::add_sync_config(TestTrafficSenderConfig sync_config) {
     std::vector<uint32_t> outgoing_link_indices;
 
     // Sync configs should always have hops specified (multicast pattern)
-    outgoing_direction = this->test_device_ptr_->get_forwarding_direction(sync_config.hops);
+    outgoing_direction = this->test_device_ptr_->get_forwarding_direction(sync_config.hops.value());
     outgoing_link_indices =
         this->test_device_ptr_->get_forwarding_link_indices_in_direction(outgoing_direction.value());
 
@@ -523,7 +525,6 @@ inline void TestDevice::create_sync_kernel() {
     // Local args (all the rest go to local args buffer)
     std::vector<uint32_t> local_args;
 
-    // Global sync args
     // Expected sync value for global sync
     local_args.push_back(this->global_sync_val_);
 
@@ -550,12 +551,12 @@ inline void TestDevice::create_sync_kernel() {
     local_args.push_back(local_sync_val);
 
     // Add sync core's own NOC encoding first
-    uint32_t sync_core_noc_encoding = this->device_info_provider_->get_worker_noc_encoding(this->coord_, sync_core);
+    uint32_t sync_core_noc_encoding = this->device_info_provider_->get_worker_noc_encoding(sync_core);
     local_args.push_back(sync_core_noc_encoding);
 
     // Add other sender core coordinates for local sync
     for (const auto& [sender_core, _] : this->senders_) {
-        uint32_t sender_noc_encoding = this->device_info_provider_->get_worker_noc_encoding(this->coord_, sender_core);
+        uint32_t sender_noc_encoding = this->device_info_provider_->get_worker_noc_encoding(sender_core);
         local_args.push_back(sender_noc_encoding);
     }
 
@@ -616,14 +617,12 @@ inline void TestDevice::create_sender_kernels() {
             local_args.push_back(local_sync_val);
 
             // Add sync core's NOC encoding (the master for local sync)
-            uint32_t sync_core_noc_encoding =
-                this->device_info_provider_->get_worker_noc_encoding(this->coord_, sync_core_coord_);
+            uint32_t sync_core_noc_encoding = this->device_info_provider_->get_worker_noc_encoding(sync_core_coord_);
             local_args.push_back(sync_core_noc_encoding);
 
             // Add other sender core coordinates for local sync
             for (const auto& [sender_core, _] : this->senders_) {
-                uint32_t sender_noc_encoding =
-                    this->device_info_provider_->get_worker_noc_encoding(this->coord_, sender_core);
+                uint32_t sender_noc_encoding = this->device_info_provider_->get_worker_noc_encoding(sender_core);
                 local_args.push_back(sender_noc_encoding);
             }
         }
@@ -739,10 +738,27 @@ inline RoutingDirection TestDevice::get_forwarding_direction(
     return this->route_manager_->get_forwarding_direction(hops);
 }
 
+inline RoutingDirection TestDevice::get_forwarding_direction(
+    const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id) const {
+    return this->route_manager_->get_forwarding_direction(src_node_id, dst_node_id);
+}
+
 inline std::vector<uint32_t> TestDevice::get_forwarding_link_indices_in_direction(
     const RoutingDirection& direction) const {
     const auto link_indices =
         this->route_manager_->get_forwarding_link_indices_in_direction(this->fabric_node_id_, direction);
+    TT_FATAL(
+        !link_indices.empty(),
+        "No forwarding link indices found in direction: {} from {}",
+        direction,
+        this->fabric_node_id_);
+    return link_indices;
+}
+
+inline std::vector<uint32_t> TestDevice::get_forwarding_link_indices_in_direction(
+    const FabricNodeId& src_node_id, const FabricNodeId& dst_node_id, const RoutingDirection& direction) const {
+    const auto link_indices =
+        this->route_manager_->get_forwarding_link_indices_in_direction(src_node_id, dst_node_id, direction);
     TT_FATAL(
         !link_indices.empty(),
         "No forwarding link indices found in direction: {} from {}",

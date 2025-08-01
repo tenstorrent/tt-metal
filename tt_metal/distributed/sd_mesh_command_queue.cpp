@@ -7,6 +7,7 @@
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/graph_tracking.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -25,6 +26,10 @@ void SDMeshCommandQueue::write_shard_to_device(
     auto shard_view = device_buffer->view(region_value);
 
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
+    if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
+        return;
+    }
+
     tt::tt_metal::detail::WriteToBuffer(
         *shard_view,
         tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size));
@@ -41,6 +46,10 @@ void SDMeshCommandQueue::read_shard_from_device(
     auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
 
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
+    if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(&buffer)) {
+        return;
+    }
+
     tt::tt_metal::detail::ReadFromBuffer(*shard_view, static_cast<uint8_t*>(dst));
 }
 

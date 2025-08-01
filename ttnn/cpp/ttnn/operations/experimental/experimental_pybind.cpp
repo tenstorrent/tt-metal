@@ -45,8 +45,6 @@
 #include "ttnn/operations/experimental/reshape/view_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_pybind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.hpp"
-#include "ttnn/operations/experimental/scatter/scatter_pybind.hpp"
-#include "ttnn/operations/experimental/scatter/tosa_scatter_pybind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_pybind.hpp"
 #include "ttnn/operations/experimental/where/where_pybind.hpp"
 
@@ -104,9 +102,6 @@ void py_module(py::module& module) {
     reshape::detail::py_bind_view(module);
 
     gelu_backward::detail::bind_experimental_gelu_backward_operation(module);
-
-    scatter::detail::bind_scatter_operation(module);
-    tosa_scatter::detail::bind_tosa_scatter_operation(module);
 
     // CCL ops
     auto m_experimental_ccl =

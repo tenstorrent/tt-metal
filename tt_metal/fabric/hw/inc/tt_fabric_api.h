@@ -55,9 +55,11 @@ inline eth_chan_directions get_next_hop_router_direction(uint32_t dst_mesh_id, u
     tt_l1_ptr tensix_routing_l1_info_t* routing_table =
         reinterpret_cast<tt_l1_ptr tensix_routing_l1_info_t*>(MEM_TENSIX_ROUTING_TABLE_BASE);
     if (dst_mesh_id == routing_table->mesh_id) {
-        return routing_table->intra_mesh_routing_table[dst_dev_id];
+        return static_cast<eth_chan_directions>(
+            routing_table->intra_mesh_routing_table.get_original_direction(dst_dev_id));
     } else {
-        return routing_table->inter_mesh_routing_table[dst_mesh_id];
+        return static_cast<eth_chan_directions>(
+            routing_table->inter_mesh_routing_table.get_original_direction(dst_mesh_id));
     }
 }
 
@@ -259,7 +261,7 @@ inline void fabric_async_write_add_header(
 
 template <bool mcast = false>
 void fabric_set_route(
-    low_latency_packet_header_t* packet_header,
+    volatile tt_l1_ptr low_latency_packet_header_t* packet_header,
     eth_chan_directions direction,
     uint32_t start_hop,
     uint32_t num_hops,
@@ -346,13 +348,14 @@ void fabric_set_unicast_route(
     }
 }
 
-void fabric_set_mcast_route(low_latency_packet_header_t* packet_header, eth_chan_directions direction, uint32_t hops) {
+void fabric_set_mcast_route(
+    volatile tt_l1_ptr low_latency_packet_header_t* packet_header, eth_chan_directions direction, uint32_t hops) {
     fabric_set_route<true>(packet_header, (eth_chan_directions)direction, 0, hops);
 }
 
 template <bool mcast = false>
 void fabric_set_route(
-    LowLatencyMeshPacketHeader* packet_header,
+    volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header,
     eth_chan_directions direction,
     uint32_t branch_forward,
     uint32_t start_hop,
@@ -383,7 +386,7 @@ void fabric_set_route(
         default: ASSERT(false);
     }
 
-    uint8_t* route_vector = packet_header->route_buffer;
+    volatile tt_l1_ptr uint8_t* route_vector = packet_header->route_buffer;
     uint32_t local_val;
     uint32_t forward_val;
     uint32_t end_hop = start_hop + num_hops;
@@ -408,41 +411,36 @@ void fabric_set_route(
 }
 
 void fabric_set_unicast_route(
-    MeshPacketHeader* packet_header,
+    volatile tt_l1_ptr MeshPacketHeader* packet_header,
     eth_chan_directions outgoing_direction,  // Ignore this: Dynamic Routing does not need outgoing_direction specified
     uint16_t my_dev_id,                      // Ignore this: Dynamic Routing does not need src chip ID
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id,
     uint16_t ew_dim  // Ignore this: Dynamic Routing does not need mesh dimensions
 ) {
-    packet_header->dst_start_chip_id = dst_dev_id;
-    packet_header->dst_start_mesh_id = dst_mesh_id;
-    packet_header->mcast_params[0] = 0;
-    packet_header->mcast_params[1] = 0;
-    packet_header->mcast_params[2] = 0;
-    packet_header->mcast_params[3] = 0;
+    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+    // Minimize writes to L1 by doing 1 u64 write (decomposed to 2 u32 writes) instead of 4 u16 writes
+    packet_header->mcast_params_64 = 0;
     packet_header->is_mcast_active = 0;
 }
 
 void fabric_set_mcast_route(
-    MeshPacketHeader* packet_header,
+    volatile tt_l1_ptr MeshPacketHeader* packet_header,
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id,
     uint16_t e_num_hops,
     uint16_t w_num_hops,
     uint16_t n_num_hops,
     uint16_t s_num_hops) {
-    packet_header->dst_start_chip_id = dst_dev_id;
-    packet_header->dst_start_mesh_id = dst_mesh_id;
-    packet_header->mcast_params[0] = e_num_hops;
-    packet_header->mcast_params[1] = w_num_hops;
-    packet_header->mcast_params[2] = n_num_hops;
-    packet_header->mcast_params[3] = s_num_hops;
+    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+    // Minimize writes to L1 by doing 1 u64 write (decomposed to 2 u32 writes) instead of 4 u16 writes
+    packet_header->mcast_params_64 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
+                                     ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
     packet_header->is_mcast_active = 0;
 }
 
 void fabric_set_unicast_route(
-    LowLatencyMeshPacketHeader* packet_header,
+    volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header,
     eth_chan_directions outgoing_direction,
     uint16_t my_dev_id,
     uint16_t dst_dev_id,
@@ -483,7 +481,7 @@ void fabric_set_unicast_route(
 }
 
 void fabric_set_mcast_route(
-    LowLatencyMeshPacketHeader* packet_header,
+    volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header,
     uint16_t dst_dev_id,   // Ignore this, since Low Latency Mesh Fabric does not support arbitrary 2D Mcasts yet
     uint16_t dst_mesh_id,  // Ignore this, since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
     uint16_t e_num_hops,

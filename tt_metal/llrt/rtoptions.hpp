@@ -193,15 +193,14 @@ class RunTimeOptions {
     // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
     bool force_context_reinit = false;
 
-    // Special case for watcher_dump testing, when we want to keep errors around. TODO: remove this when watcher_dump
-    // goes away.
-    bool watcher_keep_errors = false;
-
     // feature flag to enable 2-erisc mode with fabric on Blackhole, until it is enabled by default
     bool enable_2_erisc_mode_with_fabric = false;
 
     // Enable fabric performance telemetry
     bool enable_fabric_telemetry = false;
+
+    // Log kernels compilation commands
+    bool log_kernels_compilation_commands = false;
 
 public:
     RunTimeOptions();
@@ -459,8 +458,6 @@ public:
 
     inline bool get_force_context_reinit() const { return force_context_reinit; }
 
-    inline bool get_watcher_keep_errors() const { return watcher_keep_errors; }
-
     // Feature flag to specify if fabric is enabled in 2-erisc mode or not.
     // if true, then the fabric router is parallelized across two eriscs in the Ethernet core
     inline bool get_is_fabric_2_erisc_mode_enabled() const { return enable_2_erisc_mode_with_fabric; }
@@ -477,6 +474,8 @@ public:
     // NOTE: Enabling this option will lead to a 0-2% performance degradation for fabric traffic.
     inline bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     inline void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
+
+    inline bool get_log_kernels_compilation_commands() const { return log_kernels_compilation_commands; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.

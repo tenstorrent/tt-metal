@@ -61,10 +61,7 @@ MorehGroupNormOperation::MorehGroupNormFactory::cached_program_t MorehGroupNormO
     const bool is_group_norm = true;
 
     const bool do_mask_h = (origin_h % TILE_HEIGHT) != 0;
-    const auto mask_h = do_mask_h ? origin_h % TILE_HEIGHT : TILE_HEIGHT;
-
     const bool do_mask_w = (origin_w % TILE_WIDTH) != 0;
-    const auto mask_w = do_mask_w ? origin_w % TILE_WIDTH : TILE_WIDTH;
 
     const auto Ht = h / TILE_HEIGHT;
     const auto Wt = w / TILE_WIDTH;

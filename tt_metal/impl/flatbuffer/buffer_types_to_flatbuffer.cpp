@@ -118,6 +118,24 @@ flatbuffers::Offset<flatbuffer::ShardSpec> to_flatbuffer(
         physical_shard_shape);
 }
 
+flatbuffers::Offset<flatbuffer::BufferDistributionSpec> to_flatbuffer(
+    const std::optional<BufferDistributionSpec>& spec, flatbuffers::FlatBufferBuilder& builder) {
+    if (!spec.has_value()) {
+        return 0;
+    }
+    auto flat_tensor_shape =
+        builder.CreateVector(spec->tensor_shape_in_pages().view().data(), spec->tensor_shape_in_pages().rank());
+    auto flat_shard_shape =
+        builder.CreateVector(spec->shard_shape_in_pages().view().data(), spec->shard_shape_in_pages().rank());
+    std::vector<flatbuffers::Offset<flatbuffer::CoreCoord>> flat_cores;
+    flat_cores.reserve(spec->cores().size());
+    for (const auto& core : spec->cores()) {
+        flat_cores.push_back(flatbuffer::CreateCoreCoord(builder, core.x, core.y));
+    }
+    return flatbuffer::CreateBufferDistributionSpec(
+        builder, flat_tensor_shape, flat_shard_shape, builder.CreateVector(flat_cores));
+}
+
 flatbuffers::Offset<flatbuffer::ShardSpecBuffer> to_flatbuffer(
     const std::optional<ShardSpecBuffer>& shard_parameters, ::flatbuffers::FlatBufferBuilder& builder) {
     if (!shard_parameters.has_value()) {

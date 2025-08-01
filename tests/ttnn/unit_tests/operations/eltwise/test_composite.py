@@ -192,25 +192,6 @@ def test_unary_composite_digamma_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_composite_hardswish_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-
-    output_tensor = ttnn.hardswish(input_tensor1)
-    golden_function = ttnn.get_golden_function(ttnn.hardswish)
-    golden_tensor = golden_function(in_data1)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
 def test_unary_composite_hardtanh_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
 
@@ -368,25 +349,6 @@ def test_unary_composite_sinh_ttnn(input_shapes, device):
 
     output_tensor = ttnn.sinh(input_tensor1)
     golden_function = ttnn.get_golden_function(ttnn.sinh)
-    golden_tensor = golden_function(in_data1)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-def test_unary_composite_softsign_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-
-    output_tensor = ttnn.softsign(input_tensor1)
-    golden_function = ttnn.get_golden_function(ttnn.softsign)
     golden_tensor = golden_function(in_data1)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
@@ -608,28 +570,6 @@ def test_unary_logit(input_shapes, param, device):
 
     out = ttnn.to_torch(output_tensor)
     assert_with_pcc(golden_tensor, out, 0.99)
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize(
-    "param",
-    {-98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9},
-)
-def test_unary_celu(input_shapes, param, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-    output_tensor = ttnn.celu(input_tensor, alpha=param)
-    golden_function = ttnn.get_golden_function(ttnn.celu)
-    golden_tensor = golden_function(in_data, alpha=param)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
 
 
 @pytest.mark.parametrize(

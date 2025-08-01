@@ -89,7 +89,10 @@ void PagedUpdateCacheDeviceOperation::validate(
                 "Batch size between page_table and input_tensor must match");
             TT_FATAL(
                 page_table.padded_shape()[1] <= cache_tensor.padded_shape()[0],
-                "max_num_blocks_per_seq must be less than max_num_blocks");
+                "max_num_blocks_per_seq must be less than max_num_blocks: max_num_blocks_per_seq={}, "
+                "max_num_blocks={}",
+                page_table.padded_shape()[1],
+                cache_tensor.padded_shape()[0]);
         }
     };
 
@@ -241,7 +244,39 @@ std::vector<ttnn::TensorSpec> PagedUpdateCacheDeviceOperation::compute_output_sp
     return {};
 }
 
-operation::ProgramWithCallbacks PagedUpdateCacheDeviceOperation::create_program(
+operation::MeshWorkloadWithCallbacks PagedUpdateCacheDeviceOperation::create_mesh_workload(
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    operation::MeshWorkloadWithCallbacks workload_with_callbacks;
+    for (const auto& range : tensor_coords.ranges()) {
+        for (const auto& coord : range) {
+            // If mesh_coords is provided, check if the coordinate is in the set
+            if (this->mesh_coords.has_value()) {
+                bool enable_on_coord =
+                    std::find(this->mesh_coords->begin(), this->mesh_coords->end(), coord) != this->mesh_coords->end();
+                if (!enable_on_coord) {
+                    continue;  // Skip this coordinate if it's not in the mesh_coords set
+                }
+            }
+
+            // Create the program for the coordinate
+            const ttnn::MeshCoordinateRange program_range(coord, coord);
+            auto program_with_callbacks = PagedUpdateCacheDeviceOperation::create_program_at(
+                {0, 0}, input_tensors, optional_input_tensors, output_tensors);
+            workload_with_callbacks.workload.add_program(program_range, std::move(program_with_callbacks.program));
+            if (program_with_callbacks.override_runtime_arguments_callback.has_value()) {
+                workload_with_callbacks.per_program_callbacks.emplace(
+                    program_range, std::move(*program_with_callbacks.override_runtime_arguments_callback));
+            }
+        }
+    }
+    return workload_with_callbacks;
+}
+
+operation::ProgramWithCallbacks PagedUpdateCacheDeviceOperation::create_program_at(
+    const ttnn::MeshCoordinate& _,
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {

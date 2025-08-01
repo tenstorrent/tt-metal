@@ -14,7 +14,7 @@ struct CoreSemPair {
     CoreCoord core = {0, 0};
     uint32_t sem_id = 0;
 
-    CoreSemPair() {}
+    CoreSemPair() = default;
     CoreSemPair(CoreCoord core, uint32_t sem_id) : core(core), sem_id(sem_id) {}
 };
 
@@ -40,7 +40,7 @@ struct AllGatherFusedOpSignaler {
     bool initialized_fused_op = false;
     bool initialized_all_gather = false;
 
-    AllGatherFusedOpSignaler() {}
+    AllGatherFusedOpSignaler() = default;
 
     void init_fused_op(
         const std::vector<CoreCoord>& fused_op_receiver_cores_noc,

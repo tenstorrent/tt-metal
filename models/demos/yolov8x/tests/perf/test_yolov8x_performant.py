@@ -1,10 +1,11 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 
 import pytest
 
+from models.demos.yolov8x.common import YOLOV8X_L1_SMALL_SIZE
 from models.demos.yolov8x.runner.yolov8x_performant import (
     run_yolov8x_inference,
     run_yolov8x_trace_2cqs_inference,
@@ -12,7 +13,7 @@ from models.demos.yolov8x.runner.yolov8x_performant import (
 )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("device_batch_size", [(1)])
 def test_run_yolov8x_inference(
     device,
@@ -24,7 +25,9 @@ def test_run_yolov8x_inference(
     )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 3686400}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE, "trace_region_size": 3686400}], indirect=True
+)
 @pytest.mark.parametrize("device_batch_size", [(1)])
 def test_run_yolov8x_trace_inference(
     device,
@@ -37,7 +40,9 @@ def test_run_yolov8x_trace_inference(
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 3686400, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": YOLOV8X_L1_SMALL_SIZE, "trace_region_size": 3686400, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize("device_batch_size", [(1)])
 def test_run_yolov8x_trace_2cq_inference(

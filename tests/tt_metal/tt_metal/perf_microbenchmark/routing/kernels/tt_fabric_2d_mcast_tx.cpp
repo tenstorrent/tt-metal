@@ -12,6 +12,7 @@
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 
 #ifdef TEST_ENABLE_FABRIC_TRACING
 #include "tt_metal/tools/profiler/experimental/fabric_event_profiler.hpp"
@@ -86,7 +87,6 @@ void kernel_main() {
     using namespace tt::tt_fabric;
 
     size_t rt_args_idx = 0;
-    uint32_t packet_header_buffer_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t source_l1_buffer_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t packet_payload_size_bytes = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_packets = get_arg_val<uint32_t>(rt_args_idx++);
@@ -109,14 +109,12 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender south_trunk_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* north_packet_header =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_address);
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* south_packet_header =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
-            packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* north_packet_header = PacketHeaderPool::allocate_header();
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* south_packet_header = PacketHeaderPool::allocate_header();
 
     uint64_t noc_dest_addr = get_noc_addr_helper(rx_noc_encoding, target_address);
-    zero_l1_buf((uint32_t*)packet_header_buffer_address, sizeof(PACKET_HEADER_TYPE) * 2);
+    zero_l1_buf((uint32_t*)north_packet_header, sizeof(PACKET_HEADER_TYPE));
+    zero_l1_buf((uint32_t*)south_packet_header, sizeof(PACKET_HEADER_TYPE));
 
     if constexpr (mcast_mode & 0x1) {
         // North trunk present

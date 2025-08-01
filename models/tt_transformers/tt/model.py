@@ -27,6 +27,8 @@ class Transformer(LightweightModule):
         weight_cache_path,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        attention_class=None,
+        rope_setup_class=None,
     ):
         super().__init__()
         self.args = args
@@ -47,14 +49,14 @@ class Transformer(LightweightModule):
             dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
         )
 
-        self.rope_setup = RotarySetup(
-            mesh_device,
-            args.max_batch_size,
-            args.head_dim,
-            args.max_seq_len,
-            args.rope_theta,
-            args.rope_scaling_factor,
-            args.orig_context_len,
+        ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else RotarySetup
+        self.rope_setup = ActualRopeSetupClass(
+            device=mesh_device,
+            batch_size=args.max_batch_size,
+            head_dim=args.head_dim,
+            max_seq_len=args.max_seq_len,
+            rope_theta=args.rope_theta,
+            rope_scaling=args.rope_scaling,
         )
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
@@ -69,6 +71,7 @@ class Transformer(LightweightModule):
                 transformation_mats=self.trans_mats_dict,
                 paged_attention_config=paged_attention_config,
                 use_paged_kv_cache=use_paged_kv_cache,
+                attention_class=attention_class,
             )
             for i in tqdm(range(self.n_layers))
         ]
@@ -109,6 +112,7 @@ class Transformer(LightweightModule):
         TODO: Debate whether this function is responsible for padding
         """
 
+        assert tokens.dim() == 2, "tokens must be a 2D tensor"
         tokens = tokens.reshape(1, 1, 1, -1)
         S = tokens.shape[-1]
         tokens = ttnn.from_torch(

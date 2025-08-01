@@ -6,6 +6,7 @@ import pytest
 import torch
 from diffusers import DiffusionPipeline
 from loguru import logger
+from conftest import is_galaxy
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
@@ -13,15 +14,21 @@ from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
+    SDXL_TRACE_REGION_SIZE,
     retrieve_timesteps,
     run_tt_image_gen,
+    prepare_input_tensors,
+    allocate_input_tensors,
+    create_user_tensors,
 )
 import os
 from models.utility_functions import profiler
 
 
 @torch.no_grad()
-def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae_on_device, evaluation_range):
+def run_demo_inference(
+    ttnn_device, is_ci_env, prompts, num_inference_steps, vae_on_device, evaluation_range, capture_trace
+):
     batch_size = ttnn_device.get_num_devices()
 
     start_from, _ = evaluation_range
@@ -45,6 +52,11 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
         torch_dtype=torch.float32,
         use_safetensors=True,
     )
+
+    # Have to throttle matmuls due to di/dt
+    if is_galaxy():
+        logger.info("Setting TT_MM_THROTTLE_PERF for Galaxy")
+        os.environ["TT_MM_THROTTLE_PERF"] = "5"
 
     with ttnn.distribute(ttnn.ReplicateTensorToMesh(ttnn_device)):
         # 2. Load tt_unet, tt_vae and tt_scheduler
@@ -116,28 +128,17 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
 
     prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = zip(*all_embeds)
 
-    prompt_embeds_torch = torch.cat(prompt_embeds, dim=0)
-    negative_prompt_embeds_torch = torch.cat(negative_prompt_embeds, dim=0)
-    pooled_prompt_embeds_torch = torch.cat(pooled_prompt_embeds, dim=0)
-    negative_pooled_prompt_embeds_torch = torch.cat(negative_pooled_prompt_embeds, dim=0)
+    prompt_embeds_torch = torch.split(torch.cat(prompt_embeds, dim=0), batch_size, dim=0)
+    negative_prompt_embeds_torch = torch.split(torch.cat(negative_prompt_embeds, dim=0), batch_size, dim=0)
+    pooled_prompt_embeds_torch = torch.split(torch.cat(pooled_prompt_embeds, dim=0), batch_size, dim=0)
+    negative_pooled_prompt_embeds_torch = torch.split(
+        torch.cat(negative_pooled_prompt_embeds, dim=0), batch_size, dim=0
+    )
 
     # Prepare timesteps
-    timesteps, num_inference_steps = retrieve_timesteps(pipeline.scheduler, num_inference_steps, cpu_device, None, None)
-
-    # Convert timesteps to ttnn
-    ttnn_timesteps = []
-    for t in timesteps:
-        scalar_tensor = torch.tensor(t).unsqueeze(0)
-        ttnn_timesteps.append(
-            ttnn.from_torch(
-                scalar_tensor,
-                dtype=ttnn.bfloat16,
-                device=ttnn_device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
-            )
-        )
+    ttnn_timesteps, num_inference_steps = retrieve_timesteps(
+        pipeline.scheduler, num_inference_steps, cpu_device, None, None
+    )
 
     num_channels_latents = pipeline.unet.config.in_channels
     assert num_channels_latents == 4, f"num_channels_latents is {num_channels_latents}, but it should be 4"
@@ -172,50 +173,6 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
     )
     negative_add_time_ids = add_time_ids
 
-    torch_prompt_embeds = torch.stack([negative_prompt_embeds_torch, prompt_embeds_torch], dim=1)
-    torch_add_text_embeds = torch.stack([negative_pooled_prompt_embeds_torch, pooled_prompt_embeds_torch], dim=1)
-    ttnn_prompt_embeds = ttnn.from_torch(
-        torch_prompt_embeds,
-        dtype=ttnn.bfloat16,
-        device=ttnn_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
-    )
-    ttnn_add_text_embeds = ttnn.from_torch(
-        torch_add_text_embeds,
-        dtype=ttnn.bfloat16,
-        device=ttnn_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
-    )
-
-    ttnn_add_time_id1 = ttnn.from_torch(
-        negative_add_time_ids.squeeze(0),
-        dtype=ttnn.bfloat16,
-        device=ttnn_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
-    )
-    ttnn_add_time_id2 = ttnn.from_torch(
-        add_time_ids.squeeze(0),
-        dtype=ttnn.bfloat16,
-        device=ttnn_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
-    )
-    ttnn_time_ids = [ttnn_add_time_id1, ttnn_add_time_id2]
-    ttnn_text_embeds = [
-        [
-            ttnn_add_text_embed[0],
-            ttnn_add_text_embed[1],
-        ]
-        for ttnn_add_text_embed in ttnn_add_text_embeds
-    ]
-
     scaling_factor = ttnn.from_torch(
         torch.Tensor([pipeline.vae.config.scaling_factor]),
         dtype=ttnn.bfloat16,
@@ -228,32 +185,43 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
     B, C, H, W = latents.shape
 
     # All device code will work with channel last tensors
-    latents = torch.permute(latents, (0, 2, 3, 1))
-    latents = latents.reshape(1, 1, B * H * W, C)
-
-    latents_clone = latents.clone()
-
-    latents = ttnn.from_torch(
-        latents,
-        dtype=ttnn.bfloat16,
-        device=ttnn_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
+    tt_latents = torch.permute(latents, (0, 2, 3, 1))
+    tt_latents = tt_latents.reshape(1, 1, B * H * W, C)
+    tt_latents, tt_prompt_embeds, tt_add_text_embeds = create_user_tensors(
+        ttnn_device=ttnn_device,
+        latents=tt_latents,
+        negative_prompt_embeds=negative_prompt_embeds_torch,
+        prompt_embeds=prompt_embeds_torch,
+        negative_pooled_prompt_embeds=negative_pooled_prompt_embeds_torch,
+        add_text_embeds=pooled_prompt_embeds_torch,
     )
 
-    # UNet will deallocate the input tensor
-    latent_model_input = ttnn.clone(latents)
+    tt_latents_device, tt_prompt_embeds_device, tt_text_embeds_device, tt_time_ids_device = allocate_input_tensors(
+        ttnn_device=ttnn_device,
+        tt_latents=tt_latents,
+        tt_prompt_embeds=tt_prompt_embeds,
+        tt_text_embeds=tt_add_text_embeds,
+        tt_time_ids=[negative_add_time_ids, add_time_ids],
+    )
 
     logger.info("Performing warmup run, to make use of program caching in actual inference...")
-    run_tt_image_gen(
+    prepare_input_tensors(
+        [
+            tt_latents,
+            *tt_prompt_embeds[0],
+            tt_add_text_embeds[0][0],
+            tt_add_text_embeds[0][1],
+        ],
+        [tt_latents_device, *tt_prompt_embeds_device, *tt_text_embeds_device],
+    )
+    _, _, _, output_shape, _ = run_tt_image_gen(
         ttnn_device,
         tt_unet,
         tt_scheduler,
-        latent_model_input,
-        ttnn_prompt_embeds,
-        ttnn_time_ids,
-        ttnn_text_embeds,
+        tt_latents_device,
+        tt_prompt_embeds_device,
+        tt_time_ids_device,
+        tt_text_embeds_device,
         [ttnn_timesteps[0]],
         extra_step_kwargs,
         guidance_scale,
@@ -261,8 +229,40 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
         [B, C, H, W],
         tt_vae if vae_on_device else pipeline.vae,
         batch_size,
-        0,
+        capture_trace=False,
     )
+
+    tid = None
+    output_device = None
+    tid_vae = None
+    if capture_trace:
+        logger.info("Capturing model trace...")
+        prepare_input_tensors(
+            [
+                tt_latents,
+                *tt_prompt_embeds[0],
+                tt_add_text_embeds[0][0],
+                tt_add_text_embeds[0][1],
+            ],
+            [tt_latents_device, *tt_prompt_embeds_device, *tt_text_embeds_device],
+        )
+        _, tid, output_device, output_shape, tid_vae = run_tt_image_gen(
+            ttnn_device,
+            tt_unet,
+            tt_scheduler,
+            tt_latents_device,
+            tt_prompt_embeds_device,
+            tt_time_ids_device,
+            tt_text_embeds_device,
+            [ttnn_timesteps[0]],
+            extra_step_kwargs,
+            guidance_scale,
+            scaling_factor,
+            [B, C, H, W],
+            tt_vae if vae_on_device else pipeline.vae,
+            batch_size,
+            capture_trace=True,
+        )
     profiler.clear()
 
     if not is_ci_env and not os.path.exists("output"):
@@ -274,14 +274,23 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
         logger.info(
             f"Running inference for prompts {iter * batch_size + 1}-{iter * batch_size + batch_size}/{len(prompts)}"
         )
-        imgs = run_tt_image_gen(
+        prepare_input_tensors(
+            [
+                tt_latents,
+                *tt_prompt_embeds[iter],
+                tt_add_text_embeds[iter][0],
+                tt_add_text_embeds[iter][1],
+            ],
+            [tt_latents_device, *tt_prompt_embeds_device, *tt_text_embeds_device],
+        )
+        imgs, tid, output_device, output_shape, tid_vae = run_tt_image_gen(
             ttnn_device,
             tt_unet,
             tt_scheduler,
-            latents,
-            ttnn_prompt_embeds,
-            ttnn_time_ids,
-            ttnn_text_embeds,
+            tt_latents_device,
+            tt_prompt_embeds_device,
+            tt_time_ids_device,
+            tt_text_embeds_device,
             ttnn_timesteps,
             extra_step_kwargs,
             guidance_scale,
@@ -289,15 +298,20 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
             [B, C, H, W],
             tt_vae if vae_on_device else pipeline.vae,
             batch_size,
-            iter,
+            tid=tid,
+            output_device=output_device,
+            output_shape=output_shape,
+            tid_vae=tid_vae,
         )
 
+        logger.info(f"Image gen for {batch_size} prompts completed in {profiler.times['image_gen'][-1]:.2f} seconds")
         logger.info(
             f"Denoising loop for {batch_size} promts completed in {profiler.times['denoising_loop'][-1]:.2f} seconds"
         )
         logger.info(
             f"{'On device VAE' if vae_on_device else 'Host VAE'} decoding completed in {profiler.times['vae_decode'][-1]:.2f} seconds"
         )
+
         for idx, img in enumerate(imgs):
             if iter == len(prompts) // batch_size - 1 and idx >= batch_size - needed_padding:
                 break
@@ -309,21 +323,16 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
             else:
                 img.save(f"output/output{len(images) + start_from}.png")
                 logger.info(f"Image saved to output/output{len(images) + start_from}.png")
-
-        latents = latents_clone.clone()
-        latents = ttnn.from_torch(
-            latents,
-            dtype=ttnn.bfloat16,
-            device=ttnn_device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(ttnn_device),
-        )
-
+    if capture_trace:
+        ttnn.release_trace(ttnn_device, tid)
+        if vae_on_device:
+            ttnn.release_trace(ttnn_device, tid_vae)
     return images
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE, "trace_region_size": SDXL_TRACE_REGION_SIZE}], indirect=True
+)
 @pytest.mark.parametrize(
     "prompt",
     (("An astronaut riding a green horse"),),
@@ -340,12 +349,23 @@ def run_demo_inference(ttnn_device, is_ci_env, prompts, num_inference_steps, vae
     ],
     ids=("device_vae", "host_vae"),
 )
+@pytest.mark.parametrize(
+    "capture_trace",
+    [
+        (True),
+        (False),
+    ],
+    ids=("with_trace", "no_trace"),
+)
 def test_demo(
     mesh_device,
     is_ci_env,
     prompt,
     num_inference_steps,
     vae_on_device,
+    capture_trace,
     evaluation_range,
 ):
-    return run_demo_inference(mesh_device, is_ci_env, prompt, num_inference_steps, vae_on_device, evaluation_range)
+    return run_demo_inference(
+        mesh_device, is_ci_env, prompt, num_inference_steps, vae_on_device, evaluation_range, capture_trace
+    )

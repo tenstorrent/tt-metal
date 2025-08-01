@@ -27,6 +27,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "gtest/gtest.h"
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
@@ -45,29 +46,13 @@ namespace tt::tt_metal {
 namespace {
 
 struct L1Config {
-    uint32_t num_cores_height = 1;
-    uint32_t num_cores_width = 2;
-    uint32_t num_tiles_per_core_height = 2;
-    uint32_t num_tiles_per_core_width = 2;
+    uint32_t num_elements = 8 * tt::constants::TILE_HW;
     uint32_t element_size = 2;
-    uint32_t size_bytes = 1 * num_cores_height * num_tiles_per_core_height * tt::constants::TILE_HEIGHT *
-                          num_cores_width * num_tiles_per_core_width * tt::constants::TILE_WIDTH * element_size;
+    uint32_t size_bytes = element_size * num_elements;
     uint32_t page_size_bytes = tt::constants::TILE_HW * element_size;
     tt::DataFormat l1_data_format = tt::DataFormat::Float16_b;
-    TensorMemoryLayout buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED;
 
-    bool sharded = true;
-    ShardSpecBuffer shard_spec() const {
-        return ShardSpecBuffer(
-            CoreRangeSet(std::set<CoreRange>(
-                {CoreRange(CoreCoord(0, 0), CoreCoord(0, num_cores_height * num_cores_width - 1))})),
-            {(uint32_t)num_tiles_per_core_height * tt::constants::TILE_HEIGHT,
-             (uint32_t)num_tiles_per_core_width * tt::constants::TILE_WIDTH},
-            ShardOrientation::ROW_MAJOR,
-            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-            {1 * num_cores_height * num_tiles_per_core_height * num_cores_height,
-             num_tiles_per_core_width * num_cores_width});
-    }
+    BufferShardingArgs sharding_args;
 };
 
 // Inspired heavily from test_sharded_l1_buffer.cpp
@@ -83,16 +68,8 @@ bool l1_buffer_read_write_test(IDevice* device, const L1Config& test_config) {
     for (uint32_t loop_idx = 0; loop_idx < num_loops; loop_idx++) {
         log_debug(tt::LogTest, "Running loop: {}", loop_idx);
 
-        auto buffer =
-            test_config.sharded
-                ? CreateBuffer(tt::tt_metal::ShardedBufferConfig{
-                      .device = device,
-                      .size = test_config.size_bytes,
-                      .page_size = test_config.page_size_bytes,
-                      .buffer_layout = test_config.buffer_layout,
-                      .shard_parameters = test_config.shard_spec()})
-                : CreateBuffer(tt::tt_metal::BufferConfig{
-                      .device = device, .size = test_config.size_bytes, .page_size = test_config.page_size_bytes});
+        auto buffer = Buffer::create(
+            device, test_config.size_bytes, test_config.page_size_bytes, BufferType::L1, test_config.sharding_args);
 
         if (loop_idx > 1) {
             buffers_vec.push_back(buffer);
@@ -152,11 +129,17 @@ Program create_simple_datamovement_program(
     IDevice* device = input.device();
     constexpr CoreCoord core = {0, 0};
 
+    std::vector<uint32_t> compile_time_args;
+    TensorAccessorArgs(input).append_to(compile_time_args);
+    TensorAccessorArgs(output).append_to(compile_time_args);
     KernelHandle dram_copy_kernel_id = CreateKernel(
         program,
         "tt_metal/programming_examples/loopback/kernels/loopback_dram_copy.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = compile_time_args});
 
     // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
     const uint32_t input_bank_id = 0;
@@ -254,21 +237,45 @@ using LightMetalBasicTest = SingleDeviceLightMetalFixture;
 TEST_F(LightMetalBasicTest, CreateBufferInterleavedEnqueueWriteRead) {
     CreateDeviceAndBeginCapture(4096);
     L1Config test_config;
-    test_config.buffer_layout = TensorMemoryLayout::INTERLEAVED;
-    test_config.sharded = false;
     EXPECT_TRUE(l1_buffer_read_write_test(device_, test_config));
 }
 
 TEST_F(LightMetalBasicTest, CreateBufferHeightShardEnqueueWriteRead) {
     CreateDeviceAndBeginCapture(4096);
     L1Config test_config;
+    test_config.sharding_args = BufferShardingArgs(
+        ShardSpecBuffer(
+            CoreRangeSet(std::set<CoreRange>({CoreRange(CoreCoord(0, 0), CoreCoord(0, 1))})),
+            {2 * tt::constants::TILE_HEIGHT, 2 * tt::constants::TILE_WIDTH},
+            ShardOrientation::ROW_MAJOR,
+            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            {4, 2}),
+        TensorMemoryLayout::HEIGHT_SHARDED);
     EXPECT_TRUE(l1_buffer_read_write_test(device_, test_config));
 }
 
 TEST_F(LightMetalBasicTest, CreateBufferWidthShardEnqueueWriteRead) {
     CreateDeviceAndBeginCapture(4096);
     L1Config test_config;
-    test_config.buffer_layout = TensorMemoryLayout::WIDTH_SHARDED;
+    test_config.sharding_args = BufferShardingArgs(
+        ShardSpecBuffer(
+            CoreRangeSet(std::set<CoreRange>({CoreRange(CoreCoord(0, 0), CoreCoord(0, 1))})),
+            {2 * tt::constants::TILE_HEIGHT, 2 * tt::constants::TILE_WIDTH},
+            ShardOrientation::ROW_MAJOR,
+            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            {2, 4}),
+        TensorMemoryLayout::WIDTH_SHARDED);
+    EXPECT_TRUE(l1_buffer_read_write_test(device_, test_config));
+}
+
+TEST_F(LightMetalBasicTest, CreateBufferNdShardEnqueueWriteRead) {
+    CreateDeviceAndBeginCapture(4096);
+    L1Config test_config;
+    test_config.sharding_args = BufferShardingArgs(BufferDistributionSpec(
+        Shape({2, 2, 2}),
+        Shape({1, 1, 1}),
+        CoreRangeSet(std::set<CoreRange>({CoreRange(CoreCoord(0, 0), CoreCoord(0, 1))})),
+        ShardOrientation::ROW_MAJOR));
     EXPECT_TRUE(l1_buffer_read_write_test(device_, test_config));
 }
 

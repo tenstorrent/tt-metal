@@ -70,7 +70,6 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     const auto num_elems = input_shape.volume();
 
     // INPUT TENSOR setup
-    size_t page_size = tile_size(DataFormat::Float16);
 
     // Replicate the tensor across (1, num_devices) submesh.
     const Tensor input_mesh_tensor = ttnn::distributed::distribute_tensor(
@@ -113,7 +112,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     // wait for op completion
     log_info(tt::LogTest, "Waiting for Op finish");
     std::ranges::for_each(devices, [&](IDevice* d) {
-        tt_metal::Finish(d->command_queue(), {subdevice_managers->worker_subdevice_id.at(d->id())});
+        tt_metal::Finish(d->command_queue(), {{subdevice_managers->worker_subdevice_id.at(d->id())}});
     });
 
     log_info(tt::LogTest, "Finished");

@@ -22,7 +22,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     FF1_CRS_RS_OUT,
     NORM_CRS,
 )
-from models.demos.llama3_subdevices.tt.model_config import set_tg_attention_config
+from models.demos.llama3_70b_galaxy.tt.model_config import set_tg_attention_config
 from tracy import signpost
 
 PACKET_WORKER_CRS = ttnn.CoreRangeSet(

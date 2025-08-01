@@ -26,11 +26,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
     // input_grad: (N, C)
     auto input_grad_shape = input_grad.padded_shape();
-    auto N = input_grad_shape[0];
     auto channel_size = input_grad_shape[1];
-
-    auto W = input_grad_shape[-1];
-    auto Wt = W / tt::constants::TILE_WIDTH;
 
     const bool weight_has_value = weight.has_value();
     const bool divisor_has_value = divisor.has_value();
@@ -197,12 +193,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
 
     // input_grad: (N, C, W)
     auto input_grad_shape = input_grad.padded_shape();
-    auto N = input_grad_shape[0];
     auto channel_size = input_grad_shape[1];
-
-    auto W = input_grad_shape[-1];
-    auto Ct = channel_size / tt::constants::TILE_HEIGHT;
-    auto Wt = W / tt::constants::TILE_WIDTH;
 
     auto target_shape = target.padded_shape();
     auto num_inner_tile = target_shape[-1] / tt::constants::TILE_WIDTH;

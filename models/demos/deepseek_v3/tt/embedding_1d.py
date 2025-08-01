@@ -99,7 +99,9 @@ class Embedding1D(AbstractModule):
         Returns:
             Output tensor after embedding lookup
         """
-        return ttnn.embedding(x, **cfg)
+
+        embeddings = ttnn.embedding(x, **cfg)
+        return ttnn.reshape(embeddings, (1, *embeddings.shape))
 
     @classmethod
     def forward_decode(cls, x, cfg):
@@ -112,4 +114,5 @@ class Embedding1D(AbstractModule):
         Returns:
             Output tensor after embedding lookup
         """
-        return ttnn.embedding(x, **cfg)
+        embeddings = ttnn.embedding(x, **cfg)
+        return ttnn.reshape(embeddings, (1, *embeddings.shape))

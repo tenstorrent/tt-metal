@@ -13,6 +13,8 @@ usage()
     echo "[--validate, -v]            Validate that required packages are installed"
     echo "[--docker, -d]              Specialize execution for docker"
     echo "[--no-distributed]          Don't install distributed compute dependencies (OpenMPI)"
+    echo "[--hugepages]               Install hugepages dependency"
+    echo "[--sfpi]                    Install only SFPI package (minimal installation)"
     exit 1
 }
 
@@ -359,7 +361,28 @@ install_sfpi() {
     rm -rf $TEMP_DIR
 }
 
-install_mpi_ulfm(){
+install_sfpi_only() {
+    echo "[INFO] Installing only SFPI package for $OS_ID..."
+
+    # Check packaging system
+    local pkg
+    if dpkg-query -f '${Version}' -W libc-bin >/dev/null 2>&1; then
+        pkg=deb
+    elif rpm -q --qf '%{VERSION}' glibc >/dev/null 2>&1; then
+        pkg=rpm
+    else
+        echo "[ERROR] Unknown packaging system. SFPI installation requires either dpkg or rpm."
+        exit 1
+    fi
+    echo "[INFO] Detected packaging system: $pkg"
+
+    # Install SFPI using existing function
+    install_sfpi
+
+    echo "[INFO] SFPI installation completed successfully!"
+}
+
+install_mpi_ulfm() {
     # Only install if distributed flag is set
     if [ "$distributed" -ne 1 ]; then
         echo "[INFO] Skipping MPI ULFM installation (distributed mode not enabled)"
@@ -439,8 +462,8 @@ install() {
     install_llvm
     install_mpi_ulfm
 
-    # Configure system (hugepages, etc.) - only for baremetal (not docker)
-    if [ "$docker" -ne 1 ]; then
+    # Configure system (hugepages, etc.) - only for baremetal if requested (not docker)
+    if [ "$docker" -ne 1 ] && [ "$hugepages" -eq 1 ]; then
         configure_hugepages
     fi
 }
@@ -472,6 +495,8 @@ fi
 validate=0
 docker=0
 distributed=1
+hugepages=0
+sfpi_only=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -490,6 +515,14 @@ while [ $# -gt 0 ]; do
             distributed=0
             shift
             ;;
+        --hugepages)
+            hugepages=1
+            shift
+            ;;
+        --sfpi)
+            sfpi_only=1
+            shift
+            ;;
         *)
             echo "Unknown option: $1"
             usage
@@ -499,7 +532,9 @@ done
 
 init_packages
 
-if [ "$validate" -eq 1 ]; then
+if [ "$sfpi_only" -eq 1 ]; then
+    install_sfpi_only
+elif [ "$validate" -eq 1 ]; then
     validate_packages
 else
     install
@@ -507,4 +542,8 @@ fi
 
 cleanup
 
-echo "[INFO] TT-Metalium dependencies installed successfully!"
+if [ "$sfpi_only" -eq 1 ]; then
+    echo "[INFO] SFPI installation completed successfully!"
+else
+    echo "[INFO] TT-Metalium dependencies installed successfully!"
+fi

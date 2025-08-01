@@ -9,11 +9,12 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tt.common import get_prefill_rot_mat, get_single_rot_mat
+from models.tt_transformers.tt.common import get_single_rot_mat
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.llama_cross_attention_transformer_text import (
     TtLlamaCrossAttentionTransformerText,
 )
+from models.tt_transformers.tt.rope import get_rot_mats
 from models.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_for_grayskull
 
 
@@ -237,13 +238,12 @@ def test_cross_attention_transformer_text_inference(
                     mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
                 )
 
-                rot_mats = get_prefill_rot_mat(
-                    model_args.head_dim,
-                    mesh_device,
-                    seq_len,
-                    model_args.rope_theta,
-                    model_args.rope_scaling_factor,
-                    model_args.orig_context_len,
+                rot_mats = get_rot_mats(
+                    head_dim=model_args.head_dim,
+                    device=mesh_device,
+                    seq_len=seq_len,
+                    theta=model_args.rope_theta,
+                    rope_scaling=model_args.rope_scaling,
                 )
                 tt_out = tt_model(
                     tt_h,
@@ -287,8 +287,10 @@ def test_cross_attention_transformer_text_inference(
                 model_args.num_devices,
                 start_pos=cur_pos - 1,
                 theta=model_args.rope_theta,
-                scale_factor=model_args.rope_scaling_factor,
-                orig_context_len=model_args.orig_context_len,
+                scale_factor=model_args.rope_scaling.factor if model_args.rope_scaling else None,
+                orig_context_len=model_args.rope_scaling.original_max_position_embeddings
+                if model_args.rope_scaling
+                else None,
             )
             tt_rope_id = tt_model.rope_setup.get_rot_idxs(position_ids)
             rot_mats = tt_model.rope_setup.get_rot_mats(tt_rope_id)

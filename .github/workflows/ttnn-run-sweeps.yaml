@@ -384,7 +384,6 @@ on:
           - eltwise.binary.rpow.rpow_sharded
           - eltwise.binary.squared_difference.squared_difference
           - eltwise.binary.squared_difference_output.squared_difference_output
-          - eltwise.binary.scatter.scatter_forge
           - eltwise.binary.bcast.bcast_h_sharded
           - eltwise.binary.bcast.bcast
           - eltwise.binary.eq.eq_scalar_pytorch2
@@ -495,6 +494,7 @@ on:
           - matmul.short.matmul
           - matmul.generality.matmul
           - matmul.generality.linear
+          - matmul.sparse.sparse_matmul
           - losses.l1_loss
           - losses.mse_loss
           - data_movement.concat.concat_interleaved_n_tensors

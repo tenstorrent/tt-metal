@@ -20,6 +20,10 @@ namespace tt::tt_fabric {
 namespace multi_host_tests {
 
 TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
     const std::filesystem::path dual_galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.yaml";
@@ -31,6 +35,10 @@ TEST(MultiHost, TestDualGalaxyControlPlaneInit) {
 }
 
 TEST(MultiHost, TestDualGalaxyFabricSanity) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
         tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);

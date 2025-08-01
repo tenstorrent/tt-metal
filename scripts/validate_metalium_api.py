@@ -21,7 +21,7 @@ ALLOWED_PREFIXES = {
     "tt_stl",
     "umd",
     "fmt",
-    "magic_enum",
+    "enchantum",
     "nlohmann",
     "tt-logger",
 }

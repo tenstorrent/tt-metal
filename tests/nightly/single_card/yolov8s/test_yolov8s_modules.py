@@ -1,1 +1,1 @@
-../../../ttnn/integration_tests/yolov8s/test_yolov8s.py
+../../../../models/demos/yolov8s/tests/pcc/test_yolov8s.py

@@ -113,7 +113,7 @@ def test_matmul(
     input_layout,
     compute_kernel_config,
 ):
-    run_matmul(
+    (result, msg), e2e_perf = run_matmul(
         device,
         batch_sizes,
         m_size,
@@ -129,6 +129,8 @@ def test_matmul(
         input_layout,
         compute_kernel_config,
     )
+    assert result, msg
+    logger.info(f"e2e_perf: {e2e_perf}")
 
 
 def run(

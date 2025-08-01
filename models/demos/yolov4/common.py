@@ -43,10 +43,10 @@ def image_to_tensor(image):
 
 
 def load_torch_model(model_location_generator, module=None):
-    if model_location_generator == None:
+    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
         model_path = "models"
     else:
-        model_path = model_location_generator("models", model_subdir="Yolo")
+        model_path = model_location_generator("vision-models/yolov4", model_subdir="", download_if_ci_v2=True)
 
     if model_path == "models":
         if not os.path.exists("models/demos/yolov4/tests/pcc/yolov4.pth"):  # check if yolov4.th is availble
@@ -55,7 +55,7 @@ def load_torch_model(model_location_generator, module=None):
             )  # execute the yolov4_weights_download.sh file
         weights_pth = "models/demos/yolov4/tests/pcc/yolov4.pth"
     else:
-        weights_pth = str(model_path / "yolov4.pth")
+        weights_pth = os.path.join(model_path, "yolov4.pth")
 
     torch_dict = torch.load(weights_pth)
     state_dict = torch_dict

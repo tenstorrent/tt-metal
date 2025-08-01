@@ -273,7 +273,7 @@ protected:
     }
 };
 
-class CommandQueueSingleCardBufferFixture : public CommandQueueSingleCardFixture {};
+using UnitMeshCQSingleCardBufferFixture = UnitMeshCQSingleCardFixture;
 
 // left in for subdevice testing
 class CommandQueueSingleCardTraceFixture : virtual public CommandQueueSingleCardFixture {
@@ -374,7 +374,7 @@ protected:
 
 class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixture {};
 
-class CommandQueueMultiDeviceBufferFixture : public CommandQueueMultiDeviceFixture {};
+class UnitMeshCQMultiDeviceBufferFixture : public UnitMeshCQMultiDeviceFixture {};
 
 class DISABLED_CQMultiDeviceOnFabricFixture
     : public UnitMeshCQMultiDeviceFixture,

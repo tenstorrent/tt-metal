@@ -14,6 +14,7 @@
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
+#include "umd/device/types/cluster_descriptor_types.h"
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -229,6 +230,16 @@ struct AllocatorPolicies {
             this->default_payload_chunk_size =
                 detail::DEFAULT_RECEIVER_L1_SIZE / this->receiver_config.max_configs_per_core;
         }
+    }
+};
+
+struct PhysicalMeshConfig {
+    std::string mesh_descriptor_path;
+    std::vector<std::vector<eth_coord_t>> eth_coord_mapping;
+
+    PhysicalMeshConfig() {
+        mesh_descriptor_path = "";  // Default path to the mesh descriptor.
+        eth_coord_mapping = {};
     }
 };
 

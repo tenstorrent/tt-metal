@@ -14,7 +14,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 
-#include <ttnn/tensor/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 // Defines to include tt_metal/hw/inc/accessor/tensor_accessor.h but won't need these
 #if !(defined(KERNEL_BUILD) || defined(FW_BUILD))
@@ -446,7 +446,6 @@ TEST(TensorAccessorTestsCRTA, CompiletimeTensorCompileTimeShardShapeRuntimeBanks
     using dspec_t = tensor_accessor::
         DistributionSpec<crta_params::rank, crta_params::num_banks, TensorShapeT, ShardShapeT, bank_coords>;
 
-    std::array<uint32_t, crta_params::rank> shard_shape_array = {1, 2};
     std::array<uint16_t, crta_params::num_banks> bank_coord_array{0, 1, 2, 3};
 
     auto dspec_val = dspec_t({}, {}, bank_coord_array);

@@ -74,6 +74,10 @@ struct SlidingWindowConfig {
      */
     ttnn::Shape get_output_shape() const;
 
+    uint32_t get_pad_top() const;
+    uint32_t get_pad_bottom() const;
+    uint32_t get_pad_left() const;
+    uint32_t get_pad_right() const;
     uint32_t get_pad_h() const;
     uint32_t get_pad_w() const;
     uint32_t get_ceil_pad_h() const;
@@ -169,7 +173,10 @@ Tensor construct_on_host_config_tensor(
     const std::vector<std::vector<uint16_t>>& config, const ParallelConfig& p_config);
 
 Tensor move_config_tensor_to_device(
-    const Tensor& config_tensor, const ParallelConfig& p_config, bool is_block_sharded, tt::tt_metal::IDevice* device);
+    const Tensor& config_tensor,
+    const ParallelConfig& p_config,
+    bool is_block_sharded,
+    tt::tt_metal::distributed::MeshDevice* device);
 
 }  // namespace ttnn::operations::sliding_window
 

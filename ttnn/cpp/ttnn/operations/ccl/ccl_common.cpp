@@ -9,6 +9,7 @@
 
 #include "ccl_host_datastructures.hpp"
 #include <tt-metalium/erisc_datamover_builder.hpp>
+#include <tt-metalium/fabric.hpp>
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
@@ -114,7 +115,6 @@ SenderRecieverConfig get_device_sender_receiver_config_in_ring(
     TT_FATAL(
         mesh_view.is_mesh_2d(),
         "CLL operation invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-    const auto view_index = (cluster_axis == 0) ? mesh_coord[1] : mesh_coord[0];
     config.device_index = (cluster_axis == 0) ? mesh_coord[0] : mesh_coord[1];
 
     auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
@@ -125,7 +125,9 @@ SenderRecieverConfig get_device_sender_receiver_config_in_ring(
         } else {
             new_col = line_index % ring_size;
         }
-        return mesh_view.find_device_id(MeshCoordinate(new_row, new_col));
+        auto* device = mesh_view.get_device(MeshCoordinate(new_row, new_col));
+        TT_FATAL(device != nullptr, "Device not found at coordinate {}", MeshCoordinate(new_row, new_col));
+        return device->id();
     };
 
     bool is_last_chip_in_clockwise_direction = config.device_index == (ring_size - 1);
@@ -299,7 +301,7 @@ void generate_edm_kernels_for_ring_or_linear_topology(
         if (is_clockwise_direction_edm_enabled) {
             auto eth_sender_core = topology_config.eth_sender_cores.at(i);
             log_trace(tt::LogOp, "EDM CLOCKWISE KERNEL RT ARGS: ");
-            auto eth_sender_kernel = generate_edm_kernel(
+            generate_edm_kernel(
                 program,
                 device,
                 clockwise_edm_builders.at(i),
@@ -319,7 +321,7 @@ void generate_edm_kernels_for_ring_or_linear_topology(
         if (is_counter_clockwise_direction_edm_enabled) {
             log_trace(tt::LogOp, "EDM COUNTER CLOCKWISE KERNEL RT ARGS: ");
             auto eth_receiver_core = topology_config.eth_receiver_cores.at(i);
-            auto eth_receiver_kernel = generate_edm_kernel(
+            generate_edm_kernel(
                 program,
                 device,
                 counter_clockwise_edm_builders.at(i),
@@ -504,7 +506,6 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
     // The `output_page_offset` will be the starting page offset for this slice index (corresponds to )
     // ring index). Each worker will operate out of that slice and then advance to the next slice for
     // for the next ring index/timestep
-    uint32_t slice_size_in_bytes = std::numeric_limits<uint32_t>::max();
     if (row_major) {
         if (slice_dim_is_width) {
             TT_THROW("Reduce scatter row-major interleaved does not yet support a width dim");
@@ -710,8 +711,6 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shape
     // Add padding for filler pages
 
     TT_ASSERT(max_slice_size_in_tiles > 0);
-    std::size_t max_width_in_tiles = std::min<std::size_t>(max_slice_size_in_tiles, tensor_slice_shape_in_tiles.x);
-    std::size_t max_height_in_tiles = std::min<std::size_t>(max_slice_size_in_tiles, tensor_slice_shape_in_tiles.y);
 
     uint32_t num_tiles_accounted_for = 0;  // for validation
     if (tensor_slice_shape_in_tiles.y >= num_workers) {
@@ -1528,6 +1527,108 @@ std::tuple<size_t, size_t, bool> get_forward_backward_configuration(
         }
     }
     return std::make_tuple(num_targets_forward, num_targets_backward, dynamic_alternate);
+}
+
+std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backward_line_unicast_configuration(
+    Topology topology,
+    IDevice* src_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device) {
+    std::array<uint32_t, 2> forward_args = {};
+    std::array<uint32_t, 2> backward_args = {};
+
+    auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
+        TT_FATAL(topology != Topology::Ring, "Fabric 2D dynamic is not supported for ring topology");
+        auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_device->id());
+        if (forward_device) {
+            auto forward_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id((*forward_device)->id());
+            forward_args[0] = *forward_device_fabric_node_id.mesh_id;
+            forward_args[1] = forward_device_fabric_node_id.chip_id;
+        }
+        if (backward_device) {
+            auto backward_device_fabric_node_id =
+                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id((*backward_device)->id());
+            backward_args[0] = *backward_device_fabric_node_id.mesh_id;
+            backward_args[1] = backward_device_fabric_node_id.chip_id;
+        }
+    } else if (tt::tt_fabric::is_1d_fabric_config(fabric_config)) {
+        if (forward_device) {
+            forward_args[0] = 0; // dst_mesh_id, unused
+            forward_args[1] = 1; // distance_in_hops
+        }
+        if (backward_device) {
+            backward_args[0] = 0; // dst_mesh_id, unused
+            backward_args[1] = 1; // distance_in_hops
+        }
+    } else {
+        TT_THROW("Unsupported fabric config");
+    }
+    return std::make_tuple(forward_args, backward_args);
+}
+
+std::tuple<uint32_t, uint32_t> get_forward_backward_line_mcast_distance(
+    size_t ring_size, size_t ring_index, Topology topology, bool static_alternate) {
+    size_t num_targets_forward = 0;
+    size_t num_targets_backward = 0;
+    if (topology == Topology::Linear) {
+        LineTopology line_topology(ring_size, ring_index);
+        num_targets_forward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::FORWARD);
+        num_targets_backward = line_topology.get_distance_to_end_of_line(ttnn::ccl::LineDirection::BACKWARD);
+    } else if (topology == ccl::Topology::Ring) {
+        // TODO: Commonize
+        num_targets_forward = tt::div_up(ring_size - 1, 2);
+        num_targets_backward = ring_size - 1 - num_targets_forward;
+        if (static_alternate) {
+            if (ring_index % 2 == 0) {
+                std::swap(num_targets_forward, num_targets_backward);
+            }
+        }
+    }
+    return std::make_tuple(num_targets_forward, num_targets_backward);
+}
+
+std::tuple<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_forward_backward_line_mcast_configuration(
+    Topology topology,
+    IDevice* src_device,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
+    uint32_t num_targets_forward,
+    uint32_t num_targets_backward) {
+    std::array<uint32_t, 6> forward_args = {};
+    std::array<uint32_t, 6> backward_args = {};
+    // Used for experimentation for optimal perf
+    // May be uplifted to an op parameter if needed
+    auto fabric_config = tt::tt_fabric::GetFabricConfig();
+
+    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
+        TT_FATAL(topology != Topology::Ring, "Fabric 2D dynamic is not supported for ring topology");
+        auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_device->id());
+        auto set_mcast_args = [&src_fabric_node_id](std::array<uint32_t, 6>& args, std::optional<IDevice*> device, uint32_t num_targets) {
+            if (device) {
+                auto device_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id((*device)->id());
+                auto eth_chan_dir = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, device_fabric_node_id);
+                args[0] = *device_fabric_node_id.mesh_id;
+                args[1] = device_fabric_node_id.chip_id;
+                args[2 + static_cast<std::uint8_t>(eth_chan_dir.value())] = num_targets - 1;
+            }
+        };
+        set_mcast_args(forward_args, forward_device, num_targets_forward);
+        set_mcast_args(backward_args, backward_device, num_targets_backward);
+    } else if (tt::tt_fabric::is_1d_fabric_config(fabric_config)) {
+        if (forward_device) {
+            forward_args[0] = 1;                    // start_distance_in_hops
+            forward_args[1] = num_targets_forward;  // range_hops
+        }
+        if (backward_device) {
+            backward_args[0] = 1;                     // start_distance_in_hops
+            backward_args[1] = num_targets_backward;  // range_hops
+        }
+    } else {
+        TT_THROW("Unsupported fabric config");
+    }
+    return std::make_tuple(forward_args, backward_args);
 }
 
 }  // namespace ccl

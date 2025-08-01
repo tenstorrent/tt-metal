@@ -17,6 +17,7 @@ from scipy.stats import pearsonr, spearmanr
 from tqdm import tqdm
 
 import ttnn
+from models.demos.sentence_bert.common import load_torch_model
 from models.demos.sentence_bert.reference.sentence_bert import BertModel, custom_extended_mask
 from models.demos.sentence_bert.runner.performant_runner import SentenceBERTPerformantRunner
 
@@ -46,7 +47,14 @@ def load_sts_tr(split="test"):
     [("emrecan/bert-base-turkish-cased-mean-nli-stsb-tr", 384, 8, 10)],
 )
 def test_sentence_bert_eval_data_parallel(
-    mesh_device, model_name, sequence_length, device_batch_size, num_samples, start=0, end=7
+    mesh_device,
+    model_name,
+    sequence_length,
+    device_batch_size,
+    num_samples,
+    start=0,
+    end=7,
+    model_location_generator=None,
 ):
     batch_size = device_batch_size * mesh_device.get_num_devices()
     tokenizer = transformers.AutoTokenizer.from_pretrained(model_name)
@@ -57,7 +65,9 @@ def test_sentence_bert_eval_data_parallel(
     ref_pred_scores = []
     ttnn_pred_scores = []
     reference_module = BertModel(config).to(torch.bfloat16)
-    reference_module.load_state_dict(transformers_model.state_dict())
+    reference_module = load_torch_model(
+        reference_module, target_prefix="", model_location_generator=model_location_generator
+    )
     ttnn_module = None
     inference_times = []
     for i in tqdm(range(num_samples), desc="Evaluating"):
@@ -92,6 +102,7 @@ def test_sentence_bert_eval_data_parallel(
                 attention_mask=attention_mask,
                 token_type_ids=token_type_ids,
                 position_ids=position_ids,
+                model_location_generator=model_location_generator,
             )
             ttnn_module._capture_sentencebert_trace_2cqs()
         t0 = time.time()

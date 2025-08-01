@@ -49,7 +49,7 @@ The host code of the ``full_buffer`` example is in ``{$TT_METAL_HOME}/tt_metal/p
 On top of tt_metal's program dispatch API calls, two additional steps specific to this example are taken, which are:
 
 1. Setting ``LOOP_COUNT`` and ``LOOP_SIZE`` defines for the kernels
-2. Calling DumpDeviceProfileResults after the call to Finish to collect the device side profiling data
+2. Calling ReadDeviceProfilerResults after the call to Finish to collect the device side profiling data
 
 The kernel code for full buffer is in ``{$TT_METAL_HOME}/tt_metal/programming_examples/profiler/test_full_buffer/kernels/full_buffer.cpp`` and demonstrated below:
 
@@ -83,10 +83,10 @@ Device-side profiler provides marker information for all RISCs and cores used in
 
     ARCH: grayskull, CHIP_FREQ[MHz]: 1202
     PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], stat value, Run ID, zone name, zone phase, source line, source file
-    0,1,1,BRISC,53427 ,11233712278980,0,0,BRISC-FW    ,begin,315,tt-metal/tt_metal/hw/firmware/src/brisc.cc
-    0,1,1,BRISC,118963,11233712334431,0,0,BRISC-FW    ,end  ,315,tt-metal/tt_metal/hw/firmware/src/brisc.cc
-    0,1,1,BRISC,25255 ,11233712279447,0,0,BRISC-KERNEL,begin,40 ,tt-metal/tt_metal/hw/firmware/src/brisck.cc
-    0,1,1,BRISC,90791 ,11233712325701,0,0,BRISC-KERNEL,end  ,40 ,tt-metal/tt_metal/hw/firmware/src/brisck.cc
+    0,1,1,BRISC,53427 ,11233712278980,0,0,BRISC-FW    ,begin,315,tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisc.cc
+    0,1,1,BRISC,118963,11233712334431,0,0,BRISC-FW    ,end  ,315,tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisc.cc
+    0,1,1,BRISC,25255 ,11233712279447,0,0,BRISC-KERNEL,begin,40 ,tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc
+    0,1,1,BRISC,90791 ,11233712325701,0,0,BRISC-KERNEL,end  ,40 ,tt-metal/tt_metal/hw/firmware/src/tt-1xx/brisck.cc
     0,1,1,BRISC,36986 ,11233712279499,0,0,TEST-FULL   ,begin,10 ,./kernel.cpp
     0,1,1,BRISC,102522,11233712279792,0,0,TEST-FULL   ,end  ,10 ,./kernel.cpp
     0,1,1,BRISC,36986 ,11233712279863,0,0,TEST-FULL   ,begin,10 ,./kernel.cpp

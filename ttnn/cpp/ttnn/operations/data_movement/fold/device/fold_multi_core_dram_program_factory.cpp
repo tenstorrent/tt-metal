@@ -19,6 +19,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "fold_device_op.hpp"
 namespace ttnn::operations::data_movement {
 
@@ -36,7 +37,6 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     const uint32_t input_width = input_tensor.logical_shape()[2];
 
     // Get compute grid size and buffer pointers
-    auto compute_grid_size = device->compute_with_storage_grid_size();
     Buffer* src0_buffer = input_tensor.buffer();
     Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -81,20 +81,21 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         tt::tt_metal::CircularBufferConfig(
             num_input_tiles * single_tile_size * double_buffer, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig cb_src1_config =
         tt::tt_metal::CircularBufferConfig(
             num_input_tiles * single_tile_size * double_buffer, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, single_tile_size);
-    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     // Configure compile-time arguments for reader kernel
     std::vector<uint32_t> reader_compile_time_args = {
         ntiles_per_row,
         src0_cb_index,
     };
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     // Configure compile-time arguments for writer kernel
     std::vector<uint32_t> writer_compile_time_args = {
@@ -108,6 +109,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
         datum_size(cb_data_format),
         src1_cb_index,
     };
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Create reader kernel for DRAM to circular buffer data movement
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -148,7 +150,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
     log_debug(tt::LogOp, "compute_kernel_name: {}", compute_kernel_name);
 
     // Create main compute kernel
-    tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
+    tt::tt_metal::CreateKernel(
         program,
         compute_kernel_name,
         core_range,
@@ -159,7 +161,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_tiled_interleaved(
 
     // Create cliff compute kernel if needed (for handling edge cases)
     if (core_range_cliff.ranges().size() > 0) {
-        tt::tt_metal::KernelHandle compute_kernel_id_cliff = tt::tt_metal::CreateKernel(
+        tt::tt_metal::CreateKernel(
             program,
             compute_kernel_name,
             core_range_cliff,
@@ -241,7 +243,6 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
     // Calculate total input work
     uint32_t total_patches = (batch_size * input_height * input_width) / (stride_h * stride_w);
@@ -292,19 +293,10 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
             .set_page_size(cb_src0_index, aligned_stick_nbytes * stride_w * stride_h);
     auto cb_src0 = CreateCircularBuffer(program, all_cores, src_cb_config);
 
-    bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_nbytes);
-    uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_nbytes) : 0;
     // Create reader kernel
     std::vector<uint32_t> compile_time_args(
-        {stick_nbytes,
-         cb_src0_index,
-         src_stick_size_is_power_of_two,
-         src_log2_stick_size,
-         aligned_stick_nbytes,
-         stride_h,
-         stride_w,
-         input_width,
-         patches_per_core});
+        {stick_nbytes, cb_src0_index, aligned_stick_nbytes, stride_h, stride_w, input_width, patches_per_core});
+    TensorAccessorArgs(*src0_buffer).append_to(compile_time_args);
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/fold/device/kernels/dataflow/reader_dram2cb_for_rm_input.cpp",

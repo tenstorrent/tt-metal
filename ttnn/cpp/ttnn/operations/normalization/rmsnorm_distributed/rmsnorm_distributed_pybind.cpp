@@ -30,7 +30,8 @@ void bind_normalization_rmsnorm_pre_all_gather_operation(py::module& module) {
             py::arg("residual_input_tensor") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("program_config") = std::nullopt,
-            py::arg("memory_config") = std::nullopt});
+            py::arg("memory_config") = std::nullopt,
+            py::arg("use_2d_core_grid") = std::nullopt});
 }
 
 void bind_normalization_rmsnorm_post_all_gather_operation(py::module& module) {
@@ -50,7 +51,8 @@ void bind_normalization_rmsnorm_post_all_gather_operation(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("program_config") = std::nullopt,
-            py::arg("dtype") = std::nullopt});
+            py::arg("dtype") = std::nullopt,
+            py::arg("use_2d_core_grid") = std::nullopt});
 }
 
 void bind_normalization_rms_norm_distributed(py::module& module) {
