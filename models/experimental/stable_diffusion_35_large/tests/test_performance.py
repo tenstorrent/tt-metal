@@ -11,14 +11,14 @@ from ..tt.parallel_config import StableDiffusionParallelManager, EncoderParallel
 @pytest.mark.parametrize(
     "model_name, image_w, image_h, guidance_scale, num_inference_steps",
     [
-        ("large", 1024, 1024, 3.5, 28),
+        ("large", 1024, 1024, 3.5, 20),
     ],
 )
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, topology, num_links",
     [
         [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
-        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 3],
+        [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
         "t3k_cfg2_sp2_tp2",
@@ -28,7 +28,7 @@ from ..tt.parallel_config import StableDiffusionParallelManager, EncoderParallel
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192, "trace_region_size": 20000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192, "trace_region_size": 25000000}],
     indirect=True,
 )
 def test_sd35_performance(
