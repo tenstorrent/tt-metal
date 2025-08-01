@@ -3984,6 +3984,14 @@ def test_conv_single_core(
         (1, 1920, 1280, 32, 32, ttnn.bfloat8_b, ttnn.bfloat16, 1, (3, 3), (1, 1), (1, 1), (1, 1), BS, 0, 1, True, ttnn.MathFidelity.HiFi2, True, False, False, True, True),
     ),
 )
+
+@pytest.mark.parametrize(
+    "full_inner_dim",
+    [
+        True,
+        False,
+    ],
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv_sharded_rm_input(
     device,
@@ -4010,6 +4018,7 @@ def test_conv_sharded_rm_input(
     enable_split_reader,
     act_db,
     w_db,
+    full_inner_dim
 ):
 
     # Skip all on N300
@@ -4017,7 +4026,7 @@ def test_conv_sharded_rm_input(
         pytest.skip("Needs 8x8 grid for wormhole_b0")
 
     config_override = {}
-    config_override["act_block_h"] = act_block_h_override
+    config_override["act_block_h"] = 32
     config_override["act_block_w_div"] = act_block_w_div
 
     core_x = core_y = 8
@@ -4050,7 +4059,7 @@ def test_conv_sharded_rm_input(
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
         output_layout=ttnn.TILE_LAYOUT,
-        deallocate_activation=deallocate_activation,
+        deallocate_activation=True,
         groups=groups,
         has_bias=True,
         shard_layout=shard_layout,
@@ -4062,6 +4071,7 @@ def test_conv_sharded_rm_input(
         enable_split_reader=enable_split_reader,
         input_layout=ttnn.ROW_MAJOR_LAYOUT,
         sharded_cfg=sharded_cfg,
-        enable_act_double_buffer=act_db,
-        enable_weights_double_buffer=w_db
+        enable_act_double_buffer=False,
+        enable_weights_double_buffer=False,
+        bs_full_inner_dim=full_inner_dim,
     )

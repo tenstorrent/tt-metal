@@ -217,15 +217,14 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
 
 template <typename T>
 Tensor to_weight_tile_layout_block_sharded(
-    const Tensor& conv_weight_tensor, uint32_t num_channel_shards, DataType output_dtype) {
+    const Tensor& conv_weight_tensor, uint32_t num_channel_shards, bool full_inner_dim, DataType output_dtype) {
     ttnn::Shape w_shape = conv_weight_tensor.padded_shape();
-
+    log_info(tt::LogOp, "full_inner_dim: {}", full_inner_dim);
     // Calculate dimensions outside lambda
     uint32_t weight_matrix_cols = w_shape[0];
     TT_ASSERT(weight_matrix_cols % num_channel_shards == 0);
     uint32_t conv_output_shard_width = weight_matrix_cols / num_channel_shards;
-    uint32_t conv_output_shard_width_padded =
-        (uint32_t)std::ceil((double)conv_output_shard_width / (double)constants::TILE_WIDTH) * constants::TILE_WIDTH;
+    uint32_t conv_output_shard_width_padded = tt::round_up(conv_output_shard_width, constants::TILE_WIDTH);
     if (conv_output_shard_width < conv_output_shard_width_padded) {
         // width padding for conv output shard padding
         weight_matrix_cols = conv_output_shard_width_padded * num_channel_shards;
@@ -235,13 +234,23 @@ Tensor to_weight_tile_layout_block_sharded(
     uint32_t conv_input_shard_width = w_shape[1] / num_channel_shards;
     uint32_t weight_block_height = conv_input_shard_width * w_shape[2] * w_shape[3];
 
-    // ToDo: change for case where we dont' slice the inner dim.
-    uint32_t weight_block_height_padded =
-        tt::round_up(conv_input_shard_width * w_shape[3], constants::TILE_HEIGHT) * w_shape[2];
+    // Change for case where we use full inner dim vs slicing by kernel height
+    uint32_t weight_block_height_padded;
+    if (full_inner_dim) {
+        // Use full inner dimension - round up the entire block height
+        weight_block_height_padded =
+            tt::round_up(conv_input_shard_width * w_shape[3] * w_shape[2], constants::TILE_HEIGHT);
+    } else {
+        // Original logic - slice by kernel height, round up kernel width portion
+        weight_block_height_padded =
+            tt::round_up(conv_input_shard_width * w_shape[3], constants::TILE_HEIGHT) * w_shape[2];
+    }
+
     if (weight_block_height < weight_block_height_padded) {
         // height padding for non tile multiple block height
         weight_matrix_rows = weight_block_height_padded * num_channel_shards;
     }
+
     ttnn::Shape output_shape{1, 1, weight_matrix_rows, weight_matrix_cols};
 
     auto compute = [&w_shape,
@@ -253,7 +262,8 @@ Tensor to_weight_tile_layout_block_sharded(
                     conv_output_shard_width_padded,
                     conv_input_shard_width,
                     weight_matrix_rows,
-                    weight_block_height_padded](const tt::tt_metal::HostBuffer& input_host_buffer) {
+                    weight_block_height_padded,
+                    full_inner_dim](const tt::tt_metal::HostBuffer& input_host_buffer) {
         auto input_buffer = tt::tt_metal::host_buffer::get_as<T>(input_host_buffer);
         auto output_buffer = std::vector<T>(output_shape.volume(), T(0));  // Initialize with zeros
 
@@ -261,29 +271,38 @@ Tensor to_weight_tile_layout_block_sharded(
         const uint32_t kernel_h = w_shape[2];
         const uint32_t kernel_w = w_shape[3];
 
-        // Correct height stride calculation that accounts for both kernel dimensions
-        const uint32_t height_stride_per_kernel_row =
-            tt::round_up(conv_input_shard_width * kernel_w, constants::TILE_HEIGHT);
+        uint32_t height_stride_per_kernel_row =
+            tt::round_up(conv_input_shard_width * (full_inner_dim ? kernel_h : 1) * kernel_w, constants::TILE_HEIGHT);
 
-        for (auto ic = 0; ic < num_channel_shards; ic++) {
-            for (auto r = 0; r < kernel_h; r++) {
-                for (auto s = 0; s < kernel_w; s++) {
-                    for (auto c_s = 0; c_s < conv_input_shard_width; c_s++) {
-                        for (auto oc = 0; oc < num_channel_shards; oc++) {
-                            for (auto k_s = 0; k_s < conv_output_shard_width; k_s++) {
-                                // Fixed matrix indexing that properly handles kernel_h != kernel_w
-                                auto matrix_row =
-                                    ic * weight_block_height_padded +
-                                    r * height_stride_per_kernel_row +  // Now correctly strides by kernel_w
-                                    s * conv_input_shard_width + c_s;
-                                auto matrix_col = oc * conv_output_shard_width_padded + k_s;
-                                auto matrix_idx = matrix_row * weight_matrix_cols + matrix_col;
+        for (uint32_t ic = 0; ic < num_channel_shards; ic++) {
+            for (uint32_t r = 0; r < kernel_h; r++) {
+                for (uint32_t s = 0; s < kernel_w; s++) {
+                    for (uint32_t c_s = 0; c_s < conv_input_shard_width; c_s++) {
+                        for (uint32_t oc = 0; oc < num_channel_shards; oc++) {
+                            for (uint32_t k_s = 0; k_s < conv_output_shard_width; k_s++) {
+                                // Calculate matrix row index based on full_inner_dim flag
+                                uint32_t matrix_row;
+                                if (full_inner_dim) {
+                                    // When using full inner dim, layout is: [ic_shard][flattened_inner_dim]
+                                    // where flattened_inner_dim = r*kernel_w*conv_input_shard_width +
+                                    // s*conv_input_shard_width + c_s
+                                    uint32_t flattened_inner_idx =
+                                        r * kernel_w * conv_input_shard_width + s * conv_input_shard_width + c_s;
+                                    matrix_row = ic * weight_block_height_padded + flattened_inner_idx;
+                                } else {
+                                    // Original logic - slice by kernel height
+                                    matrix_row = ic * weight_block_height_padded + r * height_stride_per_kernel_row +
+                                                 s * conv_input_shard_width + c_s;
+                                }
+
+                                uint32_t matrix_col = oc * conv_output_shard_width_padded + k_s;
+                                uint32_t matrix_idx = matrix_row * weight_matrix_cols + matrix_col;
 
                                 // Calculate input tensor index [OC][IC][KH][KW]
-                                auto input_oc = oc * conv_output_shard_width + k_s;
-                                auto input_ic = ic * conv_input_shard_width + c_s;
-                                auto idx = input_oc * w_shape[1] * w_shape[2] * w_shape[3] +
-                                           input_ic * w_shape[2] * w_shape[3] + r * w_shape[3] + s;
+                                uint32_t input_oc = oc * conv_output_shard_width + k_s;
+                                uint32_t input_ic = ic * conv_input_shard_width + c_s;
+                                uint32_t idx = input_oc * w_shape[1] * w_shape[2] * w_shape[3] +
+                                               input_ic * w_shape[2] * w_shape[3] + r * w_shape[3] + s;
 
                                 // Ensure we're within bounds before writing
                                 if (matrix_idx < output_buffer.size() && input_oc < w_shape[0] &&
@@ -309,15 +328,18 @@ Tensor to_weight_tile_layout_block_sharded(
 // Converts convolution weights to tilized 2d matrix layout for block sharded conv.
 // Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_tiled_layout_block_sharded(
-    const Tensor& conv_weight_tensor, uint32_t num_channel_shards, std::optional<DataType> output_dtype) {
-    const static std::unordered_map<DataType, std::function<Tensor(const Tensor&, uint32_t, DataType)>>
+    const Tensor& conv_weight_tensor,
+    uint32_t num_channel_shards,
+    bool full_inner_dim,
+    std::optional<DataType> output_dtype) {
+    const static std::unordered_map<DataType, std::function<Tensor(const Tensor&, uint32_t, bool, DataType)>>
         to_w_tile_layout_map = {
             {DataType::BFLOAT16, &to_weight_tile_layout_block_sharded<bfloat16>},
             {DataType::FLOAT32, &to_weight_tile_layout_block_sharded<float>},
             {DataType::UINT32, &to_weight_tile_layout_block_sharded<uint32_t>}};
 
     return convert_tensor_to_tiled_layout_common(
-        conv_weight_tensor, output_dtype, to_w_tile_layout_map, num_channel_shards);
+        conv_weight_tensor, output_dtype, to_w_tile_layout_map, num_channel_shards, full_inner_dim);
 }
 
 template <typename T>
@@ -978,6 +1000,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         has_bias,
         true,  // parameters_on_device
         conv_config.enable_kernel_stride_folding,
+        conv_config.full_inner_dim,
         kernel_size,
         orig_stride,
         padding_n4);
@@ -1051,7 +1074,7 @@ static ttnn::Tensor prepare_conv_weights_internal(
             weight_tensor_, params.weight_block_h_ntiles, params.weight_block_w_ntiles, weight_tensor_.dtype());
     } else if (params.input_parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
         weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout_block_sharded(
-            weight_tensor_, input_num_cores_channels, weight_tensor_.dtype());
+            weight_tensor_, input_num_cores_channels, params.full_inner_dim, weight_tensor_.dtype());
     } else {
         weight_tensor_ = convert_conv_weight_tensor_to_tiled_layout(
             weight_tensor_, params.weight_block_h_ntiles, params.weight_block_w_ntiles, weight_tensor_.dtype());
