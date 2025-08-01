@@ -162,7 +162,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
     return y;
 }
 
-template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_sfpu_binary(const uint dst_offset) {
     if constexpr (BINOP == BinaryOp::POW) {
         for (int d = 0; d < ITERATIONS; d++) {

@@ -34,27 +34,27 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void add_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::ADD>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::ADD, DST_ACCUM_MODE>(idst0, idst1)));
 }
 
 ALWI void sub_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::SUB>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::SUB, DST_ACCUM_MODE>(idst0, idst1)));
 }
 
 ALWI void mul_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::MUL>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::MUL, DST_ACCUM_MODE>(idst0, idst1)));
 }
 
 ALWI void div_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::DIV>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::DIV, DST_ACCUM_MODE>(idst0, idst1)));
 }
 
 ALWI void rsub_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::RSUB>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::RSUB, DST_ACCUM_MODE>(idst0, idst1)));
 }
 
 ALWI void power_binary_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::POW>(idst0, idst1)));
+    MATH((llk_math_eltwise_binary_sfpu_binop<APPROX, ckernel::BinaryOp::POW, DST_ACCUM_MODE>(idst0, idst1)));
 }
 
 /**
