@@ -161,11 +161,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     TT_FATAL(act_matrix_shape[0] == 1, "act_matrix_shape should have 1 as the first dimension");
     uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
     uint32_t act_matrix_width = (uint32_t)act_matrix_shape[2];
-    if (block_sharded) {
-        act_matrix_width =
-            tt::round_up((input_channels_padded / conv_act_c_blocks) * filter_w * filter_h, tt::constants::TILE_WIDTH) *
-            conv_act_c_blocks;
-    }
 
     const uint32_t act_matrix_height_unpadded = (uint32_t)act_matrix_shape_unpadded[1];
 
@@ -180,17 +175,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         TT_FATAL(bias_shape_without_padding[0] == 1, "Bias should have batch == 1");
     }
 
-    // matrix multiplication shape check valid for all convs except depthwise conv1d
-    TT_FATAL(
-        act_matrix_width == weight_matrix_height || is_conv_1d_depthwise_conv,
-        "The width of tensor a {} needs to match the height of tensor b {}",
-        act_matrix_width,
-        weight_matrix_height);
     // Tile size divisibility checks
     TT_FATAL(
         act_matrix_height % tt::constants::TILE_HEIGHT == 0, "Height of activation matrix needs to be divisible by 32");
-    TT_FATAL(
-        act_matrix_width % tt::constants::TILE_WIDTH == 0, "Width of activation matrix needs to be divisible by 32");
     TT_FATAL(
         weight_matrix_height % tt::constants::TILE_HEIGHT == 0, "Height of weight matrix needs to be divisible by 32");
     TT_FATAL(
@@ -210,18 +197,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     // Convert tensor dims to tile dims
     const uint32_t act_matrix_height_ntiles = act_matrix_height / tt::constants::TILE_HEIGHT;
-    const uint32_t act_matrix_width_ntiles = act_matrix_width / tt::constants::TILE_WIDTH;
 
     TT_FATAL(
         act_matrix_height_ntiles % act_block_h_ntiles == 0,
         "act_matrix_height_ntiles {} should be divisible by act_block_h_ntiles {}",
         act_matrix_height_ntiles,
         act_block_h_ntiles);
-    TT_FATAL(
-        act_matrix_width_ntiles % act_block_w_ntiles == 0,
-        "act_matrix_width_ntiles {} should be divisible by act_block_w_ntiles {}",
-        act_matrix_width_ntiles,
-        act_block_w_ntiles);
     TT_FATAL(
         weight_matrix_width_ntiles % weight_block_w_ntiles == 0,
         "weight_matrix_width_ntiles {} should be divisible by weight_block_w_ntiles {}",
@@ -549,7 +530,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / conv_act_c_blocks;
     uint32_t act_block_w_extra_align_bytes =
-        block_sharded
+        !slice_inner_dim
             ? (tt::round_up(shard_shape[1] * filter_h * filter_w, tt::constants::TILE_WIDTH) -
                (shard_shape[1] * filter_h * filter_w)) *
                   a.element_size()
