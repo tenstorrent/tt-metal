@@ -46,8 +46,31 @@ def prepare_dir_as_metal_home(ttnn_package_path, metal_home):
     # Firmware binaries need to be present
     runtime_hw_src = ttnn_package_path / "runtime" / "hw"
     if not runtime_hw_src.is_dir():
+        # Get directory listings for debugging
+        ttnn_package_listing = "N/A"
+        runtime_listing = "N/A"
+
+        try:
+            if ttnn_package_path.exists():
+                ttnn_package_listing = str(list(ttnn_package_path.iterdir()))
+            else:
+                ttnn_package_listing = "Directory does not exist"
+        except Exception as e:
+            ttnn_package_listing = f"Error listing directory: {e}"
+
+        try:
+            runtime_path = ttnn_package_path / "runtime"
+            if runtime_path.exists():
+                runtime_listing = str(list(runtime_path.iterdir()))
+            else:
+                runtime_listing = "Directory does not exist"
+        except Exception as e:
+            runtime_listing = f"Error listing directory: {e}"
+
         logger.error(
-            f"{runtime_hw_src} seems to not exist as a directory. This should have been packaged during wheel creation"
+            f"{runtime_hw_src} seems to not exist as a directory. This should have been packaged during wheel creation.\n"
+            f"Contents of {ttnn_package_path}: {ttnn_package_listing}\n"
+            f"Contents of {ttnn_package_path / 'runtime'}: {runtime_listing}"
         )
         sys.exit(1)
     runtime_hw_dest = metal_home / "runtime" / "hw"
@@ -74,7 +97,7 @@ def prepare_dir_as_metal_home(ttnn_package_path, metal_home):
     tt_metal_src = ttnn_package_path / "tt_metal"
     tt_metal_dest = metal_home / "tt_metal"
 
-    ttnn_src = ttnn_package_path
+    ttnn_src = ttnn_package_path / "ttnn"
     ttnn_dest = metal_home / "ttnn"
 
     if version_file.exists():
@@ -129,10 +152,13 @@ def _setup_env(ttnn_package_path, cwd):
         metal_home = cwd / ".ttnn_runtime_artifacts"
         prepare_dir_as_metal_home(ttnn_package_path, metal_home)
         os.environ["TT_METAL_HOME"] = str(metal_home)
+        logger.debug(f"TT_METAL_HOME: {os.environ['TT_METAL_HOME']}")
+        metal_home_listing = str(list(metal_home.iterdir()))
+        logger.debug(f"Contents of {metal_home}: {metal_home_listing}")
 
 
 def setup_ttnn_so():
-    ttnn_package_path = Path(__file__).resolve().parent
+    ttnn_package_path = Path(__file__).resolve().parent / "tt-metalium"
 
     cwd = Path(os.getcwd())
 
