@@ -419,6 +419,60 @@ TEST_F(MeshBufferTestSuite, InterleavedShardsReadWriteWithFloat32ToBfloat16Conve
     }
 }
 
+TEST_F(MeshBufferTestSuite, DistributedHostBufferReadWriteWithFloat32ToBfloat16Conversion) {
+    constexpr uint32_t NUM_ITERS = 100;
+    uint32_t seed = tt::parse_env("TT_METAL_SEED", 0);
+    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+
+    for (auto buffer_type : {BufferType::L1, BufferType::DRAM}) {
+        DeviceLocalBufferConfig per_device_buffer_config{
+            .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
+
+        std::uniform_int_distribution<int> gen_num_tiles(1, 1024);
+        std::mt19937 rng(seed);
+        for (int i = 0; i < NUM_ITERS; i++) {
+            uint32_t num_random_tiles = gen_num_tiles(rng);
+            ReplicatedBufferConfig global_buffer_config = {
+                .size = num_random_tiles * single_tile_size,
+            };
+
+            std::shared_ptr<MeshBuffer> buf =
+                MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+
+            std::vector<float> src_vec(num_random_tiles * single_tile_size / sizeof(uint16_t), 0);
+            // Initialize src_vec with random values
+            std::generate(src_vec.begin(), src_vec.end(), [&rng]() { return static_cast<float>(rng() % 100); });
+            DistributedHostBuffer host_buffer = DistributedHostBuffer::create(mesh_device_->get_view());
+            std::shared_ptr<std::vector<float>> shared_src_vec = std::make_shared<std::vector<float>>(src_vec);
+
+            for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
+                for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
+                    host_buffer.emplace_shard(MeshCoordinate(logical_y, logical_x), [shared_src_vec]() {
+                        return HostBuffer(shared_src_vec);
+                    });
+                }
+            }
+            mesh_device_->mesh_command_queue().enqueue_write_with_conversion(buf, DataFormat::Float16_b, host_buffer, DataFormat::Float32, false);
+            // Generate golden vector
+            std::vector<bfloat16> golden_vec(num_random_tiles * single_tile_size / sizeof(uint16_t), 0);
+            std::transform(src_vec.begin(), src_vec.end(), golden_vec.begin(), [](float f) { return bfloat16(f); });
+            std::vector<uint16_t> golden_vec_uint16(num_random_tiles * single_tile_size / sizeof(uint16_t), 0);
+            std::transform(golden_vec.begin(), golden_vec.end(), golden_vec_uint16.begin(), [](bfloat16 bf16) {
+                return bf16.to_packed();
+            });
+
+            for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
+                for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
+                    std::vector<uint16_t> dst_vec = {};
+                    ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, MeshCoordinate(logical_y, logical_x));
+
+                    EXPECT_EQ(dst_vec, golden_vec_uint16);
+                }
+            }
+        }
+    }
+}
+
 TEST_F(MeshBufferTestSuite, ShardingTestithFloat32ToBfloat16Conversion) {
     std::array<uint32_t, 2> num_pages_per_core = {1, 1};
     std::array<uint32_t, 2> page_shape = {1, 1024};
@@ -579,6 +633,7 @@ TEST_F(MeshBufferTestSuite, RowMajorShardingAndReplicationWithFloat32ToBfloat16C
         EXPECT_EQ(dst_vec, golden_vec_uint16);
     }
 }
+
 
 TEST_F(MeshBufferTestSuite, ColMajorShardingAndReplication) {
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
