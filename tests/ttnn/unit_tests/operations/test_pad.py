@@ -38,8 +38,8 @@ def random_torch_tensor(dtype, shape):
         (((0, 1), (3, 25), (4, 7)), (4, 7, 3, 25, 0, 1)),  # Odd padding widths (5 and 7)
     ],
 )
-@pytest.mark.parametrize("value", [-1])
-@pytest.mark.parametrize("dtype", [ttnn.int32])
+@pytest.mark.parametrize("value", [0, 1])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
 def test_pad_rm(device, n, c, h, w, padding, torch_padding, value, dtype):
     torch.manual_seed(0)
 
@@ -73,8 +73,8 @@ def run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, va
 @pytest.mark.parametrize("h", [224])
 @pytest.mark.parametrize("w", [224])
 @pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (0, 32), (0, 32)), (0, 32, 0, 32, 0, 1))])
-@pytest.mark.parametrize("value", [4])
-@pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.uint32])
+@pytest.mark.parametrize("value", [0, 1])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
 def test_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value, dtype):
     for _ in range(2):
         run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value, dtype)
@@ -94,13 +94,11 @@ def test_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, v
 def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, dtype):
     torch.manual_seed(0)
 
-    # torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_input_tensor = random_torch_tensor(dtype, (n, c, h, w))
     torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
 
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor,
-        # dtype=ttnn.DataType.BFLOAT16,
         dtype=dtype,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
@@ -229,9 +227,7 @@ def to_torch_padding(padspec):
         ],
     ],
 )
-@pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.uint32])
-# @pytest.mark.parametrize("dtype", [ttnn.int32])
-# @pytest.mark.parametrize("dtype", [ttnn.float32])
+@pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.float32])
 def test_pad_rm_sharded_stickwise(
     device, input_shape, pad_to_shape, input_tensor_start, pad_value, input_sharded_memory_config_args, dtype
 ):
@@ -243,8 +239,7 @@ def test_pad_rm_sharded_stickwise(
 
     input_shard_memory_config = ttnn.create_sharded_memory_config(input_shape, **input_sharded_memory_config_args)
 
-    # torch_input_tensor = torch.ones(input_shape, dtype=torch.int32)
-    torch_input_tensor = torch.arange(torch.prod(torch.tensor(input_shape)), dtype=torch.int32).reshape(input_shape)
+    torch_input_tensor = torch.ones(input_shape, dtype=torch.float32)
     ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     # Still relay on keep_l1_aligned = True to make it work with the current implementation
     ttnn_sharded_input_tensor = ttnn.interleaved_to_sharded(
@@ -276,8 +271,7 @@ def test_pad_rm_sharded_stickwise(
 @pytest.mark.parametrize("padding,torch_padding", [(((1, 1), (2, 32), (0, 0)), (0, 0, 2, 32, 1, 1))])
 @pytest.mark.parametrize("value", [8])
 @pytest.mark.parametrize("shard_orient", [ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.ROW_MAJOR])
-@pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.uint32])
-# @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.bfloat16])
 def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, dtype):
     if device.core_grid.y < 8:
         pytest.skip("n300 does not have 8x8 grid")
@@ -288,7 +282,6 @@ def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttnn.from_torch(
             py_dummy_tensor,
-            # dtype=ttnn.DataType.BFLOAT16,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
@@ -488,14 +481,7 @@ def _unsqueeze(smaller, larger, fill):
 @pytest.mark.parametrize(
     "padding", [[25, 1], [5, 4], [64], [32, 32], [1, 0, 0, 0], [1, 0, 0], [32, 32, 32, 64], [0, 64], [0, 0, 0, 64]]
 )
-# @pytest.mark.parametrize(
-#     "shape",
-#     [[2, 128]],
-# )
-# @pytest.mark.parametrize(
-#     "padding", [[25, 1]]
-# )
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
 def test_pad_tile(shape, padding, dtype, device):
     if (shape, padding) in [([5, 4, 3, 2, 1], [1, 0, 0, 0]), ([5, 4, 3, 2, 1], [32, 32, 32, 64])]:
         pytest.xfail("Can't pad upper dims with rank>4")
