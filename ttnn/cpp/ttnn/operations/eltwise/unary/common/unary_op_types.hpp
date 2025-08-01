@@ -107,6 +107,7 @@ enum class UnaryOpType {
     HARDSIGMOID,
     HARDSWISH,
     WHERE_TSS,
+    SOFTSIGN,
 };
 
 enum class VecMode {
