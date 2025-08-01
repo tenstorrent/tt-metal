@@ -61,7 +61,7 @@ parameters = {
         "output_layout": [ttnn.TILE_LAYOUT],
         "has_bias": [True],
         "enable_act_double_buffer": [False],
-        "enable_split_reader": [False],
+        "enable_split_reader": [True],
         "enable_subblock_padding": [False],
         "activations_dtype": [ttnn.bfloat16],
         "weights_dtype": [ttnn.bfloat16],

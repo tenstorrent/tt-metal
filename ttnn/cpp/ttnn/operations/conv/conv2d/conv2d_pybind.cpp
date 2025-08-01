@@ -328,7 +328,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("enable_act_double_buffer") = false,
         py::arg("enable_weights_double_buffer") = false,
         py::arg("full_inner_dim") = false,
-        py::arg("enable_split_reader") = false,
+        py::arg("enable_split_reader") = true,
         py::arg("enable_subblock_padding") = false,
         py::arg("in_place") = false,
         py::arg("enable_kernel_stride_folding") = false);

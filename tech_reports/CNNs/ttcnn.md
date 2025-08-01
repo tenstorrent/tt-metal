@@ -119,7 +119,7 @@ Following are the conv2d operation configuration parameters:
 * `output_layout = ttnn.TILE_LAYOUT` _optional_ `ttnn.Layout` to specify whether the output tensor be in `TILE` or `ROW_MAJOR` layout.
 * `enable_act_double_buffer = False` _optional_ bool to enable activation double buffering.
 * `enable_weights_double_buffer = False` _optional_ bool to enable weights double buffering when using block sharding.
-* `enable_split_reader = False` _optional_ bool to two concurrent reader kernels instead of one.
+* `enable_split_reader = True` _optional_ bool to two concurrent reader kernels instead of one.
 
 #### Compute Config
 

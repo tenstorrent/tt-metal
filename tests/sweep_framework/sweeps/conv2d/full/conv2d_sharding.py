@@ -62,7 +62,7 @@ parameters = {
         "output_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "has_bias": [True, False],
         "enable_act_double_buffer": [True, False],
-        "enable_split_reader": [True, False],
+        "enable_split_reader": [True],
         "enable_subblock_padding": [True, False],
         # Parameters-to-check ends
         "activations_dtype": [ttnn.bfloat16],

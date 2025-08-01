@@ -328,7 +328,7 @@ Tensor optimized_conv_new(
     bool enable_act_double_buffer = false,
     bool enable_weights_double_buffer = false,
     bool full_inner_dim = false,
-    bool enable_split_reader = false,
+    bool enable_split_reader = true,
     bool enable_subblock_padding = false);
 
 // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2, otherwise

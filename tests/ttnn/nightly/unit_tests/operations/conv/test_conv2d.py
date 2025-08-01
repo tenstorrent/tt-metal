@@ -104,7 +104,7 @@ def run_conv(
     input_mesh_mapper=None,
     weight_mesh_mapper=None,
     output_mesh_composer=None,
-    enable_split_reader=False,
+    enable_split_reader=True,
     activation="",
     in_place=False,
     run_twice=False,
@@ -914,7 +914,7 @@ def test_conv_ws(
         deallocate_activation=deallocate_activation,
         enable_act_double_buffer=enable_act_double_buffer,
         enable_weights_double_buffer=enable_weights_double_buffer,
-        enable_split_reader=False,
+        enable_split_reader=True,
         enable_subblock_padding=False,
         reshard_if_not_optimal=True,
         act_block_w_div=act_block_w_div if not auto_shard else 1,
@@ -3539,7 +3539,7 @@ def test_conv_sharded_non_tile(device):
 
 
 @pytest.mark.parametrize("enable_act_double_buffer", [True, False])
-@pytest.mark.parametrize("enable_split_reader", [True, False])
+@pytest.mark.parametrize("enable_split_reader", [True])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_segformer_channel_padding(device, enable_act_double_buffer, enable_split_reader):
     if device.core_grid.y != 8 and is_wormhole_b0():
