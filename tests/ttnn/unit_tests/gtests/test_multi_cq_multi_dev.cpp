@@ -50,7 +50,7 @@ using namespace tt;
 using namespace tt_metal;
 using MultiCommandQueueT3KFixture = ttnn::MultiCommandQueueT3KFixture;
 
-Tensor dispatch_ops_to_device(IDevice* dev, Tensor input_tensor, QueueId cq_id) {
+Tensor dispatch_ops_to_device(Tensor input_tensor, QueueId cq_id) {
     using ttnn::operations::unary::UnaryOpType;
     using ttnn::operations::unary::UnaryWithParam;
 
@@ -94,7 +94,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
                     {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
                 auto write_event = ttnn::record_event(device->mesh_command_queue(0));
                 ttnn::wait_for_event(device->mesh_command_queue(1), write_event);
-                auto output_tensor = dispatch_ops_to_device(device.get(), input_tensor, ttnn::QueueId(1));
+                auto output_tensor = dispatch_ops_to_device(input_tensor, ttnn::QueueId(1));
                 auto workload_event = ttnn::record_event(device->mesh_command_queue(1));
                 ttnn::wait_for_event(device->mesh_command_queue(0), workload_event);
 
@@ -147,7 +147,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
                     {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
                 auto write_event = ttnn::record_event(device->mesh_command_queue(1));
                 ttnn::wait_for_event(device->mesh_command_queue(0), write_event);
-                auto output_tensor = dispatch_ops_to_device(device.get(), input_tensor, ttnn::DefaultQueueId);
+                auto output_tensor = dispatch_ops_to_device(input_tensor, ttnn::DefaultQueueId);
                 auto workload_event = ttnn::record_event(device->mesh_command_queue(0));
                 ttnn::wait_for_event(device->mesh_command_queue(1), workload_event);
                 // std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -198,7 +198,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
                     {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
                 auto write_event = ttnn::record_event(device->mesh_command_queue(1));
                 ttnn::wait_for_event(device->mesh_command_queue(1), write_event);
-                auto output_tensor = dispatch_ops_to_device(device.get(), input_tensor, ttnn::QueueId(1));
+                auto output_tensor = dispatch_ops_to_device(input_tensor, ttnn::QueueId(1));
                 auto workload_event = ttnn::record_event(device->mesh_command_queue(1));
                 ttnn::wait_for_event(device->mesh_command_queue(1), workload_event);
                 ttnn::read_buffer(
