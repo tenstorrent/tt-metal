@@ -126,21 +126,41 @@ std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_config(const Tes
         TT_THROW("Test '{}' cannot have both explicit sockets and pattern expansions", test_config.name);
     }
 
-    // Start with explicit sockets if they exist
-    if (test_config.sockets.has_value()) {
-        parsed_configs.emplace_back(ParsedTestConfig{
-            .name = test_config.name,
-            .num_iterations = test_config.num_iterations,
-            .memory_config = test_config.memory_config,
-            .sockets = test_config.sockets.value()});
-    } else if (test_config.pattern_expansions.has_value()) {  // Expand patterns and add to sockets, cannot have both
-        for (const auto& pattern : test_config.pattern_expansions.value()) {
-            auto expanded_sockets = expand_pattern(pattern);
+    // Expand memory configurations into all combinations
+    auto expanded_memory_configs = expand_memory_config(test_config.memory_config);
+    log_info(
+        tt::LogTest,
+        "Test '{}': Expanded memory config into {} combinations",
+        test_config.name,
+        expanded_memory_configs.size());
+
+    // For each memory configuration, create test configurations
+    for (size_t mem_idx = 0; mem_idx < expanded_memory_configs.size(); ++mem_idx) {
+        const auto& memory_config = expanded_memory_configs[mem_idx];
+
+        // Generate test name suffix for parameterized tests
+        std::string test_name = test_config.name;
+        if (expanded_memory_configs.size() > 1) {
+            test_name += "_mem_" + std::to_string(mem_idx);
+        }
+
+        // Start with explicit sockets if they exist
+        if (test_config.sockets.has_value()) {
             parsed_configs.emplace_back(ParsedTestConfig{
-                .name = test_config.name,
+                .name = test_name,
                 .num_iterations = test_config.num_iterations,
-                .memory_config = test_config.memory_config,
-                .sockets = expanded_sockets});
+                .memory_config = memory_config,
+                .sockets = test_config.sockets.value()});
+        } else if (test_config.pattern_expansions
+                       .has_value()) {  // Expand patterns and add to sockets, cannot have both
+            for (const auto& pattern : test_config.pattern_expansions.value()) {
+                auto expanded_sockets = expand_pattern(pattern);
+                parsed_configs.emplace_back(ParsedTestConfig{
+                    .name = test_name,
+                    .num_iterations = test_config.num_iterations,
+                    .memory_config = memory_config,
+                    .sockets = expanded_sockets});
+            }
         }
     }
 
@@ -166,8 +186,7 @@ std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_to_all_pattern(co
     std::vector<TestSocketConfig> sockets;
 
     // TODO: Implement actual all-to-all expansion
-
-    / log_warning(tt::LogTest, "All-to-all pattern expansion not implemented at parse time");
+    log_warning(tt::LogTest, "All-to-all pattern expansion not implemented at parse time");
 
     return sockets;
 }
@@ -182,6 +201,27 @@ std::vector<TestSocketConfig> MeshSocketYamlParser::expand_random_pairing_patter
     log_warning(tt::LogTest, "Random pairing pattern expansion not implemented at parse time");
 
     return sockets;
+}
+
+std::vector<ParsedMemoryConfig> MeshSocketYamlParser::expand_memory_config(const MemoryConfig& memory_config) {
+    std::vector<ParsedMemoryConfig> expanded_configs;
+
+    // Generate all combinations of memory parameters
+    for (uint32_t fifo_size : memory_config.fifo_size) {
+        for (uint32_t page_size : memory_config.page_size) {
+            for (uint32_t data_size : memory_config.data_size) {
+                for (uint32_t num_transactions : memory_config.num_transactions) {
+                    expanded_configs.push_back(ParsedMemoryConfig{
+                        .fifo_size = fifo_size,
+                        .page_size = page_size,
+                        .data_size = data_size,
+                        .num_transactions = num_transactions});
+                }
+            }
+        }
+    }
+
+    return expanded_configs;
 }
 
 PhysicalMeshConfig MeshSocketYamlParser::parse_physical_mesh(const YAML::Node& node) {
@@ -326,22 +366,42 @@ EndpointConfig MeshSocketYamlParser::parse_endpoint_config(const YAML::Node& nod
 MemoryConfig MeshSocketYamlParser::parse_memory_config(const YAML::Node& node) {
     MemoryConfig memory;
 
+    // Parse fifo_size - can be single value or array
     if (node["fifo_size"]) {
-        memory.fifo_size = node["fifo_size"].as<uint32_t>();
+        if (node["fifo_size"].IsSequence()) {
+            memory.fifo_size = node["fifo_size"].as<std::vector<uint32_t>>();
+        } else {
+            memory.fifo_size = {node["fifo_size"].as<uint32_t>()};
+        }
     }
 
+    // Parse page_size - can be single value or array
     if (node["page_size"]) {
-        memory.page_size = node["page_size"].as<uint32_t>();
+        if (node["page_size"].IsSequence()) {
+            memory.page_size = node["page_size"].as<std::vector<uint32_t>>();
+        } else {
+            memory.page_size = {node["page_size"].as<uint32_t>()};
+        }
     }
 
+    // Parse data_size - can be single value or array
     if (node["data_size"]) {
-        memory.data_size = node["data_size"].as<uint32_t>();
+        if (node["data_size"].IsSequence()) {
+            memory.data_size = node["data_size"].as<std::vector<uint32_t>>();
+        } else {
+            memory.data_size = {node["data_size"].as<uint32_t>()};
+        }
     }
 
+    // Parse num_transactions - can be single value or array
     if (node["num_transactions"]) {
-        memory.num_transactions = node["num_transactions"].as<uint32_t>();
+        if (node["num_transactions"].IsSequence()) {
+            memory.num_transactions = node["num_transactions"].as<std::vector<uint32_t>>();
+        } else {
+            memory.num_transactions = {node["num_transactions"].as<uint32_t>()};
+        }
     } else {
-        memory.num_transactions = 20;  // Default value
+        memory.num_transactions = {20};  // Default value
     }
 
     return memory;
@@ -457,7 +517,7 @@ void MeshSocketYamlParser::validate_parsed_test_config(const ParsedTestConfig& t
     TT_FATAL(!test.sockets.empty(), "Parsed test '{}' must have at least one socket", test.name);
 
     // Validate memory config
-    validate_memory_config(test.memory_config);
+    validate_parsed_memory_config(test.memory_config);
 
     // Validate all sockets
     for (const auto& socket : test.sockets) {
@@ -475,9 +535,30 @@ void MeshSocketYamlParser::validate_socket_config(const TestSocketConfig& socket
 }
 
 void MeshSocketYamlParser::validate_memory_config(const MemoryConfig& memory) {
+    TT_FATAL(!memory.fifo_size.empty(), "fifo_size must have at least one value");
+    TT_FATAL(!memory.page_size.empty(), "page_size must have at least one value");
+    TT_FATAL(!memory.data_size.empty(), "data_size must have at least one value");
+    TT_FATAL(!memory.num_transactions.empty(), "num_transactions must have at least one value");
+
+    for (uint32_t fifo_size : memory.fifo_size) {
+        TT_FATAL(fifo_size > 0, "All fifo_size values must be greater than 0");
+    }
+    for (uint32_t page_size : memory.page_size) {
+        TT_FATAL(page_size > 0, "All page_size values must be greater than 0");
+    }
+    for (uint32_t data_size : memory.data_size) {
+        TT_FATAL(data_size > 0, "All data_size values must be greater than 0");
+    }
+    for (uint32_t num_transactions : memory.num_transactions) {
+        TT_FATAL(num_transactions > 0, "All num_transactions values must be greater than 0");
+    }
+}
+
+void MeshSocketYamlParser::validate_parsed_memory_config(const ParsedMemoryConfig& memory) {
     TT_FATAL(memory.fifo_size > 0, "fifo_size must be greater than 0");
     TT_FATAL(memory.page_size > 0, "page_size must be greater than 0");
     TT_FATAL(memory.data_size > 0, "data_size must be greater than 0");
+    TT_FATAL(memory.num_transactions > 0, "num_transactions must be greater than 0");
 }
 
 void MeshSocketYamlParser::validate_endpoint_config(const EndpointConfig& endpoint) {

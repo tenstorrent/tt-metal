@@ -44,6 +44,13 @@ struct FabricConfig {
 };
 
 struct MemoryConfig {
+    std::vector<uint32_t> fifo_size;
+    std::vector<uint32_t> page_size;
+    std::vector<uint32_t> data_size;
+    std::vector<uint32_t> num_transactions;
+};
+
+struct ParsedMemoryConfig {
     uint32_t fifo_size;
     uint32_t page_size;
     uint32_t data_size;
@@ -88,7 +95,7 @@ struct TestConfig {
 struct ParsedTestConfig {
     std::string name;
     std::optional<uint32_t> num_iterations;
-    MemoryConfig memory_config;
+    ParsedMemoryConfig memory_config;
     std::vector<TestSocketConfig> sockets;
 };
 
@@ -148,6 +155,9 @@ private:
     std::vector<TestSocketConfig> expand_all_to_all_pattern(const PatternExpansionConfig& pattern);
     std::vector<TestSocketConfig> expand_random_pairing_pattern(const PatternExpansionConfig& pattern);
 
+    // Memory config expansion methods
+    std::vector<ParsedMemoryConfig> expand_memory_config(const MemoryConfig& memory_config);
+
     // Utility parsing methods
     MeshCoordinate parse_mesh_coordinate(const YAML::Node& node);
     CoreCoord parse_core_coordinate(const YAML::Node& node);
@@ -159,6 +169,7 @@ private:
     static void validate_parsed_test_config(const ParsedTestConfig& test);
     static void validate_socket_config(const TestSocketConfig& socket);
     static void validate_memory_config(const MemoryConfig& memory);
+    static void validate_parsed_memory_config(const ParsedMemoryConfig& memory);
     static void validate_endpoint_config(const EndpointConfig& endpoint);
     static void validate_pattern_expansion_config(const PatternExpansionConfig& pattern);
     static void validate_fabric_config(const FabricConfig& fabric_config);
