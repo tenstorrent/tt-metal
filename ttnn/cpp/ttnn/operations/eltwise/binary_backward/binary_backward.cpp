@@ -23,7 +23,6 @@
 #include "ttnn/operations/eltwise/ternary/where/where.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "tools/profiler/op_profiler.hpp"
-#include <magic_enum/magic_enum.hpp>
 
 namespace ttnn::operations::binary_backward {
 
