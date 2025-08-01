@@ -77,6 +77,7 @@ target_sources(
             common/kernels/command_processor.hpp
             common/interpreter_backends/kernel_common/io_descriptors.hpp
             common/types/ccl_types.hpp
+            kernel_common/sharding_addrgen.hpp
 )
 
 install(
