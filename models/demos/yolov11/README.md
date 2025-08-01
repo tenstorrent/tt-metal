@@ -15,35 +15,67 @@
    export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
    ```
 
-
 ## How to Run
-- Use the following command to run the model:
+Use the following command to run the model:
 ```
 pytest --disable-warnings models/demos/yolov11/tests/pcc/test_ttnn_yolov11.py::test_yolov11
 ```
 
-### Performant Model with Trace+2CQ
+### Model performant running with Trace+2CQ
+#### Single Device (BS=1):
+- For `640x640`, end-2-end perf is `145` FPS :
 ```
-pytest --disable-warnings models/demos/yolov11/tests/perf/test_e2e_performant.py
-```
-### Performant Demo with Trace+2CQ
-```
-pytest --disable-warnings models/demos/yolov11/demo/demo.py::test_demo
+pytest --disable-warnings models/demos/yolov11/tests/perf/test_e2e_performant.py::test_e2e_performant
 ```
 
-### Web Demo:
-Try the interactive web demo at [yolov11/web_demo](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov11/web_demo/README.md)
+### Performant Demo with Trace+2CQ
+#### Multi Device (DP=2, N300):
+- For `640x640`, end-2-end perf is `275` FPS :
+  ```
+  pytest --disable-warnings models/demos/yolov11/tests/test_e2e_performant.py::test_e2e_performant_dp
+  ```
+
+### Demo with Trace+2CQ
+Note: Output images will be saved in the `models/demos/yolov11/demo/runs` folder.
+
+#### Single Device (BS=1)
+##### Custom Images:
+- Use the following command to run demo for `640x640` resolution :
+  ```bash
+  pytest --disable-warnings models/demos/yolov11/demo/demo.py::test_demo
+  ```
+  - To use a different image(s) for demo, replace your image(s) in the image path `models/demos/yolov11/demo/images` and run the same command.
+
+#### COCO-2017 dataset:
+- Use the following command to run demo for `640x640` resolution :
+  ```
+  pytest --disable-warnings models/demos/yolov11/demo/demo.py::test_demo_dataset
+  ```
+
+### Multi Device (DP=2, n300)
+#### Custom Images:
+- Use the following command to run demo for `640x640` resolution:
+  ```bash
+  pytest --disable-warnings models/demos/yolov11/demo/demo.py::test_demo_dp
+  ```
+  - To use a different image(s) for demo, replace your image(s) in the image path `models/demos/yolov8x/demo/images` and run the same command.
+
+#### Coco-2017 dataset:
+- Use the following command to run demo for `640x640` resolution :
+  ```
+  pytest --disable-warnings models/demos/yolov11/demo/demo.py::test_demo_dataset_dp
+  ```
 
 ## Testing
 ### Performant evaluation with Trace+2CQ
+Use the following command to run the performant evaluation with Trace+2CQs:
 ```
 pytest models/experimental/yolo_eval/evaluate.py::test_yolov11n[res0-device_params0-tt_model]
 ```
 Note: The model is evaluated with 500 samples.
 
 ## Details
-- The entry point to the yolov11 is located at:`models/demos/yolov11/tt/ttnn_yolov11.py`
-- Batch Size :1
-- Supported Input Resolution - (640,640) (Height,Width)
-- Dataset used for evaluation - **coco-2017**
-- End-2-end perf is 190 FPS
+- The entry point to the `yolov11` is located at : `models/demos/yolov11/tt/ttnn_yolov11.py`
+- Batch Size : `1` (Single Device), `2` (Multi Device).
+- Supported Input Resolution : `(640, 640)` - (Height, Width).
+- Dataset used for evaluation : **COCO-2017**
