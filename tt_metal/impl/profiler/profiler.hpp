@@ -151,7 +151,7 @@ private:
     // Smallest timestamp
     uint64_t smallest_timestamp = (1lu << 63);
 
-    // Output dir for device Profile Logs
+    // Output directory for device profiler logs
     std::filesystem::path output_dir;
 
     // Hash to zone source locations
@@ -184,6 +184,9 @@ private:
 
     // Storage for all noc trace data
     std::vector<std::unordered_map<RuntimeID, nlohmann::json::array_t>> noc_trace_data;
+
+    // Output directory for noc trace data
+    std::filesystem::path noc_trace_data_output_dir;
 
     // Read all control buffers
     void readControlBuffers(IDevice* device, const std::vector<CoreCoord>& virtual_cores);
