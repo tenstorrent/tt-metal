@@ -21,15 +21,16 @@ run_qwen7b_func() {
 
 }
 
-run_segformer_func() {
+# run_segformer_func() {
   #Segformer Segmentation Demo
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py --timeout 600; fail+=$?
+  # Commenting out Segformer Segmentation Demo. Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
+  # WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py --timeout 600; fail+=$?
 
   ## Commenting out Segformer Classification Demo. Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
   #Segformer Classification Demo
   # WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py --timeout 600; fail+=$?
 
-}
+# }
 
 run_sentencebert_func() {
 
