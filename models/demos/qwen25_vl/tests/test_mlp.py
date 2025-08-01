@@ -36,7 +36,7 @@ from models.utility_functions import comp_allclose, comp_pcc
     "batch_size",
     (1,),
 )
-def test_mlp_inference(rows, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
+def test_mlp_inference(rows, batch_size, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
     mode = "prefill"  # Vision processing is prefill only (generating token embeddings)
 

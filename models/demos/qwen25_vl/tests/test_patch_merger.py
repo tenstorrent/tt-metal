@@ -33,7 +33,7 @@ from models.utility_functions import comp_allclose, comp_pcc
     "batch_size",
     (1,),
 )
-def test_patch_merger_inference(rows, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
+def test_patch_merger_inference(rows, batch_size, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
 
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=rows)
