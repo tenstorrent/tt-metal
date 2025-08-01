@@ -456,11 +456,12 @@ def test_noc_event_profiler():
 
     testCommand = f"build/{PROG_EXMP_DIR}/test_noc_event_profiler"
     clear_profiler_runtime_artifacts()
+    nocEventsRptPathEnv = f"TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH={PROFILER_ARTIFACTS_DIR}/noc_events_rpt"
     nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
-    profilerRun = os.system(f"cd {TT_METAL_HOME} && {nocEventProfilerEnv} {testCommand}")
+    profilerRun = os.system(f"cd {TT_METAL_HOME} && {nocEventsRptPathEnv} {nocEventProfilerEnv} {testCommand}")
     assert profilerRun == 0
 
-    expected_trace_file = f"{PROFILER_LOGS_DIR}/noc_trace_dev0_ID0.json"
+    expected_trace_file = f"{PROFILER_ARTIFACTS_DIR}/noc_events_rpt/noc_trace_dev0_ID0.json"
     assert os.path.isfile(expected_trace_file)
 
     with open(expected_trace_file, "r") as nocTraceJson:
