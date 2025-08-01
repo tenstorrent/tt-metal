@@ -77,7 +77,7 @@ jobs:
           clean: true
       - name: Configure git
         run: |
-          git config --global user.name "github-actions[bot]"
+          git config --global user.name "LLK Integration Tester [bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
       - name: Check if mirrored branch exists in submodule
         id: check-branch
