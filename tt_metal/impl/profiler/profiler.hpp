@@ -145,8 +145,8 @@ private:
     // Device frequency
     int device_core_frequency;
 
-    // Last fast dispatch dump performed flag
-    bool is_last_fd_dump_done;
+    // Last fast dispatch read performed flag
+    bool is_last_fd_read_done;
 
     // Smallest timestamp
     uint64_t smallest_timestamp = (1lu << 63);
@@ -239,7 +239,7 @@ private:
         uint32_t timer_id,
         uint64_t timestamp);
 
-    // Track the smallest timestamp dumped to file
+    // Track the smallest timestamp read
     void firstTimestamp(uint64_t timestamp);
 
     // Get tracy context for the core
@@ -290,7 +290,7 @@ public:
     void readResults(
         IDevice* device,
         const std::vector<CoreCoord>& virtual_cores,
-        ProfilerDumpState state = ProfilerDumpState::NORMAL,
+        ProfilerReadState state = ProfilerReadState::NORMAL,
         ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
@@ -298,7 +298,7 @@ public:
     void processResults(
         IDevice* device,
         const std::vector<CoreCoord>& virtual_cores,
-        ProfilerDumpState state = ProfilerDumpState::NORMAL,
+        ProfilerReadState state = ProfilerReadState::NORMAL,
         ProfilerDataBufferSource data_source = ProfilerDataBufferSource::DRAM,
         const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
@@ -315,12 +315,12 @@ public:
     // Get zone details for the zone corresponding to the given timer id
     ZoneDetails getZoneDetails(uint16_t timer_id) const;
 
-    // setter and getter on last fast dispatch dump
-    void setLastFDDumpAsDone();
+    // setter and getter on last fast dispatch read
+    void setLastFDReadAsDone();
 
-    void setLastFDDumpAsNotDone();
+    void setLastFDReadAsNotDone();
 
-    bool isLastFDDumpDone() const;
+    bool isLastFDReadDone() const;
 };
 
 bool useFastDispatch(IDevice* device);

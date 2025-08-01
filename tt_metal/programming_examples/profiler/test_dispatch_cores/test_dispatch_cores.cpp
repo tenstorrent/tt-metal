@@ -52,7 +52,7 @@ void RunCustomCycle(tt_metal::IDevice* device, int loop_count) {
         tt_metal::ComputeConfig{.compile_args = trisc_kernel_args, .defines = kernel_defines});
 
     EnqueueProgram(device->command_queue(), program, false);
-    tt_metal::detail::DumpDeviceProfileResults(device);
+    tt_metal::detail::ReadDeviceProfilerResults(device);
 }
 
 int main() {
