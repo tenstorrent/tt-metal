@@ -190,3 +190,134 @@ def test_conv_dram(
             num_slices=num_slices,
         ),
     )
+
+
+@pytest.mark.parametrize("batch_size, input_channels, output_channels, input_height, input_width, has_bias, kernel, stride, padding, dilation, groups",
+                        [
+                            [1, 128, 128,  48, 160, False, (3, 3), (1, 1), (1, 1), (1, 1), 1],
+                            [1, 128, 256,  48, 160, False, (3, 3), (2, 2), (1, 1), (1, 1), 1],
+                            [1, 128, 256,  48, 160, True , (1, 1), (1, 1), (0, 0), (1, 1), 1],
+                            # [1, 256, 256, 159, 159, False, (3, 3), (1, 1), (1, 1), (1, 1), 1], #
+                            # [1, 256,   9, 159, 159, True , (3, 3), (1, 1), (1, 1), (1, 1), 1],
+                            
+                            [1, 256, 256,  24,  80, True , (1, 1), (1, 1), (0, 0), (1, 1), 1],
+                            [1, 256, 256,  24,  80, False, (3, 3), (1, 1), (1, 1), (1, 1), 1],
+                            [1, 256, 512,  24,  80, False, (3, 3), (2, 2), (1, 1), (1, 1), 1],
+                            
+                            [1, 3, 384, 64, 1280, False, (7, 7), (2, 2), (3, 3), (1, 1), 1],
+
+                            [1, 512, 256, 12, 40, True , (1, 1), (1, 1), (0, 0), (1, 1), 1],
+                            [1, 512, 512, 12, 40, False, (3, 3), (1, 1), (1, 1), (1, 1), 1],
+
+                            [1, 64, 128, 96, 320, False, (3, 3), (2, 2), (1, 1), (1, 1), 1],
+                            [1, 64,  64, 96, 320, False, (3, 3), (1, 1), (1, 1), (1, 1), 1],
+
+
+                        ])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 2*1024}], indirect=True)
+def test_conv2d_oft(device, torch_tensor_map, batch_size, input_channels, output_channels, input_height, input_width, has_bias, kernel, stride, padding, dilation, groups):
+    # if device.core_grid.y != 4 and device.core_grid.x != 5:
+    #     pytest.skip(f"Test should be executed on coregrid 5x4 and current core grid is {device.core_grid.x}x{device.core_grid.y}")
+    run_conv(
+        device=device,
+        torch_tensor_map=torch_tensor_map,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        output_dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat8_b,
+        batch_size=batch_size,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=kernel[0],
+        filter_width=kernel[1],
+        stride_h=stride[0],
+        stride_w=stride[1],
+        padding=padding,
+        dilation_h=dilation[0],
+        dilation_w=dilation[1],
+        groups=groups,
+        has_bias=has_bias,
+        config_override=None,
+    )  
+
+
+@pytest.mark.parametrize(
+    "input_dtype, input_layout",
+    [
+        [ttnn.bfloat16, ttnn.TILE_LAYOUT]
+    ],
+)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize(
+    "input_channels, output_channels, input_height, input_width, slice_type, num_slices, weights_dtype, output_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity",
+    (
+        (256,    256,  159,   159,  SliceHeight,   2,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0, ttnn.MathFidelity.LoFi  ),
+        (256,      9,  159,   159,  SliceHeight,   2,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0, ttnn.MathFidelity.LoFi  ),
+    )
+)
+@pytest.mark.parametrize(
+    "has_bias, fp32_accum, packer_l1_acc",
+    [[True, False, False]],
+)
+def test_conv2d_dram_oft(
+    device,
+    torch_tensor_map,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    has_bias,
+    weights_dtype,
+    output_dtype,
+    slice_type,
+    num_slices,
+    kernel,
+    stride,
+    padding,
+    dilation,
+    act_block_h_override,
+    math_fidelity,
+    fp32_accum,
+    input_dtype,
+    input_layout,
+    packer_l1_acc,
+):
+    # if device.core_grid.y != 4 and device.core_grid.x != 5:
+    #     pytest.skip(f"Test should be executed on coregrid 5x4 and current core grid is {device.core_grid.x}x{device.core_grid.y}")
+    batch_size = 1
+    config = {
+        "act_block_h": act_block_h_override,
+    }
+    run_conv(
+        device,
+        torch_tensor_map,
+        math_fidelity,
+        output_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        kernel[0],
+        kernel[1],
+        stride[0],
+        stride[1],
+        padding,
+        config,
+        dilation_h=dilation[0],
+        dilation_w=dilation[1],
+        has_bias=True,
+        fp32_accum=fp32_accum,
+        input_dtype=input_dtype,
+        input_layout=input_layout,
+        output_layout=input_layout,
+        packer_l1_acc=packer_l1_acc,
+        run_twice=False,
+        fast_compare=True,
+        slice_config=ttnn.Conv2dSliceConfig(
+            slice_type=slice_type,
+            num_slices=num_slices,
+        ),
+    )
