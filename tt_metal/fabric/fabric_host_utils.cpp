@@ -45,8 +45,9 @@ uint32_t get_downstream_edm_count(tt::tt_fabric::Topology topology) {
     }
 }
 
-FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, tt::ClusterType cluster_type) {
-    if (cluster_type == tt::ClusterType::GALAXY && fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {
+FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, tt::tt_metal::ClusterType cluster_type) {
+    if (cluster_type == tt::tt_metal::ClusterType::GALAXY &&
+        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {
         return FabricType::TORUS_XY;
     }
     return FabricType::MESH;

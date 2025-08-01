@@ -23,7 +23,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_i
     round_up,
 )
 from tracy import signpost
-from models.demos.llama3_subdevices.tt.prefetcher_common import get_core_ranges
+from models.demos.llama3_70b_galaxy.tt.prefetcher_common import get_core_ranges
 
 
 def run_prefetcher_mm(

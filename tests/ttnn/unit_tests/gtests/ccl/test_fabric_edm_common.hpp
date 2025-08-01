@@ -2603,11 +2603,11 @@ Fabric1DWorkerConfig get_fabric_1d_worker_config(
 }
 
 tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_wormhole(
-    tt::ClusterType cluster_type, FabricTestMode fabric_mode, size_t line_size) {
+    tt::tt_metal::ClusterType cluster_type, FabricTestMode fabric_mode, size_t line_size) {
     tt::tt_fabric::FabricRouterBufferConfig buffer_config{};
     switch (cluster_type) {
-        case tt::ClusterType::TG:
-        case tt::ClusterType::GALAXY:
+        case tt::tt_metal::ClusterType::TG:
+        case tt::tt_metal::ClusterType::GALAXY:
             // long axis, more buffering.
             if (line_size >= tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
                 if (fabric_mode == FabricTestMode::HalfRing) {
@@ -2633,7 +2633,7 @@ tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_wormhole(
                 }
             }
             break;
-        case tt::ClusterType::T3K:
+        case tt::tt_metal::ClusterType::T3K:
             // Need more tunning on T3K, for now keep the long/short axis the same.
             if (line_size >= tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
                 if (fabric_mode == FabricTestMode::HalfRing) {
@@ -2665,11 +2665,11 @@ tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_wormhole(
 }
 
 tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_blackhole(
-    tt::ClusterType cluster_type, FabricTestMode fabric_mode, size_t line_size) {
+    tt::tt_metal::ClusterType cluster_type, FabricTestMode fabric_mode, size_t line_size) {
     tt::tt_fabric::FabricRouterBufferConfig buffer_config{};
     switch (cluster_type) {
         // For now just copy the galaxy config to BH since we don't have any data points.
-        case tt::ClusterType::P150_X4:
+        case tt::tt_metal::ClusterType::P150_X4:
             if (line_size >= tt::tt_fabric::FabricEriscDatamoverConfig::MESH_LONG_AXIS_OPTIMIZATION_THRESHOLD) {
                 if (fabric_mode == FabricTestMode::HalfRing) {
                     buffer_config = tt::tt_fabric::FabricRouterBufferConfig{true, true, true, true, false};
@@ -3144,7 +3144,7 @@ void Run1DFabricPacketSendTest(
     for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices.size(); fabric_index++) {
         auto& devices = fabric_under_test_worker_devices[fabric_index];
         for (IDevice* d : devices) {
-            tt_metal::detail::DumpDeviceProfileResults(d);
+            tt_metal::detail::ReadDeviceProfilerResults(d);
         }
     }
     log_trace(tt::LogTest, "Finished");
@@ -3321,7 +3321,7 @@ void launch_kernels_and_wait_for_completion(
         tt_metal::Synchronize(device, *ttnn::DefaultQueueId);
     }
     for (const auto& [device, program] : device_programs) {
-        tt_metal::detail::DumpDeviceProfileResults(device);
+        tt_metal::detail::ReadDeviceProfilerResults(device);
     }
 }
 

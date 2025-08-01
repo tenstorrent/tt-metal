@@ -5,6 +5,7 @@
 import subprocess
 from pathlib import Path
 
+from models.utility_functions import skip_for_blackhole
 import nbformat
 import pytest
 from nbconvert.preprocessors import ExecutePreprocessor
@@ -19,6 +20,7 @@ def collect_ttnn_tutorials(path: Path, extension: str = "*.py"):
         yield file_name
 
 
+@skip_for_blackhole("Fails on BH. Issue #25579")
 @pytest.mark.parametrize("notebook_path", collect_ttnn_tutorials(path=TUTORIALS_NOTEBOOK_PATH, extension="*.ipynb"))
 def test_ttnn_notebook_tutorials(notebook_path):
     with open(notebook_path) as f:
@@ -27,6 +29,7 @@ def test_ttnn_notebook_tutorials(notebook_path):
         ep.preprocess(notebook)
 
 
+@skip_for_blackhole("Fails on BH. Issue #25579")
 @pytest.mark.parametrize("python_path", collect_ttnn_tutorials(path=TUTORIALS_PYTHON_PATH, extension="*.py"))
 def test_ttnn_python_tutorials(python_path):
     result = subprocess.run(
