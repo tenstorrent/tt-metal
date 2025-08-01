@@ -374,11 +374,17 @@ class PytorchLayerUnitTestGraphConfig:
 
     operation_graph: OperationGraph
     register_unit_test_operations: Optional[List[Type[UnitTestOperation]]] = None
-    group_unit_test_operations: Optional[Dict[Type[UnitTestOperation], UnitTestOperationCombiner]] = None
+    group_unit_test_operations: Optional[Dict[Type[UnitTestOperation], Type[UnitTestOperationCombiner]]] = None
 
     def __post_init__(self):
         if self.register_unit_test_operations is None:
-            self.register_unit_test_operations = [ConvolutionUnittest]
+            self.register_unit_test_operations = [ConvolutionUnittest, AddmUnittest, Maxpool2dUnittest]
+        if self.group_unit_test_operations is None:
+            self.group_unit_test_operations = {
+                ConvolutionUnittest: ConvolutionCombiner,
+                AddmUnittest: AddmCombiner,
+                Maxpool2dUnittest: Maxpool2dCombiner,
+            }
 
 
 class PytorchLayerUnitTestGraph:

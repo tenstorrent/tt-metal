@@ -11,6 +11,7 @@
 - [Future Enhancements](#future-enhancements)
 - [How It Works](#how-it-works)
 - [Supported Models](#supported-models)
+- [Contributions](#contributions)
 
 
 ## Getting Started
@@ -143,6 +144,17 @@ The following models are supported out of the box:
 - Vision Transformers (ViT, Swin)
 
 For custom models, ensure they are compatible with PyTorch and provide the necessary input shapes.
+
+## Contributions
+
+We welcome contributions to enhance the functionality of `sample_tracer.py` and its associated tools. Below are some ways you can contribute:
+
+1. **Adding Unit Test Generators for Operations**:
+   - To contribute to adding unit test generators for specific operations (e.g., batch matmul, binary/unary ops), refer to the [`generate_pytorch_unittest_graph.py`](generate_pytorch_unittest_graph.py) file in the same directory. This file contains the logic for generating parameterized unit tests. For detailed instructions, please refer to [`README_generate_pytorch_unittest_graph.md`](README_generate_pytorch_unittest_graph.md)
+
+2. **Expanding Model Support**:
+   - Add support for new models or architectures by updating the `allowed_modes` list in `sample_tracer.py`.
+   - Ensure compatibility with PyTorch and provide necessary input shape configurations.
 
 ## Conclusion
 
