@@ -785,6 +785,31 @@ def test_dram_reshard_with_program_cache(
             ttnn.ShardOrientation.ROW_MAJOR,
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ),
+        # width sharded with different page sizes
+        (
+            [1, 1, 1024, 1248],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 0)]],
+            (1024, 160),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            [[(0, 0), (6, 0)]],
+            (1024, 192),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (
+            [1, 1, 32, 160],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (3, 0)]],
+            (32, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            [[(0, 0), (4, 0)]],
+            (32, 32),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
     ],
 )
 @pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16])
