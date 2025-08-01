@@ -312,8 +312,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
                 // Set output_tensor into device_tensor for allgather
                 device_tensors[dev_idx] = dispatch_ops_to_device(input_tensor, ttnn::QueueId(op_cq_id));
 
-                auto operation_event = tt::tt_metal::distributed::EnqueueRecordEvent(
-                    single_mesh->mesh_command_queue(op_cq_id), std::vector<SubDeviceId>{SubDeviceId{0}});
+                auto operation_event = ttnn::record_event(single_mesh->mesh_command_queue(op_cq_id));
                 // Enqueue the task waiting for the operation_event to the ccl`s command queue
                 ttnn::wait_for_event(single_mesh->mesh_command_queue(ccl_cq_id), operation_event);
 
