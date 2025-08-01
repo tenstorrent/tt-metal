@@ -140,8 +140,9 @@ FactoryParameters get_factory_parameters(
     uint32_t nbytes = datum_size(data_format);
 
     uint32_t kernel_size_hw = kernel_h * kernel_w;  // number of valid rows, to read
-    // for medium kernels we tilize an entire tile even if some rows are unused, so the in_cb has to be TILE_HEIGHT,
-    // but for kernels spanning 1 only face we set the face_r_dim to only tilize the necessary number of rows
+    // for medium kernels with sizes 16 < kernel_size_hw < 32 we tilize an entire tile even if some rows are unused,
+    // so the in_cb height must be equal to the TILE_HEIGHT, but for kernels spanning only one face we set the
+    // face_r_dim to only tilize the necessary number of rows, thus we can make the in_cb height smaller
     uint32_t num_tilized_rows = kernel_size_hw <= 16 ? kernel_size_hw : tt::constants::TILE_HEIGHT;
     uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
 
