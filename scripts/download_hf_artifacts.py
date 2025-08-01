@@ -26,10 +26,10 @@ UPSTREAM_MODELS = [
 
 CI_DISPATCH_MODELS = [
     "meta-llama/Llama-3.2-1B-Instruct",
-    "meta-llama/Llama-3.2-3B-Instruct",
-    "meta-llama/Llama-3.2-8B-Instruct",
-    "meta-llama/Llama-3.2-11B-Vision-Instruct",
-    "mistralai/Mistral-7B-Instruct-v0.3",
+    # "meta-llama/Llama-3.2-3B-Instruct",
+    # "meta-llama/Llama-3.2-8B-Instruct",
+    # "meta-llama/Llama-3.2-11B-Vision-Instruct",
+    # "mistralai/Mistral-7B-Instruct-v0.3",
 ]
 
 PYTHON_MODELS = [
@@ -117,7 +117,9 @@ def download_datasets(args):
 
 
 def get_parser():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        epilog="Example: HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home python scripts/download_hf_artifacts.py --all --hf_token <your_hf_token>"
+    )
     parser.add_argument(
         "--hf_token",
         type=str,
