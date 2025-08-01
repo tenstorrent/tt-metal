@@ -10,7 +10,6 @@ import ttnn
 
 # Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
-from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.moe import MoE
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.utility_functions import comp_pcc
@@ -46,6 +45,7 @@ def test_forward_pass(
     hf_config,
     tmp_path,
     mesh_device,
+    ccl,
 ):
     """Test forward pass against reference model."""
     batch_size = 1
@@ -63,7 +63,6 @@ def test_forward_pass(
     weight_config = MoE.convert_weights(hf_config, hf_state_dict, tmp_path, mesh_device)
 
     # Generate appropriate config
-    ccl = CCL1D(hf_config, mesh_device)
     if mode == "prefill":
         model_config = MoE.prefill_model_config(hf_config, mesh_device, ccl, batch_size=seq_len, seq_len=1)
     else:
