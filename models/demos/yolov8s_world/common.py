@@ -9,6 +9,8 @@ import torch
 from models.demos.yolov8s_world.reference import yolov8s_world
 from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import attempt_load
 
+YOLOV8SWORLD_L1_SMALL_SIZE = 24576
+
 
 def load_torch_model(model_location_generator=None):
     if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
