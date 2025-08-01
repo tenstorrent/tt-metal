@@ -13,6 +13,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 static const uint32_t max_read_size = 2048;  // max read size in bytes for reader and writer kernels
 using namespace tt::constants;
@@ -257,10 +258,9 @@ operation::ProgramWithCallbacks pad_tile(
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
-                                                      (std::uint32_t)src0_is_dram};
+    std::vector<uint32_t> reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
                                                       (std::uint32_t)src0_cb_index,
                                                       (std::uint32_t)src1_cb_index,
