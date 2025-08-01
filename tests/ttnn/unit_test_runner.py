@@ -14,9 +14,14 @@ import json
 import subprocess
 from enum import Enum
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
-
-import psycopg2
 import pytest
+
+try:
+    import psycopg2
+except ImportError as e:
+    raise RuntimeError(
+        "The psycopg2 library is required but not installed. Please install it using 'pip install psycopg2'."
+    ) from e
 from contextlib import contextmanager
 
 
@@ -57,6 +62,8 @@ class TestCaseStatus(Enum):
     FAIL = "fail"
     ERROR = "error"
     SKIP = "skipped"
+    XFAIL = "xfail"  # Expected failure
+    XPASS = "xpass"  # Unexpected pass (when an xfail test passes)
 
 
 # --- Git and System Info Helpers ---
@@ -313,12 +320,16 @@ def map_test_status_to_run_status(statuses):
     """Aggregate test case statuses to a single test/run status."""
     if not statuses:
         return "error"
-    if any(s in ["error", "fail"] for s in statuses):
+    # Hard failures (error, fail, xpass) indicate overall failure
+    # XPASS is treated as failure because it's unexpected behavior
+    if any(s in ["error", "fail", "xpass"] for s in statuses):
         return "failure"
     if any(s == "cancelled" for s in statuses):
         return "cancelled"
-    if all(s == "skipped" for s in statuses):
+    # If all tests are skipped or expected failures, consider it skipped
+    if all(s in ["skipped", "xfail"] for s in statuses):
         return "skipped"
+    # If we have any passes (even with some skips/xfails), it's success
     return "success"
 
 
@@ -349,19 +360,44 @@ class ResultCollector:
         end_time = dt.datetime.now()
         start_time = self.test_start_times.get(report.nodeid, end_time)
 
-        exception_str = report.longreprtext
-        status = TestCaseStatus.PASS
-        if report.skipped:
+        # Default values
+        exception_str = ""
+
+        # --- Revised Status Logic (cleaner approach) ---
+        if hasattr(report, "wasxfail"):
+            # Test was marked with xfail
+            if report.skipped:
+                # It failed as expected (XFAIL)
+                status = TestCaseStatus.XFAIL
+                exception_str = f"XFAIL: {report.wasxfail}"
+            elif report.passed:
+                # It passed unexpectedly (XPASS)
+                status = TestCaseStatus.XPASS
+                exception_str = f"XPASS: {report.wasxfail}"
+            else:
+                # This case should not typically happen for xfail, but we handle it
+                status = TestCaseStatus.ERROR
+                exception_str = report.longreprtext or "Unexpected xfail state"
+        elif report.skipped:
+            # Regular skip
             status = TestCaseStatus.SKIP
-            # For skipped tests, longrepr is a tuple (file, line, reason)
-            exception_str = str(report.longrepr)
+            # report.longrepr is a tuple: (file, line, reason)
+            if report.longrepr and len(report.longrepr) >= 3:
+                exception_str = report.longrepr[2]  # Extract just the reason string
+            else:
+                exception_str = str(report.longrepr)
         elif report.failed:
+            exception_str = report.longreprtext or "Test failed"
             if "AssertionError" in exception_str:
                 status = TestCaseStatus.FAIL
             else:
                 status = TestCaseStatus.ERROR
         elif report.passed:
             status = TestCaseStatus.PASS
+        else:
+            # Catch any other unforeseen outcome
+            status = TestCaseStatus.ERROR
+            exception_str = "Unknown test outcome"
 
         message = report.capstdout
 
@@ -374,6 +410,7 @@ class ResultCollector:
             full_name = full_name.split("[")[0]
         if len(full_name) > 255:
             full_name = full_name[:252] + "..."
+            logger.info(f"Full name has been truncated to first 252 characters: {full_name}")
 
         # Extract suite name from the test file path or use "default"
         suite_name = "default"

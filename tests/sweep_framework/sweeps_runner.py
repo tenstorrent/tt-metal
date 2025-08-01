@@ -29,7 +29,6 @@ except ImportError as e:
     raise RuntimeError(
         "The psycopg2 library is required but not installed. Please install it using 'pip install psycopg2'."
     ) from e
-import time
 from contextlib import contextmanager
 
 # Constants

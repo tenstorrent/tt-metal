@@ -4,92 +4,7 @@
 
 from ttnn import *
 import json
-import importlib
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
-
-
-# Whitelist of allowed modules and types for secure deserialization
-ALLOWED_MODULES = {
-    "ttnn",
-    "ttnn.types",
-    "ttnn.tensor",
-    "ttnn.operations",
-    "ttnn.core",
-    "ttnn.device",
-    "ttnn.layout",
-    "ttnn.memory_config",
-    # Add other trusted modules as needed
-}
-
-ALLOWED_TYPES = {
-    # Built-in safe types
-    "int",
-    "float",
-    "str",
-    "bool",
-    "list",
-    "dict",
-    "tuple",
-    # TTNN specific types that might appear without module prefix
-    "DataType",
-    "Layout",
-    "MemoryConfig",
-    "BufferType",
-    "TensorMemoryLayout",
-    "ShardSpec",
-    "CoreRangeSet",
-    "CoreRange",
-    "CoreCoord",
-    "ShardOrientation",
-}
-
-
-def safe_get_type(type_string):
-    """
-    Safely get a type from a string without using eval().
-    Only allows whitelisted modules and types.
-    """
-    try:
-        # Handle built-in types
-        if type_string in ALLOWED_TYPES:
-            return eval(type_string)  # Safe for built-in types
-
-        # Handle module.ClassName format
-        if "." in type_string:
-            module_path, class_name = type_string.rsplit(".", 1)
-
-            # Check if module is in whitelist
-            root_module = module_path.split(".")[0]
-            if root_module not in ALLOWED_MODULES:
-                raise ValueError(f"Module {root_module} not in whitelist")
-
-            # Import module and get class
-            module = importlib.import_module(module_path)
-            return getattr(module, class_name)
-        else:
-            # Single name, check if it's an allowed type
-            if type_string in ALLOWED_TYPES:
-                return eval(type_string)  # Safe for whitelisted types
-            else:
-                raise ValueError(f"Type {type_string} not in whitelist")
-    except (ImportError, AttributeError, ValueError) as e:
-        logger.error(f"Failed to safely get type {type_string}: {e}")
-        raise ValueError(f"Invalid or disallowed type: {type_string}")
-
-
-def safe_eval_literal(value_string):
-    """
-    Safely evaluate string literals without arbitrary code execution.
-    Only handles basic Python literals.
-    """
-    import ast
-
-    try:
-        # ast.literal_eval only evaluates literals, not arbitrary expressions
-        return ast.literal_eval(value_string)
-    except (ValueError, SyntaxError):
-        # If it's not a valid literal, return as string
-        return value_string
 
 
 def convert_enum_values_to_strings(data):
@@ -100,18 +15,32 @@ def convert_enum_values_to_strings(data):
     # Create a copy to avoid modifying the original
     result = data.copy()
 
-    # Define enum mappings - from tt_metal/api/tt-metalium/buffer_types
-    buffer_type_map = {0: "DRAM", 1: "L1", 2: "SYSTEM_MEMORY", 3: "L1_SMALL", 4: "TRACE"}
+    # Get enum mappings dynamically from the actual enum classes
+    buffer_type_map = {}
+    try:
+        BufferType = ttnn._ttnn.tensor.BufferType
+        buffer_type_map = {member.value: name for name, member in BufferType.__members__.items()}
+    except (ImportError, AttributeError) as e:
+        logger.warning(f"Could not load BufferType enum: {e}")
 
-    memory_layout_map = {0: "INTERLEAVED", 2: "HEIGHT_SHARDED", 3: "WIDTH_SHARDED", 4: "BLOCK_SHARDED"}
+    memory_layout_map = {}
+    try:
+        TensorMemoryLayout = ttnn._ttnn.tensor.TensorMemoryLayout
+        memory_layout_map = {member.value: name for name, member in TensorMemoryLayout.__members__.items()}
+    except (ImportError, AttributeError) as e:
+        logger.warning(f"Could not load TensorMemoryLayout enum: {e}")
 
-    # Convert buffer_type if present
-    if "buffer_type" in result and isinstance(result["buffer_type"], int):
-        result["buffer_type"] = buffer_type_map.get(result["buffer_type"], f"UNKNOWN_{result['buffer_type']}")
+    # Convert buffer_type if present and mapping is available
+    if "buffer_type" in result and isinstance(result["buffer_type"], int) and buffer_type_map:
+        result["buffer_type"] = buffer_type_map.get(
+            result["buffer_type"], f"UNKNOWN_BUFFER_TYPE_{result['buffer_type']}"
+        )
 
-    # Convert memory_layout if present
-    if "memory_layout" in result and isinstance(result["memory_layout"], int):
-        result["memory_layout"] = memory_layout_map.get(result["memory_layout"], f"UNKNOWN_{result['memory_layout']}")
+    # Convert memory_layout if present and mapping is available
+    if "memory_layout" in result and isinstance(result["memory_layout"], int) and memory_layout_map:
+        result["memory_layout"] = memory_layout_map.get(
+            result["memory_layout"], f"UNKNOWN_MEMORY_LAYOUT_{result['memory_layout']}"
+        )
 
     # Recursively process nested objects (like shard_spec)
     for key, value in result.items():
@@ -138,11 +67,11 @@ def serialize(object, warnings=[]):
 
 def deserialize(object):
     if isinstance(object, dict):
-        type_cls = safe_get_type(object["type"])
-        return type_cls.from_json(object["data"])
+        type = eval(object["type"])
+        return type.from_json(object["data"])
     else:
         try:
-            return safe_eval_literal(object)
+            return eval(object)
         except:
             return str(object)
 
@@ -171,17 +100,17 @@ def serialize_for_postgres(object, warnings=[]):
 
 def deserialize_for_postgres(object):
     if isinstance(object, dict):
-        type_cls = safe_get_type(object["type"])
+        type = eval(object["type"])
         data = object["data"]
         # If data is a dict/object, convert it back to JSON string for from_json method
         if isinstance(data, (dict, list)):
             # Convert string enum values back to integers for from_json
             data = convert_enum_strings_to_values(data)
             data = json.dumps(data)
-        return type_cls.from_json(data)
+        return type.from_json(data)
     else:
         try:
-            return safe_eval_literal(object)
+            return eval(object)
         except:
             return str(object)
 
@@ -194,18 +123,34 @@ def convert_enum_strings_to_values(data):
     # Create a copy to avoid modifying the original
     result = data.copy()
 
-    # Define reverse enum mappings
-    buffer_type_reverse_map = {"DRAM": 0, "L1": 1, "SYSTEM_MEMORY": 2, "L1_SMALL": 3, "TRACE": 4}
+    # Get reverse enum mappings dynamically from the actual enum classes
+    buffer_type_reverse_map = {}
+    try:
+        BufferType = ttnn._ttnn.tensor.BufferType
+        buffer_type_reverse_map = {name: member.value for name, member in BufferType.__members__.items()}
+    except (ImportError, AttributeError) as e:
+        logger.warning(f"Could not load BufferType enum for reverse mapping: {e}")
 
-    memory_layout_reverse_map = {"INTERLEAVED": 0, "HEIGHT_SHARDED": 2, "WIDTH_SHARDED": 3, "BLOCK_SHARDED": 4}
+    memory_layout_reverse_map = {}
+    try:
+        TensorMemoryLayout = ttnn._ttnn.tensor.TensorMemoryLayout
+        memory_layout_reverse_map = {name: member.value for name, member in TensorMemoryLayout.__members__.items()}
+    except (ImportError, AttributeError) as e:
+        logger.warning(f"Could not load TensorMemoryLayout enum for reverse mapping: {e}")
 
-    # Convert buffer_type back to integer if it's a string
-    if "buffer_type" in result and isinstance(result["buffer_type"], str):
-        result["buffer_type"] = buffer_type_reverse_map.get(result["buffer_type"], 0)
+    # Convert buffer_type back to integer if it's a string and mapping is available
+    if "buffer_type" in result and isinstance(result["buffer_type"], str) and buffer_type_reverse_map:
+        if result["buffer_type"] in buffer_type_reverse_map:
+            result["buffer_type"] = buffer_type_reverse_map[result["buffer_type"]]
+        else:
+            logger.warning(f"Unknown buffer_type string: {result['buffer_type']}")
 
-    # Convert memory_layout back to integer if it's a string
-    if "memory_layout" in result and isinstance(result["memory_layout"], str):
-        result["memory_layout"] = memory_layout_reverse_map.get(result["memory_layout"], 0)
+    # Convert memory_layout back to integer if it's a string and mapping is available
+    if "memory_layout" in result and isinstance(result["memory_layout"], str) and memory_layout_reverse_map:
+        if result["memory_layout"] in memory_layout_reverse_map:
+            result["memory_layout"] = memory_layout_reverse_map[result["memory_layout"]]
+        else:
+            logger.warning(f"Unknown memory_layout string: {result['memory_layout']}")
 
     # Recursively process nested objects
     for key, value in result.items():
