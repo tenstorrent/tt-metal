@@ -12,6 +12,7 @@ from fastapi import FastAPI, File, UploadFile
 from PIL import Image
 
 import ttnn
+from models.demos.yolov10x.common import YOLOV10_L1_SMALL_SIZE
 from models.demos.yolov10x.runner.performant_runner import YOLOv10PerformantRunner
 
 # from models.experimental.yolo_common.yolo_web_demo.yolo_evaluation_utils import postprocess
@@ -54,7 +55,7 @@ async def startup():
         device = ttnn.CreateDevice(
             device_id,
             dispatch_core_config=get_dispatch_core_config(),
-            l1_small_size=10 * 1024,
+            l1_small_size=YOLOV10_L1_SMALL_SIZE,
             trace_region_size=3211264,
             num_command_queues=2,
         )
@@ -67,7 +68,9 @@ async def startup():
         )
     else:
         device_id = 0
-        device = ttnn.CreateDevice(device_id, l1_small_size=10 * 1024, trace_region_size=3211264, num_command_queues=2)
+        device = ttnn.CreateDevice(
+            device_id, l1_small_size=YOLOV10_L1_SMALL_SIZE, trace_region_size=3211264, num_command_queues=2
+        )
         device.enable_program_cache()
         model = YOLOv10PerformantRunner(
             device,
