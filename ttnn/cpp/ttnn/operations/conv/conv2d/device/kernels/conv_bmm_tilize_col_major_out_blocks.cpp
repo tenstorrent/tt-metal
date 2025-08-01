@@ -20,9 +20,12 @@
 
 #define DEBUG_PRINT 0
 
-inline void tilize_in(
+template <bool init_tilize = true, bool uninit_tilize = true>
+__attribute__((noinline)) void tilize_in(
     uint32_t in_cb_id, uint32_t in_subblock_h, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
-    fast_tilize_init_with_dt(in_cb_id, in_block_w, out_cb_id);
+    if constexpr (init_tilize) {
+        fast_tilize_init_with_dt(in_cb_id, in_block_w, out_cb_id);
+    }
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
             cb_wait_front(in_cb_id, in_block_w);
@@ -32,7 +35,9 @@ inline void tilize_in(
             cb_pop_front(in_cb_id, in_block_w);
         }
     }
-    fast_tilize_uninit(in_cb_id, out_cb_id);
+    if constexpr (uninit_tilize) {
+        fast_tilize_uninit(in_cb_id, out_cb_id);
+    }
 }  // tilize_in()
 
 template <uint32_t out_subblock_w, uint32_t out_block_w>
@@ -119,9 +124,11 @@ void MAIN {
 // TODO change for better split reader
 // ------------------------------------------------------------
 #ifdef SPLIT_READER
+    constexpr bool split_reader = true;
     constexpr uint32_t in0_num_subblocks_read_last = reader_num_subblocks / 2;
     constexpr uint32_t in0_num_subblocks_read = reader_num_subblocks - in0_num_subblocks_read_last;
 #else
+    constexpr bool split_reader = false;
     constexpr uint32_t in0_num_subblocks_read = reader_num_subblocks;
 #endif
     // ------------------------------------------------------------
@@ -186,9 +193,10 @@ void MAIN {
                     pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
                     pack_reconfig_l1_acc(0);
 #endif
-                    tilize_in(in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
+                    tilize_in<true, !split_reader>(
+                        in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks_read, tilized_in0_cb_id);
 #ifdef SPLIT_READER
-                    tilize_in(
+                    tilize_in<false, true>(
                         in0_cb_second_reader_id,
                         in0_subblock_h,
                         in0_block_w,
