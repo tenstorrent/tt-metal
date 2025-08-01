@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "noc_nonblocking_api.h"
 #include "ckernel_sfpu_sigmoid_appx.h"
 
 using namespace sfpi;
@@ -15,7 +16,7 @@ namespace sfpu {
 
 // sigmoid is anti-symmetric and offset by 1
 // sigmoid[-x] = 1 - sigmoid[x]
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_sigmoid() {
     if constexpr (APPROXIMATION_MODE == false) {
         for (int d = 0; d < ITERATIONS; d++) {

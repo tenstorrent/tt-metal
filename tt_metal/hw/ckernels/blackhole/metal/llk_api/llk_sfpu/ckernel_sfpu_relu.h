@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "noc_nonblocking_api.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 
 using namespace sfpi;
@@ -39,7 +40,7 @@ inline void relu_max(uint uint_threshold) {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_lrelu(uint slope) {
     _calculate_lrelu_<APPROXIMATION_MODE>(ITERATIONS, slope);
 }

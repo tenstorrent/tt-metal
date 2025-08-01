@@ -17,10 +17,10 @@ inline void llk_math_eltwise_unary_sfpu_log_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::log, APPROXIMATE>(sfpu::log_init<APPROXIMATE>);
 }
 
-template <bool APPROXIMATE>
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en = false>
 inline void llk_math_eltwise_unary_sfpu_log(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_log<APPROXIMATE, false>, dst_index, vector_mode, 0);
+        ckernel::sfpu::calculate_log<APPROXIMATE, false, 8, is_fp32_dest_acc_en>, dst_index, vector_mode, 0);
 }
 
 template <bool APPROXIMATE>
@@ -28,11 +28,11 @@ inline void llk_math_eltwise_unary_sfpu_log_with_base_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::log_with_base, APPROXIMATE>(sfpu::log_init<APPROXIMATE>);
 }
 
-template <bool APPROXIMATE>
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en = false>
 inline void llk_math_eltwise_unary_sfpu_log_with_base(
     uint dst_index, uint base_scale, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_log<APPROXIMATE, true>, dst_index, vector_mode, base_scale);
+        ckernel::sfpu::calculate_log<APPROXIMATE, true, 8, is_fp32_dest_acc_en>, dst_index, vector_mode, base_scale);
 }
 
 }  // namespace ckernel
