@@ -974,10 +974,10 @@ private:
         if (!config.senders.empty() && !config.senders[0].patterns.empty()) {
             const auto& first_pattern = config.senders[0].patterns[0];
             if (first_pattern.ftype.has_value()) {
-                ftype_str = magic_enum::enum_name(first_pattern.ftype.value()).data();
+                ftype_str = enchantum::to_string(first_pattern.ftype.value()).data();
             }
             if (first_pattern.ntype.has_value()) {
-                ntype_str = magic_enum::enum_name(first_pattern.ntype.value()).data();
+                ntype_str = enchantum::to_string(first_pattern.ntype.value()).data();
             }
         }
 
@@ -1049,7 +1049,7 @@ private:
         auto cluster_type = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type();
 
         // Convert cluster type enum to lowercase string
-        std::string cluster_name = magic_enum::enum_name(cluster_type).data();
+        std::string cluster_name = enchantum::to_string(cluster_type).data();
         std::transform(cluster_name.begin(), cluster_name.end(), cluster_name.begin(), ::tolower);
 
         std::string file_name = "golden_bandwidth_summary_" + arch_name + "_" + cluster_name + ".csv";
@@ -1151,10 +1151,10 @@ private:
         if (!config.senders.empty() && !config.senders[0].patterns.empty()) {
             const auto& first_pattern = config.senders[0].patterns[0];
             if (first_pattern.ftype.has_value()) {
-                ftype_str = magic_enum::enum_name(first_pattern.ftype.value()).data();
+                ftype_str = enchantum::to_string(first_pattern.ftype.value()).data();
             }
             if (first_pattern.ntype.has_value()) {
-                ntype_str = magic_enum::enum_name(first_pattern.ntype.value()).data();
+                ntype_str = enchantum::to_string(first_pattern.ntype.value()).data();
             }
         }
 
@@ -1170,7 +1170,7 @@ private:
             }
             num_devices_str += "]";
 
-            std::string topology_str = magic_enum::enum_name(config.fabric_setup.topology).data();
+            std::string topology_str = enchantum::to_string(config.fabric_setup.topology).data();
 
             // Find matching golden entry
             auto golden_it =
