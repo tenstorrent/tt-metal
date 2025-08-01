@@ -89,6 +89,7 @@ struct GoldenCsvEntry {
     uint64_t cycles;
     double bandwidth_gb_s;
     double packets_per_second;
+    double tolerance_percent;  // Per-test tolerance percentage
 };
 
 struct ComparisonResult {
@@ -1056,6 +1057,12 @@ private:
                 }
             }
 
+            // Validate we have enough tokens for the new format with tolerance
+            if (tokens.size() < 11) {
+                log_error(tt::LogTest, "Invalid CSV format in golden file. Expected 11 fields, got {}", tokens.size());
+                continue;
+            }
+
             GoldenCsvEntry entry;
             entry.test_name = tokens[0];
             entry.ftype = tokens[1];
@@ -1067,6 +1074,7 @@ private:
             entry.cycles = std::stoull(tokens[7]);
             entry.bandwidth_gb_s = std::stod(tokens[8]);
             entry.packets_per_second = std::stod(tokens[9]);
+            entry.tolerance_percent = std::stod(tokens[10]);
 
             golden_csv_entries_.push_back(entry);
         }
@@ -1139,7 +1147,10 @@ private:
                     ((comp_result.current_bandwidth_gb_s - comp_result.golden_bandwidth_gb_s) /
                      comp_result.golden_bandwidth_gb_s) *
                     100.0;
-                comp_result.within_tolerance = std::abs(comp_result.difference_percent) <= tolerance_percent_;
+
+                // Use per-test tolerance from golden CSV instead of global tolerance
+                double test_tolerance = golden_it->tolerance_percent;
+                comp_result.within_tolerance = std::abs(comp_result.difference_percent) <= test_tolerance;
 
                 if (comp_result.within_tolerance) {
                     comp_result.status = "PASS";
@@ -1147,7 +1158,8 @@ private:
                     comp_result.status = "FAIL";
                     failed_tests_.push_back(
                         config.name + " (" + ftype_str + "," + ntype_str + "," + topology_str + "," + num_devices_str +
-                        ")");
+                        ") - diff: " + std::to_string(comp_result.difference_percent) +
+                        "%, tolerance: " + std::to_string(test_tolerance) + "%");
                 }
             } else {
                 comp_result.golden_bandwidth_gb_s = 0.0;
@@ -1187,12 +1199,12 @@ private:
         }
 
         if (!failed_tests_.empty()) {
-            TT_THROW("The following tests failed golden comparison (tolerance: {}%):", tolerance_percent_);
+            TT_THROW("The following tests failed golden comparison (using per-test tolerance):");
             for (const auto& failed_test : failed_tests_) {
                 log_error(tt::LogTest, "  - {}", failed_test);
             }
         } else {
-            log_info(tt::LogTest, "All tests passed golden comparison within {}% tolerance", tolerance_percent_);
+            log_info(tt::LogTest, "All tests passed golden comparison using per-test tolerance values");
         }
     }
 
@@ -1227,5 +1239,4 @@ private:
     std::vector<ComparisonResult> comparison_results_;
     std::vector<std::string> failed_tests_;
     std::filesystem::path diff_csv_file_path_;
-    static constexpr double tolerance_percent_ = 5.0;  // 5% tolerance
 };
