@@ -78,8 +78,6 @@ class Generator:
         empty_slots=None,
         tt_out_logits_all_users=None,
     ):
-        assert sampling_params.temperature == 0, "Currently only supporting greedy decoding (temperature=0) on device"
-
         if self.model.is_prefill_setup is False:
             self.model.switch_mode("prefill")
 
@@ -347,10 +345,6 @@ class Generator:
         reset_inputs=False,
         tt_out_logits_saved=None,
     ):
-        assert (
-            sampling_params is None or sampling_params.temperature == 0
-        ), "Currently only supporting greedy decoding (temperature=0) on device"
-
         if self.prev_page_table is None:
             self.prev_page_table = page_table
         if torch.any(self.prev_page_table != page_table).item():
@@ -367,6 +361,14 @@ class Generator:
             "page_table": page_table,
             "kv_cache": kv_cache,
         }
+        if reset_inputs and sampling_params is not None:
+            if sampling_params.temperature == 0:  # argmax
+                sampling_params = SamplingParams(temperature=1.0, top_k=1, top_p=0.0)
+            self.model.tt_sampling.reset_params(
+                k=[sampling_params.top_k] * 32,
+                p=[sampling_params.top_p] * 32,
+                temp=[1 / sampling_params.temperature] * 32,
+            )
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
 

@@ -7,10 +7,7 @@
 namespace ttnn::operations::reduction::detail {
 
 tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
-    const Tensor& input_values_tensor,
-    const Tensor& input_indices_tensor,
-    const std::vector<uint16_t>& k,
-    const std::vector<float>& p,
+    const std::vector<Tensor>& input_tensors,
     const std::optional<uint32_t>& seed,
     const std::optional<CoreRangeSet>& sub_core_grids,
     Tensor& output_tensor);
