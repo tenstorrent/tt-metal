@@ -140,6 +140,9 @@ FactoryParameters get_factory_parameters(
     uint32_t nbytes = datum_size(data_format);
 
     uint32_t kernel_size_hw = kernel_h * kernel_w;  // number of valid rows, to read
+    // for medium kernels we tilize an entire tile even if some rows are unused, so the in_cb has to be TILE_HEIGHT,
+    // but for kernels spanning 1 only face we set the face_r_dim to only tilize the necessary number of rows
+    uint32_t num_tilized_rows = kernel_size_hw <= 16 ? kernel_size_hw : tt::constants::TILE_HEIGHT;
     uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / num_shards_c / tt::constants::TILE_WIDTH);
 
     bool is_avg_pool = pool_type == Pool2DType::AVG_POOL2D;
@@ -160,7 +163,8 @@ FactoryParameters get_factory_parameters(
         .max_rows_for_reduction = max_rows_for_reduction,
         .is_large_kernel = is_large_kernel,
         .MAX_TILES_PER_REDUCTION = MAX_TILES_PER_REDUCTION,
-        .is_wide_reduction = is_wide_reduction};
+        .is_wide_reduction = is_wide_reduction,
+        .num_tilized_rows = num_tilized_rows};
 }
 
 uint32_t calculate_L1_usage(
@@ -210,9 +214,9 @@ uint32_t calculate_L1_usage(
 
     uint32_t in_cb_sz = 0;
     if (params.is_wide_reduction) {
-        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_HW;
+        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * params.num_tilized_rows;
     } else {
-        in_cb_sz = params.in_ntiles_c * tt::constants::TILE_HW;
+        in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
     }
 
     uint32_t in_cb_page_padded = tt::round_up(in_cb_sz, tt::constants::TILE_HW);
