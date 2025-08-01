@@ -95,7 +95,10 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(batch % axis_group == 0, "Batch {} must be divisible by axis group", batch, axis_group);
 
     TT_FATAL(operation_attributes.num_links == 1, "Number of links must be 1, got {}", operation_attributes.num_links);
-    TT_FATAL(operation_attributes.topology == tt::tt_fabric::Topology::Linear, "Topology must be linear at the moment");
+    TT_FATAL(
+        (operation_attributes.topology == tt::tt_fabric::Topology::Linear) ||
+            (operation_attributes.topology == tt::tt_fabric::Topology::Mesh),
+        "Topology must be linear or mesh at the moment");
 }
 
 void AllToAllCombineDeviceOperation::validate_on_program_cache_hit(
