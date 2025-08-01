@@ -113,7 +113,7 @@ private:
      * @return tt::tt_metal::distributed::SocketConfig
      */
     tt::tt_metal::distributed::SocketConfig convert_to_socket_config(
-        const TestSocketConfig& socket_config, const MemoryConfig& memory_config);
+        const TestSocketConfig& socket_config, const ParsedMemoryConfig& memory_config);
 
     /**
      * @brief Convert SocketConnectionConfig to tt::tt_metal::distributed::SocketConnection

@@ -255,7 +255,7 @@ std::vector<tt::tt_metal::distributed::MeshSocket> MeshSocketTestRunner::create_
 }
 
 tt::tt_metal::distributed::SocketConfig MeshSocketTestRunner::convert_to_socket_config(
-    const TestSocketConfig& test_socket_config, const MemoryConfig& memory_config) {
+    const TestSocketConfig& test_socket_config, const ParsedMemoryConfig& memory_config) {
     // Convert connections
     std::vector<tt::tt_metal::distributed::SocketConnection> connections;
     for (const auto& conn_config : test_socket_config.connections) {

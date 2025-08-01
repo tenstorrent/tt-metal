@@ -61,6 +61,14 @@ void test_socket_send_recv(
 
     auto sender_core = socket.get_config().socket_connection_config[0].sender_core.core_coord;
     auto recv_core = socket.get_config().socket_connection_config[0].receiver_core.core_coord;
+    std::set<CoreRange> sender_core_range;
+    std::set<CoreRange> recv_core_range;
+    for (const auto& connection : socket.get_config().socket_connection_config) {
+        sender_core_range.insert(CoreRange(connection.sender_core.core_coord, connection.sender_core.core_coord));
+        recv_core_range.insert(CoreRange(connection.receiver_core.core_coord, connection.receiver_core.core_coord));
+    }
+    auto sender_core_range_set = CoreRangeSet(sender_core_range);
+    auto recv_core_range_set = CoreRangeSet(recv_cor_range);
 
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
 
@@ -96,11 +104,11 @@ void test_socket_send_recv(
         if (distributed_context->rank() == sender_rank) {
             // TODO: Change to CoreRangeSet to all senders
             auto sender_data_shard_params = ShardSpecBuffer(
-                CoreRangeSet(sender_core),
+                sender_core_range_set,
                 {1, 1},
                 ShardOrientation::ROW_MAJOR,
                 {1, 1},
-                {1, 1} /*TODO CHANGE TO{num cores, 1}*/);
+                {sender_core_range_set.num_cores(), 1});
 
             const DeviceLocalBufferConfig sender_device_local_config{
                 .page_size = data_size,
