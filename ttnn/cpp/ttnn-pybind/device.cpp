@@ -502,19 +502,19 @@ void device_module(py::module& m_device) {
         py::arg("cq_id") = std::nullopt,
         py::arg("sub_device_ids") = std::vector<SubDeviceId>());
     m_device.def(
-        "DumpDeviceProfiler",
+        "ReadDeviceProfiler",
         [](MeshDevice* device) {
             ProfilerOptionalMetadata prof_metadata(tt::tt_metal::op_profiler::runtime_id_to_opname_.export_map());
-            tt::tt_metal::DumpMeshDeviceProfileResults(*device, ProfilerDumpState::NORMAL, prof_metadata);
+            tt::tt_metal::ReadMeshDeviceProfilerResults(*device, ProfilerReadState::NORMAL, prof_metadata);
         },
         py::arg("device"),
         R"doc(
-        Dump device side profiling data.
+        Read device side profiling data.
 
         +------------------+----------------------------------+-----------------------+-------------+----------+
         | Argument         | Description                      | Data type             | Valid range | Required |
         +==================+==================================+=======================+=============+==========+
-        | device           | Device to dump profiling data of | ttnn.Device           |             | Yes      |
+        | device           | Device to read profiling data of | ttnn.Device           |             | Yes      |
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
 

@@ -910,7 +910,7 @@ int main(int argc, char** argv) {
             }
             Finish(device->command_queue());
             for (auto& program : programs) {
-                tt_metal::detail::DumpDeviceProfileResults(device);
+                tt_metal::detail::ReadDeviceProfilerResults(device);
             }
         }
 

@@ -894,7 +894,7 @@ int main(int argc, char **argv) {
 
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
         for (auto [features, target, masks] : train_dataloader) {
-            ttml::autograd::ctx().get_profiler().dump_results(device, "dataloader_step_done");
+            ttml::autograd::ctx().get_profiler().read_results(device, "dataloader_step_done");
 
             auto start_timer = std::chrono::high_resolution_clock::now();
             if (gradient_accumulator_helper.should_zero_grad()) {
@@ -905,7 +905,7 @@ int main(int argc, char **argv) {
             loss = gradient_accumulator_helper.scale(loss);
             float loss_float = get_loss_value(loss);
 
-            ttml::autograd::ctx().get_profiler().dump_results(device, "model_forward_done");
+            ttml::autograd::ctx().get_profiler().read_results(device, "model_forward_done");
 
             loss->backward();
             ttml::autograd::ctx().reset_graph();
@@ -951,7 +951,7 @@ int main(int argc, char **argv) {
                     }
                 }
 
-                ttml::autograd::ctx().get_profiler().dump_results(device, fmt::format("iteration_{}", global_step));
+                ttml::autograd::ctx().get_profiler().read_results(device, fmt::format("iteration_{}", global_step));
 
                 if (global_step >= config.max_steps) {
                     break;
@@ -960,7 +960,7 @@ int main(int argc, char **argv) {
                 gradient_accumulator_helper.reset();
 
                 if (!is_everything_compiled) {
-                    ttml::autograd::ctx().get_profiler().dump_results(device, "compilation_finished");
+                    ttml::autograd::ctx().get_profiler().read_results(device, "compilation_finished");
                     is_everything_compiled = true;
                 }
             }
@@ -1002,7 +1002,7 @@ int main(int argc, char **argv) {
         wandbcpp::finish();
     }
 
-    ttml::autograd::ctx().get_profiler().dump_results(device, "before close device", 0);
+    ttml::autograd::ctx().get_profiler().read_results(device, "before close device", 0);
     ttml::autograd::ctx().close_profiler();
     return 0;
 }

@@ -344,7 +344,7 @@ void build_and_run_roundtrip_latency_test(
     }
 
     for (auto [device_ptr, program_ptr] : device_program_map) {
-        tt::tt_metal::detail::DumpDeviceProfileResults(device_ptr);
+        tt::tt_metal::detail::ReadDeviceProfilerResults(device_ptr);
     }
 }
 

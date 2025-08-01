@@ -3144,7 +3144,7 @@ void Run1DFabricPacketSendTest(
     for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices.size(); fabric_index++) {
         auto& devices = fabric_under_test_worker_devices[fabric_index];
         for (IDevice* d : devices) {
-            tt_metal::detail::DumpDeviceProfileResults(d);
+            tt_metal::detail::ReadDeviceProfilerResults(d);
         }
     }
     log_trace(tt::LogTest, "Finished");
@@ -3321,7 +3321,7 @@ void launch_kernels_and_wait_for_completion(
         tt_metal::Synchronize(device, *ttnn::DefaultQueueId);
     }
     for (const auto& [device, program] : device_programs) {
-        tt_metal::detail::DumpDeviceProfileResults(device);
+        tt_metal::detail::ReadDeviceProfilerResults(device);
     }
 }
 
