@@ -57,9 +57,7 @@ def run_reshard_test(
         memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
         buffer_type=ttnn.BufferType.DRAM,
     )
-    # torch_tensor = torch.ones(input_shape).bfloat16()
-    numel = torch.tensor(input_shape).prod().item()
-    torch_tensor = torch.arange(0.01, 0.01 * numel + 0.001, 0.01).reshape(input_shape).bfloat16()
+    torch_tensor = torch.ones(input_shape).bfloat16()
     tt_tensor_sharded = ttnn.Tensor(torch_tensor, tt_dtype).to(input_layout)
     tt_tensor_sharded = tt_tensor_sharded.to(device, dram_memory_config)
     tt_tensor_sharded = ttnn.interleaved_to_sharded(
@@ -80,6 +78,7 @@ def run_reshard_test(
 
     tt_tensor_interleaved = tt_tensor_interleaved.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
     torch_tensor_after_round_trip = tt_tensor_interleaved.to_torch()
+
     return torch_tensor, torch_tensor_after_round_trip
 
 
