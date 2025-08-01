@@ -131,7 +131,7 @@ class DispatchCoreConfig(ttnn._ttnn.device.DispatchCoreConfig):
             elif self.axis == DispatchCoreAxis.ROW:
                 # ROW axis is supported for all dispatch core types, use default type for their system
                 self.type = get_default_dispatch_core_type()
-                logging.info(f"Using default dispatch core type for this system: {self.type}")
+                logger.info(f"Using default dispatch core type for this system: {self.type}")
         else:
             # User provided no valid type or axis, use default for their system
             self.type = get_default_dispatch_core_type()
