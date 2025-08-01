@@ -64,7 +64,7 @@ sfpi_inline void calculate_log_body(const uint log_base_scale_factor) {
     dst_reg[0] = result;
 }
 
-template <bool APPROXIMATION_MODE, bool HAS_BASE_SCALING, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool HAS_BASE_SCALING, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_log(uint log_base_scale_factor) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
