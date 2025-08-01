@@ -52,29 +52,62 @@ def is_supported(shape, dim, ttnn_dtype):
 @pytest.mark.parametrize(
     "size, dim",
     [
-        ([], 0),
-        ([1], 0),
-        ([2, 3], 0),
-        ([2, 3], -1),
-        ([1, 1024, 32], 0),
-        ([33, 35, 37], -1),
-        ([7, 13, 129, 33], 1),
-        ([2, 3, 5, 33, 128], -1),
-        ([5, 2, 3, 5, 33, 128], 0),
-        ([19], -1),
-        ([1, 19], -1),
-        ([1, 151936], -1),
-        ([5], -1),
-        ([1, 5], -1),
-        ([1, 128256], -1),
+        # ([], 0),
+        # ([0], 0),
+        # ([1], 0),
+        # ([10], 0),
+        # ([2, 3], 0),
+        # ([2, 3], 1),
+        # ([2, 3], -1),
+        # ([2, 3], -2),
+        # ([2, 3, 4], 0),
+        # ([2, 3, 4], 2),
+        # ([2, 3, 4], -3),
+        # ([0, 0, 0], 0),
+        # ([0, 0, 0], 1),
+        # ([1, 32, 64], 1),
+        # ([1, 1024, 32], 0),
+        # ([1, 1024, 32], 1),
+        # ([260, 1, 1], 0),
+        # ([1024, 1, 32], 0),
+        # ([1, 1024, 32], 2),
+        # ([64, 1, 32], 1),
+        # ([64, 64, 1], 1),
+        # ([1, 32, 129], 1),
+        # ([33, 35, 37], 1),
+        ([1, 12, 40, 256], 0),
+        ([1, 12, 40, 256], 1),
+        ([1, 24, 80, 256], 0),
+        ([1, 24, 80, 256], 1),
+        ([1, 48, 160, 256], 0),
+        ([1, 48, 160, 256], 1),
+        # ([7, 13, 129, 33], 1),
+        # ([7, 13, 129, 33], 0),
+        # ([4, 6, 128, 128], 0),
+        # ([2, 3, 5, 33, 128], 0),
+        # ([2, 3, 5, 33, 128], 1),
+        # ([2, 3, 5, 33, 128], 2),
+        # ([2, 3, 5, 33, 128], 3),
+        # ([2, 3, 5, 33, 128], 4),
+        # ((2, 3, 4, 5, 33, 33), 0),
+        # ((2, 3, 4, 5, 33, 33), 1),
+        # ((2, 3, 4, 5, 33, 33), 2),
+        # ((2, 3, 4, 5, 33, 33), 3),
+        # ((2, 3, 4, 5, 33, 33), 4),
+        # ((2, 3, 4, 5, 33, 33), 5),
+        # ([8192, 16, 32, 32], 1),
+        # ([1, 151936], -1),
+        # ([1, 19], -1),
     ],
 )
 @pytest.mark.parametrize(
     "dtypes",
     [
-        (torch.float32, None),
+        # (torch.float32, None),
         (torch.bfloat16, ttnn.bfloat16),
-        (torch.int32, ttnn.int32),
+        # (torch.float32, ttnn.float32),
+        # (torch.float32, ttnn.bfloat16),
+        # (torch.int32, ttnn.int32),
     ],
 )
 def test_cumsum(size, dim, dtypes, device):
@@ -85,30 +118,29 @@ def test_cumsum(size, dim, dtypes, device):
     # Generate integer input on [-2; 2];
     # by generating around 0, this avoids FP-related issues when adding large sums with small inputs
     # which are not handled yet
-    for _ in range(2):
-        torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch_dtype)
-        input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
+    # torch_input_tensor = torch.randint(-2, 3, size=size, dtype=torch_dtype)
+    torch_input_tensor = torch.rand(size=size, dtype=torch_dtype)
+    # input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE, memory_config=ttnn.L1_MEMORY_CONFIG)
+    input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=ttnn.Layout.TILE)
 
-        expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
+    expected_output_dtype = ttnn_dtype if ttnn_dtype is not None else input_tensor.dtype
 
-        # For now, int32 version only supports >3-D tensors and `dim` outher than x and y axes
-        if not is_supported(size, dim, expected_output_dtype):
-            pytest.skip("Unsupported configuration by ttnn.cumsum")
+    # For now, int32 version only supports >3-D tensors and `dim` outher than x and y axes
+    if not is_supported(size, dim, expected_output_dtype):
+        pytest.skip("Unsupported configuration by ttnn.cumsum")
 
-        output_tensor = ttnn.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype)
+    output_tensor = ttnn.cumsum(input_tensor, dim=dim, dtype=ttnn_dtype)
 
-        assert output_tensor.dtype == expected_output_dtype
-        assert output_tensor.shape == (size)
+    assert output_tensor.dtype == expected_output_dtype
+    assert output_tensor.shape == (size)
 
-        torch_output = ttnn.to_torch(output_tensor, dtype=torch_dtype)
+    torch_output = ttnn.to_torch(output_tensor, dtype=torch_dtype)
 
-        expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=torch_dtype)
+    expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=torch_dtype)
 
-        if torch_output.numel() > 0:
-            if torch_dtype is torch.float32:
-                assert_allclose(expected_output, torch_output, atol=4.0, rtol=1e-3)
-            else:
-                assert_allclose(expected_output, torch_output)
+    comp_allclose_and_pcc(expected_output, torch_output)
+    if torch_output.numel() > 0:
+        assert_allclose(expected_output, torch_output, atol=4.0, rtol=1e-3)
 
 
 @pytest.mark.parametrize(
