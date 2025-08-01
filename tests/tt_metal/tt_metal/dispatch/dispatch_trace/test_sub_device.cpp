@@ -21,6 +21,7 @@
 #include "sub_device_test_utils.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 
 namespace tt::tt_metal {
 
@@ -93,7 +94,7 @@ TEST_F(UnitMeshCQSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms) 
         distributed::ReplayTrace(mesh_device.get(), mesh_device->mesh_command_queue().id(), tid_3, false);
     }
     distributed::Finish(mesh_device->mesh_command_queue());
-    detail::DumpDeviceProfileResults(mesh_device->get_devices()[0]);
+    ReadMeshDeviceProfilerResults(*mesh_device, ProfilerReadState::LAST_FD_READ);
 }
 
 TEST_F(UnitMeshCQSingleCardTraceFixture, TensixTestSubDeviceIllegalOperations) {
