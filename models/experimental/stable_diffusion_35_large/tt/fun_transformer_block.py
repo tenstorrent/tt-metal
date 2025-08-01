@@ -171,23 +171,27 @@ def sd_dual_attn_block(
     if parallel_manager.is_tensor_parallel:
         spatial_scaled = ttnn.experimental.all_gather_async(
             spatial_scaled,
+            persistent_output_buffer=parallel_manager.get_ping_pong_buffer(cfg_index, "spatial_buffer"),
             dim=3,
-            num_links=parallel_manager.num_links,
-            cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
-            mesh_device=device,
-            topology=parallel_manager.dit_parallel_config.topology,
             multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
-            persistent_output_tensor=parallel_manager.get_ping_pong_buffer(cfg_index, "spatial_buffer"),
+            num_links=parallel_manager.num_links,
+            topology=parallel_manager.dit_parallel_config.topology,
+            cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
+            chunks_per_sync=16,
+            num_workers_per_link=3,
+            num_buffers_per_channel=2,
         )
         prompt_scaled = unpadded_all_gather_async(
             prompt_scaled,
+            persistent_output_buffer=parallel_manager.get_ping_pong_buffer(cfg_index, "prompt_buffer"),
             dim=3,
+            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
             num_links=parallel_manager.num_links,
             cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
-            mesh_device=device,
             topology=parallel_manager.dit_parallel_config.topology,
-            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
-            persistent_output_tensor=parallel_manager.get_ping_pong_buffer(cfg_index, "prompt_buffer"),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
         )
 
     spatial_attn, prompt_attn = sd_joint_attention(
@@ -224,13 +228,15 @@ def sd_gated_ff_block(
         buffer_name = "spatial_buffer" if is_spatial else "prompt_buffer"
         scaled = unpadded_all_gather_async(
             scaled,
+            persistent_output_buffer=parallel_manager.get_ping_pong_buffer(cfg_index, buffer_name),
             dim=3,
-            num_links=parallel_manager.num_links,
-            cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
-            mesh_device=device,
-            topology=parallel_manager.dit_parallel_config.topology,
             multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
-            persistent_output_tensor=parallel_manager.get_ping_pong_buffer(cfg_index, buffer_name),
+            num_links=parallel_manager.num_links,
+            topology=parallel_manager.dit_parallel_config.topology,
+            cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
+            chunks_per_sync=16 if is_spatial else 10,
+            num_workers_per_link=3 if is_spatial else 2,
+            num_buffers_per_channel=2,
         )
     result = gate * sd_feed_forward(
         scaled,

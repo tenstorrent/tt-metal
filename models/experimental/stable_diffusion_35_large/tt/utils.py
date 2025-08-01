@@ -291,27 +291,31 @@ def silu(x: ttnn.Tensor) -> ttnn.Tensor:
 
 def unpadded_all_gather_async(
     x,
+    persistent_output_buffer,
     dim,
-    cluster_axis,
-    mesh_device,
-    topology,
     multi_device_global_semaphore,
-    memory_config=None,
     num_links=1,
-    persistent_output_tensor=None,
+    memory_config=None,
+    topology=ttnn.Topology.Linear,
+    cluster_axis=None,
+    chunks_per_sync=None,
+    num_workers_per_link=None,
+    num_buffers_per_channel=None,
 ):
     shape = list(x.shape)
 
     x = ttnn.experimental.all_gather_async(
         x,
+        persistent_output_buffer=persistent_output_buffer,
         dim=dim,
-        cluster_axis=cluster_axis,
-        mesh_device=mesh_device,
-        topology=topology,
         multi_device_global_semaphore=multi_device_global_semaphore,
-        memory_config=memory_config,
         num_links=num_links,
-        persistent_output_tensor=persistent_output_tensor,
+        topology=topology,
+        cluster_axis=cluster_axis,
+        memory_config=memory_config,
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
     )
 
     shape[dim] = x.shape[dim]
