@@ -34,11 +34,30 @@ void kernel_main() {
     auto accessor_src = TensorAccessor(args_src, bank_base_address_src, page_size);
     auto accessor_dst = TensorAccessor(args_dst, bank_base_address_dst, page_size);
 
+    // for (uint32_t shard_id = first_shard_id; shard_id < num_shards; shard_id += shard_id_stride) {
+    //     if constexpr (is_reader) {
+    //         auto shard_pages_begin = accessor_src.shard_pages_begin(shard_id);
+    //         auto shard_pages_end = accessor_src.shard_pages_end(shard_id);
+    //         for (auto it = shard_pages_begin; it != shard_pages_end; ++it) {
+    //             noc_async_write_page(it.get_page_id(), accessor_dst, *it);
+    //             noc_async_writes_flushed();
+    //         }
+    //     } else {
+    //         auto shard_pages_begin = accessor_dst.shard_pages_begin(shard_id);
+    //         auto shard_pages_end = accessor_dst.shard_pages_end(shard_id);
+    //         for (auto it = shard_pages_begin; it != shard_pages_end; ++it) {
+    //             noc_async_read_page(it.get_page_id(), accessor_src, *it);
+    //         }
+    //     }
+    // }
+
     for (uint32_t shard_id = first_shard_id; shard_id < num_shards; shard_id += shard_id_stride) {
         if constexpr (is_reader) {
             iterate_pages_in_shard(accessor_src, shard_id, [&](uint32_t page_id) {
                 // TODO: local noc_addr calculation can be optimized
                 ASSERT(accessor_src.is_local_page(page_id));
+                DPRINT << "Shard " << shard_id << ": Writing page " << page_id << " to "
+                       << accessor_src.get_noc_addr(page_id) << "\n";
                 noc_async_write_page(page_id, accessor_dst, accessor_src.get_noc_addr(page_id));
                 noc_async_writes_flushed();
             });
