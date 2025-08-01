@@ -1132,16 +1132,31 @@ uint32_t calculate_conv_dram_slice_L1_usage(
 
     // Output of padded slice is always BFloat16, so size is 2 bytes.
     uint32_t input_size = shard_shape[0] * shard_shape[1] * 2;
-    uint32_t shard_height = tt::div_up(shard_shape[0], params.input_width);
+    uint32_t shard_height = shard_shape[0] / input_slice_width;
 
+    uint32_t batch_boundary_multiplier = (params.batch_size > 1) ? 2 : 1;
     // Halo adds the overlap region of the input tensor that is needed for the convolution.
     //  As width is the faster changing dimension, we typically have the entire width in every shard.
     //  For each shard, it's the additional height from adjacent shards that is needed to cover the kernel size and
     //  dilation. At the boundary between two batches, the additional height is needed twice.
     // Multiplying by 2 as output is BFloat16.
-    uint32_t approx_max_halo_size = (shard_height + (params.dilation[0] * params.kernel_size[0]) * 2) *
-                                    (params.input_width + params.padding_n4[2] + params.padding_n4[3]) * 2;
+    uint32_t approx_max_halo_size =
+        (shard_height + (params.dilation[0] * params.kernel_size[0] - 1) * batch_boundary_multiplier) *
+        (input_slice_width + params.padding_n4[2] + params.padding_n4[3]) * shard_shape[1] * 2;
     const float output_size_margin = 1.0f;
+
+    float float_shard_height = ((float)shard_shape[0]) / params.input_width;
+    uint32_t approx_halo_size =
+        (float_shard_height + (params.dilation[0] * params.kernel_size[0] / 2)) * input_size / float_shard_height;
+
+    log_info(
+        tt::LogOp,
+        "For num_slices = {}, input_size = {}, approx_max_halo_size = {}, old_halo_size = {}, conv size = {}",
+        dram_slice_config.num_slices,
+        input_size,
+        approx_max_halo_size,
+        approx_halo_size,
+        l1_usage);
     if (conv_config.in_place) {
         return output_size_margin *
                (approx_max_halo_size + l1_usage.tensor_allocation_size + l1_usage.CB_allocation_size);
