@@ -459,6 +459,10 @@ public:
 
     void set_global_sync_val(uint32_t val) { global_sync_val_ = val; }
 
+    bool has_test_failures() const { return has_test_failures_; }
+
+    const std::vector<std::string>& get_all_failed_tests() const { return all_failed_tests_; }
+
 private:
     void reset_local_variables() {
         benchmark_mode_ = false;
@@ -471,6 +475,7 @@ private:
         bandwidth_results_summary_.clear();
         comparison_results_.clear();
         failed_tests_.clear();
+        // Note: has_test_failures_ is NOT reset here to preserve failures across tests
         // Note: golden_csv_entries_ is kept loaded for reuse across tests
     }
 
@@ -1199,9 +1204,11 @@ private:
         }
 
         if (!failed_tests_.empty()) {
-            TT_THROW("The following tests failed golden comparison (using per-test tolerance):");
+            has_test_failures_ = true;
+            log_error(tt::LogTest, "The following tests failed golden comparison (using per-test tolerance):");
             for (const auto& failed_test : failed_tests_) {
                 log_error(tt::LogTest, "  - {}", failed_test);
+                all_failed_tests_.push_back(failed_test);  // Accumulate for final summary
             }
         } else {
             log_info(tt::LogTest, "All tests passed golden comparison using per-test tolerance values");
@@ -1237,6 +1244,8 @@ private:
     // Golden CSV comparison data
     std::vector<GoldenCsvEntry> golden_csv_entries_;
     std::vector<ComparisonResult> comparison_results_;
-    std::vector<std::string> failed_tests_;
+    std::vector<std::string> failed_tests_;      // Per-test failed tests (reset each test)
+    std::vector<std::string> all_failed_tests_;  // Accumulates all failed tests across test run
     std::filesystem::path diff_csv_file_path_;
+    bool has_test_failures_ = false;  // Track if any tests failed validation
 };
