@@ -55,7 +55,6 @@ class MoE(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        mode: str,
         ccl: CCL1D,
     ) -> ModelState:
         """Create model state containing CCL-related communication configurations.
@@ -67,10 +66,6 @@ class MoE(AbstractModule):
         Returns:
             ModelState containing CCL configurations
         """
-        if mode == "decode":
-            memory_config = ttnn.L1_MEMORY_CONFIG
-        else:
-            memory_config = ttnn.DRAM_MEMORY_CONFIG
 
         num_devices = mesh_device.get_num_devices()
         num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
@@ -88,30 +83,21 @@ class MoE(AbstractModule):
         )
 
         return {
-            "device": mesh_device,
-            "num_devices": num_devices,
-            "num_experts_per_device": num_experts_per_device,
             "expert_mapping_tensors": expert_mapping_tensors,
-            "hidden_size": hf_config.hidden_size,
-            "num_experts_per_tok": hf_config.num_experts_per_tok,
-            "num_dispatch_devices": tuple(mesh_device.shape)[0],
-            "all_to_all_dispatch": AllToAllDispatchConfig(
-                cluster_axis=0, num_links=1, memory_config=memory_config, global_semaphore=ccl.get_semaphore(0)
-            ),
-            "all_to_all_combine": AllToAllCombineConfig(
-                axis=0, num_links=1, memory_config=memory_config, global_semaphore=ccl.get_semaphore(0)
-            ),
-            "final_output_reduce_scatter": ReduceScatterAsyncConfig(
-                mesh_device=mesh_device,
-                cluster_axis=1,
-                dim=3,
-                from_remote_multi_device_global_semaphore=ccl.get_semaphore(1),
-                to_remote_multi_device_global_semaphore=ccl.get_semaphore(1),
-                math_op=ttnn.ReduceType.Sum,
-                num_links=ccl.get_max_links(1),
-                memory_config=memory_config,
-                topology=ttnn.Topology.Linear,
-            ),
+            # CCL-specific parameters (semaphores and num_links)
+            "all_to_all_dispatch": {
+                "global_semaphore": ccl.get_semaphore(0),
+                "num_links": 1,
+            },
+            "all_to_all_combine": {
+                "global_semaphore": ccl.get_semaphore(0),
+                "num_links": 1,
+            },
+            "final_output_reduce_scatter": {
+                "from_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
+                "to_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
+                "num_links": ccl.get_max_links(1),
+            },
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
         }
 
@@ -140,6 +126,12 @@ class MoE(AbstractModule):
 
         # Construct the config
         return {
+            "device": mesh_device,
+            "num_devices": mesh_device.get_num_devices(),
+            "num_experts_per_device": num_experts_per_device,
+            "hidden_size": hf_config.hidden_size,
+            "num_experts_per_tok": hf_config.num_experts_per_tok,
+            "num_dispatch_devices": tuple(mesh_device.shape)[0],
             "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode),
             "all_to_all_dispatch_output_memory_config": memory_config,
             "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -150,6 +142,16 @@ class MoE(AbstractModule):
             "mul_experts_output_with_weights": MulConfig(memory_config=memory_config),
             "input_memory_config": memory_config,
             "output_memory_config": memory_config,
+            "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
+            "all_to_all_combine": AllToAllCombineConfig(axis=0, memory_config=memory_config),
+            "final_output_reduce_scatter": ReduceScatterAsyncConfig(
+                mesh_device=mesh_device,
+                cluster_axis=1,
+                dim=3,
+                math_op=ttnn.ReduceType.Sum,
+                memory_config=memory_config,
+                topology=ttnn.Topology.Linear,
+            ),
         }
 
     @classmethod
