@@ -4,8 +4,14 @@ add_library(TTNN::Ops::Matmul ALIAS ttnn_op_matmul)
 target_precompile_headers(ttnn_op_matmul REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_matmul)
 
+file(GLOB_RECURSE kernels matmul/device/kernels/*)
 target_sources(
     ttnn_op_matmul
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES ${kernels}
     PRIVATE
         device/matmul_op.cpp
         device/matmul_op_multi_core_program_factory.cpp
