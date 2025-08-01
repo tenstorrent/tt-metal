@@ -240,13 +240,23 @@ protected:
         const chip_id_t mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         std::vector<chip_id_t> chip_ids;
         auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
-        if (enable_remote_chip or
-            tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB) {
             for (chip_id_t id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
                 chip_ids.push_back(id);
             }
         } else {
             chip_ids.push_back(mmio_device_id);
+        }
+
+        if (enable_remote_chip) {
+            const auto tunnels =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
+            for (const auto& tunnel : tunnels) {
+                for (const auto& chip_id : tunnel) {
+                    chip_ids.push_back((chip_id));
+                }
+                break;
+            }
         }
         auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
             chip_ids, DEFAULT_L1_SMALL_SIZE, trace_region_size, 1, dispatch_core_config);
