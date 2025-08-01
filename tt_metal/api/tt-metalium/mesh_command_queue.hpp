@@ -111,6 +111,10 @@ public:
      * This allows writing data in one format (e.g., Float32) to a buffer that stores
      * data in a different format (e.g., BFloat16).
      *
+     * Only a limited number of data formats are supported for conversion, including:
+     * - Float32 to Float16_b
+     * - Identity conversion (Float32 to Float32, Float16_b to Float16_b, etc.)
+     *
      * @param buffer The MeshBuffer to write data to
      * @param data_format The target data format for the buffer
      * @param host_data Pointer to the source data on the host
@@ -134,6 +138,10 @@ public:
      * Writes data to multiple specific shards of a MeshBuffer, performing data format
      * conversion from the source format to the target buffer format. Each shard can
      * receive different data, allowing for fine-grained control over distributed data placement.
+     *
+     * Only a limited number of data formats are supported for conversion, including:
+     * - Float32 to Float16_b
+     * - Identity conversion (Float32 to Float32, Float16_b to Float16_b, etc.)
      *
      * @param mesh_buffer Shared pointer to the MeshBuffer to write data to
      * @param data_format The target data format for the buffer
@@ -160,6 +168,10 @@ public:
      * Writes host data to all devices in a MeshBuffer, performing data format conversion from the source format to the
      * target buffer format. This operation writes the data using the sharding specification in the buffer.
      *
+     * Only a limited number of data formats are supported for conversion, including:
+     * - Float32 to Float16_b
+     * - Identity conversion (Float32 to Float32, Float16_b to Float16_b, etc.)
+     *
      * @param buffer Shared pointer to the MeshBuffer to write data to
      * @param data_format The target data format for the buffer
      * @param host_data Pointer to the source data on the host
@@ -183,6 +195,10 @@ public:
      * conversion from the source format to the target buffer format. The DistributedHostBuffer
      * provides per-shard data distribution, allowing different data to be written to each
      * shard in the mesh while maintaining format conversion capabilities.
+     *
+     * Only a limited number of data formats are supported for conversion, including:
+     * - Float32 to Float16_b
+     * - Identity conversion (Float32 to Float32, Float16_b to Float16_b, etc.)
      *
      * @param mesh_buffer Shared pointer to the MeshBuffer to write data to
      * @param data_format The target data format for the buffer
