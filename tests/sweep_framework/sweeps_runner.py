@@ -839,7 +839,11 @@ def run_sweeps_json(module_names, suite_name, run_contents=None, vector_id=None)
 
 
 def run_sweeps(module_name, suite_name, vector_id, skip_modules=None, run_contents=None):
-    client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
+    try:
+        client = Elasticsearch(ELASTIC_CONNECTION_STRING, basic_auth=(ELASTIC_USERNAME, ELASTIC_PASSWORD))
+    except Exception as e:
+        logger.error(f"Error connecting to Elasticsearch: {e}")
+        exit(1)
     pbar_manager = enlighten.get_manager()
 
     sweeps_path = pathlib.Path(__file__).parent / "sweeps"
@@ -1389,18 +1393,22 @@ if __name__ == "__main__":
         exit(1)
 
     global READ_FILE
-    if not args.read_file:
+    # Only import Elasticsearch if using elastic database and not reading from file
+    if not args.read_file and args.database == "elastic":
         from elasticsearch import Elasticsearch, NotFoundError
         from framework.elastic_config import *
 
         global ELASTIC_CONNECTION_STRING
         ELASTIC_CONNECTION_STRING = get_elastic_url(args.elastic)
         READ_FILE = None
-    else:
+    elif args.read_file:
         if not args.module_name:
             logger.error("You must specify a module with a local file.")
             exit(1)
         READ_FILE = args.read_file
+    else:
+        # Using PostgreSQL database or other non-elastic backend
+        READ_FILE = None
 
     global MEASURE_PERF
     MEASURE_PERF = args.perf
@@ -1480,7 +1488,12 @@ if __name__ == "__main__":
         run_sweeps_json(effective_module_names, args.suite_name, run_contents=run_contents, vector_id=args.vector_id)
     else:
         # Exporting results to Elasticsearch
-        logger.info(f"Exporting results to Elasticsearch")
+        # check that ELASTIC_USERNAME and ELASTIC_PASSWORD are set
+        if ELASTIC_USERNAME is None or ELASTIC_PASSWORD is None:
+            logger.error("ELASTIC_USERNAME and ELASTIC_PASSWORD must be set in the environment variables.")
+            exit(1)
+        else:
+            logger.info(f"Exporting results to Elasticsearch")
         run_sweeps(module_names, args.suite_name, args.vector_id, skip_modules_set, run_contents=run_contents)
 
     if args.watcher:
