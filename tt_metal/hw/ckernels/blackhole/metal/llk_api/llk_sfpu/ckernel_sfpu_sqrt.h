@@ -12,7 +12,7 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, int RECIPROCAL_ITERATIONS = 2>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, int RECIPROCAL_ITERATIONS = 2, bool is_fp32_dest_acc_en = false>
 inline void calculate_sqrt() {
     _calculate_sqrt_<APPROXIMATION_MODE, ITERATIONS, RECIPROCAL_ITERATIONS>(ITERATIONS);
 }

@@ -12,7 +12,7 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_tanh() {
     // SFPU microcode
     vUInt l0 = l_reg[LRegs::LReg0];
