@@ -366,6 +366,7 @@ target_sources(
             inc/dataflow_api_addrgen.h
             inc/dataflow_api_common.h
             inc/socket_api.h
+            inc/socket.h
             # Toolchain
             toolchain/erisc-b0-app.ld
             toolchain/erisc-b0-app-sections.ld
