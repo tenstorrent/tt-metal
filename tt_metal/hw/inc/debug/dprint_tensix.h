@@ -206,6 +206,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
 
         uint32_t row = tile_id * NUM_ROWS_PER_TILE;
         for (int face_id = 0; face_id < NUM_FACES_PER_TILE; ++face_id) {
+            DPRINT << "Face ID = " << face_id << ENDL();
             for (int row_id = 0; row_id < NUM_ROWS_PER_FACE; ++row_id) {
                 switch (data_format_reg_field_value) {
                     case (uint32_t)DataFormat::Float32:

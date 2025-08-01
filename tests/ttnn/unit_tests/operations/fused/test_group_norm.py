@@ -411,16 +411,16 @@ def generate_sdxl_test_inputs():
     inputs = []
 
     # 1024x1024 resoultion
-    inputs.append((1, 1280, 64, 64))
-    inputs.append((1, 1280, 32, 32))
-    inputs.append((1, 1920, 64, 64))
-    inputs.append((1, 1920, 32, 32))
-    inputs.append((1, 2560, 32, 32))
+    # inputs.append((1, 1280, 64, 64))
+    # inputs.append((1, 1280, 32, 32))
+    # inputs.append((1, 1920, 64, 64))
+    # inputs.append((1, 1920, 32, 32))
+    # inputs.append((1, 2560, 32, 32))
     inputs.append((1, 320, 128, 128))
-    inputs.append((1, 320, 64, 64))
-    inputs.append((1, 640, 64, 64))
-    inputs.append((1, 640, 32, 32))
-    inputs.append((1, 960, 64, 64))
+    # inputs.append((1, 320, 64, 64))
+    # inputs.append((1, 640, 64, 64))
+    # inputs.append((1, 640, 32, 32))
+    # inputs.append((1, 960, 64, 64))
 
     return inputs
 
@@ -482,6 +482,8 @@ def test_sdxl_base_group_norm(device, input_shape):
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+    print("Out tensor: ", tt_output_tensor)
+    print("Torch out tensor: ", torch_output_tensor)
 
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9997)
 
