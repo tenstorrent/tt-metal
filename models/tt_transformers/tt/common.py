@@ -37,6 +37,7 @@ class RopeScalingType(str, Enum):
     # DYNAMIC = "dynamic"
     YARN = "yarn"
     LLAMA3 = "llama3"
+    DEFAULT = "default"
 
 
 class RopeScaling(BaseModel):
@@ -71,7 +72,7 @@ def rope_scaling_model_factory(rope_scaling_params: dict) -> RopeScaling:
     elif rope_scaling_params.get("rope_type") == RopeScalingType.YARN:
         return RopeScalingYarn(**rope_scaling_params)
     else:
-        return RopeScaling(rope_type=RopeScalingType.LLAMA3, **rope_scaling_params)
+        return RopeScaling(rope_type=RopeScalingType.DEFAULT, **rope_scaling_params)
 
 
 def encode_prompt_instruct(tokenizer, prompt_text, system_prompt_text=None):
