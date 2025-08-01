@@ -48,6 +48,7 @@ jobs:
           docker_opts: |
             -e TT_METAL_HOME="/work"
             -e PYTHONPATH="/work"
+            -e PYTHON_ENV_DIR="${{ github.workspace }}/python_env"
             -e LD_LIBRARY_PATH="/work/build/lib"
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:/work/generated/test_reports/"
