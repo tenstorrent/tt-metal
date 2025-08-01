@@ -266,7 +266,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     };
     for (auto& neighbor : neighbors) {
         uint32_t link_id = 0;
-        const auto neighbor_fabric_id = mesh_device->get_device_fabric_node_id(neighbor);
+        const auto neighbor_fabric_id = mesh_device->get_fabric_node_id(neighbor);
         append_fabric_connection_rt_args(
             fabric_node_id, neighbor_fabric_id, link_id, program, sender_core, writer_runtime_args);
     }

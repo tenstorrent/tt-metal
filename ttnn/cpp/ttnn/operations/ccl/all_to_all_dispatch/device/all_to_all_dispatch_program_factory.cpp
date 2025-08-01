@@ -126,7 +126,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto src_device = mesh_device->get_device(mesh_coordinate);
     auto src_physical_device_id = src_device->id();
 
-    auto src_fabric_node_id = mesh_device->get_device_fabric_node_id(mesh_coordinate);
+    auto src_fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     uint32_t src_mesh_id = *src_fabric_node_id.mesh_id;
     uint32_t src_chip_id = (uint32_t)src_fabric_node_id.chip_id;
     uint32_t linearized_mesh_coord = common::get_linearized_index(mesh_coordinate, mesh_view);
@@ -290,7 +290,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
     for (const auto& coord : tensor_coords.coords()) {
-        auto dest_fabric_node_id = mesh_device->get_device_fabric_node_id(coord);
+        auto dest_fabric_node_id = mesh_device->get_fabric_node_id(coord);
         dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)dest_fabric_node_id.chip_id);
     }
