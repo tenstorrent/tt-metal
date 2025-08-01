@@ -89,7 +89,10 @@ void PagedUpdateCacheDeviceOperation::validate(
                 "Batch size between page_table and input_tensor must match");
             TT_FATAL(
                 page_table.padded_shape()[1] <= cache_tensor.padded_shape()[0],
-                "max_num_blocks_per_seq must be less than max_num_blocks");
+                "max_num_blocks_per_seq must be less than max_num_blocks: max_num_blocks_per_seq={}, "
+                "max_num_blocks={}",
+                page_table.padded_shape()[1],
+                cache_tensor.padded_shape()[0]);
         }
     };
 

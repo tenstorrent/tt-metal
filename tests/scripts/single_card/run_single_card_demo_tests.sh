@@ -21,6 +21,34 @@ run_qwen7b_func() {
 
 }
 
+run_qwen25_vl_func() {
+  fail=0
+
+  # install qwen25_vl requirements
+  pip install -r models/demos/qwen25_vl/reference/requirements.txt
+
+  # export PYTEST_ADDOPTS for concise pytest output
+  export PYTEST_ADDOPTS="--tb=short"
+
+  # Qwen2.5-VL-3B
+  qwen25_vl_3b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-3B-Instruct/
+  # todo)) Qwen2.5-VL-7B-Instruct
+
+  # simple generation-accuracy tests for qwen25_vl_3b
+  MESH_DEVICE=N300 HF_MODEL=$qwen25_vl_3b WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 600 || fail=1
+  echo "LOG_METAL: demo/combined.py tests for $qwen25_vl_3b on N300 completed"
+
+  # complete demo tests
+  for qwen_dir in "$qwen25_vl_3b"; do
+    MESH_DEVICE=N300 HF_MODEL=$qwen_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/qwen25_vl/demo/demo.py --timeout 600 || fail=1
+    echo "LOG_METAL: Tests for $qwen_dir on N300 completed"
+  done
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_segformer_func() {
   #Segformer Segmentation Demo
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py --timeout 600; fail+=$?
