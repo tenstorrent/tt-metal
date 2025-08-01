@@ -12,6 +12,7 @@
 #include <vector>
 #include <utility>
 #include <nlohmann/json.hpp>
+#include <enchantum/enchantum.hpp>
 
 #include "fabric_types.hpp"
 #include "tt_cluster.hpp"
@@ -108,9 +109,9 @@ inline void dumpRoutingInfo(const std::filesystem::path& filepath) {
         });
     }
 
-    topology_json["cluster_type"] = magic_enum::enum_name(cluster.get_cluster_type());
+    topology_json["cluster_type"] = enchantum::to_string(cluster.get_cluster_type());
 
-    topology_json["fabric_config"] = magic_enum::enum_name(tt::tt_metal::MetalContext::instance().get_fabric_config());
+    topology_json["fabric_config"] = enchantum::to_string(tt::tt_metal::MetalContext::instance().get_fabric_config());
     if (tt::tt_metal::MetalContext::instance().get_fabric_config() != tt_fabric::FabricConfig::DISABLED) {
         topology_json["routing_planes"] = nlohmann::ordered_json::array();
         topology_json["device_id_to_fabric_node_id"] = nlohmann::ordered_json::object();
@@ -132,7 +133,7 @@ inline void dumpRoutingInfo(const std::filesystem::path& filepath) {
 
                 for (int j = 0; j < eth_routing_planes_in_dir.size(); j++) {
                     chip_id_t eth_channel = eth_routing_planes_in_dir[j];
-                    device_routing_planes[j]["ethernet_channels"][magic_enum::enum_name(direction)] = eth_channel;
+                    device_routing_planes[j]["ethernet_channels"][enchantum::to_string(direction)] = eth_channel;
                 }
             }
 

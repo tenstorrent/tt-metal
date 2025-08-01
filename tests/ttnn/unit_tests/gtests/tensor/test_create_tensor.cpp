@@ -4,7 +4,7 @@
 
 #include <boost/move/utility_core.hpp>
 #include <fmt/base.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <stdint.h>
 #include <tt-logger/tt-logger.hpp>
 #include <initializer_list>
@@ -102,7 +102,7 @@ INSTANTIATE_TEST_SUITE_P(
         CreateTensorParams{.shape = ttnn::Shape({0})}));
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& value) {
-    os << magic_enum::enum_name(value);
+    os << enchantum::to_string(value);
     return os;
 }
 
