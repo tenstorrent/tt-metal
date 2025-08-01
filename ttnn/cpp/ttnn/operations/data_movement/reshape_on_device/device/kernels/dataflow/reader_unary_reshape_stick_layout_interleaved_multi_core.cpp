@@ -12,15 +12,12 @@ void kernel_main() {
     uint32_t num_sticks_per_cb_push = get_arg_val<uint32_t>(3);
     uint32_t start_id = get_arg_val<uint32_t>(4);
 
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t old_stick_size = get_compile_time_arg_val(1);
+    constexpr uint32_t old_stick_size = get_compile_time_arg_val(0);
+    constexpr auto src_args = TensorAccessorArgs<1>();
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
 
-    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(2) == 1;
-    constexpr uint32_t size = get_compile_time_arg_val(3);
-
-    const auto s = get_interleaved_addr_gen<src_is_dram, stick_size_is_pow2>(src_addr, size);
+    const auto s = TensorAccessor(src_args, src_addr, old_stick_size);
 
     uint32_t i_stick = start_id;
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;

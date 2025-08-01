@@ -15,6 +15,7 @@ from PIL import Image
 import models.demos.yolov7.reference.yolov7_model as yolov7_model
 import models.demos.yolov7.reference.yolov7_utils as yolov7_utils
 import ttnn
+from models.demos.yolov7.common import YOLOV7_L1_SMALL_SIZE
 from models.demos.yolov7.demo.demo_utils import load_coco_class_names
 from models.demos.yolov7.runner.performant_runner import YOLOv7PerformantRunner
 
@@ -93,7 +94,7 @@ async def startup():
         device = ttnn.CreateDevice(
             device_id,
             dispatch_core_config=get_dispatch_core_config(),
-            l1_small_size=24576,
+            l1_small_size=YOLOV7_L1_SMALL_SIZE,
             trace_region_size=6434816,
             num_command_queues=2,
         )
@@ -101,7 +102,9 @@ async def startup():
         model = YOLOv7PerformantRunner(device)
     else:
         device_id = 0
-        device = ttnn.CreateDevice(device_id, l1_small_size=24576, trace_region_size=3211264, num_command_queues=2)
+        device = ttnn.CreateDevice(
+            device_id, l1_small_size=YOLOV7_L1_SMALL_SIZE, trace_region_size=3211264, num_command_queues=2
+        )
         device.enable_program_cache()
         model = YOLOv7PerformantRunner(device)
     model._capture_yolov7_trace_2cqs()
