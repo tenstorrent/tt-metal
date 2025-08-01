@@ -69,6 +69,7 @@ jobs:
       - name: Setup
         uses: actions/checkout@v4
         with:
+          repository: tenstorrent/tt-metal
           submodules: recursive
           token: ${{ secrets.TEMP_METAL_PAT }}
           fetch-depth: 0
@@ -216,6 +217,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          repository: tenstorrent/tt-metal
           submodules: recursive
           token: ${{ secrets.TEMP_METAL_PAT }}
 
