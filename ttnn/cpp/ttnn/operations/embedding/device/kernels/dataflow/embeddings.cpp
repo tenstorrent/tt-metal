@@ -38,7 +38,7 @@ void kernel_main() {
     uint32_t curr_row = batch_offset;  // Number of pages/rows we have read from input so far
     uint32_t offset = weights_offset;  // Which input elem we are on (bytes offset from start of row)
     uint32_t index = index_idx;
-    uint32_t input_size_bytes = input_block_size_bytes / rows_per_block;
+    uint32_t input_elem_size_bytes = input_block_size_bytes / rows_per_block;
 
     bool read_indices = true;
     for (uint32_t i = 0; i < num_rows; ++i) {
@@ -57,7 +57,7 @@ void kernel_main() {
         cb_push_back(cb_id_in0, 1);
 
         index++;
-        uint32_t total_bytes_into_page = offset + index * input_size_bytes;
+        uint32_t total_bytes_into_page = offset + index * input_elem_size_bytes;
         bool end_of_block = index == rows_per_block;
         bool end_of_page = total_bytes_into_page == input_page_size;
         if (end_of_block || end_of_page) {
