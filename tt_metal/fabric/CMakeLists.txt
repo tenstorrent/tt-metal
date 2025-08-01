@@ -69,7 +69,7 @@ target_link_libraries(
         Metalium::Metal::LLRT
         umd::device
         metal_common_libs
-        magic_enum::magic_enum
+        enchantum::enchantum
         fmt::fmt-header-only
         yaml-cpp::yaml-cpp
         Metalium::Metal::Impl

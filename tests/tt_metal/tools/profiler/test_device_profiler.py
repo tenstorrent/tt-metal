@@ -292,7 +292,7 @@ def test_dispatch_cores():
 @skip_for_blackhole()
 @skip_for_grayskull()
 def test_ethernet_dispatch_cores():
-    REF_COUNT_DICT = {"Ethernet CQ Dispatch": [590, 1220, 1430, 1660, 2320], "Ethernet CQ Prefetch": [1180, 4630]}
+    REF_COUNT_DICT = {"Ethernet CQ Dispatch": [590, 840, 1430, 1660, 2320], "Ethernet CQ Prefetch": [572, 4030]}
     devicesData = run_device_profiler_test(
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops",
         setupAutoExtract=True,
@@ -437,7 +437,7 @@ def test_noc_event_profiler_linked_multicast_hang():
     testCommand = "build/test/tt_metal/perf_microbenchmark/dispatch/test_bw_and_latency"
     # note: this runs a long series repeated multicasts from worker {1,1} to grid {2,2},{3,3}
     # note: -m6 is multicast test mode, -link activates linked multicast
-    testCommandArgs = "-tx 3 -ty 3 -sx 2 -sy 2 -rx 1 -ry 1 -m 6 -link -profdump"
+    testCommandArgs = "-tx 3 -ty 3 -sx 2 -sy 2 -rx 1 -ry 1 -m 6 -link -profread"
     clear_profiler_runtime_artifacts()
     nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
     profilerRun = os.system(f"cd {TT_METAL_HOME} && {nocEventProfilerEnv} {testCommand} {testCommandArgs}")
@@ -456,11 +456,12 @@ def test_noc_event_profiler():
 
     testCommand = f"build/{PROG_EXMP_DIR}/test_noc_event_profiler"
     clear_profiler_runtime_artifacts()
+    nocEventsRptPathEnv = f"TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH={PROFILER_ARTIFACTS_DIR}/noc_events_rpt"
     nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
-    profilerRun = os.system(f"cd {TT_METAL_HOME} && {nocEventProfilerEnv} {testCommand}")
+    profilerRun = os.system(f"cd {TT_METAL_HOME} && {nocEventsRptPathEnv} {nocEventProfilerEnv} {testCommand}")
     assert profilerRun == 0
 
-    expected_trace_file = f"{PROFILER_LOGS_DIR}/noc_trace_dev0_ID0.json"
+    expected_trace_file = f"{PROFILER_ARTIFACTS_DIR}/noc_events_rpt/noc_trace_dev0_ID0.json"
     assert os.path.isfile(expected_trace_file)
 
     with open(expected_trace_file, "r") as nocTraceJson:

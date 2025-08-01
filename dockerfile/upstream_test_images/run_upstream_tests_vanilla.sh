@@ -16,7 +16,7 @@ test_suite_bh_single_pcie_metal_unit_tests() {
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQSingleCardProgramFixture.*
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=CommandQueueProgramFixture.*
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshCQProgramFixture.*
-    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=RandomProgramFixture.*
+    ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=*RandomProgramFixture.*
     ./build/test/tt_metal/unit_tests_dispatch --gtest_filter=CommandQueueSingleCardBufferFixture.* # Tests EnqueueRead/EnqueueWrite Buffer from DRAM/L1
 
     TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_api --gtest_filter=*SimpleDram*:*SimpleL1* # Executable is dependent on arch (provided through GitHub CI workflow scripts)
@@ -86,6 +86,15 @@ test_suite_bh_llmbox_llama_demo_tests() {
     verify_llama_dir_
 
     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 4
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel 4 --max_generated_tokens 220
+}
+
+test_suite_bh_llmbox_llama_stress_tests() {
+    echo "[upstream-tests] Running BH LLMBox upstream Llama stress model tests"
+
+    verify_llama_dir_
+
+    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel 4 --max_generated_tokens 22000
 }
 
 test_suite_wh_6u_metal_unit_tests() {
@@ -118,13 +127,13 @@ test_suite_wh_6u_llama_demo_tests() {
 
     verify_llama_dir_
 
-    pytest models/demos/llama3_subdevices/tests/test_llama_model.py -k "quick"
-    pytest models/demos/llama3_subdevices/tests/unit_tests/test_llama_model_prefill.py
-    pytest models/demos/llama3_subdevices/demo/text_demo.py -k "repeat"
+    pytest models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k "quick"
+    pytest models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
+    pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat"
     # Some AssertionError: Throughput is out of targets 49 - 53 t/s/u in 200 iterations
     # assert 200 <= 20
-    # pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "full"
-    pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "mini-stress-test"
+    # pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full"
+    pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "mini-stress-test"
 }
 
 test_suite_wh_6u_llama_long_stress_tests() {
@@ -134,7 +143,7 @@ test_suite_wh_6u_llama_long_stress_tests() {
     verify_llama_dir_
 
     # This will take almost 3 hours. Ensure that the tensors are cached in the LLAMA_DIR.
-    pytest models/demos/llama3_subdevices/demo/demo_decode.py -k "stress-test and not mini-stress-test"
+    pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "stress-test and not mini-stress-test"
 }
 
 # Define test suite mappings for different hardware topologies

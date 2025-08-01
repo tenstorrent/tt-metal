@@ -5,7 +5,6 @@
 #pragma once
 
 #include "command_queue_fixture.hpp"
-#include "data_types.hpp"
 #include "env_lib.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -18,7 +17,7 @@
 
 namespace tt::tt_metal {
 
-class RandomProgramFixture : virtual public CommandQueueSingleCardProgramFixture {
+class UnitMeshRandomProgramFixture : virtual public UnitMeshCQSingleCardProgramFixture {
 protected:
     static const uint32_t MIN_KERNEL_SIZE_BYTES = 20;
     static const uint32_t MAX_KERNEL_SIZE_BYTES = 4096;
@@ -66,12 +65,12 @@ protected:
             max_num_cbs(MAX_NUM_CBS) {}
     };
 
-    static const uint32_t NUM_PROGRAMS = 75;
+    static const uint32_t NUM_WORKLOADS = 75;
 
-    IDevice* device_;
+    std::shared_ptr<distributed::MeshDevice> device_;
 
     void SetUp() override {
-        CommandQueueSingleCardProgramFixture::SetUp();
+        UnitMeshCQSingleCardProgramFixture::SetUp();
         if (!::testing::Test::IsSkipped()) {
             // Parent may have skipped
             this->device_ = this->devices_[0];
@@ -84,7 +83,6 @@ protected:
         log_info(tt::LogTest, "Using seed: {}", seed);
         srand(seed);
     }
-
     void create_kernel(
         Program& program,
         const CoreType kernel_core_type,
@@ -262,10 +260,11 @@ private:
         std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> config;
         if (create_eth_config) {
             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::ACTIVE_ETH));
-            config = EthernetConfig{.processor = this->get_processor(true), .compile_args = compile_args, .defines = defines};
+            config = EthernetConfig{.compile_args = compile_args, .defines = defines};
         } else {
             compile_args.push_back(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
-            config = DataMovementConfig{.processor = this->get_processor(false), .compile_args = compile_args, .defines = defines};
+            DataMovementProcessor processor = this->get_processor();
+            config = DataMovementConfig{.processor = processor, .compile_args = compile_args, .defines = defines};
         }
 
         KernelHandle kernel_id = CreateKernel(
@@ -294,19 +293,8 @@ private:
         return adjusted_min + (rand() % ((adjusted_max - adjusted_min) / divisible_by + 1)) * divisible_by;
     }
 
-    DataMovementProcessor get_processor(bool is_eth) {
-        int max_index = 1;
-        int num = 0;
-
-        if (is_eth) {
-            max_index = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
-                            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH) -
-                        1;
-            // hardcoded to subordinate for now
-            num = max_index;
-        } else {
-            num = this->generate_random_num(0, max_index);
-        }
+    DataMovementProcessor get_processor() {
+        const uint32_t num = this->generate_random_num(0, 1);
         DataMovementProcessor processor;
         if (num == 0) {
             processor = DataMovementProcessor::RISCV_0;
@@ -324,7 +312,8 @@ private:
         } else {
             TT_FATAL(core_type == CoreType::ETH, "Unsupported core type");
             std::set<CoreRange> core_ranges;
-            const std::unordered_set<CoreCoord> active_eth_cores = this->device_->get_active_ethernet_cores(true);
+            const std::unordered_set<CoreCoord> active_eth_cores =
+                this->device_->get_devices()[0]->get_active_ethernet_cores(true);
             TT_FATAL(!active_eth_cores.empty(), "No active ethernet cores detected");
             for (CoreCoord eth_core : active_eth_cores) {
                 core_ranges.emplace(eth_core);
@@ -335,7 +324,7 @@ private:
         all_cores = empty_crs.merge(all_cores);
 
         CoreRangeSet cores;
-        const uint32_t num = 0;  // this->generate_random_num(0, 2);
+        const uint32_t num = this->generate_random_num(0, 2);
         switch (num) {
             case 0: cores = all_cores; break;
             case 1: cores = this->generate_subset_of_cores(all_cores, 2); break;
@@ -370,14 +359,14 @@ private:
     }
 };
 
-class RandomProgramTraceFixture : virtual public RandomProgramFixture,
-                                  virtual public CommandQueueSingleCardTraceFixture {
+class UnitMeshRandomProgramTraceFixture : virtual public UnitMeshRandomProgramFixture,
+                                          virtual public UnitMeshCQSingleCardTraceFixture {
 protected:
     static const uint32_t NUM_TRACE_ITERATIONS = 50;
-    Program programs[NUM_PROGRAMS];
+    distributed::MeshWorkload workloads[NUM_WORKLOADS];
 
     void SetUp() override {
-        CommandQueueSingleCardTraceFixture::SetUp();
+        UnitMeshCQSingleCardTraceFixture::SetUp();
         if (!::testing::Test::IsSkipped()) {
             // Parent may have skipped
             this->device_ = this->devices_[0];
@@ -385,25 +374,34 @@ protected:
         }
     }
 
-    uint32_t trace_programs() {
-        const uint32_t trace_id = this->capture_trace();
+    distributed::MeshTraceId trace_programs() {
+        const distributed::MeshTraceId trace_id = this->capture_trace();
         this->run_trace(trace_id);
         return trace_id;
     }
 
 private:
-    uint32_t capture_trace() {
-        const uint32_t trace_id = BeginTraceCapture(this->device_, this->device_->command_queue().id());
-        for (Program& program : this->programs) {
-            EnqueueProgram(this->device_->command_queue(), program, false);
+    distributed::MeshTraceId capture_trace() {
+        auto& mesh_command_queue = this->device_->mesh_command_queue();
+
+        // Create a zero coordinate and range for the device
+        distributed::MeshCoordinate zero_coord =
+            distributed::MeshCoordinate::zero_coordinate(this->device_->shape().dims());
+        distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+
+        const distributed::MeshTraceId trace_id =
+            distributed::BeginTraceCapture(this->device_.get(), mesh_command_queue.id());
+        for (auto& workload : this->workloads) {
+            distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
         }
-        EndTraceCapture(this->device_, this->device_->command_queue().id(), trace_id);
+        distributed::EndTraceCapture(this->device_.get(), mesh_command_queue.id(), trace_id);
         return trace_id;
     }
 
-    void run_trace(const uint32_t trace_id) {
+    void run_trace(const distributed::MeshTraceId trace_id) {
+        auto& mesh_command_queue = this->device_->mesh_command_queue();
         for (uint32_t i = 0; i < NUM_TRACE_ITERATIONS; i++) {
-            EnqueueTrace(this->device_->command_queue(), trace_id, false);
+            distributed::ReplayTrace(this->device_.get(), mesh_command_queue.id(), trace_id, false);
         }
     }
 };

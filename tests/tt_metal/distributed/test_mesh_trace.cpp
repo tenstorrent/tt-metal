@@ -88,16 +88,16 @@ protected:
     MeshTraceTestSuite() : MeshDeviceFixtureBase(Config{.num_cqs = 1, .trace_region_size = (64 << 20)}) {}
 };
 
-class MeshTraceTestT3000 : public MeshDeviceFixtureBase {
+class MeshTraceTest2x4 : public MeshDeviceFixtureBase {
 protected:
-    MeshTraceTestT3000() :
-        MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::T3000}, .trace_region_size = (64 << 20)}) {}
+    MeshTraceTest2x4() :
+        MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{2, 4}, .trace_region_size = (64 << 20)}) {}
 };
 
-class MeshTraceTestTG : public MeshDeviceFixtureBase {
+class MeshTraceTest4x8 : public MeshDeviceFixtureBase {
 protected:
-    MeshTraceTestTG() :
-        MeshDeviceFixtureBase(Config{.mesh_device_types = {MeshDeviceType::TG}, .trace_region_size = (64 << 20)}) {}
+    MeshTraceTest4x8() :
+        MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{4, 8}, .trace_region_size = (64 << 20)}) {}
 };
 
 TEST_F(MeshTraceTestSuite, Sanity) {
@@ -149,7 +149,7 @@ TEST_F(MeshTraceTestSuite, Sanity) {
     }
 }
 
-TEST_F(MeshTraceTestT3000, EltwiseBinaryMeshTrace) {
+TEST_F(MeshTraceTest2x4, EltwiseBinaryMeshTrace) {
     std::vector<std::shared_ptr<MeshBuffer>> src0_bufs = {};
     std::vector<std::shared_ptr<MeshBuffer>> src1_bufs = {};
     std::vector<std::shared_ptr<MeshBuffer>> intermed_bufs_0 = {};
@@ -259,12 +259,12 @@ TEST_F(MeshTraceTestSuite, SyncWorkloadsOnSubDeviceTrace) {
     auto [waiter_program_2, syncer_program_2, incrementer_program_2, global_sem_2] =
         create_basic_sync_program(mesh_device_.get(), sub_device_1, sub_device_2);
 
-    uint32_t num_rows_in_workload = mesh_device_->num_rows() / 2;
-    // Top row - first MeshWorkload set
-    MeshCoordinateRange top_row({0, 0}, {num_rows_in_workload - 1, mesh_device_->num_cols() - 1});
-    // Bottom row - second MeshWorkload set
-    MeshCoordinateRange bottom_row(
-        {num_rows_in_workload, 0}, {mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
+    uint32_t num_cols_in_workload = mesh_device_->num_cols() / 2;
+    // Left column - first MeshWorkload set
+    MeshCoordinateRange left_col({0, 0}, {mesh_device_->num_rows() - 1, num_cols_in_workload - 1});
+    // Right column - second MeshWorkload set
+    MeshCoordinateRange right_col(
+        {0, num_cols_in_workload}, {mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
     // All devices: third MeshWorkload set
     MeshCoordinateRange all_devices(mesh_device_->shape());
 
@@ -281,13 +281,13 @@ TEST_F(MeshTraceTestSuite, SyncWorkloadsOnSubDeviceTrace) {
     auto syncer_2 = CreateMeshWorkload();
     auto incrementer_2 = CreateMeshWorkload();
 
-    AddProgramToMeshWorkload(waiter_0, std::move(waiter_program_0), top_row);
-    AddProgramToMeshWorkload(syncer_0, std::move(syncer_program_0), top_row);
-    AddProgramToMeshWorkload(incrementer_0, std::move(incrementer_program_0), top_row);
+    AddProgramToMeshWorkload(waiter_0, std::move(waiter_program_0), left_col);
+    AddProgramToMeshWorkload(syncer_0, std::move(syncer_program_0), left_col);
+    AddProgramToMeshWorkload(incrementer_0, std::move(incrementer_program_0), left_col);
 
-    AddProgramToMeshWorkload(waiter_1, std::move(waiter_program_1), bottom_row);
-    AddProgramToMeshWorkload(syncer_1, std::move(syncer_program_1), bottom_row);
-    AddProgramToMeshWorkload(incrementer_1, std::move(incrementer_program_1), bottom_row);
+    AddProgramToMeshWorkload(waiter_1, std::move(waiter_program_1), right_col);
+    AddProgramToMeshWorkload(syncer_1, std::move(syncer_program_1), right_col);
+    AddProgramToMeshWorkload(incrementer_1, std::move(incrementer_program_1), right_col);
 
     AddProgramToMeshWorkload(waiter_2, std::move(waiter_program_2), all_devices);
     AddProgramToMeshWorkload(syncer_2, std::move(syncer_program_2), all_devices);
@@ -295,21 +295,21 @@ TEST_F(MeshTraceTestSuite, SyncWorkloadsOnSubDeviceTrace) {
 
     // Compile all MeshWorkloads
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_0, false);
-    mesh_device_->set_sub_device_stall_group({SubDeviceId{0}});
+    mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_0, true);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_0, false);
     mesh_device_->reset_sub_device_stall_group();
     Finish(mesh_device_->mesh_command_queue());
 
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_1, false);
-    mesh_device_->set_sub_device_stall_group({SubDeviceId{0}});
+    mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_1, true);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_1, false);
     mesh_device_->reset_sub_device_stall_group();
     Finish(mesh_device_->mesh_command_queue());
 
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_2, false);
-    mesh_device_->set_sub_device_stall_group({SubDeviceId{0}});
+    mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_2, true);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_2, false);
     mesh_device_->reset_sub_device_stall_group();
@@ -435,11 +435,11 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     SetRuntimeArgs(add_program_2, add_kernel_2, add_core, add_rt_args_2);
     CBHandle add_cb_2 = CreateCircularBuffer(add_program_2, add_core, cb_src0_config);
 
-    uint32_t num_rows_in_workload = mesh_device_->num_rows() / 2;
+    uint32_t num_cols_in_workload = mesh_device_->num_cols() / 2;
     MeshCoordinateRange devices(mesh_device_->shape());
-    MeshCoordinateRange top_row({0, 0}, {num_rows_in_workload - 1, mesh_device_->num_cols() - 1});
-    MeshCoordinateRange bottom_row(
-        {num_rows_in_workload, 0}, {mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
+    MeshCoordinateRange left_col({0, 0}, {mesh_device_->num_rows() - 1, num_cols_in_workload - 1});
+    MeshCoordinateRange right_col(
+        {0, num_cols_in_workload}, {mesh_device_->num_rows() - 1, mesh_device_->num_cols() - 1});
 
     // Create and initialize MeshWorkloads
     auto syncer_mesh_workload = CreateMeshWorkload();
@@ -448,14 +448,14 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     // Sync program goes to entire Mesh
     AddProgramToMeshWorkload(syncer_mesh_workload, std::move(sync_and_incr_program), devices);
     // Datacopy goes to top row
-    AddProgramToMeshWorkload(datacopy_mesh_workload, std::move(datacopy_program), top_row);
+    AddProgramToMeshWorkload(datacopy_mesh_workload, std::move(datacopy_program), left_col);
     // First addition goes to bottom row
-    AddProgramToMeshWorkload(datacopy_mesh_workload, std::move(add_program), bottom_row);
+    AddProgramToMeshWorkload(datacopy_mesh_workload, std::move(add_program), right_col);
     // Second addition goes to bottom row
-    AddProgramToMeshWorkload(add_mesh_workload, std::move(add_program_2), bottom_row);
+    AddProgramToMeshWorkload(add_mesh_workload, std::move(add_program_2), right_col);
 
     // Compile and load workloads
-    mesh_device_->set_sub_device_stall_group({SubDeviceId{2}});
+    mesh_device_->set_sub_device_stall_group({{SubDeviceId{2}}});
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), datacopy_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, false);
@@ -479,7 +479,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
         // Block after this write on host, since the global semaphore update starting the
         // program goes through an independent path (UMD) and can go out of order wrt the
         // buffer data
-        mesh_device_->set_sub_device_stall_group({SubDeviceId{2}});
+        mesh_device_->set_sub_device_stall_group({{SubDeviceId{2}}});
         EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
 
         for (auto device : mesh_device_->get_devices()) {
@@ -487,13 +487,13 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
                 device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
         }
         mesh_device_->reset_sub_device_stall_group();
-        for (const auto& device_coord : top_row) {
+        for (const auto& device_coord : left_col) {
             std::vector<uint32_t> dst_vec;
             ReadShard(mesh_device_->mesh_command_queue(), dst_vec, output_buf, device_coord);
             EXPECT_EQ(dst_vec, src_vec);
         }
 
-        for (const auto& device_coord : bottom_row) {
+        for (const auto& device_coord : right_col) {
             std::vector<uint32_t> dst_vec;
             ReadShard(mesh_device_->mesh_command_queue(), dst_vec, output_buf, device_coord);
             for (int j = 0; j < dst_vec.size(); j++) {
@@ -557,19 +557,19 @@ void run_heterogenous_trace_sweep(
     ReleaseTrace(mesh_device.get(), trace_id);
 }
 
-class T3KMeshTraceSweepTest : public MeshTraceTestT3000,
+class MeshTraceSweepTest2x4 : public MeshTraceTest2x4,
                               public testing::WithParamInterface<std::vector<std::vector<MeshCoordinateRange>>> {};
 
-class TGMeshTraceSweepTest : public MeshTraceTestTG,
-                             public testing::WithParamInterface<std::vector<std::vector<MeshCoordinateRange>>> {};
+class MeshTraceSweepTest4x8 : public MeshTraceTest4x8,
+                              public testing::WithParamInterface<std::vector<std::vector<MeshCoordinateRange>>> {};
 
-TEST_P(T3KMeshTraceSweepTest, Sweep) { run_heterogenous_trace_sweep(mesh_device_, GetParam()); }
+TEST_P(MeshTraceSweepTest2x4, Sweep) { run_heterogenous_trace_sweep(mesh_device_, GetParam()); }
 
-TEST_P(TGMeshTraceSweepTest, Sweep) { run_heterogenous_trace_sweep(mesh_device_, GetParam()); }
+TEST_P(MeshTraceSweepTest4x8, Sweep) { run_heterogenous_trace_sweep(mesh_device_, GetParam()); }
 
 INSTANTIATE_TEST_SUITE_P(
-    T3KMeshTraceSweepTests,
-    T3KMeshTraceSweepTest,
+    MeshTraceSweepTest2x4Tests,
+    MeshTraceSweepTest2x4,
     ::testing::Values(
         std::vector<std::vector<MeshCoordinateRange>>({
             {t3k_full_grid()},
@@ -668,8 +668,8 @@ INSTANTIATE_TEST_SUITE_P(
         })));
 
 INSTANTIATE_TEST_SUITE_P(
-    TGMeshTraceSweepTests,
-    TGMeshTraceSweepTest,
+    MeshTraceSweepTest4x8Tests,
+    MeshTraceSweepTest4x8,
     ::testing::Values(
         std::vector<std::vector<MeshCoordinateRange>>({
             // Run on full grid

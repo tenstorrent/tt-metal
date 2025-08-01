@@ -1,5 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
+
 
 import ttnn
 from models.demos.yolov8x.runner.performant_runner_infra import YOLOv8xPerformanceRunnerInfra
@@ -10,10 +12,22 @@ class YOLOv8xPerformantRunner:
         self,
         device,
         device_batch_size,
+        inputs_mesh_mapper=None,
+        weights_mesh_mapper=None,
+        outputs_mesh_composer=None,
+        model_location_generator=None,
     ):
+        self.inputs_mesh_mapper = inputs_mesh_mapper
+        self.weights_mesh_mapper = weights_mesh_mapper
+        self.outputs_mesh_composer = outputs_mesh_composer
+        self.model_location_generator = model_location_generator
         self.runner_infra = YOLOv8xPerformanceRunnerInfra(
             device,
             device_batch_size,
+            model_location_generator=self.model_location_generator,
+            inputs_mesh_mapper=self.inputs_mesh_mapper,
+            weights_mesh_mapper=self.weights_mesh_mapper,
+            outputs_mesh_composer=self.outputs_mesh_composer,
         )
         self.device = device
         (
@@ -69,18 +83,13 @@ class YOLOv8xPerformantRunner:
 
     def execute_yolov8x_trace_2cqs_inference(self, tt_inputs_host=None):
         tt_inputs_host = self.tt_inputs_host if tt_inputs_host is None else tt_inputs_host
-
-        # Data transfer and re-sharding
         ttnn.wait_for_event(1, self.op_event)
         ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
-
         ttnn.wait_for_event(0, self.write_event)
-
         self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
-        ttnn.synchronize_device(self.device)
 
         return self.runner_infra.output_tensor
 

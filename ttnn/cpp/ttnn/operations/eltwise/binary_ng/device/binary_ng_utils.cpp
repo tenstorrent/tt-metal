@@ -8,7 +8,7 @@
 
 #include <fmt/core.h>
 #include <fmt/format.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 
 namespace ttnn::operations::binary_ng {
 
@@ -178,6 +178,8 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
             postprocess = unary::UnaryOpType::GELU;
             break;
         case BinaryOpType::LOGICAL_AND:
+            process_lhs = unary::UnaryOpType::NEZ;
+            process_rhs = unary::UnaryOpType::NEZ;
             binary_op = EnumT::MUL;
             postprocess = unary::UnaryOpType::NEZ;
             break;
@@ -309,6 +311,13 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
                 TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
             }
             break;
+        case BinaryOpType::XLOGY:
+            if (is_sfpu_op()) {
+                binary_op = SfpuBinaryOp::XLOGY;
+            } else {
+                TT_THROW("Unsupported binary op for FPU {}", binary_op_type);
+            }
+            break;
         default: TT_THROW("Unsupported binary op {}", binary_op_type);
     }
 }
@@ -337,6 +346,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case MUL:
             if (dtype == DataType::UINT16) {
                 return {"mul_int_tile_init();", "mul_uint16_tile"};
+            } else if (dtype == DataType::INT32) {
+                return {"mul_int32_tile_init();", "mul_int32_tile"};
             } else {
                 return {"mul_binary_tile_init();", "mul_binary_tile"};
             }
@@ -404,6 +415,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             return {"requant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "requant_tile"};
         case DEQUANT:
             return {"dequant_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));", "dequant_tile"};
+        case XLOGY: return {"xlogy_binary_tile_init();", "xlogy_binary_tile"};
         default: TT_THROW("Unsupported sfpu binary op {}", sfpu_binary_op);
     }
 }
@@ -413,7 +425,7 @@ std::map<std::string, std::string> OpConfig::as_defines(DataType dtype) const {
 
     if (!is_sfpu_op()) {
         auto fpu_binary_op = std::get<FpuBinaryOp>(binary_op);
-        auto binary_op_str = magic_enum::enum_name(fpu_binary_op);
+        auto binary_op_str = enchantum::to_string(fpu_binary_op);
         defines["BINARY_OP"] = fmt::format("{}_tiles", Lowercase{binary_op_str});
         defines["BINARY_OP_TYPE"] = fmt::format("EltwiseBinaryType::ELW{}", binary_op_str);
         return defines;

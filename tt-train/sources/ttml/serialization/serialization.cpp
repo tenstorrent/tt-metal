@@ -4,6 +4,8 @@
 
 #include "serialization.hpp"
 
+#include <enchantum/enchantum.hpp>
+
 #include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <ttnn/tensor/types.hpp>
@@ -82,21 +84,18 @@ void write_ttnn_tensor(MsgPackFile& file, std::string_view name, const tt::tt_me
     // once we decide to use other parallelization techniques (tensor parallel, FSDP) we need to update this code
     if (data_type == tt::tt_metal::DataType::BFLOAT16) {
         auto* device = &ttml::autograd::ctx().get_device();
-        ttml::core::MeshToXTensorVariant<float> composer = ttml::core::VectorMeshToXTensor<float>(device->shape());
-        auto data_all_devices = ttml::core::to_xtensor<float>(tensor, composer);
+        auto data_all_devices = ttml::core::to_xtensor<float>(tensor, core::IdentityComposer{});
         // pick weights from first device
         auto data = data_all_devices.front();
         file.put(std::string(name) + "/data", std::span<const float>(data.data(), data.size()));
     } else if (data_type == tt::tt_metal::DataType::UINT32) {
         auto* device = &ttml::autograd::ctx().get_device();
-        ttml::core::MeshToXTensorVariant<uint32_t> composer =
-            ttml::core::VectorMeshToXTensor<uint32_t>(device->shape());
-        auto data_all_devices = ttml::core::to_xtensor<uint32_t>(tensor, composer);
+        auto data_all_devices = ttml::core::to_xtensor<uint32_t>(tensor, ttml::core::IdentityComposer{});
         // pick weights from first device
         auto data = data_all_devices.front();
         file.put(std::string(name) + "/data", std::span<const uint32_t>(data.data(), data.size()));
     } else {
-        throw std::runtime_error(fmt::format("Unsupported data type: {}", magic_enum::enum_name(data_type)));
+        throw std::runtime_error(fmt::format("Unsupported data type: {}", enchantum::to_string(data_type)));
     }
 }
 
@@ -124,7 +123,7 @@ void read_ttnn_tensor(MsgPackFile& file, std::string_view name, tt::tt_metal::Te
         tensor = core::from_vector<uint32_t, tt::tt_metal::DataType::UINT32>(
             data, shape, &ttml::autograd::ctx().get_device(), layout);
     } else {
-        throw std::runtime_error(fmt::format("Unsupported data type: {}", magic_enum::enum_name(data_type)));
+        throw std::runtime_error(fmt::format("Unsupported data type: {}", enchantum::to_string(data_type)));
     }
 }
 

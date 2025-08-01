@@ -62,7 +62,10 @@ class TtYOLOv7Conv2D:
             shard_layout=self.shard_layout,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             enable_split_reader=self.enable_split_reader,
-            enable_act_double_buffer=self.enable_act_double_buffer,
+            enable_act_double_buffer=True
+            if self.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            else self.enable_act_double_buffer,
+            enable_weights_double_buffer=True if self.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED else False,
             deallocate_activation=self.deallocate_activation,
         )
         compute_config = ttnn.init_device_compute_kernel_config(
@@ -109,3 +112,15 @@ class TtYOLOv7Conv2D:
             )
             output_tensor = ttnn.permute(output_tensor, (0, 3, 1, 2))
         return output_tensor
+
+
+def get_mesh_mappers(device):
+    if device.get_num_devices() > 1:
+        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+        weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+    else:
+        inputs_mesh_mapper = None
+        weights_mesh_mapper = None
+        output_mesh_composer = None
+    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer

@@ -15,7 +15,7 @@
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 
-#include <ttnn/tensor/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace accessor_benchmarks {
 
@@ -127,7 +127,7 @@ void benchmark_all_args_combinations_single_core(
         Finish(mesh_device_->mesh_command_queue());
         log_info(tt::LogTest, "Program finished!");
     }
-    tt::tt_metal::detail::DumpDeviceProfileResults(local_device);
+    tt::tt_metal::detail::ReadDeviceProfilerResults(local_device);
 }
 
 TEST_P(AccessorBenchmarks, GetNocAddr) {
