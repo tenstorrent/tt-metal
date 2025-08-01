@@ -15,6 +15,8 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
 
+torch.manual_seed(0)
+
 
 def random_torch_tensor(dtype, shape):
     if dtype == ttnn.uint16:
@@ -51,7 +53,7 @@ def test_pad_rm(device, n, c, h, w, padding, torch_padding, value, dtype):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.equal(torch_output_tensor, output_tensor)
 
 
 def run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value, dtype):
@@ -65,7 +67,7 @@ def run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, va
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [16])
@@ -145,7 +147,7 @@ def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
     assert tt_output_tensor.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
+    assert torch.equal(torch_output_tensor, tt_output_tensor)
 
 
 def to_torch_padding(padspec):
@@ -306,7 +308,7 @@ def test_pad(device, h, w, padding, torch_padding, value):
     output_tensor = ttnn.to_torch(output_tensor)
     assert output_tensor.shape == torch_output_tensor.shape
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -362,7 +364,7 @@ def test_pad(device, h, w, padding, torch_padding, value):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.skip(reason="ttnn.pad does not support row_major tensors because the kernel currently causes a PCC error")
@@ -389,7 +391,7 @@ def test_pad_back_to_back(device, h, w, padding, torch_padding, value):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.skip(reason="ttnn.pad requires pad to start at 0")
@@ -425,7 +427,7 @@ def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.equal(torch_output_tensor, output_tensor)
 
 
 @skip_for_blackhole("Fails on Blackhole. Issue #20698")
@@ -449,7 +451,7 @@ def test_pad_conv2d_sweep(device, dtype, use_multicore, shape, padded_shape):
     out_torch = out_ttnn.cpu().to_torch().float()
 
     out_torch = out_torch[: shape[0], : shape[1], : shape[2], : shape[3]]
-    assert_with_pcc(in_torch, out_torch, 0.9999)
+    assert torch.equal(in_torch, out_torch)
 
 
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32])
@@ -466,7 +468,7 @@ def test_pad_op(device, in_dtype, shape, padshape, use_multicore):
 
     shape_diff = list(map(lambda x, y: x - y, padshape, shape))
     output_torch = torch.nn.functional.pad(torch_input, [0, shape_diff[-1], 0, shape_diff[-2]], value=0)
-    assert_with_pcc(output_tt, output_torch, 0.9999)
+    assert torch.equal(output_tt, output_torch)
 
 
 def _unsqueeze(smaller, larger, fill):
@@ -501,4 +503,4 @@ def test_pad_tile(shape, padding, dtype, device):
 
     out_tt = ttnn.to_torch(output)
 
-    assert_with_pcc(out_tt, torch_output, 0.9999)
+    assert torch.equal(out_tt, torch_output)

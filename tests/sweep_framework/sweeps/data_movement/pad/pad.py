@@ -78,12 +78,10 @@ def run(
     torch_input = random_torch_tensor(dtype, shape)
     ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=dtype)
 
-    # print(padding)
     torch_padding = []
     for i in range(len(padding) - 1, -1, -1):  # go through each dim of padding
         for p in padding[i]:
             torch_padding.append(p)  # each dim has 2 padding values
-    # print(torch_padding)
     padding = tuple(padding)
 
     # Measure performance of the embedding operation in ttnn
@@ -99,6 +97,6 @@ def run(
     ttnn_output_tensor = ttnn.to_torch(ttnn_output_tensor)
 
     # Compare the results and return performance and accuracy check
-    result = check_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
+    result = check_with_pcc(torch_output_tensor, ttnn_output_tensor, 1.0)
 
     return [result, e2e_perf]
