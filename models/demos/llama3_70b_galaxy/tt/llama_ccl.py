@@ -1104,8 +1104,11 @@ def tt_distributed_rmsnorm(
     compute_kernel_config,
     tt_ccl=None,
 ):
+    use_2d_grid = inp.shape[-2] == 128
     # Run distributed rmsnorm part 1
-    tt_stats = ttnn.rms_norm_pre_all_gather(inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16)
+    tt_stats = ttnn.rms_norm_pre_all_gather(
+        inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16, use_2d_core_grid=use_2d_grid
+    )
     padded_shape = (1, 1, inp.shape[-2], 32)
 
     tt_stats_gathered = tt_ccl.line_all_gather(
@@ -1116,7 +1119,12 @@ def tt_distributed_rmsnorm(
 
     # Run distributed rmsnorm part 2
     tt_out = ttnn.rms_norm_post_all_gather(
-        inp, tt_stats_gathered, epsilon=epsilon, weight=gamma, compute_kernel_config=compute_kernel_config
+        inp,
+        tt_stats_gathered,
+        epsilon=epsilon,
+        weight=gamma,
+        compute_kernel_config=compute_kernel_config,
+        use_2d_core_grid=use_2d_grid,
     )
 
     # tt_stats_gathered.deallocate(True)
