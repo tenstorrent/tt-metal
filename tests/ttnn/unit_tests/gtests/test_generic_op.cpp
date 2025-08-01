@@ -349,8 +349,6 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
             num_tiles_per_core = num_tiles_per_core_group_2;
             block_cnt_per_core = block_cnt_per_core_group_2;
             block_size_per_core = block_size_per_core_group_2;
-        } else {
-            continue;
         }
 
         reader_rt_args_per_core[core_x][core_y] = {
