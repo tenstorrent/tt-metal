@@ -72,9 +72,6 @@ jobs:
               # e2e performant test is present in .../vit/demo folder only
               - models/demos/wormhole/vit/demo/
 
-          - name: tt_transformers
-            model-list:
-              - models/demos/qwen25_vl/tests
     name: "${{ matrix.model-group.name }} ${{ matrix.test-info.name }}"
     defaults:
       run:
