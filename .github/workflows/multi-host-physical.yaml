@@ -48,10 +48,9 @@ jobs:
           docker_opts: |
             -e TT_METAL_HOME="${{ github.workspace }}"
             -e PYTHONPATH="${{ github.workspace }}"
-            -e PYTHON_ENV_DIR="${{ github.workspace }}/python_env"
-            -e LD_LIBRARY_PATH="/work/build/lib"
+            -e LD_LIBRARY_PATH="${{ github.workspace }}/build/lib"
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
-            -e GTEST_OUTPUT="xml:/work/generated/test_reports/"
+            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -v ${{ github.workspace }}:${{ github.workspace }}
             -v /dev/hugepages-1G:/dev/hugepages-1G
             -v /etc/mpirun:/etc/mpirun:ro
