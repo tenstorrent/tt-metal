@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <magic_enum/magic_enum.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/fabric_types.hpp>

@@ -8,6 +8,9 @@
 
 #include "metal/ops/common/program_utils.hpp"
 
+#include <enchantum/enchantum.hpp>
+
+
 namespace {
 
 constexpr auto kWriterKernelPath =
@@ -161,19 +164,19 @@ SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
     TT_FATAL(
         input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "Input buffer must be in DRAM. Input buffer of type {}",
-        magic_enum::enum_name(input_buffer->buffer_type()));
+        enchantum::to_string(input_buffer->buffer_type()));
 
     auto* dLdout_buffer = dLdout.buffer();
     TT_FATAL(
         dLdout_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "dL_dout buffer must be in DRAM. dL_dout buffer of type {}",
-        magic_enum::enum_name(dLdout_buffer->buffer_type()));
+        enchantum::to_string(dLdout_buffer->buffer_type()));
 
     auto* dL_da_buffer = output.buffer();
     TT_FATAL(
         dL_da_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "dL_da buffer must be in DRAM. dL_da buffer of type {}",
-        magic_enum::enum_name(dL_da_buffer->buffer_type()));
+        enchantum::to_string(dL_da_buffer->buffer_type()));
 
     SiLUBackwardKernels kernels;
     kernels.reader = create_reader_kernel(program, all_cores, {block_size, Wt}, {}, kReaderKernelPath);

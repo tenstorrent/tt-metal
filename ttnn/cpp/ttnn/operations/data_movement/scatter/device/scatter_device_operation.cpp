@@ -7,7 +7,7 @@
 
 #include "ttnn/operations/data_movement/common/common.hpp"
 
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 
 namespace ttnn::operations::data_movement::scatter {
 
@@ -50,14 +50,14 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_dtype == src_dtype,
         "input_dtype differs from src_dtype (input_dtype: {}, src_dtype: {}).",
-        magic_enum::enum_name(input_dtype),
-        magic_enum::enum_name(src_dtype));
+        enchantum::to_string(input_dtype),
+        enchantum::to_string(src_dtype));
 
     TT_FATAL(
         index_dtype == DataType::INT32 || index_dtype == DataType::UINT8 || index_dtype == DataType::UINT16 ||
             index_dtype == DataType::UINT32,
         "index_dtype is not integer, it is {}.",
-        magic_enum::enum_name(index_dtype));
+        enchantum::to_string(index_dtype));
 
     TT_FATAL(!input_tensor.is_sharded(), "Sharded tensors are not supported - input_tensor is sharded.");
     TT_FATAL(!index_tensor.is_sharded(), "Sharded tensors are not supported - index_tensor is sharded.");
