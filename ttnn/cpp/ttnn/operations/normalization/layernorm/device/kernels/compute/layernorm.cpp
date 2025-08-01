@@ -15,6 +15,8 @@
 #include "compute_kernel_api/eltwise_binary.h"
 #include "compute_kernel_api/layernorm.h"
 #include "compute_kernel_api/welford.h"
+#include "compute_kernel_api/transpose_wh_dest.h"
+#include "compute_kernel_api/tile_move_copy.h"
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
@@ -66,7 +68,6 @@ void MAIN {
 #else
     binary_op_init_common(cb_in, cb_in, cb_xmm2);
 #endif
-    welford_init();
 
     cb_wait_front(cb_scaler, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
@@ -76,6 +77,16 @@ void MAIN {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr int onetile = 1;
         constexpr int dst0 = 0;
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            cb_wait_front(cb_x, wt + blk);
+            for (uint32_t j = 0; j < blk; j++) {
+                copy_tile_init(cb_x);
+                transpose_wh_dest_init_short();
+                transpose_wh_dest(0);
+                welford_init();
+                welford(0, 1, 2, (wt + j) * 32, 64, false);
+            }
+        }
 
 /*
  * X + Y
