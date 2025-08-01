@@ -11,6 +11,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
@@ -62,13 +63,10 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
     // Create Kernels
     // reader
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)cb_index,
-        (std::uint32_t)batch_cb_index,
-        (std::uint32_t)batch_ids_is_dram,
-        (std::uint32_t)in0_is_dram,
-        (std::uint32_t)in1_is_dram,
-        (std::uint32_t)stick_size_is_power_of_two,
-        (std::uint32_t)log2_stick_size};
+        (std::uint32_t)cb_index, (std::uint32_t)batch_cb_index, page_size};
+    TensorAccessorArgs(*input_a.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*input_b.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*batch_ids.buffer()).append_to(reader_compile_time_args);
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -76,11 +74,8 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)cb_index,
-        (std::uint32_t)out_is_dram,
-        (std::uint32_t)stick_size_is_power_of_two,
-        (std::uint32_t)log2_stick_size};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)cb_index, (std::uint32_t)page_size};
+    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -102,7 +97,6 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
             local_b,
             input_a.buffer()->address(),
             input_b.buffer()->address(),
-            page_size,
             local_batch_size_in_sticks,
             i};
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
@@ -132,7 +126,6 @@ operation::ProgramWithCallbacks indexed_fill_multi_core(
                 local_b,
                 input_a.buffer()->address(),
                 input_b.buffer()->address(),
-                page_size,
                 local_batch_size_in_sticks,
                 core_id};
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);

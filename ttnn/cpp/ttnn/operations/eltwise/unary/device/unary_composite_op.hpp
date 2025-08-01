@@ -20,12 +20,10 @@ enum class UnaryCompositeOpType {
     LGAMMA,
     MULTIGAMMALN,
     SINH,
-    SOFTSIGN,
     SWISH,
     VAR_HW,
     STD_HW,
     NORMALIZE_HW,
-    HARDSWISH,
     HARDTANH,
     SELU,
     GLU,
@@ -38,7 +36,6 @@ enum class UnaryCompositeOpType {
     POLYGAMMA,
     SOFTSHRINK,
     LOGIT,
-    CELU,
     LOGICAL_NOT_,
     RPOW,
     NORMALIZE_GLOBAL,
@@ -50,7 +47,6 @@ Tensor _digamma(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _lgamma(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _multigammaln(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _sinh(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _softsign(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _swish(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _variance_impl(const Tensor&, const Tensor&, Tensor&, const std::optional<MemoryConfig>&);
 Tensor _variance_impl(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
@@ -59,11 +55,6 @@ Tensor _std(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _std(const Tensor&, const Tensor&, Tensor&, const std::optional<MemoryConfig>&);
 Tensor _std_overload(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _normalize(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _hardswish(
-    const Tensor&,
-    float scale = 1.0f / 6.0f,
-    float shift = 0.5f,
-    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _hardtanh(
     const Tensor&, float min = -1, float max = 1, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _selu(
@@ -81,7 +72,6 @@ Tensor _polygamma(const Tensor&, int32_t, const std::optional<MemoryConfig>&);
 Tensor _softshrink(
     const Tensor& a, float lambd = 0.5f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _logit(const Tensor& a, float eps = 0.0f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-Tensor _celu(const Tensor& a, float alpha = 1.0f, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _logical_not_(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _rpow(const Tensor& a, float param, const std::optional<MemoryConfig>&);
 Tensor _normalize_global(const Tensor&, const std::optional<MemoryConfig>&);
@@ -131,13 +121,6 @@ struct OpHandler<UnaryCompositeOpType::SINH> {
 };
 
 template <>
-struct OpHandler<UnaryCompositeOpType::SOFTSIGN> {
-    static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) {
-        return _softsign(t1, mem_cfg);
-    }
-};
-
-template <>
 struct OpHandler<UnaryCompositeOpType::SWISH> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) { return _swish(t1, mem_cfg); }
 };
@@ -160,13 +143,6 @@ template <>
 struct OpHandler<UnaryCompositeOpType::NORMALIZE_HW> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) {
         return _normalize(t1, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::HARDSWISH> {
-    static Tensor handle(const Tensor& t1, float scale, float shift, const std::optional<MemoryConfig>& mem_cfg) {
-        return _hardswish(t1, scale, shift, mem_cfg);
     }
 };
 
@@ -245,13 +221,6 @@ template <>
 struct OpHandler<UnaryCompositeOpType::LOGIT> {
     static Tensor handle(const Tensor& t1, float eps, const std::optional<MemoryConfig>& mem_cfg) {
         return _logit(t1, eps, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::CELU> {
-    static Tensor handle(const Tensor& t1, float alpha, const std::optional<MemoryConfig>& mem_cfg) {
-        return _celu(t1, alpha, mem_cfg);
     }
 };
 

@@ -109,8 +109,7 @@ void test_socket_send_recv(
                     src_vec,
                     connection.sender_core.device_coord);
 
-                auto sender_fabric_node_id =
-                    mesh_device_->get_device_fabric_node_id(connection.sender_core.device_coord);
+                auto sender_fabric_node_id = mesh_device_->get_fabric_node_id(connection.sender_core.device_coord);
                 auto recv_fabric_node_id =
                     socket.get_fabric_node_id(SocketEndpoint::RECEIVER, connection.receiver_core.device_coord);
 
@@ -169,8 +168,7 @@ void test_socket_send_recv(
             for (const auto& connection : socket.get_config().socket_connection_config) {
                 auto sender_fabric_node_id =
                     socket.get_fabric_node_id(SocketEndpoint::SENDER, connection.sender_core.device_coord);
-                auto recv_fabric_node_id =
-                    mesh_device_->get_device_fabric_node_id(connection.receiver_core.device_coord);
+                auto recv_fabric_node_id = mesh_device_->get_fabric_node_id(connection.receiver_core.device_coord);
 
                 auto recv_program = CreateProgram();
 

@@ -123,6 +123,8 @@ template struct ExecuteUnary<UnaryOpType::FLOOR>;
 template struct ExecuteUnary<UnaryOpType::TRUNC>;
 template struct ExecuteUnary<UnaryOpType::FRAC>;
 template struct ExecuteUnary<UnaryOpType::HARDSIGMOID>;
+template struct ExecuteUnary<UnaryOpType::HARDSWISH>;
+template struct ExecuteUnary<UnaryOpType::SOFTSIGN>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::invoke(
@@ -209,6 +211,7 @@ template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_NE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_EQ>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_GE>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LE>;
+template struct ExecuteUnaryWithFloatParameter<UnaryOpType::CELU>;
 
 template Tensor ExecuteUnaryWithVariantFloatIntParameter<UnaryOpType::MINIMUM>::invoke<float>(
     QueueId, const Tensor&, const float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&);

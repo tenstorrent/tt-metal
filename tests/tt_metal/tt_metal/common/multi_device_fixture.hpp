@@ -93,20 +93,23 @@ protected:
     using MeshShape = ::tt::tt_metal::distributed::MeshShape;
 
     struct Config {
-        // If specified, the associated tests will run only if SystemMesh shape matches the specified shape.
-        std::optional<tt::tt_metal::distributed::MeshShape> system_mesh_shape;
+        // If specified, the fixture will open a mesh device with the specified shape and offset.
+        // Otherwise, SystemMesh shape with zero offset will be used.
+        std::optional<tt::tt_metal::distributed::MeshShape> mesh_shape;
+        std::optional<tt::tt_metal::distributed::MeshCoordinate> mesh_offset;
 
         // If specified, the associated tests will run only if the machine architecture matches the specified
         // architecture.
         std::optional<tt::ARCH> arch;
 
         int num_cqs = 1;
-        uint32_t trace_region_size = 0;
+        uint32_t l1_small_size = DEFAULT_L1_SMALL_SIZE;
+        uint32_t trace_region_size = DEFAULT_TRACE_REGION_SIZE;
         uint32_t worker_l1_size = DEFAULT_WORKER_L1_SIZE;
         tt_fabric::FabricConfig fabric_config = tt_fabric::FabricConfig::DISABLED;
     };
 
-    MeshDeviceFixtureBase(const Config& fixture_config) : config_(fixture_config) {}
+    explicit MeshDeviceFixtureBase(const Config& fixture_config) : config_(fixture_config) {}
 
     void SetUp() override {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -124,12 +127,13 @@ protected:
         }
 
         const auto system_mesh_shape = tt::tt_metal::distributed::SystemMesh::instance().shape();
-        if (config_.system_mesh_shape.has_value() && *config_.system_mesh_shape != system_mesh_shape) {
+        if (config_.mesh_shape.has_value() && config_.mesh_shape->mesh_size() > system_mesh_shape.mesh_size()) {
             GTEST_SKIP() << fmt::format(
-                "Skipping MeshDevice test suite on a machine with SystemMesh {} that does not match the requested mesh "
+                "Skipping MeshDevice test suite on a machine with SystemMesh {} that is smaller than the requested "
+                "mesh "
                 "shape {}",
                 system_mesh_shape,
-                *config_.system_mesh_shape);
+                *config_.mesh_shape);
         }
 
         // Use ethernet dispatch for more than 1 CQ on T3K/N300
@@ -143,8 +147,8 @@ protected:
             tt_fabric::SetFabricConfig(config_.fabric_config);
         }
         mesh_device_ = MeshDevice::create(
-            MeshDeviceConfig(system_mesh_shape),
-            0,
+            MeshDeviceConfig(config_.mesh_shape.value_or(system_mesh_shape), config_.mesh_offset),
+            config_.l1_small_size,
             config_.trace_region_size,
             config_.num_cqs,
             core_type,
@@ -186,24 +190,24 @@ protected:
 // what is specified.
 class MeshDevice2x4Fixture : public MeshDeviceFixtureBase {
 protected:
-    MeshDevice2x4Fixture() : MeshDeviceFixtureBase(Config{.system_mesh_shape = MeshShape{2, 4}}) {}
+    MeshDevice2x4Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{2, 4}}) {}
 };
 
 class MeshDevice4x8Fixture : public MeshDeviceFixtureBase {
 protected:
-    MeshDevice4x8Fixture() : MeshDeviceFixtureBase(Config{.system_mesh_shape = MeshShape{4, 8}}) {}
+    MeshDevice4x8Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{4, 8}}) {}
 };
 
 class MultiCQMeshDevice2x4Fixture : public MeshDeviceFixtureBase {
 protected:
-    MultiCQMeshDevice2x4Fixture() : MeshDeviceFixtureBase(Config{.system_mesh_shape = MeshShape{2, 4}, .num_cqs = 2}) {}
+    MultiCQMeshDevice2x4Fixture() : MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{2, 4}, .num_cqs = 2}) {}
 };
 
 class MeshDevice2x4Fabric1DFixture : public MeshDeviceFixtureBase {
 protected:
     MeshDevice2x4Fabric1DFixture() :
-        MeshDeviceFixtureBase(Config{
-            .system_mesh_shape = MeshShape{2, 4}, .num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_1D}) {}
+        MeshDeviceFixtureBase(
+            Config{.mesh_shape = MeshShape{2, 4}, .num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_1D}) {}
 };
 
 class GenericMeshDeviceFabric2DFixture : public MeshDeviceFixtureBase {
@@ -216,9 +220,8 @@ class MeshDevice2x4Fabric2DFixture : public MeshDeviceFixtureBase {
 protected:
     MeshDevice2x4Fabric2DFixture() :
         MeshDeviceFixtureBase(Config{
-            .system_mesh_shape = MeshShape{2, 4},
-            .num_cqs = 1,
-            .fabric_config = tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC}) {}
+            .mesh_shape = MeshShape{2, 4}, .num_cqs = 1, .fabric_config = tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC}) {
+    }
 };
 
 }  // namespace tt::tt_metal
