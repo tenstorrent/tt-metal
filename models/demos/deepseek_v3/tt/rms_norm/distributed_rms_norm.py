@@ -17,7 +17,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     RMSNormPostAllGatherConfig,
     RMSNormPreAllGatherConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import get_state_dicts, save_and_get_path
+from models.demos.deepseek_v3.utils.config_helpers import save_and_get_path
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
@@ -32,23 +32,20 @@ class DistributedRMSNorm(RMSNormBase):
     def convert_weights(
         cls,
         hf_config: PretrainedConfig,
-        state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
+        state_dict: dict[str, torch.Tensor],
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
-        torch_metaweight = get_state_dicts(state_dicts, "weight", shape=(hf_config.hidden_size,), dtype=torch.bfloat16)
-        num_shards = torch_metaweight.shape[0]
-        assert num_shards == mesh_device.shape[0], "Number of state dictsdoes not match the number of rows."
+        assert cls.is_device_supported(mesh_device)
 
+        torch_weight = state_dict["weight"]
         tt_weight = ttnn.as_tensor(
-            torch_metaweight.reshape(
-                (num_shards, 1, -1, ttnn.TILE_SIZE)
-            ),  # Reshape to tile width sticks for optimal performance
+            torch_weight.reshape((1, 1, -1, ttnn.TILE_SIZE)),  # Reshape to tile width sticks for optimal performance
             device=mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=(0, -2)),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-1, -2), mesh_shape=tuple(mesh_device.shape)),
         )
 
         # Save to disk with standard naming - "rmsnorm" must match the op name used in the model config
@@ -89,7 +86,7 @@ class DistributedRMSNorm(RMSNormBase):
             hf_config=hf_config,
             mesh_device=mesh_device,
             rms_norm_stats_memory_config=ttnn.create_sharded_memory_config(
-                shape=[1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE * mesh_device.shape[1]],
+                shape=[1, 1, ttnn.TILE_SIZE, ttnn.TILE_SIZE * tuple(mesh_device.shape)[1]],
                 core_grid=ttnn.CoreGrid(y=1, x=1),
                 strategy=ttnn.ShardStrategy.WIDTH,
             ),
