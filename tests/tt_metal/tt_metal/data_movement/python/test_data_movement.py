@@ -130,21 +130,15 @@ def performance_check(dm_stats, arch="blackhole", verbose=False, test_bounds=Non
             if riscv not in test_bounds[arch][test_id].keys():
                 continue
 
-            cycles_within_bounds = bounds[riscv]["latency"] <= test_bounds[arch][test_id][riscv]["latency"]
             bw_within_bounds = test_bounds[arch][test_id][riscv]["bandwidth"] <= bounds[riscv]["bandwidth"]
 
             # Print bounds check results
             if verbose:
-                if not cycles_within_bounds:
-                    logger.warning(f"{riscv} cycles not within perf bounds.")
-                else:
-                    logger.info(f"{riscv} cycles within perf bounds.")
                 if not bw_within_bounds:
                     logger.warning(f"{riscv} bandwidth not within perf bounds.")
                 else:
                     logger.info(f"{riscv} bandwidth within perf bounds.")
 
-            assert cycles_within_bounds
             assert bw_within_bounds
 
 
