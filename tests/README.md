@@ -1,9 +1,9 @@
-# TT-Metal Testing Framework
+# TT-Metal Unit Tests and Sweep Test Runners
 
-This directory contains two main testing frameworks for TT-Metal:
+This README applies to two testing frameworks for in this directory:
 
-1. **Unit Test Framework** (`tests/ttnn/unit_test_runner.py`) - For running pytest-based unit tests
-2. **Sweep Test Framework** (`tests/sweep_framework/`) - For running parameterized performance and correctness tests
+1. **Unit Test Framework** (`tests/ttnn/unit_test_runner.py`) - For running pytest-based metal ops unit tests
+2. **Sweep Test Framework** (`tests/sweep_framework/`) - For running parameterized sweep tests across ops
 
 Both frameworks support PostgreSQL database integration for result tracking and analysis.
 
