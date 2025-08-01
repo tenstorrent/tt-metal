@@ -80,35 +80,15 @@ ttnn::Shape SlidingWindowConfig::get_output_shape() const {
     float output_h_float;
     float output_w_float;
 
-    // Calculation of the output shapes in pytorch documentation differs for avg and
-    // max pool operations or convolution operations,
-    // therefore conditional substraction using is_avg_pool variable
-
-    // MAX_POOL2D and CONV2D operations
-    // output_h = ((input_hw.first + get_pad_h() - dilation_hw.first * (window_hw.first - 1) - 1) / stride_hw.first) +
-    // 1; output_w = ((input_hw.second + get_pad_w() - dilation_hw.second * (window_hw.second - 1) - 1) /
-    // stride_hw.second) + 1; AVG_POOL2D output_h = ((input_hw.first + get_pad_h() - window_hw.first) / stride_hw.first)
-    // + 1; output_w = ((input_hw.second + get_pad_w() - window_hw.second) / stride_hw.second) + 1;
-    if (is_avg_pool) {
-        output_h_float = (float)(input_hw.first + get_pad_h() - window_hw.first) / stride_hw.first;
-        output_w_float = (float)(input_hw.second + get_pad_w() - window_hw.second) / stride_hw.second;
-    } else {
-        output_h_float =
-            (float)(input_hw.first + get_pad_h() - dilation_hw.first * (window_hw.first - 1) - 1) / stride_hw.first;
-        output_w_float =
-            (float)(input_hw.second + get_pad_w() - dilation_hw.second * (window_hw.second - 1) - 1) / stride_hw.second;
-    }
+    // Note Pytorch doesn't support dilation for average pool, but TTNN may in the future
+    // thus output size calculation is the same for average and max pool
+    output_h_float =
+        (float)(input_hw.first + get_pad_h() - dilation_hw.first * (window_hw.first - 1) - 1) / stride_hw.first;
+    output_w_float =
+        (float)(input_hw.second + get_pad_w() - dilation_hw.second * (window_hw.second - 1) - 1) / stride_hw.second;
     if (ceil_mode) {
         output_h = std::ceil(output_h_float) + 1;
         output_w = std::ceil(output_w_float) + 1;
-        if (is_avg_pool) {
-            if (((output_h - 1) * stride_hw.first) >= (input_hw.first + padding[0])) {
-                output_h--;
-            }
-            if (((output_w - 1) * stride_hw.second) >= (input_hw.second + padding[2])) {
-                output_w--;
-            }
-        }
     } else {
         output_h = std::floor(output_h_float) + 1;
         output_w = std::floor(output_w_float) + 1;
@@ -126,6 +106,13 @@ ttnn::Shape SlidingWindowConfig::get_output_shape() const {
     return ttnn::Shape({batch_size, output_h, output_w, 0});
 }
 
+uint32_t SlidingWindowConfig::get_pad_top() const { return padding[0]; }
+uint32_t SlidingWindowConfig::get_pad_bottom() const { return padding[1]; }
+uint32_t SlidingWindowConfig::get_pad_left() const { return padding[2]; }
+uint32_t SlidingWindowConfig::get_pad_right() const { return padding[3]; }
+uint32_t SlidingWindowConfig::get_pad_h() const { return padding[0] + padding[1]; }
+uint32_t SlidingWindowConfig::get_pad_w() const { return padding[2] + padding[3]; }
+
 uint32_t SlidingWindowConfig::get_ceil_pad_h() const {
     uint32_t ceil_padding_h = 0;
     if (ceil_mode) {
@@ -136,10 +123,6 @@ uint32_t SlidingWindowConfig::get_ceil_pad_h() const {
 
     return ceil_padding_h;
 }
-
-uint32_t SlidingWindowConfig::get_pad_h() const { return padding[0] + padding[1]; }
-
-uint32_t SlidingWindowConfig::get_pad_w() const { return padding[2] + padding[3]; }
 
 uint32_t SlidingWindowConfig::get_ceil_pad_w() const {
     uint32_t ceil_padding_w = 0;
