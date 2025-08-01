@@ -29,10 +29,14 @@ class LoadImages:
         files = []
         for p in sorted(path) if isinstance(path, (list, tuple)) else [path]:
             a = str(Path(p).absolute())
-            if os.path.isfile(a):
+            if os.path.isdir(a):
+                for f in os.listdir(a):
+                    if f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp")):
+                        files.append(os.path.join(a, f))
+            elif os.path.isfile(a):
                 files.append(a)
             else:
-                raise FileNotFoundError(f"{p} does not exist")
+                raise FileNotFoundError(f"{p} does not exist or is not a valid file/directory")
 
         images = []
         for f in files:
@@ -64,8 +68,6 @@ class LoadImages:
                     raise StopIteration
 
             path = self.files[self.count]
-
-            self.mode = "image"
             im0 = imread(path)
             if im0 is None:
                 logger.warning(f"WARNING ⚠️ Image Read Error {path}")
@@ -118,15 +120,15 @@ def LetterBox(img, new_shape=(640, 640), auto=False, scaleFill=False, scaleup=Tr
     return img
 
 
-def pre_transform(im):
-    return [LetterBox(img=x) for x in im]
+def pre_transform(im, res=(640, 640)):
+    return [LetterBox(img=x, new_shape=res) for x in im]
 
 
-def preprocess(im):
+def preprocess(im, res=(640, 640)):
     device = "cpu"
     not_tensor = not isinstance(im, torch.Tensor)
     if not_tensor:
-        im = np.stack(pre_transform(im))
+        im = np.stack(pre_transform(im, res))
         im = im[..., ::-1].transpose((0, 3, 1, 2))
         im = np.ascontiguousarray(im)
         im = torch.from_numpy(im)
