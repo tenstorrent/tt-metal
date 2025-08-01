@@ -251,7 +251,8 @@ inline void llk_pack_untilize(
     std::uint32_t output,
     const std::uint32_t face_r_dim = FACE_R_DIM,
     const std::uint32_t num_faces = 4,
-    const std::uint32_t block_c_index = 0) {
+    const std::uint32_t block_c_index = 0,
+    const std::uint32_t tile_dst_offset = 0) {
     const std::uint32_t output_id = get_output_id(output);
     std::uint32_t pack_tile_addr =
         get_local_cb_interface(output_id).fifo_wr_ptr - 1 +
@@ -262,7 +263,11 @@ inline void llk_pack_untilize(
 
     for (std::uint32_t block_rt = 0; block_rt < block_rt_dim; block_rt++) {
         _llk_pack_untilize_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
-            pack_tile_addr, pack_dst_format[output_id], face_r_dim, num_faces, block_rt * block_ct_dim);
+            pack_tile_addr,
+            pack_dst_format[output_id],
+            face_r_dim,
+            num_faces,
+            block_rt * block_ct_dim + tile_dst_offset);
 
         pack_tile_addr += full_ct_dim * get_local_cb_interface(output_id).fifo_page_size;
     }
