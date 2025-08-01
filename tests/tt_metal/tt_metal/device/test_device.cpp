@@ -518,7 +518,7 @@ TEST(Debugging, Test_Eth) {
         llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{0}, arg_base);
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
         std::cerr << "virtual_core " << virtual_core.str() << std::endl;
-        
+
         tt_metal::Program program = tt_metal::CreateProgram();
         tt_metal::KernelHandle kernel = tt_metal::CreateKernel(
             program,
@@ -545,60 +545,63 @@ TEST(Debugging, Test_Tensix) {
         GTEST_SKIP();
     }
     auto device = CreateDevice(0);
-    constexpr uint32_t num_writes = 60000;
-    constexpr uint32_t total_size = num_writes * sizeof(uint32_t);
-    uint32_t l1_base = MetalContext::instance().hal().get_dev_addr(
-        HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
-    uint32_t heartbeat_base = l1_base;
-    uint32_t debug_dump_base = heartbeat_base + 16;
-    uint32_t arg_base = debug_dump_base + 64;
-    uint32_t buffer_base = arg_base + 16;
+    for (int i = 0; i < 1; ++i) {
+        constexpr uint32_t num_writes = 60000;
+        constexpr uint32_t total_size = num_writes * sizeof(uint32_t);
+        uint32_t l1_base = MetalContext::instance().hal().get_dev_addr(
+            HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
+        uint32_t heartbeat_base = l1_base;
+        uint32_t debug_dump_base = heartbeat_base + 16;
+        uint32_t arg_base = debug_dump_base + 64;
+        uint32_t buffer_base = arg_base + 16;
 
-    std::cerr << "l1_base " << std::hex << l1_base << std::endl;
-    std::cerr << "buffer_base " << std::hex << buffer_base << std::endl;
-    const auto& other_debug_core_virt = device->virtual_core_from_logical_core(CoreCoord{1, 1}, CoreType::WORKER);
+        std::cerr << "l1_base " << std::hex << l1_base << std::endl;
+        std::cerr << "buffer_base " << std::hex << buffer_base << std::endl;
+        const auto& other_debug_core_virt = device->virtual_core_from_logical_core(CoreCoord{1, 1}, CoreType::WORKER);
 
-    std::vector<uint32_t> ct_args = {
-        num_writes,
-        buffer_base,
-        arg_base,
-        heartbeat_base,
-        debug_dump_base,
-        other_debug_core_virt.x,
-        other_debug_core_virt.y};
-    std::vector<uint32_t> zero_buffer(num_writes, 0);
+        std::vector<uint32_t> ct_args = {
+            num_writes,
+            buffer_base,
+            arg_base,
+            heartbeat_base,
+            debug_dump_base,
+            other_debug_core_virt.x,
+            other_debug_core_virt.y};
+        std::vector<uint32_t> zero_buffer(num_writes, 0);
 
-    const auto& core = CoreCoord{0, 0};
-    // Zero buffer
-    const auto& virtual_core = device->virtual_core_from_logical_core(core, CoreType::WORKER);
-    llrt::write_hex_vec_to_core(device->id(), virtual_core, zero_buffer, buffer_base);
-    llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{0}, arg_base);
-    // tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
-    std::this_thread::sleep_for(std::chrono::seconds(2));
+        const auto& core = CoreCoord{0, 0};
+        // Zero buffer
+        const auto& virtual_core = device->virtual_core_from_logical_core(core, CoreType::WORKER);
+        llrt::write_hex_vec_to_core(device->id(), virtual_core, zero_buffer, buffer_base);
+        llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{0}, arg_base);
+        // tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+        std::this_thread::sleep_for(std::chrono::seconds(2));
 
-    tt_metal::Program program = tt_metal::CreateProgram();
-    tt_metal::KernelHandle kernel = tt_metal::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/device/test_kernel_2.cpp",
-        core,
-        tt_metal::DataMovementConfig{.processor = tt_metal::DataMovementProcessor::RISCV_0, .compile_args = ct_args});
-    tt_metal::detail::LaunchProgram(device, program, false);
+        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::KernelHandle kernel = tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/device/test_kernel_2.cpp",
+            core,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0, .compile_args = ct_args});
+        tt_metal::detail::LaunchProgram(device, program, false);
 
-    do_debug_test(
-        device,
-        debug_dump_base,
-        buffer_base,
-        arg_base,
-        num_writes,
-        virtual_core,
-        other_debug_core_virt,
-        false,
-        heartbeat_base);
+        do_debug_test(
+            device,
+            debug_dump_base,
+            buffer_base,
+            arg_base,
+            num_writes,
+            virtual_core,
+            other_debug_core_virt,
+            false,
+            heartbeat_base);
 
-    detail::WaitProgramDone(device, program, false);
+        detail::WaitProgramDone(device, program, false);
+    }
 }
 
-TEST(Debugging, TestBasicWrites) {
+TEST(Debugging, TestBasicWritesEth) {
     auto rt_options = llrt::RunTimeOptions();
     auto hal = Hal(tt::ARCH::BLACKHOLE, false);
     auto cluster = std::make_unique<tt::Cluster>(rt_options, hal);
@@ -610,6 +613,29 @@ TEST(Debugging, TestBasicWrites) {
         cluster->write_core(data.data(), data.size() * sizeof(uint32_t), tt_cxy_pair{0, virtual_eth_core.x, virtual_eth_core.y}, 0x20000);
         for (int j = 0; j < 25; ++j) {
             cluster->read_core(read, data.size() * sizeof(uint32_t), tt_cxy_pair{0, virtual_eth_core.x, virtual_eth_core.y}, 0x20000);
+        }
+    }
+
+    std::cerr << "done" << std::endl;
+}
+
+TEST(Debugging, TestBasicWritesTensix) {
+    auto rt_options = llrt::RunTimeOptions();
+    auto hal = Hal(tt::ARCH::BLACKHOLE, false);
+    auto cluster = std::make_unique<tt::Cluster>(rt_options, hal);
+
+    CoreCoord virtual_eth_core = {1, 2};
+    std::vector<uint32_t> data = {0xabcd1234};
+    std::vector<uint32_t> read;
+    for (int i = 0; i < 800000; ++i) {
+        cluster->write_core(
+            data.data(),
+            data.size() * sizeof(uint32_t),
+            tt_cxy_pair{0, virtual_eth_core.x, virtual_eth_core.y},
+            0x20000);
+        for (int j = 0; j < 25; ++j) {
+            cluster->read_core(
+                read, data.size() * sizeof(uint32_t), tt_cxy_pair{0, virtual_eth_core.x, virtual_eth_core.y}, 0x20000);
         }
     }
 
