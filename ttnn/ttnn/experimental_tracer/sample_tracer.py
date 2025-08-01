@@ -70,6 +70,11 @@ def get_parser():
         default=["float32"],
         help=f"Optional list of data types for the input tensors (default: float32). Allowed types: {', '.join(allowed_dtypes)}",
     )
+    parser.add_argument(
+        "--disable-torch-summary",
+        action="store_true",
+        help="Disable torch summary output. Useful for models that do not support torch summary.",
+    )
     return parser
 
 
@@ -163,7 +168,7 @@ def main(args_dict):
         torch_model = AutoModelForImageClassification.from_pretrained("microsoft/swinv2-base-patch4-window8-256")
 
     torch_model.eval()
-    if not args.model == "sentence_bert":
+    if not args.model == "sentence_bert" and not args.disable_torch_summary:
         print("Started torch summary: ")
         summary(torch_model, input_size=args.input_shape)
         print("Finished torch summary.\n\n\n")

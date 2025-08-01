@@ -6,7 +6,7 @@ import networkx as nx
 import os
 import xlsxwriter  # Library for writing Excel files
 from tracer_backend import OperationGraph
-from tracer_backend_utils import WrappedOperation, Operation, AttrsBase, PlaceholderTensor
+from tracer_backend_utils import WrappedOperation, Operation, AttrsBase, PlaceholderTensor, TupleOp, AtenConvolution
 from pytorch_graph_utils import format_file_with_black
 from dataclasses import asdict
 
@@ -57,8 +57,14 @@ class PytorchExcelGraph:
         if isinstance(operation, WrappedOperation):
             # Extract relevant attributes from the operation
             result["Attrs"] = asdict(operation.attrs) if isinstance(operation.attrs, AttrsBase) else None
+            if isinstance(operation, AtenConvolution):
+                if operation.attrs.transposed:
+                    result["Function Call Name"] = "torch.ops.aten.convolution_transpose"
             result["Ops"] = operation.ops
             result["Params"] = operation.params
+        elif isinstance(operation, TupleOp):
+            result["Ops"] = 0
+            result["Params"] = 0
         else:
             result["Ops"] = -1
             result["Params"] = -1

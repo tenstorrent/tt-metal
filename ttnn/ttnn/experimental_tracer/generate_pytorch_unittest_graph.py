@@ -176,7 +176,15 @@ class Maxpool2dGroupUnittest(UnitTestOperation):
 
 @pytest.mark.parametrize(
     "dtype",
-    [[ttnn.bfloat8_b], [ttnn.bfloat16]],
+    [ttnn.bfloat8_b, ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "ceil_mode",
+    [False, True],
+)
+@pytest.mark.parametrize(
+    "sharding",
+    [None, ttnn.TensorMemoryLayout.HEIGHT_SHARDED]
 )
 @pytest.mark.parametrize(
     "input_batch, input_depth, input_height, input_width, kernel, stride, padding, dilation",
@@ -195,6 +203,8 @@ def test_maxpool2d(
     stride,
     padding,
     dilation,
+    sharding,
+    ceil_mode,
 ):
     if device.core_grid.y == 7:
         pytest.skip("Tests have been configured for N150.")
@@ -219,6 +229,8 @@ def test_maxpool2d(
         dilation_w,
         dtype,
         device,
+        sharding,
+        ceil_mode,
     )
         """
 

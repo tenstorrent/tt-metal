@@ -15,10 +15,7 @@ from typing import Optional, List, Dict, Any
 import os
 import networkx as nx
 from tracer_backend_utils import (
-    AtenConvolution,
-    AtenAddTensor,
-    AtenAddm,
-    AtenMaxPool2dWithIndices,
+    get_operation_class,
     Operation,
     OperationMetadata,
     PlaceholderTensor,
@@ -461,15 +458,10 @@ class WrappedOperationGraph(OperationGraph):
     def convert_operations_to_wrapped(self):
         unsupported_wrapped_ops = set()
         for node_id, operation in self.operations.items():
-            if operation.function_call_name == "torch.ops.aten.convolution":
-                self.operations[node_id] = operation.to_operation(AtenConvolution)
-            elif operation.function_call_name == "torch.ops.aten.add_.Tensor":
-                self.operations[node_id] = operation.to_operation(AtenAddTensor)
-            elif operation.function_call_name.startswith("torch.ops.aten.addmm"):
-                self.operations[node_id] = operation.to_operation(AtenAddm)
-            elif operation.function_call_name == "torch.ops.aten.max_pool2d_with_indices":
-                self.operations[node_id] = operation.to_operation(AtenMaxPool2dWithIndices)
-            elif len(operation.function_call_name):
+            operation_class = get_operation_class(operation.function_call_name)
+            if operation_class:
+                self.operations[node_id] = operation.to_operation(operation_class)
+            elif len(operation.function_call_name) > 0:
                 unsupported_wrapped_ops.add(operation.function_call_name)
         if self.verbose and unsupported_wrapped_ops:
             print(f"Unsupported wrapped operations: {', '.join(unsupported_wrapped_ops)}")

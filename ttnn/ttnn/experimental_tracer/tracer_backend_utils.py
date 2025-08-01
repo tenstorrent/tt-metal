@@ -7,6 +7,25 @@ from typing import List, Dict, Any, Union, Optional
 import torch
 import re
 
+# Global registry for operations
+WRAPPED_OPERATION_REGISTRY = {}
+
+
+def register_operation(function_call_name: str):
+    """Decorator to register an operation class with its function_call_name."""
+
+    def decorator(cls):
+        assert len(function_call_name) > 0, "Function call name must be a non-empty string"
+        WRAPPED_OPERATION_REGISTRY[function_call_name] = cls
+        return cls
+
+    return decorator
+
+
+def get_operation_class(function_call_name: str):
+    """Retrieve the operation class from the registry."""
+    return WRAPPED_OPERATION_REGISTRY.get(function_call_name, None)
+
 
 def to_valid_variable_name(input_string: Optional[str]) -> str:
     """
@@ -42,6 +61,8 @@ class ConvAttrs(AttrsBase):
     padding: List[int]
     dilation: List[int]
     groups: int
+    transposed: bool = False
+    output_padding: Optional[List[int]] = None
 
 
 @dataclass
@@ -128,7 +149,7 @@ class Operation:
             return None
 
     @property
-    def output_shapes(self) -> List[Any]:
+    def output_shapes(self) -> Optional[List[Any]]:
         try:
             return self.meta_data.meta["o_shapes"]
         except:
@@ -142,6 +163,16 @@ class WrappedOperation(Operation):
     @property
     def ops(self) -> int:
         """Return the number of multiply-accumulate operations"""
+        output_shape = self.output_shapes
+        if output_shape:
+            num_elements = 0
+            for shape in output_shape:
+                if isinstance(shape, torch.Size):
+                    num_elements += shape.numel()
+                else:
+                    num_elements = -1
+                    break
+            return num_elements  # Assuming two tensors are involved in the operation
         raise NotImplementedError("This method should be implemented in subclasses")
 
     @property
@@ -151,6 +182,7 @@ class WrappedOperation(Operation):
 
 
 @dataclass
+@register_operation("torch.ops.aten.convolution")
 class AtenConvolution(WrappedOperation):
     attrs: Optional[ConvAttrs] = None
 
@@ -166,6 +198,8 @@ class AtenConvolution(WrappedOperation):
                 stride=self.args[3],
                 padding=self.args[4],
                 dilation=self.args[5],
+                transposed=self.args[6],
+                output_padding=self.args[7],
                 groups=self.args[8],
             )
 
@@ -188,6 +222,7 @@ class AtenConvolution(WrappedOperation):
 
 
 @dataclass
+@register_operation("torch.ops.aten.add_.Tensor")
 class AtenAddTensor(WrappedOperation):
     @property
     def ops(self) -> int:
@@ -199,6 +234,7 @@ class AtenAddTensor(WrappedOperation):
 
 
 @dataclass
+@register_operation("torch.ops.aten.addmm")
 class AtenAddm(WrappedOperation):
     @property
     def ops(self) -> int:
@@ -209,6 +245,7 @@ class AtenAddm(WrappedOperation):
 
 
 @dataclass
+@register_operation("torch.ops.aten.max_pool2d_with_indices")
 class AtenMaxPool2dWithIndices(WrappedOperation):
     attrs: Optional[PoolAttrs] = None
 
@@ -241,6 +278,493 @@ class AtenMaxPool2dWithIndices(WrappedOperation):
             * self.attrs.kernel[0]
             * self.attrs.kernel[1]
         )
+
+
+@dataclass
+@register_operation("torch.ops.aten.view")
+class AtenView(WrappedOperation):
+    pass
+
+
+@dataclass
+@register_operation("torch.ones")
+class TorchOnes(WrappedOperation):
+    """Represents the torch.ones operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.native_batch_norm")
+class AtenNativeBatchNorm(WrappedOperation):
+    """Represents the native_batch_norm operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.mul.Tensor")
+class AtenMulTensor(WrappedOperation):
+    """Represents the mul.Tensor operation."""
+
+    @property
+    def ops(self) -> int:
+        output_shapes = self.output_shapes
+        if output_shapes:
+            num_elements = output_shapes[0].numel()
+            return num_elements * 2
+        return super().ops
+
+
+@dataclass
+@register_operation("torch.ops.aten.add.Tensor")
+class AtenAddTensor(WrappedOperation):
+    """Represents the add.Tensor operation."""
+
+    @property
+    def ops(self) -> int:
+        output_shapes = self.output_shapes
+        if output_shapes:
+            num_elements = output_shapes[0].numel()
+            return num_elements * 2
+        return super().ops
+
+
+@dataclass
+@register_operation("torch.ops.aten.cat")
+class AtenCat(WrappedOperation):
+    """Represents the cat operation."""
+
+    @property
+    def ops(self) -> int:
+        output_shapes = self.output_shapes
+        if output_shapes:
+            num_elements = output_shapes[0].numel()
+            return num_elements * len(self.args)
+        return super().ops
+
+
+@dataclass
+@register_operation("torch.ops.aten.sigmoid")
+class AtenSigmoid(WrappedOperation):
+    """Represents the sigmoid operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten._softmax")
+class AtenSoftmax(WrappedOperation):
+    """Represents the _softmax operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.transpose.int")
+class AtenTransposeInt(WrappedOperation):
+    """Represents the transpose.int operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.div.Tensor")
+class AtenDivTensor(WrappedOperation):
+    """Represents the div.Tensor operation."""
+
+    @property
+    def ops(self) -> int:
+        output_shapes = self.output_shapes
+        if output_shapes:
+            num_elements = output_shapes[0].numel()
+            return num_elements * 2
+        return super().ops
+
+
+@dataclass
+@register_operation("torch.ops.aten.silu_")
+class AtenSiluInplace(WrappedOperation):
+    """Represents the silu_ operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.mean.dim")
+class AtenMeanDim(WrappedOperation):
+    """Represents the mean.dim operation."""
+
+    @property
+    def ops(self) -> int:
+        input_shapes = self.input_shapes
+        if input_shapes:
+            num_elements = input_shapes[0].numel()
+            return num_elements * 2
+        return super().ops
+
+
+@dataclass
+@register_operation("torch.ops.aten.upsample_nearest2d")
+class AtenUpsampleNearest2d(WrappedOperation):
+    """Represents the upsample_nearest2d operation."""
+
+    @property
+    def ops(self) -> int:
+        input_shapes = self.input_shapes
+        if input_shapes:
+            num_elements = input_shapes[0].numel()
+            return num_elements * 2
+        return super().ops
+
+
+@dataclass
+@register_operation("torch.ops.aten.clone")
+class AtenClone(WrappedOperation):
+    """Represents the clone operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.permute")
+class AtenPermute(WrappedOperation):
+    """Represents the permute operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.sub.Tensor")
+class AtenSubTensor(WrappedOperation):
+    """Represents the sub.Tensor operation."""
+
+    @property
+    def ops(self) -> int:
+        output_shapes = self.output_shapes
+        if output_shapes:
+            num_elements = output_shapes[0].numel()
+            return num_elements * 2
+        return super().ops
+
+
+@dataclass
+@register_operation("torch.ops.aten.bmm")
+class AtenBmm(WrappedOperation):
+    """Represents the bmm operation."""
+
+    @property
+    def ops(self) -> int:
+        input_shapes = self.input_shapes
+        if input_shapes and len(input_shapes) >= 2:
+            batch_size = input_shapes[0][0]
+            m = input_shapes[0][1]
+            n = input_shapes[1][2]
+            k = input_shapes[1][1]
+            return batch_size * m * n * k
+        return super().ops
+
+
+@dataclass
+@register_operation("torch.ops.aten.expand")
+class AtenExpand(WrappedOperation):
+    """Represents the expand operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten._unsafe_view")
+class AtenUnsafeView(WrappedOperation):
+    """Represents the _unsafe_view operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.slice.Tensor")
+class AtenSliceTensor(WrappedOperation):
+    """Represents the slice.Tensor operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.split_with_sizes")
+class AtenSplitWithSizes(WrappedOperation):
+    """Represents the split_with_sizes operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.split.Tensor")
+class AtenSplitTensor(WrappedOperation):
+    """Represents the split.Tensor operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.native_layer_norm")
+class AtenNativeLayerNorm(WrappedOperation):
+    """Represents the native_layer_norm operation."""
+
+    @property
+    def ops(self) -> int:
+        input_shapes = self.input_shapes
+        if input_shapes:
+            num_elements = input_shapes[0].numel()
+            return num_elements * 2
+        return super().ops
+
+
+@dataclass
+@register_operation("torch.ops.aten.unsqueeze")
+class AtenUnsqueeze(WrappedOperation):
+    """Represents the unsqueeze operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.gelu")
+class AtenGelu(WrappedOperation):
+    """Represents the gelu operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.relu_")
+class AtenReluInplace(WrappedOperation):
+    """Represents the relu_ operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.constant_pad_nd")
+class AtenConstantPadNd(WrappedOperation):
+    """Represents the constant_pad_nd operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.squeeze.dim")
+class AtenSqueezeDim(WrappedOperation):
+    """Represents the squeeze.dim operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.mm")
+class AtenMm(WrappedOperation):
+    """Represents the mm operation."""
+
+    @property
+    def ops(self) -> int:
+        input_shapes = self.input_shapes
+        if input_shapes and len(input_shapes) >= 2:
+            m = input_shapes[0][1]
+            n = input_shapes[1][0]
+            k = input_shapes[0][0]
+            return m * n * k
+        return super().ops
+
+
+@dataclass
+@register_operation("torch.ops.aten.linalg_vector_norm")
+class AtenLinalgVectorNorm(WrappedOperation):
+    """Represents the linalg_vector_norm operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.clamp_min")
+class AtenClampMin(WrappedOperation):
+    """Represents the clamp_min operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.max.dim")
+class AtenMaxDim(WrappedOperation):
+    """Represents the max.dim operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.relu")
+class AtenRelu(WrappedOperation):
+    """Represents the relu operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.as_strided_")
+class AtenAsStridedInplace(WrappedOperation):
+    """Represents the as_strided_ operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.roll")
+class AtenRoll(WrappedOperation):
+    """Represents the roll operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.leaky_relu_")
+class AtenLeakyReluInplace(WrappedOperation):
+    """Represents the leaky_relu_ operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.softplus")
+class AtenSoftplus(WrappedOperation):
+    """Represents the softplus operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.tanh")
+class AtenTanh(WrappedOperation):
+    """Represents the tanh operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.pow.Tensor_Scalar")
+class AtenPowTensorScalar(WrappedOperation):
+    """Represents the pow.Tensor_Scalar operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.silu")
+class AtenSilu(WrappedOperation):
+    """Represents the silu operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.copy_")
+class AtenCopyInplace(WrappedOperation):
+    """Represents the copy_ operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.adaptive_max_pool2d")
+class AtenAdaptiveMaxPool2d(WrappedOperation):
+    """Represents the adaptive_max_pool2d operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.unbind.int")
+class AtenUnbindInt(WrappedOperation):
+    """Represents the unbind.int operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.clamp")
+class AtenClamp(WrappedOperation):
+    """Represents the clamp operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.select.int")
+class AtenSelectInt(WrappedOperation):
+    """Represents the select.int operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.topk")
+class AtenTopk(WrappedOperation):
+    """Represents the topk operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.grid_sampler_2d")
+class AtenGridSampler2d(WrappedOperation):
+    """Represents the grid_sampler_2d operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.sum.dim_IntList")
+class AtenSumDimIntList(WrappedOperation):
+    """Represents the sum.dim_IntList operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.rsub.Scalar")
+class AtenRsubScalar(WrappedOperation):
+    """Represents the rsub.Scalar operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.stack")
+class AtenStack(WrappedOperation):
+    """Represents the stack operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.index.Tensor")
+class AtenIndexTensor(WrappedOperation):
+    """Represents the index.Tensor operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.log")
+class AtenLog(WrappedOperation):
+    """Represents the log operation."""
+
+    pass
+
+
+@dataclass
+@register_operation("torch.ops.aten.hardtanh_")
+class AtenHardtanhInplace(WrappedOperation):
+    """Represents the hardtanh_ operation."""
+
+    pass
 
 
 @dataclass
