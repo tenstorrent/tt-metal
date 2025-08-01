@@ -4,7 +4,7 @@ add_library(TTNN::Ops::Matmul ALIAS ttnn_op_matmul)
 target_precompile_headers(ttnn_op_matmul REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_matmul)
 
-file(GLOB_RECURSE kernels matmul/device/kernels/*)
+file(GLOB_RECURSE kernels device/kernels/*)
 target_sources(
     ttnn_op_matmul
     PUBLIC
