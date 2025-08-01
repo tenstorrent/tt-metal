@@ -36,6 +36,7 @@ jobs:
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
+        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
@@ -82,6 +83,7 @@ jobs:
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
+        HF_HOME: /mnt/MLPerf/tt_dnn-models/hf_home
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib

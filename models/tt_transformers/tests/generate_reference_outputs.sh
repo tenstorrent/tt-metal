@@ -55,10 +55,11 @@ get_model_name() {
 
 # Loop through each LLAMA directory
 for DIR in "${HF_MODELS[@]}"; do
-    if [ ! -d "$DIR" ]; then
-        echo "Warning: Directory $DIR does not exist, skipping..."
-        continue
-    fi
+    # TBD: do check using HF_HOME
+    # if [ ! -d "$DIR" ]; then
+    #     echo "Warning: Directory $DIR does not exist, skipping..."
+    #     continue
+    # fi
 
     # Get model size for output filename
     MODEL_NAME=$(get_model_name "$DIR")

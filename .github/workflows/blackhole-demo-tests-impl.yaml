@@ -33,7 +33,7 @@ jobs:
             name: "llama3-8b performance",
             arch: blackhole,
             # I think we can get rid of TT_CACHE_PATH here by using a NFS export
-            cmd:  HF_MODEL=/localdev/blackhole_demos/huggingface_data/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659 pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci and not performance-ci-stress-1",
+            cmd:  HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci and not performance-ci-stress-1",
             owner_id: U03PUAKE719 # Miguel Tairum
           },
           { # This should be moved to a BH perf regression pipeline in the future
@@ -75,11 +75,12 @@ jobs:
           docker_image: ${{ inputs.docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
+            -e HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e HF_TOKEN=${{ secrets.HUGGINGFACE_TOKEN }}
-            -v /localdev/blackhole_demos:/localdev/blackhole_demos:ro
+            -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
           run_args: |
             if [[ "${{ matrix.test-group.name }}" == *"llama"* ]]; then

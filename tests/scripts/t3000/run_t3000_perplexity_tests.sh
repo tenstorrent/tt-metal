@@ -123,7 +123,7 @@ run_t3000_mistral_perplexity_tests() {
 
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
-  hf_model="/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db"
+  hf_model="mistralai/Mistral-7B-Instruct-v0.3"
   WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/tests/test_accuracy.py --timeout=3600
 
 }
@@ -176,7 +176,7 @@ run_t3000_qwen25_perplexity_tests() {
 
   echo "LOG_METAL: Running run_t3000_qwen25_perplexity_tests"
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
-  qwen72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-72B-Instruct
+  qwen72b=Qwen/Qwen2.5-72B-Instruct
 
   HF_MODEL=$qwen72b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout 3600; fail+=$?
 
@@ -200,7 +200,7 @@ run_t3000_qwen3_perplexity_tests() {
 
   echo "LOG_METAL: Running run_t3000_qwen3_perplexity_tests"
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
-  qwen32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-32B
+  qwen32b=Qwen/Qwen3-32B
 
   HF_MODEL=$qwen32b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout 3600; fail+=$?
 
