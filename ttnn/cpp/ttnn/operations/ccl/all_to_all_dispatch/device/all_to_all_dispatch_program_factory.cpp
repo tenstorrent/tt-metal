@@ -95,7 +95,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_mesh_workload(
     tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    auto mesh_device = tensor_args.input_tensor.mesh_device();
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(operation_attributes, coord, tensor_args, tensor_return_value, tensor_coords);
@@ -120,7 +119,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     const auto& output_tensor = tensor_return_value.at(0);
     const auto& metadata_tensor = tensor_return_value.at(1);
     auto num_links = operation_attributes.num_links;
-    auto topology = operation_attributes.topology;
+    auto topology = tt::tt_fabric::get_fabric_topology();
 
     auto mesh_device = input_tensor.mesh_device();
     const auto& mesh_view = mesh_device->get_view();
@@ -158,7 +157,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
 
     uint32_t hidden_size = input_shape[-1];
     uint32_t batch_size = input_shape[0] * dispatch_devices;
-    uint32_t seq_len = indices_shape[-2];
 
     uint32_t tokens_per_device = detail::get_num_rows(input_tensor);
     uint32_t selected_experts_k = indices_shape[-1];
@@ -179,8 +177,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
     auto indices_data_format = tt::tt_metal::datatype_to_dataformat_converter(indices_tensor.dtype());
     auto mapping_data_format = tt::tt_metal::datatype_to_dataformat_converter(mapping_tensor.dtype());
-
-    constexpr uint32_t buffering_factor = 2;
 
     // input sharded buffer
     uint32_t input_tensor_cb_id = tt::CBIndex::c_0;
@@ -284,15 +280,13 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
 
     // create circular buffers
-    auto input_tensor_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_input_tensor_config);
-    auto indices_tensor_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_indices_tensor_config);
-    auto mapping_tensor_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_mapping_tensor_config);
-    auto packet_header_cb = tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, packet_header_cb_config);
-    auto send_preparation_buffer_cb =
-        tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_send_preparation_buffer_config);
+    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_input_tensor_config);
+    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_indices_tensor_config);
+    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_mapping_tensor_config);
+    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, packet_header_cb_config);
+    tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_send_preparation_buffer_config);
     if (operation_attributes.impl == AllToAllTransferType::FullPacket) {
-        auto metadata_buffer_cb =
-            tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_metadata_buffer_config);
+        tt::tt_metal::CreateCircularBuffer(program, sender_core_grid, cb_metadata_buffer_config);
     }
 
     std::vector<uint32_t> dest_mesh_id, dest_chip_id;
@@ -342,7 +336,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         tokens_per_device,
 
         num_links,
-        (uint32_t)tt::tt_fabric::get_fabric_topology(),
+        (uint32_t)topology,
 
         src_mesh_id,
         (uint32_t)src_chip_id,
@@ -364,12 +358,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     };
 
     const auto& writer_compile_time_args = reader_compile_time_args;
-
-    auto input_buffer = input_tensor.buffer();
-    auto indices_buffer = indices_tensor.buffer();
-    auto mapping_buffer = mapping_tensor.buffer();
-    auto output_buffer = output_tensor.buffer();
-    auto metadata_buffer = metadata_tensor.buffer();
 
     std::map<std::string, std::string> reader_defines = {
         {"AXIS", std::to_string(operation_attributes.axis.has_value() ? operation_attributes.axis.value() : -1)},

@@ -18,10 +18,18 @@ class YOLOv8sWorldPerformantRunner:
         model_location_generator=None,
         resolution=(640, 640),
         torch_input_tensor=None,
+        inputs_mesh_mapper=None,
+        weights_mesh_mapper=None,
+        outputs_mesh_composer=None,
     ):
         self.device = device
         self.resolution = resolution
         self.torch_input_tensor = torch_input_tensor
+        self.num_devices = self.device.get_num_devices()
+        self.inputs_mesh_mapper = inputs_mesh_mapper
+        self.weights_mesh_mapper = weights_mesh_mapper
+        self.outputs_mesh_composer = outputs_mesh_composer
+
         self.runner_infra = YOLOv8sWorldPerformanceRunnerInfra(
             device,
             device_batch_size,
@@ -29,6 +37,9 @@ class YOLOv8sWorldPerformantRunner:
             weight_dtype,
             model_location_generator,
             resolution=resolution,
+            inputs_mesh_mapper=self.inputs_mesh_mapper,
+            weights_mesh_mapper=self.weights_mesh_mapper,
+            outputs_mesh_composer=self.outputs_mesh_composer,
         )
 
         (
@@ -85,9 +96,7 @@ class YOLOv8sWorldPerformantRunner:
         ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
-        # TODO: Add in place support to ttnn to_memory_config
-        if self.input_tensor.is_sharded():
-            self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
+        self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
         return self.runner_infra.output_tensor

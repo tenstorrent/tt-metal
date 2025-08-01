@@ -21,5 +21,6 @@ ShardOrientation from_flatbuffer(flatbuffer::ShardOrientation orientation);
 ShardMode from_flatbuffer(flatbuffer::ShardMode mode);
 ShardSpec from_flatbuffer(const flatbuffer::ShardSpec* spec);
 std::optional<ShardSpecBuffer> from_flatbuffer(const flatbuffer::ShardSpecBuffer* fb_shard_spec);
+std::optional<BufferDistributionSpec> from_flatbuffer(const flatbuffer::BufferDistributionSpec* fb_dist_spec);
 
 }  // namespace tt::tt_metal

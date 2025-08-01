@@ -583,7 +583,7 @@ chan_id_t ControlPlane::get_downstream_eth_chan_id(
     // If no match found, return a channel from candidate_target_chans
     // Enabled for TG Dispatch on Fabric
     // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
         while (src_routing_plane_id >= candidate_target_chans.size()) {
             src_routing_plane_id = src_routing_plane_id % candidate_target_chans.size();
         }
@@ -2084,6 +2084,8 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
 }
 
 const IntermeshLinkTable& ControlPlane::get_local_intermesh_link_table() const { return intermesh_link_table_; }
+
+const MeshGraph& ControlPlane::get_mesh_graph() const { return *routing_table_generator_->mesh_graph; }
 
 uint64_t ControlPlane::get_asic_id(chip_id_t chip_id) const { return chip_id_to_asic_id_.at(chip_id); }
 
