@@ -33,8 +33,7 @@ parameters = {
             ((1, 1), (4, 2)),
         ],
         "value": [0, 3],
-        # "dtype": [ttnn.bfloat16],
-        "dtype": [ttnn.int32, ttnn.uint32],
+        "dtype": [ttnn.int32, ttnn.uint32, ttnn.bfloat16],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
     }
 }

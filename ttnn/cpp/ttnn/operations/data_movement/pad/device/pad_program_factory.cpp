@@ -73,9 +73,12 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     bfloat16 bfloat_zero = bfloat16(0.0f);
-    uint32_t packed_pad_value = (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32)
-                                    ? pad_value
-                                    : pack_two_bfloat16_into_uint32({bfloat_zero, bfloat_pad_value});
+    uint32_t packed_pad_value;
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
+        packed_pad_value = pad_value;
+    } else {
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_zero, bfloat_pad_value});
+    }
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
@@ -212,11 +215,12 @@ operation::ProgramWithCallbacks pad_tile(
     tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
-    uint32_t pad_bits;
-    std::memcpy(&pad_bits, &pad_value, sizeof(uint32_t));
-    uint32_t packed_pad_value = (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32)
-                                    ? pad_bits
-                                    : pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+    uint32_t packed_pad_value;
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
+        packed_pad_value = pad_value;
+    } else {
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+    }
 
     uint32_t num_unpadded_Xt = a.padded_shape()[3] / TILE_WIDTH;
     uint32_t num_total_Xt = output_shape[3] / TILE_WIDTH;
@@ -518,9 +522,12 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     bfloat16 bfloat_zero = bfloat16(0.0f);
-    uint32_t packed_pad_value = (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32)
-                                    ? pad_value
-                                    : pack_two_bfloat16_into_uint32({bfloat_zero, bfloat_pad_value});
+    uint32_t packed_pad_value;
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
+        packed_pad_value = pad_value;
+    } else {
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_zero, bfloat_pad_value});
+    }
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
@@ -841,9 +848,12 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
-    uint32_t packed_pad_value = (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32)
-                                    ? pad_value
-                                    : pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+    uint32_t packed_pad_value;
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
+        packed_pad_value = pad_value;
+    } else {
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+    }
 
     bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
     bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
@@ -1252,9 +1262,12 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
     tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
-    uint32_t packed_pad_value = (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32)
-                                    ? pad_value
-                                    : pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+    uint32_t packed_pad_value;
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
+        packed_pad_value = pad_value;
+    } else {
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+    }
 
     std::vector<uint32_t> reader_ct_args = {(std::uint32_t)stick_size_padded, (std::uint32_t)shard_height_padded};
 
