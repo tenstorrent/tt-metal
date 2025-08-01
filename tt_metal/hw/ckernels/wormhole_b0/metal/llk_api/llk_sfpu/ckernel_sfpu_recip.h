@@ -15,9 +15,9 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <int max_iter = 3, bool save_reg = true /* Unused. Enough registers available. */>
+template <bool APPROXIMATE = false, bool save_reg = true /* Unused. Enough registers available. */>
 sfpi_inline vFloat sfpu_reciprocal(const vFloat in) {
-    return _sfpu_reciprocal_<max_iter>(in);
+    return _sfpu_reciprocal_<APPROXIMATE>(in);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
