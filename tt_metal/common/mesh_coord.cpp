@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <assert.hpp>
-#include <boost/container/vector.hpp>
+
 #include <boost/move/utility_core.hpp>
 #include <mesh_coord.hpp>
 #include <tt_stl/span.hpp>

@@ -12,10 +12,12 @@ namespace ttsl {
 
 static constexpr size_t SMALL_VECTOR_SIZE = 8;
 
-template <typename T, size_t PREALLOCATED_SIZE = SMALL_VECTOR_SIZE>
-using SmallVector = llvm::SmallVector<T, PREALLOCATED_SIZE>;
+template <typename T, std::size_t PREALLOCATED_SIZE = SMALL_VECTOR_SIZE>
+struct SmallVector : public llvm::SmallVector<T, PREALLOCATED_SIZE> {
+    using llvm::SmallVector<T, PREALLOCATED_SIZE>::SmallVector;
+};
 
-template <typename Stream, typename T, unsigned PREALLOCATED_SIZE>
+template <typename Stream, typename T, std::size_t PREALLOCATED_SIZE>
 Stream& operator<<(Stream& os, const SmallVector<T, PREALLOCATED_SIZE>& vec) {
     os << "SmallVector([";
     for (auto i = 0; i < vec.size(); ++i) {

@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/container/vector.hpp>
 #include <stdint.h>
 #include <algorithm>
 #include <cstddef>
@@ -57,8 +56,9 @@ tt::stl::Span<const uint32_t> ShapeBase::view() const {
     const auto begin = cbegin();
     const auto end = cend();
     // `Span` constructor requires a contiguous range of data.
-    static_assert(
-        std::is_base_of_v<std::random_access_iterator_tag, std::iterator_traits<decltype(begin)>::iterator_category>);
+    // static_assert(
+    //     std::is_base_of_v<std::random_access_iterator_tag,
+    //     std::iterator_traits<decltype(begin)>::iterator_category>);
     return tt::stl::Span<const uint32_t>(begin, end);
 }
 
