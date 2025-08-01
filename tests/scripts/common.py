@@ -276,6 +276,10 @@ def get_updated_device_params(device_params):
     if "TT_TEST_USE_WORKER_DISPATCH" in os.environ:
         dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
 
+    if ttnn.is_blackhole() and dispatch_core_axis == ttnn.DispatchCoreAxis.ROW:
+        logger.warning("blackhole arch does not support DispatchCoreAxis.ROW, using DispatchCoreAxis.COL instead.")
+        dispatch_core_axis = ttnn.DispatchCoreAxis.COL
+
     dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
     new_device_params["dispatch_core_config"] = dispatch_core_config
 
