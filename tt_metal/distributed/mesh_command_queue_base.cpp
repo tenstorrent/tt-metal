@@ -21,7 +21,6 @@
 
 namespace tt::tt_metal::distributed {
 
-// TODO calculate data format size.
 void MeshCommandQueueBase::write_sharded_buffer(
     const MeshBuffer& buffer, tt::DataFormat data_format, const void* src, tt::DataFormat src_data_format) {
     auto global_buffer_shape = buffer.global_shard_spec().global_buffer_shape;
