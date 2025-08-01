@@ -38,16 +38,6 @@ logging.basicConfig(
 )
 
 
-def get_dispatch_core_config():
-    dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
-    if ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.N300:
-        dispatch_core_type = ttnn.device.DispatchCoreType.ETH
-    dispatch_core_axis = ttnn.DispatchCoreAxis.ROW
-    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
-
-    return dispatch_core_config
-
-
 def postprocess_yolov7_custom(preds, img, orig_imgs):
     """Custom postprocessing for YOLOv7 to match YOLOv11 format"""
     # The model output is already processed and contains detections in format [x1, y1, x2, y2, conf, cls]

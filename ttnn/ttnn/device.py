@@ -12,7 +12,7 @@ from loguru import logger
 
 def get_device_core_grid(device):
     compute_with_storage_grid_size = device.compute_with_storage_grid_size()
-    return ttnn.CoreGrid(y=compute_with_storage_grid_size.y, x=compute_with_storage_grid_size.x)
+    return ttnn.types.CoreGrid(y=compute_with_storage_grid_size.y, x=compute_with_storage_grid_size.x)
 
 
 # TODO: Device = ttnn._ttnn.Device
@@ -57,6 +57,27 @@ GetPCIeDeviceID = ttnn._ttnn.device.GetPCIeDeviceID
 GetNumPCIeDevices = ttnn._ttnn.device.GetNumPCIeDevices
 
 
+def is_wormhole_b0(device=None):
+    if device is not None:
+        return device.arch() == ttnn._ttnn.device.Arch.WORMHOLE_B0
+    ARCH_NAME = ttnn._ttnn.device.get_arch_name()
+    return "wormhole_b0" in ARCH_NAME
+
+
+def is_grayskull(device=None):
+    if device is not None:
+        return device.arch() == ttnn._ttnn.device.Arch.GRAYSKULL
+    ARCH_NAME = ttnn._ttnn.device.get_arch_name()
+    return "grayskull" in ARCH_NAME
+
+
+def is_blackhole(device=None):
+    if device is not None:
+        return device.arch() == ttnn._ttnn.device.Arch.BLACKHOLE
+    ARCH_NAME = ttnn._ttnn.device.get_arch_name()
+    return "blackhole" in ARCH_NAME
+
+
 def get_default_dispatch_core_type():
     eth_default_dispatch_clusters = [
         ttnn._ttnn.cluster.ClusterType.N300,
@@ -70,41 +91,47 @@ def get_default_dispatch_core_type():
     )
 
 
+def get_default_dispatch_core_axis():
+    return DispatchCoreAxis.COL if is_blackhole() else DispatchCoreAxis.ROW
+
+
 class DispatchCoreConfig(ttnn._ttnn.device.DispatchCoreConfig):
     def __init__(self, type: DispatchCoreType = None, axis: DispatchCoreAxis = None):
+        # Validate user provided args
         if type:
-            try:
-                type = DispatchCoreType(type)
-            except ValueError:
-                valid_values = [e.value for e in ttnn._ttnn.device.DispatchCoreType]
+            if not isinstance(type, DispatchCoreType):
+                valid_values = [e for e in DispatchCoreType.__members__.values()]
                 raise ValueError(f"Invalid dispatch core type: {type}. Valid values are: {valid_values}")
+            if type == DispatchCoreType.ETH and axis == DispatchCoreAxis.COL:
+                raise ValueError("COL axis is not supported for ETH dispatch core type")
         if axis:
-            try:
-                axis = DispatchCoreAxis(axis)
-            except ValueError:
-                valid_values = [e.value for e in ttnn._ttnn.device.DispatchCoreAxis]
+            if not isinstance(axis, DispatchCoreAxis):
+                valid_values = [e for e in DispatchCoreAxis.__members__.values()]
                 raise ValueError(f"Invalid dispatch core axis: {axis}. Valid values are: {valid_values}")
+            if axis == DispatchCoreAxis.ROW and is_blackhole():
+                raise ValueError("ROW dispatch core axis is not supported for blackhole arch")
         if type and axis:
             # User provided both valid type and axis, check if they are compatible
-            if type == DispatchCoreType.ETH and axis == DispatchCoreAxis.COL:
-                raise ValueError("ETH dispatch core type cannot be used with COL axis")
-            super().__init__(type, axis)
+            self.type = type
+            self.axis = axis
         elif type:
             # User provided only valid type
-            super().__init__(type)
+            self.type = type
+            self.axis = get_default_dispatch_core_axis()
         elif axis:
+            self.axis = axis
             # User provided only valid axis
             if axis == DispatchCoreAxis.COL:
                 # COL axis is not supported for ETH dispatch core type, default to WORKER
-                type = DispatchCoreType.WORKER
-            elif axis == DispatchCoreAxis.ROW:
+                self.type = DispatchCoreType.WORKER
+            elif self.axis == DispatchCoreAxis.ROW:
                 # ROW axis is supported for all dispatch core types, use default type for their system
-                type = get_default_dispatch_core_type()
-            super().__init__(type, axis)
+                self.type = get_default_dispatch_core_type()
         else:
             # User provided no valid type or axis, use default for their system
-            type = get_default_dispatch_core_type()
-            super().__init__(type)
+            self.type = get_default_dispatch_core_type()
+            self.axis = get_default_dispatch_core_axis()
+        super().__init__(self.type, self.axis)
 
 
 def CreateDevice(
@@ -192,27 +219,6 @@ def dump_device_memory_state(device, prefix=""):
 
 def get_memory_view(device, buffer_type):
     return ttnn._ttnn.device.GetMemoryView(device, buffer_type)
-
-
-def is_wormhole_b0(device=None):
-    if device is not None:
-        return device.arch() == ttnn._ttnn.device.Arch.WORMHOLE_B0
-    ARCH_NAME = ttnn.get_arch_name()
-    return "wormhole_b0" in ARCH_NAME
-
-
-def is_grayskull(device=None):
-    if device is not None:
-        return device.arch() == ttnn._ttnn.device.Arch.GRAYSKULL
-    ARCH_NAME = ttnn.get_arch_name()
-    return "grayskull" in ARCH_NAME
-
-
-def is_blackhole(device=None):
-    if device is not None:
-        return device.arch() == ttnn._ttnn.device.Arch.BLACKHOLE
-    ARCH_NAME = ttnn.get_arch_name()
-    return "blackhole" in ARCH_NAME
 
 
 SetDefaultDevice = ttnn._ttnn.device.SetDefaultDevice

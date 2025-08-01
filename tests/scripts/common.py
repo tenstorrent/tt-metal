@@ -270,36 +270,13 @@ def get_updated_device_params(device_params):
 
     new_device_params = device_params.copy()
 
-    is_blackhole = ttnn.get_arch_name() == "blackhole"
     dispatch_core_axis = new_device_params.pop("dispatch_core_axis", None)
     dispatch_core_type = new_device_params.pop("dispatch_core_type", None)
     # Special env to force worker dispatch to test dispatch from worker cores
     if "TT_TEST_USE_WORKER_DISPATCH" in os.environ:
         dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
 
-    assert not (
-        dispatch_core_axis == ttnn.DispatchCoreAxis.COL and dispatch_core_type == ttnn.device.DispatchCoreType.ETH
-    ), "COL dispatch core axis is not supported with ETH dispatch cores, check your device params."
-
-    if dispatch_core_axis or dispatch_core_type:
-        # If the user specifies a dispatch core axis as COL assume
-        # they want to use WORKER dispatch cores (COL isn't supported with ETH)
-        if dispatch_core_axis == ttnn.DispatchCoreAxis.COL:
-            dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
-        # If the user specifies a dispatch core axis as ROW assume
-        # they want to use the default dispatch for the cluster type
-        elif dispatch_core_axis == ttnn.DispatchCoreAxis.ROW:
-            dispatch_core_type = ttnn.device.get_default_dispatch_core_type()
-        # Set default if not specified
-        if dispatch_core_axis is None:
-            dispatch_core_axis = ttnn.DispatchCoreAxis.COL if is_blackhole else ttnn.DispatchCoreAxis.ROW
-
-        # Force COL for blackhole regardless of user setting
-        if is_blackhole and dispatch_core_axis == ttnn.DispatchCoreAxis.ROW:
-            logger.warning("blackhole arch does not support DispatchCoreAxis.Row, using DispatchCoreAxis.COL instead.")
-            dispatch_core_axis = ttnn.DispatchCoreAxis.COL
-
-        dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
-        new_device_params["dispatch_core_config"] = dispatch_core_config
+    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
+    new_device_params["dispatch_core_config"] = dispatch_core_config
 
     return new_device_params

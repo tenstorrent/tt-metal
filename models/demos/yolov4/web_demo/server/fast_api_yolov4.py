@@ -31,16 +31,6 @@ logging.basicConfig(
 )
 
 
-def get_dispatch_core_config():
-    dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
-    if ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.N300:
-        dispatch_core_type = ttnn.device.DispatchCoreType.ETH
-    dispatch_core_axis = ttnn.DispatchCoreAxis.ROW
-    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
-
-    return dispatch_core_config
-
-
 @app.on_event("startup")
 async def startup():
     global model
