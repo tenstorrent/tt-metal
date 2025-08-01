@@ -22,8 +22,13 @@ from elasticsearch import Elasticsearch, NotFoundError
 from framework.elastic_config import *
 from framework.sweeps_logger import sweeps_logger as logger
 from sweep_utils.roofline_utils import get_updated_message
-import psycopg2
-from psycopg2.extras import RealDictCursor
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+except ImportError as e:
+    raise RuntimeError(
+        "The psycopg2 library is required but not installed. Please install it using 'pip install psycopg2'."
+    ) from e
 import time
 
 
