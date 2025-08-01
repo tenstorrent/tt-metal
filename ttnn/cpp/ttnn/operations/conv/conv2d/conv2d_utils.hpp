@@ -68,6 +68,7 @@ sliding_window::ParallelConfig determine_parallel_config(
     uint32_t output_height,
     uint32_t output_width,
     uint32_t output_channels,
+    uint32_t input_channels_alignment,
     const CoreCoord& compute_grid_size,
     tt::tt_metal::ShardOrientation block_shard_orientation,
     bool enable_channels_padding,
