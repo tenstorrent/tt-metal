@@ -224,9 +224,9 @@ models/*/vgg/ @bbradelTT @uaydonat @mbahnasTT
 models/demos/wormhole @uaydonat @yieldthought @cglagovichTT
 models/demos/t3000 @uaydonat @yieldthought @cglagovichTT
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat @gwangTT
-models/demos/llama3_subdevices @johanna-rock-tt @kpaigwar @avoraTT @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT
+models/demos/llama3_70b_galaxy @johanna-rock-tt @kpaigwar @avoraTT @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT
 models/tt_transformers/tt/generator*.py @cglagovichTT @yieldthought @mtairum @skhorasganiTT @uaydonat
-models/demos/qwen @sraizada-tt @mtairum @uaydonat @yieldthought
+models/demos/qwen25_vl @gwangTT @yieldthought @uaydonat
 models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat
 models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar
 models/demos/wormhole/falcon7b @skhorasganiTT @djordje-tt @uaydonat
@@ -273,6 +273,10 @@ models/experimental/classification_eval @tenstorrent/cse-developer-ttnn
 models/demos/yolov11 @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/segmentation_evaluation @tenstorrent/cse-developer-ttnn
 models/experimental/yolov6l @ssinghalTT @tenstorrent/cse-developer-ttnn
+models/experimental/yolov12x @ssinghalTT @tenstorrent/cse-developer-ttnn
+models/experimental/efficientnetb0 @ssinghalTT @tenstorrent/cse-developer-ttnn
+models/experimental/yolov5x @ssinghalTT @tenstorrent/cse-developer-ttnn
+models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra

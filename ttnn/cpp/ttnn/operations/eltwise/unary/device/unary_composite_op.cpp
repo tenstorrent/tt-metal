@@ -7,7 +7,6 @@
 #include <functional>
 #include <optional>
 
-#include <magic_enum/magic_enum.hpp>
 #include <utility>
 #include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
@@ -223,18 +222,6 @@ Tensor _sinh(const Tensor& input_a, const std::optional<MemoryConfig>& output_me
     return ttnn::multiply(nr_term, 0.5f, std::nullopt, output_mem_config);
 }
 
-// Function: softsign
-// Ref: https://pytorch.org/docs/stable/generated/torch.nn.Softsign.html
-Tensor _softsign(const Tensor& a, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor result = ttnn::multiply(
-        a,
-        ttnn::reciprocal(
-            ttnn::add(ttnn::abs(a, output_mem_config), 1.0f, std::nullopt, output_mem_config), output_mem_config),
-        std::nullopt,
-        output_mem_config);
-    return result;
-}
-
 Tensor _swish(const Tensor& a, const std::optional<MemoryConfig>& output_mem_config) {
     // x / (1.0f + exp(-x))
     return ttnn::silu(a);
@@ -295,16 +282,6 @@ Tensor _normalize(const Tensor& y, const std::optional<MemoryConfig>& output_mem
     Tensor recip_std_y = ttnn::reciprocal(std_y, output_mem_config);
     Tensor z = ttnn::multiply(y_minus_mean_y, recip_std_y, std::nullopt, output_mem_config);
     return z;
-}
-
-// Function @hard_swish
-// use transformation y = x * hardsigmoid( x ) by broadcast
-// Ref: PyTorch
-// hard swish(x) = x*hardsigmoid(x,scale,shift)
-Tensor _hardswish(const Tensor& a, float value_1, float value_2, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor a_sigmoid = ttnn::hardsigmoid(a, output_mem_config);
-    Tensor result_sq = ttnn::multiply(a_sigmoid, a, std::nullopt, output_mem_config);
-    return result_sq;
 }
 
 // Function Clip
@@ -631,23 +608,6 @@ Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig
                 ttnn::log(log_input, output_mem_config)));
     }
     return logit_result;
-}
-
-// Celu
-// torch.where(x > 0, x, alpha * (torch.exp(x / alpha) - 1))
-Tensor _celu(const Tensor& input_a, float alpha, const std::optional<MemoryConfig>& output_mem_config) {
-    float recip_val = 1.0f / alpha;
-    using ttnn::operations::unary::UnaryOpType;
-    using ttnn::operations::unary::UnaryWithParam;
-    std::vector<UnaryWithParam> ops_chain = {
-        UnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, recip_val},
-        UnaryWithParam{UnaryOpType::EXP, 1.0f},
-        UnaryWithParam{UnaryOpType::SUB_UNARY_SFPU, 1.0f},
-        UnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, alpha}};
-
-    Tensor result = ttnn::unary_chain(input_a, ops_chain, output_mem_config);
-    result = ttnn::where(ttnn::gtz(input_a, output_mem_config), input_a, result);
-    return result;
 }
 
 // // tanhshrink(x) = x - tanh(x)

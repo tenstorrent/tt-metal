@@ -86,7 +86,7 @@ TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms
         ReplayTrace(device, device->command_queue().id(), tid_3, false);
     }
     Synchronize(device);
-    detail::DumpDeviceProfileResults(device);
+    detail::ReadDeviceProfilerResults(device);
 }
 
 TEST_F(CommandQueueSingleCardTraceFixture, TensixActiveEthTestSubDeviceTraceBasicEthPrograms) {

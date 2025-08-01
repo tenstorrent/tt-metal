@@ -246,7 +246,7 @@ class MeshEndToEnd2x4TraceTests : public MeshDeviceFixtureBase {
 protected:
     MeshEndToEnd2x4TraceTests() :
         MeshDeviceFixtureBase(Config{
-            .system_mesh_shape = MeshShape{2, 4},
+            .mesh_shape = MeshShape{2, 4},
             .num_cqs = 2,
             .trace_region_size = 3072,  // 1024 per workload necessary
         }) {}
