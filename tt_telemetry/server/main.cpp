@@ -87,6 +87,18 @@ auto make_ordered_ethernet_connections(const auto &unordered_connections) {
     
     return ordered_connections;
 }
+    
+static bool is_ethernet_link_up(const tt::Cluster &cluster, tt::umd::chip_id_t chip_id, tt::umd::ethernet_channel_t ethernet_channel) {
+    for (const auto &[core, channel]: cluster.get_soc_desc(chip_id).logical_eth_core_to_chan_map) {
+        if (ethernet_channel == channel) {
+            // Found the channel on the chip we are interested in, we now have the core coordinates
+            return cluster.is_ethernet_link_up(chip_id, core);
+        }
+    }
+
+    // Invalid chip ID or channel -> not connected
+    return false;
+}
 
 int main() {
     const tt::tt_metal::MetalContext &instance = tt::tt_metal::MetalContext::instance();
@@ -108,8 +120,12 @@ int main() {
             tt::umd::chip_id_t remote_chip_id;
             tt::umd::ethernet_channel_t remote_channel;
             std::tie(remote_chip_id, remote_channel) = remote_chip_and_channel;
-            std::cout << "  Channel " << channel << " -> Chip " << remote_chip_id << ' ' << get_galaxy_ubb_id(remote_chip_id) << ", Channel " << remote_channel << std::endl;
+            std::cout << "  Channel " << channel << " -> Chip " << remote_chip_id << ' ' 
+                      << get_galaxy_ubb_id(remote_chip_id) << ", Channel " << remote_channel 
+                      << "(Link Status: " << (is_ethernet_link_up(cluster, chip_id, channel) ? "UP" : "DOWN") << '/' << (is_ethernet_link_up(cluster, remote_chip_id, remote_channel) ? "UP" : "DOWN") <<  ')'
+                      << std::endl;
         }
     }
+
     return 0;
 }
