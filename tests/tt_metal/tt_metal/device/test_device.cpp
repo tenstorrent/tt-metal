@@ -24,6 +24,7 @@
 
 #include <tt-metalium/buffer_types.hpp>
 #include "get_platform_architecture.hpp"
+#include "hal.hpp"
 #include "impl/dispatch/command_queue_common.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
@@ -37,9 +38,11 @@
 #include "impl/context/metal_context.hpp"
 #include "llrt.hpp"
 #include "rtoptions.hpp"
+#include "tt_cluster.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include <tt-metalium/utils.hpp>
 #include <fmt/ranges.h>
+#include <umd/device/types/arch.h>
 
 namespace tt::tt_metal {
 
@@ -485,45 +488,56 @@ void do_debug_test(
     llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{0xdead0000}, buffer_base);
 }
 
-TEST(Debugging, Test_Active_Eth) {
+TEST(Debugging, Test_Eth) {
     if (!std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         GTEST_SKIP();
     }
     auto device = CreateDevice(0);
-    constexpr uint32_t num_writes = 60000;
-    // NOTE: kernel ring buffer size = 16,384
-    constexpr uint32_t total_size = num_writes * sizeof(uint32_t);
-    uint32_t l1_base =
-        MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
-    uint32_t arg_base = l1_base;
-    uint32_t buffer_base = l1_base + 16;
 
-    std::cerr << "l1_base " << std::hex << l1_base << std::endl;
-    std::cerr << "buffer_base " << std::hex << buffer_base << std::endl;
-    const auto& other_debug_core_virt = device->virtual_core_from_logical_core(CoreCoord{1, 1}, CoreType::WORKER);
+    for (int i = 0; i < 1; ++i) {
+        constexpr uint32_t num_writes = 60000;
+        // NOTE: kernel ring buffer size = 16,384
+        constexpr uint32_t total_size = num_writes * sizeof(uint32_t);
+        uint32_t l1_base =
+            MetalContext::instance().hal().get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        uint32_t arg_base = l1_base;
+        uint32_t buffer_base = l1_base + 16;
 
-    std::vector<uint32_t> ct_args = {
-        num_writes, buffer_base, arg_base, 0x7CC70, 0x36b0, other_debug_core_virt.x, other_debug_core_virt.y};
-    std::vector<uint32_t> zero_buffer(num_writes, 0xdeadbeef);
+        std::cerr << "l1_base " << std::hex << l1_base << std::endl;
+        std::cerr << "buffer_base " << std::hex << buffer_base << std::endl;
+        const auto& other_debug_core_virt = device->virtual_core_from_logical_core(CoreCoord{1, 1}, CoreType::WORKER);
 
-    const auto& core = CoreCoord{0, 0};
-    // Zero buffer
-    const auto& virtual_core = device->virtual_core_from_logical_core(core, CoreType::ETH);
-    llrt::write_hex_vec_to_core(device->id(), virtual_core, zero_buffer, buffer_base);
-    llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{0}, arg_base);
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+        std::vector<uint32_t> ct_args = {
+            num_writes, buffer_base, arg_base, 0x7CC70, 0x36b0, other_debug_core_virt.x, other_debug_core_virt.y};
+        std::vector<uint32_t> zero_buffer(num_writes, 0xdeadbeef);
 
-    tt_metal::Program program = tt_metal::CreateProgram();
-    tt_metal::KernelHandle kernel = tt_metal::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/device/test_kernel_2.cpp",
-        core,
-        tt_metal::EthernetConfig{.eth_mode = IDLE, .processor = tt_metal::DataMovementProcessor::RISCV_0, .compile_args = ct_args});
-    tt_metal::detail::LaunchProgram(device, program, false);
+        const auto& core = CoreCoord{0, 0};
+        // Zero buffer
+        const auto& virtual_core = device->virtual_core_from_logical_core(core, CoreType::ETH);
+        llrt::write_hex_vec_to_core(device->id(), virtual_core, zero_buffer, buffer_base);
+        llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{0}, arg_base);
+        tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+        std::cerr << "virtual_core " << virtual_core.str() << std::endl;
+        
+        tt_metal::Program program = tt_metal::CreateProgram();
+        tt_metal::KernelHandle kernel = tt_metal::CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/device/test_kernel_2.cpp",
+            core,
+            tt_metal::EthernetConfig{.eth_mode = IDLE, .processor = tt_metal::DataMovementProcessor::RISCV_0, .compile_args = ct_args});
 
-    do_debug_test(device, 0x36b0, buffer_base, arg_base, num_writes, virtual_core, other_debug_core_virt, true);
+        // tt_metal::KernelHandle reader_kernel = tt_metal::CreateKernel(
+        //     program,
+        //     "tests/tt_metal/tt_metal/device/reader_kernel.cpp",
+        //     core,
+        //     tt_metal::EthernetConfig{.eth_mode = IDLE, .processor = tt_metal::DataMovementProcessor::RISCV_1, .compile_args = ct_args});
 
-    detail::WaitProgramDone(device, program, false);
+        tt_metal::detail::LaunchProgram(device, program, false);
+
+        do_debug_test(device, 0x36b0, buffer_base, arg_base, num_writes, virtual_core, other_debug_core_virt, true);
+
+        detail::WaitProgramDone(device, program, false);
+    }
 }
 
 TEST(Debugging, Test_Tensix) {
@@ -582,6 +596,24 @@ TEST(Debugging, Test_Tensix) {
         heartbeat_base);
 
     detail::WaitProgramDone(device, program, false);
+}
+
+TEST(Debugging, TestBasicWrites) {
+    auto rt_options = llrt::RunTimeOptions();
+    auto hal = Hal(tt::ARCH::BLACKHOLE, false);
+    auto cluster = std::make_unique<tt::Cluster>(rt_options, hal);
+
+    CoreCoord virtual_eth_core = {20, 25};
+    std::vector<uint32_t> data = {0xabcd1234};
+    std::vector<uint32_t> read;
+    for (int i = 0; i < 800000; ++i) {
+        cluster->write_core(data.data(), data.size() * sizeof(uint32_t), tt_cxy_pair{0, virtual_eth_core.x, virtual_eth_core.y}, 0x20000);
+        for (int j = 0; j < 25; ++j) {
+            cluster->read_core(read, data.size() * sizeof(uint32_t), tt_cxy_pair{0, virtual_eth_core.x, virtual_eth_core.y}, 0x20000);
+        }
+    }
+
+    std::cerr << "done" << std::endl;
 }
 
 }  // namespace tt::tt_metal
