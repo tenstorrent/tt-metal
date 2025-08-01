@@ -94,7 +94,7 @@ TEST_F(UnitMeshCQSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms) 
         distributed::ReplayTrace(mesh_device.get(), mesh_device->mesh_command_queue().id(), tid_3, false);
     }
     distributed::Finish(mesh_device->mesh_command_queue());
-    ReadMeshDeviceProfilerResults(*mesh_device, ProfilerReadState::LAST_FD_READ);
+    ReadMeshDeviceProfilerResults(*mesh_device, ProfilerReadState::NORMAL);
 }
 
 TEST_F(UnitMeshCQSingleCardTraceFixture, TensixTestSubDeviceIllegalOperations) {
