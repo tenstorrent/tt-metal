@@ -65,7 +65,7 @@ class ResetUtil:
                     break
 
         if self.command is None:
-            raise Exception(f"SWEEPS: Unable to location tt-smi executable")
+            raise Exception(f"SWEEPS: Unable to locate tt-smi executable")
         print(f"SWEEPS: tt-smi util initialized with command: {self.command}, args: {self.args}")
 
     def reset(self):

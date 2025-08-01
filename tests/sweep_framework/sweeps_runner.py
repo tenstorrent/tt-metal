@@ -26,8 +26,6 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import time
 
-ARCH = os.getenv("ARCH_NAME")
-
 
 def git_hash():
     try:
@@ -146,7 +144,8 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
     p = None
     timeout = get_timeout(test_module)
     suite_pbar = pbar_manager.counter(total=len(test_vectors), desc=f"Suite: {suite_name}", leave=False)
-    reset_util = tt_smi_util.ResetUtil(ARCH)
+    arch = ttnn.get_arch_name()
+    reset_util = tt_smi_util.ResetUtil(arch)
 
     if len(test_vectors) > 1 and not DRY_RUN:
         p = Process(target=run, args=(test_module, input_queue, output_queue))
