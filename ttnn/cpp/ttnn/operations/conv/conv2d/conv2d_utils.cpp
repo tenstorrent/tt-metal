@@ -1138,8 +1138,9 @@ uint32_t calculate_conv_dram_slice_L1_usage(
     //  As width is the faster changing dimension, we typically have the entire width in every shard.
     //  For each shard, it's the additional height from adjacent shards that is needed to cover the kernel size and
     //  dilation. At the boundary between two batches, the additional height is needed twice.
+    // Multiplying by 2 as output is BFloat16.
     uint32_t approx_max_halo_size = (shard_height + (params.dilation[0] * params.kernel_size[0]) * 2) *
-                                    (params.input_width + params.padding_n4[2] + params.padding_n4[3]);
+                                    (params.input_width + params.padding_n4[2] + params.padding_n4[3]) * 2;
     const float output_size_margin = 1.0f;
     if (conv_config.in_place) {
         return output_size_margin *
