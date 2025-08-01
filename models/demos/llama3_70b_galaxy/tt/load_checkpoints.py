@@ -103,6 +103,9 @@ def map_hf_to_meta_keys(loaded_weights):
         "model.layers.{layer}.mlp.gate_proj.weight": "layers.{layer}.feed_forward.w1.weight",
         "model.layers.{layer}.mlp.up_proj.weight": "layers.{layer}.feed_forward.w3.weight",
         "model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
+        # Mappings for models with qk_norm
+        "model.layers.{layer}.self_attn.q_norm.weight": "layers.{layer}.attention.q_norm.weight",
+        "model.layers.{layer}.self_attn.k_norm.weight": "layers.{layer}.attention.k_norm.weight",
     }
 
     meta_state_dict = {}
@@ -267,6 +270,9 @@ def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
             # For biases: n_heads = tensor.shape[0] // head_dim
             n_heads = tensor.shape[0] // head_dim
             converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], 1).squeeze(-1)
+        elif "q_norm.weight" in key or "k_norm.weight" in key:
+            logger.info(f"Converting {key} to Meta format, {tensor.shape}")
+            converted_weights[key] = reverse_permute_1d(tensor)
         else:
             # Keep all other weights unchanged
             converted_weights[key] = tensor
@@ -375,3 +381,25 @@ def reverse_permute(tensor, n_heads, dim1, dim2):
 
 def permute(tensor, n_heads, dim1, dim2):
     return tensor.view(n_heads, dim1 // n_heads // 2, 2, dim2).transpose(1, 2).reshape(dim1, dim2)
+
+
+def reverse_permute_1d(tensor):
+    """Convert the last dim of a tensor from separate real and imaginary parts (r1, r2, i1, i2, ...) to interleaved rope format (r1, i1, r2, i2, ...)"""
+    shape = tensor.shape
+    dim = shape[-1]
+    assert dim % 2 == 0, "Last dimension must be even"
+    reals = tensor[..., : dim // 2]
+    imags = tensor[..., dim // 2 :]
+    interleaved = torch.stack((reals, imags), dim=-1).flatten(start_dim=len(shape) - 1)
+    return interleaved
+
+
+def permute_1d(tensor):
+    """Convert the last dim of a tensor from interleaved rope format (r1, i1, r2, i2, ...) to separate real and imaginary parts (r1, r2, i1, i2, ...)"""
+    shape = tensor.shape
+    dim = shape[-1]
+    assert dim % 2 == 0, "Last dimension must be even"
+    reshaped = tensor.reshape(*shape[:-1], dim // 2, 2)
+    reals = reshaped[..., 0]
+    imags = reshaped[..., 1]
+    return torch.cat((reals, imags), dim=-1)

@@ -20,12 +20,13 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
 )
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
 from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
 
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
+
+from transformers import AutoTokenizer  # This replaces the llama31_8b tokenizer
 
 # Maximum number of times `tokens_per_second_per_user` is allowed to be outside the `tsu_range`
 # before triggering an assertion failure. Allows occasional dips while ensuring
@@ -77,7 +78,7 @@ def load_inputs(user_input, batch, instruct_mode):
             user_input = json.load(f)
     assert len(user_input) >= batch, f"Number of users (batch) must be {batch}!"
     in_prompt = []
-    cache_dir = Path("models/demos/qwen3/demo/context_cache")
+    cache_dir = Path("models/demos/llama3/demo/context_cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     for i in range(batch):
@@ -180,15 +181,11 @@ def run_llama3_demo(
     )
     model_args.n_layers = layers
 
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    tokenizer = AutoTokenizer.from_pretrained(model_args.TOKENIZER_PATH)
 
     # Check max sequence length compatibility with model and architecture. Refer to README for more information
     llama_model_name = model_args.model_name  # ["3.2-1B", "3.2-3B", "3.1-8B", "3.2-11B", "3.1-70B"]
     tt_device_name = model_args.device_name  # ["N150", "N300", "T3K", "TG"]
-
-    if llama_model_name == "3.1-70B":
-        assert tt_device_name in ["TG"], "Llama-3.1-70B is only supported on TG"
-        assert max_seq_len <= 128 * 1024, "TG supports the official max context length of 128k tokens for Llama-3.1-70B"
 
     logger.info("Loading weights...")
     profiler.start("weight_loading")
