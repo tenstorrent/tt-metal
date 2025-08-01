@@ -12,48 +12,21 @@ import datetime as dt
 import os
 import json
 import subprocess
+import traceback
 from enum import Enum
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
+from tests.sweep_framework.framework.database import (
+    postgres_connection,
+    initialize_postgres_database,
+    push_run,
+    update_run,
+    push_test,
+    update_test_status,
+    generate_error_signature,
+    map_test_status_to_run_status,
+    get_postgres_config,
+)
 import pytest
-
-try:
-    import psycopg2
-except ImportError as e:
-    raise RuntimeError(
-        "The psycopg2 library is required but not installed. Please install it using 'pip install psycopg2'."
-    ) from e
-from contextlib import contextmanager
-
-
-@contextmanager
-def postgres_connection():
-    """
-    Context manager for PostgreSQL database connections.
-    Handles connection setup, commit/rollback, and cleanup automatically.
-
-    Usage:
-        with postgres_connection() as (conn, cursor):
-            cursor.execute("SELECT * FROM table")
-            # Connection automatically committed on success or rolled back on error
-    """
-    pg_config = get_postgres_config()
-    conn = None
-    cursor = None
-
-    try:
-        conn = psycopg2.connect(**pg_config)
-        cursor = conn.cursor()
-        yield conn, cursor
-        conn.commit()
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        raise
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
 
 
 # --- Status Enum ---
@@ -118,131 +91,21 @@ def get_device_arch_name():
         return os.getenv("ARCH_NAME", "unknown")
 
 
-def get_postgres_config():
-    config = {
-        "host": os.getenv("POSTGRES_HOST"),
-        "port": os.getenv("POSTGRES_PORT", "5432"),
-        "database": os.getenv("POSTGRES_DATABASE"),
-        "user": os.getenv("POSTGRES_USER"),
-        "password": os.getenv("POSTGRES_PASSWORD"),
-    }
-
-    required_vars = ["host", "database", "user", "password"]
-    missing_keys = [key for key in required_vars if config[key] is None]
-
-    if missing_keys:
-        env_vars_to_set = [f"POSTGRES_{key.upper()}" for key in missing_keys]
-        raise ValueError(f"Missing required PostgreSQL environment variables: {', '.join(env_vars_to_set)}")
-
-    config["port"] = int(config["port"])
-    return config
-
-
 # --- Database Operations ---
-def initialize_postgres_database():
-    """Initialize PostgreSQL database with required tables for unit testing."""
-    try:
-        with postgres_connection() as (conn, cursor):
-            # Create tables if they don't exist
-            create_run_table_query = """
-            CREATE TABLE IF NOT EXISTS runs (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                initiated_by VARCHAR(255) NOT NULL,
-                host VARCHAR(255),
-                device VARCHAR(255),
-                type VARCHAR(255),
-                run_contents VARCHAR(1024),
-                git_author VARCHAR(255),
-                git_branch_name VARCHAR(255),
-                git_commit_hash VARCHAR(50),
-                start_time_ts TIMESTAMP NOT NULL,
-                end_time_ts TIMESTAMP,
-                status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failure', 'error', 'cancelled')),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-            """
-
-            create_test_table_query = """
-            CREATE TABLE IF NOT EXISTS tests (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                run_id UUID NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-                name VARCHAR(255) NOT NULL,
-                start_time_ts TIMESTAMP NOT NULL,
-                end_time_ts TIMESTAMP,
-                status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failure', 'error', 'cancelled', 'skipped')),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-            """
-
-            create_testcase_table_query = """
-            CREATE TABLE IF NOT EXISTS unit_testcases (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                test_id UUID NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
-                name VARCHAR(255) NOT NULL,
-                start_time_ts TIMESTAMP NOT NULL,
-                end_time_ts TIMESTAMP,
-                status VARCHAR(100) NOT NULL,
-                suite_name VARCHAR(255) NOT NULL,
-                test_vector JSONB,
-                message TEXT,
-                exception TEXT,
-                e2e_perf FLOAT,
-                device_perf JSONB,
-                error_signature VARCHAR(255)
-            );
-            """
-
-            cursor.execute(create_run_table_query)
-            cursor.execute(create_test_table_query)
-            cursor.execute(create_testcase_table_query)
-
-            logger.info("Successfully initialized PostgreSQL database.")
-
-    except Exception as e:
-        logger.error(f"Failed to initialize PostgreSQL database: {e}")
-        raise
-
-
-def push_run(start_time_ts, status="success", run_contents=None):
-    """Create a new run record in the database."""
-    try:
-        with postgres_connection() as (conn, cursor):
-            insert_run_query = """
-            INSERT INTO runs (initiated_by, host, device, type, run_contents, git_author, git_branch_name, git_commit_hash, start_time_ts, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-            """
-            run_data = (
-                get_initiated_by(),
-                get_hostname(),
-                get_device_arch_name(),
-                "unit_test",
-                run_contents,
-                get_git_author(),
-                get_git_branch(),
-                git_hash(),
-                start_time_ts,
-                status,
-            )
-            cursor.execute(insert_run_query, run_data)
-            run_id = cursor.fetchone()[0]
-            logger.info(f"Successfully created run with ID: {run_id}")
-            return run_id
-    except Exception as e:
-        logger.error(f"Failed to push run to PostgreSQL: {e}")
-        raise
-
-
-def update_run(run_id, end_time_ts, status):
-    """Update an existing run's status and end time."""
-    try:
-        with postgres_connection() as (conn, cursor):
-            update_run_query = "UPDATE runs SET status = %s, end_time_ts = %s WHERE id = %s"
-            cursor.execute(update_run_query, (status, end_time_ts, run_id))
-            logger.info(f"Successfully updated run {run_id} with status {status}.")
-    except Exception as e:
-        logger.error(f"Failed to update run in PostgreSQL: {e}")
-        raise
+def create_unit_test_run(start_time_ts, status="success", run_contents=None):
+    """Create a new run record in the database for unit tests."""
+    return push_run(
+        initiated_by=get_initiated_by(),
+        host=get_hostname(),
+        git_author=get_git_author(),
+        git_branch_name=get_git_branch(),
+        git_commit_hash=git_hash(),
+        start_time_ts=start_time_ts,
+        status=status,
+        run_contents=run_contents,
+        device=get_device_arch_name(),
+        run_type="unit_test",
+    )
 
 
 def push_test_and_cases(run_id, file_path, test_cases_results):
@@ -314,31 +177,6 @@ def push_test_and_cases(run_id, file_path, test_cases_results):
             except Exception as e2:
                 logger.error(f"Could not mark test as error after another failure: {e2}")
         return "error"
-
-
-def map_test_status_to_run_status(statuses):
-    """Aggregate test case statuses to a single test/run status."""
-    if not statuses:
-        return "error"
-    # Hard failures (error, fail, xpass) indicate overall failure
-    # XPASS is treated as failure because it's unexpected behavior
-    if any(s in ["error", "fail", "xpass"] for s in statuses):
-        return "failure"
-    if any(s == "cancelled" for s in statuses):
-        return "cancelled"
-    # If all tests are skipped or expected failures, consider it skipped
-    if all(s in ["skipped", "xfail"] for s in statuses):
-        return "skipped"
-    # If we have any passes (even with some skips/xfails), it's success
-    return "success"
-
-
-def generate_error_signature(exception_message):
-    """Generate a concise error signature from an exception message."""
-    if not exception_message:
-        return None
-    # Take the first line of the exception as the signature, capped at 255 chars
-    return exception_message.splitlines()[0][:255]
 
 
 # --- Pytest Result Collector ---
@@ -608,7 +446,7 @@ if __name__ == "__main__":
     run_start_time = dt.datetime.now()
     test_paths_list = [path.strip() for path in args.test_paths.split(",")]
     run_contents = ", ".join([path.removeprefix("tests/ttnn/unit_tests/") for path in test_paths_list])
-    run_id = push_run(run_start_time, run_contents=run_contents)
+    run_id = create_unit_test_run(run_start_time, run_contents=run_contents)
 
     # 3. Discover and run tests
     all_results = {}

@@ -21,55 +21,31 @@ import framework.tt_smi_util as tt_smi_util
 from elasticsearch import Elasticsearch, NotFoundError
 from framework.elastic_config import *
 from framework.sweeps_logger import sweeps_logger as logger
+from framework.database import (
+    postgres_connection,
+    initialize_postgres_database,
+    push_run,
+    update_run,
+    push_test,
+    generate_error_signature,
+    map_test_status_to_run_status,
+    get_postgres_config,
+)
 from sweep_utils.roofline_utils import get_updated_message
 
 try:
     import psycopg2
+
+    PSYCOPG2_AVAILABLE = True
 except ImportError as e:
-    raise RuntimeError(
-        "The psycopg2 library is required but not installed. Please install it using 'pip install psycopg2'."
-    ) from e
-from contextlib import contextmanager
+    PSYCOPG2_AVAILABLE = False
+    logger.warning(
+        "PostgreSQL dependencies not available. If you plan to use database features, "
+        "please install psycopg2 using 'pip install psycopg2' or 'pip install psycopg2-binary'"
+    )
 
 # Constants
 PROCESS_TERMINATION_TIMEOUT_SECONDS = 5  # Time to wait for graceful process termination
-
-
-@contextmanager
-def postgres_connection(env="prod"):
-    """
-    Context manager for PostgreSQL database connections.
-    Handles connection setup, commit/rollback, and cleanup automatically.
-
-    Benefits:
-    - Eliminates repetitive try/except/finally blocks
-    - Ensures proper resource cleanup (connections, cursors)
-    - Automatic transaction management (commit on success, rollback on error)
-    - Consistent error handling across all database operations
-
-    Usage:
-        with postgres_connection() as (conn, cursor):
-            cursor.execute("SELECT * FROM table")
-            # Connection automatically committed on success or rolled back on error
-    """
-    pg_config = get_postgres_config(env)
-    conn = None
-    cursor = None
-
-    try:
-        conn = psycopg2.connect(**pg_config)
-        cursor = conn.cursor()
-        yield conn, cursor
-        conn.commit()
-    except Exception as e:
-        if conn:
-            conn.rollback()
-        raise
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
 
 
 def git_hash():
@@ -450,120 +426,8 @@ def find_vector_files_for_modules(module_names):
     return module_files
 
 
-def initialize_postgres_database():
-    """Initialize PostgreSQL database with required tables"""
-    try:
-        with postgres_connection(POSTGRES_ENV) as (conn, cursor):
-            # Check if tables already exist
-            check_tables_query = """
-            SELECT table_name
-            FROM information_schema.tables
-            WHERE table_schema = 'public'
-            AND table_name IN ('runs', 'tests', 'sweep_testcases')
-            """
-            cursor.execute(check_tables_query)
-            existing_tables = {row[0] for row in cursor.fetchall()}
-
-            if len(existing_tables) == 3:
-                logger.info("PostgreSQL database already initialized - all required tables exist")
-                return
-
-            # Create the Run table
-            create_run_table_query = """
-            CREATE TABLE IF NOT EXISTS runs (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                initiated_by VARCHAR(255) NOT NULL,
-                host VARCHAR(255),
-                device VARCHAR(255),
-                type VARCHAR(255),
-                run_contents VARCHAR(1024),
-                git_author VARCHAR(255),
-                git_branch_name VARCHAR(255),
-                git_commit_hash VARCHAR(50),
-                start_time_ts TIMESTAMP NOT NULL,
-                end_time_ts TIMESTAMP,
-                status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failure', 'error', 'cancelled')),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-            """
-
-            # Create the Test table
-            create_test_table_query = """
-            CREATE TABLE IF NOT EXISTS tests (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                run_id UUID NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-                name VARCHAR(255) NOT NULL,
-                start_time_ts TIMESTAMP NOT NULL,
-                end_time_ts TIMESTAMP,
-                status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failure', 'error', 'cancelled', 'skipped')),
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-            """
-
-            # Create the Sweep Testcase table
-            create_testcase_table_query = """
-            CREATE TABLE IF NOT EXISTS sweep_testcases (
-                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-                test_id UUID NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
-                name VARCHAR(255) NOT NULL,
-                start_time_ts TIMESTAMP NOT NULL,
-                end_time_ts TIMESTAMP,
-                status VARCHAR(100) NOT NULL,
-                suite_name VARCHAR(255) NOT NULL,
-                test_vector JSONB,
-                message TEXT,
-                exception TEXT,
-                e2e_perf FLOAT,
-                device_perf JSONB,
-                error_signature VARCHAR(255)
-            );
-            """
-
-            # Execute table creation queries
-            cursor.execute(create_run_table_query)
-            cursor.execute(create_test_table_query)
-            cursor.execute(create_testcase_table_query)
-
-            # Create indexes for better query performance
-            create_indexes_query = """
-            CREATE INDEX IF NOT EXISTS idx_runs_initiated_by ON runs(initiated_by);
-            CREATE INDEX IF NOT EXISTS idx_runs_host ON runs(host);
-            CREATE INDEX IF NOT EXISTS idx_runs_device ON runs(device);
-            CREATE INDEX IF NOT EXISTS idx_runs_git_commit_hash ON runs(git_commit_hash);
-            CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
-            CREATE INDEX IF NOT EXISTS idx_runs_start_time_ts ON runs(start_time_ts);
-
-            CREATE INDEX IF NOT EXISTS idx_tests_run_id ON tests(run_id);
-            CREATE INDEX IF NOT EXISTS idx_tests_name ON tests(name);
-            CREATE INDEX IF NOT EXISTS idx_tests_status ON tests(status);
-            CREATE INDEX IF NOT EXISTS idx_tests_start_time_ts ON tests(start_time_ts);
-
-            CREATE INDEX IF NOT EXISTS idx_sweep_testcases_test_id ON sweep_testcases(test_id);
-            CREATE INDEX IF NOT EXISTS idx_sweep_testcases_name ON sweep_testcases(name);
-            CREATE INDEX IF NOT EXISTS idx_sweep_testcases_suite_name ON sweep_testcases(suite_name);
-            CREATE INDEX IF NOT EXISTS idx_sweep_testcases_status ON sweep_testcases(status);
-            CREATE INDEX IF NOT EXISTS idx_sweep_testcases_start_time_ts ON sweep_testcases(start_time_ts);
-            CREATE INDEX IF NOT EXISTS idx_sweep_testcases_error_signature ON sweep_testcases(error_signature);
-            """
-
-            cursor.execute(create_indexes_query)
-
-            logger.info("Successfully initialized PostgreSQL database with runs, tests, and sweep_testcases tables")
-
-    except Exception as e:
-        logger.error(f"Failed to initialize PostgreSQL database: {e}")
-        raise
-
-
-def generate_error_signature(exception_message):
-    """Generate a concise error signature from an exception message."""
-    if not exception_message:
-        return None
-    # Take the first line of the exception as the signature, capped at 255 chars
-    return exception_message.splitlines()[0][:255]
-
-
-def push_run(
+# Database wrapper functions that use the common database module with sweep-specific parameters
+def create_sweep_run(
     initiated_by,
     host,
     git_author,
@@ -574,54 +438,20 @@ def push_run(
     run_contents=None,
     device=None,
 ):
-    """Export run result to PostgreSQL database"""
-    try:
-        with postgres_connection(POSTGRES_ENV) as (conn, cursor):
-            # Insert run result into the runs table
-            insert_run_query = """
-            INSERT INTO runs (initiated_by, host, git_author, git_branch_name, git_commit_hash, start_time_ts, status, run_contents, device, type)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            RETURNING id
-            """
-            cursor.execute(
-                insert_run_query,
-                (
-                    initiated_by,
-                    host,
-                    git_author,
-                    git_branch_name,
-                    git_commit_hash,
-                    start_time_ts,
-                    status,
-                    run_contents,
-                    device,
-                    "sweep",
-                ),
-            )
-            logger.info("Successfully exported run result to PostgreSQL database")
-            return cursor.fetchone()[0]
-
-    except Exception as e:
-        logger.error(f"Failed to export run result to PostgreSQL database: {e}")
-        raise
-
-
-def update_run(run_id, end_time_ts, status):
-    """Update run result in PostgreSQL database"""
-    try:
-        with postgres_connection(POSTGRES_ENV) as (conn, cursor):
-            # Update run result in the runs table
-            update_run_query = """
-            UPDATE runs
-            SET status = %s, end_time_ts = %s
-            WHERE id = %s
-            """
-            cursor.execute(update_run_query, (status, end_time_ts, run_id))
-            logger.info("Successfully updated run result in PostgreSQL database")
-
-    except Exception as e:
-        logger.error(f"Failed to update run result in PostgreSQL database: {e}")
-        raise
+    """Create a new sweep run record in the database."""
+    return push_run(
+        initiated_by=initiated_by,
+        host=host,
+        git_author=git_author,
+        git_branch_name=git_branch_name,
+        git_commit_hash=git_commit_hash,
+        start_time_ts=start_time_ts,
+        status=status,
+        run_contents=run_contents,
+        device=device,
+        run_type="sweep",
+        env=POSTGRES_ENV,
+    )
 
 
 def push_test(run_id, header_info, test_results, test_start_time, test_end_time):
@@ -738,7 +568,7 @@ def run_multiple_modules_json(module_names, suite_name, run_contents=None, vecto
 
     # Initialize database if needed
     if not DRY_RUN:
-        initialize_postgres_database()
+        initialize_postgres_database(POSTGRES_ENV)
 
         initiated_by = get_initiated_by()
         host = get_hostname()
@@ -748,7 +578,7 @@ def run_multiple_modules_json(module_names, suite_name, run_contents=None, vecto
         status = "success"
         run_start_time = dt.datetime.now()
         device = ttnn.get_arch_name()
-        run_id = push_run(
+        run_id = create_sweep_run(
             initiated_by,
             host,
             git_author,
@@ -859,7 +689,7 @@ def run_multiple_modules_json(module_names, suite_name, run_contents=None, vecto
 
     if not DRY_RUN:
         run_end_time = dt.datetime.now()
-        update_run(run_id, run_end_time, status)
+        update_run(run_id, run_end_time, status, POSTGRES_ENV)
         logger.info(f"Run status: {status}")
 
         # Display execution summary
@@ -1266,30 +1096,6 @@ def get_initiated_by():
         return get_username()
 
 
-def map_test_status_to_run_status(test_statuses):
-    """Reduce individual testcase DB statuses to an overall test (suite) status.
-
-    Input: list like ["pass", "fail_assert_exception", "skipped", ...]
-    Output must be one of the allowed values for the `tests` table:
-        "success" | "failure" | "error" | "cancelled" | "skipped"
-    """
-    if not test_statuses:
-        return "error"
-
-    # Any explicit failure or error ⇒ overall failure
-    if any(status.startswith("fail") or status == "error" for status in test_statuses):
-        return "failure"
-    # Any cancellation ⇒ overall cancelled
-    elif any(status == "cancelled" for status in test_statuses):
-        return "cancelled"
-    # All skipped ⇒ overall skipped
-    elif all(status == "skipped" for status in test_statuses):
-        return "skipped"
-    # Otherwise (all pass or mixture of pass & skipped) ⇒ success
-    else:
-        return "success"
-
-
 def map_test_status_to_db_status(test_status):
     """Map TestStatus enum to database status string"""
     status_mapping = {
@@ -1482,26 +1288,6 @@ def disable_profiler():
     logger.info("Disabling Device Profiler")
     os.environ.pop("TT_METAL_DEVICE_PROFILER")
     os.environ.pop("ENABLE_TRACY")
-
-
-def get_postgres_config(env="prod"):
-    config = {
-        "host": os.getenv("POSTGRES_HOST"),
-        "port": os.getenv("POSTGRES_PORT", "5432"),
-        "database": os.getenv("POSTGRES_DATABASE"),
-        "user": os.getenv("POSTGRES_USER"),
-        "password": os.getenv("POSTGRES_PASSWORD"),
-    }
-
-    required_vars = ["host", "database", "user", "password"]
-    missing_keys = [key for key in required_vars if config[key] is None]
-
-    if missing_keys:
-        env_vars_to_set = [f"POSTGRES_{key.upper()}" for key in missing_keys]
-        raise ValueError(f"Missing required PostgreSQL environment variables: {', '.join(env_vars_to_set)}")
-
-    config["port"] = int(config["port"])
-    return config
 
 
 if __name__ == "__main__":
