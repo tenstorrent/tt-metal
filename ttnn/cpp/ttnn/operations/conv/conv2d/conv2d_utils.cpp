@@ -1016,7 +1016,7 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
     return {opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config};
 }
 
-uint32_t calculate_conv_dram_L1(
+uint32_t calculate_conv_dram_slice_L1_usage(
     const ConvDRAMParamters& params, MeshDevice* device, const Conv2dSliceConfig& dram_slice_config) {
     Conv2dConfig conv_config = params.conv_config;
     TT_FATAL(
@@ -1132,15 +1132,23 @@ uint32_t calculate_conv_dram_L1(
 
     // Output of padded slice is always BFloat16, so size is 2 bytes.
     uint32_t input_size = shard_shape[0] * shard_shape[1] * 2;
-    const float approx_halo_size_margin = 1.1;
-    float float_shard_height = ((float)shard_shape[0]) / params.input_width;
-    uint32_t approx_halo_size = approx_halo_size_margin *
-                                (float_shard_height + (params.dilation[0] * params.kernel_size[0] / 2)) * input_size /
-                                float_shard_height;
+    uint32_t shard_height = tt::div_up(shard_shape[0], params.input_width);
+
+    // Halo adds the overlap region of the input tensor that is needed for the convolution.
+    //  As width is the faster changing dimension, we typically have the entire width in every shard.
+    //  For each shard, it's the additional height from adjacent shards that is needed to cover the kernel size and
+    //  dilation. At the boundary between two batches, the additional height is needed twice.
+    uint32_t approx_max_halo_size = (shard_height + (params.dilation[0] * params.kernel_size[0]) * 2) *
+                                    (params.input_width + params.padding_n4[2] + params.padding_n4[3]);
     const float output_size_margin = 1.0f;
-    return output_size_margin * std::max<uint32_t>(
-                                    approx_halo_size + l1_usage.tensor_allocation_size + l1_usage.CB_allocation_size,
-                                    input_size + approx_halo_size);
+    if (conv_config.in_place) {
+        return output_size_margin *
+               (approx_max_halo_size + l1_usage.tensor_allocation_size + l1_usage.CB_allocation_size);
+    }
+    return output_size_margin *
+           std::max<uint32_t>(
+               approx_max_halo_size + l1_usage.tensor_allocation_size + l1_usage.CB_allocation_size,
+               input_size + approx_max_halo_size);
 }
 
 conv_op_l1_usage conv2d::calculate_L1_usage(

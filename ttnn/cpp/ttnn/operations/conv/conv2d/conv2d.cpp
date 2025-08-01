@@ -188,7 +188,7 @@ Result conv2d_DRAM(
         while (current_num_slices < output_sliced_dim) {
             dram_slice_config.num_slices = current_num_slices;
             if (L1_stats.total_free_bytes >=
-                calculate_conv_dram_L1(
+                calculate_conv_dram_slice_L1_usage(
                     ConvDRAMParamters{
                         .in_channels = in_channels,
                         .out_channels = out_channels,
