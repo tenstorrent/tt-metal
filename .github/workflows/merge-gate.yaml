@@ -127,7 +127,8 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N300-viommu",
+          # Remove N300 from Merge Gate to help with queue times
+          # "N300-viommu",
           "N300-llmbox",
           "P150b-viommu",
         ]
@@ -150,7 +151,8 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N300-viommu",
+          # Remove N300 from Merge Gate to help with queue times
+          # "N300-viommu",
           "N300-llmbox",
           "P150b-viommu",
         ]
