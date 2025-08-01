@@ -968,7 +968,7 @@ void LoadTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id, const TraceDes
 
 // clang-format off
 /**
- * Read device side profiler data for all devices in the mesh device and dump results into device side CSV log
+ * Read device side profiler data for all devices in the mesh device
  *
  * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
  *
@@ -977,13 +977,13 @@ void LoadTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id, const TraceDes
  * | Argument      | Description                                           | Type                     | Valid Range               | Required |
  * |---------------|-------------------------------------------------------|--------------------------|---------------------------|----------|
  * | mesh_device   | The mesh device containing the devices to be profiled | MeshDevice&              |                           | Yes      |
- * | state         | The dump state to use for this profiler dump          | ProfilerDumpState        |                           | No       |
+ * | state         | The state to use for this profiler read               | ProfilerReadState        |                           | No       |
  * | metadata      | Metadata to include in the profiler results           | ProfilerOptionalMetadata |                           | No       |
  * */
 // clang-format on
-void DumpMeshDeviceProfileResults(
+void ReadMeshDeviceProfilerResults(
     distributed::MeshDevice& mesh_device,
-    ProfilerDumpState state = ProfilerDumpState::NORMAL,
+    ProfilerReadState state = ProfilerReadState::NORMAL,
     const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
 // clang-format off
