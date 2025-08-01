@@ -801,13 +801,15 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
             program,
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader.cpp",
             all_cores,
-            tt::tt_metal::ReaderDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size}));
+            tt::tt_metal::ReaderDataMovementConfig(
+                {dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size, unit_size}));
 
         kernel_id_1 = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader.cpp",
             all_cores,
-            tt::tt_metal::WriterDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size}));
+            tt::tt_metal::WriterDataMovementConfig(
+                {dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size, unit_size}));
 
         for (const auto& core : cores) {
             const auto& runtime_args_0 = rt_config_map_0.at(core);
