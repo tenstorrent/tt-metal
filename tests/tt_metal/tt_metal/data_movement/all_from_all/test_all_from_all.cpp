@@ -398,28 +398,6 @@ IDEAS:
         different sizes
 */
 
-/* ======== PACKET SIZES ======== */
-
-TEST_F(DeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
-    if (arch_ == tt::ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "Skipping test on Blackhole, Issue #24584";
-    }
-    uint32_t test_case_id = 0;
-
-    /* Parameters */
-
-    CoreCoord mst_start_coord = {0, 0};
-    CoreCoord sub_start_coord = {0, 0};
-
-    CoreCoord mst_grid_size = {
-        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
-    CoreCoord sub_grid_size = {
-        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
-
-    tt::tt_metal::unit_tests::dm::all_from_all::packet_sizes_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
-}
-
 /* ======== DIRECTED IDEAL ======== */
 
 /* ======== All from All ======== */
@@ -440,6 +418,29 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
         devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
 
     unit_tests::dm::all_from_all::directed_ideal_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
+}
+
+/* ======== PACKET SIZES ======== */
+
+TEST_F(DeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
+    if (arch_ == tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Skipping test on Blackhole, Issue #24584";
+    }
+
+    uint32_t test_case_id = 70;
+
+    /* Parameters */
+
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord sub_start_coord = {0, 0};
+
+    CoreCoord mst_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    CoreCoord sub_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+
+    tt::tt_metal::unit_tests::dm::all_from_all::packet_sizes_test(
         arch_, devices_, num_devices_, test_case_id, mst_start_coord, sub_start_coord, mst_grid_size, sub_grid_size);
 }
 
