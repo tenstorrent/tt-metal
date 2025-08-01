@@ -599,8 +599,8 @@ bool RunWriteBWTest(
         tt_metal::Finish(sender_device->command_queue());
         tt_metal::Finish(receiver_device->command_queue());
     }
-    // tt::tt_metal::detail::DumpDeviceProfileResults(receiver_device);
-    // tt::tt_metal::detail::DumpDeviceProfileResults(sender_device);
+    // tt::tt_metal::detail::ReadDeviceProfilerResults(receiver_device);
+    // tt::tt_metal::detail::ReadDeviceProfilerResults(sender_device);
     log_info(tt::LogTest, "Reading back outputs");
 
     auto is_output_correct = [&all_zeros, &inputs](const std::shared_ptr<tt_metal::Buffer>& output_buffer) {
