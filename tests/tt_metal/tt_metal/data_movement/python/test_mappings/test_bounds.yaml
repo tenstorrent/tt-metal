@@ -163,3 +163,13 @@
     riscv_1:
       latency: 60000
       bandwidth: 2
+
+"Loopback Directed Ideal":
+  wormhole_b0:
+    riscv_0:
+      latency: 24000
+      bandwidth: 30
+  blackhole:
+    riscv_0:
+      latency: 13000
+      bandwidth: 60
