@@ -760,6 +760,32 @@ def test_dram_reshard_with_program_cache(
             ttnn.ShardOrientation.ROW_MAJOR,
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ),
+        # input and output with different page size and have padding
+        (
+            [1, 1, 4096, 1248],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 7)]],
+            (512, 160),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (6, 7)]],
+            (512, 192),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+        # input and output with different page size and input has padding
+        (
+            [1, 1, 4096, 1280],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (6, 7)]],
+            (512, 192),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (7, 7)]],
+            (512, 160),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
     ],
 )
 @pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16])
