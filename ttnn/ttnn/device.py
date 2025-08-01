@@ -118,19 +118,26 @@ class DispatchCoreConfig(ttnn._ttnn.device.DispatchCoreConfig):
             # User provided only valid type
             self.type = type
             self.axis = get_default_dispatch_core_axis()
+            logger.info(f"Using default dispatch core axis for this system: {self.axis}")
         elif axis:
             self.axis = axis
             # User provided only valid axis
-            if axis == DispatchCoreAxis.COL:
+            if self.axis == DispatchCoreAxis.COL:
                 # COL axis is not supported for ETH dispatch core type, default to WORKER
                 self.type = DispatchCoreType.WORKER
+                logger.info(
+                    f"{self.axis} axis is only supported on WORKER dispatch core type, defaulting to {self.type}"
+                )
             elif self.axis == DispatchCoreAxis.ROW:
                 # ROW axis is supported for all dispatch core types, use default type for their system
                 self.type = get_default_dispatch_core_type()
+                logging.info(f"Using default dispatch core type for this system: {self.type}")
         else:
             # User provided no valid type or axis, use default for their system
             self.type = get_default_dispatch_core_type()
+            logger.info(f"Using default dispatch core type for this system: {self.type}")
             self.axis = get_default_dispatch_core_axis()
+            logger.info(f"Using default dispatch core axis for this system: {self.axis}")
         super().__init__(self.type, self.axis)
 
 
@@ -139,7 +146,7 @@ def CreateDevice(
     num_command_queues: int = 1,
     l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
-    dispatch_core_config: DispatchCoreConfig = DispatchCoreConfig(),
+    dispatch_core_config: DispatchCoreConfig = None,
     *,
     worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
 ):
@@ -148,7 +155,7 @@ def CreateDevice(
         num_command_queues,
         l1_small_size,
         trace_region_size,
-        dispatch_core_config,
+        dispatch_core_config or DispatchCoreConfig(),
         worker_l1_size=worker_l1_size,
     )
 
@@ -158,7 +165,7 @@ def CreateDevices(
     num_command_queues: int = 1,
     l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
-    dispatch_core_config: DispatchCoreConfig = DispatchCoreConfig(),
+    dispatch_core_config: DispatchCoreConfig = None,
     *,
     worker_l1_size: int = ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
 ):
@@ -167,7 +174,7 @@ def CreateDevices(
         num_command_queues,
         l1_small_size,
         trace_region_size,
-        dispatch_core_config,
+        dispatch_core_config or DispatchCoreConfig(),
         worker_l1_size=worker_l1_size,
     )
 
