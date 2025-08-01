@@ -35,13 +35,11 @@ constexpr auto softmax =
 constexpr auto profiler_no_op =
     ttnn::register_operation<"ttml::metal::profiler_no_op", ttml::metal::ops::profiler_no_op::ProfilerNoopOperation>();
 
-<<<<<<< HEAD
 constexpr auto reduce_row_test_op = ttnn::register_operation<
     "ttml::metal::reduce_row_test_op",
     ttml::metal::ops::reduce_row_test_op::ReduceRowTestOperation>();
-=======
+    
 constexpr auto silu_bw =
     ttnn::register_operation<"ttml::metal::silu_bw", ttml::metal::ops::silu_bw::SiLUBackwardOperation>();
->>>>>>> origin/main
 
 }  // namespace ttml::metal
