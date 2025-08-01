@@ -81,12 +81,14 @@ struct CommonMemoryMap {
  */
 struct SenderMemoryMap {
     // Constants for memory region sizes
+    static constexpr uint32_t PACKET_HEADER_BUFFER_SIZE = 0x1000;    // 4KB
     static constexpr uint32_t MAX_PAYLOAD_SIZE_PER_CONFIG = 0x2800;  // 10KB per config
 
     // Encapsulated common memory map
     CommonMemoryMap common;
 
     // Sender-specific memory regions
+    BaseMemoryRegion packet_headers;
     BaseMemoryRegion payload_buffers;
 
     // sync addresses
@@ -97,7 +99,7 @@ struct SenderMemoryMap {
     uint32_t highest_usable_address;
 
     // Default constructor
-    SenderMemoryMap() : common(), payload_buffers(0, 0), highest_usable_address(0) {}
+    SenderMemoryMap() : common(), packet_headers(0, 0), payload_buffers(0, 0), highest_usable_address(0) {}
 
     SenderMemoryMap(
         uint32_t l1_unreserved_base, uint32_t l1_unreserved_size, uint32_t l1_alignment, uint32_t num_configs) :
@@ -128,6 +130,11 @@ struct SenderMemoryMap {
             kernel_config_base,
             CommonMemoryMap::KERNEL_CONFIG_BUFFER_SIZE);
 
+        // Packet headers
+        uint32_t packet_header_base = current_addr;
+        current_addr += PACKET_HEADER_BUFFER_SIZE;
+        packet_headers = BaseMemoryRegion(packet_header_base, PACKET_HEADER_BUFFER_SIZE);
+
         // Payload buffers - use small fixed size per config since sender buffer is virtual
         uint32_t payload_buffer_base = current_addr;
         uint32_t payload_buffer_size = MAX_PAYLOAD_SIZE_PER_CONFIG * num_configs;
@@ -153,11 +160,12 @@ struct SenderMemoryMap {
             l1_unreserved_size);
     }
 
-    bool is_valid() const { return common.is_valid() && payload_buffers.is_valid(); }
+    bool is_valid() const { return common.is_valid() && packet_headers.is_valid() && payload_buffers.is_valid(); }
 
     std::vector<uint32_t> get_memory_map_args() const {
         std::vector<uint32_t> args = common.get_kernel_args();
 
+        args.push_back(packet_headers.start);
         args.push_back(payload_buffers.start);
         args.push_back(highest_usable_address);
 

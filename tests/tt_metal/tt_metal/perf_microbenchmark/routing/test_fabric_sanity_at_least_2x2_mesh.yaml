@@ -145,7 +145,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_multicast
+      - type: all_to_all
 
   - name: "PacketSizesMeshMulticastDynamic"
     fabric_setup:
@@ -163,7 +163,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_multicast
+      - type: all_to_all
 
   - name: "SingleSenderMeshUnicastAllDevices"
     fabric_setup:

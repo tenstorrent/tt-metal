@@ -136,7 +136,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_unicast
+      - type: all_to_all
 
   - name: "SimpleUnicastMesh"
     fabric_setup:
@@ -317,7 +317,7 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_unicast
+      - type: all_to_all
 
   - name: TestPacketSizesMeshDynamic
     fabric_setup:
@@ -351,4 +351,4 @@ Tests:
       num_packets: 100
 
     patterns:
-      - type: all_to_all_unicast
+      - type: all_to_all
