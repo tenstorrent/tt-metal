@@ -22,6 +22,7 @@ from elasticsearch import Elasticsearch, NotFoundError
 from framework.elastic_config import *
 from framework.sweeps_logger import sweeps_logger as logger
 from sweep_utils.roofline_utils import get_updated_message
+
 try:
     import psycopg2
     from psycopg2.extras import RealDictCursor
@@ -30,6 +31,47 @@ except ImportError as e:
         "The psycopg2 library is required but not installed. Please install it using 'pip install psycopg2'."
     ) from e
 import time
+from contextlib import contextmanager
+
+# Constants
+PROCESS_TERMINATION_TIMEOUT_SECONDS = 5  # Time to wait for graceful process termination
+
+
+@contextmanager
+def postgres_connection(env="prod"):
+    """
+    Context manager for PostgreSQL database connections.
+    Handles connection setup, commit/rollback, and cleanup automatically.
+
+    Benefits:
+    - Eliminates repetitive try/except/finally blocks
+    - Ensures proper resource cleanup (connections, cursors)
+    - Automatic transaction management (commit on success, rollback on error)
+    - Consistent error handling across all database operations
+
+    Usage:
+        with postgres_connection() as (conn, cursor):
+            cursor.execute("SELECT * FROM table")
+            # Connection automatically committed on success or rolled back on error
+    """
+    pg_config = get_postgres_config(env)
+    conn = None
+    cursor = None
+
+    try:
+        conn = psycopg2.connect(**pg_config)
+        cursor = conn.cursor()
+        yield conn, cursor
+        conn.commit()
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        raise
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 
 def git_hash():
@@ -240,7 +282,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                 if p:
                     logger.warning(f"TEST TIMED OUT, Killing child process {p.pid} and running tt-smi...")
                     p.terminate()
-                    p.join(5)  # Wait for a bit for the process to terminate
+                    p.join(PROCESS_TERMINATION_TIMEOUT_SECONDS)  # Wait for graceful process termination
                     if p.is_alive():
                         logger.error(f"Child process {p.pid} did not terminate, killing it.")
                         p.kill()
@@ -412,119 +454,107 @@ def find_vector_files_for_modules(module_names):
 
 def initialize_postgres_database():
     """Initialize PostgreSQL database with required tables"""
-    pg_config = get_postgres_config(POSTGRES_ENV)
-
     try:
-        conn = psycopg2.connect(**pg_config)
-        cursor = conn.cursor()
+        with postgres_connection(POSTGRES_ENV) as (conn, cursor):
+            # Check if tables already exist
+            check_tables_query = """
+            SELECT table_name
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+            AND table_name IN ('runs', 'tests', 'sweep_testcases')
+            """
+            cursor.execute(check_tables_query)
+            existing_tables = {row[0] for row in cursor.fetchall()}
 
-        # Check if tables already exist
-        check_tables_query = """
-        SELECT table_name
-        FROM information_schema.tables
-        WHERE table_schema = 'public'
-        AND table_name IN ('runs', 'tests', 'sweep_testcases')
-        """
-        cursor.execute(check_tables_query)
-        existing_tables = {row[0] for row in cursor.fetchall()}
+            if len(existing_tables) == 3:
+                logger.info("PostgreSQL database already initialized - all required tables exist")
+                return
 
-        if len(existing_tables) == 3:
-            logger.info("PostgreSQL database already initialized - all required tables exist")
-            return
+            # Create the Run table
+            create_run_table_query = """
+            CREATE TABLE IF NOT EXISTS runs (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                initiated_by VARCHAR(255) NOT NULL,
+                host VARCHAR(255),
+                device VARCHAR(255),
+                type VARCHAR(255),
+                run_contents VARCHAR(1024),
+                git_author VARCHAR(255),
+                git_branch_name VARCHAR(255),
+                git_commit_hash VARCHAR(50),
+                start_time_ts TIMESTAMP NOT NULL,
+                end_time_ts TIMESTAMP,
+                status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failure', 'error', 'cancelled')),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
 
-        # Create the Run table
-        create_run_table_query = """
-        CREATE TABLE IF NOT EXISTS runs (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            initiated_by VARCHAR(255) NOT NULL,
-            host VARCHAR(255),
-            device VARCHAR(255),
-            type VARCHAR(255),
-            run_contents VARCHAR(1024),
-            git_author VARCHAR(255),
-            git_branch_name VARCHAR(255),
-            git_commit_hash VARCHAR(50),
-            start_time_ts TIMESTAMP NOT NULL,
-            end_time_ts TIMESTAMP,
-            status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failure', 'error', 'cancelled')),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        """
+            # Create the Test table
+            create_test_table_query = """
+            CREATE TABLE IF NOT EXISTS tests (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                run_id UUID NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                name VARCHAR(255) NOT NULL,
+                start_time_ts TIMESTAMP NOT NULL,
+                end_time_ts TIMESTAMP,
+                status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failure', 'error', 'cancelled', 'skipped')),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
 
-        # Create the Test table
-        create_test_table_query = """
-        CREATE TABLE IF NOT EXISTS tests (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            run_id UUID NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-            name VARCHAR(255) NOT NULL,
-            start_time_ts TIMESTAMP NOT NULL,
-            end_time_ts TIMESTAMP,
-            status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failure', 'error', 'cancelled', 'skipped')),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        """
+            # Create the Sweep Testcase table
+            create_testcase_table_query = """
+            CREATE TABLE IF NOT EXISTS sweep_testcases (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                test_id UUID NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+                name VARCHAR(255) NOT NULL,
+                start_time_ts TIMESTAMP NOT NULL,
+                end_time_ts TIMESTAMP,
+                status VARCHAR(100) NOT NULL,
+                suite_name VARCHAR(255) NOT NULL,
+                test_vector JSONB,
+                message TEXT,
+                exception TEXT,
+                e2e_perf FLOAT,
+                device_perf JSONB,
+                error_signature VARCHAR(255)
+            );
+            """
 
-        # Create the Sweep Testcase table
-        create_testcase_table_query = """
-        CREATE TABLE IF NOT EXISTS sweep_testcases (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            test_id UUID NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
-            name VARCHAR(255) NOT NULL,
-            start_time_ts TIMESTAMP NOT NULL,
-            end_time_ts TIMESTAMP,
-            status VARCHAR(100) NOT NULL,
-            suite_name VARCHAR(255) NOT NULL,
-            test_vector JSONB,
-            message TEXT,
-            exception TEXT,
-            e2e_perf FLOAT,
-            device_perf JSONB,
-            error_signature VARCHAR(255)
-        );
-        """
+            # Execute table creation queries
+            cursor.execute(create_run_table_query)
+            cursor.execute(create_test_table_query)
+            cursor.execute(create_testcase_table_query)
 
-        # Execute table creation queries
-        cursor.execute(create_run_table_query)
-        cursor.execute(create_test_table_query)
-        cursor.execute(create_testcase_table_query)
+            # Create indexes for better query performance
+            create_indexes_query = """
+            CREATE INDEX IF NOT EXISTS idx_runs_initiated_by ON runs(initiated_by);
+            CREATE INDEX IF NOT EXISTS idx_runs_host ON runs(host);
+            CREATE INDEX IF NOT EXISTS idx_runs_device ON runs(device);
+            CREATE INDEX IF NOT EXISTS idx_runs_git_commit_hash ON runs(git_commit_hash);
+            CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
+            CREATE INDEX IF NOT EXISTS idx_runs_start_time_ts ON runs(start_time_ts);
 
-        # Create indexes for better query performance
-        create_indexes_query = """
-        CREATE INDEX IF NOT EXISTS idx_runs_initiated_by ON runs(initiated_by);
-        CREATE INDEX IF NOT EXISTS idx_runs_host ON runs(host);
-        CREATE INDEX IF NOT EXISTS idx_runs_device ON runs(device);
-        CREATE INDEX IF NOT EXISTS idx_runs_git_commit_hash ON runs(git_commit_hash);
-        CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
-        CREATE INDEX IF NOT EXISTS idx_runs_start_time_ts ON runs(start_time_ts);
+            CREATE INDEX IF NOT EXISTS idx_tests_run_id ON tests(run_id);
+            CREATE INDEX IF NOT EXISTS idx_tests_name ON tests(name);
+            CREATE INDEX IF NOT EXISTS idx_tests_status ON tests(status);
+            CREATE INDEX IF NOT EXISTS idx_tests_start_time_ts ON tests(start_time_ts);
 
-        CREATE INDEX IF NOT EXISTS idx_tests_run_id ON tests(run_id);
-        CREATE INDEX IF NOT EXISTS idx_tests_name ON tests(name);
-        CREATE INDEX IF NOT EXISTS idx_tests_status ON tests(status);
-        CREATE INDEX IF NOT EXISTS idx_tests_start_time_ts ON tests(start_time_ts);
+            CREATE INDEX IF NOT EXISTS idx_sweep_testcases_test_id ON sweep_testcases(test_id);
+            CREATE INDEX IF NOT EXISTS idx_sweep_testcases_name ON sweep_testcases(name);
+            CREATE INDEX IF NOT EXISTS idx_sweep_testcases_suite_name ON sweep_testcases(suite_name);
+            CREATE INDEX IF NOT EXISTS idx_sweep_testcases_status ON sweep_testcases(status);
+            CREATE INDEX IF NOT EXISTS idx_sweep_testcases_start_time_ts ON sweep_testcases(start_time_ts);
+            CREATE INDEX IF NOT EXISTS idx_sweep_testcases_error_signature ON sweep_testcases(error_signature);
+            """
 
-        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_test_id ON sweep_testcases(test_id);
-        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_name ON sweep_testcases(name);
-        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_suite_name ON sweep_testcases(suite_name);
-        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_status ON sweep_testcases(status);
-        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_start_time_ts ON sweep_testcases(start_time_ts);
-        CREATE INDEX IF NOT EXISTS idx_sweep_testcases_error_signature ON sweep_testcases(error_signature);
-        """
+            cursor.execute(create_indexes_query)
 
-        cursor.execute(create_indexes_query)
-
-        conn.commit()
-        logger.info("Successfully initialized PostgreSQL database with runs, tests, and sweep_testcases tables")
+            logger.info("Successfully initialized PostgreSQL database with runs, tests, and sweep_testcases tables")
 
     except Exception as e:
         logger.error(f"Failed to initialize PostgreSQL database: {e}")
-        if conn:
-            conn.rollback()
         raise
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
 
 
 def generate_error_signature(exception_message):
@@ -547,77 +577,53 @@ def push_run(
     device=None,
 ):
     """Export run result to PostgreSQL database"""
-    pg_config = get_postgres_config(POSTGRES_ENV)
-
     try:
-        conn = psycopg2.connect(**pg_config)
-        cursor = conn.cursor()
-
-        # Insert run result into the runs table
-        insert_run_query = """
-        INSERT INTO runs (initiated_by, host, git_author, git_branch_name, git_commit_hash, start_time_ts, status, run_contents, device, type)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        RETURNING id
-        """
-        cursor.execute(
-            insert_run_query,
-            (
-                initiated_by,
-                host,
-                git_author,
-                git_branch_name,
-                git_commit_hash,
-                start_time_ts,
-                status,
-                run_contents,
-                device,
-                "sweep",
-            ),
-        )
-        conn.commit()
-        logger.info("Successfully exported run result to PostgreSQL database")
-        return cursor.fetchone()[0]
+        with postgres_connection(POSTGRES_ENV) as (conn, cursor):
+            # Insert run result into the runs table
+            insert_run_query = """
+            INSERT INTO runs (initiated_by, host, git_author, git_branch_name, git_commit_hash, start_time_ts, status, run_contents, device, type)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """
+            cursor.execute(
+                insert_run_query,
+                (
+                    initiated_by,
+                    host,
+                    git_author,
+                    git_branch_name,
+                    git_commit_hash,
+                    start_time_ts,
+                    status,
+                    run_contents,
+                    device,
+                    "sweep",
+                ),
+            )
+            logger.info("Successfully exported run result to PostgreSQL database")
+            return cursor.fetchone()[0]
 
     except Exception as e:
         logger.error(f"Failed to export run result to PostgreSQL database: {e}")
-        if conn:
-            conn.rollback()
         raise
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
 
 
 def update_run(run_id, end_time_ts, status):
     """Update run result in PostgreSQL database"""
-    pg_config = get_postgres_config(POSTGRES_ENV)
-
     try:
-        conn = psycopg2.connect(**pg_config)
-        cursor = conn.cursor()
-
-        # Update run result in the runs table
-        update_run_query = """
-        UPDATE runs
-        SET status = %s, end_time_ts = %s
-        WHERE id = %s
-        """
-        cursor.execute(update_run_query, (status, end_time_ts, run_id))
-        conn.commit()
-        logger.info("Successfully updated run result in PostgreSQL database")
+        with postgres_connection(POSTGRES_ENV) as (conn, cursor):
+            # Update run result in the runs table
+            update_run_query = """
+            UPDATE runs
+            SET status = %s, end_time_ts = %s
+            WHERE id = %s
+            """
+            cursor.execute(update_run_query, (status, end_time_ts, run_id))
+            logger.info("Successfully updated run result in PostgreSQL database")
 
     except Exception as e:
         logger.error(f"Failed to update run result in PostgreSQL database: {e}")
-        if conn:
-            conn.rollback()
         raise
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
 
 
 def push_test(run_id, header_info, test_results, test_start_time, test_end_time):
@@ -625,108 +631,93 @@ def push_test(run_id, header_info, test_results, test_start_time, test_end_time)
     if not test_results:
         logger.info("No test results to push to PostgreSQL database.")
         return "success"
-    pg_config = get_postgres_config(POSTGRES_ENV)
+
     try:
-        conn = psycopg2.connect(**pg_config)
-        cursor = conn.cursor()
-        sweep_name = header_info[0]["sweep_name"]
+        with postgres_connection(POSTGRES_ENV) as (conn, cursor):
+            sweep_name = header_info[0]["sweep_name"]
 
-        test_insert_query = """
-        INSERT INTO tests (run_id, name, start_time_ts, end_time_ts, status)
-        VALUES (%s, %s, %s, %s, %s)
-        RETURNING id
-        """
-        cursor.execute(test_insert_query, (run_id, sweep_name, test_start_time, test_end_time, "success"))
-        test_id = cursor.fetchone()[0]
+            test_insert_query = """
+            INSERT INTO tests (run_id, name, start_time_ts, end_time_ts, status)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+            """
+            cursor.execute(test_insert_query, (run_id, sweep_name, test_start_time, test_end_time, "success"))
+            test_id = cursor.fetchone()[0]
 
-        # Insert test cases in batch
-        test_statuses = []
-        testcase_insert_query = """
-        INSERT INTO sweep_testcases (
-            test_id, name, start_time_ts, end_time_ts,
-            status, suite_name, test_vector, message, exception,
-            e2e_perf, device_perf, error_signature
-        ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-        )
-        """
-
-        # Prepare all testcase values for batch insert
-        batch_values = []
-        for i, result in enumerate(test_results):
-            # Map test status to db status
-            db_status = map_test_status_to_db_status(result.get("status", None))
-            test_statuses.append(db_status)
-            testcase_name = f"{sweep_name}_{header_info[i].get('vector_id', 'unknown')}"
-            exception_text = result.get("exception", None)
-            error_sig = generate_error_signature(exception_text)
-            # Create testcase record
-            testcase_values = (
-                test_id,
-                testcase_name,
-                result.get("start_time_ts", None),
-                result.get("end_time_ts", None),
-                db_status,
-                header_info[i].get("suite_name", None),
-                json.dumps(result.get("original_vector_data", None)),
-                result.get("message", None),
-                exception_text,
-                result.get("e2e_perf", None),
-                json.dumps(result.get("device_perf")) if result.get("device_perf") else None,
-                error_sig,
+            # Insert test cases in batch
+            test_statuses = []
+            testcase_insert_query = """
+            INSERT INTO sweep_testcases (
+                test_id, name, start_time_ts, end_time_ts,
+                status, suite_name, test_vector, message, exception,
+                e2e_perf, device_perf, error_signature
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             )
-            batch_values.append(testcase_values)
+            """
 
-        # Execute batch insert
-        if batch_values:
-            cursor.executemany(testcase_insert_query, batch_values)
-            logger.info(
-                f"Successfully pushed {len(batch_values)} testcase results to PostgreSQL database for test {test_id}"
-            )
+            # Prepare all testcase values for batch insert
+            batch_values = []
+            for i, result in enumerate(test_results):
+                # Map test status to db status
+                db_status = map_test_status_to_db_status(result.get("status", None))
+                test_statuses.append(db_status)
+                testcase_name = f"{sweep_name}_{header_info[i].get('vector_id', 'unknown')}"
+                exception_text = result.get("exception", None)
+                error_sig = generate_error_signature(exception_text)
+                # Create testcase record
+                testcase_values = (
+                    test_id,
+                    testcase_name,
+                    result.get("start_time_ts", None),
+                    result.get("end_time_ts", None),
+                    db_status,
+                    header_info[i].get("suite_name", None),
+                    json.dumps(result.get("original_vector_data", None)),
+                    result.get("message", None),
+                    exception_text,
+                    result.get("e2e_perf", None),
+                    json.dumps(result.get("device_perf")) if result.get("device_perf") else None,
+                    error_sig,
+                )
+                batch_values.append(testcase_values)
 
-        # Update test status based on testcase results
-        test_status = map_test_status_to_run_status(test_statuses)
-        test_update_query = """
-        UPDATE tests
-        SET status = %s
-        WHERE id = %s
-        """
-        cursor.execute(test_update_query, (test_status, test_id))
+            # Execute batch insert
+            if batch_values:
+                cursor.executemany(testcase_insert_query, batch_values)
+                logger.info(
+                    f"Successfully pushed {len(batch_values)} testcase results to PostgreSQL database for test {test_id}"
+                )
 
-        conn.commit()
-        return test_status
+            # Update test status based on testcase results
+            test_status = map_test_status_to_run_status(test_statuses)
+            test_update_query = """
+            UPDATE tests
+            SET status = %s
+            WHERE id = %s
+            """
+            cursor.execute(test_update_query, (test_status, test_id))
+
+            return test_status
     except Exception as e:
         logger.error(f"Failed to push test result to PostgreSQL database: {e}")
-        if conn:
-            conn.rollback()
         raise
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
 
 
 def push_failed_test(run_id, name, test_start_time, test_end_time, status):
     """Push failed test result to PostgreSQL database"""
-    pg_config = get_postgres_config(POSTGRES_ENV)
     try:
-        conn = psycopg2.connect(**pg_config)
-        cursor = conn.cursor()
-
-        test_insert_query = """
-        INSERT INTO tests (run_id, name, start_time_ts, end_time_ts, status)
-        VALUES (%s, %s, %s, %s, %s)
-        RETURNING id
-        """
-        cursor.execute(test_insert_query, (run_id, name, test_start_time, test_end_time, status))
-        test_id = cursor.fetchone()[0]
-        conn.commit()
-        return test_id
+        with postgres_connection(POSTGRES_ENV) as (conn, cursor):
+            test_insert_query = """
+            INSERT INTO tests (run_id, name, start_time_ts, end_time_ts, status)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING id
+            """
+            cursor.execute(test_insert_query, (run_id, name, test_start_time, test_end_time, status))
+            test_id = cursor.fetchone()[0]
+            return test_id
     except Exception as e:
         logger.error(f"Failed to push failed test result to PostgreSQL database: {e}")
-        if conn:
-            conn.rollback()
         raise
 
 
@@ -1323,160 +1314,152 @@ def export_test_results_postgres(header_info, results, run_start_time, run_end_t
     # Initialize database if needed
     initialize_postgres_database()
 
-    # Get PostgreSQL connection
-    pg_config = get_postgres_config(POSTGRES_ENV)
-
     try:
-        conn = psycopg2.connect(**pg_config)
-        cursor = conn.cursor()
+        with postgres_connection(POSTGRES_ENV) as (conn, cursor):
+            # Get git information
+            curr_git_hash = git_hash()
+            git_author = get_git_author()
+            git_branch = get_git_branch()
+            initiated_by = get_initiated_by()
+            host = get_hostname()
+            device = ttnn.get_arch_name()
 
-        # Get git information
-        curr_git_hash = git_hash()
-        git_author = get_git_author()
-        git_branch = get_git_branch()
-        initiated_by = get_initiated_by()
-        host = get_hostname()
-        device = ttnn.get_arch_name()
-
-        # Create a new run record
-        run_insert_query = """
-        INSERT INTO runs (
-            initiated_by, host, git_author, git_branch_name, git_commit_hash,
-            start_time_ts, end_time_ts, status, run_contents, device, type
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        RETURNING id
-        """
-
-        run_values = (
-            initiated_by,
-            host,
-            git_author,
-            git_branch,
-            curr_git_hash,
-            run_start_time,
-            run_end_time,
-            "success",  # Will be updated after processing all results
-            run_contents,
-            device,
-            "sweep",
-        )
-
-        cursor.execute(run_insert_query, run_values)
-        run_id = cursor.fetchone()[0]
-
-        # Group results by test module (sweep_name)
-        test_groups = {}
-        for i, result in enumerate(results):
-            sweep_name = header_info[i]["sweep_name"]
-            if sweep_name not in test_groups:
-                test_groups[sweep_name] = []
-            test_groups[sweep_name].append((i, result))
-
-        all_test_statuses = []
-        test_index = 0  # Track which test we're processing
-
-        # Process each test module
-        for sweep_name, test_results_group in test_groups.items():
-            # Use the corresponding test start/end time from the lists
-            test_start_time = (
-                min(r.get("start_time_ts") for _, r in test_results_group) if test_results_group else dt.datetime.now()
-            )
-            test_end_time = (
-                max(r.get("end_time_ts") for _, r in test_results_group) if test_results_group else dt.datetime.now()
-            )
-
-            test_insert_query = """
-            INSERT INTO tests (
-                run_id, name, start_time_ts, end_time_ts, status
-            ) VALUES (%s, %s, %s, %s, %s)
+            # Create a new run record
+            run_insert_query = """
+            INSERT INTO runs (
+                initiated_by, host, git_author, git_branch_name, git_commit_hash,
+                start_time_ts, end_time_ts, status, run_contents, device, type
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """
 
-            test_values = (
-                run_id,
-                sweep_name,
-                test_start_time,
-                test_end_time,
-                "success",  # Will be updated after processing all testcases
+            run_values = (
+                initiated_by,
+                host,
+                git_author,
+                git_branch,
+                curr_git_hash,
+                run_start_time,
+                run_end_time,
+                "success",  # Will be updated after processing all results
+                run_contents,
+                device,
+                "sweep",
             )
 
-            cursor.execute(test_insert_query, test_values)
-            test_id = cursor.fetchone()[0]
+            cursor.execute(run_insert_query, run_values)
+            run_id = cursor.fetchone()[0]
 
-            test_statuses = []
-            testcase_insert_query = """
-            INSERT INTO sweep_testcases (
-                test_id, name, start_time_ts, end_time_ts,
-                status, suite_name, test_vector, message, exception,
-                e2e_perf, device_perf, error_signature
-            ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-            )
-            """
+            # Group results by test module (sweep_name)
+            test_groups = {}
+            for i, result in enumerate(results):
+                sweep_name = header_info[i]["sweep_name"]
+                if sweep_name not in test_groups:
+                    test_groups[sweep_name] = []
+                test_groups[sweep_name].append((i, result))
 
-            # Prepare all testcase values for batch insert
-            batch_values = []
-            for idx, result in test_results_group:
-                header = header_info[idx]
+            all_test_statuses = []
+            test_index = 0  # Track which test we're processing
 
-                # Map test status to database status
-                db_status = map_test_status_to_db_status(result.get("status"))
-                test_statuses.append(db_status)
-
-                exception_text = result.get("exception", None)
-                error_sig = generate_error_signature(exception_text)
-
-                testcase_values = (
-                    test_id,
-                    f"{sweep_name}_{header.get('vector_id', 'unknown')}",
-                    result.get("start_time_ts"),
-                    result.get("end_time_ts"),
-                    db_status,
-                    header.get("suite_name"),
-                    json.dumps(result.get("original_vector_data")),
-                    result.get("message"),
-                    exception_text,
-                    result.get("e2e_perf"),
-                    json.dumps(result.get("device_perf")) if result.get("device_perf") else None,
-                    error_sig,
+            # Process each test module
+            for sweep_name, test_results_group in test_groups.items():
+                # Use the corresponding test start/end time from the lists
+                test_start_time = (
+                    min(r.get("start_time_ts") for _, r in test_results_group)
+                    if test_results_group
+                    else dt.datetime.now()
                 )
-                batch_values.append(testcase_values)
+                test_end_time = (
+                    max(r.get("end_time_ts") for _, r in test_results_group)
+                    if test_results_group
+                    else dt.datetime.now()
+                )
 
-            # Execute batch insert
-            if batch_values:
-                cursor.executemany(testcase_insert_query, batch_values)
+                test_insert_query = """
+                INSERT INTO tests (
+                    run_id, name, start_time_ts, end_time_ts, status
+                ) VALUES (%s, %s, %s, %s, %s)
+                RETURNING id
+                """
 
-            # Update test status based on testcase results
-            test_status = map_test_status_to_run_status(test_statuses)
+                test_values = (
+                    run_id,
+                    sweep_name,
+                    test_start_time,
+                    test_end_time,
+                    "success",  # Will be updated after processing all testcases
+                )
 
-            test_update_query = """
-            UPDATE tests SET status = %s WHERE id = %s
+                cursor.execute(test_insert_query, test_values)
+                test_id = cursor.fetchone()[0]
+
+                test_statuses = []
+                testcase_insert_query = """
+                INSERT INTO sweep_testcases (
+                    test_id, name, start_time_ts, end_time_ts,
+                    status, suite_name, test_vector, message, exception,
+                    e2e_perf, device_perf, error_signature
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                """
+
+                # Prepare all testcase values for batch insert
+                batch_values = []
+                for idx, result in test_results_group:
+                    header = header_info[idx]
+
+                    # Map test status to database status
+                    db_status = map_test_status_to_db_status(result.get("status"))
+                    test_statuses.append(db_status)
+
+                    exception_text = result.get("exception", None)
+                    error_sig = generate_error_signature(exception_text)
+
+                    testcase_values = (
+                        test_id,
+                        f"{sweep_name}_{header.get('vector_id', 'unknown')}",
+                        result.get("start_time_ts"),
+                        result.get("end_time_ts"),
+                        db_status,
+                        header.get("suite_name"),
+                        json.dumps(result.get("original_vector_data")),
+                        result.get("message"),
+                        exception_text,
+                        result.get("e2e_perf"),
+                        json.dumps(result.get("device_perf")) if result.get("device_perf") else None,
+                        error_sig,
+                    )
+                    batch_values.append(testcase_values)
+
+                # Execute batch insert
+                if batch_values:
+                    cursor.executemany(testcase_insert_query, batch_values)
+
+                # Update test status based on testcase results
+                test_status = map_test_status_to_run_status(test_statuses)
+
+                test_update_query = """
+                UPDATE tests SET status = %s WHERE id = %s
+                """
+                cursor.execute(test_update_query, (test_status, test_id))
+
+                all_test_statuses.append(test_status)
+                test_index += 1  # Move to next test
+
+            # Update run status based on all test results
+            run_status = map_test_status_to_run_status(all_test_statuses)
+
+            run_update_query = """
+            UPDATE runs SET status = %s WHERE id = %s
             """
-            cursor.execute(test_update_query, (test_status, test_id))
+            cursor.execute(run_update_query, (run_status, run_id))
 
-            all_test_statuses.append(test_status)
-            test_index += 1  # Move to next test
-
-        # Update run status based on all test results
-        run_status = map_test_status_to_run_status(all_test_statuses)
-
-        run_update_query = """
-        UPDATE runs SET status = %s WHERE id = %s
-        """
-        cursor.execute(run_update_query, (run_status, run_id))
-
-        conn.commit()
-        logger.info(f"Successfully exported {len(results)} results to PostgreSQL with run_id: {run_id}")
+            logger.info(f"Successfully exported {len(results)} results to PostgreSQL with run_id: {run_id}")
 
     except Exception as e:
         logger.error(f"Failed to export results to PostgreSQL: {e}")
-        if conn:
-            conn.rollback()
-    finally:
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        raise
 
 
 def enable_watcher():
