@@ -73,6 +73,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/noc)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/lightmetal)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sfpi)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/misc)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tunneling)
 
 add_custom_target(
     metal_tests
@@ -91,6 +92,7 @@ add_custom_target(
         unit_tests_lightmetal
         unit_tests_sfpi
         unit_tests_misc
+        unit_tests_tunneling
 )
 
 add_library(metalium_test_files INTERFACE)
