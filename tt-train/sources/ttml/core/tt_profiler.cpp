@@ -15,18 +15,18 @@ constexpr bool is_tracy_enabled = false;
 
 namespace ttml::core {
 
-void TTProfiler::dump_results(
+void TTProfiler::read_results(
     ttnn::distributed::MeshDevice* device,
     const std::string& noop_identifier,
     const size_t number_of_noops,
-    tt::tt_metal::ProfilerDumpState dump_state) const {
+    tt::tt_metal::ProfilerReadState read_state) const {
     assert(device);
     if (!m_enabled) {
         return;
     }
     call_device_noop(device, number_of_noops, noop_identifier);
     for (auto& dev : device->get_devices()) {
-        tt::tt_metal::detail::DumpDeviceProfileResults(dev, dump_state);
+        tt::tt_metal::detail::ReadDeviceProfilerResults(dev, read_state);
     }
     call_device_noop(device, number_of_noops, noop_identifier);
 }

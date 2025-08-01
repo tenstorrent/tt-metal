@@ -119,7 +119,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     const auto& output_tensor = tensor_return_value.at(0);
     const auto& metadata_tensor = tensor_return_value.at(1);
     auto num_links = operation_attributes.num_links;
-    auto topology = operation_attributes.topology;
+    auto topology = tt::tt_fabric::get_fabric_topology();
 
     auto mesh_device = input_tensor.mesh_device();
     const auto& mesh_view = mesh_device->get_view();
@@ -336,7 +336,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         tokens_per_device,
 
         num_links,
-        (uint32_t)tt::tt_fabric::get_fabric_topology(),
+        (uint32_t)topology,
 
         src_mesh_id,
         (uint32_t)src_chip_id,
