@@ -241,7 +241,8 @@ struct ConvDRAMParamters {
     bool mm_conv;
 };
 
-uint32_t calculate_conv_dram_L1(const ConvDRAMParamters& params, MeshDevice* device, const Conv2dSliceConfig& dram_slice_config);
+uint32_t calculate_conv_dram_slice_L1_usage(
+    const ConvDRAMParamters& params, MeshDevice* device, const Conv2dSliceConfig& dram_slice_config);
 
 }  // namespace operations::conv
 }  // namespace ttnn
