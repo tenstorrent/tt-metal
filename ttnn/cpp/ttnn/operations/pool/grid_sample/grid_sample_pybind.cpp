@@ -9,6 +9,7 @@
 
 #include "ttnn-pybind/decorators.hpp"
 #include "grid_sample.hpp"
+#include "grid_sample_prepare_grid.hpp"
 
 namespace ttnn::operations::grid_sample {
 
@@ -72,8 +73,55 @@ void bind_grid_sample(py::module& module) {
             py::arg("memory_config") = std::nullopt});
 }
 
+void bind_prepare_grid_sample_grid(py::module& module) {
+    // Bind prepare_grid_sample_grid function
+    module.def(
+        "prepare_grid_sample_grid",
+        prepare_grid_sample_grid,
+        py::arg("grid"),
+        py::arg("input_shape"),
+        py::kw_only(),
+        py::arg("padding_mode") = "zeros",
+        py::arg("output_dtype") = std::nullopt,
+        R"doc(
+        prepare_grid_sample_grid(grid: ttnn.Tensor, input_shape: List[int], *, padding_mode: str = "zeros", output_dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+
+        Precomputes grid sample data for optimized kernel execution.
+
+        This function takes a normalized grid tensor and precomputes the pixel coordinates
+        and bilinear interpolation weights needed for grid sampling.
+
+        Args:
+            grid (ttnn.Tensor): Grid tensor of shape (N, H_out, W_out, 2) with normalized coordinates in [-1, 1]
+            input_shape (List[int]): Input tensor dimensions [N, H_in, W_in, C] in NHWC format
+
+        Keyword Args:
+            padding_mode (str): How to handle out-of-bounds coordinates. Currently only "zeros" is supported.
+            output_dtype (ttnn.DataType, optional): Data type for the output tensor. Default: bfloat16
+
+        Returns:
+            ttnn.Tensor: Precomputed grid tensor of shape (N, H_out, W_out, 6) where:
+                        - [:, :, :, 0]: North-west height coordinate (as integer stored in bfloat16)
+                        - [:, :, :, 1]: North-west width coordinate (as integer stored in bfloat16)
+                        - [:, :, :, 2]: Weight for north-west pixel
+                        - [:, :, :, 3]: Weight for north-east pixel
+                        - [:, :, :, 4]: Weight for south-west pixel
+                        - [:, :, :, 5]: Weight for south-east pixel
+
+        Example:
+            >>> # Create a normalized grid
+            >>> grid = ttnn.from_torch(torch.randn(1, 8, 8, 2), dtype=ttnn.float32)
+            >>> input_shape = [1, 32, 32, 64]  # N, H, W, C
+            >>> precomputed_grid = ttnn.prepare_grid_sample_grid(grid, input_shape)
+            >>> print(precomputed_grid.shape)  # [1, 8, 8, 6]
+        )doc");
+}
+
 }  // namespace detail
 
-void py_bind_grid_sample(pybind11::module& module) { detail::bind_grid_sample(module); }
+void py_bind_grid_sample(py::module& module) {
+    detail::bind_grid_sample(module);
+    detail::bind_prepare_grid_sample_grid(module);
+}
 
 }  // namespace ttnn::operations::grid_sample
