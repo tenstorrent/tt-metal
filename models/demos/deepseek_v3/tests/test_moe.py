@@ -64,12 +64,13 @@ def test_forward_pass(
 
     # Generate appropriate config
     if mode == "prefill":
-        model_config = MoE.prefill_model_config(hf_config, mesh_device, ccl, batch_size=seq_len, seq_len=1)
+        model_config = MoE.prefill_model_config(hf_config, mesh_device)
     else:
-        model_config = MoE.decode_model_config(hf_config, mesh_device, ccl, batch_size=seq_len)
+        model_config = MoE.decode_model_config(hf_config, mesh_device)
 
-    # Create a new model state
-    model_state = MoE.create_state(hf_config, mesh_device)
+    # Create a new model state with CCL
+    ccl = CCL1D(hf_config, mesh_device)
+    model_state = MoE.create_state(hf_config, mesh_device, mode, ccl)
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state)
