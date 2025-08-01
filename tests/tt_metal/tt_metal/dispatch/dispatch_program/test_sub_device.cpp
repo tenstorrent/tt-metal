@@ -60,7 +60,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     CoreRangeSet sharded_cores_1 = CoreRange({0, 0}, {2, 2});
     SubDevice sub_device_1(std::array{sharded_cores_1});
     auto sub_device_manager_1 = mesh_device->create_sub_device_manager({sub_device_1}, k_local_l1_size);
-    DeviceAddr l1_unreserved_base = mesh_device->get_devices()[0]->allocator()->get_base_allocator_addr(HalMemType::L1);
+    DeviceAddr l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
     DeviceAddr l1_max_size = mesh_device->get_devices()[0]->l1_size_per_core();
     DeviceAddr l1_total_size = l1_max_size - l1_unreserved_base;
     mesh_device->load_sub_device_manager(sub_device_manager_1);
@@ -87,13 +87,13 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
             .set_page_size(src0_cb_index, hal::get_l1_alignment());
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, sharded_cores_1, cb_src0_config);
 
-    program.allocate_circular_buffers(mesh_device->get_devices()[0]);
-    detail::ValidateCircularBufferRegion(program, mesh_device->get_devices()[0]);
+    program.allocate_circular_buffers(mesh_device.get());
+    detail::ValidateCircularBufferRegion(program, mesh_device.get());
     UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size * 3);
-    program.allocate_circular_buffers(mesh_device->get_devices()[0]);
-    EXPECT_THROW(detail::ValidateCircularBufferRegion(program, mesh_device->get_devices()[0]), std::exception);
+    program.allocate_circular_buffers(mesh_device.get());
+    EXPECT_THROW(detail::ValidateCircularBufferRegion(program, mesh_device.get()), std::exception);
     global_buffer.reset();
-    detail::ValidateCircularBufferRegion(program, mesh_device->get_devices()[0]);
+    detail::ValidateCircularBufferRegion(program, mesh_device.get());
     ShardSpecBuffer local_shard_spec_buffer =
         ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_1.num_cores(), 1});
     uint32_t local_buffer_size = k_local_l1_size / 2;
@@ -105,10 +105,10 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     };
 
     auto local_buffer = distributed::MeshBuffer::create(replicated_config_1, local_config_2, mesh_device.get());
-    EXPECT_THROW(detail::ValidateCircularBufferRegion(program, mesh_device->get_devices()[0]), std::exception);
+    EXPECT_THROW(detail::ValidateCircularBufferRegion(program, mesh_device.get()), std::exception);
     UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size / 4);
-    program.allocate_circular_buffers(mesh_device->get_devices()[0]);
-    detail::ValidateCircularBufferRegion(program, mesh_device->get_devices()[0]);
+    program.allocate_circular_buffers(mesh_device.get());
+    detail::ValidateCircularBufferRegion(program, mesh_device.get());
 }
 
 void test_sub_device_synchronization(distributed::MeshDevice* device) {
