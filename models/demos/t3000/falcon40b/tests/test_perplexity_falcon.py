@@ -272,6 +272,7 @@ def test_perplexity_huggingface(
         "decode_2048",
     ],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_perplexity(
     llm_mode,
     batch_size,
