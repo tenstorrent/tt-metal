@@ -1255,6 +1255,7 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
     ttnn_input = ttnn.from_torch(
         torch_input, device=device, layout=layout, dtype=input_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
+    assert_with_pcc(torch_input, torch.Tensor(ttnn_input.to_list()), 1)
     parallel_config = ttnn.SlidingWindowParallelConfig(
         grid=core_range, shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED, shard_orientation=orientation
     )
@@ -1275,8 +1276,9 @@ def test_slice_height_sharded_for_conv2d(device, dims, slice_dim, slice_size, co
         )
         this_ttnn_output = ttnn.padded_slice(ttnn_input, begins, ends, strides, memory_config=memory_config)
         output = ttnn.to_torch(this_ttnn_output)
+        assert_with_pcc(output, torch.Tensor(this_ttnn_output.to_list()), 1)
         output = torch.reshape(output, this_torch_output.shape)
-        assert torch.allclose(this_torch_output, output, atol=1e-2, rtol=1e-2)
+        torch.testing.assert_close(this_torch_output, output, atol=1e-2, rtol=1e-2)
 
 
 @pytest.mark.parametrize(

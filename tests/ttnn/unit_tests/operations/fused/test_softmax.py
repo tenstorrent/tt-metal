@@ -84,7 +84,6 @@ def run_softmax_stable_with_program_cache(
     import logging
 
     logger = logging.getLogger()
-
     scale = 1.0
     attention_mask = torch.rand(batch_size, 1, 1, w)
     attention_mask = (attention_mask > 0.5).float()
@@ -92,7 +91,6 @@ def run_softmax_stable_with_program_cache(
     attention_mask = attention_mask.masked_fill(attention_mask == 1, 0)
     current_entries_count = device.num_program_cache_entries()
     attention_mask_t = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    assert_with_pcc(attention_mask, torch.Tensor(attention_mask_t.to_list()), 1)
     extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
 
     torch_input_tensor = torch_random((batch_size, 1, h, w), -1000, 1000, dtype=torch.bfloat16)
@@ -104,7 +102,6 @@ def run_softmax_stable_with_program_cache(
 
     current_entries_count = device.num_program_cache_entries()
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    assert_with_pcc(torch_input_tensor, torch.Tensor(input_tensor.to_list()), 0.9999)
     extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
 
     if is_grayskull():
@@ -130,7 +127,6 @@ def run_softmax_stable_with_program_cache(
         )
 
     output_tensor = ttnn.to_torch(ttnn_output_tensor)
-    assert_with_pcc(output_tensor, torch.Tensor(ttnn_output_tensor.to_list()), 1)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 

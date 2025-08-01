@@ -119,10 +119,6 @@ void log_from_cpp(const char* file, int line, const char* func, Args&&... messag
 std::string format_tensor_as_string(pybind11::object tensor, int precision = 4) {
     pybind11::object tensor_list;
 
-    if (1024 < tensor.attr("volume")().cast<int>()) {
-        return "1024 < volume";
-    }
-
     if (pybind11::hasattr(tensor, "tolist")) {
         tensor_list = tensor.attr("tolist")();
     } else if (pybind11::hasattr(tensor, "to_list")) {
@@ -249,7 +245,30 @@ std::string format_tensor_as_string(pybind11::object tensor, int precision = 4) 
     }
 
     int col_width = calculate_col_width(tensor_list);
-    return format_recursive(tensor_list, 0, col_width);
+
+    std::string header;
+
+    auto builtins = pybind11::module_::import("builtins");
+    auto str_func = builtins.attr("str");
+
+    if (pybind11::hasattr(tensor, "to_list")) {
+        header = fmt::format(
+            "layout: {} padded_shape: {} shape: {} dtype: {} volume: {}",
+            str_func(tensor.attr("layout")).cast<std::string>(),
+            str_func(tensor.attr("padded_shape")).cast<std::string>(),
+            str_func(tensor.attr("shape")).cast<std::string>(),
+            str_func(tensor.attr("dtype")).cast<std::string>(),
+            str_func(tensor.attr("volume")()).cast<std::string>());
+    }
+
+    std::string body;
+    if (1024 < tensor.attr("volume")().cast<int>()) {
+        body = "1024 < volume";
+    } else {
+        body = format_recursive(tensor_list, 0, col_width);
+    }
+
+    return header + "\n" + body;
 }
 
 template <typename T>
@@ -311,6 +330,7 @@ Tensor create_tt_tensor_from_py_data(
     ttnn::QueueId cq_id,
     float pad_value,
     const distributed::TensorToMesh* mesh_mapper) {
+    py_log(py_data_shape, tensor_layout.get_data_type(), tensor_layout.get_layout());
     ZoneScoped;
     auto create_concrete = [&]<typename T>() {
         return create_typed_tt_tensor_from_py_data<T>(
@@ -372,6 +392,7 @@ PreprocessedPyTensor parse_py_tensor(const py::handle& py_tensor, std::optional<
             TT_THROW("Unsupported DataType: {}", std::string(py::repr(py_dtype)));
         }
 
+        py_log(data_type, optional_data_type);
         return PreprocessedPyTensor{
             .data_type = data_type,
             .contiguous_py_tensor = contiguous_py_tensor,
@@ -505,16 +526,29 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
                                      dtype.value() == DataType::UINT32);
     };
 
+    auto is_torch_and_ttnn_type_identical = [&torch](std::optional<DataType> dtype, py::object tensor) {
+        return !dtype.has_value() ||
+               (dtype.value() == DataType::FLOAT32 && tensor.attr("dtype").equal(torch.attr("float32"))) ||
+               (dtype.value() == DataType::BFLOAT16 && tensor.attr("dtype").equal(torch.attr("bfloat16"))) ||
+               (dtype.value() == DataType::INT32 && tensor.attr("dtype").equal(torch.attr("int32"))) ||
+               (dtype.value() == DataType::UINT8 && tensor.attr("dtype").equal(torch.attr("uint8")));
+    };
+
+    auto do_tensor_conversion = [&](py::object tensor, py::object dtype) -> py::object {
+        py_log("execute python tensor conversion", tensor.attr("dtype"), "to", dtype);
+        return tensor.attr("to")(dtype);
+    };
+
     auto do_host_conversion_through_fallback = [&]() {
         if (ttnn_fallback_type_mapping(dtype).has_value()) {
             py_log(ttnn_fallback_type_mapping(dtype).value());
-            tensor = tensor.attr("to")(ttnn_fallback_type_mapping(dtype).value());
+            tensor = do_tensor_conversion(tensor, ttnn_fallback_type_mapping(dtype).value());
+        } else if (is_torch_and_ttnn_type_identical(dtype, tensor)) {
+            py_log("identical source/target type, no conversion needed");
         } else {
-            py_log();
-            tensor = tensor.attr("to")(ttnn_unsupported_type_mapping(tensor.attr("dtype")));
+            py_log(dtype, tensor.attr("dtype"));
+            tensor = do_tensor_conversion(tensor, ttnn_unsupported_type_mapping(tensor.attr("dtype")).value());
         }
-
-        // tensor = tensor.attr("to")(ttnn_fallback_type_mapping(dtype).value());
 
         res.host_side_conversion = true;
         if (is_torch_missing_data_type(dtype)) {
@@ -531,7 +565,7 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
     if (tensor.attr("dtype").equal(torch.attr("int64"))) {
         py_log();
         if (!dtype.has_value()) {
-            tensor = tensor.attr("to")(torch.attr("int32"));
+            tensor = do_tensor_conversion(tensor, torch.attr("int32"));
             res.host_side_conversion = true;
             res.construct_with_data_type = DataType::UINT32;
         } else {
@@ -556,10 +590,10 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
         // host.
         if (ttnn_fallback_type_mapping(dtype).has_value()) {
             py_log(ttnn_fallback_type_mapping(dtype).value());
-            tensor = tensor.attr("to")(ttnn_fallback_type_mapping(dtype).value());
+            tensor = do_tensor_conversion(tensor, ttnn_fallback_type_mapping(dtype).value());
         } else {
             py_log();
-            tensor = tensor.attr("to")(ttnn_unsupported_type_mapping(tensor.attr("dtype")));
+            tensor = do_tensor_conversion(tensor, ttnn_unsupported_type_mapping(tensor.attr("dtype")).value());
         }
         res.host_side_conversion = true;
         py_log(dtype);
@@ -597,14 +631,9 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
         dtype && dtype.value() == DataType::UINT8) {
         py_log();
         // Original data is stored in float32 and requires type casting
-        tensor = tensor.attr("to")(ttnn_fallback_type_mapping(dtype).value());
+        tensor = do_tensor_conversion(tensor, ttnn_fallback_type_mapping(dtype).value());
         res.host_side_conversion = true;
-    } else if (
-        !dtype.has_value() ||
-        (dtype.value() == DataType::FLOAT32 && tensor.attr("dtype").equal(torch.attr("float32"))) ||
-        (dtype.value() == DataType::BFLOAT16 && tensor.attr("dtype").equal(torch.attr("bfloat16"))) ||
-        (dtype.value() == DataType::INT32 && tensor.attr("dtype").equal(torch.attr("int32"))) ||
-        (dtype.value() == DataType::UINT8 && tensor.attr("dtype").equal(torch.attr("uint8")))) {
+    } else if (is_torch_and_ttnn_type_identical(dtype, tensor)) {
         py_log();
         // Strategy: No Conversion Needed
         // No target type specified or target is the same as input, will copy the tensor from source data w/o typecast.
@@ -644,7 +673,7 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
         res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
         res.construct_with_data_type = dtype;
     } else if (is_int32_with_retiling) {
-        py_log();
+        py_log("int32 type with re-tiling");
         res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
         res.construct_with_data_type = DataType::INT32;
     } else if (
@@ -669,9 +698,11 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
                 res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
             }
         } else if (!(tensor.attr("dtype").equal(torch.attr("float32")) ||
-                     tensor.attr("dtype").equal(torch.attr("int32")) ||
-                     tensor.attr("dtype").equal(torch.attr("bfloat16")))) {
+                     tensor.attr("dtype").equal(torch.attr("int32")))) {
             // can't convert the host data to tiles on device -- must perform tiling on host
+            // bfloat16 is excluded as on-device tiling might loose precison if performed multiple
+            // times intermixed with other operations. `test_softmax_stable_with_program_cache`
+            // fails otherwise.
             res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
         } else if (has_device) {
             py_log("has device, construct with row major");
@@ -772,13 +803,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     output = tt::tt_metal::set_tensor_id(output);
     py_log("output result ok");
     py_log(strategy->construct_with_data_type);
-    py_log(
-        "just constructed tensor",
-        output.layout(),
-        output.logical_shape(),
-        output.padded_shape(),
-        output.dtype(),
-        "\n" + format_tensor_as_string(pybind11::cast(output)));
+    py_log("just constructed tensor", format_tensor_as_string(pybind11::cast(output)));
 
     if (memory_config.is_sharded()) {
         py_log("Sharded memory config");
