@@ -38,6 +38,10 @@ on:
         required: false
         type: boolean
         default: true
+      run_train_tests:
+        required: false
+        type: boolean
+        default: true
 
 jobs:
   ttnn-conv-tests:
@@ -238,6 +242,7 @@ jobs:
         if: always()
 
   ttnn-train-nightly-tests:
+    if: ${{ inputs.run_train_tests }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
