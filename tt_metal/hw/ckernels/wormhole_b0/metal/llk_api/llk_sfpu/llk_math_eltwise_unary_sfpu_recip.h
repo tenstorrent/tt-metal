@@ -23,4 +23,15 @@ inline void llk_math_eltwise_unary_sfpu_reciprocal_init() {
     llk_math_eltwise_unary_sfpu_init<SfpuType::reciprocal, APPROXIMATE>(sfpu::recip_init<APPROXIMATE>);
 }
 
+template <bool APPROXIMATE, bool is_fp32_dest_acc_en>
+inline void llk_math_eltwise_unary_sfpu_ln_rsqrt(uint dst_index, int vector_mode = (int)VectorMode::RC) {
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
+        ckernel::sfpu::_calculate_ln_rsqrt_<APPROXIMATE, 8, 2, is_fp32_dest_acc_en>, dst_index, vector_mode);
+}
+
+template <bool APPROXIMATE>
+inline void llk_math_eltwise_unary_sfpu_ln_rsqrt_init() {
+    llk_math_eltwise_unary_sfpu_init<SfpuType::ln_rsqrt, APPROXIMATE>(sfpu::_init_ln_rsqrt_<APPROXIMATE>);
+}
+
 }  // namespace ckernel

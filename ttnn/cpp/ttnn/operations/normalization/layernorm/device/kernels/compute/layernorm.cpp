@@ -223,10 +223,12 @@ void MAIN {
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
         cb_reserve_back(cb_ex2pe, 1);  // 1
-        sqrt_tile_init();
-        sqrt_tile(dst0);
-        recip_tile_init();
-        recip_tile(dst0);
+        // sqrt_tile_init();
+        // sqrt_tile(dst0);
+        // recip_tile_init();
+        // recip_tile(dst0);
+        ln_rsqrt_tile_init();
+        ln_rsqrt_tile(dst0);
         pack_tile(dst0, cb_ex2pe);
         cb_push_back(cb_ex2pe, 1);
         REL();
