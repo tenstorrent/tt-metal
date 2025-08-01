@@ -4,8 +4,6 @@
 
 #pragma once
 
-#pragma once
-
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "sfpi.h"
 
