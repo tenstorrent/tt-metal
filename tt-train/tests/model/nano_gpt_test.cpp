@@ -51,7 +51,7 @@ struct TrainingConfig {
     uint32_t model_save_interval = 500;
     uint32_t batch_size = 64;
     uint32_t num_epochs = 1;
-    uint32_t max_steps = 5000;
+    uint32_t max_steps = 100;
     float learning_rate = 3e-4F;
     float weight_decay = 1e-2F;
     bool use_moreh_adamw = false;
@@ -105,6 +105,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
     }
 
     auto *device = &ttml::autograd::ctx().get_device();
+    device->clear_program_cache();  // we want a fresh program cache count for each run
 
     auto sequence_length = config.transformer_config.max_sequence_length;
 
@@ -113,32 +114,27 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
 
     struct CachedHostData {
         std::vector<uint32_t> data;
-        std::vector<int32_t> targets;
+        std::vector<uint32_t> targets;
         ttml::autograd::TensorPtr masks_tensor;
     };
     CachedHostData cached_data;
 
     std::vector<float> mask;
-    auto num_heads = config.transformer_config.num_heads;
-    mask.reserve((size_t)config.batch_size * sequence_length * sequence_length * num_heads);
-    for (int sample_idx = 0; sample_idx < config.batch_size; ++sample_idx) {
-        for (int head = 0; head < num_heads; ++head) {
-            for (int i = 0; i < sequence_length; ++i) {
-                for (int j = 0; j < sequence_length; ++j) {
-                    mask.push_back(i >= j ? 1.0F : 0.0F);
-                }
-            }
+    mask.reserve((size_t)sequence_length * sequence_length);
+    for (int i = 0; i < sequence_length; ++i) {
+        for (int j = 0; j < sequence_length; ++j) {
+            mask.push_back(i >= j ? 1.0F : 0.0F);
         }
     }
-    cached_data.masks_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
-        mask, ttnn::Shape({config.batch_size, num_heads, sequence_length, sequence_length}), device));
+    cached_data.masks_tensor = ttml::autograd::create_tensor(
+        ttml::core::from_vector(mask, ttnn::Shape({1, 1, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
-        [sequence_length, num_heads, device, &cached_data, use_ddp](std::vector<DatasetSample> &&samples) {
+        [sequence_length, device, &cached_data, use_ddp](std::vector<DatasetSample> &&samples) {
             auto start_timer = std::chrono::high_resolution_clock::now();
             const uint32_t batch_size = samples.size();
             std::vector<uint32_t> &data = cached_data.data;
-            std::vector<int32_t> &targets = cached_data.targets;
+            std::vector<uint32_t> &targets = cached_data.targets;
 
             data.clear();
             targets.clear();
@@ -151,7 +147,6 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
             }
             auto end_timer = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
-            fmt::print("dataloader host only step time {} ms\n", (double)duration / 1000.);
 
             auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
                 if (use_ddp) {
@@ -164,7 +159,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
                             ttnn::Layout::ROW_MAJOR,
                             mapper.get()));
                     auto targets_tensor =
-                        ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, ttnn::DataType::INT32>(
+                        ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
                             targets,
                             ttnn::Shape({batch_size, sequence_length}),
                             device,
@@ -182,7 +177,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
                         ttnn::Layout::ROW_MAJOR,
                         mapper.get()));
                 auto targets_tensor =
-                    ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, ttnn::DataType::INT32>(
+                    ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
                         targets, ttnn::Shape({batch_size, sequence_length}), device, ttnn::Layout::ROW_MAJOR));
                 return {data_tensor, targets_tensor};
             };
@@ -190,7 +185,6 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
             auto [data_tensor, targets_tensor] = create_data_and_targets();
             end_timer = std::chrono::high_resolution_clock::now();
             duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
-            fmt::print("dataloader step time {} ms\n", (double)duration / 1000.);
             return std::make_tuple(data_tensor, targets_tensor, cached_data.masks_tensor);
         };
     auto train_dataloader = DataLoader(dataset, /* batch_size */ config.batch_size, /* shuffle */ true, collate_fn);
@@ -205,7 +199,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
     std::shared_ptr<ttml::autograd::ModuleBase> model;
     if (use_tensor_parallel) {
         config.transformer_config.num_groups = num_devices;
-        config.transformer_config.num_heads = num_devices * 2;
+        config.transformer_config.num_heads = num_devices * 3;
         config.transformer_config.embedding_dim = (384U / 3U) * config.transformer_config.num_heads;
 
         model = ttml::models::distributed::llama::create(config.transformer_config);
@@ -219,6 +213,17 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
 
     auto optimizer = std::make_shared<ttml::optimizers::MorehAdamW>(model->parameters(), adamw_params);
 
+    auto get_loss_value = [device](const TensorPtr &loss) {
+        auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
+        // sum of loss xtensors
+        float loss_float =
+            std::accumulate(loss_xtensors.begin(), loss_xtensors.end(), 0.0F, [](float acc, auto &xtensor) {
+                return acc + xtensor(0);
+            });
+
+        return loss_float / static_cast<float>(loss_xtensors.size());
+    };
+
     std::vector<double> steps_time;
     std::vector<float> losses;
 
@@ -226,8 +231,8 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
         auto start_timer = std::chrono::high_resolution_clock::now();
         optimizer->zero_grad();
         auto output = (*model)(features, masks);
-        auto loss = ttml::ops::nll_loss(output, target);
-        auto loss_float = ttml::core::to_vector(loss->get_value())[0];
+        auto loss = ttml::ops::cross_entropy_loss(output, target);
+        auto loss_float = get_loss_value(loss);
         loss->backward();
 
         // synchronize gradients for multi-device case, no-op if single device
@@ -252,7 +257,12 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
     auto program_cache_entries = device->num_program_cache_entries();
 
     float abs_tol = 1e-4;
-    EXPECT_NEAR(program_cache_entries, 79, abs_tol);
+    std::string run_type = use_tensor_parallel ? "TP" : use_ddp ? "DDP" : "SingleDevice";
+    std::unordered_map<std::string, uint32_t> expected_program_cache_entries_map = {
+        {"SingleDevice", 83},
+        {"DDP", 97},
+        {"TP", 106}};
+    EXPECT_NEAR(program_cache_entries, expected_program_cache_entries_map.at(run_type), abs_tol);
 
     // verify time per step
     size_t num_steps_below = 0;
@@ -268,17 +278,22 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
     // verify loss
     EXPECT_NEAR(losses.size(), config.max_steps, abs_tol);
 
-    EXPECT_NEAR(losses[0], 0.024047852, abs_tol);
-    EXPECT_NEAR(losses[9], -2.296875, abs_tol);
-    EXPECT_NEAR(losses[19], -3.296875, abs_tol);
-    EXPECT_NEAR(losses[29], -4.46875, abs_tol);
-    EXPECT_NEAR(losses[39], -5.6875, abs_tol);
-    EXPECT_NEAR(losses[49], -6.875, abs_tol);
-    EXPECT_NEAR(losses[59], -8.0625, abs_tol);
-    EXPECT_NEAR(losses[69], -9.3125, abs_tol);
-    EXPECT_NEAR(losses[79], -10.5625, abs_tol);
-    EXPECT_NEAR(losses[89], -11.9375, abs_tol);
-    EXPECT_NEAR(losses[99], -13.1875, abs_tol);
+    std::unordered_map<std::string, std::vector<float>> expected_losses_map = {
+        {"SingleDevice", {4.6875, 3.46875, 3.46875, 3.0625, 2.95312, 2.75, 2.625, 2.53125, 2.375, 2.32812, 2.21875}},
+        {"DDP", {4.73438, 3.45312, 3.42969, 3.07812, 2.91406, 2.6875, 2.57031, 2.46875, 2.38281, 2.34375, 2.24219}},
+        {"TP", {5, 3.46875, 3.32812, 3.29688, 3.0625, 2.90625, 2.70312, 2.57812, 2.4375, 2.34375, 2.25}}};
+
+    auto expected_losses = expected_losses_map.at(run_type);
+
+    auto test_indices = {0, 9, 19, 29, 39, 49, 59, 69, 79, 89, 99};
+    auto actual_losses = std::vector<float>(test_indices.size());
+    std::transform(test_indices.begin(), test_indices.end(), actual_losses.begin(), [&losses](size_t index) {
+        return losses[index];
+    });
+
+    for (size_t i = 0; i < test_indices.size(); ++i) {
+        EXPECT_NEAR(actual_losses[i], expected_losses[i], abs_tol);
+    }
 }
 
 bool should_run_nightly_tests() {
