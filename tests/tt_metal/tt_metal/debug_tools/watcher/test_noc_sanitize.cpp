@@ -5,7 +5,7 @@
 #include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -133,7 +133,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
 
     auto input_buf_noc_xy = get_core_coord_for_test(input_buffer);
     auto output_buf_noc_xy = get_core_coord_for_test(output_buffer);
-    log_info(tt::LogTest, "Input/Output Buffer mem type: {}", magic_enum::enum_name(buffer_mem_type));
+    log_info(tt::LogTest, "Input/Output Buffer mem type: {}", enchantum::to_string(buffer_mem_type));
     log_info(tt::LogTest, "Input Buffer NOC XY: {}", input_buf_noc_xy);
     log_info(tt::LogTest, "Output Buffer NOC XY: {}", output_buf_noc_xy);
     log_info(tt::LogTest, "Local scratch buffer addr: {:#x}", buffer_addr);

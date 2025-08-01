@@ -47,8 +47,8 @@ class RotarySetup(LightweightModule):
             dhead=head_dim,
             end=max_seq_len * 2,
             theta=rope_theta,
-            scale_factor=rope_scaling.factor,
-            orig_context_len=rope_scaling.original_max_position_embeddings,
+            scale_factor=rope_scaling.factor if rope_scaling is not None else None,
+            orig_context_len=rope_scaling.original_max_position_embeddings if rope_scaling is not None else None,
             position_ids=torch.arange(max_seq_len),
         )
 

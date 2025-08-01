@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from models.demos.yolov9c.common import load_torch_model
+from models.demos.yolov9c.common import YOLOV9C_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov9c.reference import yolov9c
 from models.demos.yolov9c.tt import ttnn_yolov9c
 from models.demos.yolov9c.tt.model_preprocessing import create_yolov9c_input_tensors, create_yolov9c_model_parameters
@@ -26,7 +26,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         "detect",  # Uncomment to run the demo for Object Detection
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV9C_L1_SMALL_SIZE}], indirect=True)
 def test_yolov9c(use_pretrained_weights, model_task, device, reset_seeds, model_location_generator):
     torch_input, ttnn_input = create_yolov9c_input_tensors(device, model=True)
     state_dict = None

@@ -108,6 +108,7 @@ enum class UnaryOpType {
     HARDSWISH,
     WHERE_TSS,
     SOFTSIGN,
+    CELU,
 };
 
 enum class VecMode {

@@ -10,7 +10,7 @@
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "impl/context/metal_context.hpp"
@@ -52,7 +52,7 @@ tt::tt_fabric::Topology FabricContext::get_topology_from_config(tt::tt_fabric::F
         case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC: return tt::tt_fabric::Topology::Mesh;
         case tt::tt_fabric::FabricConfig::DISABLED:
         case tt::tt_fabric::FabricConfig::CUSTOM:
-            TT_THROW("Unsupported fabric config: {}", magic_enum::enum_name(fabric_config));
+            TT_THROW("Unsupported fabric config: {}", enchantum::to_string(fabric_config));
     }
     return tt::tt_fabric::Topology::Linear;
 }

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <iostream>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 
 #include "scatter.hpp"
 
@@ -85,8 +85,8 @@ void check_support(
         "Scatter doesn't work for int32 tensors that have scatter row longer than {} elements - input tensor is of "
         "type: {}, layout: {} and input_shape[scatter_axis] == {}",
         to_layout_int32_scatter_axis_max_length,
-        magic_enum::enum_name(input_dtype),
-        magic_enum::enum_name(input_layout),
+        enchantum::to_string(input_dtype),
+        enchantum::to_string(input_layout),
         input_shape[dim]);
     TT_FATAL(
         !(is_i32(index_dtype) && index_layout == Layout::TILE &&
@@ -94,8 +94,8 @@ void check_support(
         "Scatter doesn't work for int32 tensors that have scatter row longer than {} elements - index tensor is of "
         "type: {}, layout: {} and index_shape[scatter_axis] == {}",
         to_layout_int32_scatter_axis_max_length,
-        magic_enum::enum_name(index_dtype),
-        magic_enum::enum_name(index_layout),
+        enchantum::to_string(index_dtype),
+        enchantum::to_string(index_layout),
         index_shape[dim]);
     TT_FATAL(
         !(is_i32(source_dtype) && source_layout == Layout::TILE &&
@@ -103,8 +103,8 @@ void check_support(
         "Scatter doesn't work for int32 tensors that have scatter row longer than {} elements - source tensor is of "
         "type: {}, layout: {} and source_shape[scatter_axis] == {}",
         to_layout_int32_scatter_axis_max_length,
-        magic_enum::enum_name(source_dtype),
-        magic_enum::enum_name(source_layout),
+        enchantum::to_string(source_dtype),
+        enchantum::to_string(source_layout),
         source_shape[dim]);
 }
 

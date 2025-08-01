@@ -16,7 +16,8 @@ class Plotter:
     def __init__(self, dm_stats, aggregate_stats, output_dir, arch, test_id_to_name, test_id_to_comment):
         self.dm_stats = dm_stats
         self.aggregate_stats = aggregate_stats
-        self.output_dir = output_dir
+        # Create architecture-specific subdirectory
+        self.output_dir = os.path.join(output_dir, arch)
         self.noc_width = NOC_WIDTHS.get(arch, 64)  # Default to 64 if architecture not found
         self.arch = arch
         self.test_id_to_name = test_id_to_name
@@ -28,11 +29,23 @@ class Plotter:
         return {
             "plot_width": DEFAULT_PLOT_WIDTH,  # Width of an individual plot
             "plot_height": DEFAULT_PLOT_HEIGHT,  # Height of an individual plot
-            "nrows_per_figure": 1,  # Number of rows of plots per figure
-            "ncols_per_figure": 2,  # Number of columns of plots per figure
+            "nrows_per_figure": 1,  # Number of rows of plots per figure (will be updated dynamically)
+            "ncols_per_figure": 2,  # Number of columns of plots per figure (will be updated dynamically)
             "comment_section_height_ratio": DEFAULT_COMMENT_HEIGHT_RATIO,  # Height ratio for the comment section
             "wspace": 0.3,  # Horizontal space between plots
+            "hspace": 0.3,  # Vertical space between plots
         }
+
+    def get_dynamic_plot_config(self, test_name):
+        """Returns dynamic plot configuration based on test type"""
+        config = self.plot_config.copy()
+
+        if "Virtual Channels" in test_name:
+            # For virtual channels tests, use two plots (1x2 grid) for NOC 0 and NOC 1
+            config["nrows_per_figure"] = 1
+            config["ncols_per_figure"] = 2
+
+        return config
 
     def plot_dm_stats(self):
         # Ensure output directory exists
@@ -63,59 +76,61 @@ class Plotter:
                 else f"Test ID {test_id}"
             )
 
+            # Get dynamic plot configuration for this test type
+            plot_config = self.get_dynamic_plot_config(test_name)
+
             # Prepare figure for the current test ID
             figure_height = (
-                self.plot_config["plot_height"] * self.plot_config["nrows_per_figure"]
-                + self.plot_config["comment_section_height_ratio"] * self.plot_config["plot_height"]
+                plot_config["plot_height"] * plot_config["nrows_per_figure"]
+                + plot_config["comment_section_height_ratio"] * plot_config["plot_height"]
             )
 
-            fig = plt.figure(
-                figsize=(self.plot_config["plot_width"] * self.plot_config["ncols_per_figure"], figure_height)
-            )
+            fig = plt.figure(figsize=(plot_config["plot_width"] * plot_config["ncols_per_figure"], figure_height))
 
             # Create a GridSpec layout
             gridspec = GridSpec(
-                self.plot_config["nrows_per_figure"] + 1,
-                self.plot_config["ncols_per_figure"],
-                height_ratios=[self.plot_config["plot_height"]] * self.plot_config["nrows_per_figure"]
-                + [self.plot_config["comment_section_height_ratio"] * self.plot_config["plot_height"]],
-                wspace=self.plot_config["wspace"],
+                plot_config["nrows_per_figure"] + 1,
+                plot_config["ncols_per_figure"],
+                height_ratios=[plot_config["plot_height"]] * plot_config["nrows_per_figure"]
+                + [plot_config["comment_section_height_ratio"] * plot_config["plot_height"]],
+                wspace=plot_config["wspace"],
+                hspace=plot_config.get("hspace", 0.3),
             )
 
             # Create subplots within the figure
-            axes = [fig.add_subplot(gridspec[0, col]) for col in range(self.plot_config["ncols_per_figure"])]
+            axes = []
+            for row in range(plot_config["nrows_per_figure"]):
+                for col in range(plot_config["ncols_per_figure"]):
+                    axes.append(fig.add_subplot(gridspec[row, col]))
 
             # Generate plots based on test type
-            if test_id in TEST_TYPE_ATTRIBUTES["multicast_schemes"]["test_ids"]:
+            if "Multicast Schemes" in test_name:
                 self.plot_bandwidth_multicast(
                     axes[0],
                     plot_data[test_id],
-                    x_axis="grid_dimensions",
-                    lines="multicast_scheme_number",
                     riscv="riscv_0",
                     noc_index=0,
                 )
                 self.plot_bandwidth_multicast(
                     axes[1],
                     plot_data[test_id],
-                    x_axis="grid_dimensions",
-                    lines="multicast_scheme_number",
                     riscv="riscv_0",
                     noc_index=1,
                 )
+            elif "Virtual Channels" in test_name:
+                self.plot_bandwidth_virtual_channels(axes[0], plot_data[test_id], noc_index=0)
+                self.plot_bandwidth_virtual_channels(axes[1], plot_data[test_id], noc_index=1)
             else:  # Packet Sizes
                 self.plot_durations(axes[0], plot_data[test_id])
                 self.plot_data_size_vs_bandwidth(axes[1], plot_data[test_id])
+
+            # Add figure title
+            fig.suptitle(f"{test_name} ({self.arch.upper()})", fontsize=16, fontweight="bold", y=0.98)
 
             # Add comments section to the figure below the plots
             self.add_comment_section(fig, gridspec, test_id)
 
             # Save the plot for this test id
-            test_name = (
-                self.test_id_to_name.get(test_id, f"Test ID {test_id}")
-                if self.test_id_to_name
-                else f"Test ID {test_id}"
-            )
             output_file = os.path.join(self.output_dir, f"{test_name}.png")
             plt.savefig(output_file)
             plt.close(fig)
@@ -207,17 +222,25 @@ class Plotter:
 
     # Packet Sizes: Transaction Size vs Duration
     def plot_durations(self, ax, data):
+        x_key = "transaction_size"
+        y_key = "duration_cycles"
+        series_keys = ["riscv", "num_transactions"]
+
+        title = "Transaction Size vs Duration"
+        xlabel = "Transaction Size (bytes)"
+        ylabel = "Duration (cycles)"
+
         risc_to_kernel_map = RISC_TO_KERNEL_MAP
         self._plot_series(
             ax=ax,
             data=data,
-            x_key="transaction_size",
-            y_key="duration_cycles",
-            series_keys=["riscv", "num_transactions"],
+            x_key=x_key,
+            y_key=y_key,
+            series_keys=series_keys,
             label_format=lambda combo, keys: f"{risc_to_kernel_map[combo[0]]} (Number of Transactions={combo[1]})",
-            title="Transaction Size vs Duration",
-            xlabel="Transaction Size (bytes)",
-            ylabel="Duration (cycles)",
+            title=title,
+            xlabel=xlabel,
+            ylabel=ylabel,
             xscale="log",
             xbase=2,
             yscale="log",
@@ -226,24 +249,40 @@ class Plotter:
 
     # Packet Sizes: Transaction Size vs Bandwidth
     def plot_data_size_vs_bandwidth(self, ax, data):
+        x_key = "transaction_size"
+        y_key = "bandwidth"
+        series_keys = ["riscv", "num_transactions"]
+
+        title = "Transaction Size vs Bandwidth"
+        xlabel = "Transaction Size (bytes)"
+        ylabel = "Bandwidth (bytes/cycle)"
+
         risc_to_kernel_map = RISC_TO_KERNEL_MAP
         self._plot_series(
             ax=ax,
             data=data,
-            x_key="transaction_size",
-            y_key="bandwidth",
-            series_keys=["riscv", "num_transactions"],
+            x_key=x_key,
+            y_key=y_key,
+            series_keys=series_keys,
             label_format=lambda combo, keys: f"{risc_to_kernel_map[combo[0]]} (Transactions={combo[1]})",
-            title="Transaction Size vs Bandwidth",
-            xlabel="Transaction Size (bytes)",
-            ylabel="Bandwidth (bytes/cycle)",
+            title=title,
+            xlabel=xlabel,
+            ylabel=ylabel,
             xscale="log",
             xbase=2,
             add_theoretical_max_bw=True,
         )
 
     # Multicast Schemes: Grid Dimensions vs Bandwidth
-    def plot_bandwidth_multicast(self, ax, data, x_axis, lines, riscv, noc_index):
+    def plot_bandwidth_multicast(self, ax, data, riscv, noc_index):
+        x_key = "grid_dimensions"
+        y_key = "bandwidth"
+        series_keys = ["multicast_scheme_number"]
+
+        title = "Grid Dimensions vs Bandwidth"
+        xlabel = "Grid Dimensions"
+        ylabel = "Bandwidth (bytes/cycle)"
+
         filtered_data = {
             r: [run for run in runs if run.get("noc_index") == noc_index] for r, runs in data.items() if r == riscv
         }
@@ -254,13 +293,59 @@ class Plotter:
         self._plot_series(
             ax=ax,
             data=filtered_data,
-            x_key=x_axis,
-            y_key="bandwidth",
-            series_keys=[lines],
+            x_key=x_key,
+            y_key=y_key,
+            series_keys=series_keys,
             label_format=lambda combo, keys: f"{riscv.upper()}, NoC {noc_index}, {keys[0].replace('_', ' ').title()}: {combo[0]}",
-            title=f"{x_axis.replace('_', ' ').title()} vs Bandwidth",
-            xlabel=f"{x_axis.replace('_', ' ').title()}",
-            ylabel="Bandwidth (bytes/cycle)",
+            title=title,
+            xlabel=xlabel,
+            ylabel=ylabel,
+        )
+
+    def plot_bandwidth_virtual_channels(self, ax, data, noc_index):
+        x_key = "transaction_size"
+        y_key = "bandwidth"
+        series_keys = ["num_virtual_channels"]
+
+        title = f"Transaction Size vs Bandwidth (NOC {noc_index})"
+        xlabel = "Transaction Size (bytes)"
+        ylabel = "Bandwidth (bytes/cycle)"
+
+        # Filter data for the specific NOC index
+        filtered_data = {}
+        for riscv, runs in data.items():
+            filtered_runs = [run for run in runs if run.get("noc_index") == noc_index]
+            if filtered_runs:
+                filtered_data[riscv] = filtered_runs
+
+        if not filtered_data:
+            # If no data for this NOC, show empty plot with appropriate message
+            ax.text(
+                0.5,
+                0.5,
+                f"No data available for NOC {noc_index}",
+                horizontalalignment="center",
+                verticalalignment="center",
+                transform=ax.transAxes,
+                fontsize=12,
+            )
+            ax.set_title(title)
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(ylabel)
+            return
+
+        self._plot_series(
+            ax=ax,
+            data=filtered_data,
+            x_key=x_key,
+            y_key=y_key,
+            series_keys=series_keys,
+            label_format=lambda combo, keys: f"{combo[0]} Virtual Channels",
+            title=title,
+            xlabel=xlabel,
+            ylabel=ylabel,
+            xscale="log",
+            xbase=2,
         )
 
     # Add comments section to the figure below the plots

@@ -4,7 +4,7 @@
 
 #include "moreh_helper_functions.hpp"
 
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
@@ -254,7 +254,7 @@ void check_tensor(
             "{} {} only supports {} layout.",
             op_name,
             tensor_name,
-            magic_enum::enum_name(layout));
+            enchantum::to_string(layout));
     }
     TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "{} {} need to be on device!", op_name, tensor_name);
     TT_FATAL(tensor.buffer() != nullptr, "{} {} need to be allocated in buffers on device!", op_name, tensor_name);
@@ -274,7 +274,7 @@ void check_tensor(
                 if (!is_first) {
                     dtype_string += ", ";
                 }
-                dtype_string += fmt::format("{}", magic_enum::enum_name(data_type));
+                dtype_string += fmt::format("{}", enchantum::to_string(data_type));
                 is_first = false;
             }
             dtype_string += "]";

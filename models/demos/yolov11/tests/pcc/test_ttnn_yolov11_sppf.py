@@ -5,6 +5,7 @@
 import pytest
 
 import ttnn
+from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE
 from models.demos.yolov11.reference.yolov11 import SPPF as torch_sppf
 from models.demos.yolov11.tt.model_preprocessing import create_yolov11_input_tensors, create_yolov11_model_parameters
 from models.demos.yolov11.tt.ttnn_yolov11_sppf import TtnnSPPF as ttnn_sppf
@@ -17,7 +18,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ([256, 512], [128, 256], [1, 1], [1, 1], [0, 0], [1, 1], [1, 1], [1, 256, 20, 20]),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV11_L1_SMALL_SIZE}], indirect=True)
 def test_yolo_v11_sppf(
     device,
     reset_seeds,

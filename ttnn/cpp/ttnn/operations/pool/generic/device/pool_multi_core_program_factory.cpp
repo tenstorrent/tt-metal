@@ -49,8 +49,8 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
             config.ceil_h,
             config.ceil_w,
             config.count_include_pad,
-            config.pad_h,
-            config.pad_w,
+            config.pad_t + config.pad_b,
+            config.pad_l + config.pad_r,
             config.divisor_override),
         "Avg pool scalars config should be calulated only for ceil_mode == true and "
         "(ceil_pad_h > 0 || ceil_pad_w > 0) or count_include_pad == false and (pad_h > 0 || pad_w > 0)");
@@ -61,30 +61,16 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
 
     for (uint32_t i = 0; i < config.out_nhw_per_core; i++) {
         // Compute starting and ending indices of the pooling window
-        int h_start = output_stick_x * config.stride_h - config.pad_h;
-        int w_start = output_stick_y * config.stride_w - config.pad_w;
-        int h_end = std::min(
-            h_start + static_cast<int>(config.kernel_h), static_cast<int>(config.in_h + config.pad_h + config.ceil_h));
-        int w_end = std::min(
-            w_start + static_cast<int>(config.kernel_w), static_cast<int>(config.in_w + config.pad_w + config.ceil_w));
+        int h_start = output_stick_x * config.stride_h - config.pad_t;
+        int w_start = output_stick_y * config.stride_w - config.pad_l;
+        // omit any ceiling mode related padding from end point calculations as these are not used in the
+        // calculation of the pool area even when count_include_pad is on
+        int h_end = std::min(h_start + static_cast<int>(config.kernel_h), static_cast<int>(config.in_h + config.pad_b));
+        int w_end = std::min(w_start + static_cast<int>(config.kernel_w), static_cast<int>(config.in_w + config.pad_r));
 
         int pool_area = 0;
         if (config.count_include_pad) {
-            // Initial pool area
             pool_area = (h_end - h_start) * (w_end - w_start);
-
-            // Calculate ceil induced padding overflow beyond input dimensions
-            int pad_h_over = std::max(h_end - static_cast<int>(config.in_h) - static_cast<int>(config.pad_h), 0);
-            int pad_w_over = std::max(w_end - static_cast<int>(config.in_w) - static_cast<int>(config.pad_w), 0);
-
-            // Adjust pool area to exclude padded overflow
-            pool_area -= pad_h_over * config.kernel_w;
-            pool_area -= pad_w_over * config.kernel_h;
-
-            // Re-add intersection if both directions overflowed
-            if (pad_h_over > 0 && pad_w_over > 0) {
-                pool_area += pad_h_over * pad_w_over;
-            }
         } else {
             int valid_h_start = (h_start > 0) ? h_start : 0;
             int valid_w_start = (w_start > 0) ? w_start : 0;
@@ -234,8 +220,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t kernel_w,
     uint32_t stride_h,
     uint32_t stride_w,
-    uint32_t pad_h,
-    uint32_t pad_w,
+    uint32_t pad_t,
+    uint32_t pad_b,
+    uint32_t pad_l,
+    uint32_t pad_r,
     uint32_t ceil_pad_h,
     uint32_t ceil_pad_w,
     bool ceil_mode,
@@ -258,6 +246,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
     FactoryParameters params = get_factory_parameters(num_shards_c, input, kernel_h, kernel_w, pool_type);
+    uint32_t pad_h = pad_t + pad_b;
+    uint32_t pad_w = pad_l + pad_r;
     const bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
 
@@ -393,8 +383,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
             .ceil_h = ceil_pad_h,
             .ceil_w = ceil_pad_w,
             .count_include_pad = count_include_pad,
-            .pad_h = pad_h / 2,  // pad_h is the total padding, so divide by 2 for each side
-            .pad_w = pad_w / 2,  // pad_w is the total padding, so divide by 2 for each side
+            .pad_t = pad_t,
+            .pad_b = pad_b,
+            .pad_l = pad_l,
+            .pad_r = pad_r,
             .out_nhw_per_core = out_nhw_per_core,
             .divisor_override = divisor_override};
         config_tensor = create_scalar_config_tensor(
@@ -609,8 +601,10 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     auto kernel_w = sliding_window_config.window_hw.second;
     auto stride_h = sliding_window_config.stride_hw.first;
     auto stride_w = sliding_window_config.stride_hw.second;
-    auto pad_h = sliding_window_config.get_pad_h();
-    auto pad_w = sliding_window_config.get_pad_w();
+    auto pad_t = sliding_window_config.get_pad_top();
+    auto pad_b = sliding_window_config.get_pad_bottom();
+    auto pad_l = sliding_window_config.get_pad_left();
+    auto pad_r = sliding_window_config.get_pad_right();
     auto ceil_pad_h = sliding_window_config.get_ceil_pad_h();
     auto ceil_pad_w = sliding_window_config.get_ceil_pad_w();
     auto ceil_mode = sliding_window_config.ceil_mode;
@@ -645,8 +639,10 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         kernel_w,
         stride_h,
         stride_w,
-        pad_h,
-        pad_w,
+        pad_t,
+        pad_b,
+        pad_l,
+        pad_r,
         ceil_pad_h,
         ceil_pad_w,
         ceil_mode,

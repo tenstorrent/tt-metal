@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include <magic_enum/magic_enum.hpp>
 #include <umd/device/tt_core_coordinates.h>
 #include <array>
 #include <cstdint>

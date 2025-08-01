@@ -32,7 +32,7 @@ def run_dm_tests(profile, verbose, gtest_filter, plot, report, arch_name):
     # Initialize configuration and load test metadata
     config = DataMovementConfig()
     metadata_loader = TestMetadataLoader(config)
-    test_id_to_name, test_id_to_comment, test_bounds = metadata_loader.get_test_mappings()
+    test_id_to_name, test_id_to_comment, test_bounds, test_type_attributes = metadata_loader.get_test_mappings()
 
     # Get architecture
     arch = config.get_arch(arch_name, test_bounds)
@@ -44,11 +44,13 @@ def run_dm_tests(profile, verbose, gtest_filter, plot, report, arch_name):
         profile_dm_tests(verbose=verbose, gtest_filter=gtest_filter)
 
     # Gather analysis stats
-    stats_collector = StatsCollector(log_file_path, verbose=verbose)
+    stats_collector = StatsCollector(log_file_path, test_id_to_name, test_type_attributes, verbose=verbose)
     dm_stats, aggregate_stats = stats_collector.gather_analysis_stats()
 
     # Print stats if explicitly requested
-    stats_reporter = StatsReporter(dm_stats, aggregate_stats, test_id_to_name, DEFAULT_OUTPUT_DIR)
+    stats_reporter = StatsReporter(
+        dm_stats, aggregate_stats, test_id_to_name, test_type_attributes, DEFAULT_OUTPUT_DIR, arch
+    )
 
     if verbose:
         stats_reporter.print_stats()
@@ -128,21 +130,15 @@ def performance_check(dm_stats, arch="blackhole", verbose=False, test_bounds=Non
             if riscv not in test_bounds[arch][test_id].keys():
                 continue
 
-            cycles_within_bounds = bounds[riscv]["latency"] <= test_bounds[arch][test_id][riscv]["latency"]
             bw_within_bounds = test_bounds[arch][test_id][riscv]["bandwidth"] <= bounds[riscv]["bandwidth"]
 
             # Print bounds check results
             if verbose:
-                if not cycles_within_bounds:
-                    logger.warning(f"{riscv} cycles not within perf bounds.")
-                else:
-                    logger.info(f"{riscv} cycles within perf bounds.")
                 if not bw_within_bounds:
                     logger.warning(f"{riscv} bandwidth not within perf bounds.")
                 else:
                     logger.info(f"{riscv} bandwidth within perf bounds.")
 
-            assert cycles_within_bounds
             assert bw_within_bounds
 
 

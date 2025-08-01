@@ -6,6 +6,9 @@
 
 #include "silu_bw_program_factory.hpp"
 
+#include <enchantum/enchantum.hpp>
+
+
 namespace ttml::metal::ops::silu_bw::device {
 
 SiLUBackwardDeviceOperation::program_factory_t SiLUBackwardDeviceOperation::select_program_factory(
@@ -24,7 +27,7 @@ void SiLUBackwardDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             tensor.device()->arch() == tt::ARCH::WORMHOLE_B0,
             "SiLUBackward operation is only supported on Wormhole. Device arch: {}. Tensor name {}",
-            magic_enum::enum_name(tensor.device()->arch()),
+            enchantum::to_string(tensor.device()->arch()),
             name);
 
         TT_FATAL(

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <enchantum/enchantum.hpp>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
@@ -231,8 +232,8 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         (std::uint32_t)input_block_size_bytes};
 
     std::map<std::string, std::string> embedding_defines = {
-        {magic_enum::enum_name(embeddings_type).data(), "1"},
-        {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
+        {enchantum::to_string(embeddings_type).data(), "1"},
+        {enchantum::to_string(embeddings_index_type).data(), "1"}};
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -508,8 +509,8 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     }
 
     std::map<std::string, std::string> embedding_defines = {
-        {magic_enum::enum_name(embeddings_type).data(), "1"},
-        {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
+        {enchantum::to_string(embeddings_type).data(), "1"},
+        {enchantum::to_string(embeddings_index_type).data(), "1"}};
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -728,8 +729,8 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     }
 
     std::map<std::string, std::string> embedding_defines = {
-        {magic_enum::enum_name(embeddings_type).data(), "1"},
-        {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
+        {enchantum::to_string(embeddings_type).data(), "1"},
+        {enchantum::to_string(embeddings_index_type).data(), "1"}};
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,

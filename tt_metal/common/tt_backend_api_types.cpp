@@ -5,7 +5,7 @@
 #include "tt_backend_api_types.hpp"
 
 #include <fmt/base.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <string_view>
 
 std::string tt::get_string(tt::ARCH arch) {
@@ -55,7 +55,7 @@ tt::ARCH tt::get_arch_from_string(const std::string& arch_str) {
 }
 
 auto fmt::formatter<tt::DataFormat>::format(tt::DataFormat df, format_context& ctx) const -> format_context::iterator {
-    const auto name = magic_enum::enum_name(df);
+    const auto name = enchantum::to_string(df);
 
     if (name.empty()) {
         throw std::invalid_argument("Unknown format");

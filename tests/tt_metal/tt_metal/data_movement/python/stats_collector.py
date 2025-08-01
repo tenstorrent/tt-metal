@@ -13,9 +13,11 @@ from tests.tt_metal.tt_metal.data_movement.python.constants import *
 
 
 class StatsCollector:
-    def __init__(self, file_path, verbose=False):
+    def __init__(self, file_path, test_id_to_name, test_type_attributes, verbose=False):
         self.file_path = file_path
         self.verbose = verbose
+        self.test_id_to_name = test_id_to_name
+        self.test_type_attributes = test_type_attributes
         # Map each RISC-V processor to its corresponding analysis/event key
         self.riscv_to_analysis_event = {
             "riscv_1": {"analysis": "riscv_1_analysis", "events": "riscv_1_events"},
@@ -105,7 +107,7 @@ class StatsCollector:
         and includes the attributes for each run_host_id.
 
         This function now also dynamically adds test-specific attributes
-        based on the TEST_TYPE_ATTRIBUTES mapping in constants.py.
+        based on the test_type_attributes mapping in test_config.yaml.
 
         Args:
             dm_stats: nested dict as produced by gather_analysis_stats
@@ -164,8 +166,9 @@ class StatsCollector:
                 }
 
                 # Dynamically add attributes based on test type
-                for test_type, config in TEST_TYPE_ATTRIBUTES.items():
-                    if test_id in config["test_ids"]:
+                test_name = self.test_id_to_name.get(test_id, "")
+                for test_type, config in self.test_type_attributes.items():
+                    if test_type.replace("_", " ").title() in test_name:
                         for key, value in config["attributes"].items():
                             agg_data[value] = attributes.get(key)
                         # For multicast, create a grid dimension string

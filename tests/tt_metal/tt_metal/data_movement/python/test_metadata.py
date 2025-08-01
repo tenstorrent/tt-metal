@@ -4,6 +4,7 @@
 
 import yaml
 from typing import Dict, Any, Tuple
+import os
 
 
 class TestMetadataLoader:
@@ -18,6 +19,11 @@ class TestMetadataLoader:
     def load_test_bounds(self) -> Dict[str, Any]:
         """Load test bounds from YAML file."""
         with open(self.config.test_bounds_path, "r") as file:
+            return yaml.safe_load(file)
+
+    def load_test_type_attributes(self) -> Dict[str, Any]:
+        """Loads the test type attributes from the YAML file."""
+        with open(self.config.test_type_attributes_path, "r") as file:
             return yaml.safe_load(file)
 
     def _get_test_id_to_name(self, test_info: Dict[str, Any]) -> Dict[str, str]:
@@ -48,13 +54,16 @@ class TestMetadataLoader:
 
         return bounds
 
-    def get_test_mappings(self) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, Dict[str, Any]]]:
+    def get_test_mappings(
+        self,
+    ) -> Tuple[Dict[str, str], Dict[str, str], Dict[str, Dict[str, Any]], Dict[str, Any]]:
         """Get all test mappings and bounds."""
         test_info = self.load_test_information()
         test_bounds_data = self.load_test_bounds()
+        test_type_attributes = self.load_test_type_attributes()
 
         test_id_to_name = self._get_test_id_to_name(test_info)
         test_id_to_comment = self._get_test_id_to_comment(test_info)
         test_bounds = self._get_test_bounds(test_bounds_data, test_id_to_name)
 
-        return test_id_to_name, test_id_to_comment, test_bounds
+        return test_id_to_name, test_id_to_comment, test_bounds, test_type_attributes
