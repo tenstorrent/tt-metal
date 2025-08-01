@@ -21,19 +21,6 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(tt::tt
                                      : tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
 }
 
-std::vector<tt::tt_metal::IDevice*> get_axis_devices(
-    const MeshDeviceView& mesh_view, uint32_t axis, uint32_t axis_value) {
-    // axis == 1 -> horizontal row (East/West)
-    // axis == 0 -> vertical column (North/South)
-    if (axis == 1) {
-        return mesh_view.get_devices_on_row(axis_value);
-    } else if (axis == 0) {
-        return mesh_view.get_devices_on_column(axis_value);
-    }
-    TT_THROW("Axis must be 0 (column) or 1 (row)");
-    return {};
-}
-
 uint32_t device_index(const std::vector<tt::tt_metal::IDevice*>& devices, const tt::tt_metal::IDevice* device) {
     for (uint32_t i = 0; i < devices.size(); i++) {
         if (devices[i] == device) {
