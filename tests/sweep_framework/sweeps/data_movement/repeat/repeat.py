@@ -15,7 +15,7 @@ from functools import reduce
 
 TIMEOUT = 15
 
-dtypes = [ttnn.bfloat16]
+dtypes = [ttnn.bfloat16, ttnn.int32]
 shapes = [(1, 2, 4, 4), (1, 1, 1, 1)] + [(1, 2, 2 * j, 4 * j) for j in range(2, 12)]
 repeat_specs = [(2, 2, 2, 2), (1, 2, 1, 1)] + [(1, 3, 2 * j, 4 * j) for j in range(2, 12)]
 
