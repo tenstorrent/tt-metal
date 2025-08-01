@@ -12,7 +12,7 @@ void compressed_routing_table_t<ArraySize>::set_direction(std::uint16_t index, s
     std::uint32_t byte_index = bit_index / BITS_PER_BYTE;
     std::uint32_t bit_offset = bit_index % BITS_PER_BYTE;
 
-    if (bit_offset <= 5) {
+    if (bit_offset <= BITS_PER_BYTE - BITS_PER_COMPRESSED_ENTRY) {
         // All 3 bits are in the same byte
         packed_directions[byte_index] &= ~(COMPRESSED_ENTRY_MASK << bit_offset);             // Clear bits
         packed_directions[byte_index] |= (direction & COMPRESSED_ENTRY_MASK) << bit_offset;  // Set bits

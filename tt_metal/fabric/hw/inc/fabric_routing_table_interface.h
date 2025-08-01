@@ -17,7 +17,7 @@ inline std::uint8_t compressed_routing_table_t<ArraySize>::get_direction(std::ui
     std::uint32_t byte_index = bit_index / BITS_PER_BYTE;
     std::uint32_t bit_offset = bit_index % BITS_PER_BYTE;
 
-    if (bit_offset <= 5) {
+    if (bit_offset <= BITS_PER_BYTE - BITS_PER_COMPRESSED_ENTRY) {
         // All 3 bits are in the same byte
         return (packed_directions[byte_index] >> bit_offset) & COMPRESSED_ENTRY_MASK;
     } else {

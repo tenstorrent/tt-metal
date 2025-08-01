@@ -9,8 +9,6 @@
 namespace tt::tt_fabric {
 
 extern template class compressed_routing_table_t<MAX_MESH_SIZE>;
-#if MAX_MESH_SIZE != MAX_NUM_MESHES
 extern template class compressed_routing_table_t<MAX_NUM_MESHES>;
-#endif
 
 }  // namespace tt::tt_fabric
