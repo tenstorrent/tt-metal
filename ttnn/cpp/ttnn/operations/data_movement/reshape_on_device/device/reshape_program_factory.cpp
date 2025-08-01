@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"
 
 using namespace tt::tt_metal;
@@ -42,7 +43,8 @@ operation::ProgramWithCallbacks reshape_tile_single_core(const Tensor& a, Tensor
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     uint32_t alignment = src0_is_dram ? hal::get_dram_alignment() : hal::get_l1_alignment();
 
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram, alignment};
+    std::vector<uint32_t> reader_compile_time_args = {alignment};
+    tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram};
@@ -255,25 +257,12 @@ operation::ProgramWithCallbacks reshape_rm_multi_core(const Tensor& a, Tensor& o
     tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     // Reader compile-time args
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool old_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(old_stick_size);
-    uint32_t old_log2_stick_size = old_stick_size_is_power_of_two ? (std::uint32_t)std::log2(old_stick_size) : 0;
-    std::vector<uint32_t> reader_ct_args = {
-        (std::uint32_t)src0_is_dram,
-        (std::uint32_t)old_stick_size,
-        (std::uint32_t)old_stick_size_is_power_of_two,
-        (std::uint32_t)old_stick_size_is_power_of_two ? old_log2_stick_size : old_stick_size};
+    std::vector<uint32_t> reader_ct_args = {old_stick_size};
+    tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
 
     // Writer compile-time args
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool new_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(new_stick_size);
-    uint32_t new_log2_stick_size = new_stick_size_is_power_of_two ? (std::uint32_t)std::log2(new_stick_size) : 0;
-    std::vector<uint32_t> writer_ct_args = {
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)dst_is_dram,
-        (std::uint32_t)new_stick_size,
-        (std::uint32_t)new_stick_size_is_power_of_two,
-        (std::uint32_t)new_stick_size_is_power_of_two ? new_log2_stick_size : new_stick_size};
+    std::vector<uint32_t> writer_ct_args = {src0_cb_index, new_stick_size};
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
