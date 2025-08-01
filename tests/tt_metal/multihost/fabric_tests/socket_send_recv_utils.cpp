@@ -94,8 +94,13 @@ void test_socket_send_recv(
 
     for (int i = 0; i < num_txns; i++) {
         if (distributed_context->rank() == sender_rank) {
-            auto sender_data_shard_params =
-                ShardSpecBuffer(CoreRangeSet(sender_core), {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {1, 1});
+            // TODO: Change to CoreRangeSet to all senders
+            auto sender_data_shard_params = ShardSpecBuffer(
+                CoreRangeSet(sender_core),
+                {1, 1},
+                ShardOrientation::ROW_MAJOR,
+                {1, 1},
+                {1, 1} /*TODO CHANGE TO{num cores, 1}*/);
 
             const DeviceLocalBufferConfig sender_device_local_config{
                 .page_size = data_size,
