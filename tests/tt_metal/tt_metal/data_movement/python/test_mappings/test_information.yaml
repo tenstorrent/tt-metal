@@ -131,6 +131,9 @@ tests:
   54:
     name: "One to All Multicast Linked Directed Ideal"
 
+  55:
+    name: "Loopback Directed Ideal"
+
   60:
     name: "All to All Packet Sizes"
 

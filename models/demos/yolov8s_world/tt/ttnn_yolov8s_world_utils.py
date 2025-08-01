@@ -9,12 +9,9 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 from loguru import logger
-from ttnn.model_preprocessing import (
+from ttnn.model_preprocessing import (  # preprocess_layernorm_parameter,; preprocess_linear_bias,; preprocess_linear_weight,
     ParameterDict,
     ParameterList,
-    preprocess_layernorm_parameter,
-    preprocess_linear_bias,
-    preprocess_linear_weight,
 )
 
 import ttnn
@@ -27,6 +24,24 @@ from models.demos.yolov8s_world.reference.yolov8s_world import (
     WorldDetect,
     WorldModel,
 )
+
+
+def preprocess_linear_weight(weight, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
+    weight = weight.T.contiguous()
+    weight = ttnn.from_torch(weight, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
+    return weight
+
+
+def preprocess_linear_bias(bias, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
+    bias = bias.reshape((1, -1))
+    bias = ttnn.from_torch(bias, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
+    return bias
+
+
+def preprocess_layernorm_parameter(parameter, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
+    parameter = parameter.reshape((1, -1))
+    parameter = ttnn.from_torch(parameter, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
+    return parameter
 
 
 def move_to_device(object, device):
@@ -210,7 +225,7 @@ def ttnn_decode_bboxes(device, distance, anchor_points, xywh=True, dim=1):
         return ttnn.concat([c_xy, wh], 1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
 
-def make_anchors(device, feats, strides, grid_cell_offset=0.5):
+def make_anchors(device, feats, strides, mesh_mapper=None, grid_cell_offset=0.5):
     anchor_points, stride_tensor = [], []
     assert feats is not None
     for i, stride in enumerate(strides):
@@ -226,10 +241,20 @@ def make_anchors(device, feats, strides, grid_cell_offset=0.5):
 
     return (
         ttnn.from_torch(
-            a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+            a,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
         ),
         ttnn.from_torch(
-            b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+            b,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
         ),
     )
 
@@ -267,6 +292,8 @@ def fold_batch_norm2d_into_conv2d_split(conv, bn):
 
 
 def create_custom_preprocessor(device):
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
+
     def custom_preprocessor(model, name, ttnn_module_args):
         parameters = {}
         if isinstance(model, WorldModel):
@@ -276,9 +303,11 @@ def create_custom_preprocessor(device):
                 if isinstance(child, Conv):
                     conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(child.conv, child.bn)
                     parameters["model"][index]["conv"] = {}
-                    parameters["model"][index]["conv"]["weight"] = ttnn.from_torch(conv_weight)
+                    parameters["model"][index]["conv"]["weight"] = ttnn.from_torch(
+                        conv_weight, mesh_mapper=weights_mesh_mapper
+                    )
                     parameters["model"][index]["conv"]["bias"] = ttnn.from_torch(
-                        conv_bias.reshape(1, 1, 1, -1),
+                        conv_bias.reshape(1, 1, 1, -1), mesh_mapper=weights_mesh_mapper
                     )
                 elif isinstance(child, C2f):
                     parameters["model"][index]["cv1_a"] = {}
@@ -287,28 +316,28 @@ def create_custom_preprocessor(device):
                     )
                     parameters["model"][index]["cv1_a"]["conv"] = {}
                     parameters["model"][index]["cv1_a"]["conv"]["weight"] = ttnn.from_torch(
-                        conv_weight_a,
+                        conv_weight_a, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["cv1_a"]["conv"]["bias"] = ttnn.from_torch(
-                        conv_bias_a,
+                        conv_bias_a, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["cv1_b"] = {}
                     parameters["model"][index]["cv1_b"]["conv"] = {}
                     parameters["model"][index]["cv1_b"]["conv"]["weight"] = ttnn.from_torch(
-                        conv_weight_b,
+                        conv_weight_b, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["cv1_b"]["conv"]["bias"] = ttnn.from_torch(
-                        conv_bias_b,
+                        conv_bias_b, mesh_mapper=weights_mesh_mapper
                     )
 
                     parameters["model"][index]["cv2"] = {}
                     conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(child.cv2.conv, child.cv2.bn)
                     parameters["model"][index]["cv2"]["conv"] = {}
                     parameters["model"][index]["cv2"]["conv"]["weight"] = ttnn.from_torch(
-                        conv_weight,
+                        conv_weight, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["cv2"]["conv"]["bias"] = ttnn.from_torch(
-                        conv_bias.reshape(1, 1, 1, -1),
+                        conv_bias.reshape(1, 1, 1, -1), mesh_mapper=weights_mesh_mapper
                     )
 
                     parameters["model"][index]["m"] = {}
@@ -319,40 +348,40 @@ def create_custom_preprocessor(device):
                         conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(child_2.cv1.conv, child_2.cv1.bn)
                         parameters["model"][index]["m"][index_2]["cv1"]["conv"] = {}
                         parameters["model"][index]["m"][index_2]["cv1"]["conv"]["weight"] = ttnn.from_torch(
-                            conv_weight,
+                            conv_weight, mesh_mapper=weights_mesh_mapper
                         )
                         parameters["model"][index]["m"][index_2]["cv1"]["conv"]["bias"] = ttnn.from_torch(
-                            conv_bias.reshape(1, 1, 1, -1),
+                            conv_bias.reshape(1, 1, 1, -1), mesh_mapper=weights_mesh_mapper
                         )
 
                         parameters["model"][index]["m"][index_2]["cv2"] = {}
                         conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(child_2.cv2.conv, child_2.cv2.bn)
                         parameters["model"][index]["m"][index_2]["cv2"]["conv"] = {}
                         parameters["model"][index]["m"][index_2]["cv2"]["conv"]["weight"] = ttnn.from_torch(
-                            conv_weight,
+                            conv_weight, mesh_mapper=weights_mesh_mapper
                         )
                         parameters["model"][index]["m"][index_2]["cv2"]["conv"]["bias"] = ttnn.from_torch(
-                            conv_bias.reshape(1, 1, 1, -1),
+                            conv_bias.reshape(1, 1, 1, -1), mesh_mapper=weights_mesh_mapper
                         )
                 elif isinstance(child, SPPF):
                     parameters["model"][index]["cv1"] = {}
                     conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(child.cv1.conv, child.cv1.bn)
                     parameters["model"][index]["cv1"]["conv"] = {}
                     parameters["model"][index]["cv1"]["conv"]["weight"] = ttnn.from_torch(
-                        conv_weight,
+                        conv_weight, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["cv1"]["conv"]["bias"] = ttnn.from_torch(
-                        conv_bias.reshape(1, 1, 1, -1),
+                        conv_bias.reshape(1, 1, 1, -1), mesh_mapper=weights_mesh_mapper
                     )
 
                     parameters["model"][index]["cv2"] = {}
                     conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(child.cv2.conv, child.cv2.bn)
                     parameters["model"][index]["cv2"]["conv"] = {}
                     parameters["model"][index]["cv2"]["conv"]["weight"] = ttnn.from_torch(
-                        conv_weight,
+                        conv_weight, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["cv2"]["conv"]["bias"] = ttnn.from_torch(
-                        conv_bias.reshape(1, 1, 1, -1),
+                        conv_bias.reshape(1, 1, 1, -1), mesh_mapper=weights_mesh_mapper
                     )
                 elif isinstance(child, C2fAttn):
                     parameters["model"][index]["cv1_a"] = {}
@@ -361,28 +390,28 @@ def create_custom_preprocessor(device):
                     )
                     parameters["model"][index]["cv1_a"]["conv"] = {}
                     parameters["model"][index]["cv1_a"]["conv"]["weight"] = ttnn.from_torch(
-                        conv_weight_a,
+                        conv_weight_a, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["cv1_a"]["conv"]["bias"] = ttnn.from_torch(
-                        conv_bias_a,
+                        conv_bias_a, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["cv1_b"] = {}
                     parameters["model"][index]["cv1_b"]["conv"] = {}
                     parameters["model"][index]["cv1_b"]["conv"]["weight"] = ttnn.from_torch(
-                        conv_weight_b,
+                        conv_weight_b, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["cv1_b"]["conv"]["bias"] = ttnn.from_torch(
-                        conv_bias_b,
+                        conv_bias_b, mesh_mapper=weights_mesh_mapper
                     )
 
                     parameters["model"][index]["cv2"] = {}
                     conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(child.cv2.conv, child.cv2.bn)
                     parameters["model"][index]["cv2"]["conv"] = {}
                     parameters["model"][index]["cv2"]["conv"]["weight"] = ttnn.from_torch(
-                        conv_weight,
+                        conv_weight, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["cv2"]["conv"]["bias"] = ttnn.from_torch(
-                        conv_bias.reshape(1, 1, 1, -1),
+                        conv_bias.reshape(1, 1, 1, -1), mesh_mapper=weights_mesh_mapper
                     )
 
                     parameters["model"][index]["m"] = {}
@@ -393,20 +422,20 @@ def create_custom_preprocessor(device):
                         conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(child_2.cv1.conv, child_2.cv1.bn)
                         parameters["model"][index]["m"][index_2]["cv1"]["conv"] = {}
                         parameters["model"][index]["m"][index_2]["cv1"]["conv"]["weight"] = ttnn.from_torch(
-                            conv_weight,
+                            conv_weight, mesh_mapper=weights_mesh_mapper
                         )
                         parameters["model"][index]["m"][index_2]["cv1"]["conv"]["bias"] = ttnn.from_torch(
-                            conv_bias.reshape(1, 1, 1, -1),
+                            conv_bias.reshape(1, 1, 1, -1), mesh_mapper=weights_mesh_mapper
                         )
 
                         parameters["model"][index]["m"][index_2]["cv2"] = {}
                         conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(child_2.cv2.conv, child_2.cv2.bn)
                         parameters["model"][index]["m"][index_2]["cv2"]["conv"] = {}
                         parameters["model"][index]["m"][index_2]["cv2"]["conv"]["weight"] = ttnn.from_torch(
-                            conv_weight,
+                            conv_weight, mesh_mapper=weights_mesh_mapper
                         )
                         parameters["model"][index]["m"][index_2]["cv2"]["conv"]["bias"] = ttnn.from_torch(
-                            conv_bias.reshape(1, 1, 1, -1),
+                            conv_bias.reshape(1, 1, 1, -1), mesh_mapper=weights_mesh_mapper
                         )
                     parameters["model"][index]["attn"] = {}
                     if child.attn.ec == None:
@@ -419,13 +448,14 @@ def create_custom_preprocessor(device):
                         layout=ttnn.TILE_LAYOUT,
                         memory_config=ttnn.L1_MEMORY_CONFIG,
                         device=device,
+                        mesh_mapper=weights_mesh_mapper,
                     )
                     parameters["model"][index]["attn"]["gl"] = {}
                     parameters["model"][index]["attn"]["gl"]["weight"] = preprocess_linear_weight(
-                        child.attn.gl.weight, dtype=ttnn.bfloat8_b
+                        child.attn.gl.weight, dtype=ttnn.bfloat8_b, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["attn"]["gl"]["bias"] = preprocess_linear_bias(
-                        child.attn.gl.bias, dtype=ttnn.bfloat8_b
+                        child.attn.gl.bias, dtype=ttnn.bfloat8_b, mesh_mapper=weights_mesh_mapper
                     )
 
                     parameters["model"][index]["attn"]["proj_conv"] = {}
@@ -434,10 +464,10 @@ def create_custom_preprocessor(device):
                     )
                     parameters["model"][index]["attn"]["proj_conv"]["conv"] = {}
                     parameters["model"][index]["attn"]["proj_conv"]["conv"]["weight"] = ttnn.from_torch(
-                        conv_weight,
+                        conv_weight, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["attn"]["proj_conv"]["conv"]["bias"] = ttnn.from_torch(
-                        conv_bias.reshape(1, 1, 1, -1),
+                        conv_bias.reshape(1, 1, 1, -1), mesh_mapper=weights_mesh_mapper
                     )
                 elif isinstance(child, ImagePoolingAttn):
                     ##query
@@ -445,19 +475,19 @@ def create_custom_preprocessor(device):
                     # layernorm
                     parameters["model"][index]["query"][0] = {}
                     parameters["model"][index]["query"][0]["weight"] = preprocess_layernorm_parameter(
-                        child.query[0].weight, dtype=ttnn.bfloat8_b
+                        child.query[0].weight, dtype=ttnn.bfloat8_b, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["query"][0]["bias"] = preprocess_layernorm_parameter(
-                        child.query[0].bias, dtype=ttnn.bfloat8_b
+                        child.query[0].bias, dtype=ttnn.bfloat8_b, mesh_mapper=weights_mesh_mapper
                     )
 
                     # linear
                     parameters["model"][index]["query"][1] = {}
                     parameters["model"][index]["query"][1]["weight"] = preprocess_linear_weight(
-                        child.query[1].weight, dtype=ttnn.bfloat8_b
+                        child.query[1].weight, dtype=ttnn.bfloat8_b, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["query"][1]["bias"] = preprocess_linear_bias(
-                        child.query[1].bias, dtype=ttnn.bfloat8_b
+                        child.query[1].bias, dtype=ttnn.bfloat8_b, mesh_mapper=weights_mesh_mapper
                     )
 
                     ##key
@@ -465,19 +495,19 @@ def create_custom_preprocessor(device):
                     # layernorm
                     parameters["model"][index]["key"][0] = {}
                     parameters["model"][index]["key"][0]["weight"] = preprocess_layernorm_parameter(
-                        child.key[0].weight, dtype=ttnn.bfloat8_b
+                        child.key[0].weight, dtype=ttnn.bfloat8_b, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["key"][0]["bias"] = preprocess_layernorm_parameter(
-                        child.key[0].bias, dtype=ttnn.bfloat8_b
+                        child.key[0].bias, dtype=ttnn.bfloat8_b, mesh_mapper=weights_mesh_mapper
                     )
 
                     # linear
                     parameters["model"][index]["key"][1] = {}
                     parameters["model"][index]["key"][1]["weight"] = preprocess_linear_weight(
-                        child.key[1].weight, dtype=ttnn.bfloat8_b
+                        child.key[1].weight, dtype=ttnn.bfloat8_b, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["key"][1]["bias"] = preprocess_linear_bias(
-                        child.key[1].bias, dtype=ttnn.bfloat8_b
+                        child.key[1].bias, dtype=ttnn.bfloat8_b, mesh_mapper=weights_mesh_mapper
                     )
 
                     ##value
@@ -485,28 +515,28 @@ def create_custom_preprocessor(device):
                     # layernorm
                     parameters["model"][index]["value"][0] = {}
                     parameters["model"][index]["value"][0]["weight"] = preprocess_layernorm_parameter(
-                        child.value[0].weight, dtype=ttnn.bfloat8_b
+                        child.value[0].weight, dtype=ttnn.bfloat8_b, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["value"][0]["bias"] = preprocess_layernorm_parameter(
-                        child.value[0].bias, dtype=ttnn.bfloat8_b
+                        child.value[0].bias, dtype=ttnn.bfloat8_b, mesh_mapper=weights_mesh_mapper
                     )
 
                     # linear
                     parameters["model"][index]["value"][1] = {}
                     parameters["model"][index]["value"][1]["weight"] = preprocess_linear_weight(
-                        child.value[1].weight, dtype=ttnn.bfloat8_b
+                        child.value[1].weight, dtype=ttnn.bfloat8_b, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["value"][1]["bias"] = preprocess_linear_bias(
-                        child.value[1].bias, dtype=ttnn.bfloat8_b
+                        child.value[1].bias, dtype=ttnn.bfloat8_b, mesh_mapper=weights_mesh_mapper
                     )
 
                     # proj
                     parameters["model"][index]["proj"] = {}
                     parameters["model"][index]["proj"]["weight"] = preprocess_linear_weight(
-                        child.proj.weight, dtype=ttnn.bfloat8_b
+                        child.proj.weight, dtype=ttnn.bfloat8_b, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["proj"]["bias"] = preprocess_linear_bias(
-                        child.proj.bias, dtype=ttnn.bfloat8_b
+                        child.proj.bias, dtype=ttnn.bfloat8_b, mesh_mapper=weights_mesh_mapper
                     )
 
                     # projections
@@ -514,26 +544,26 @@ def create_custom_preprocessor(device):
 
                     parameters["model"][index]["projections"][0] = {}
                     parameters["model"][index]["projections"][0]["weight"] = ttnn.from_torch(
-                        child.projections[0].weight,
+                        child.projections[0].weight, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["projections"][0]["bias"] = ttnn.from_torch(
-                        child.projections[0].bias.reshape(1, 1, 1, -1),
+                        child.projections[0].bias.reshape(1, 1, 1, -1), mesh_mapper=weights_mesh_mapper
                     )
 
                     parameters["model"][index]["projections"][1] = {}
                     parameters["model"][index]["projections"][1]["weight"] = ttnn.from_torch(
-                        child.projections[1].weight,
+                        child.projections[1].weight, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["projections"][1]["bias"] = ttnn.from_torch(
-                        child.projections[1].bias.reshape(1, 1, 1, -1),
+                        child.projections[1].bias.reshape(1, 1, 1, -1), mesh_mapper=weights_mesh_mapper
                     )
 
                     parameters["model"][index]["projections"][2] = {}
                     parameters["model"][index]["projections"][2]["weight"] = ttnn.from_torch(
-                        child.projections[2].weight,
+                        child.projections[2].weight, mesh_mapper=weights_mesh_mapper
                     )
                     parameters["model"][index]["projections"][2]["bias"] = ttnn.from_torch(
-                        child.projections[2].bias.reshape(1, 1, 1, -1),
+                        child.projections[2].bias.reshape(1, 1, 1, -1), mesh_mapper=weights_mesh_mapper
                     )
 
                 elif isinstance(child, WorldDetect):
@@ -544,19 +574,19 @@ def create_custom_preprocessor(device):
                             parameters["model"][index]["cv2"][i_1][i_2] = {}
                             if i_2 == 2:
                                 parameters["model"][index]["cv2"][i_1][i_2]["weight"] = ttnn.from_torch(
-                                    child_2.weight,
+                                    child_2.weight, mesh_mapper=weights_mesh_mapper
                                 )
                                 parameters["model"][index]["cv2"][i_1][i_2]["bias"] = ttnn.from_torch(
-                                    child_2.bias.reshape(1, 1, 1, -1),
+                                    child_2.bias.reshape(1, 1, 1, -1), mesh_mapper=weights_mesh_mapper
                                 )
                             else:
                                 conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(child_2.conv, child_2.bn)
                                 parameters["model"][index]["cv2"][i_1][i_2]["conv"] = {}
                                 parameters["model"][index]["cv2"][i_1][i_2]["conv"]["weight"] = ttnn.from_torch(
-                                    conv_weight,
+                                    conv_weight, mesh_mapper=weights_mesh_mapper
                                 )
                                 parameters["model"][index]["cv2"][i_1][i_2]["conv"]["bias"] = ttnn.from_torch(
-                                    conv_bias.reshape(1, 1, 1, -1),
+                                    conv_bias.reshape(1, 1, 1, -1), mesh_mapper=weights_mesh_mapper
                                 )
 
                     parameters["model"][index]["cv3"] = {}
@@ -566,24 +596,24 @@ def create_custom_preprocessor(device):
                             parameters["model"][index]["cv3"][i_1][i_2] = {}
                             if i_2 == 2:
                                 parameters["model"][index]["cv3"][i_1][i_2]["weight"] = ttnn.from_torch(
-                                    child_2.weight,
+                                    child_2.weight, mesh_mapper=weights_mesh_mapper
                                 )
                                 parameters["model"][index]["cv3"][i_1][i_2]["bias"] = ttnn.from_torch(
-                                    child_2.bias.reshape(1, 1, 1, -1),
+                                    child_2.bias.reshape(1, 1, 1, -1), mesh_mapper=weights_mesh_mapper
                                 )
                             else:
                                 conv_weight, conv_bias = fold_batch_norm2d_into_conv2d(child_2.conv, child_2.bn)
                                 parameters["model"][index]["cv3"][i_1][i_2]["conv"] = {}
                                 parameters["model"][index]["cv3"][i_1][i_2]["conv"]["weight"] = ttnn.from_torch(
-                                    conv_weight,
+                                    conv_weight, mesh_mapper=weights_mesh_mapper
                                 )
                                 parameters["model"][index]["cv3"][i_1][i_2]["conv"]["bias"] = ttnn.from_torch(
-                                    conv_bias.reshape(1, 1, 1, -1),
+                                    conv_bias.reshape(1, 1, 1, -1), mesh_mapper=weights_mesh_mapper
                                 )
                     parameters["model"][index]["dfl"] = {}
                     parameters["model"][index]["dfl"]["conv"] = {}
                     parameters["model"][index]["dfl"]["conv"]["weight"] = ttnn.from_torch(
-                        child.dfl.conv.weight,
+                        child.dfl.conv.weight, mesh_mapper=weights_mesh_mapper
                     )
                     if child.dfl.conv.bias == None:
                         parameters["model"][index]["dfl"]["conv"]["bias"] = None
@@ -597,6 +627,7 @@ def create_custom_preprocessor(device):
                             layout=ttnn.TILE_LAYOUT,
                             memory_config=ttnn.L1_MEMORY_CONFIG,
                             device=device,
+                            mesh_mapper=weights_mesh_mapper,
                         )
                         parameters["model"][index]["cv4"][i_1]["logit_scale"] = ttnn.from_torch(
                             child_1.logit_scale,
@@ -604,6 +635,7 @@ def create_custom_preprocessor(device):
                             layout=ttnn.TILE_LAYOUT,
                             memory_config=ttnn.L1_MEMORY_CONFIG,
                             device=device,
+                            mesh_mapper=weights_mesh_mapper,
                         )
 
                     strides = [8, 16, 32]
@@ -615,7 +647,7 @@ def create_custom_preprocessor(device):
                     ]  # value depend on res
 
                     anchors, strides = make_anchors(
-                        device, feats, strides
+                        device, feats, strides, mesh_mapper=weights_mesh_mapper
                     )  # Optimization: Processing make anchors outside model run
 
                     parameters["model"][index]["anchors"] = anchors
@@ -626,6 +658,7 @@ def create_custom_preprocessor(device):
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,  # keeping the dtype as bfloat16 instead of float32 affects demo result
+                mesh_mapper=weights_mesh_mapper,
             )
 
         return parameters
@@ -714,3 +747,15 @@ def ttnn_custom_normalize(x, dim, device):
     normalized = ttnn.divide(x, norm_expanded)
 
     return normalized
+
+
+def get_mesh_mappers(device):
+    if device.get_num_devices() > 1:
+        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+        weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+    else:
+        inputs_mesh_mapper = None
+        weights_mesh_mapper = None
+        output_mesh_composer = None
+    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
