@@ -25,7 +25,6 @@ from sweep_utils.roofline_utils import get_updated_message
 
 try:
     import psycopg2
-    from psycopg2.extras import RealDictCursor
 except ImportError as e:
     raise RuntimeError(
         "The psycopg2 library is required but not installed. Please install it using 'pip install psycopg2'."

@@ -12,15 +12,43 @@ import datetime as dt
 import os
 import json
 import subprocess
-import inspect
-import traceback
 from enum import Enum
-from contextlib import redirect_stdout
-import io
+from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
 
 import psycopg2
-from psycopg2.extras import RealDictCursor
 import pytest
+from contextlib import contextmanager
+
+
+@contextmanager
+def postgres_connection():
+    """
+    Context manager for PostgreSQL database connections.
+    Handles connection setup, commit/rollback, and cleanup automatically.
+
+    Usage:
+        with postgres_connection() as (conn, cursor):
+            cursor.execute("SELECT * FROM table")
+            # Connection automatically committed on success or rolled back on error
+    """
+    pg_config = get_postgres_config()
+    conn = None
+    cursor = None
+
+    try:
+        conn = psycopg2.connect(**pg_config)
+        cursor = conn.cursor()
+        yield conn, cursor
+        conn.commit()
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        raise
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 
 # --- Status Enum ---
@@ -76,10 +104,10 @@ def get_device_arch_name():
 
         return ttnn.get_arch_name()
     except ImportError:
-        print("Warning: ttnn not available, falling back to ARCH_NAME environment variable")
+        logger.warning("ttnn not available, falling back to ARCH_NAME environment variable")
         return os.getenv("ARCH_NAME", "unknown")
     except Exception as e:
-        print(f"Warning: Failed to get device arch from ttnn ({e}), falling back to ARCH_NAME environment variable")
+        logger.warning(f"Failed to get device arch from ttnn ({e}), falling back to ARCH_NAME environment variable")
         return os.getenv("ARCH_NAME", "unknown")
 
 
@@ -104,214 +132,181 @@ def get_postgres_config():
 
 
 # --- Database Operations ---
-def initialize_postgres_database(pg_config):
+def initialize_postgres_database():
     """Initialize PostgreSQL database with required tables for unit testing."""
-    conn = None
     try:
-        conn = psycopg2.connect(**pg_config)
-        cursor = conn.cursor()
+        with postgres_connection() as (conn, cursor):
+            # Create tables if they don't exist
+            create_run_table_query = """
+            CREATE TABLE IF NOT EXISTS runs (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                initiated_by VARCHAR(255) NOT NULL,
+                host VARCHAR(255),
+                device VARCHAR(255),
+                type VARCHAR(255),
+                run_contents VARCHAR(1024),
+                git_author VARCHAR(255),
+                git_branch_name VARCHAR(255),
+                git_commit_hash VARCHAR(50),
+                start_time_ts TIMESTAMP NOT NULL,
+                end_time_ts TIMESTAMP,
+                status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failure', 'error', 'cancelled')),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
 
-        # Create tables if they don't exist
-        create_run_table_query = """
-        CREATE TABLE IF NOT EXISTS runs (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            initiated_by VARCHAR(255) NOT NULL,
-            host VARCHAR(255),
-            device VARCHAR(255),
-            type VARCHAR(255),
-            run_contents VARCHAR(1024),
-            git_author VARCHAR(255),
-            git_branch_name VARCHAR(255),
-            git_commit_hash VARCHAR(50),
-            start_time_ts TIMESTAMP NOT NULL,
-            end_time_ts TIMESTAMP,
-            status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failure', 'error', 'cancelled')),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        """
+            create_test_table_query = """
+            CREATE TABLE IF NOT EXISTS tests (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                run_id UUID NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+                name VARCHAR(255) NOT NULL,
+                start_time_ts TIMESTAMP NOT NULL,
+                end_time_ts TIMESTAMP,
+                status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failure', 'error', 'cancelled', 'skipped')),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            """
 
-        create_test_table_query = """
-        CREATE TABLE IF NOT EXISTS tests (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            run_id UUID NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
-            name VARCHAR(255) NOT NULL,
-            start_time_ts TIMESTAMP NOT NULL,
-            end_time_ts TIMESTAMP,
-            status VARCHAR(20) NOT NULL CHECK (status IN ('success', 'failure', 'error', 'cancelled', 'skipped')),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        """
+            create_testcase_table_query = """
+            CREATE TABLE IF NOT EXISTS unit_testcases (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                test_id UUID NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
+                name VARCHAR(255) NOT NULL,
+                start_time_ts TIMESTAMP NOT NULL,
+                end_time_ts TIMESTAMP,
+                status VARCHAR(100) NOT NULL,
+                suite_name VARCHAR(255) NOT NULL,
+                test_vector JSONB,
+                message TEXT,
+                exception TEXT,
+                e2e_perf FLOAT,
+                device_perf JSONB,
+                error_signature VARCHAR(255)
+            );
+            """
 
-        create_testcase_table_query = """
-        CREATE TABLE IF NOT EXISTS unit_testcases (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            test_id UUID NOT NULL REFERENCES tests(id) ON DELETE CASCADE,
-            name VARCHAR(255) NOT NULL,
-            start_time_ts TIMESTAMP NOT NULL,
-            end_time_ts TIMESTAMP,
-            status VARCHAR(100) NOT NULL,
-            suite_name VARCHAR(255) NOT NULL,
-            test_vector JSONB,
-            message TEXT,
-            exception TEXT,
-            e2e_perf FLOAT,
-            device_perf JSONB,
-            error_signature VARCHAR(255)
-        );
-        """
+            cursor.execute(create_run_table_query)
+            cursor.execute(create_test_table_query)
+            cursor.execute(create_testcase_table_query)
 
-        cursor.execute(create_run_table_query)
-        cursor.execute(create_test_table_query)
-        cursor.execute(create_testcase_table_query)
-
-        conn.commit()
-        print("Successfully initialized PostgreSQL database.")
+            logger.info("Successfully initialized PostgreSQL database.")
 
     except Exception as e:
-        print(f"Failed to initialize PostgreSQL database: {e}")
-        if conn:
-            conn.rollback()
+        logger.error(f"Failed to initialize PostgreSQL database: {e}")
         raise
-    finally:
-        if conn:
-            conn.close()
 
 
-def push_run(pg_config, start_time_ts, status="success", run_contents=None):
+def push_run(start_time_ts, status="success", run_contents=None):
     """Create a new run record in the database."""
-    conn = None
     try:
-        conn = psycopg2.connect(**pg_config)
-        cursor = conn.cursor()
-        insert_run_query = """
-        INSERT INTO runs (initiated_by, host, device, type, run_contents, git_author, git_branch_name, git_commit_hash, start_time_ts, status)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        RETURNING id
-        """
-        run_data = (
-            get_initiated_by(),
-            get_hostname(),
-            get_device_arch_name(),
-            "unit_test",
-            run_contents,
-            get_git_author(),
-            get_git_branch(),
-            git_hash(),
-            start_time_ts,
-            status,
-        )
-        cursor.execute(insert_run_query, run_data)
-        run_id = cursor.fetchone()[0]
-        conn.commit()
-        print(f"Successfully created run with ID: {run_id}")
-        return run_id
+        with postgres_connection() as (conn, cursor):
+            insert_run_query = """
+            INSERT INTO runs (initiated_by, host, device, type, run_contents, git_author, git_branch_name, git_commit_hash, start_time_ts, status)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            RETURNING id
+            """
+            run_data = (
+                get_initiated_by(),
+                get_hostname(),
+                get_device_arch_name(),
+                "unit_test",
+                run_contents,
+                get_git_author(),
+                get_git_branch(),
+                git_hash(),
+                start_time_ts,
+                status,
+            )
+            cursor.execute(insert_run_query, run_data)
+            run_id = cursor.fetchone()[0]
+            logger.info(f"Successfully created run with ID: {run_id}")
+            return run_id
     except Exception as e:
-        print(f"Failed to push run to PostgreSQL: {e}")
-        if conn:
-            conn.rollback()
+        logger.error(f"Failed to push run to PostgreSQL: {e}")
         raise
-    finally:
-        if conn:
-            conn.close()
 
 
-def update_run(pg_config, run_id, end_time_ts, status):
+def update_run(run_id, end_time_ts, status):
     """Update an existing run's status and end time."""
-    conn = None
     try:
-        conn = psycopg2.connect(**pg_config)
-        cursor = conn.cursor()
-        update_run_query = "UPDATE runs SET status = %s, end_time_ts = %s WHERE id = %s"
-        cursor.execute(update_run_query, (status, end_time_ts, run_id))
-        conn.commit()
-        print(f"Successfully updated run {run_id} with status {status}.")
+        with postgres_connection() as (conn, cursor):
+            update_run_query = "UPDATE runs SET status = %s, end_time_ts = %s WHERE id = %s"
+            cursor.execute(update_run_query, (status, end_time_ts, run_id))
+            logger.info(f"Successfully updated run {run_id} with status {status}.")
     except Exception as e:
-        print(f"Failed to update run in PostgreSQL: {e}")
-        if conn:
-            conn.rollback()
+        logger.error(f"Failed to update run in PostgreSQL: {e}")
         raise
-    finally:
-        if conn:
-            conn.close()
 
 
-def push_test_and_cases(pg_config, run_id, file_path, test_cases_results):
+def push_test_and_cases(run_id, file_path, test_cases_results):
     """Push a test (file) and its test cases to the database."""
-    conn = None
     test_id = None
     try:
-        conn = psycopg2.connect(**pg_config)
-        cursor = conn.cursor()
+        with postgres_connection() as (conn, cursor):
+            # 1. Create a record for the test file
+            test_start_time = min(tc["start_time_ts"] for tc in test_cases_results)
+            test_end_time = max(tc["end_time_ts"] for tc in test_cases_results)
 
-        # 1. Create a record for the test file
-        test_start_time = min(tc["start_time_ts"] for tc in test_cases_results)
-        test_end_time = max(tc["end_time_ts"] for tc in test_cases_results)
+            test_insert_query = """
+            INSERT INTO tests (run_id, name, start_time_ts, end_time_ts, status)
+            VALUES (%s, %s, %s, %s, %s) RETURNING id
+            """
+            # Placeholder status, will be updated later
+            cursor.execute(test_insert_query, (run_id, str(file_path), test_start_time, test_end_time, "success"))
+            test_id = cursor.fetchone()[0]
 
-        test_insert_query = """
-        INSERT INTO tests (run_id, name, start_time_ts, end_time_ts, status)
-        VALUES (%s, %s, %s, %s, %s) RETURNING id
-        """
-        # Placeholder status, will be updated later
-        cursor.execute(test_insert_query, (run_id, str(file_path), test_start_time, test_end_time, "success"))
-        test_id = cursor.fetchone()[0]
+            # 2. Insert test cases in batch
+            case_statuses = []
+            testcase_insert_query = """
+            INSERT INTO unit_testcases (test_id, name, start_time_ts, end_time_ts, status, suite_name, test_vector, message, exception, e2e_perf, device_perf, error_signature)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
 
-        # 2. Insert test cases in batch
-        case_statuses = []
-        testcase_insert_query = """
-        INSERT INTO unit_testcases (test_id, name, start_time_ts, end_time_ts, status, suite_name, test_vector, message, exception, e2e_perf, device_perf, error_signature)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """
+            # Prepare all case values for batch insert
+            batch_values = []
+            for case in test_cases_results:
+                db_status = case["status"].value
+                case_statuses.append(db_status)
+                exception_text = case["exception"]
+                error_sig = generate_error_signature(exception_text)
+                case_values = (
+                    test_id,
+                    case["name"],
+                    case["start_time_ts"],
+                    case["end_time_ts"],
+                    db_status,
+                    case.get("suite_name", "default"),  # Default suite name for unit tests
+                    json.dumps(case["test_parameters"]) if case.get("test_parameters") else None,
+                    case["message"],
+                    exception_text,
+                    case.get("e2e_perf"),  # Performance data if available
+                    json.dumps(case.get("device_perf")) if case.get("device_perf") else None,
+                    error_sig,
+                )
+                batch_values.append(case_values)
 
-        # Prepare all case values for batch insert
-        batch_values = []
-        for case in test_cases_results:
-            db_status = case["status"].value
-            case_statuses.append(db_status)
-            exception_text = case["exception"]
-            error_sig = generate_error_signature(exception_text)
-            case_values = (
-                test_id,
-                case["name"],
-                case["start_time_ts"],
-                case["end_time_ts"],
-                db_status,
-                case.get("suite_name", "default"),  # Default suite name for unit tests
-                json.dumps(case["test_parameters"]) if case.get("test_parameters") else None,
-                case["message"],
-                exception_text,
-                case.get("e2e_perf"),  # Performance data if available
-                json.dumps(case.get("device_perf")) if case.get("device_perf") else None,
-                error_sig,
-            )
-            batch_values.append(case_values)
+            # Execute batch insert
+            if batch_values:
+                cursor.executemany(testcase_insert_query, batch_values)
 
-        # Execute batch insert
-        if batch_values:
-            cursor.executemany(testcase_insert_query, batch_values)
+            # 3. Determine and update the overall test status
+            test_status = map_test_status_to_run_status(case_statuses)
+            cursor.execute("UPDATE tests SET status = %s WHERE id = %s", (test_status, test_id))
 
-        # 3. Determine and update the overall test status
-        test_status = map_test_status_to_run_status(case_statuses)
-        cursor.execute("UPDATE tests SET status = %s WHERE id = %s", (test_status, test_id))
-
-        conn.commit()
-        print(f"Successfully pushed results for test file: {file_path}")
-        return test_status
+            logger.info(f"Successfully pushed results for test file: {file_path}")
+            return test_status
     except Exception as e:
-        print(f"Failed to push test results for {file_path} to PostgreSQL: {e}")
-        if conn:
-            conn.rollback()
-            if test_id:
-                # If testcases failed, still try to mark the parent test as 'error'
-                try:
+        logger.error(f"Failed to push test results for {file_path} to PostgreSQL: {e}")
+        # If we have a test_id and the error happened after test creation,
+        # try to mark the test as 'error' in a separate transaction
+        if test_id:
+            try:
+                with postgres_connection() as (conn, cursor):
                     cursor.execute("UPDATE tests SET status = 'error' WHERE id = %s", (test_id,))
-                    conn.commit()
-                except Exception as e2:
-                    print(f"Could not mark test as error after another failure: {e2}")
-                    conn.rollback()
+                    logger.info(f"Marked test {test_id} as error after failure")
+            except Exception as e2:
+                logger.error(f"Could not mark test as error after another failure: {e2}")
         return "error"
-    finally:
-        if conn:
-            conn.close()
 
 
 def map_test_status_to_run_status(statuses):
@@ -417,18 +412,18 @@ def discover_and_run_tests(test_path: pathlib.Path):
         # Find all python files that start with test_ recursively
         test_files = sorted(test_path.rglob("test_*.py"))
         if not test_files:
-            print(f"No test files found in directory: {test_path}")
+            logger.warning(f"No test files found in directory: {test_path}")
             return {}
-        print(f"Found {len(test_files)} test files in directory: {test_path}")
+        logger.info(f"Found {len(test_files)} test files in directory: {test_path}")
         for file in test_files:
-            print(f"  - {file}")
+            logger.info(f"  - {file}")
     else:
-        print(f"Error: Test path {test_path} is not a valid file or directory.")
+        logger.error(f"Test path {test_path} is not a valid file or directory.")
         return {}
 
     results_by_file = {}
     for file in test_files:
-        print(f"Running tests in: {file}")
+        logger.info(f"Running tests in: {file}")
         results_by_file[file] = run_tests_in_file(file)
 
     return results_by_file
@@ -478,18 +473,18 @@ def discover_and_collect_tests(test_path: pathlib.Path):
     elif test_path.is_dir():
         test_files = sorted(test_path.rglob("test_*.py"))
         if not test_files:
-            print(f"No test files found in directory: {test_path}")
+            logger.warning(f"No test files found in directory: {test_path}")
             return {}
-        print(f"Found {len(test_files)} test files in directory: {test_path}")
+        logger.info(f"Found {len(test_files)} test files in directory: {test_path}")
         for file in test_files:
-            print(f"  - {file}")
+            logger.info(f"  - {file}")
     else:
-        print(f"Error: Test path {test_path} is not a valid file or directory.")
+        logger.error(f"Test path {test_path} is not a valid file or directory.")
         return {}
 
     collected_tests_by_file = {}
     for file in test_files:
-        print(f"Collecting tests from: {file}")
+        logger.info(f"Collecting tests from: {file}")
         collected_tests_by_file[file] = collect_tests_in_file(file)
 
     return collected_tests_by_file
@@ -512,8 +507,8 @@ if __name__ == "__main__":
 
     # Handle dry-run mode
     if args.dry_run:
-        print("=== DRY RUN MODE ===")
-        print("Collecting test information without executing tests...")
+        logger.info("=== DRY RUN MODE ===")
+        logger.info("Collecting test information without executing tests...")
 
         # 3. Discover and collect tests
         test_paths_list = [path.strip() for path in args.test_paths.split(",")]
@@ -526,9 +521,9 @@ if __name__ == "__main__":
             all_collected_tests.update(collected_tests_for_path)
 
         # Print summary
-        print("\n=== DRY RUN SUMMARY ===")
+        logger.info("\n=== DRY RUN SUMMARY ===")
         if not all_collected_tests:
-            print("No test files found to analyze.")
+            logger.info("No test files found to analyze.")
         else:
             max_test_cases_per_file = 0
             max_test_cases_file = None
@@ -542,36 +537,34 @@ if __name__ == "__main__":
                     max_test_cases_per_file = test_count
                     max_test_cases_file = file_path
 
-                print(f"File: {file_path}")
-                print(f"  Test cases: {test_count}")
+                logger.info(f"File: {file_path}")
+                logger.info(f"  Test cases: {test_count}")
                 if test_cases:
                     for test_case in test_cases[:3]:  # Show first 3 test cases as examples
                         params_str = ""
                         if test_case.get("test_parameters"):
                             params_str = f" (params: {test_case['test_parameters']})"
-                        print(f"    - {test_case['name']}{params_str}")
+                        logger.info(f"    - {test_case['name']}{params_str}")
                     if len(test_cases) > 3:
-                        print(f"    ... and {len(test_cases) - 3} more test cases")
-                print()
+                        logger.info(f"    ... and {len(test_cases) - 3} more test cases")
+                logger.info("")
 
-            print(f"Total test files: {len(all_collected_tests)}")
-            print(f"Total test cases that would be executed: {total_test_cases}")
-            print(f"Maximum test cases per file: {max_test_cases_per_file} (in {max_test_cases_file})")
+            logger.info(f"Total test files: {len(all_collected_tests)}")
+            logger.info(f"Total test cases that would be executed: {total_test_cases}")
+            logger.info(f"Maximum test cases per file: {max_test_cases_per_file} (in {max_test_cases_file})")
 
-        print("=== END DRY RUN ===")
+        logger.info("=== END DRY RUN ===")
         sys.exit(0)
 
     # Normal execution mode (existing code)
-    pg_config = get_postgres_config()
-
     # 1. Initialize DB
-    initialize_postgres_database(pg_config)
+    initialize_postgres_database()
 
     # 2. Create a new run
     run_start_time = dt.datetime.now()
     test_paths_list = [path.strip() for path in args.test_paths.split(",")]
     run_contents = ", ".join([path.removeprefix("tests/ttnn/unit_tests/") for path in test_paths_list])
-    run_id = push_run(pg_config, run_start_time, run_contents=run_contents)
+    run_id = push_run(run_start_time, run_contents=run_contents)
 
     # 3. Discover and run tests
     all_results = {}
@@ -583,19 +576,19 @@ if __name__ == "__main__":
     # 4. Push results to the database
     overall_statuses = []
     if not all_results:
-        print("No test results to report.")
+        logger.info("No test results to report.")
         run_status = "success"  # or 'error' if no tests found is an error
     else:
         for file_path, results in all_results.items():
             if results:
-                test_status = push_test_and_cases(pg_config, run_id, file_path, results)
+                test_status = push_test_and_cases(run_id, file_path, results)
                 overall_statuses.append(test_status)
         run_status = map_test_status_to_run_status(overall_statuses)
 
     # 5. Finalize the run
     run_end_time = dt.datetime.now()
-    update_run(pg_config, run_id, run_end_time, run_status)
+    update_run(run_id, run_end_time, run_status)
 
-    print(f"\nRun completed with status: {run_status.upper()}")
+    logger.info(f"\nRun completed with status: {run_status.upper()}")
     if run_status == "failure" or run_status == "error":
         sys.exit(1)
