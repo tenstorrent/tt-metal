@@ -13,7 +13,9 @@ class TTSampling(LightweightModule):
         args,
         mesh_device,
         tt_ccl,
-        temperature=None,
+        k=torch.ones(32),
+        p=torch.zeros(32),
+        temp=torch.ones(32),
     ):
         super().__init__()
         self.args = args
@@ -24,35 +26,33 @@ class TTSampling(LightweightModule):
         self.num_devices = args.num_devices
         self.max_batch_size = args.max_batch_size
         self.max_top_k = args.max_top_k
-        self.temperature = temperature
 
         max_num_gather_links = args.model_config["GALAXY_NUM_LINKS"]
         self.num_gather_links = (
             self.max_top_k // 32 if self.max_top_k // 32 <= max_num_gather_links else max_num_gather_links
         )
 
-        # Prepare temperature reciprocal tensor
-        if temperature is None or temperature == 0.0:
-            temperature_reciprocal_scalar = [1.0] * self.max_batch_size
-        elif isinstance(temperature, float):
-            temperature_reciprocal_scalar = [1.0 / temperature] * self.max_batch_size
-        else:
-            temperature_reciprocal_scalar = [
-                1.0 / temperature_i if temperature_i != 0.0 else 1.0 for temperature_i in temperature
-            ]
-
-        temperature_reciprocal_tensor_torch = torch.ones(
-            [1, 1, self.max_batch_size, self.args.max_top_k * self.args.cluster_shape[0]], dtype=torch.bfloat16
+        self.k_tensor = ttnn.from_torch(
+            k,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.args.cluster_shape),
         )
-        for i in range(self.max_batch_size):
-            temperature_reciprocal_tensor_torch[:, :, i, :] = temperature_reciprocal_scalar[i]
-        self.temperature_reciprocal_tensor = ttnn.from_torch(
-            temperature_reciprocal_tensor_torch,
+        self.p_tensor = ttnn.from_torch(
+            p,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.args.cluster_shape),
-            memory_config=self.args.model_config["DECODE_SAMPLING_INPUT_MEMCFG"],
+        )
+
+        self.temp_tensor = ttnn.from_torch(
+            temp,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.args.cluster_shape),
         )
 
         # Create indices tensor
@@ -84,28 +84,36 @@ class TTSampling(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
+    def reset_params(self, k, p, temp):
+        self.k_tensor_new = ttnn.from_torch(
+            torch.tensor(k),
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        self.p_tensor_new = ttnn.from_torch(
+            torch.tensor(p),
+            device=None,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        self.temp_tensor_new = ttnn.from_torch(
+            torch.tensor(temp),
+            device=None,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+        ttnn.copy_host_to_device_tensor(self.k_tensor_new, self.k_tensor)
+        ttnn.copy_host_to_device_tensor(self.p_tensor_new, self.p_tensor)
+        ttnn.copy_host_to_device_tensor(self.temp_tensor_new, self.temp_tensor)
+
     def forward(
         self,
         x: ttnn.Tensor,
-        k: int | list[int] = 1,
-        p: float | list[float] = 0.0,
         seed: int = 0,
         tt_out_tok: ttnn.Tensor = None,
     ):
-        if type(k) == int:
-            k = [k] * x.shape[2]
-        if type(p) == float:
-            p = [p] * x.shape[2]
-
-        assert all(k_i <= self.max_top_k for k_i in k)
-        assert type(k) == list and len(k) == x.shape[2]
-        assert type(p) == list and len(p) == x.shape[2]
-
-        if isinstance(self.temperature, float) and self.temperature == 0.0:
-            k = [1] * x.shape[2]
-        elif isinstance(self.temperature, list):
-            k = [k[i] if self.temperature[i] != 0.0 else 1 for i in range(len(self.temperature))]
-
         x_bf16 = ttnn.typecast(x, dtype=ttnn.bfloat16, sub_core_grids=self.args.sub_core_grids)
 
         # Local top k
@@ -134,10 +142,6 @@ class TTSampling(LightweightModule):
             memory_config=self.args.model_config["DECODE_SAMPLING_INPUT_MEMCFG"],
             dtype=ttnn.bfloat16,
         )
-
-        # Apply temperature
-        topk_values_gathered_bf16 = ttnn.mul(topk_values_gathered_bf16, self.temperature_reciprocal_tensor)
-
         topk_values_gathered_bf16_interleaved = ttnn.to_memory_config(
             topk_values_gathered_bf16, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
@@ -187,8 +191,9 @@ class TTSampling(LightweightModule):
         tt_out_tok = ttnn.sampling(
             topk_values_gathered_bf16_interleaved,
             topk_global_indices_interleaved_untilised,
-            k=k,
-            p=p,
+            k=self.k_tensor,
+            p=self.p_tensor,
+            temp=self.temp_tensor,
             seed=seed,
             sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
                 self.args.start_core, self.max_batch_size, self.args.sub_core_grids, row_wise=True

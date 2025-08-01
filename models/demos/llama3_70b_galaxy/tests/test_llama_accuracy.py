@@ -190,7 +190,6 @@ def test_tt_model_acc(
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
-        temperature=temperature,
         tt_ccl=tt_model.tt_ccl,
     )
     # Initialize embedding
@@ -239,7 +238,7 @@ def test_tt_model_acc(
         )
 
         # Sampling
-        tt_out_tok = tt_sampling(tt_out[0], top_k, top_p, seed)
+        tt_out_tok = tt_sampling(tt_out[0], seed)
 
         # Update the idxs
         ttnn.plus_one(
