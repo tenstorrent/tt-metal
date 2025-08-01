@@ -37,4 +37,27 @@ ALWI void hardsigmoid_tile(uint32_t idst) {
  */
 ALWI void hardsigmoid_tile_init() { MATH((llk_math_eltwise_unary_sfpu_hardsigmoid_init<APPROX>())); }
 
+// clang-format off
+/**
+* Performs element-wise softshrink operation. The DST
+* register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available on the
+* compute engine.
+*
+* Return value: None
+*
+* | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
+* |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+* | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+* | param0          | The λ value for the Softshrink formulation                                 | uint32   |                                                       | True     |
+*/
+// clang-format on
+ALWI void softshrink_tile(uint32_t idst, uint32_t param0) {
+    MATH((llk_math_eltwise_unary_sfpu_softshrink<APPROX>(idst, param0)));
+}
+
+/**
+ * Please refer to documentation for any_init.
+ */
+ALWI void softshrink_tile_init() { MATH((llk_math_eltwise_unary_sfpu_softshrink_init<APPROX>())); }
+
 }  // namespace ckernel
