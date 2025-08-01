@@ -20,12 +20,12 @@ void gelu_derivative_init() {
     _init_gelu_derivative_<APPROXIMATION_MODE>();
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_gelu() {
     _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_gelu_derivative() {
     _calculate_gelu_derivative_<APPROXIMATION_MODE, ITERATIONS>();
 }
