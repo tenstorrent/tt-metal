@@ -70,3 +70,24 @@ target_link_libraries(
 )
 
 install(TARGETS ttnn_op_experimental_ccl LIBRARY COMPONENT tar)
+
+add_library(ttnn_op_experimental_ccl_jit INTERFACE)
+target_sources(
+    ttnn_op_experimental_ccl_jit
+    INTERFACE
+        FILE_SET ttnn_op_experimental_ccl_jit
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            send_recv_async/send_async/device/kernels/sender_reader.cpp
+            send_recv_async/send_async/device/kernels/sender_writer.cpp
+)
+
+install(
+    TARGETS
+        ttnn_op_experimental_ccl_jit
+    FILE_SET
+    ttnn_op_experimental_ccl_jit
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/experimental/ccl/
+        COMPONENT ttnn-runtime
+)
