@@ -14,7 +14,6 @@ namespace conv_transpose2d {
 
 Tensor transform_weights_for_conv_transpose2d(const Tensor& conv_weight_tensor, bool mirror_kernel);
 
-template <typename T>
 ttnn::Tensor prepare_conv_transpose2d_weights(
     const ttnn::Tensor& weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
@@ -31,14 +30,13 @@ ttnn::Tensor prepare_conv_transpose2d_weights(
     std::array<uint32_t, 2> dilation,
     bool has_bias,
     uint32_t groups,
-    T* device,
+    MeshDevice* device,
     DataType input_dtype,
     const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     bool mirror_kernel = true);
 
-template <typename T>
 ttnn::Tensor prepare_conv_transpose2d_bias(
     const ttnn::Tensor& bias_tensor,
     const ttnn::MemoryConfig& input_memory_config,
@@ -53,7 +51,7 @@ ttnn::Tensor prepare_conv_transpose2d_bias(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    T* device,
+    MeshDevice* device,
     DataType input_dtype,
     const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,

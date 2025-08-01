@@ -156,7 +156,7 @@ void py_bind_conv_transpose2d(py::module& module) {
 
     module.def(
         "prepare_conv_transpose2d_weights",
-        prepare_conv_transpose2d_weights<ttnn::MeshDevice>,
+        prepare_conv_transpose2d_weights,
         py::kw_only(),
         py::arg("weight_tensor"),
         py::arg("input_memory_config"),
@@ -182,7 +182,7 @@ void py_bind_conv_transpose2d(py::module& module) {
 
     module.def(
         "prepare_conv_transpose2d_bias",
-        prepare_conv_transpose2d_bias<ttnn::MeshDevice>,
+        prepare_conv_transpose2d_bias,
         py::kw_only(),
         py::arg("bias_tensor"),
         py::arg("input_memory_config"),

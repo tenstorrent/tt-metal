@@ -63,7 +63,6 @@ Tensor convert_conv_weight_tensor_to_grouped_layout(
 Tensor convert_conv_weight_tensor_to_depthwise_layout(
     const Tensor& conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
 
-template <typename T>
 ttnn::Tensor prepare_conv_weights(
     const ttnn::Tensor& weight_tensor,
     const ttnn::MemoryConfig& input_memory_config,
@@ -80,14 +79,13 @@ ttnn::Tensor prepare_conv_weights(
     std::array<uint32_t, 2> dilation,
     bool has_bias,
     uint32_t groups,
-    T* device,
+    MeshDevice* device,
     DataType input_dtype,
     const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_);
 
-template <typename T>
 ttnn::Tensor prepare_conv_bias(
     const ttnn::Tensor& bias_tensor,
     const ttnn::MemoryConfig& input_memory_config,
@@ -102,7 +100,7 @@ ttnn::Tensor prepare_conv_bias(
     std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     uint32_t groups,
-    T* device,
+    MeshDevice* device,
     DataType input_dtype,
     const std::optional<const DataType>& output_dtype,
     const std::optional<const Conv2dConfig>& conv_config_,
@@ -163,20 +161,18 @@ struct Conv2dWeightsBiasPrepConfig {
     const std::array<uint32_t, 4> padding_n4;
 };
 
-template <typename T>
 std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device(
     const ttnn::Tensor& weight_tensor,
     const std::optional<const ttnn::Tensor>& bias_tensor,
     Conv2dWeightsBiasPrepConfig& params,
-    T* device);
+    MeshDevice* device);
 
-template <typename T>
 std::optional<ttnn::Tensor> prepare_conv_bias_internal(
     const std::optional<const ttnn::Tensor>& bias_tensor,
     uint32_t out_channels,
     const Conv2dWeightsBiasPrepConfig& params,
     DataType weight_dtype,
-    T* device);
+    MeshDevice* device);
 }  // namespace conv2d
 }  // namespace operations::conv
 }  // namespace ttnn
