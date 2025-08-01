@@ -13,6 +13,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 static const uint32_t max_read_size = 2048;  // max read size in bytes for reader and writer kernels
 using namespace tt::constants;
@@ -64,21 +65,10 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
         tt::tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}}).set_page_size(cb_id, cb_pagesize);
     tt::tt_metal::CreateCircularBuffer(program, cores, cb_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
-    bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(unpadded_row_size_nbytes);
-    uint32_t src_log2_stick_size =
-        src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(unpadded_row_size_nbytes) : 0;
-    bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(padded_row_size_nbytes);
-    uint32_t dst_log2_stick_size =
-        dst_stick_size_is_power_of_two ? (std::uint32_t)std::log2(padded_row_size_nbytes) : 0;
-    std::vector<uint32_t> reader_ct_args = {
-        (std::uint32_t)src0_is_dram,
-        (std::uint32_t)dst_is_dram,
-        (std::uint32_t)src_stick_size_is_power_of_two,
-        (std::uint32_t)src_log2_stick_size,
-        (std::uint32_t)dst_stick_size_is_power_of_two,
-        (std::uint32_t)dst_log2_stick_size};
+    std::vector<uint32_t> reader_ct_args = {unpadded_row_size_nbytes, padded_row_size_nbytes};
+    TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
+    TensorAccessorArgs(*dst_buffer).append_to(reader_ct_args);
+    TensorAccessorArgs(*pad_value_const_tensor.buffer()).append_to(reader_ct_args);
     const std::vector<uint32_t>& writer_ct_args = reader_ct_args;
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
@@ -258,13 +248,12 @@ operation::ProgramWithCallbacks pad_tile(
     // Reader compile-time args
     // Data is 32 byte aligned
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
                                                       (std::uint32_t)src0_is_dram};
     std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
                                                       (std::uint32_t)src0_cb_index,
-                                                      (std::uint32_t)src1_cb_index,
-                                                      (std::uint32_t)dst_is_dram};
+                                                      (std::uint32_t)src1_cb_index};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -515,21 +504,10 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
         tt::tt_metal::CircularBufferConfig(cb_npages * cb_pagesize, {{cb_id, in_df}}).set_page_size(cb_id, cb_pagesize);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_config);
 
-    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
-    bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(unpadded_row_size_nbytes);
-    uint32_t src_log2_stick_size =
-        src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(unpadded_row_size_nbytes) : 0;
-    bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(padded_row_size_nbytes);
-    uint32_t dst_log2_stick_size =
-        dst_stick_size_is_power_of_two ? (std::uint32_t)std::log2(padded_row_size_nbytes) : 0;
-    std::vector<uint32_t> reader_ct_args = {
-        (std::uint32_t)src0_is_dram,
-        (std::uint32_t)dst_is_dram,
-        (std::uint32_t)src_stick_size_is_power_of_two,
-        (std::uint32_t)src_log2_stick_size,
-        (std::uint32_t)dst_stick_size_is_power_of_two,
-        (std::uint32_t)dst_log2_stick_size};
+    std::vector<uint32_t> reader_ct_args = {unpadded_row_size_nbytes, padded_row_size_nbytes};
+    TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
+    TensorAccessorArgs(*dst_buffer).append_to(reader_ct_args);
+    TensorAccessorArgs(*pad_value_const_tensor.buffer()).append_to(reader_ct_args);
     std::vector<uint32_t> writer_ct_args = reader_ct_args;
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
@@ -857,14 +835,12 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
 
-    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
     bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
     bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
     uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
     bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size_padded);
     uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size_padded) : 0;
     std::vector<uint32_t> reader_ct_args = {
-        (std::uint32_t)src0_is_dram,
         (std::uint32_t)N + front_pad[-4],
         (std::uint32_t)H + front_pad[-2],
         (std::uint32_t)C + front_pad[-3],
@@ -883,17 +859,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
         (std::uint32_t)(stick_size_padded_front / row_major_min_bytes),
         (std::uint32_t)(stick_size_padded_end / row_major_min_bytes),
         (std::uint32_t)(stick_size_padded / row_major_min_bytes),
-        (std::uint32_t)src_stick_size_is_power_of_two,
-        (std::uint32_t)src_stick_size_is_power_of_two ? src_log2_stick_size : stick_size,
         (std::uint32_t)stick_size_padded_aligned,
         (std::uint32_t)unaligned};
+    TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
+
     std::vector<uint32_t> writer_ct_args = {
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)dst_is_dram,
-        (std::uint32_t)stick_size_padded,
-        (std::uint32_t)dst_stick_size_is_power_of_two,
-        (std::uint32_t)dst_stick_size_is_power_of_two ? dst_log2_stick_size : stick_size_padded,
-        (std::uint32_t)stick_size_padded_aligned};
+        (std::uint32_t)src0_cb_index, (std::uint32_t)stick_size_padded, (std::uint32_t)stick_size_padded_aligned};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
