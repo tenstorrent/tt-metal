@@ -48,7 +48,6 @@ jobs:
           docker_opts: |
             -e TT_METAL_HOME="${{ github.workspace }}"
             -e PYTHONPATH="${{ github.workspace }}"
-            -e PYTHON_ENV_DIR="${{ github.workspace }}/python_env"
             -e LD_LIBRARY_PATH="${{ github.workspace }}/build/lib"
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
@@ -62,6 +61,8 @@ jobs:
           install_wheel: false
           run_args: |
             sleep 10s
+            pwd
+            env|sort
             echo "Running mpirun command on multiple hosts"
             cd "${{ github.workspace }}"
             ./create_venv.sh
