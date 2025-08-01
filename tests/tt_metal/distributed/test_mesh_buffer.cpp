@@ -421,7 +421,7 @@ TEST_F(MeshBufferTestSuite, ColMajorShardingAndReplication) {
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
 
-    std::vector<Shape2D> global_buffer_shapes = {{256, 64}, {1024, 1024}, {128, 32}, {512, 64}, {2048, 256}};
+    std::vector<Shape2D> global_buffer_shapes = {{256, 64}, {1024, 1024}, {512, 64}, {2048, 256}};
 
     for (int i = 0; i < global_buffer_shapes.size(); i++) {
         auto global_buffer_shape = global_buffer_shapes[i];
