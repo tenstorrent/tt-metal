@@ -1,4 +1,7 @@
 #include <iostream>
+#include <optional>
+
+#include <boost/functional/hash.hpp>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/control_plane.hpp>
@@ -7,22 +10,81 @@
 
 
 /**************************************************************************************************
- Galaxy UBB ID
+ Chip Identification
 
- Identifies the position of a chip in a Galaxy system. This is only valid for Galaxy boxes.
+ Enriched chip identification, including information about tray and board position, where
+ applicable (e.g., on Galaxy machines). The basic tt::umd::chip_id_t is always the fallback.
 **************************************************************************************************/
 
-struct GalaxyUbbId {
+struct GalaxyUbbIdentifier {
     std::uint32_t tray_id;
     std::uint32_t asic_id;
-}; 
 
-static std::ostream &operator<<(std::ostream &os, const GalaxyUbbId &ubb_id) {
-    os << "[Tray " << ubb_id.tray_id << " N" << ubb_id.asic_id << ']';
+    bool operator<(const GalaxyUbbIdentifier &other) const {
+        if (tray_id != other.tray_id) {
+            return tray_id < other.tray_id;
+        }
+        return asic_id < other.asic_id;
+    }
+
+    bool operator==(const GalaxyUbbIdentifier &other) const {
+        return tray_id == other.tray_id && asic_id == other.asic_id;
+    }
+};
+
+struct ChipIdentifier {
+    tt::umd::chip_id_t id;
+    std::optional<GalaxyUbbIdentifier> galaxy_ubb;
+
+    bool operator<(const ChipIdentifier &other) const {
+        if (id != other.id) {
+            return id < other.id;
+        }
+        return galaxy_ubb < other.galaxy_ubb;
+    }
+
+    bool operator==(const ChipIdentifier &other) const {
+        return id == other.id && galaxy_ubb == other.galaxy_ubb;
+    }
+};
+
+static std::ostream &operator<<(std::ostream &os, const ChipIdentifier &chip) {
+    if (chip.galaxy_ubb.has_value()) {
+        os << "Tray " << chip.galaxy_ubb.value().tray_id << ", N" << chip.galaxy_ubb.value().asic_id << " (Chip " << chip.id << ')';
+    } else {
+        os << "Chip " << chip.id;
+    }
     return os;
 }
 
-static GalaxyUbbId get_galaxy_ubb_id(chip_id_t chip_id) {
+// For Boost compatibility
+static size_t hash_value(const GalaxyUbbIdentifier& g) {
+    std::size_t seed = 0;
+    boost::hash_combine(seed, g.tray_id);
+    boost::hash_combine(seed, g.asic_id);
+    return seed;
+}
+
+namespace std {
+    template<>
+    struct hash<GalaxyUbbIdentifier> {
+        std::size_t operator()(const GalaxyUbbIdentifier& g) const noexcept {
+            return hash_value(g);
+        }
+    };
+    
+    template<>
+    struct hash<ChipIdentifier> {
+        std::size_t operator()(const ChipIdentifier& c) const noexcept {
+            std::size_t seed = 0;
+            boost::hash_combine(seed, c.id);
+            boost::hash_combine(seed, c.galaxy_ubb);
+            return seed;
+        }
+    };
+}
+
+static ChipIdentifier get_chip_identifier_from_umd_chip_id(chip_id_t chip_id) {
     const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
         {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
         {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
@@ -33,9 +95,9 @@ static GalaxyUbbId get_galaxy_ubb_id(chip_id_t chip_id) {
     auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
     if (tray_bus_id_it != tray_bus_ids.end()) {
         auto ubb_asic_id = bus_id & 0x0F;
-        return GalaxyUbbId{tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_asic_id};
+        return { .id = chip_id, .galaxy_ubb = GalaxyUbbIdentifier{tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_asic_id} };
     }
-    return GalaxyUbbId{0, 0};  // Invalid UBB ID if not found
+    return { .id = chip_id, .galaxy_ubb = {} }; // invalid UBB ID if not found
 }
 
 
@@ -115,14 +177,14 @@ int main() {
     std::cout << "Cluster Type: " << cluster_type << std::endl;
 
     for (const auto &[chip_id, remote_chip_and_channel_by_channel]: ethernet_connections) {
-        std::cout << "Chip " << chip_id << ' ' << get_galaxy_ubb_id(chip_id) << std::endl;
+        std::cout << get_chip_identifier_from_umd_chip_id(chip_id) << std::endl;
         for (const auto &[channel, remote_chip_and_channel]: remote_chip_and_channel_by_channel) {
             tt::umd::chip_id_t remote_chip_id;
             tt::umd::ethernet_channel_t remote_channel;
             std::tie(remote_chip_id, remote_channel) = remote_chip_and_channel;
-            std::cout << "  Channel " << channel << " -> Chip " << remote_chip_id << ' ' 
-                      << get_galaxy_ubb_id(remote_chip_id) << ", Channel " << remote_channel 
-                      << "(Link Status: " << (is_ethernet_link_up(cluster, chip_id, channel) ? "UP" : "DOWN") << '/' << (is_ethernet_link_up(cluster, remote_chip_id, remote_channel) ? "UP" : "DOWN") <<  ')'
+            std::cout << "  Channel " << channel << " -> [" << get_chip_identifier_from_umd_chip_id(remote_chip_id) 
+                      << "], Channel " << remote_channel 
+                      << " (Link Status: " << (is_ethernet_link_up(cluster, chip_id, channel) ? "UP" : "DOWN") << '/' << (is_ethernet_link_up(cluster, remote_chip_id, remote_channel) ? "UP" : "DOWN") <<  ')'
                       << std::endl;
         }
     }
