@@ -160,13 +160,14 @@ std::vector<TestSocketConfig> MeshSocketYamlParser::expand_pattern(const Pattern
     }
 }
 
+// Parametrize on fifo size, page size, and data size
+
 std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_to_all_pattern(const PatternExpansionConfig& pattern) {
     std::vector<TestSocketConfig> sockets;
 
     // TODO: Implement actual all-to-all expansion
-    // This would require knowledge of available devices which isn't available at parse time
-    // For now, return empty vector - this should be handled by the test runner
-    log_warning(tt::LogTest, "All-to-all pattern expansion not implemented at parse time");
+
+    / log_warning(tt::LogTest, "All-to-all pattern expansion not implemented at parse time");
 
     return sockets;
 }

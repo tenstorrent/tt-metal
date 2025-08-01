@@ -196,8 +196,8 @@ void MeshSocketTestRunner::run_test(const ParsedTestConfig& test) {
             log_test_execution(test, socket_idx, sockets.size());
             execute_socket_test(sockets[socket_idx], test);
         }
-        distributed_context_->barrier();
     }
+    distributed_context_->barrier();
 }
 
 void MeshSocketTestRunner::initialize_mesh_device() {
