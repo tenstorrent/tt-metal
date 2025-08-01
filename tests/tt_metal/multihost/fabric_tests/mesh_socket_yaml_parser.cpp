@@ -86,9 +86,8 @@ MeshSocketTestConfiguration MeshSocketYamlParser::parse_file(const std::string& 
     // Parse tests (required)
     TT_FATAL(root["tests"] && root["tests"].IsSequence(), "Missing or invalid 'tests' section - must be a list");
 
-    // Two-stage parsing: YAML -> TestConfig -> ParsedTestConfig
-    auto raw_test_configs = parse_raw_test_configs(root["tests"]);
-    config.tests = expand_test_configs(raw_test_configs);
+    // Parse YAML -> TestConfig (no expansion at parse time)
+    config.tests = parse_raw_test_configs(root["tests"]);
 
     // Validate the complete configuration
     validate_configuration(config);
@@ -107,18 +106,20 @@ std::vector<TestConfig> MeshSocketYamlParser::parse_raw_test_configs(const YAML:
     return test_configs;
 }
 
-std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_configs(const std::vector<TestConfig>& test_configs) {
+std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_configs(
+    const std::vector<TestConfig>& test_configs, const tt::tt_fabric::MeshGraph& mesh_graph) {
     std::vector<ParsedTestConfig> parsed_configs;
 
     for (const auto& test_config : test_configs) {
-        auto expanded_configs = expand_test_config(test_config);
+        auto expanded_configs = expand_test_config(test_config, mesh_graph);
         parsed_configs.insert(parsed_configs.end(), expanded_configs.begin(), expanded_configs.end());
     }
 
     return parsed_configs;
 }
 
-std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_config(const TestConfig& test_config) {
+std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_config(
+    const TestConfig& test_config, const tt::tt_fabric::MeshGraph& mesh_graph) {
     std::vector<ParsedTestConfig> parsed_configs;
 
     // Validate that we have either explicit sockets or pattern expansions, but not both
@@ -154,7 +155,7 @@ std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_config(const Tes
         } else if (test_config.pattern_expansions
                        .has_value()) {  // Expand patterns and add to sockets, cannot have both
             for (const auto& pattern : test_config.pattern_expansions.value()) {
-                auto expanded_sockets = expand_pattern(pattern);
+                auto expanded_sockets = expand_pattern(pattern, test_config, mesh_graph);
                 parsed_configs.emplace_back(ParsedTestConfig{
                     .name = test_name,
                     .num_iterations = test_config.num_iterations,
@@ -172,27 +173,75 @@ std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_config(const Tes
     return parsed_configs;
 }
 
-std::vector<TestSocketConfig> MeshSocketYamlParser::expand_pattern(const PatternExpansionConfig& pattern) {
+std::vector<TestSocketConfig> MeshSocketYamlParser::expand_pattern(
+    const PatternExpansionConfig& pattern, const TestConfig& test_config, const tt::tt_fabric::MeshGraph& mesh_graph) {
     switch (pattern.type) {
-        case PatternType::AllToAll: return expand_all_to_all_pattern(pattern);
-        case PatternType::RandomPairing: return expand_random_pairing_pattern(pattern);
+        case PatternType::AllToAll: return expand_all_to_all_pattern(pattern, test_config, mesh_graph);
+        case PatternType::RandomPairing: return expand_random_pairing_pattern(pattern, test_config, mesh_graph);
         default: TT_THROW("Unknown pattern type");
     }
 }
 
 // Parametrize on fifo size, page size, and data size
 
-std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_to_all_pattern(const PatternExpansionConfig& pattern) {
+std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_to_all_pattern(
+    const PatternExpansionConfig& pattern, const TestConfig& test_config, const tt::tt_fabric::MeshGraph& mesh_graph) {
     std::vector<TestSocketConfig> sockets;
 
-    // TODO: Implement actual all-to-all expansion
-    log_warning(tt::LogTest, "All-to-all pattern expansion not implemented at parse time");
+    // Get all mesh IDs from the mesh graph
+    auto mesh_ids = mesh_graph.get_mesh_ids();
 
+    // Ensure we have the required num_ranks parameter
+    TT_FATAL(test_config.num_ranks.has_value(), "All-to-all pattern requires num_ranks to be specified");
+    uint32_t num_ranks = test_config.num_ranks.value();
+
+    log_info(tt::LogTest, "Expanding all-to-all pattern for {} ranks across {} meshes", num_ranks, mesh_ids.size());
+
+    // Create all-to-all connections between ranks
+    // TODO: create  a rank to mesh_id mappings
+    for (uint32_t sender_rank = 0; sender_rank < num_ranks; ++sender_rank) {
+        for (uint32_t receiver_rank = 0; receiver_rank < num_ranks; ++receiver_rank) {
+            if (sender_rank == receiver_rank) {
+                continue;  // Skip self-connections
+            }
+
+            std::vector<SocketConnectionConfig> connections;
+
+            // this makes literally no sense lmao
+            for (const auto& sender_mesh_id : mesh_ids) {
+                for (const auto& recv_mesh_id : mesh_ids) {
+                    auto sender_coord_range = mesh_graph.get_coord_range(sender_mesh_id);
+                    auto recv_coord_range = mesh_graph.get_coord_range(recv_mesh_id);
+                    // Create connections for each coordinate in the mesh
+                    for (const auto& sender_coord : sender_coord_range) {
+                        for (const auto& recv_coord : recv_coord_range) {
+                            // TODO pass in a coreCoord
+                            // Use core coordinate (0,0) for simplicity - can be parameterized later
+                            CoreCoord core_coord(0, 0);
+
+                            connections.push_back(SocketConnectionConfig{
+                                .sender = EndpointConfig(sender_coord, core_coord),
+                                .receiver = EndpointConfig(recv_coord, core_coord)});
+                        }
+                    }
+                }
+            }
+
+            if (!connections.empty()) {
+                sockets.push_back(TestSocketConfig{
+                    .connections = connections,
+                    .sender_rank = Rank{sender_rank},
+                    .receiver_rank = Rank{receiver_rank}});
+            }
+        }
+    }
+
+    log_info(tt::LogTest, "Generated {} sockets for all-to-all pattern", sockets.size());
     return sockets;
 }
 
 std::vector<TestSocketConfig> MeshSocketYamlParser::expand_random_pairing_pattern(
-    const PatternExpansionConfig& pattern) {
+    const PatternExpansionConfig& pattern, const TestConfig& test_config, const tt::tt_fabric::MeshGraph& mesh_graph) {
     std::vector<TestSocketConfig> sockets;
 
     // TODO: Implement actual random pairing expansion
@@ -482,9 +531,9 @@ void MeshSocketYamlParser::validate_configuration(const MeshSocketTestConfigurat
         validate_physical_mesh_config(config.physical_mesh_config.value());
     }
 
-    // Validate each parsed test
+    // Validate each test config
     for (const auto& test : config.tests) {
-        validate_parsed_test_config(test);
+        validate_test_config(test);
     }
 
     log_info(tt::LogTest, "Configuration validation passed");
@@ -626,33 +675,43 @@ void MeshSocketYamlParser::print_test_configuration(const MeshSocketTestConfigur
             log_info(tt::LogTest, "  Iterations: {}", test.num_iterations.value());
         }
 
-        log_info(
-            tt::LogTest,
-            "  Memory Config: fifo_size={}, page_size={}, data_size={}",
-            test.memory_config.fifo_size,
-            test.memory_config.page_size,
-            test.memory_config.data_size);
+        // Print memory config arrays
+        log_info(tt::LogTest, "  Memory Config:");
+        log_info(tt::LogTest, "    fifo_size: {} values", test.memory_config.fifo_size.size());
+        log_info(tt::LogTest, "    page_size: {} values", test.memory_config.page_size.size());
+        log_info(tt::LogTest, "    data_size: {} values", test.memory_config.data_size.size());
+        log_info(tt::LogTest, "    num_transactions: {} values", test.memory_config.num_transactions.size());
 
-        // Print sockets
-        log_info(tt::LogTest, "  Sockets: {} defined", test.sockets.size());
-        for (size_t socket_idx = 0; socket_idx < test.sockets.size(); ++socket_idx) {
-            const auto& socket = test.sockets[socket_idx];
-            log_info(tt::LogTest, "    Socket {}: {} connections", socket_idx + 1, socket.connections.size());
-            log_info(
-                tt::LogTest, "      Sender Rank: {}, Receiver Rank: {}", *socket.sender_rank, *socket.receiver_rank);
-
-            // Print connection details
-            for (size_t conn_idx = 0; conn_idx < socket.connections.size(); ++conn_idx) {
-                const auto& connection = socket.connections[conn_idx];
+        // Print sockets if present
+        if (test.sockets.has_value()) {
+            log_info(tt::LogTest, "  Sockets: {} defined", test.sockets.value().size());
+            for (size_t socket_idx = 0; socket_idx < test.sockets.value().size(); ++socket_idx) {
+                const auto& socket = test.sockets.value()[socket_idx];
+                log_info(tt::LogTest, "    Socket {}: {} connections", socket_idx + 1, socket.connections.size());
                 log_info(
                     tt::LogTest,
-                    "      Connection {}: [{}, {}] -> [{}, {}]",
-                    conn_idx + 1,
-                    connection.sender.mesh_coord[0],
-                    connection.sender.mesh_coord[1],
-                    connection.receiver.mesh_coord[0],
-                    connection.receiver.mesh_coord[1]);
+                    "      Sender Rank: {}, Receiver Rank: {}",
+                    *socket.sender_rank,
+                    *socket.receiver_rank);
+
+                // Print connection details
+                for (size_t conn_idx = 0; conn_idx < socket.connections.size(); ++conn_idx) {
+                    const auto& connection = socket.connections[conn_idx];
+                    log_info(
+                        tt::LogTest,
+                        "      Connection {}: [{}, {}] -> [{}, {}]",
+                        conn_idx + 1,
+                        connection.sender.mesh_coord[0],
+                        connection.sender.mesh_coord[1],
+                        connection.receiver.mesh_coord[0],
+                        connection.receiver.mesh_coord[1]);
+                }
             }
+        }
+
+        // Print pattern expansions if present
+        if (test.pattern_expansions.has_value()) {
+            log_info(tt::LogTest, "  Pattern Expansions: {} defined", test.pattern_expansions.value().size());
         }
     }
 
