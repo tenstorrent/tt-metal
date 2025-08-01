@@ -367,7 +367,8 @@ void SubDeviceManager::populate_noc_data() {
     CoreRangeSet all_core_set{device_worker_cores};
     CoreRangeSet unused_cores = all_core_set.subtract(used_cores);
     if (!unused_cores.empty()) {
-        core_go_message_mapping_.emplace_back(unused_cores, num_sub_devices);
+        constexpr uint32_t unused_go_message_index = go_message_num_entries - 1;
+        core_go_message_mapping_.emplace_back(unused_cores, unused_go_message_index);
     }
 }
 
