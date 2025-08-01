@@ -391,18 +391,20 @@ bool assign_runtime_args_to_program(
     uint32_t dram_buffer_size_out =
         single_tile_size * M * N;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
+    uint32_t max_size = 0xFFFFFFFF;  // maximum uint32_t value: 4,294,967,295
+
     TT_FATAL(
-        in0_dram_addr + dram_buffer_size_act < 1024 * 1024 * 1024,
+        in0_dram_addr + dram_buffer_size_act < max_size,
         "addr {} + size {} too large",
         in0_dram_addr,
         dram_buffer_size_act);
     TT_FATAL(
-        in1_dram_addr + dram_buffer_size_weights < 1024 * 1024 * 1024,
+        in1_dram_addr + dram_buffer_size_weights < max_size,
         "addr {} + size {} too large",
         in1_dram_addr,
         dram_buffer_size_weights);
     TT_FATAL(
-        out_dram_addr + dram_buffer_size_out < 1024 * 1024 * 1024,
+        out_dram_addr + dram_buffer_size_out < max_size,
         "addr {} + size {} too large",
         out_dram_addr,
         dram_buffer_size_out);
@@ -530,7 +532,6 @@ bool matmul_multi_core_multi_dram(
     auto activations_tile_layout =
         convert_layout_tile_swizzled_to_tile_nfaces(tt::stl::make_const_span(activations_tilized));
     auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
-
     distributed::DeviceLocalBufferConfig local_buffer_config = {
         .page_size = 1024 * 2, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
     distributed::ReplicatedBufferConfig activation_buffer_config = {.size = activations.size() * sizeof(uint32_t)};
