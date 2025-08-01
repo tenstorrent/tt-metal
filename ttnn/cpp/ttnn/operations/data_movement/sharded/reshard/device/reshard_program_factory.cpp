@@ -735,50 +735,90 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
             page_stride_vector.size());
         rt_config_map_1[core] = runtime_args_1;
     }
-    auto runtime_args_tensor_0 = construct_per_core_host_tensor(rt_config_map_0);
-    auto runtime_args_tensor_1 = construct_per_core_host_tensor(rt_config_map_1);
 
-    // Move to device with proper sharding
-    auto device_runtime_args_0 = move_per_core_config_to_device(runtime_args_tensor_0, output_shard_spec.grid, device);
+    tt::tt_metal::KernelHandle kernel_id_0;
+    tt::tt_metal::KernelHandle kernel_id_1;
+    bool rt_gt_256 = false;
+    for (const auto& core : cores) {
+        const auto& runtime_args_0 = rt_config_map_0.at(core);
+        const auto& runtime_args_1 = rt_config_map_1.at(core);
 
-    auto device_runtime_args_1 = move_per_core_config_to_device(runtime_args_tensor_1, output_shard_spec.grid, device);
+        // If runtime args are larger than 256, we need to use circular buffers
+        if (runtime_args_0.size() > 256 || runtime_args_1.size() > 256) {
+            rt_gt_256 = true;
+            break;
+        }
+    }
+    if (rt_gt_256) {
+        auto runtime_args_tensor_0 = construct_per_core_host_tensor(rt_config_map_0);
+        auto runtime_args_tensor_1 = construct_per_core_host_tensor(rt_config_map_1);
 
-    constexpr uint32_t rt_args_cb_index_0 = 17;
-    constexpr uint32_t rt_args_cb_index_1 = 18;
+        // Move to device with proper sharding
+        auto device_runtime_args_0 =
+            move_per_core_config_to_device(runtime_args_tensor_0, output_shard_spec.grid, device);
 
-    // CB config for first runtime args tensor
-    tt::tt_metal::CircularBufferConfig cb_rt_args_config_0 =
-        tt::tt_metal::CircularBufferConfig(
-            device_runtime_args_0.logical_shape()[1] * sizeof(uint32_t), {{rt_args_cb_index_0, tt::DataFormat::Int32}})
-            .set_page_size(rt_args_cb_index_0, device_runtime_args_0.logical_shape()[1] * sizeof(uint32_t))
-            .set_globally_allocated_address(*device_runtime_args_0.buffer());
+        auto device_runtime_args_1 =
+            move_per_core_config_to_device(runtime_args_tensor_1, output_shard_spec.grid, device);
 
-    // CB config for second runtime args tensor
-    tt::tt_metal::CircularBufferConfig cb_rt_args_config_1 =
-        tt::tt_metal::CircularBufferConfig(
-            device_runtime_args_1.logical_shape()[1] * sizeof(uint32_t), {{rt_args_cb_index_1, tt::DataFormat::Int32}})
-            .set_page_size(rt_args_cb_index_1, device_runtime_args_1.logical_shape()[1] * sizeof(uint32_t))
-            .set_globally_allocated_address(*device_runtime_args_1.buffer());
+        constexpr uint32_t rt_args_cb_index_0 = 17;
+        constexpr uint32_t rt_args_cb_index_1 = 18;
 
-    // Create the circular buffers
-    auto cb_rt_args_0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_rt_args_config_0);
-    auto cb_rt_args_1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_rt_args_config_1);
+        // CB config for first runtime args tensor
+        tt::tt_metal::CircularBufferConfig cb_rt_args_config_0 =
+            tt::tt_metal::CircularBufferConfig(
+                device_runtime_args_0.logical_shape()[1] * sizeof(uint32_t),
+                {{rt_args_cb_index_0, tt::DataFormat::Int32}})
+                .set_page_size(rt_args_cb_index_0, device_runtime_args_0.logical_shape()[1] * sizeof(uint32_t))
+                .set_globally_allocated_address(*device_runtime_args_0.buffer());
 
-    tt::tt_metal::KernelHandle kernel_id_0 = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader.cpp",
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(
-            {dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size, unit_size, rt_args_cb_index_0}));
+        // CB config for second runtime args tensor
+        tt::tt_metal::CircularBufferConfig cb_rt_args_config_1 =
+            tt::tt_metal::CircularBufferConfig(
+                device_runtime_args_1.logical_shape()[1] * sizeof(uint32_t),
+                {{rt_args_cb_index_1, tt::DataFormat::Int32}})
+                .set_page_size(rt_args_cb_index_1, device_runtime_args_1.logical_shape()[1] * sizeof(uint32_t))
+                .set_globally_allocated_address(*device_runtime_args_1.buffer());
 
-    tt::tt_metal::KernelHandle kernel_id_1 = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader.cpp",
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig(
-            {dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size, unit_size, rt_args_cb_index_1}));
+        // Create the circular buffers
+        auto cb_rt_args_0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_rt_args_config_0);
+        auto cb_rt_args_1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_rt_args_config_1);
 
-    auto override_runtime_arguments_callback = [kernel_id_0, kernel_id_1, cb_dst0, grid, cores](
+        kernel_id_0 = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/reshard_reader_tensor_rt.cpp",
+            all_cores,
+            tt::tt_metal::ReaderDataMovementConfig(
+                {dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size, unit_size, rt_args_cb_index_0}));
+
+        kernel_id_1 = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/kernels/reshard_reader_tensor_rt.cpp",
+            all_cores,
+            tt::tt_metal::WriterDataMovementConfig(
+                {dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size, unit_size, rt_args_cb_index_1}));
+    } else {
+        kernel_id_0 = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader.cpp",
+            all_cores,
+            tt::tt_metal::ReaderDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size}));
+
+        kernel_id_1 = tt::tt_metal::CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_reader.cpp",
+            all_cores,
+            tt::tt_metal::WriterDataMovementConfig({dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size}));
+
+        for (const auto& core : cores) {
+            const auto& runtime_args_0 = rt_config_map_0.at(core);
+            const auto& runtime_args_1 = rt_config_map_1.at(core);
+
+            // Set runtime args for each core
+            tt::tt_metal::SetRuntimeArgs(program, kernel_id_0, core, runtime_args_0);
+            tt::tt_metal::SetRuntimeArgs(program, kernel_id_1, core, runtime_args_1);
+        }
+    }
+    auto override_runtime_arguments_callback = [kernel_id_0, kernel_id_1, rt_gt_256, cb_dst0, grid, cores](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
@@ -787,6 +827,16 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
         const auto& input = input_tensors.at(0);
         const auto& output = output_tensors.at(0);
         uint32_t input_addr = input.buffer()->address();
+        if (rt_gt_256 == false) {
+            auto& runtime_args_0_by_core = GetRuntimeArgs(program, kernel_id_0);
+            auto& runtime_args_1_by_core = GetRuntimeArgs(program, kernel_id_1);
+            for (auto core : cores) {
+                auto& runtime_args_0 = runtime_args_0_by_core[core.x][core.y];
+                auto& runtime_args_1 = runtime_args_1_by_core[core.x][core.y];
+                runtime_args_0[grid.x + grid.y] = input_addr;
+                runtime_args_1[grid.x + grid.y] = input_addr;
+            }
+        }
         UpdateDynamicCircularBufferAddress(program, cb_dst0, *output.buffer());
     };
 
