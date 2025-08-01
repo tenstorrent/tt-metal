@@ -155,6 +155,7 @@ def run_reduce_scatter_impl(
             barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
             num_links=num_links,
             memory_config=mem_config_rs,
+            intermediate_memory_config=mem_config_intermediate,
             topology=rs_topology,
             subdevice_id=worker_sub_device_id,
             cluster_axis=cluster_axis,
