@@ -90,11 +90,11 @@ jobs:
           git remote set-url origin https://${{ secrets.TEMP_METAL_PAT }}@github.com/tenstorrent/tt-llk.git
 
           # Try to fetch branch and create test branch if exists
-          if git fetch origin "$MIRRORED_BRANCH:$MIRRORED_BRANCH" 2>/dev/null; then
+          if git fetch origin "$MIRRORED_BRANCH" 2>/dev/null; then
             echo "branch-exists=true" >> $GITHUB_OUTPUT
             echo "✅ Mirrored branch '$MIRRORED_BRANCH' exists in submodule"
 
-            git checkout -b "$TEST_BRANCH_NAME" "origin/$MIRRORED_BRANCH"
+            git checkout -b "$TEST_BRANCH_NAME" FETCH_HEAD
             git push origin "$TEST_BRANCH_NAME"
 
             # Update parent repo to reference new test branch
