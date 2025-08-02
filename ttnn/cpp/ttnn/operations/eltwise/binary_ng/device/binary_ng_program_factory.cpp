@@ -680,14 +680,6 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
         all_device_cores,
         tt_metal::WriterDataMovementConfig({b_is_dram, c_is_dram, has_sharding}, std::move(writer_defines)));
 
-    // READER KERNEL
-
-    auto reader_kernel_id = tt_metal::CreateKernel(
-        program,
-        get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op),
-        all_device_cores,
-        tt_metal::ReaderDataMovementConfig({a_is_dram, has_sharding, b_is_dram}, std::move(reader_defines)));
-
     // COMPUTE KERNEL
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
                             c_data_format == tt::DataFormat::Float32;
@@ -736,6 +728,13 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
             .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
             .compile_args = {num_tiles_per_cycle},
             .defines = std::move(compute_kernel_defines)});
+
+    // READER KERNEL
+    auto reader_kernel_id = tt_metal::CreateKernel(
+        program,
+        get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op),
+        all_device_cores,
+        tt_metal::ReaderDataMovementConfig({a_is_dram, has_sharding, b_is_dram}, std::move(reader_defines)));
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
