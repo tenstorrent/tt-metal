@@ -1,3 +1,14 @@
+/*
+ * main.cpp
+ * tt-telemetry main server app.
+ * 
+ * TODO
+ * ----
+ * - Need to handle other cluster types (including N300, etc., which have most of their Ethernet
+ *   cores unused), ensuring we don't mark legitimately unused connections as "down".
+ * - Simple REST exporter and web GUI.  
+ */
+
 #include <iostream>
 #include <optional>
 
@@ -5,6 +16,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include "impl/context/metal_context.hpp"
 
@@ -58,28 +70,32 @@ static std::ostream &operator<<(std::ostream &os, const ChipIdentifier &chip) {
 }
 
 // For Boost compatibility
-static size_t hash_value(const GalaxyUbbIdentifier& g) {
+static size_t hash_value(const GalaxyUbbIdentifier &g) {
     std::size_t seed = 0;
     boost::hash_combine(seed, g.tray_id);
     boost::hash_combine(seed, g.asic_id);
     return seed;
 }
 
+static size_t hash_value(const ChipIdentifier &c) {
+    std::size_t seed = 0;
+    boost::hash_combine(seed, c.id);
+    boost::hash_combine(seed, c.galaxy_ubb);
+    return seed;
+}
+
 namespace std {
     template<>
     struct hash<GalaxyUbbIdentifier> {
-        std::size_t operator()(const GalaxyUbbIdentifier& g) const noexcept {
+        std::size_t operator()(const GalaxyUbbIdentifier &g) const noexcept {
             return hash_value(g);
         }
     };
     
     template<>
     struct hash<ChipIdentifier> {
-        std::size_t operator()(const ChipIdentifier& c) const noexcept {
-            std::size_t seed = 0;
-            boost::hash_combine(seed, c.id);
-            boost::hash_combine(seed, c.galaxy_ubb);
-            return seed;
+        std::size_t operator()(const ChipIdentifier &c) const noexcept {
+            return hash_value(c);
         }
     };
 }
@@ -98,6 +114,69 @@ static ChipIdentifier get_chip_identifier_from_umd_chip_id(chip_id_t chip_id) {
         return { .id = chip_id, .galaxy_ubb = GalaxyUbbIdentifier{tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_asic_id} };
     }
     return { .id = chip_id, .galaxy_ubb = {} }; // invalid UBB ID if not found
+}
+
+
+/**************************************************************************************************
+ Chip Link Identification
+
+ Contains information on link endpoints (i.e., Ethernet cores) and bidirectional links between two
+ identifiable cores.
+**************************************************************************************************/
+
+struct ChipLinkEndpoint {
+    ChipIdentifier chip;
+    CoreCoord ethernet_core;
+    tt::umd::ethernet_channel_t channel;
+
+    bool operator<(const ChipLinkEndpoint &other) const {
+        if (chip != other.chip) {
+            return chip < other.chip;
+        } else if (ethernet_core != other.ethernet_core) {
+            return ethernet_core < other.ethernet_core;
+        }
+        return channel < other.channel;
+    }
+
+    bool operator==(const ChipLinkEndpoint &other) const {
+        return chip == other.chip && ethernet_core == other.ethernet_core && channel == other.channel;
+    }
+};
+
+using ChipLink = std::pair<ChipLinkEndpoint, ChipLinkEndpoint>;
+
+static std::ostream &operator<<(std::ostream &os, const CoreCoord &core) {
+    os << core.str();
+    return os;
+}
+
+static std::ostream &operator<<(std::ostream &os, const ChipLinkEndpoint &ep) {
+    os << "<Endpoint " << ep.chip << " Core " << ep.ethernet_core << '>';
+    return os;
+}
+
+namespace tt { 
+    namespace umd {
+        static size_t hash_value(const xy_pair &xy) {
+            std::size_t seed = 0;
+            boost::hash_combine(seed, xy.x);
+            boost::hash_combine(seed, xy.y);
+            return seed;
+        }
+    }
+}
+
+namespace std {
+    template<>
+    struct hash<ChipLinkEndpoint> {
+        std::size_t operator()(const ChipLinkEndpoint& ep) const noexcept {
+            std::size_t seed = 0;
+            boost::hash_combine(seed, ep.chip);
+            boost::hash_combine(seed, ep.ethernet_core);
+            boost::hash_combine(seed, ep.channel);
+            return seed;
+        }
+    };
 }
 
 
@@ -131,6 +210,48 @@ static std::ostream &operator<<(std::ostream &os, const tt::tt_metal::ClusterTyp
 /**************************************************************************************************
  Link Status App
 **************************************************************************************************/
+
+std::map<tt::umd::ethernet_channel_t, CoreCoord> map_ethernet_channel_to_core_coord(const tt::Cluster &cluster, tt::umd::chip_id_t chip_id) {
+    std::map<tt::umd::ethernet_channel_t, CoreCoord> ethernet_channel_to_core_coord;
+    for (const auto &[core, channel]: cluster.get_soc_desc(chip_id).logical_eth_core_to_chan_map) {
+        //TODO: assert channel not already in map
+        ethernet_channel_to_core_coord.insert({ channel, core });
+    }
+    return ethernet_channel_to_core_coord;
+}
+
+// TODO: using get_ethernet_connections() in here. This will only map links on the same host. We will want a more generic scheme eventually for remote ones.
+std::unordered_map<ChipLinkEndpoint, ChipLinkEndpoint> map_endpoints_to_remote_endpoints(const tt::Cluster &cluster) {
+    std::unordered_map<ChipLinkEndpoint, ChipLinkEndpoint> endpoint_to_remote;
+
+    for (const auto &[chip_id, remote_chip_and_channel_by_channel]: cluster.get_ethernet_connections()) {
+        ChipIdentifier from_chip = get_chip_identifier_from_umd_chip_id(chip_id);
+        
+        auto ethernet_channel_to_core_coord = map_ethernet_channel_to_core_coord(cluster, chip_id);
+        
+        for (const auto &[channel, remote_chip_and_channel]: remote_chip_and_channel_by_channel) {
+            //TODO: assert that channel is in map
+            CoreCoord from_ethernet_core = ethernet_channel_to_core_coord[channel];
+            ChipLinkEndpoint from{ .chip = from_chip, .ethernet_core = from_ethernet_core, .channel = channel };
+
+            tt::umd::chip_id_t remote_chip_id;
+            tt::umd::ethernet_channel_t remote_channel;
+            std::tie(remote_chip_id, remote_channel) = remote_chip_and_channel;
+
+            ChipIdentifier to_chip = get_chip_identifier_from_umd_chip_id(remote_chip_id);
+
+            auto remote_ethernet_channel_to_core_coord = map_ethernet_channel_to_core_coord(cluster, remote_chip_id);
+
+            //TODO: assert channel is in map
+            CoreCoord remote_ethernet_core = remote_ethernet_channel_to_core_coord[remote_channel];
+            ChipLinkEndpoint to{ .chip = to_chip, .ethernet_core = remote_ethernet_core, .channel = remote_channel };
+
+            endpoint_to_remote[from] = to;
+        }
+    }
+
+    return endpoint_to_remote;
+}
 
 auto make_ordered_ethernet_connections(const auto &unordered_connections) {
     std::map<
@@ -187,6 +308,15 @@ int main() {
                       << " (Link Status: " << (is_ethernet_link_up(cluster, chip_id, channel) ? "UP" : "DOWN") << '/' << (is_ethernet_link_up(cluster, remote_chip_id, remote_channel) ? "UP" : "DOWN") <<  ')'
                       << std::endl;
         }
+    }
+
+    std::cout << std::endl;
+    std::cout << "Links:" << std::endl;
+
+    std::unordered_map<ChipLinkEndpoint, ChipLinkEndpoint> endpoint_to_remote = map_endpoints_to_remote_endpoints(cluster);
+    
+    for (const auto &[from, to]: endpoint_to_remote) {
+        std::cout << from << " -> " << to << std::endl;
     }
 
     return 0;
