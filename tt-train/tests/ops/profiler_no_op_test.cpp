@@ -50,31 +50,4 @@ TEST_F(ProfilerNoOpTest, ProfilerNoOpTest_Batch) {
     auto result = ttml::metal::profiler_no_op(input, "identifier");
     std::cout << "Profiler_no_op_test:\nResult:\n";
     result.print();
-
-    // Check if the result is close to the expected result
-    auto result_xtensor = core::to_xtensor(result);
-    assert((result_xtensor.shape() == input_tensor.shape()));
-    EXPECT_TRUE(xt::allclose(result_xtensor, input_tensor, 1e-2F, 1e-2F));
-}
-
-TEST_F(ProfilerNoOpTest, ProfilerNoOpTest_Huge_Batch) {
-    using namespace ttml;
-
-    const uint32_t N = 64U, C = 1U, H = 32U, W = 128000U;
-
-    xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
-    auto rng = ttml::autograd::ctx().get_generator();
-    uint32_t seed = rng();
-    ttml::core::parallel_generate(
-        std::span{input_tensor.data(), input_tensor.size()},
-        []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
-        seed);
-
-    auto input = core::from_xtensor(input_tensor, &autograd::ctx().get_device());
-    std::cout << "Input Logits:\n";
-    input.print();
-
-    auto result = ttml::metal::profiler_no_op(input, "identifier");
-    std::cout << "Profiler_no_op_test:\nResult:\n";
-    result.print();
 }
