@@ -138,7 +138,7 @@ inline void calculate_cosine() {
     }
 }
 
-template <SfpuType operation, bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <SfpuType operation, bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_sfpu_trig() {
     if constexpr (operation == SfpuType::sine) {
         calculate_sine<APPROXIMATION_MODE, ITERATIONS>();
@@ -218,7 +218,7 @@ sfpi_inline vFloat sfpu_asine_maclaurin_series(vFloat val) {
     return output;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_asin() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
@@ -229,7 +229,7 @@ inline void calculate_asin() {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_acos() {
     // SFPU microcode
     // acos = (pi/2 - asin)

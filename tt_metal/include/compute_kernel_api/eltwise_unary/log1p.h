@@ -34,6 +34,6 @@ ALWI void log1p_tile_init() { MATH((llk_math_eltwise_unary_sfpu_log1p_init<APPRO
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void log1p_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_log1p<APPROX>(idst))); }
+ALWI void log1p_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_log1p<APPROX, DST_ACCUM_MODE>(idst))); }
 
 }  // namespace ckernel

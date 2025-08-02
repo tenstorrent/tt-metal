@@ -18,7 +18,8 @@ template <
     bool FAST_APPROX,
     bool SCALE_EN = false,
     int ITERATIONS = 8,
-    bool SKIP_POSITIVE_CHECK = false>
+    bool SKIP_POSITIVE_CHECK = false,
+    bool is_fp32_dest_acc_en = false>
 void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     _calculate_exponential_<APPROXIMATION_MODE, SCALE_EN, ITERATIONS, FAST_APPROX, SKIP_POSITIVE_CHECK>(
         exp_base_scale_factor);
