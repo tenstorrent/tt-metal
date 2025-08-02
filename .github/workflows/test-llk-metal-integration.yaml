@@ -49,7 +49,7 @@ env:
   SUBMODULE_PATH: tt_metal/third_party/tt_llk
   WORKFLOW_TIMEOUT: ${{ inputs.workflow_timeout || 240 }}
   MAX_RETRIES: 3
-  POLL_INTERVAL: 120
+  POLL_INTERVAL: 60
 
 permissions:
   contents: write
@@ -87,11 +87,9 @@ jobs:
           SUBMODULE_PATH="${{ env.SUBMODULE_PATH }}"
           cd "$SUBMODULE_PATH"
 
-          # Ensure correct remote
+          # Ensure correct remote and fetch mirrored branch in one operation
           git remote set-url origin https://${{ secrets.TEMP_METAL_PAT }}@github.com/tenstorrent/tt-llk.git
-
-          # Fetch mirrored branch
-          if git fetch origin "$MIRRORED_BRANCH"; then
+          if git fetch origin "$MIRRORED_BRANCH:$MIRRORED_BRANCH" 2>/dev/null; then
             echo "branch-exists=true" >> $GITHUB_OUTPUT
             echo "✅ Mirrored branch '$MIRRORED_BRANCH' exists in submodule"
 
@@ -101,25 +99,34 @@ jobs:
             cd "$SUBMODULE_PATH"
 
             # Checkout mirrored branch
-            git checkout -b "$TEST_BRANCH_NAME" "origin/$MIRRORED_BRANCH"
+            git checkout -b "$TEST_BRANCH_NAME" "$MIRRORED_BRANCH"
 
             # Check if rebase is needed
-            if git merge-base --is-ancestor "$PARENT_PINNED_COMMIT" "$TEST_BRANCH_NAME"; then
+            if git merge-base --is-ancestor "$PARENT_PINNED_COMMIT" HEAD; then
               echo "✅ Branch is already based on or ahead of pinned commit - no rebase needed"
             else
               echo "🔄 Rebasing branch onto pinned commit for compatibility"
-              git rebase "$PARENT_PINNED_COMMIT"
+              if ! git rebase "$PARENT_PINNED_COMMIT"; then
+                echo "❌ Rebase failed - there may be conflicts that need manual resolution"
+                exit 1
+              fi
             fi
 
             # Push test branch to origin
-            git push origin "$TEST_BRANCH_NAME"
+            if ! git push origin "$TEST_BRANCH_NAME"; then
+              echo "❌ Failed to push test branch to origin"
+              exit 1
+            fi
 
             # Update parent repository to reference new submodule commit
             cd "${{ github.workspace }}"
             git checkout -b "${{ env.PARENT_BRANCH_NAME }}"
             git add "$SUBMODULE_PATH"
             git commit -m "test: update LLK submodule to test branch $TEST_BRANCH_NAME from mirrored branch $MIRRORED_BRANCH"
-            git push origin "${{ env.PARENT_BRANCH_NAME }}"
+            if ! git push origin "${{ env.PARENT_BRANCH_NAME }}"; then
+              echo "❌ Failed to push parent branch to origin"
+              exit 1
+            fi
 
             echo "test-branch-name=$TEST_BRANCH_NAME" >> $GITHUB_OUTPUT
             echo "✅ Created test branch '$TEST_BRANCH_NAME' and updated parent repository"
@@ -199,16 +206,25 @@ jobs:
             if [ "${TEST_CONFIGS[$workflow]}" = "true" ]; then
               echo "Triggering $workflow..."
               gh workflow run "$workflow" --ref "$PARENT_BRANCH_NAME" --repo "tenstorrent/tt-metal"
-              # Wait and get run ID
-              sleep 10
-              run_id=$(gh run list --workflow "$workflow" --branch "$PARENT_BRANCH_NAME" --limit 1 --json databaseId --jq '.[0].databaseId' --repo "tenstorrent/tt-metal" 2>/dev/null || echo "")
+
+              # Poll for run ID more efficiently
+              run_id=""
+              for i in {1..12}; do  # Try for 60 seconds max
+                sleep 5
+                run_id=$(gh run list --workflow "$workflow" --branch "$PARENT_BRANCH_NAME" --limit 1 --json databaseId --jq '.[0].databaseId' --repo "tenstorrent/tt-metal" 2>/dev/null || echo "")
+                if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then
+                  echo "Found run ID: $run_id for $workflow"
+                  break
+                fi
+              done
+
               if [ -n "$run_id" ] && [ "$run_id" != "null" ]; then
                 run_ids["$workflow"]="$run_id"
                 # Start monitoring in background
                 monitor_workflow "$run_id" "$workflow" &
                 pids["$workflow"]=$!
               else
-                echo "❌ Failed to get run ID for $workflow"
+                echo "❌ Failed to get run ID for $workflow after 60 seconds"
                 exit 1
               fi
             fi
@@ -224,38 +240,26 @@ jobs:
             fi
           done
           exit $exit_code
-  cleanup:
+  cleanup-and-report:
     needs: setup-and-test
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          repository: tenstorrent/tt-metal
-          submodules: recursive
-          token: ${{ secrets.TEMP_METAL_PAT }}
       - name: Cleanup test branches
         if: needs.setup-and-test.outputs.branch-exists == 'true'
         env:
           GH_TOKEN: ${{ secrets.TEMP_METAL_PAT }}
-          SUBMODULE_PATH: ${{ env.SUBMODULE_PATH }}
         run: |
           TEST_BRANCH_NAME="${{ needs.setup-and-test.outputs.test-branch-name }}"
           PARENT_BRANCH_NAME="${{ needs.setup-and-test.outputs.parent-branch-name }}"
-          # Clean up test branch in submodule
-          cd $SUBMODULE_PATH
-          git remote set-url origin https://${{ secrets.TEMP_METAL_PAT }}@github.com/tenstorrent/tt-llk.git
-          git push origin --delete "$TEST_BRANCH_NAME" 2>/dev/null || echo "Test branch already deleted or doesn't exist"
+
+          # Clean up test branch in submodule (direct API call, no checkout needed)
+          gh api --method DELETE "repos/tenstorrent/tt-llk/git/refs/heads/$TEST_BRANCH_NAME" 2>/dev/null || echo "Test branch already deleted or doesn't exist"
+
           # Clean up parent branch
-          cd ${{ github.workspace }}
-          git push origin --delete "$PARENT_BRANCH_NAME" 2>/dev/null || echo "Parent branch already deleted or doesn't exist"
+          gh api --method DELETE "repos/tenstorrent/tt-metal/git/refs/heads/$PARENT_BRANCH_NAME" 2>/dev/null || echo "Parent branch already deleted or doesn't exist"
+
           echo "✅ Cleaned up test branches"
-  report-results:
-    needs: [setup-and-test, cleanup]
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
       - name: Generate test report
         run: |
           echo "## Test Results Summary" >> $GITHUB_STEP_SUMMARY
@@ -285,4 +289,3 @@ jobs:
           fi
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Workflow Status:** ${{ needs.setup-and-test.result }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Duration:** ${{ github.event.workflow_run.duration || 'N/A' }} seconds" >> $GITHUB_STEP_SUMMARY
