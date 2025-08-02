@@ -345,16 +345,14 @@ class Transformer(LightweightModule):
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:
-            cluster_axis = 0 if self.args.is_galaxy else None
-            num_links = 2 if self.args.is_galaxy else 1
-            topology = self.args.ccl_topology()
             tt_logits = ag_on_padded_dim_3(
                 tt_logits,
                 self.mesh_device,
                 self.tt_ccl,
-                cluster_axis=cluster_axis,
-                num_links=num_links,
-                topology=topology,
+                is_galaxy=self.args.is_galaxy,
+                cluster_axis=0 if self.args.is_galaxy else None,
+                num_links=2 if self.args.is_galaxy else 1,
+                topology=self.args.ccl_topology(),
             )
 
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
