@@ -161,7 +161,7 @@ void ElfFile::ReleaseImpl() {
 
 void ElfFile::ReadImage(std::string_view path) {
     int fd = open(path.data(), O_RDONLY | O_CLOEXEC);
-    struct stat st;
+    struct stat st{};
     void* buffer = MAP_FAILED;
     if (fd >= 0 && fstat(fd, &st) >= 0) {
         buffer = mmap(nullptr, st.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);

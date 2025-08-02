@@ -293,7 +293,7 @@ void add_prefetcher_paged_read_cmd(
     uint32_t pages,
     bool is_dram,
     uint32_t length_adjust) {
-    CQPrefetchCmd cmd;
+    CQPrefetchCmd cmd{};
     cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_PAGED;
 
     cmd.relay_paged.start_page = start_page & CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK;
@@ -322,7 +322,7 @@ void add_prefetcher_linear_read_cmd(IDevice* device,
                                     uint32_t length) {
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
 
-    CQPrefetchCmd cmd;
+    CQPrefetchCmd cmd{};
     cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR;
 
     cmd.relay_linear.pad1 = 0;
@@ -337,7 +337,7 @@ void add_prefetcher_linear_read_cmd(IDevice* device,
 
 void add_prefetcher_debug_prologue(vector<uint32_t>& cmds) {
     if (debug_g) {
-        CQPrefetchCmd debug_cmd;
+        CQPrefetchCmd debug_cmd{};
         debug_cmd.base.cmd_id = CQ_PREFETCH_CMD_DEBUG;
         add_bare_prefetcher_cmd(cmds, debug_cmd, true);
     }
@@ -394,7 +394,7 @@ void add_prefetcher_cmd(
 
     add_prefetcher_debug_prologue(cmds);
 
-    CQPrefetchCmd cmd;
+    CQPrefetchCmd cmd{};
     memset(&cmd, 0, sizeof(CQPrefetchCmd));
     cmd.base.cmd_id = id;
 
@@ -485,7 +485,7 @@ void gen_dram_packed_read_cmd(
     for (auto length : lengths) {
         TT_ASSERT(length <= num_dram_banks_g * page_size);
         TT_ASSERT((length & (MetalContext::instance().hal().get_alignment(HalMemType::DRAM) - 1)) == 0);
-        CQPrefetchRelayPagedPackedSubCmd sub_cmd;
+        CQPrefetchRelayPagedPackedSubCmd sub_cmd{};
         sub_cmd.start_page = 0;  // TODO: randomize?
         sub_cmd.log_page_size = log_page_size;
         sub_cmd.base_addr = DRAM_DATA_BASE_ADDR + count * page_size;
@@ -608,7 +608,7 @@ void gen_dram_write_cmd(
 void gen_wait_and_stall_cmd(IDevice* device, vector<uint32_t>& prefetch_cmds, vector<uint32_t>& cmd_sizes) {
     vector<uint32_t> dispatch_cmds;
 
-    CQDispatchCmd wait;
+    CQDispatchCmd wait{};
     wait.base.cmd_id = CQ_DISPATCH_CMD_WAIT;
     wait.wait.flags = CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER | CQ_DISPATCH_CMD_WAIT_FLAG_NOTIFY_PREFETCH |
                       CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY;
@@ -660,7 +660,7 @@ void gen_dispatcher_delay_cmd(
     IDevice* device, vector<uint32_t>& prefetch_cmds, vector<uint32_t>& cmd_sizes, uint32_t count) {
     vector<uint32_t> dispatch_cmds;
 
-    CQDispatchCmd delay;
+    CQDispatchCmd delay{};
     delay.base.cmd_id = CQ_DISPATCH_CMD_DELAY;
     delay.delay.delay = count;
     add_bare_dispatcher_cmd(dispatch_cmds, delay);
@@ -1085,7 +1085,7 @@ void gen_dram_ringbuffer_read_cmd(
 
     size_t current_offset = 0;
     for (auto length : lengths) {
-        CQPrefetchRelayRingbufferSubCmd sub_cmd;
+        CQPrefetchRelayRingbufferSubCmd sub_cmd{};
         sub_cmd.start = current_offset - kWriteOffset;
         sub_cmd.length = length;
         current_offset += length;
@@ -1185,7 +1185,7 @@ void gen_prefetcher_exec_buf_cmd_and_write_to_dram(
     vector<uint32_t> empty_payload;  // don't give me grief, it is just a test
 
     // Add the semaphore release for prefetch_h
-    CQDispatchCmd dcmd;
+    CQDispatchCmd dcmd{};
     memset(&dcmd, 0, sizeof(CQDispatchCmd));
 
     // cmddat_q in prefetch_d is re-used for exec_buf
@@ -1219,7 +1219,7 @@ void gen_prefetcher_exec_buf_cmd_and_write_to_dram(
     }
     tt::tt_metal::MetalContext::instance().get_cluster().dram_barrier(device->id());
 
-    CQPrefetchCmd cmd;
+    CQPrefetchCmd cmd{};
     cmd.base.cmd_id = CQ_PREFETCH_CMD_EXEC_BUF;
     cmd.exec_buf.pad1 = 0;
     cmd.exec_buf.pad2 = 0;

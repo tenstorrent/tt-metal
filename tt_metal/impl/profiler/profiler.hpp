@@ -94,7 +94,7 @@ struct ZoneDetails {
     std::string zone_name;
     std::string source_file;
     uint64_t source_line_num;
-    std::array<bool, static_cast<uint16_t>(ZoneNameKeyword::COUNT)> zone_name_keyword_flags;
+    std::array<bool, static_cast<uint16_t>(ZoneNameKeyword::COUNT)> zone_name_keyword_flags{};
 
     ZoneDetails(const std::string& zone_name, const std::string& source_file, uint64_t source_line_num) :
         zone_name(zone_name), source_file(source_file), source_line_num(source_line_num) {
@@ -140,13 +140,13 @@ private:
     tt::ARCH device_arch;
 
     // Device ID
-    chip_id_t device_id;
+    chip_id_t device_id{};
 
     // Device frequency
-    int device_core_frequency;
+    int device_core_frequency{};
 
     // Last fast dispatch read performed flag
-    bool is_last_fd_read_done;
+    bool is_last_fd_read_done{};
 
     // Smallest timestamp
     uint64_t smallest_timestamp = (1lu << 63);
@@ -262,7 +262,7 @@ public:
     std::vector<uint32_t> profile_buffer;
 
     // Number of bytes reserved in each DRAM bank for storing device profiling data
-    uint32_t profile_buffer_bank_size_bytes;
+    uint32_t profile_buffer_bank_size_bytes{};
 
     // Device events
     std::unordered_set<tracy::TTDeviceEvent> device_events;

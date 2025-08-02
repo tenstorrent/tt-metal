@@ -821,8 +821,8 @@ struct test_traffic_t {
     std::vector<std::vector<uint32_t>> rx_to_tx_address_map;
     std::vector<std::vector<uint32_t>> tx_results;
     std::vector<std::vector<std::vector<uint32_t>>> rx_results;
-    uint32_t test_results_address;
-    uint32_t rx_buf_size;
+    uint32_t test_results_address{};
+    uint32_t rx_buf_size{};
     uint32_t num_links_to_use;
     uint32_t link_idx = 0;
     bool sync_with_remote_controller_kernel = false;

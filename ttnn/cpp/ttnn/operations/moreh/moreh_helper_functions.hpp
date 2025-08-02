@@ -82,7 +82,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 
 struct ComputeKernelArg {
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec;
-    uint32_t num_tile_per_core_group;
+    uint32_t num_tile_per_core_group{};
     const std::vector<uint32_t>& compile_args = {};
 };
 

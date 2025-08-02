@@ -95,7 +95,7 @@ private:
         uint32_t num_eth_messages_to_forward;
         uint32_t channel;
         uint32_t largest_message_size_bytes;
-        uint32_t num_buffers;
+        uint32_t num_buffers{};
         bool is_sender;
     };
 

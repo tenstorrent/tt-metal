@@ -101,7 +101,7 @@ enum class HighLevelTrafficPattern {
 struct TestFabricSetup {
     tt::tt_fabric::Topology topology{0};
     std::optional<RoutingType> routing_type;
-    uint32_t num_links;
+    uint32_t num_links{};
 };
 
 struct HighLevelPatternConfig {
@@ -125,7 +125,7 @@ struct ParsedTestConfig {
     bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
-    uint32_t seed;
+    uint32_t seed{};
 };
 
 struct TestConfig {
@@ -144,7 +144,7 @@ struct TestConfig {
     bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
-    uint32_t seed;
+    uint32_t seed{};
 };
 
 // ======================================================================================

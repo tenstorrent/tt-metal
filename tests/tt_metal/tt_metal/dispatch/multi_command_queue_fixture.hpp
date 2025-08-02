@@ -81,7 +81,7 @@ protected:
 
     tt::tt_metal::IDevice* device_ = nullptr;
     tt::ARCH arch_{tt::ARCH::Invalid};
-    uint8_t num_cqs_;
+    uint8_t num_cqs_{};
 };
 
 class UnitMeshMultiCQSingleDeviceFixture : public DispatchFixture {
@@ -144,7 +144,7 @@ protected:
 
     std::shared_ptr<distributed::MeshDevice> device_;
     tt::ARCH arch_{tt::ARCH::Invalid};
-    uint8_t num_cqs_;
+    uint8_t num_cqs_{};
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
 };

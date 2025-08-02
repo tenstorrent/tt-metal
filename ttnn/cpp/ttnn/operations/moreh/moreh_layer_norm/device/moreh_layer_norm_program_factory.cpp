@@ -302,7 +302,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     union {
         float f;
         uint32_t u;
-    } scaler;
+    } scaler{};
 
     if (normalized_dims == 1) {
         scaler.f = 1.0f / static_cast<float>(origin_W);
@@ -319,7 +319,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     union {
         float f;
         uint32_t u;
-    } e;
+    } e{};
     e.f = eps;  // epsilon
 
     const auto input_addr = input.buffer()->address();

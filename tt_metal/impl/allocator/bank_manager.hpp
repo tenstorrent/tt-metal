@@ -86,8 +86,8 @@ private:
     // banks using only bank_id Set to 0 for cores/nodes with only 1 bank
     std::unordered_map<uint32_t, int64_t> bank_id_to_bank_offset_;
     std::unique_ptr<allocator::Algorithm> allocator_;
-    DeviceAddr interleaved_address_limit_;
-    uint32_t alignment_bytes_;
+    DeviceAddr interleaved_address_limit_{};
+    uint32_t alignment_bytes_{};
     void validate_bank_id(uint32_t bank_id) const;
 
     void init_allocator(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset);

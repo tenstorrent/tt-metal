@@ -1352,7 +1352,7 @@ public:
     }
 
 private:
-    ControlPlane* control_plane_ptr_;
+    ControlPlane* control_plane_ptr_{};
     Topology topology_{0};
     RoutingType routing_type_{0};
     MeshShape mesh_shape_;

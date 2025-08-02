@@ -316,7 +316,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     union {
         float f;
         uint32_t u;
-    } s;
+    } s{};
     s.f = scale.value_or(1.0f);  // scale for fused scale-mask-softmax
     for (uint32_t i = 0; i < grid_size.x * grid_size.y; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
@@ -510,7 +510,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             union {
                 float f;
                 uint32_t u;
-            } s;
+            } s{};
             s.f = scale.value_or(1.0f);  // scale for fused scale-mask-softmax
 
             auto& cached_reader_args = GetRuntimeArgs(program, reader_kernels_id);
@@ -863,7 +863,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
     union {
         float f;
         uint32_t u;
-    } s;
+    } s{};
     s.f = scale.value_or(1.0f);  // scale for fused scale-mask-softmax
     uint32_t mask_start_tile_id = 0;
 

@@ -101,7 +101,7 @@ RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::Progr
         union {
             float f;
             uint32_t u;
-        } f2u_from, f2u_to;
+        } f2u_from{}, f2u_to{};
         f2u_from.f = operation_attributes.from;
         f2u_to.f = operation_attributes.to - eps;  // -eps make sure that generated number is < operation_attributes.to
 

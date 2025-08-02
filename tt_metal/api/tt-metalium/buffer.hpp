@@ -110,8 +110,8 @@ std::ostream& operator<<(std::ostream& os, const ShardSpec& spec);
 
 struct ShardSpecBuffer {
     ShardSpec tensor_shard_spec;
-    std::array<uint32_t, 2> page_shape;
-    std::array<uint32_t, 2> tensor2d_shape_in_pages;
+    std::array<uint32_t, 2> page_shape{};
+    std::array<uint32_t, 2> tensor2d_shape_in_pages{};
     ShardSpecBuffer(
         const CoreRangeSet& core_sets_,
         const std::array<uint32_t, 2>& shard_shape_,
@@ -152,9 +152,9 @@ using InterleavedBufferConfig = BufferConfig;
 // copied from above instead of using inheritance such that we can use
 // designator constructor
 struct ShardedBufferConfig {
-    IDevice* device;
-    DeviceAddr size;       // Size in bytes
-    DeviceAddr page_size;  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
+    IDevice* device{};
+    DeviceAddr size{};       // Size in bytes
+    DeviceAddr page_size{};  // Size of unit being interleaved. For non-interleaved buffers: size == page_size
     BufferType buffer_type = BufferType::L1;
     TensorMemoryLayout buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED;
     ShardSpecBuffer shard_parameters;

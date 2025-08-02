@@ -12,8 +12,8 @@
 namespace tt::tt_metal {
 
 struct TestBufferConfig {
-    uint32_t num_pages;
-    uint32_t page_size;
+    uint32_t num_pages{};
+    uint32_t page_size{};
     BufferType buftype{0};
     std::optional<BufferShardingArgs> sharding_args = std::nullopt;  // only used for sharded buffers
 };

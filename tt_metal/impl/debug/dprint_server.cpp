@@ -157,7 +157,7 @@ bool StreamEndsWithNewlineChar(const ostringstream* stream) {
 }  // StreamEndsWithNewlineChar
 
 void PrintTileSlice(ostringstream* stream, uint8_t* ptr) {
-    TileSliceHostDev<0> ts_copy;  // Make a copy since ptr might not be properly aligned
+    TileSliceHostDev<0> ts_copy{};  // Make a copy since ptr might not be properly aligned
     std::memcpy(&ts_copy, ptr, sizeof(TileSliceHostDev<0>));
     TileSliceHostDev<0>* ts = &ts_copy;
     TT_ASSERT(

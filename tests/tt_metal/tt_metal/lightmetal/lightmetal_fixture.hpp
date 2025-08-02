@@ -21,11 +21,11 @@ namespace tt::tt_metal {
 
 class SingleDeviceLightMetalFixture : public CommandQueueFixture {
 protected:
-    bool replay_binary_;
+    bool replay_binary_{};
     std::string trace_bin_path_;
-    bool write_bin_to_disk_;
-    bool replay_manages_device_;
-    size_t trace_region_size_;
+    bool write_bin_to_disk_{};
+    bool replay_manages_device_{};
+    size_t trace_region_size_{};
 
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {

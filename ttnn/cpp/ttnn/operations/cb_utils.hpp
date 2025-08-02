@@ -31,7 +31,7 @@ std::tuple<std::array<uint32_t, N>, CBHandle> create_cb(
         cb_config.set_globally_allocated_address(*buffer);
     }
 
-    std::array<uint32_t, N> cbs_out;
+    std::array<uint32_t, N> cbs_out{};
     std::copy(cbs, cbs + N, cbs_out.begin());
     return std::make_tuple(cbs_out, tt_metal::CreateCircularBuffer(program, core_spec, cb_config));
 }

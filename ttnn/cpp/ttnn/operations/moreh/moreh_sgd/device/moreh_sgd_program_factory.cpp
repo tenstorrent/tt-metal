@@ -185,7 +185,7 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
         union {
             float f;
             uint32_t u;
-        } u_lr, u_momentum, u_dampening, u_weight_decay, u_one;
+        } u_lr{}, u_momentum{}, u_dampening{}, u_weight_decay{}, u_one{};
         u_lr.f = lr;
         u_momentum.f = momentum;
         u_dampening.f = dampening;

@@ -50,7 +50,7 @@ struct ShardCoordInfo {
 template <uint32_t columns_per_shard, uint32_t total_pages_last_dim, shard_addr_gen_consts::ContiguityType contiguity>
 struct ShardCoordInfo get_width_sharded_coordinates(uint32_t page_num) {
     // Returns core index followed by the page number
-    struct ShardCoordInfo coord_info;
+    struct ShardCoordInfo coord_info{};
     uint32_t page_row = page_num / total_pages_last_dim;
     uint32_t page_col = page_num - page_row * total_pages_last_dim;
     uint32_t w_core_id = page_col / columns_per_shard;
@@ -73,7 +73,7 @@ struct ShardCoordInfo get_width_sharded_coordinates(uint32_t page_num) {
 template <uint32_t rows_per_shard, uint32_t total_pages_last_dim, shard_addr_gen_consts::ContiguityType contiguity>
 struct ShardCoordInfo get_height_sharded_coordinates(uint32_t page_num) {
     // Returns core index followed by the page number
-    struct ShardCoordInfo coord_info;
+    struct ShardCoordInfo coord_info{};
     constexpr uint32_t num_pages_per_core = total_pages_last_dim * rows_per_shard;
     coord_info.core_num = page_num / num_pages_per_core;
     coord_info.page_num = page_num - coord_info.core_num * num_pages_per_core;
@@ -100,7 +100,7 @@ experimental::shard_addr_gen_utils::ShardCoordInfo get_block_sharded_coordinates
     // Returns core index followed by the page number
     // Calculate how many cores are in the sharding grid
     constexpr uint32_t cores_per_block_row = (total_pages_last_dim - 1) / columns_per_shard + 1;
-    experimental::shard_addr_gen_utils::ShardCoordInfo coord_info;
+    experimental::shard_addr_gen_utils::ShardCoordInfo coord_info{};
     // Get row and column ID of this page
     uint32_t page_row = page_num / total_pages_last_dim;
     uint32_t page_col = page_num - page_row * total_pages_last_dim;

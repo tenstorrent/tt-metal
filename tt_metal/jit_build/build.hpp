@@ -97,7 +97,7 @@ protected:
     int core_id_;
     int is_fw_;
     uint32_t dispatch_message_addr_;
-    bool process_defines_at_compile;
+    bool process_defines_at_compile{};
 
     std::string out_path_;
     std::string target_name_;

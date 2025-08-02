@@ -145,23 +145,23 @@ private:
     std::vector<uint32_t> mem_read_alignments_;
     std::vector<uint32_t> mem_write_alignments_;
     std::vector<uint32_t> mem_alignments_with_pcie_;
-    uint32_t num_nocs_;
-    uint32_t noc_addr_node_id_bits_;
+    uint32_t num_nocs_{};
+    uint32_t noc_addr_node_id_bits_{};
     uint32_t noc_node_id_ = 0;
     uint32_t noc_node_id_mask_ = 0;
     uint32_t noc_encoding_reg_ = 0;
-    uint32_t noc_coord_reg_offset_;
-    uint32_t noc_overlay_start_addr_;
-    uint32_t noc_stream_reg_space_size_;
-    uint32_t noc_stream_remote_dest_buf_size_reg_index_;
-    uint32_t noc_stream_remote_dest_buf_start_reg_index_;
-    uint32_t noc_stream_remote_dest_buf_space_available_reg_index_;
-    uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_;
+    uint32_t noc_coord_reg_offset_{};
+    uint32_t noc_overlay_start_addr_{};
+    uint32_t noc_stream_reg_space_size_{};
+    uint32_t noc_stream_remote_dest_buf_size_reg_index_{};
+    uint32_t noc_stream_remote_dest_buf_start_reg_index_{};
+    uint32_t noc_stream_remote_dest_buf_space_available_reg_index_{};
+    uint32_t noc_stream_remote_dest_buf_space_available_update_reg_index_{};
     std::vector<uint32_t> noc_x_id_translate_table_;
     std::vector<uint32_t> noc_y_id_translate_table_;
-    bool coordinate_virtualization_enabled_;
-    uint32_t virtual_worker_start_x_;
-    uint32_t virtual_worker_start_y_;
+    bool coordinate_virtualization_enabled_{};
+    uint32_t virtual_worker_start_x_{};
+    uint32_t virtual_worker_start_y_{};
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
     bool intermesh_eth_links_enabled_ = false;  // set when an architecture enable intermesh routing
     std::unordered_set<AddressableCoreType> virtualized_core_types_;
