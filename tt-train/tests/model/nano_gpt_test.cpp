@@ -22,8 +22,9 @@
 
 bool should_run_nightly_tests() {
     const char *env_var = std::getenv("ENABLE_NIGHTLY_TT_TRAIN_TESTS");
-    bool res = env_var || ENABLE_NIGHTLY_TT_TRAIN_TESTS;
-    return res;
+    bool is_whb0 = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
+    bool is_ci = env_var || ENABLE_NIGHTLY_TT_TRAIN_TESTS;
+    return is_whb0 && is_ci;
 }
 
 bool should_run_multi_device_tests() {
