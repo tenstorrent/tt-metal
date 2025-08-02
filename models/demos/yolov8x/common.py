@@ -9,6 +9,8 @@ from ultralytics import YOLO
 
 from models.demos.yolov8x.reference import yolov8x
 
+YOLOV8X_L1_SMALL_SIZE = 24576
+
 
 def load_torch_model(model_location_generator=None):
     if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
