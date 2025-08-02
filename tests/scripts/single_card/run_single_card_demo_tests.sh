@@ -321,13 +321,15 @@ run_yolov7_demo() {
 
 }
 
-# Commenting out VGG_Unet Demo since CIv2 does not support dataset download from Kaggle
-# Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
-# run_vgg_unet_demo() {
 
-#  pytest -n auto models/demos/vgg_unet/demo/demo.py --timeout 600
+run_vgg_unet_demo() {
 
-# }
+ pytest -n auto --disable-warnings models/demos/vgg_unet/demo/demo.py --timeout 600
+
+ # Dataset Evaluation
+ pytest -n auto --disable-warnings models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet --timeout 600
+
+}
 
 
 
