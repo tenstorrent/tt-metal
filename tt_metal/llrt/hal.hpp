@@ -165,7 +165,7 @@ private:
     bool eth_fw_is_cooperative_ = false;  // set when eth riscs have to context switch
     bool intermesh_eth_links_enabled_ = false;  // set when an architecture enable intermesh routing
     std::unordered_set<AddressableCoreType> virtualized_core_types_;
-    HalTensixHarvestAxis tensix_harvest_axis_;
+    HalTensixHarvestAxis tensix_harvest_axis_{HalTensixHarvestAxis::ROW};
 
     float eps_ = 0.0f;
     float nan_ = 0.0f;

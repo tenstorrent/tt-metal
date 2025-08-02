@@ -42,7 +42,7 @@ struct CBInfo {
     // CB handle
     tt::tt_metal::CBHandle handle;
     // Type of the CB
-    Conv2dCb name;
+    Conv2dCb name{Conv2dCb::COUNT};
     // Number of pages in the circular buffer.
     uint32_t num_pages;
     // Size of each page in the circular buffer.

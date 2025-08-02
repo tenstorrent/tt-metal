@@ -32,7 +32,7 @@ extern bool perf_test_g;
 extern uint32_t hugepage_issue_buffer_size_g;
 
 struct one_core_data_t {
-    CoreType core_type;
+    CoreType core_type{CoreType::COUNT};
     CoreCoord logical_core;
     CoreCoord phys_core;
     int bank_id;

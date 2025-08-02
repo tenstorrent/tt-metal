@@ -80,7 +80,7 @@ private:
     void deallocate_buffer_(DeviceAddr address);
 
     // Types of buffers allocated in the banks
-    BufferType buffer_type_;
+    BufferType buffer_type_{0};
     std::unordered_set<DeviceAddr> allocated_buffers_;
     // This is to store offsets for any banks that share a core or node (dram in wh/storage core), so we can view all
     // banks using only bank_id Set to 0 for cores/nodes with only 1 bank

@@ -67,7 +67,7 @@ struct EDMChannelWorkerLocationInfo {
     uint32_t align_pad_4;
     uint32_t align_pad_5;
 
-    WorkerXY worker_xy;
+    WorkerXY worker_xy{0, 0};
     uint32_t align_pad_6;  // Padding added for safe reading over noc
     uint32_t align_pad_7;
     uint32_t align_pad_8;

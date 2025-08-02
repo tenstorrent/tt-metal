@@ -67,7 +67,7 @@ public:
     bool IsSlowDispatch() { return this->slow_dispatch_; }
 
 protected:
-    tt::ARCH arch_;
+    tt::ARCH arch_{tt::ARCH::Invalid};
     std::vector<tt::tt_metal::IDevice*> devices_;
     bool slow_dispatch_;
     const size_t l1_small_size_{DEFAULT_L1_SMALL_SIZE};

@@ -67,7 +67,7 @@ public:
     const std::string& get_out_kernel_root_path() const { return out_kernel_root_; }
 
 private:
-    tt::ARCH arch_;
+    tt::ARCH arch_{tt::ARCH::Invalid};
     std::string arch_name_;
     std::string aliased_arch_name_;
 

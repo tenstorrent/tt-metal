@@ -31,7 +31,7 @@ private:
     std::vector<struct span> link_spans_;
     uint32_t text_size_ = 0;
     uint32_t text_addr_ = 0;
-    Loading loading_;
+    Loading loading_{Loading::DISCRETE};
 
 public:
     memory();

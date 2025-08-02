@@ -170,7 +170,7 @@ public:
     uint32_t dispatch_s_buffer_size_;
     uint32_t dispatch_s_buffer_pages_;  // dispatch_s_buffer_size_ / DISPATCH_S_BUFFER_LOG_PAGE_SIZE
 
-    CoreType core_type_;  // Which core this settings is for
+    CoreType core_type_{0};  // Which core this settings is for
 };
 
 // Convenience type alias for arrays of `DISPATCH_MESSAGE_ENTRIES` size.

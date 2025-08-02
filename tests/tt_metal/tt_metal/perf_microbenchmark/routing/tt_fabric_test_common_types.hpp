@@ -99,7 +99,7 @@ enum class HighLevelTrafficPattern {
 };
 
 struct TestFabricSetup {
-    tt::tt_fabric::Topology topology;
+    tt::tt_fabric::Topology topology{0};
     std::optional<RoutingType> routing_type;
     uint32_t num_links;
 };
