@@ -28,7 +28,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace llvm {
+namespace ttsl::details::llvm {
 
 template <typename T>
 class ArrayRef;
@@ -1314,19 +1314,19 @@ extern template class llvm::SmallVectorBase<uint32_t>;
 extern template class llvm::SmallVectorBase<uint64_t>;
 #endif
 
-}  // end namespace llvm
+}  // namespace ttsl::details::llvm
 
 namespace std {
 
 /// Implement std::swap in terms of SmallVector swap.
 template <typename T>
-inline void swap(llvm::SmallVectorImpl<T>& LHS, llvm::SmallVectorImpl<T>& RHS) {
+inline void swap(ttsl::details::llvm::SmallVectorImpl<T>& LHS, ttsl::details::llvm::SmallVectorImpl<T>& RHS) {
     LHS.swap(RHS);
 }
 
 /// Implement std::swap in terms of SmallVector swap.
 template <typename T, unsigned N>
-inline void swap(llvm::SmallVector<T, N>& LHS, llvm::SmallVector<T, N>& RHS) {
+inline void swap(ttsl::details::llvm::SmallVector<T, N>& LHS, ttsl::details::llvm::SmallVector<T, N>& RHS) {
     LHS.swap(RHS);
 }
 

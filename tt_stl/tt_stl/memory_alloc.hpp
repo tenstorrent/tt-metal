@@ -16,12 +16,10 @@
 #ifndef LLVM_SUPPORT_MEMALLOC_H
 #define LLVM_SUPPORT_MEMALLOC_H
 
-// #include "llvm/Support/ErrorHandling.h"
 #include <cstdlib>
-// #include <new>
 #include <stdexcept>
 
-namespace llvm {
+namespace ttsl::details::llvm {
 
 inline void* safe_malloc(size_t Sz) {
     void* Result = std::malloc(Sz);
@@ -85,5 +83,5 @@ void* allocate_buffer(size_t Size, size_t Alignment);
 /// most likely using the above helper.
 void deallocate_buffer(void* Ptr, size_t Size, size_t Alignment);
 
-}  // namespace llvm
+}  // namespace ttsl::details::llvm
 #endif

@@ -16,7 +16,7 @@
 #include <cstdint>
 #include <stdexcept>
 
-using namespace llvm;
+using namespace ttsl::details::llvm;
 
 // Check that no bytes are wasted and everything is well-aligned.
 namespace {
@@ -103,7 +103,7 @@ static size_t getNewCapacity(size_t MinSize, size_t TSize, size_t OldCapacity) {
 /// This is unlikely to be called often, but resolves a memory leak when the
 /// situation does occur.
 static void* replaceAllocation(void* NewElts, size_t TSize, size_t NewCapacity, size_t VSize = 0) {
-    void* NewEltsReplace = llvm::safe_malloc(NewCapacity * TSize);
+    void* NewEltsReplace = safe_malloc(NewCapacity * TSize);
     if (VSize) {
         memcpy(NewEltsReplace, NewElts, VSize * TSize);
     }
@@ -117,7 +117,7 @@ void* SmallVectorBase<Size_T>::mallocForGrow(void* FirstEl, size_t MinSize, size
     NewCapacity = getNewCapacity<Size_T>(MinSize, TSize, this->capacity());
     // Even if capacity is not 0 now, if the vector was originally created with
     // capacity 0, it's possible for the malloc to return FirstEl.
-    void* NewElts = llvm::safe_malloc(NewCapacity * TSize);
+    void* NewElts = safe_malloc(NewCapacity * TSize);
     if (NewElts == FirstEl) {
         NewElts = replaceAllocation(NewElts, TSize, NewCapacity);
     }
@@ -130,7 +130,7 @@ void SmallVectorBase<Size_T>::grow_pod(void* FirstEl, size_t MinSize, size_t TSi
     size_t NewCapacity = getNewCapacity<Size_T>(MinSize, TSize, this->capacity());
     void* NewElts;
     if (BeginX == FirstEl) {
-        NewElts = llvm::safe_malloc(NewCapacity * TSize);
+        NewElts = safe_malloc(NewCapacity * TSize);
         if (NewElts == FirstEl) {
             NewElts = replaceAllocation(NewElts, TSize, NewCapacity);
         }
@@ -139,7 +139,7 @@ void SmallVectorBase<Size_T>::grow_pod(void* FirstEl, size_t MinSize, size_t TSi
         memcpy(NewElts, this->BeginX, size() * TSize);
     } else {
         // If this wasn't grown from the inline copy, grow the allocated space.
-        NewElts = llvm::safe_realloc(this->BeginX, NewCapacity * TSize);
+        NewElts = safe_realloc(this->BeginX, NewCapacity * TSize);
         if (NewElts == FirstEl) {
             NewElts = replaceAllocation(NewElts, TSize, NewCapacity, size());
         }
@@ -148,14 +148,14 @@ void SmallVectorBase<Size_T>::grow_pod(void* FirstEl, size_t MinSize, size_t TSi
     this->set_allocation_range(NewElts, NewCapacity);
 }
 
-template class llvm::SmallVectorBase<uint32_t>;
+template class ttsl::details::llvm::SmallVectorBase<uint32_t>;
 
 // Disable the uint64_t instantiation for 32-bit builds.
 // Both uint32_t and uint64_t instantiations are needed for 64-bit builds.
 // This instantiation will never be used in 32-bit builds, and will cause
 // warnings when sizeof(Size_T) > sizeof(size_t).
 #if SIZE_MAX > UINT32_MAX
-template class llvm::SmallVectorBase<uint64_t>;
+template class ttsl::details::llvm::SmallVectorBase<uint64_t>;
 
 // Assertions to ensure this #if stays in sync with SmallVectorSizeType.
 static_assert(
