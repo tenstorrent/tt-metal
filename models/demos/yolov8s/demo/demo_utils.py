@@ -14,6 +14,8 @@ import torch
 import torchvision
 from loguru import logger
 
+import ttnn
+
 
 # Read image using OpenCV from a file path (handles Unicode paths)
 def imread(filename: str, flags: int = cv2.IMREAD_COLOR):
@@ -30,10 +32,14 @@ class LoadImages:
         files = []
         for p in sorted(path) if isinstance(path, (list, tuple)) else [path]:
             a = str(Path(p).absolute())
-            if os.path.isfile(a):
+            if os.path.isdir(a):
+                for f in os.listdir(a):
+                    if f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp")):
+                        files.append(os.path.join(a, f))
+            elif os.path.isfile(a):
                 files.append(a)
             else:
-                raise FileNotFoundError(f"{p} does not exist")
+                raise FileNotFoundError(f"{p} does not exist or is not a valid file/directory")
 
         images = []
         for f in files:
@@ -327,3 +333,15 @@ def load_coco_class_names():
             return [line.strip() for line in f.readlines()]
 
     raise Exception("Failed to fetch COCO class names from both online and local sources.")
+
+
+def get_mesh_mappers(device):
+    if device.get_num_devices() > 1:
+        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+        weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+    else:
+        inputs_mesh_mapper = None
+        weights_mesh_mapper = None
+        output_mesh_composer = None
+    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
