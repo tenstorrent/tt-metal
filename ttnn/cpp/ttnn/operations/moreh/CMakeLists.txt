@@ -11,7 +11,12 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE kernels moreh_dot/device/kernels/*)
+file(
+    GLOB_RECURSE kernels
+    moreh_dot/device/kernels/*
+    moreh_getitem/device/moreh_getitem_kernels/*
+    moreh_getitem/device/moreh_getitem_tilized_kernels/*
+)
 target_sources(
     ttnn_op_moreh
     PUBLIC

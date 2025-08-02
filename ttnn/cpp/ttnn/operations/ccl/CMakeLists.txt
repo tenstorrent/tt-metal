@@ -4,8 +4,34 @@ add_library(TTNN::Ops::CCL ALIAS ttnn_op_ccl)
 target_precompile_headers(ttnn_op_ccl REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_ccl)
 
+set_target_properties(
+    ttnn_op_ccl
+    PROPERTIES
+        VERIFY_INTERFACE_HEADER_SETS
+            FALSE
+)
+# Globbing non-build files is acceptable for now because devs don't generate packages.
+file(
+    GLOB_RECURSE kernels
+    kernel_common/*
+    kernels/*
+    all_gather/device/kernels/*
+)
 target_sources(
     ttnn_op_ccl
+    PUBLIC
+        FILE_SET kernels
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES
+            ${kernels}
+            shared_with_host/hetergeneous_data_structs.hpp
+            shared_with_host/sharded_tensor_addr_gen.hpp
+            common/types/ccl_types.hpp
+            common/types/sharding_common.hpp
+            common/types/ccl_types_device.hpp
+            common/uops/ccl_command_device.hpp
+            common/uops/ccl_command.hpp
     PRIVATE
         # Common
         erisc_datamover_builder_helper.cpp
@@ -49,6 +75,15 @@ target_link_libraries(
     PRIVATE
         TT::Metalium
         TTNN::Core
+)
+
+install(
+    TARGETS
+        ttnn_op_ccl
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/ccl
+        COMPONENT ttnn-runtime
 )
 
 install(TARGETS ttnn_op_ccl LIBRARY COMPONENT tar)
