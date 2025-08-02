@@ -14,7 +14,6 @@
 #ifndef LLVM_ADT_SMALLVECTOR_H
 #define LLVM_ADT_SMALLVECTOR_H
 
-// #include "llvm/Support/Compiler.h"
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -26,7 +25,6 @@
 #include <iterator>
 #include <limits>
 #include <memory>
-// #include <new>
 #include <type_traits>
 #include <utility>
 

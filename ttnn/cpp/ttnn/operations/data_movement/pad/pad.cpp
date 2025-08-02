@@ -231,7 +231,7 @@ std::tuple<ttnn::Shape, ttnn::Shape> compute_requested_shape(
     std::transform(
         input_logical_shape.cbegin(),
         input_logical_shape.cend(),
-        pad_spec.begin(),
+        pad_spec.cbegin(),
         requested_logical_shape_vec.begin(),
         [](auto& a, auto& b) { return a + b.after_elements; });
 

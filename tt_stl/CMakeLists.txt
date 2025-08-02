@@ -27,8 +27,6 @@ target_sources(
             tt_stl/strong_type.hpp
             tt_stl/type_name.hpp
             tt_stl/unique_any.hpp
-            tt_stl/llvm_small_vector.hpp
-            tt_stl/memAlloc.hpp
 )
 
 # These dependencies are currently brought in by dependencies/CMakeLists.txt

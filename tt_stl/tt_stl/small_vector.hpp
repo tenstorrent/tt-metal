@@ -63,7 +63,6 @@ struct fmt::formatter<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
         -> format_context::iterator {
         std::stringstream ss;
         ttsl::operator<<(ss, vector);
-        // ss << vector;
         return fmt::format_to(ctx.out(), "{}", ss.str());
     }
 };

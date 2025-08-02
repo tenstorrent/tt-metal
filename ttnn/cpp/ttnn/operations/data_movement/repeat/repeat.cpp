@@ -105,7 +105,7 @@ std::tuple<ttnn::Tensor, ttnn::SmallVector<uint32_t>> match_input_rank(
     SmallVector<uint32_t> working_repetition_vector;
 
     const auto total_reps =
-        std::accumulate(repetition_vector.begin(), repetition_vector.end(), 1, std::multiplies<uint_fast32_t>());
+        std::accumulate(repetition_vector.cbegin(), repetition_vector.cend(), 1, std::multiplies<uint_fast32_t>());
 
     if (input_shape.rank() < repetition_vector.size()) {
         ttnn::SmallVector<uint32_t> new_shape_vec(repetition_vector.size(), 1);
@@ -117,7 +117,7 @@ std::tuple<ttnn::Tensor, ttnn::SmallVector<uint32_t>> match_input_rank(
     // handle it
     else if (repetition_vector.size() < input_shape.rank()) {
         working_repetition_vector.resize(input_shape.rank(), 1);
-        std::copy_backward(repetition_vector.begin(), repetition_vector.end(), working_repetition_vector.end());
+        std::copy_backward(repetition_vector.cbegin(), repetition_vector.cend(), working_repetition_vector.end());
     }
 
     else {

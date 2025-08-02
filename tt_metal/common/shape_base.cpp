@@ -52,15 +52,7 @@ bool ShapeBase::empty() const { return original_size_ == 0; }
 
 size_t ShapeBase::size() const { return original_size_; }
 
-tt::stl::Span<const uint32_t> ShapeBase::view() const {
-    const auto begin = cbegin();
-    const auto end = cend();
-    // `Span` constructor requires a contiguous range of data.
-    // static_assert(
-    //     std::is_base_of_v<std::random_access_iterator_tag,
-    //     std::iterator_traits<decltype(begin)>::iterator_category>);
-    return tt::stl::Span<const uint32_t>(begin, end);
-}
+tt::stl::Span<const uint32_t> ShapeBase::view() const { return value_; }
 
 bool ShapeBase::operator==(const ShapeBase& other) const = default;
 
@@ -85,9 +77,9 @@ uint32_t& ShapeBase::operator[](int32_t index) {
 }
 
 ShapeBase::Container::const_iterator ShapeBase::cbegin() const {
-    return this->value_.begin() + (value_.size() - original_size_);
+    return this->value_.cbegin() + (value_.size() - original_size_);
 }
 
-ShapeBase::Container::const_iterator ShapeBase::cend() const { return this->value_.end(); }
+ShapeBase::Container::const_iterator ShapeBase::cend() const { return this->value_.cend(); }
 
 }  // namespace tt::tt_metal

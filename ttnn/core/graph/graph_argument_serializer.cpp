@@ -86,7 +86,6 @@ void GraphArgumentSerializer::register_small_vector() {
         std::ostringstream oss;
         auto referenced_value = std::any_cast<std::reference_wrapper<ttsl::SmallVector<T, N>>>(value);
         ttsl::operator<<(oss, referenced_value.get());
-        // oss << referenced_value.get();
         return oss.str();
     };
 }
