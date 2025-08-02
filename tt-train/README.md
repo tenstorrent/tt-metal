@@ -67,8 +67,9 @@ TT_LOGGER_LEVEL=FATAL ./build/sources/examples/nano_gpt/nano_gpt --model_path na
 
 ```
 
-### CI only tests
-If CI fails, but local tests pass as expected, please consider changing ENABLE_CI_ONLY_TT_TRAIN_TESTS definition in tests/CMakeLists.txt
+### Nightly only tests
+If CI fails, but local tests pass as expected, please consider changing the
+ENABLE_NIGHTLY_TT_TRAIN_TESTS definition in tests/CMakeLists.txt
 
 ### wandb support
 If you don't have an account to wandb (or don't want to use it), use `-w 0` argument or run `wandb offline` beforehand (creates `wandb/settings` file)
