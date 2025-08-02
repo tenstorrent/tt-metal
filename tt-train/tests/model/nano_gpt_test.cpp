@@ -20,9 +20,25 @@
 #include "optimizers/optimizer_base.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 
+bool is_wormhole_b0() {
+    auto shape = tt::tt_metal::distributed::MeshShape(1, 1);
+    auto device_ids = std::vector<int>{};
+    auto dummy_device = ttnn::distributed::open_mesh_device(
+        shape,
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        /* num_command_queues=*/1,
+        tt::tt_metal::DispatchCoreConfig{},
+        /*offset=*/std::nullopt,
+        /*physical_device_ids=*/device_ids);
+    bool is_whb0 = dummy_device->arch() == tt::ARCH::WORMHOLE_B0;
+    ttnn::distributed::close_mesh_device(dummy_device);
+    return is_whb0;
+}
+
 bool should_run_nightly_tests() {
     const char *env_var = std::getenv("ENABLE_NIGHTLY_TT_TRAIN_TESTS");
-    bool is_whb0 = tt::tt_metal::MetalContext::instance().get_cluster().arch() == tt::ARCH::WORMHOLE_B0;
+    bool is_whb0 = is_wormhole_b0();
     bool is_ci = env_var || ENABLE_NIGHTLY_TT_TRAIN_TESTS;
     return is_whb0 && is_ci;
 }
