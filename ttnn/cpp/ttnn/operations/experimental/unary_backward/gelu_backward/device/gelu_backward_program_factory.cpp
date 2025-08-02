@@ -70,8 +70,8 @@ GeluBackwardProgramFactory::cached_program_t GeluBackwardProgramFactory::create(
     tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle binary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

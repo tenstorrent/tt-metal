@@ -4,6 +4,7 @@
 
 #include "example_multiple_return_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::examples {
 ExampleMultipleReturnDeviceOperation::SingleCore::cached_program_t
@@ -52,8 +53,8 @@ ExampleMultipleReturnDeviceOperation::SingleCore::create(
             .set_page_size(output_cb_index, single_tile_size_output);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src_is_dram};
+    std::vector<uint32_t> reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
     bool dst_is_dram1 = output_tensor1.has_value()
                             ? (output_tensor1.value().buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0)

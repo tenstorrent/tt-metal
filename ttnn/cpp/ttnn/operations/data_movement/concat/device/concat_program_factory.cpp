@@ -843,11 +843,8 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         writer_compile_time_args = {(std::uint32_t)src0_cb_index, dst_buffer->page_size()};
         TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     } else {
-        writer_compile_time_args = {// interleaved accessor args
-                                    (std::uint32_t)src0_cb_index,
-                                    (std::uint32_t)dst_is_dram,
-                                    0,
-                                    0};
+        writer_compile_time_args = {(std::uint32_t)src0_cb_index};
+        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     }
 
     // Tilized reader

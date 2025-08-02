@@ -11,7 +11,7 @@
 namespace {
 
 // this function is supposed to load either a whole stick or part of it (76800 elements)
-template <bool is_dram, typename AddrGen>
+template <typename AddrGen>
 FORCE_INLINE void load_to_cb(
     const uint32_t& cb,
     const AddrGen& addr_gtor,
@@ -104,21 +104,12 @@ void kernel_main() {
     // 76800)
     const uint32_t index_and_source_chunk_size = get_arg_val<uint32_t>(6);
 
-    const auto input_addr_gtor{
-        get_interleaved_addr_gen<ctas.input_tensor_is_dram, ctas.is_input_stick_size_bytes_pow2_min_32>(
-            input_buffer_address, ctas.input_stick_size_bytes, ctas.input_stick_size_bytes_log2)};
-    const auto index_addr_gtor{
-        get_interleaved_addr_gen<ctas.index_tensor_is_dram, ctas.is_index_stick_size_bytes_pow2_min_32>(
-            index_buffer_address, ctas.index_stick_size_bytes, ctas.index_stick_size_bytes_log2)};
-    const auto source_addr_gtor{
-        get_interleaved_addr_gen<ctas.source_tensor_is_dram, ctas.is_source_stick_size_bytes_pow2_min_32>(
-            source_buffer_address, ctas.source_stick_size_bytes, ctas.source_stick_size_bytes_log2)};
+    const auto input_addr_gtor = TensorAccessor(ctas.input_args, input_buffer_address, ctas.input_stick_size_bytes);
+    const auto index_addr_gtor = TensorAccessor(ctas.index_args, index_buffer_address, ctas.index_stick_size_bytes);
+    const auto source_addr_gtor = TensorAccessor(ctas.source_args, source_buffer_address, ctas.source_stick_size_bytes);
 
     using input_std_type = std_type_t<get_dataformat(ctas.input_cb)>;
     using index_std_type = std_type_t<get_dataformat(ctas.index_cb)>;
-    using input_addr_gtor_type = decltype(input_addr_gtor);
-    using index_addr_gtor_type = decltype(index_addr_gtor);
-    using source_addr_gtor_type = decltype(source_addr_gtor);
 
     for (uint32_t stick_id = start_stick_id; stick_id < start_stick_id + sticks_for_core; ++stick_id) {
         // process input/output chunks sequentially
@@ -128,7 +119,7 @@ void kernel_main() {
                 std::min(ctas.input_stick_size - input_offset, input_and_output_chunk_size);
 
             // first phase: copy input data to output
-            load_to_cb<ctas.input_tensor_is_dram, input_addr_gtor_type>(
+            load_to_cb(
                 ctas.input_cb,
                 input_addr_gtor,
                 input_offset * sizeof(input_std_type),
@@ -145,13 +136,13 @@ void kernel_main() {
                 // if stick is chunked, the last chunk is usually smaller
                 const uint32_t index_chunk_length =
                     std::min(ctas.index_stick_size - index_offset, index_and_source_chunk_size);
-                load_to_cb<ctas.index_tensor_is_dram, index_addr_gtor_type>(
+                load_to_cb(
                     ctas.index_cb,
                     index_addr_gtor,
                     index_offset * sizeof(index_std_type),
                     index_chunk_length * sizeof(index_std_type),
                     stick_id);
-                load_to_cb<ctas.source_tensor_is_dram, source_addr_gtor_type>(
+                load_to_cb(
                     ctas.source_cb,
                     source_addr_gtor,
                     index_offset * sizeof(input_std_type),

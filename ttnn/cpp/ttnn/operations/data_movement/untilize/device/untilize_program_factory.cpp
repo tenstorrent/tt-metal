@@ -17,6 +17,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -96,8 +97,8 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
-    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
-    std::vector<uint32_t> reader_ct_args = {(uint32_t)src0_is_dram};
+    std::vector<uint32_t> reader_ct_args;
+    TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
 
     auto reader_kernel_id = CreateKernel(
         program,
@@ -282,8 +283,8 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
-    bool src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM;
-    std::vector<uint32_t> reader_ct_args = {(uint32_t)src0_is_dram};
+    std::vector<uint32_t> reader_ct_args;
+    TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
 
     auto unary_reader_kernel_id = CreateKernel(
         program,
@@ -578,11 +579,13 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
         third_dim = log_shape[-3] * log_shape[-4];
     }
 
+    std::vector<uint32_t> reader_compile_time_args = {num_tiles_2d, third_dim, total_tiles_per_row};
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_wh_multicore.cpp",
         all_cores,
-        ReaderDataMovementConfig({src0_is_dram, num_tiles_2d, third_dim, total_tiles_per_row}));
+        ReaderDataMovementConfig(reader_compile_time_args));
 
     // writer
 
