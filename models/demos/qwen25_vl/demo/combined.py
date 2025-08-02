@@ -38,6 +38,7 @@ def test_qwen_vl_end_to_end(
     use_tt_vision,
 ):
     """Test end-to-end Qwen2.5-VL model with options to replace vision component."""
+    batch_size = 1  # use batch size 1 for now to run the test in reasonable amount of time in CI
     max_new_tokens = 128
 
     # Load model and processor
@@ -48,23 +49,25 @@ def test_qwen_vl_end_to_end(
 
     # Sample image input to trigger vision model
     messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "image": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg",
-                },
-                {"type": "text", "text": "Describe this image."},
-            ],
-        }
-    ]
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "image": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg",
+                    },
+                    {"type": "text", "text": "Describe this image."},
+                ],
+            }
+        ]
+    ] * batch_size
 
     # Process inputs
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     image_inputs, video_inputs = process_vision_info(messages)
     inputs = processor(
-        text=[text],
+        text=text,
         images=image_inputs,
         videos=video_inputs,
         padding=True,
@@ -74,34 +77,33 @@ def test_qwen_vl_end_to_end(
     # Optionally use TT vision model
     if use_tt_vision:
         # Create the TorchVisionTransformer wrapper using the original vision model as reference
-        model_args = VisionModelArgs(mesh_device, max_batch_size=1, max_seq_len=max_new_tokens)
-        model.visual = DropInVisionTransformer(model.visual, model_args, debug=True)  # show PCC
+        model_args = VisionModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_new_tokens)
+        model.model.visual = DropInVisionTransformer(model.visual, model_args, debug=True)  # show PCC
 
     # Run inference
     logger.info("Running model generation...")
     generated_ids = model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
     generated_ids_trimmed = [out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)]
-    output_text = processor.batch_decode(
+    output_texts = processor.batch_decode(
         generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
-    )[0]
+    )
 
     # Verify output
-    expected_output = "The image depicts a serene beach scene with a person and a dog. The person is sitting on the sandy beach, facing the ocean. They are wearing a plaid shirt and black pants, and they have long hair. The dog, which appears to be a Labrador Retriever, is sitting on the sand and is interacting with the person by placing its paw on their hand. The dog is wearing a harness with a colorful collar. The background shows the ocean with gentle waves, and the sky is clear with a soft light, suggesting it might be early morning or late afternoon. The overall atmosphere of the image is peaceful and joyful."
-
-    logger.info(f"Generated output: {output_text}")
-    assert len(output_text) > 0, "No output generated from the model"
-    logger.info(f"Expected output : {expected_output}")
-
     # Token-level BLEU score (standard for text generation)
     try:
         nltk.data.find("tokenizers/punkt_tab")
     except LookupError:
         nltk.download("punkt_tab", quiet=True)
 
-    reference = [word_tokenize(expected_output.lower())]
-    candidate = word_tokenize(output_text.lower())
-    bleu_score = sentence_bleu(reference, candidate)
-    logger.info(f"BLEU score: {bleu_score:.3f}")
-    assert bleu_score > 0.5
+    expected_output = "The image depicts a serene beach scene with a person and a dog. The person is sitting on the sandy beach, facing the ocean. They are wearing a plaid shirt and black pants, and they have long hair. The dog, which appears to be a Labrador Retriever, is sitting on the sand and is interacting with the person by placing its paw on their hand. The dog is wearing a harness with a colorful collar. The background shows the ocean with gentle waves, and the sky is clear with a soft light, suggesting it might be early morning or late afternoon. The overall atmosphere of the image is peaceful and joyful."
+    for i, output_text in enumerate(output_texts):
+        logger.info(f"Expected output: {expected_output}")
+        logger.info(f"Generated output {i}: {output_text}")
+
+        reference = [word_tokenize(expected_output.lower())]
+        candidate = word_tokenize(output_text.lower())
+        bleu_score = sentence_bleu(reference, candidate)
+        logger.info(f"BLEU score of output {i}: {bleu_score:.3f}")
+        assert bleu_score > 0.5
 
     logger.info(f"Test passed with {'TorchVisionTransformer' if use_tt_vision else 'original vision model'}")
