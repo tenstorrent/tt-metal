@@ -532,6 +532,7 @@ void MetalContext::initialize_control_plane() {
         case tt::tt_metal::ClusterType::P150: mesh_graph_descriptor = "p150_mesh_graph_descriptor.yaml"; break;
         case tt::tt_metal::ClusterType::P150_X2: mesh_graph_descriptor = "p150_x2_mesh_graph_descriptor.yaml"; break;
         case tt::tt_metal::ClusterType::P150_X4: mesh_graph_descriptor = "p150_x4_mesh_graph_descriptor.yaml"; break;
+        case tt::tt_metal::ClusterType::P150_X8: mesh_graph_descriptor = "p150_x8_mesh_graph_descriptor.yaml"; break;
         case tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0:
             mesh_graph_descriptor = "n150_mesh_graph_descriptor.yaml";
             break;
