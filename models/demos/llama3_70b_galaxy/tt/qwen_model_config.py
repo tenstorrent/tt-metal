@@ -9,7 +9,6 @@ import ttnn
 from pathlib import Path
 from loguru import logger
 import torch
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.tt_transformers.tt.common import (
     precompute_freqs,
     freqs_to_rotation_matrix,
@@ -25,12 +24,16 @@ from typing import Tuple
 from models.utility_functions import nearest_32
 from pathlib import Path
 from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
-    load_meta_state_dict,
     load_hf_state_dict,
     convert_hf_to_meta,
     standardize_hf_keys,
 )
-from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
+from models.demos.llama3_70b_galaxy.tt.model_config import (
+    TtModelArgs,
+    CheckpointType,
+    get_core_ranges,
+    PREFETCHER_NOC1_GRID,
+)
 
 
 class TtQwenModelArgs(TtModelArgs):
@@ -71,7 +74,7 @@ class TtQwenModelArgs(TtModelArgs):
         instruct=False,
         dummy_weights=False,
         max_batch_size=1,
-        max_seq_len=1024 * 128,
+        max_seq_len=40960,
         optimizations=LlamaOptimizations.accuracy,
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
@@ -82,17 +85,27 @@ class TtQwenModelArgs(TtModelArgs):
         self.max_batch_size = max_batch_size
         self.tile_size = 32
         self.is_70b = False
-        self.from_hf_url = False  # updated below if true
-        self.max_prefill_chunk_size = max_seq_len
+        self.from_hf_url = True  # updated below if true
+        self.max_prefill_chunk_size = 40960
         self.use_prefetcher = False
         self.max_top_k = 32
 
+        self.hidden_dim_tp_factor = 4
+        self.intermediate_dim_tp_factor = 8
+
         # Model-side constants from Llama3 to avoid code duplication
-        self.hidden_dim = 5120
-        self.n_qheads = 64
+        self.hidden_dim = 5120  # This replaces 8192
+        self.hidden_dim_padded_24_cores = 6144  # This replaces 9216
+        self.hidden_dim_per_tp = 5120 // self.hidden_dim_tp_factor  # This replaces 2048; == 1280
+
+        self.intermediate_dim = 25600  # This replaces 28672
+        self.intermediate_dim_per_tp = 25600 // self.intermediate_dim_tp_factor  # This replaces 3584; == 3200
+        self.intermediate_dim_per_tp_padded_24_cores = 3840  # This replaces 3840
+
+        self.n_q_heads = 64
         self.n_kv_heads = 8
-        self.intermediate_dim = 25600
-        self.hidden_dim_padded_24_cores = 6144
+
+        self.qk_norm = True
 
         if self.num_devices == 32:
             self.use_prefetcher = True
@@ -264,7 +277,12 @@ class TtQwenModelArgs(TtModelArgs):
             residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
             self.model_config["DECODE_RESIDUAL_MEMCFG"] = (
                 ttnn.create_sharded_memory_config(
-                    shape=(1, 1, 32, 2048 // num_cores_ln),
+                    shape=(
+                        1,
+                        1,
+                        32,
+                        self.hidden_dim_per_tp // num_cores_ln,
+                    ),  # (1, 1, 32, 2048 // num_cores_ln) originally
                     core_grid=ttnn.CoreRangeSet(
                         {
                             core_range,
@@ -392,7 +410,7 @@ class TtQwenModelArgs(TtModelArgs):
                         per_core_M=max(
                             1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8  # 8 rows
                         ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
-                        per_core_N=math.ceil(28672 / 8 / 32 / 7),  # N / TILE_WIDTH / grid width
+                        per_core_N=math.ceil(self.intermediate_dim / 8 / 32 / 7),  # N / TILE_WIDTH / grid width
                         transpose_mcast=False,
                         fused_activation=None,
                         fuse_batch=seq_len <= 2048,
@@ -775,7 +793,7 @@ class TtQwenModelArgs(TtModelArgs):
                 else ttnn.create_sharded_memory_config(
                     (
                         self.tile_padded_batch_rows,
-                        self.dim // attn_input_grid.num_cores,
+                        self.hidden_dim // attn_input_grid.num_cores,
                     ),  # Shard shape: [32, 128] -> 1 shard per core
                     attn_input_grid,
                     ttnn.ShardStrategy.WIDTH,
@@ -783,7 +801,7 @@ class TtQwenModelArgs(TtModelArgs):
                     use_height_and_width_as_shard_shape=True,
                 )
             )
-            qkv_shape_ring = (8192 // 4, 12288 // 8)  # Use padded K and N
+            qkv_shape_ring = (self.hidden_dim // 4, self.intermediate_dim // 8)  # Use padded K and N
             self.model_config["SHARDED_QKV_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
                 k=qkv_shape_ring[0],
                 n=qkv_shape_ring[1],
@@ -800,7 +818,7 @@ class TtQwenModelArgs(TtModelArgs):
             self.model_config["XQKV_DECODE_RING_PROGCFG"] = self.matmul_1d_ring_config(
                 1,
                 32,
-                8192 // 4,
+                self.hidden_dim // 4,
                 12288 // 8,  # Use padded N
                 RING_SIZE,
                 untilize_out=True,
@@ -828,13 +846,13 @@ class TtQwenModelArgs(TtModelArgs):
                 use_height_and_width_as_shard_shape=True,
             )
 
-            wo_shape_ring = (8192 // 8, 9216 // 4)  # Use padded K and N
+            wo_shape_ring = (self.hidden_dim // 8, self.hidden_dim_padded_24_cores // 4)  # Use padded K and N
             self.model_config["SHARDED_WO_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
                 k=wo_shape_ring[0],
                 n=wo_shape_ring[1],
             )
 
-            wo_out_shard_shape_ring = (32, 9216 // 4 // RING_SIZE)  # Use padded N
+            wo_out_shard_shape_ring = (32, self.hidden_dim_padded_24_cores // 4 // RING_SIZE)  # Use padded N
             self.model_config["SHARDED_WO_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=wo_out_shard_shape_ring,
                 core_grid=pf_mm_out_core_range_set,
@@ -847,26 +865,26 @@ class TtQwenModelArgs(TtModelArgs):
                 1,
                 32,
                 10240 // 8,
-                9216 // 4,  # Use padded N
+                self.hidden_dim_padded_24_cores // 4,  # Use padded N
                 RING_SIZE,
             )
 
             # Use padded K and N
             self.model_config["W1W3_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
-                k=8192 // 4,
+                k=self.hidden_dim // 4,
                 n=3840,
             )
 
             # Use padded K and N
             self.model_config["W2_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
                 k=3584,
-                n=9216 // 4,
+                n=self.hidden_dim_padded_24_cores // 4,
             )
 
             self.model_config["FF1_3_TG_RING_PROGCFG"] = self.matmul_1d_ring_config(
                 1,
                 32,
-                8192 // 4,
+                self.hidden_dim // 4,
                 3840,  # Use padded N
                 RING_SIZE,
             )
@@ -875,12 +893,12 @@ class TtQwenModelArgs(TtModelArgs):
                 1,
                 32,
                 3584,
-                9216 // 4,  # Use padded N
+                self.hidden_dim_padded_24_cores // 4,  # Use padded N
                 RING_SIZE,
             )
 
             self.model_config["SHARDED_FF12_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, 9216 // 4 // RING_SIZE),  # Use padded N
+                shape=(32, self.hidden_dim_padded_24_cores // 4 // RING_SIZE),  # Use padded N
                 core_grid=ring_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -924,7 +942,7 @@ class TtQwenModelArgs(TtModelArgs):
             )
 
             self.model_config["FF2_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, 9216 // 4 // RING_SIZE),  # Use padded N
+                shape=(32, self.hidden_dim_padded_24_cores // 4 // RING_SIZE),  # Use padded N
                 core_grid=pf_mm_out_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -936,7 +954,7 @@ class TtQwenModelArgs(TtModelArgs):
                 grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
             )
             LM_HEAD_RING_SIZE = 24
-            self.lm_head_shape = (8192 // 4, 128 * 1024 // 8)
+            self.lm_head_shape = (self.hidden_dim // 4, 128 * 1024 // 8)
 
             lm_head_ring_core_range_set = ttnn.CoreRangeSet(
                 [
@@ -1230,116 +1248,6 @@ class TtQwenModelArgs(TtModelArgs):
                 use_height_and_width_as_shard_shape=True,
             )
 
-            # Vision model configs
-            self.model_config["IMAGE_MLP_FC_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
-                m=min(seq_len, max_seq),
-                k=self.vision_dim,
-                n=self.vision_hidden_dim // self.num_devices,
-                grid_size=(8, 8),
-                in0_block_w=1,
-                fuse_batch=seq_len <= max_seq,
-            )
-            self.model_config["IMAGE_MLP_PROJ_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
-                m=min(seq_len, max_seq),
-                k=self.vision_hidden_dim // self.num_devices,
-                n=self.vision_dim,
-                grid_size=(8, 8),
-                in0_block_w=1,
-                fuse_batch=seq_len <= max_seq,
-            )
-            self.model_config["IMAGE_ATTN_QKV_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
-                m=min(seq_len, max_seq),
-                k=self.vision_dim,
-                n=(nearest_32(self.vision_head_dim) * self.vision_attn_n_heads * 3)
-                // self.num_devices,  # Head dim was padded to nearest 32
-                grid_size=(8, 8),
-                in0_block_w=1,
-                fuse_batch=seq_len <= max_seq,
-            )
-            self.model_config["IMAGE_ATTN_OUT_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
-                m=min(seq_len, max_seq),
-                k=(nearest_32(self.vision_head_dim) * self.vision_attn_n_heads * 3) // self.num_devices,
-                n=self.vision_dim,
-                grid_size=(8, 8),
-                in0_block_w=1,
-                fuse_batch=seq_len <= max_seq,
-            )
-            self.model_config["VISION_XATTN_Q_PROGCFG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 1024),
-                k=self.dim,
-                n=(self.head_dim * self.n_heads) // self.num_devices,
-                grid_size=(8, 8),
-                in0_block_w=1,
-                fuse_batch=seq_len <= 1024,
-            )
-            self.model_config["VISION_XATTN_KV_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
-                m=min(seq_len, max_seq),
-                k=self.dim,
-                n=(self.head_dim * self.n_kv_heads) // self.num_devices,
-                grid_size=(8, 8),
-                in0_block_w=1,
-                fuse_batch=seq_len <= max_seq,
-            )
-            self.model_config["VISION_XATTN_SCORE_PROGCFG"] = lambda seq_len, cache_seq_len: self.matmul_config(
-                m=seq_len,
-                k=self.head_dim,
-                n=cache_seq_len,
-                grid_size=(8, 8),
-                in0_block_w=1,
-                fuse_batch=False,
-            )
-            self.model_config["VISION_XATTN_OUTPUT_PROGCFG"] = lambda seq_len, cache_seq_len: self.matmul_config(
-                m=seq_len,
-                k=cache_seq_len,
-                n=self.head_dim,
-                grid_size=(8, 8),
-                # in0_block_w=1, # TODO: Remove this when we get non-causal FlashDecode
-                fuse_batch=False,
-            )
-            self.model_config["VISION_XATTN_DENSE_PROGCFG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 1024),
-                k=self.dim // self.num_devices,
-                n=self.dim,
-                grid_size=(8, 8),
-                in0_block_w=1,
-                fuse_batch=False,
-            )
-
-            self.model_config["VISION_PROJ_PROGCFG"] = lambda seq_len: self.matmul_config(
-                m=seq_len,
-                k=self.vision_dim * 6,
-                n=self.dim // self.num_devices,
-                grid_size=(8, 8),
-                in0_block_w=1,
-                fuse_batch=False,
-            )
-
-            self.model_config["CROSS_TRANSFORMER_TEXT_OUTPUT_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
-                m=min(seq_len, max_seq),
-                k=self.dim,
-                n=self.vocab_size // 8,  # Magic number. LM Head always contains 8 splits
-                grid_size=(8, 8),
-                in0_block_w=1,
-                fuse_batch=seq_len <= max_seq,
-            )
-
-            def _get_xattn_kv_prefill_mem_cfg(seq_len):
-                M = (self.n_kv_heads // self.num_devices) * seq_len
-                cores_x, cores_y = self.find_grid(M // self.tile_size)
-                return ttnn.create_sharded_memory_config(
-                    (
-                        nearest_32(M // (cores_x * cores_y)),
-                        self.head_dim,
-                    ),
-                    ttnn.CoreGrid(y=cores_y, x=cores_x),
-                    ttnn.ShardStrategy.HEIGHT,
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                    use_height_and_width_as_shard_shape=True,
-                )
-
-            self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = _get_xattn_kv_prefill_mem_cfg
-
-            self.VISION_MAX_MM_SEQ = nearest_32(self.vision_chunk_ntok)
             # RMS NORM
             self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"] = self.create_sharded_norm_config(attn_input_grid)
             self.model_config["SHARDED_NORM_MLP_PRGM_CFG"] = self.create_sharded_norm_config(mlp_core_grid)
@@ -1588,34 +1496,7 @@ class TtQwenModelArgs(TtModelArgs):
         with open(params_file, "r") as f:
             params = json.load(f)
         self._set_params_from_dict(params)
-
-        # Meta-style config dicts don't specity model name or rope_scaling_factor so hard-code these
-        # Set the model name based on the checkpoint directory being loaded
-        if "3.2-1B" in checkpoint_dir:
-            self.model_name = "Llama-3.2-1B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 32
-        elif "3.2-3B" in checkpoint_dir:
-            self.model_name = "Llama-3.2-3B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 32
-        elif "3.1-8B" in checkpoint_dir:
-            self.model_name = "Llama-3.1-8B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 8
-        elif "3.2-11B" in checkpoint_dir:
-            self.model_name = "Llama-3.2-11B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 8  # shared with 3.1-8B
-        elif "3.1-70B" in checkpoint_dir:
-            self.model_name = "Llama-3.1-70B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 8
-            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-            self.max_prefill_chunk_size = 128 * 1024
-        elif "3.3-70B" in checkpoint_dir:
-            self.model_name = "Llama-3.3-70B" + ("-Instruct" if self.instruct else "")
-            self.rope_scaling_factor = 8
-            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-            self.max_prefill_chunk_size = 128 * 1024
-        else:
-            logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
-        self.orig_context_len = 8192
+        self.orig_context_len = 40960
 
     def _set_hf_params(self, checkpoint_dir):
         if self.from_hf_url:
@@ -1628,16 +1509,9 @@ class TtQwenModelArgs(TtModelArgs):
             with open(config_file, "r") as f:
                 config = json.load(f)
         self._set_params_from_dict(config, is_hf=True)
-        self.is_70b = self.dim == 8192 and self.n_layers == 80
+        self.is_70b = self.dim == 5120 and self.n_layers == 64
         if self.is_70b:
-            self.max_prefill_chunk_size = 128 * 1024
-        # TODO Hack for deepseek distill 70b. generalize if needed
-        if "Llama-70B" in checkpoint_dir:  # if we're using a distill version of 70B, use same settings as Llama-70b
-            self.model_name = "Deepseek-R1-Distill-70B"
-            self.rope_scaling_factor = 8
-            self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
-            self.max_prefill_chunk_size = 128 * 1024
-            self.orig_context_len = 8192
+            self.max_prefill_chunk_size = 40960
 
     def __repr__(self):
         return f"""ModelArgs(
@@ -1691,24 +1565,16 @@ class TtQwenModelArgs(TtModelArgs):
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
     def load_state_dict(self):
         """Generate or load state_dict for n_layers of the model"""
-        if self.dummy_weights:
-            reference_model = Transformer(self)
-            state_dict = reference_model.state_dict()
-            state_dict_prefix = self.get_state_dict_prefix("", None)
-            state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
-        elif self.checkpoint_type == CheckpointType.Meta:
-            state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
-        else:
-            assert self.checkpoint_type == CheckpointType.HuggingFace
-            if self.from_hf_url:
-                from transformers import AutoModelForCausalLM
+        assert self.checkpoint_type == CheckpointType.HuggingFace
+        if self.from_hf_url:
+            from transformers import AutoModelForCausalLM
 
-                model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                state_dict = model.state_dict()
-            else:
-                state_dict = load_hf_state_dict(self.CKPT_DIR)
-            state_dict = standardize_hf_keys(state_dict)
-            state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+            model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+            state_dict = model.state_dict()
+        else:
+            state_dict = load_hf_state_dict(self.CKPT_DIR)
+        state_dict = standardize_hf_keys(state_dict)
+        state_dict = convert_hf_to_meta(state_dict, self.head_dim)
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
         for k in keys_dict:
