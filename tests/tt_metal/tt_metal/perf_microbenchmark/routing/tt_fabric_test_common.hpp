@@ -1346,6 +1346,10 @@ public:
         return master_seed;
     }
 
+    const tt::tt_metal::distributed::MeshDeviceView& get_mesh_device_view() const {
+        return mesh_device_.get()->get_view();
+    }
+
     void barrier() const override {
         const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
         distributed_context->barrier();
