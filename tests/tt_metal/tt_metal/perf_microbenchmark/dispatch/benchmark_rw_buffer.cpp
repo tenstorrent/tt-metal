@@ -52,13 +52,9 @@ static const BufferType TARGET_BUFFER_TYPE = tt_metal::BufferType::DRAM;
 
 static const auto PAGE_SIZE_ARGS = benchmark::CreateRange(32, 32 * KB, 2);
 static const std::vector<int64_t> TRANSFER_SIZE_ARGS{32 * KB, 512 * MB};
-static const auto BENCHMARK_ARGS = {PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS};
 
 // Create a buffer of total transfer_size big that is paged with page_size
 std::shared_ptr<MeshBuffer> create_buffer(int page_size, int transfer_size, std::shared_ptr<MeshDevice> device) {
-    using DataType = uint32_t;
-    auto num_data = transfer_size / sizeof(DataType);
-
     // Need to use Replicated Buffer instead of Sharded Buffer as we operate on a unit mesh.
     ReplicatedBufferConfig mesh_buffer_config{transfer_size};
     DeviceLocalBufferConfig device_local_config{.page_size = page_size, .buffer_type = TARGET_BUFFER_TYPE};
