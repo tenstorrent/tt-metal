@@ -9,6 +9,20 @@ from torch import Tensor
 import numpy as np
 
 
+def bivariate_gaussian_activation(ip):
+    mu_x = ip[..., 0:1]
+    mu_y = ip[..., 1:2]
+    # sig_x = ip[..., 2:] # empty tensors
+    # sig_y = ip[..., 3:]
+    # rho = ip[..., 4:]
+    # sig_x = ttnn.exp(sig_x)
+    # sig_y = ttnn.exp(sig_y)
+    # rho = ttnn.tanh(rho)
+    # out = ttnn.concat([mu_x, mu_y, sig_x, sig_y, rho], dim=-1)
+    out = ttnn.concat([mu_x, mu_y], dim=-1)
+    return out
+
+
 class Instances:
     """
     This class represents a list of instances in an image.
@@ -69,9 +83,7 @@ class Instances:
         The length of `value` must be the number of instances,
         and must agree with other existing fields in this object.
         """
-        print("set in ttnn Instance", type(value[0]), value.shape)
         data_len = value.shape[0]
-        print("data_len", data_len)
         self._fields[name] = value
 
     def has(self, name: str) -> bool:
@@ -138,10 +150,8 @@ class Instances:
 
         ret = Instances(self._image_size)
         for k, v in self._fields.items():
-            # print(k, type(item), 'getitem', item.type(), item.dtype)
             # if index by torch.BoolTensor
             if k == "kalman_models" and isinstance(item, torch.Tensor):
-                # print(item.shape, 'in get item')
                 ret_list = []
                 for i, if_true in enumerate(item):
                     if if_true:
@@ -149,7 +159,6 @@ class Instances:
                 ret.set(k, ret_list)
 
             else:
-                # print("INSDIE class INSTANCES",k, v[item])
                 ret.set(k, v)
         return ret
 
@@ -170,9 +179,6 @@ class Instances:
         Returns:
             Instances
         """
-        print("instance_lists", len(instance_lists))
-        for i in instance_lists:
-            print(type(i), Instances)
         assert all(isinstance(i, Instances) for i in instance_lists)
         assert len(instance_lists) > 0
         if len(instance_lists) == 1:
@@ -189,8 +195,7 @@ class Instances:
                 values[i] = ttnn.to_layout(values[i], layout=ttnn.TILE_LAYOUT)
                 # values[i] = ttnn.to_torch(values[i])
             if isinstance(v0, torch.Tensor):
-                print("Here 1")
-                # values = torch.cat(values, dim=0)
+                values = torch.cat(values, dim=0)
             elif isinstance(v0, list):
                 print("Here 2")
                 # values = list(itertools.chain(*values))
