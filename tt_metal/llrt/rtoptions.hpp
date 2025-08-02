@@ -472,6 +472,8 @@ public:
     // If true, the fabric (routers) will collect coarse grain telemetry data in software. This flag's state does not
     // affect the ability to capture Ethernet Subsystem register-read-based telemetry data.
     // This BW telemetry is coarse grain and records the total time that the reouter has unsent and inflight packets.
+    //
+    // NOTE: Enabling this option will lead to a 0-2% performance degradation for fabric traffic.
     inline bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     inline void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
 
