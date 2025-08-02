@@ -223,7 +223,7 @@ struct OptimizedConvNew {
     bool full_inner_dim;
     bool enable_split_reader;
     bool enable_subblock_padding;
-    uint32_t pre_op_l1_allocation_size_bytes;
+    uint32_t pre_op_l1_allocation_size_bytes{};
     OptimizedConvNew(
         const sliding_window::SlidingWindowConfig& sliding_window_config,
         uint32_t output_channels,

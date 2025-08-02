@@ -341,8 +341,8 @@ void MetalContext::clear_dram_state(chip_id_t device_id) {
 }
 
 void MetalContext::clear_launch_messages_on_eth_cores(chip_id_t device_id) {
-    launch_msg_t launch_msg;
-    go_msg_t go_msg;
+    launch_msg_t launch_msg{};
+    go_msg_t go_msg{};
     go_msg.signal = RUN_MSG_INIT;
     std::memset(&launch_msg, 0, sizeof(launch_msg_t));
     std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, launch_msg);
@@ -575,7 +575,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
 
     // Send exit_erisc_kernel to the launch message
     auto erisc_send_exit_signal = [&](CoreCoord virtual_core, bool is_idle_eth) {
-        go_msg_t go_msg;
+        go_msg_t go_msg{};
         std::memset(&go_msg, 0, sizeof(go_msg_t));
         log_info(
             tt::LogMetal,
@@ -945,8 +945,8 @@ void MetalContext::initialize_firmware(
 void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     ZoneScoped;
 
-    launch_msg_t launch_msg;
-    go_msg_t go_msg;
+    launch_msg_t launch_msg{};
+    go_msg_t go_msg{};
     std::memset(&launch_msg, 0, sizeof(launch_msg_t));
     go_msg.signal = RUN_MSG_INIT;
 

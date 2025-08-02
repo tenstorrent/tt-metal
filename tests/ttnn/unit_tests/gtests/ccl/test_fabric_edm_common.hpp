@@ -73,8 +73,8 @@ using tt::tt_metal::distributed::SystemMesh;
 
 class BaseFabricFixture {
 protected:
-    tt::ARCH arch_;
-    std::size_t num_devices_;
+    tt::ARCH arch_{tt::ARCH::Invalid};
+    std::size_t num_devices_{};
     bool device_open = false;
 
     // Common constants for both fixtures
@@ -185,8 +185,8 @@ public:
 
 class Fabric1DDeviceInitFixture {
 public:
-    tt::ARCH arch_;
-    std::size_t num_devices_;
+    tt::ARCH arch_{tt::ARCH::Invalid};
+    std::size_t num_devices_{};
     bool device_open = false;
 
     // Common constants for both fixtures

@@ -45,9 +45,9 @@ namespace tt {
 namespace tt_metal {
 
 struct hop_eth_sockets {
-    chip_id_t receiver_device_id;
+    chip_id_t receiver_device_id{};
     CoreCoord receiver_core;
-    chip_id_t sender_device_id;
+    chip_id_t sender_device_id{};
     CoreCoord sender_core;
 };
 
