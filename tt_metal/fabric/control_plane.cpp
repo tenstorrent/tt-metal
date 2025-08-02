@@ -768,12 +768,6 @@ void ControlPlane::trim_ethernet_channels_not_mapped_to_live_routing_planes() {
                         fabric_node_id.chip_id,
                         direction,
                         directional_eth_chans.at(direction).size());
-                    TT_FATAL(
-                        num_available_routing_planes <= 4,
-                        "Expected at most 4 routing planes for M{}D{} in direction {}",
-                        fabric_node_id.mesh_id,
-                        fabric_node_id.chip_id,
-                        direction);
                     bool trim = directional_eth_chans.at(direction).size() > num_available_routing_planes;
                     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
                     if (trim) {
