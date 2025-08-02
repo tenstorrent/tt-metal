@@ -4,7 +4,6 @@
 
 #include "generic_pools.hpp"
 
-#include <optional>
 #include "tt-metalium/constants.hpp"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
@@ -14,94 +13,9 @@
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
-#include <limits>
 
 namespace ttnn {
 namespace operations::pool {
-
-// pool specific validations are done in validate_pool2d, but we want to validate basic inputs to ensure
-// they are sensical to avoid problems in sliding window config, halo and other setup procedures
-void validate_input_params(
-    const Tensor& input_tensor,
-    uint32_t batch_size,
-    uint32_t input_h,
-    uint32_t input_w,
-    uint32_t channels,
-    const std::array<uint32_t, 2>& kernel_size,
-    const std::array<uint32_t, 2>& stride,
-    uint32_t pad_top,
-    uint32_t pad_bottom,
-    uint32_t pad_left,
-    uint32_t pad_right,
-    uint32_t dilation_h,
-    uint32_t dilation_w) {
-    // dimension value validation
-    TT_FATAL(batch_size > 0, "Pool2D: Batch size must be greater than 0, got {}", batch_size);
-    TT_FATAL(input_h > 0, "Pool2D: Input height must be greater than 0, got {}", input_h);
-    TT_FATAL(input_w > 0, "Pool2D: Input width must be greater than 0, got {}", input_w);
-    TT_FATAL(channels > 0, "Pool2D: Channels must be greater than 0, got {}", channels);
-
-    // tensor shape validation against provided NHWC dimensions
-    const auto& input_shape = input_tensor.padded_shape();
-    TT_FATAL(
-        input_shape[0] == 1 && input_shape[1] == 1 && input_shape[2] == batch_size * input_h * input_w &&
-            input_shape[3] == channels,
-        "Input tensor shape {} does not match expected shape (1, 1, {}, {})",
-        input_shape,
-        batch_size * input_h * input_w,
-        channels);
-
-    // kernel size validation
-    TT_FATAL(
-        kernel_size[0] > 0 && kernel_size[1] > 0,
-        "Pool2D: Kernel size must be greater than 0 in both dimensions, got ({}, {})",
-        kernel_size[0],
-        kernel_size[1]);
-
-    // stride validation
-    TT_FATAL(
-        stride[0] > 0 && stride[1] > 0,
-        "Pool2D: Stride must be greater than 0 in both dimensions, got ({}, {})",
-        stride[0],
-        stride[1]);
-
-    // dilation validation
-    TT_FATAL(
-        dilation_h > 0 && dilation_w > 0,
-        "Pool2D: Dilation must be greater than 0 in both dimensions, got ({}, {})",
-        dilation_h,
-        dilation_w);
-
-    // check that padding is not excessive (should not be more than half the kernel size)
-    TT_FATAL(
-        pad_top <= kernel_size[0] / 2 && pad_bottom <= kernel_size[0] / 2,
-        "Pool2D: Vertical padding ({}, {}) should not exceed half of kernel height ({})",
-        pad_top,
-        pad_bottom,
-        kernel_size[0] / 2);
-    TT_FATAL(
-        pad_left <= kernel_size[1] / 2 && pad_right <= kernel_size[1] / 2,
-        "Pool2D: Horizontal padding ({}, {}) should not exceed half of kernel width ({})",
-        pad_left,
-        pad_right,
-        kernel_size[1] / 2);
-
-    // ensure effective kernel size (with dilation) doesn't exceed padded input
-    uint32_t effective_kernel_h = dilation_h * (kernel_size[0] - 1) + 1;
-    uint32_t effective_kernel_w = dilation_w * (kernel_size[1] - 1) + 1;
-    uint32_t padded_input_h = input_h + pad_top + pad_bottom;
-    uint32_t padded_input_w = input_w + pad_left + pad_right;
-    TT_FATAL(
-        effective_kernel_h <= padded_input_h,
-        "Pool2D: Effective kernel height ({}) cannot exceed padded input height ({})",
-        effective_kernel_h,
-        padded_input_h);
-    TT_FATAL(
-        effective_kernel_w <= padded_input_w,
-        "Pool2D: Effective kernel width ({}) cannot exceed padded input width ({})",
-        effective_kernel_w,
-        padded_input_w);
-}
 
 // Generic invoke function for both max and avg pool operations. Most of the arguments are shared excpet for the
 // dilation which is set to (1,1) for avg pool and count_include_pad and divisor_override which have no effect on
@@ -125,6 +39,8 @@ static Tensor pool2d_invoke(
     const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
     bool in_place_halo = false) {
     std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
+    bool is_out_tiled = false;  // pool output is row major
+    bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
     validate_input_params(
         input_tensor,
         batch_size,
@@ -138,7 +54,8 @@ static Tensor pool2d_invoke(
         padding_4d[2],
         padding_4d[3],
         dilation.has_value() ? dilation.value()[0] : 1,
-        dilation.has_value() ? dilation.value()[1] : 1);
+        dilation.has_value() ? dilation.value()[1] : 1,
+        is_in_tiled);
     uint32_t dilation_h = dilation.has_value() ? dilation.value().at(0) : 1;
     uint32_t dilation_w = dilation.has_value() ? dilation.value().at(1) : 1;
     sliding_window::SlidingWindowConfig sliding_window_config{
@@ -153,10 +70,6 @@ static Tensor pool2d_invoke(
     };
     auto output_shape = sliding_window_config.get_output_shape();
     auto input_tensor_sharded = input_tensor;
-
-    // pool output is row major
-    bool is_out_tiled = false;
-    bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
 
     sliding_window::ParallelConfig parallel_config;
     MemoryConfig out_memory_config = input_tensor_sharded.memory_config();
