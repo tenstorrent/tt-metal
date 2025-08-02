@@ -621,11 +621,6 @@ std::vector<Tensor> all_gather_async(
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore) {
-    std::vector<IDevice*> devices;
-    devices.reserve(input_tensors.size());
-    for (const auto& input_tensor : input_tensors) {
-        devices.push_back(input_tensor.device());
-    }
     std::vector<GlobalSemaphore> semaphore;
     semaphore.reserve(multi_device_global_semaphore.size());
     for (size_t i = 0; i < multi_device_global_semaphore.size(); i++) {
@@ -642,7 +637,7 @@ std::vector<Tensor> all_gather_async(
             memory_config,
             topology,
             sub_device_id,
-            devices,
+            ttnn::ccl::get_active_physical_devices(input_tensors),
             use_optimal_ccl_for_llama,
             barrier_semaphore));
     }

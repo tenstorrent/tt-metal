@@ -49,22 +49,6 @@ static constexpr size_t TEST_EDM_FABRIC_SUBDEVICE_INDEX = 1;
 using namespace tt;
 using namespace tt_metal;
 
-Tensor dispatch_ops_to_device(IDevice* dev, Tensor input_tensor, QueueId cq_id) {
-    using ttnn::operations::unary::UnaryOpType;
-    using ttnn::operations::unary::UnaryWithParam;
-
-    Tensor output_tensor = ttnn::mul_sfpu(cq_id, input_tensor, 2);
-    for (int i = 0; i < 3; i++) {
-        output_tensor = ttnn::neg(cq_id, output_tensor);
-        output_tensor = ttnn::neg(cq_id, output_tensor);
-        output_tensor = ttnn::mul_sfpu(cq_id, output_tensor, 2);
-    }
-    output_tensor = ttnn::neg(cq_id, output_tensor);
-    output_tensor = ttnn::mul_sfpu(cq_id, output_tensor, 2);
-    output_tensor = ttnn::add_sfpu(cq_id, output_tensor, 128);
-    return output_tensor;
-}
-
 SubdeviceInfo create_subdevices(const std::vector<IDevice*>& devices) {
     SubdeviceInfo subdevice_info;
     std::unordered_map<chip_id_t, SubDeviceManagerId> sub_device_manager_ids;
@@ -145,38 +129,4 @@ void persistent_fabric_teardown_sequence(
     });
 }
 
-std::tuple<
-    ttnn::global_semaphore::MultiDeviceGlobalSemaphore,
-    ttnn::global_semaphore::MultiDeviceGlobalSemaphore,
-    ttnn::global_semaphore::MultiDeviceGlobalSemaphore>
-create_global_semaphores(std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, IDevice* device) {
-    auto from_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-        mesh_device->get_devices(),
-        device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-        0,                             // initial value
-        tt::tt_metal::BufferType::L1,  // buffer type
-        10                             // attempts
-    );
-
-    auto to_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-        mesh_device->get_devices(),
-        device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-        0,                             // initial value
-        tt::tt_metal::BufferType::L1,  // buffer type
-        10                             // attempts
-    );
-
-    auto multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-        mesh_device->get_devices(),
-        device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-        0,                             // initial value
-        tt::tt_metal::BufferType::L1,  // buffer type
-        10                             // attempts
-    );
-
-    return {
-        from_remote_multi_device_global_semaphore,
-        to_remote_multi_device_global_semaphore,
-        multi_device_global_semaphore};
-}
 }  // namespace ttnn::distributed::test
