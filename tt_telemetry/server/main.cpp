@@ -9,6 +9,7 @@
  * - Simple REST exporter and web GUI.  
  */
 
+#include <algorithm>
 #include <iostream>
 #include <optional>
 
@@ -49,10 +50,10 @@ struct ChipIdentifier {
     std::optional<GalaxyUbbIdentifier> galaxy_ubb;
 
     bool operator<(const ChipIdentifier &other) const {
-        if (id != other.id) {
-            return id < other.id;
+        if (galaxy_ubb != other.galaxy_ubb) {
+            return galaxy_ubb < other.galaxy_ubb;
         }
-        return galaxy_ubb < other.galaxy_ubb;
+        return id < other.id;
     }
 
     bool operator==(const ChipIdentifier &other) const {
@@ -132,10 +133,10 @@ struct ChipLinkEndpoint {
     bool operator<(const ChipLinkEndpoint &other) const {
         if (chip != other.chip) {
             return chip < other.chip;
-        } else if (ethernet_core != other.ethernet_core) {
-            return ethernet_core < other.ethernet_core;
+        } else if (channel != other.channel) {
+            return channel < other.channel;
         }
-        return channel < other.channel;
+        return ethernet_core < other.ethernet_core;
     }
 
     bool operator==(const ChipLinkEndpoint &other) const {
@@ -151,7 +152,7 @@ static std::ostream &operator<<(std::ostream &os, const CoreCoord &core) {
 }
 
 static std::ostream &operator<<(std::ostream &os, const ChipLinkEndpoint &ep) {
-    os << "<Endpoint " << ep.chip << " Core " << ep.ethernet_core << '>';
+    os << "<Endpoint: " << ep.chip << ", Channel " << ep.channel << ", Core " << ep.ethernet_core << '>';
     return os;
 }
 
@@ -253,6 +254,46 @@ std::unordered_map<ChipLinkEndpoint, ChipLinkEndpoint> map_endpoints_to_remote_e
     return endpoint_to_remote;
 }
 
+// Local in this case means "local to this host": links with both endpoints on this host
+std::vector<ChipLink> get_local_links(const tt::Cluster &cluster) {
+    std::vector<ChipLink> links;
+
+    auto endpoint_to_remote = map_endpoints_to_remote_endpoints(cluster);
+
+    auto it = endpoint_to_remote.begin();
+    while (it != endpoint_to_remote.end()) {
+        const ChipLinkEndpoint &from = it->first;
+        const ChipLinkEndpoint &to = it->second;
+
+        // Ensure the reverse mapping exists
+        auto reverse_it = endpoint_to_remote.find(to);
+        if (reverse_it != endpoint_to_remote.end() && reverse_it->second == from) {
+            // Yes. Bidirectional link confirmed. Add it to output, with "lesser" ordered endpoint
+            // first.
+            if (from < to) {
+                links.push_back(std::make_pair(from, to));
+            } else {
+                links.push_back(std::make_pair(to, from));
+            }
+
+            // Carefully remove reverse mapping
+            if (reverse_it == it) {
+                ++it;
+                endpoint_to_remote.erase(reverse_it);
+            } else {
+                endpoint_to_remote.erase(reverse_it);
+                ++it;
+            }
+        } else {
+            // No reverse mapping.
+            ++it;   //TODO: replace with an assert!
+        }
+    }
+
+    std::sort(links.begin(), links.end());
+    return links;
+}
+
 auto make_ordered_ethernet_connections(const auto &unordered_connections) {
     std::map<
         tt::umd::chip_id_t,
@@ -313,10 +354,10 @@ int main() {
     std::cout << std::endl;
     std::cout << "Links:" << std::endl;
 
-    std::unordered_map<ChipLinkEndpoint, ChipLinkEndpoint> endpoint_to_remote = map_endpoints_to_remote_endpoints(cluster);
-    
-    for (const auto &[from, to]: endpoint_to_remote) {
-        std::cout << from << " -> " << to << std::endl;
+    std::vector<ChipLink> links = get_local_links(cluster);
+
+    for (const auto &link: links) {
+        std::cout << link.first << " <--> " << link.second << std::endl;
     }
 
     return 0;
