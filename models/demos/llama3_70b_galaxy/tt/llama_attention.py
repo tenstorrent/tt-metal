@@ -22,7 +22,6 @@ class TtLlamaAttention(LightweightModule):
         use_paged_kv_cache=False,
         prefetcher_setup=None,
         tt_ccl=None,
-        qk_norm=False,
     ):
         super().__init__()
 
@@ -81,7 +80,7 @@ class TtLlamaAttention(LightweightModule):
             self.slice_size = 8  # Slice size is 8 since we are consuming 8 users per chip
 
         self.dtype = dtype
-        self.qk_norm = qk_norm
+        self.qk_norm = configuration.qk_norm
 
         self.max_seq_len = configuration.max_seq_len
         self.grid_size = configuration.max_grid_size
