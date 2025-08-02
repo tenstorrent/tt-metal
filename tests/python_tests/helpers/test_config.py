@@ -20,6 +20,7 @@ from .format_arg_mapping import (
     L1BufferLocations,
     MathFidelity,
     MathOperation,
+    Transpose,
     format_tile_sizes,
 )
 from .format_config import FormatConfig, InputOutputFormat
@@ -110,20 +111,24 @@ def generate_build_header(
     header_content.append(f"constexpr bool UNPACKING_TO_DEST = {unpack_to_dest};")
 
     # Unpack transpose faces
-    unpack_transpose_faces = str(
-        test_config.get("unpack_transpose_faces", False)
-    ).lower()
+    unpack_transpose_faces = test_config.get(
+        "unpack_transpose_faces", Transpose.No.value
+    )
     header_content.append(
         f"constexpr bool UNPACK_TRANSPOSE_FACES = {unpack_transpose_faces};"
     )
 
     # Unpack transpose within face
     unpack_transpose_within_face = str(
-        test_config.get("unpack_transpose_within_face", False)
+        test_config.get("unpack_transpose_within_face", Transpose.No.value)
     ).lower()
     header_content.append(
         f"constexpr bool UNPACK_TRANSPOSE_WITHIN_FACE = {unpack_transpose_within_face};"
     )
+
+    # Throttle level
+    throttle = test_config.get("throttle", 0)
+    header_content.append(f"constexpr int THROTTLE_LEVEL = {throttle};")
 
     # Math transpose faces
     math_transpose_faces = str(test_config.get("math_transpose_faces", False)).lower()
