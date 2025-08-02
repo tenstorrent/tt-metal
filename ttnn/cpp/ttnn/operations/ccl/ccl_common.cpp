@@ -149,6 +149,18 @@ std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor) {
     return devices;
 }
 
+std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& tensor_shards) {
+    std::vector<IDevice*> devices;
+    devices.reserve(tensor_shards.size());
+    for (const auto& tensor : tensor_shards) {
+        TT_FATAL(
+            tensor.mesh_device()->shape().mesh_size() == 1,
+            "Running a CCL over individual tensor shards requires the shards to be allocated on unit-meshes.");
+        devices.push_back(tensor.mesh_device()->get_device(MeshCoordinate(0, 0)));
+    }
+    return devices;
+}
+
 std::vector<ttnn::Tensor> unpad_output_tensor(
     const std::vector<ttnn::Tensor>& output_tensor,
     const uint32_t num_devices,

@@ -51,6 +51,11 @@ SenderRecieverConfig get_device_sender_receiver_config_in_ring(
 // Returns a vector of devices that the given tensor is stored on.
 std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor);
 
+// Returns a vector of devices that `tensor_shards` are stored on.
+// Each `tensor_shard` is assumed to be allocated on a 1x1 "unit-mesh"; the function returns the devices that the shards
+// to run a CCL over the unit-meshes.
+std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& tensor_shards);
+
 struct SyncModeSpec {
     uint32_t num_signals = 0;
     CoreCoord core;

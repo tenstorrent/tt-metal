@@ -617,7 +617,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event(
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
 
     MeshEvent event = this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/false, device_range);
-    for (const auto& sub_device_id : sub_device_ids) {
+    for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
         sub_device_entry.recorded_event(event.id(), event.mesh_cq_id());
     }
@@ -631,7 +631,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host_nolock(
         std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
     this->increment_num_entries_in_completion_queue();
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
-    for (const auto& sub_device_id : sub_device_ids) {
+    for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
         sub_device_entry.recorded_event(event.id(), event.mesh_cq_id());
     }

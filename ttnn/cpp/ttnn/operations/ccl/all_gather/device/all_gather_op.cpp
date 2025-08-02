@@ -357,12 +357,6 @@ std::vector<Tensor> all_gather(
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     const ttnn::ccl::Topology topology) {
-    std::vector<IDevice*> devices;
-    devices.reserve(input_tensors.size());
-    for (const auto& input_tensor : input_tensors) {
-        devices.push_back(input_tensor.device());
-    }
-
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (const auto& input_tensor : input_tensors) {
@@ -374,7 +368,7 @@ std::vector<Tensor> all_gather(
             user_defined_num_workers,
             user_defined_num_buffers_per_channel,
             topology,
-            devices));
+            ttnn::ccl::get_active_physical_devices(input_tensors)));
     }
     return output_tensors;
 }
