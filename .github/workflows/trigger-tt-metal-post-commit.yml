@@ -221,8 +221,7 @@ jobs:
       github.event_name == 'workflow_dispatch') &&
       needs.detect-changes.result == 'success' &&
       needs.detect-changes.outputs.should-skip != 'true'
-    uses: |
-      tenstorrent/tt-metal/.github/workflows/test-llk-metal-integration.yaml@68cb0f4cb86e8f5f873805c0e9f4a14b50abc071
+    uses: tenstorrent/tt-metal/.github/workflows/test-llk-metal-integration.yaml@main
     secrets: inherit
     with:
       mirrored_branch: ${{ needs.setup-branch.outputs.branch-to-run }}
