@@ -20,26 +20,47 @@
 #include "optimizers/optimizer_base.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 
+bool should_run_nightly_tests() {
+    const char *env_var = std::getenv("ENABLE_NIGHTLY_TT_TRAIN_TESTS");
+    bool res = env_var || ENABLE_NIGHTLY_TT_TRAIN_TESTS;
+    return res;
+}
+
+bool should_run_multi_device_tests() {
+    bool enable_nightly = should_run_nightly_tests();
+    bool sufficient_devices = tt::tt_metal::GetNumAvailableDevices() >= 2;
+    return enable_nightly && sufficient_devices;
+}
+
 class NanoLlamaTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        ttml::autograd::ctx().open_device();
+        if (should_run_nightly_tests()) {
+            auto shape = tt::tt_metal::distributed::MeshShape(1, 1);
+            ttml::autograd::ctx().open_device(shape);
+        }
     }
 
     void TearDown() override {
-        ttml::autograd::ctx().close_device();
+        if (should_run_nightly_tests()) {
+            ttml::autograd::ctx().close_device();
+        }
     }
 };
 
 class NanoLlamaMultiDeviceTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        auto shape = tt::tt_metal::distributed::MeshShape(1, 2);
-        ttml::autograd::ctx().open_device(shape);
+        if (should_run_multi_device_tests()) {
+            auto shape = tt::tt_metal::distributed::MeshShape(1, 2);
+            ttml::autograd::ctx().open_device(shape);
+        }
     }
 
     void TearDown() override {
-        ttml::autograd::ctx().close_device();
+        if (should_run_multi_device_tests()) {
+            ttml::autograd::ctx().close_device();
+        }
     }
 };
 
@@ -294,17 +315,6 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
     for (size_t i = 0; i < test_indices.size(); ++i) {
         EXPECT_NEAR(actual_losses[i], expected_losses[i], abs_tol);
     }
-}
-
-bool should_run_nightly_tests() {
-    const char *env_var = std::getenv("ENABLE_NIGHTLY_TT_TRAIN_TESTS");
-    return env_var ? true : ENABLE_NIGHTLY_TT_TRAIN_TESTS;
-}
-
-bool should_run_multi_device_tests() {
-    bool enable_nightly = should_run_nightly_tests();
-    bool sufficient_devices = tt::tt_metal::GetNumAvailableDevices() >= 2;
-    return enable_nightly && sufficient_devices;
 }
 
 /*
