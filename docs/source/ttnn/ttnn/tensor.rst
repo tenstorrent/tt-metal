@@ -47,6 +47,14 @@ Row major layout has the consecutive elements of a row next to each other.
 
     4x4 tensor with a row-major layout.
 
+You can create row major layout tensors using any creation function (e.g. :ref:`ttnn.zeros<ttnn.zeros>`, :ref:`ttnn.ones<ttnn.ones>`,  :ref:`ttnn.from_torch<ttnn.from_torch>`, etc.) by passing `layout=ttnn.ROW_MAJOR_LAYOUT` as an argument.
+.. code-block:: python
+
+    >>> import ttnn
+    >>> t = ttnn.zeros(ttnn.Shape([4, 4]), layout=ttnn.ROW_MAJOR_LAYOUT)
+    >>> print(t.layout)
+    Layout.ROW_MAJOR
+
 .. _ttnn.TILE_LAYOUT:
 
 **ttnn.TILE_LAYOUT**
@@ -59,8 +67,47 @@ When the height or width of the tensor are not divisible by 32, padding is autom
     :align: center
     :alt: Tensor With Tile Layout
 
-    4x4 tensor stored using 2x2 tiles. Note that ttnn Tensors can only have 32x32 tiles. This image is for illustrative purposes only.
+    4x4 tensor stored using 2x2 tiles. Note that ttnn Tensors by default have 32x32 tiles. This image is for illustrative purposes only.
 
+You can create tile layout tensors using any creation function (e.g. :ref:`ttnn.full<ttnn.full>`, :ref:`ttnn.from_torch<ttnn.from_torch>`)  by passing `layout=ttnn.TILE_LAYOUT` as an argument. You can also convert a row-major tensor to tile layout with :ref:`ttnn.to_layout<ttnn.to_layout>`.
+
+.. code-block:: python
+
+    >>> import ttnn
+    >>> t = ttnn.zeros(ttnn.Shape([4, 4]), layout=ttnn.TILE_LAYOUT)
+    >>> print(t.layout)
+    Layout.TILE
+    >>> t = ttnn.full(ttnn.Shape([4, 4]), layout=ttnn.ROW_MAJOR_LAYOUT, fill_value=1.0)
+    >>> print(t.layout)
+    Layout.ROW_MAJOR
+    >>> t = ttnn.to_layout(t, ttnn.TILE_LAYOUT)
+    >>> print(t.layout)
+    Layout.TILE
+
+Data inside the tile isn't contiguous. Each tile is split into faces ("sub-tiles"). By default, tile size is 32x32, and face size is 16x16 -- 4 faces per tile and each tile lies one after another contiguously in memory in row-major fashion (i.e., face0->face1->face2->face3 on the picture below)
+
+.. figure:: images/tile_faces.png
+    :align: center
+    :alt: Tile Faces
+
+    A tile with 4 faces. Each face is 16x16 elements.
+
+The reason for using faces is that the matrix engine natively multiplies 16x16 matrices, and tile multiplication is decomposed into multiple face multiplications.
+
+To create a tensor with a tile layout, you can pass layout=ttnn.TILE_LAYOUT in most tensor-creation functions, or change row-major tensor with :ref:`ttnn.to_layout<ttnn.to_layout>`.
+You can specify tile size and face orientation. If transpose_tile==true, then the faces' order is transposed, i.e. they are placed in memory in col-major fashion (face0->face2->face1->face3 on the image above), and values inside faces are also transposed.
+
+.. code-block:: python
+
+    >>> import ttnn
+    >>> t = ttnn.zeros(ttnn.Shape([4, 4]), layout=ttnn.TILE_LAYOUT)
+    >>> print(t.layout)
+    Layout.TILE
+    >>> t = ttnn.from_torch(torch_t, layout=ttnn.TILE_LAYOUT, tile=ttnn.Tile((16, 32), transpose_tile=True))
+    >>> print(t.layout)
+    Layout.TILE
+    >>> print(t.tile)
+    Tile with shape: [16, 32]
 
 .. _ttnn.DataType:
 
