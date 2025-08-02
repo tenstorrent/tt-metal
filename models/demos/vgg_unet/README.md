@@ -27,35 +27,47 @@ pytest models/demos/vgg_unet/tests/pcc/test_vgg_unet.py::test_vgg_unet[0-pretrai
 ```
 
 ### Performant Model with Trace+2CQ
+#### Single Device (BS=1):
+Use the following command to run the e2e perf with trace 2cq:
 ```sh
-pytest models/demos/vgg_unet/tests/perf/test_e2e_performant.py
+pytest --disable-warnings models/demos/vgg_unet/tests/perf/test_e2e_performant.py::test_vgg_unet_e2e
 ```
+- end-2-end perf with Trace+2CQs is 90 FPS
+
+#### Multi Device (DP=2, n300):
+Use the following command to run the e2e perf with trace 2cq:
+```sh
+pytest --disable-warnings models/demos/vgg_unet/tests/perf/test_e2e_performant.py::test_vgg_unet_e2e_dp
+```
+- end-2-end perf with Trace+2CQs is 158 FPS
 
 ### Performant Demo with Trace+2CQ
-#### Single image
-- Use the following command to run torch model demo:
+#### Single Device (BS=1):
+Use the following command to run performant model demo (supports single and multiple images):
 ```sh
-pytest models/demos/vgg_unet/demo/demo.py::test_demo[device_params0-pretrained_weight_true-torch_model-single]
+pytest --disable-warnings models/demos/vgg_unet/demo/demo.py::test_demo
 ```
 
-- Use the following command to run ttnn model demo:
+#### Multi Device (DP=2, n300):
+Use the following command to run performant model demo:
 ```sh
-pytest models/demos/vgg_unet/demo/demo.py::test_demo[device_params0-pretrained_weight_true-ttnn_model-single]
+pytest --disable-warnings models/demos/vgg_unet/demo/demo.py::test_demo_dp
 ```
 
-#### Multiple images
-- Use the following command to run torch model demo:
+### Performant Data evaluation with Trace+2CQ:
+#### Single Device (BS=1):
+Use the following command to run the performant evaluation with Trace+2CQs:
 ```sh
-pytest models/demos/vgg_unet/demo/demo.py::test_demo[device_params0-pretrained_weight_true-torch_model-multi]
+pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet
 ```
 
-- Use the following command to run ttnn model demo:
+#### Multi Device (DP=2, n300):
+Use the following command to run the performant evaluation with Trace+2CQs:
 ```sh
-pytest models/demos/vgg_unet/demo/demo.py::test_demo[device_params0-pretrained_weight_true-ttnn_model-multi]
+pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp
 ```
 
 ## Details
-- Entry point for the model is models/demos/vgg_unet/ttnn/ttnn_vgg_unet.py
+- Entry point for the model is `models/demos/vgg_unet/ttnn/ttnn_vgg_unet.py`
 - Batch Size: 1
 - Support Input Resolution: 256x256 (Height, Width)
-- End-2-end perf with Trace+2CQs is 80 FPS

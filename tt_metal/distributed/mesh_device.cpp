@@ -340,6 +340,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_unit_mesh(
 
 std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
     const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset) {
+    auto lock_api = this->lock_api();
     TT_FATAL(
         std::all_of(submesh_shape.cbegin(), submesh_shape.cend(), [](size_t dim) { return dim > 0; }),
         "Invalid submesh shape: ({}). All dimensions must be positive.",
