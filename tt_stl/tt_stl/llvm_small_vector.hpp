@@ -52,6 +52,9 @@ using EnableIfConvertibleToInputIterator = std::enable_if_t<
 /// buffering bitcode output - which can exceed 4GB.
 template <class Size_T>
 class SmallVectorBase {
+public:
+    SmallVectorBase() = delete;
+
 protected:
     void* BeginX;
     Size_T Size = 0, Capacity;
@@ -59,7 +62,6 @@ protected:
     /// The maximum value of the Size_T used.
     static constexpr size_t SizeTypeMax() { return std::numeric_limits<Size_T>::max(); }
 
-    SmallVectorBase() = delete;
     SmallVectorBase(void* FirstEl, size_t TotalCapacity) :
         BeginX(FirstEl), Capacity(static_cast<Size_T>(TotalCapacity)) {}
 
@@ -545,7 +547,7 @@ protected:
         // Use push_back with a copy in case Args has an internal reference,
         // side-stepping reference invalidation problems without losing the realloc
         // optimization.
-        push_back(T(std::forward<ArgTypes>(Args)...));
+        push_back(T{std::forward<ArgTypes>(Args)...});
         return this->back();
     }
 
@@ -933,7 +935,7 @@ public:
             return this->growAndEmplaceBack(std::forward<ArgTypes>(Args)...);
         }
 
-        ::new ((void*)this->end()) T(std::forward<ArgTypes>(Args)...);
+        ::new ((void*)this->end()) T{std::forward<ArgTypes>(Args)...};
         this->set_size(this->size() + 1);
         return this->back();
     }
