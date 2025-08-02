@@ -30,7 +30,7 @@ repos:
 - repo: https://github.com/BlankSpruce/gersemi
   rev: 0.16.2
   hooks:
-  - id: gersemi
+    - id: gersemi
 - repo: https://github.com/adrienverge/yamllint.git
   rev: v1.35.1
   hooks:
