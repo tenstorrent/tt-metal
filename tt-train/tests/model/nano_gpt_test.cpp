@@ -299,9 +299,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
     std::string run_type = use_tensor_parallel ? "TP" : use_ddp ? "DDP" : "SingleDevice";
     fmt::print("run_type: {}\n", run_type);
     std::unordered_map<std::string, uint32_t> expected_program_cache_entries_map = {
-        {"SingleDevice", 83},
-        {"DDP", 97},
-        {"TP", 106}};
+        {"SingleDevice", 80}, {"DDP", 94}, {"TP", 103}};
     EXPECT_NEAR(program_cache_entries, expected_program_cache_entries_map.at(run_type), abs_tol);
 
     // verify time per step
