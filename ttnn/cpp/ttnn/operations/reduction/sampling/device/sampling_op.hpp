@@ -13,6 +13,8 @@
 namespace ttnn::operations::reduction {
 
 struct Sampling {
+    const std::vector<uint16_t> k;
+    const std::vector<float> p;
     const std::optional<uint32_t> seed;
     const std::optional<CoreRangeSet> sub_core_grids;
 

@@ -43,24 +43,9 @@ void bind_reduction_sampling_operation(py::module& module) {
                     - Must have `UINT32` or `INT32` data type.
                     - Must have `ROW_MAJOR` layout.
                     - Must have the same shape as `input_values_tensor`.
-                - `k`:
-                    - Must have `BFLOAT16` data type.
-                    - Must have `ROW_MAJOR` layout.
-                    - Must have `INTERLEAVED` memory layout.
-                    - Must contain 32 elements.
-                - `p`:
-                    - Must have `BFLOAT16` data type.
-                    - Must have `ROW_MAJOR` layout.
-                    - Must have `INTERLEAVED` memory layout.
-                    - Must contain 32 elements.
-                - `temp`:
-                    - Must have `BFLOAT16` data type.
-                    - Must have `ROW_MAJOR` layout.
-                    - Must have `INTERLEAVED` memory layout.
-                    - Must contain 32 elements.
                 - The input tensors must represent exactly `32 users` (based on their shape).
                 - `k`: All values in the list must be >0 and ≤ 32.
-                - `p`, `temp`: All values in the list must be in the range `[0.0, 1.0]`.
+                - `p`: All values in the list must be in the range `[0.0, 1.0]`.
                 - Output tensor (if provided):
                     - Must have `UINT32` or `INT32` data type.
                     - Must have `INTERLEAVED` memory layout.
@@ -74,7 +59,6 @@ void bind_reduction_sampling_operation(py::module& module) {
                     input_indices_tensor,
                     k=k,
                     p=p,
-                    temp=temp,
                     seed=seed,
                     optional_output_tensor=optional_output_tensor,
                     queue_id=queue_id
@@ -83,9 +67,8 @@ void bind_reduction_sampling_operation(py::module& module) {
             Args:
                 input_values_tensor (ttnn.Tensor): The input tensor containing values to sample from.
                 input_indices_tensor (ttnn.Tensor): The input tensor containing indices to assist with sampling.
-                k (ttnn.Tensor): Top-k values for sampling.
-                p (ttnn.Tensor): Top-p (nucleus) probabilities for sampling.
-                temp (ttnn.Tensor): Temperature tensor for scaling (1/T).
+                k (List[int]): Top-k values for sampling.
+                p (List[float]): Top-p (nucleus) probabilities for sampling.
                 seed (int, optional): Seed for sampling randomness. Defaults to `0`.
                 optional_output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
                 queue_id (int, optional): Command queue ID for execution. Defaults to `0`.
@@ -103,9 +86,8 @@ void bind_reduction_sampling_operation(py::module& module) {
             [](const OperationType& self,
                const ttnn::Tensor& input_values_tensor,
                const ttnn::Tensor& input_indices_tensor,
-               const ttnn::Tensor& k,
-               const ttnn::Tensor& p,
-               const ttnn::Tensor& temp,
+               const std::vector<uint16_t>& k,
+               const std::vector<float>& p,
                const std::optional<uint32_t>& seed,
                const std::optional<CoreRangeSet>& sub_core_grids,
                std::optional<ttnn::Tensor> optional_output_tensor,
@@ -116,17 +98,15 @@ void bind_reduction_sampling_operation(py::module& module) {
                     input_indices_tensor,
                     k,
                     p,
-                    temp,
                     seed,
                     sub_core_grids,
                     optional_output_tensor);
             },
             py::arg("input_values_tensor").noconvert(),
             py::arg("input_indices_tensor").noconvert(),
+            py::kw_only(),
             py::arg("k").noconvert(),
             py::arg("p").noconvert(),
-            py::arg("temp").noconvert(),
-            py::kw_only(),
             py::arg("seed").noconvert() = std::nullopt,
             py::arg("sub_core_grids") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,

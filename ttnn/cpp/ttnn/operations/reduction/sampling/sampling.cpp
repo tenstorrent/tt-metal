@@ -17,15 +17,14 @@ ttnn::Tensor SamplingOperation::invoke(
     QueueId queue_id,
     const Tensor& input_values_tensor,
     const Tensor& input_indices_tensor,
-    const Tensor& k,
-    const Tensor& p,
-    const Tensor& temp,
+    const std::vector<uint16_t>& k,
+    const std::vector<float>& p,
     const std::optional<uint32_t>& seed,
     const std::optional<CoreRangeSet>& sub_core_grids,
     std::optional<Tensor> optional_output_tensor) {
     return tt::tt_metal::operation::run(
-               Sampling{seed, sub_core_grids},
-               {input_values_tensor, input_indices_tensor, k, p, temp},
+               Sampling{k, p, seed, sub_core_grids},
+               {input_values_tensor, input_indices_tensor},
                {},
                {std::move(optional_output_tensor)},
                queue_id)
@@ -35,9 +34,8 @@ ttnn::Tensor SamplingOperation::invoke(
 ttnn::Tensor SamplingOperation::invoke(
     const Tensor& input_values_tensor,
     const Tensor& input_indices_tensor,
-    const Tensor& k,
-    const Tensor& p,
-    const Tensor& temp,
+    const std::vector<uint16_t>& k,
+    const std::vector<float>& p,
     const std::optional<uint32_t>& seed,
     const std::optional<CoreRangeSet>& sub_core_grids,
     std::optional<Tensor> optional_output_tensor) {
@@ -47,7 +45,6 @@ ttnn::Tensor SamplingOperation::invoke(
         input_indices_tensor,
         k,
         p,
-        temp,
         seed,
         sub_core_grids,
         std::move(optional_output_tensor));
