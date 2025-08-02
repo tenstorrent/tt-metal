@@ -10,11 +10,11 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.tt_transformers.tt.ccl import ag_on_padded_dim_3
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
 from models.tt_transformers.tt.rope import get_rot_mats
-from models.utility_functions import is_blackhole
 
 
 def get_accuracy_thresholds(model_args, optimizations):
@@ -318,47 +318,13 @@ def test_tt_model_acc(
         )
 
         if tt_model.args.num_devices > 1:
-            if tt_model.args.is_galaxy:
-                if is_blackhole():
-                    tt_out_gathered = ttnn.all_gather(
-                        tt_out,
-                        dim=3,
-                        num_links=tt_model.args.num_all_gather_links,
-                        cluster_axis=0,
-                        mesh_device=mesh_device,
-                        topology=tt_model.args.ccl_topology(),
-                    )
-                else:
-                    tt_out_gathered = ttnn.experimental.all_gather_async(
-                        tt_out,
-                        persistent_output_buffer=None,
-                        dim=3,
-                        multi_device_global_semaphore=tt_model.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                        num_links=tt_model.args.num_all_gather_links,
-                        cluster_axis=0,
-                        mesh_device=mesh_device,
-                        topology=tt_model.args.ccl_topology(),
-                        barrier_semaphore=tt_model.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                        chunks_per_sync=10,
-                        num_workers_per_link=2,
-                        num_buffers_per_channel=2,
-                    )
-            else:
-                if is_blackhole():
-                    tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
-                else:
-                    tt_out_gathered = ttnn.experimental.all_gather_async(
-                        tt_out,
-                        persistent_output_buffer=None,
-                        dim=3,
-                        multi_device_global_semaphore=tt_model.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                        num_links=1,
-                        topology=ttnn.Topology.Linear,
-                        barrier_semaphore=tt_model.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                        chunks_per_sync=10,
-                        num_workers_per_link=2,
-                        num_buffers_per_channel=2,
-                    )
+            cluster_axis = 0 if tt_model.args.is_galaxy else None
+            num_links = tt_model.args.num_all_gather_links if tt_model.args.is_galaxy else 1
+            topology = tt_model.args.ccl_topology() if tt_model.args.is_galaxy else ttnn.Topology.Linear
+            tt_out_gathered = ag_on_padded_dim_3(
+                tt_out, mesh_device, tt_model.tt_ccl, cluster_axis=cluster_axis, num_links=num_links, topology=topology
+            )
+
             ttnn.deallocate(tt_out)
         else:
             tt_out_gathered = tt_out

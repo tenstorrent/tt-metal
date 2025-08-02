@@ -387,25 +387,18 @@ def tt_sharded_distributed_rmsnorm(
     return tt_out
 
 
-def ag_on_padded_dim_3(inp, mesh_device, tt_ccl, is_galaxy, topology):
+def ag_on_padded_dim_3(inp, mesh_device, tt_ccl, cluster_axis, num_links, topology):
     ag_memory_config = inp.memory_config()
     output_memory_config = inp.memory_config()
     input_shape = inp.shape
     reshape_required = input_shape[3] % 32 != 0
 
-    if is_galaxy:
-        num_links = 2
-        cluster_axis = 0
-    else:
-        num_links = 1
-        cluster_axis = None
-
     if is_blackhole():
         output_tensor = ttnn.all_gather(
             inp,
             dim=3,
-            num_links=2,
-            cluster_axis=0,
+            num_links=num_links,
+            cluster_axis=cluster_axis,
             mesh_device=mesh_device,
             topology=topology,
         )
