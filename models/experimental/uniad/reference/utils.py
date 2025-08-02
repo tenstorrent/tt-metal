@@ -8,6 +8,7 @@ import itertools
 import torch.nn.functional as F
 from functools import partial
 import numpy as np
+from typing import Any, Dict, List, Tuple, Union
 
 from torch import Tensor
 from typing import Union
