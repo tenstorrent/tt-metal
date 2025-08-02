@@ -34,3 +34,12 @@ Use the following command to run the model :
 ```
 pytest --disable-warnings models/experimental/vovnet/tests/pcc/test_tt_vovnet.py
 ```
+
+### Performant Model with Trace+2CQ
+- end-2-end perf is 84 FPS
+
+Use the following command to run the performant Model with Trace+2CQs:
+
+```
+pytest --disable-warnings models/experimental/yolov5x/tests/perf/test_e2e_performant.py
+```
