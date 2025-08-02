@@ -11,7 +11,7 @@
 #include "dev_msgs.h"
 #include "noc/noc_parameters.h"
 #include "eth_l1_address_map.h"
-#include "tt-metalium/fabric_host_interface.h"
+#include "hostdevcommon/fabric_common.h"
 
 // Validate assumptions on mailbox layout on host compile
 // Constexpr definitions allow for printing of breaking values at compile time

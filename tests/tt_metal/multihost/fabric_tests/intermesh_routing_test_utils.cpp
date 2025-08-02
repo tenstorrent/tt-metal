@@ -12,10 +12,10 @@
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include <tt-metalium/fabric.hpp>
-#include <tt-metalium/fabric_host_interface.h>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 
+#include "hostdevcommon/fabric_common.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "intermesh_routing_test_utils.hpp"

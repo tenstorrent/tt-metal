@@ -79,7 +79,6 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
             api/tt-metalium/circular_buffer_constants.h
-            api/tt-metalium/fabric_host_interface.h
             api/tt-metalium/fabric_edm_packet_header.hpp
             api/tt-metalium/fabric_edm_types.hpp
             api/tt-metalium/edm_fabric_counters.hpp

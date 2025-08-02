@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/fabric_host_interface.h>
+#include "hostdevcommon/fabric_common.h"
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/cluster.hpp>
