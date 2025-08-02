@@ -318,11 +318,14 @@ def test_tt_model_acc(
         )
 
         if tt_model.args.num_devices > 1:
-            cluster_axis = 0 if tt_model.args.is_galaxy else None
-            num_links = tt_model.args.num_all_gather_links if tt_model.args.is_galaxy else 1
-            topology = tt_model.args.ccl_topology() if tt_model.args.is_galaxy else ttnn.Topology.Linear
             tt_out_gathered = ag_on_padded_dim_3(
-                tt_out, mesh_device, tt_model.tt_ccl, cluster_axis=cluster_axis, num_links=num_links, topology=topology
+                tt_out,
+                mesh_device,
+                tt_model.tt_ccl,
+                is_galaxy=tt_model.args.is_galaxy,
+                cluster_axis=0 if tt_model.args.is_galaxy else None,
+                num_links=tt_model.args.num_all_gather_links if tt_model.args.is_galaxy else 1,
+                topology=tt_model.args.ccl_topology() if tt_model.args.is_galaxy else ttnn.Topology.Linear,
             )
 
             ttnn.deallocate(tt_out)
