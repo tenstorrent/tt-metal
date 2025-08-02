@@ -349,7 +349,7 @@ Tensor reduce_scatter_minimal_async_impl(
     std::vector<std::optional<Tensor>> optional_output_tensors =
         persistent_output_buffers
             ? std::vector<std::optional<Tensor>>(persistent_output_buffers->begin(), persistent_output_buffers->end())
-            : std::vector<std::optional<Tensor>>{};
+            : std::vector<std::optional<Tensor>>{std::nullopt, std::nullopt};
 
     return tt::tt_metal::operation::run(
                ttnn::ReduceScatterMinimalAsync(
