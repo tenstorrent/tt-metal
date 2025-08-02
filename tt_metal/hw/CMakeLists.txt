@@ -370,6 +370,10 @@ target_sources(
             toolchain/erisc-b0-app-sections.ld
             toolchain/erisc-b0-memory.ld
             toolchain/erisc-b0-kernel.ld
+        FILE_SET toolchain
+        TYPE HEADERS
+        BASE_DIRS ${PROJECT_SOURCE_DIR}
+        FILES ${LD_FILES} ${OBJ_FILES}
 )
 
 target_link_libraries(hw INTERFACE TT::Metalium::HostDevCommon)
@@ -383,5 +387,9 @@ install(
     jit_api
         DESTINATION
             ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/hw # FIXME: fix the include paths for jit_build
+        COMPONENT metalium-runtime
+    FILE_SET
+    toolchain
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium
         COMPONENT metalium-runtime
 )
