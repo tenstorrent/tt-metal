@@ -48,6 +48,8 @@ def mesh_device_fixture():
         device_name = "grayskull"
     elif ttnn.device.is_wormhole_b0(device):
         device_name = "wormhole_b0"
+    elif ttnn.device.is_blackhole(device):
+        device_name = "blackhole"
     yield device, device_name
 
     ttnn.close_device(device)
