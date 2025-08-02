@@ -15,6 +15,11 @@ SDMeshCommandQueue::SDMeshCommandQueue(
     MeshDevice* mesh_device, uint32_t id, std::function<std::lock_guard<std::mutex>()> lock_api_function) :
     MeshCommandQueueBase(mesh_device, id, create_passthrough_thread_pool(), lock_api_function) {}
 
+std::optional<MeshTraceId> SDMeshCommandQueue::trace_id() const {
+    TT_THROW("Trace not supported for slow dispatch");
+    return std::nullopt;
+}
+
 void SDMeshCommandQueue::write_shard_to_device(
     const MeshBuffer& buffer,
     const MeshCoordinate& device_coord,

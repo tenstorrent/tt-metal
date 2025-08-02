@@ -1360,33 +1360,6 @@ RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kerne
     return detail::GetKernel(program, kernel_id)->common_runtime_args_data();
 }
 
-uint32_t BeginTraceCapture(IDevice* device, const uint8_t cq_id) {
-    const uint32_t tid = Trace::next_id();
-    device->begin_trace(cq_id, tid);
-    return tid;
-}
-
-void EndTraceCapture(IDevice* device, const uint8_t cq_id, const uint32_t tid) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    device->end_trace(cq_id, tid);
-    // When light metal tracing is enabled, TraceDescriptor will be serialized via end_trace() and this
-    // will serialize the LightMetalLoadTraceId call to be used during replay to load trace back to device.
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureLoadTrace, device, cq_id, tid);
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureReplayTrace, device, cq_id, tid, true);  // blocking=true
-}
-
-void ReplayTrace(IDevice* device, const uint8_t cq_id, const uint32_t tid, const bool blocking) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureReplayTrace, device, cq_id, tid, blocking);
-    device->replay_trace(cq_id, tid, blocking /* block_on_device */, blocking /* block_on_worker_thread */);
-}
-
-void ReleaseTrace(IDevice* device, const uint32_t tid) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureReleaseTrace, device, tid);
-    device->release_trace(tid);
-}
-
 // This is nop if compile time define not set.
 void LightMetalBeginCapture() {
 #if defined(TT_ENABLE_LIGHT_METAL_TRACE) && (TT_ENABLE_LIGHT_METAL_TRACE == 1)
@@ -1411,10 +1384,6 @@ LightMetalBinary LightMetalEndCapture() {
     log_warning(tt::LogMetalTrace, "TT_ENABLE_LIGHT_METAL_TRACE!=1, ignoring LightMetalEndCapture()");
     return {};
 #endif
-}
-
-void LoadTrace(IDevice* device, const uint8_t cq_id, const uint32_t trace_id, const TraceDescriptor& trace_desc) {
-    device->load_trace(cq_id, trace_id, trace_desc);
 }
 
 void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {
