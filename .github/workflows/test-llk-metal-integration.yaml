@@ -79,38 +79,47 @@ jobs:
         run: |
           git config --global user.name "LLK Integration Tester [bot]"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-      - name: Check if mirrored branch exists in submodule
+      - name: Setup test branch and parent repository
         id: check-branch
         run: |
           MIRRORED_BRANCH="${{ inputs.mirrored_branch }}"
-          cd ${{ env.SUBMODULE_PATH }}
+          TEST_BRANCH_NAME="test-llk-$MIRRORED_BRANCH-$(date +%s)"
+          SUBMODULE_PATH="${{ env.SUBMODULE_PATH }}"
+          cd "$SUBMODULE_PATH"
+
+          # Ensure correct remote
           git remote set-url origin https://${{ secrets.TEMP_METAL_PAT }}@github.com/tenstorrent/tt-llk.git
-          if git fetch origin "$MIRRORED_BRANCH" 2>/dev/null; then
+
+          # Fetch mirrored branch
+          if git fetch origin "$MIRRORED_BRANCH"; then
             echo "branch-exists=true" >> $GITHUB_OUTPUT
             echo "✅ Mirrored branch '$MIRRORED_BRANCH' exists in submodule"
+
+            # Get the commit currently pinned in the parent repo
+            cd "${{ github.workspace }}"
+            PARENT_PINNED_COMMIT=$(git ls-tree main "$SUBMODULE_PATH" | awk '{print $3}')
+            cd "$SUBMODULE_PATH"
+
+            # Checkout mirrored branch and rebase onto pinned commit
+            git checkout -b "$TEST_BRANCH_NAME" "origin/$MIRRORED_BRANCH"
+            git rebase "$PARENT_PINNED_COMMIT"
+
+            # Push rebased branch to origin
+            git push origin "$TEST_BRANCH_NAME"
+
+            # Update parent repository to reference new submodule commit
+            cd "${{ github.workspace }}"
+            git checkout -b "${{ env.PARENT_BRANCH_NAME }}"
+            git add "$SUBMODULE_PATH"
+            git commit -m "test: update LLK submodule to rebased test branch $TEST_BRANCH_NAME from mirrored branch $MIRRORED_BRANCH"
+            git push origin "${{ env.PARENT_BRANCH_NAME }}"
+
+            echo "test-branch-name=$TEST_BRANCH_NAME" >> $GITHUB_OUTPUT
+            echo "✅ Created test branch '$TEST_BRANCH_NAME' with rebased commits and updated parent repository"
           else
             echo "branch-exists=false" >> $GITHUB_OUTPUT
             echo "❌ Mirrored branch '$MIRRORED_BRANCH' does not exist in submodule"
           fi
-      - name: Setup test branch and parent repository
-        id: setup-branch
-        if: steps.check-branch.outputs.branch-exists == 'true'
-        run: |
-          MIRRORED_BRANCH="${{ inputs.mirrored_branch }}"
-          TEST_BRANCH_NAME="test-llk-$MIRRORED_BRANCH-$(date +%s)"
-          # Setup test branch in submodule
-          cd ${{ env.SUBMODULE_PATH }}
-          git remote set-url origin https://${{ secrets.TEMP_METAL_PAT }}@github.com/tenstorrent/tt-llk.git
-          git checkout -b "$TEST_BRANCH_NAME" "origin/$MIRRORED_BRANCH"
-          git push origin "$TEST_BRANCH_NAME"
-          # Setup parent repository with submodule reference
-          cd ${{ github.workspace }}
-          git checkout -b "${{ env.PARENT_BRANCH_NAME }}"
-          git add ${{ env.SUBMODULE_PATH }}
-          git commit -m "test: update LLK submodule to test branch $TEST_BRANCH_NAME from mirrored branch ${{ inputs.mirrored_branch }}"
-          git push origin "${{ env.PARENT_BRANCH_NAME }}"
-          echo "test-branch-name=$TEST_BRANCH_NAME" >> $GITHUB_OUTPUT
-          echo "✅ Created test branch '$TEST_BRANCH_NAME' and updated parent repository"
       - name: Run selected tests
         if: |
           steps.check-branch.outputs.branch-exists == 'true' &&
