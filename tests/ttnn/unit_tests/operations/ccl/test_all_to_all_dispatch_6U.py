@@ -25,7 +25,7 @@ from tracy import signpost
         {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
         {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_2D},
     ],
-    ids=["fabric_1d", "fabric_1d_ring", "fabric_2d"],
+    ids=["fabric_1d_line", "fabric_1d_ring", "fabric_2d"],
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [False])
@@ -45,7 +45,7 @@ from tracy import signpost
     ids=["s2"],
 )
 @pytest.mark.parametrize("num_links", [4])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
@@ -115,7 +115,7 @@ def test_all_to_all_dispatch_no_trace(
             "trace_region_size": 500000,
         },
     ],
-    ids=["fabric_1d", "fabric_1d_ring", "fabric_2d"],
+    ids=["fabric_1d_line", "fabric_1d_ring", "fabric_2d"],
     indirect=True,
 )
 @pytest.mark.parametrize("trace_mode", [True])
@@ -138,7 +138,7 @@ def test_all_to_all_dispatch_no_trace(
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("num_links", [4])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_all_to_all_dispatch_trace(
     mesh_device,
@@ -218,7 +218,7 @@ def test_all_to_all_dispatch_trace(
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("num_links", [4])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_decode_perf(
     mesh_device,
@@ -298,7 +298,7 @@ def test_decode_perf(
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("num_links", [4])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_prefill_perf(
     mesh_device,
