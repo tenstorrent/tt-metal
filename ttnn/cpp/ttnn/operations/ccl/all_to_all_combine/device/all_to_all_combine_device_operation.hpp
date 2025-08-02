@@ -51,7 +51,7 @@ struct AllToAllCombineDeviceOperation {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle ternary_reader_kernel_id;
             tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            CoreCoord core;
+            std::vector<CoreCoord> cores;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

@@ -84,10 +84,12 @@ void kernel_main() {
     constexpr uint8_t dest_mesh_ids[num_devices] = DEST_MESH_ID;
     const std::array<bool, Num_Directions> directions = DIRECTIONS;
 
-    const auto output_base_addr = get_arg_val<uint32_t>(0);
-    const auto global_semaphore_addr = get_arg_val<uint32_t>(1);
+    uint32_t rt_arg_count = 0;
+    const auto output_base_addr = get_arg_val<uint32_t>(rt_arg_count++);
+    const auto global_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
+    const uint32_t token_start_idx = get_arg_val<uint32_t>(rt_arg_count++);
+    const uint32_t token_end_idx = get_arg_val<uint32_t>(rt_arg_count++);
 
-    const uint32_t rt_arg_count = 2;
     std::array<WorkerToFabricEdmSender, Num_Directions> fabric_connections;
     open_direction_connections(directions, fabric_connections, rt_arg_count);
 
@@ -105,7 +107,7 @@ void kernel_main() {
     cb_wait_front(local_experts_cb_id,1);
     auto local_experts_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(local_experts_cb_id));
 
-    for (uint32_t t = 0; t < tokens; ++t) {
+    for (uint32_t t = token_start_idx; t < token_end_idx; ++t) {
         cb_wait_front(metadata_cb_id, 1);
         const uint32_t metadata_l1_addr = get_write_ptr(metadata_cb_id);
         auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(metadata_l1_addr);
