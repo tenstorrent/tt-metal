@@ -199,6 +199,9 @@ class RunTimeOptions {
     // Log kernels compilation commands
     bool log_kernels_compilation_commands = false;
 
+    // Enable fabric performance telemetry
+    bool enable_fabric_telemetry = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -465,6 +468,9 @@ public:
     inline std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
 
     inline bool get_log_kernels_compilation_commands() const { return log_kernels_compilation_commands; }
+
+    inline bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
+    inline void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.
