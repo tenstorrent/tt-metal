@@ -272,6 +272,9 @@ run_yolov8s_perf() {
 
   pytest -n auto --disable-warnings models/demos/yolov8s/demo/demo.py --timeout 600
 
+  # Dataset Evaluation
+  pytest -n auto --disable-warnings models/experimental/yolo_eval/evaluate.py::test_yolov8s[res0-device_params0-tt_model] --timeout 600
+
 }
 
 
@@ -280,7 +283,7 @@ run_mobilenetv2_perf(){
  pytest -n auto --disable-warnings models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo --timeout 600
 
  # Dataset Evaluation
- pytest -n auto --disable-warnings models/experimental/classification_eval/classification_eval.py --timeout 600
+ pytest -n auto --disable-warnings models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp --timeout 600
 
 }
 
