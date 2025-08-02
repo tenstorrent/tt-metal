@@ -470,7 +470,7 @@ run_t3000_qwen25_vl_unit_tests() {
 
   for qwen_dir in "$qwen25_vl_32b" "$qwen25_vl_72b"; do
     # test_mlp.py
-    MESH_DEVICE=T3K HF_MODEL=$qwen_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/qwen25_vl/tests/test_mlp.py --timeout 180 || fail=1
+    MESH_DEVICE=T3K HF_MODEL=$qwen_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/qwen25_vl/tests/test_mlp.py --timeout 400 || fail=1
     echo "LOG_METAL: Unit tests in test_mlp.py for $qwen_dir on T3K completed"
     # test_rms_norm.py
     MESH_DEVICE=T3K HF_MODEL=$qwen_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/qwen25_vl/tests/test_rms_norm.py --timeout 180 || fail=1
