@@ -299,8 +299,8 @@ install(
 # FIXME(17578): figure out what bits we actually need to ship and omit the rest
 install(
     DIRECTORY
-        runtime
-    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium
+        runtime/sfpi
+    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/runtime
     USE_SOURCE_PERMISSIONS
     COMPONENT jit-build
 )
