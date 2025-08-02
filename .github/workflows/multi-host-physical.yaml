@@ -61,6 +61,7 @@ jobs:
           install_wheel: false
           run_args: |
             sleep 10s
+            unset PYTHON_ENV_DIR
             env|sort
             echo "Running mpirun command on multiple hosts"
             cd "${{ github.workspace }}"
