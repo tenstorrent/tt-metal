@@ -167,8 +167,9 @@ class Transformer(LightweightModule):
         """
         host_inputs = self.prepare_decode_inputs_host(*inputs)
         device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)  # Helper function
-        transformed_device_inputs = self.transform_decode_inputs_device(*device_inputs)
-        return transformed_device_inputs
+        return device_inputs
+        # transformed_device_inputs = self.transform_decode_inputs_device(*device_inputs)
+        # return transformed_device_inputs
 
     def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
         """
@@ -227,14 +228,13 @@ class Transformer(LightweightModule):
         Get rope sin/cos
         Embed tokens
         """
-        tt_rot_mats = self.rope_setup.get_rot_mats(rope_idxs)
         tt_tokens = self.embd(tokens)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         tt_tokens = ttnn.to_memory_config(
             tt_tokens,
             self.args.model_config["DECODE_RESIDUAL_MEMCFG"],
         )
-        return tt_tokens, current_pos, tt_rot_mats, page_table
+        return tt_tokens, current_pos, rope_idxs, page_table
 
     def concat_device_output(self, tt_out):
         """
@@ -304,7 +304,7 @@ class Transformer(LightweightModule):
         self,
         x,
         current_pos,
-        rot_mats,
+        rot_mat_idxs,
         page_table=None,
         kv_cache=None,
         argmax_on_device=False,
@@ -313,14 +313,25 @@ class Transformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        rot_mats = self.rope_setup.get_rot_mats(rot_mat_idxs)
+        x_embed = self.embd(x)
+        x_embed = ttnn.unsqueeze_to_4D(x_embed)
+        x_embed = ttnn.to_memory_config(
+            x_embed,
+            self.args.model_config["DECODE_RESIDUAL_MEMCFG"],
+        )
+
         tt_logits = self.forward(
-            x,
+            x_embed,
             current_pos,
             rot_mats=rot_mats,
             mode="decode",
             page_table=page_table,
             kv_cache=kv_cache,
         )
+
+        ttnn.plus_one(current_pos)
+        ttnn.plus_one(rot_mat_idxs)
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:
@@ -338,7 +349,7 @@ class Transformer(LightweightModule):
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
         if argmax_on_device:
-            tt_logits = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True)
+            tt_logits = ttnn.argmax(tt_logits, dim=3, keepdim=True, use_multicore=True, output_tensor=x)
         else:
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
             if not self.args.is_galaxy:
