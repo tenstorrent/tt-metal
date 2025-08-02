@@ -20,20 +20,21 @@
 #include "optimizers/optimizer_base.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 
+namespace {
+// works around design of autocontext
+static std::optional<bool> arch_is_wormhole_b0 = std::nullopt;
+}  // namespace
+
 bool is_wormhole_b0() {
-    auto shape = tt::tt_metal::distributed::MeshShape(1, 1);
-    auto device_ids = std::vector<int>{};
-    auto dummy_device = ttnn::distributed::open_mesh_device(
-        shape,
-        DEFAULT_L1_SMALL_SIZE,
-        DEFAULT_TRACE_REGION_SIZE,
-        /* num_command_queues=*/1,
-        tt::tt_metal::DispatchCoreConfig{},
-        /*offset=*/std::nullopt,
-        /*physical_device_ids=*/device_ids);
-    bool is_whb0 = dummy_device->arch() == tt::ARCH::WORMHOLE_B0;
-    ttnn::distributed::close_mesh_device(dummy_device);
-    return is_whb0;
+    if (!arch_is_wormhole_b0.has_value()) {
+        auto shape = tt::tt_metal::distributed::MeshShape(1, 1);
+        ttml::autograd::ctx().open_device(shape);
+        auto &device = ttml::autograd::ctx().get_device();
+        fmt::println("opened dummy device");
+        arch_is_wormhole_b0 = device.arch() == tt::ARCH::WORMHOLE_B0;
+        ttml::autograd::ctx().close_device();
+    }
+    return *arch_is_wormhole_b0;
 }
 
 bool should_run_nightly_tests() {
@@ -296,6 +297,7 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
 
     float abs_tol = 1e-4;
     std::string run_type = use_tensor_parallel ? "TP" : use_ddp ? "DDP" : "SingleDevice";
+    fmt::print("run_type: {}\n", run_type);
     std::unordered_map<std::string, uint32_t> expected_program_cache_entries_map = {
         {"SingleDevice", 83},
         {"DDP", 97},
