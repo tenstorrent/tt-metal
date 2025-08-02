@@ -18,7 +18,9 @@ SDMeshCommandQueue::SDMeshCommandQueue(
 void SDMeshCommandQueue::write_shard_to_device(
     const MeshBuffer& buffer,
     const MeshCoordinate& device_coord,
+    tt::DataFormat data_format,
     const void* src,
+    tt::DataFormat src_data_format,
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     auto device_buffer = buffer.get_device_buffer(device_coord);
@@ -30,9 +32,20 @@ void SDMeshCommandQueue::write_shard_to_device(
         return;
     }
 
-    tt::tt_metal::detail::WriteToBuffer(
-        *shard_view,
-        tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size));
+    // If no conversion is needed, use the existing method
+    if (src_data_format == data_format) {
+        tt::tt_metal::detail::WriteToBuffer(
+            *shard_view,
+            tt::stl::Span<const uint8_t>(static_cast<const uint8_t*>(src) + region_value.offset, region_value.size));
+    } else {
+        // For slow dispatch, we currently support limited conversions
+        // More comprehensive conversion support would require implementing the full conversion logic
+        TT_FATAL(
+            false,
+            "Data format conversion from {} to {} is not supported in slow dispatch mode",
+            src_data_format,
+            data_format);
+    }
 }
 
 void SDMeshCommandQueue::read_shard_from_device(
