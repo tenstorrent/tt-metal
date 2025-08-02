@@ -904,7 +904,7 @@ class TtQwenModelArgs(TtModelArgs):
                 else ttnn.create_sharded_memory_config(
                     (
                         self.tile_padded_batch_rows,
-                        self.dim // attn_input_grid.num_cores,
+                        self.hidden_dim // attn_input_grid.num_cores,
                     ),  # Shard shape: [32, 128] -> 1 shard per core
                     attn_input_grid,
                     ttnn.ShardStrategy.WIDTH,

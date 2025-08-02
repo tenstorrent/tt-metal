@@ -21,7 +21,6 @@ class TtLlamaAttention(LightweightModule):
         use_paged_kv_cache=False,
         prefetcher_setup=None,
         tt_ccl=None,
-        qk_norm=False,
     ):
         super().__init__()
 
