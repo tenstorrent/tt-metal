@@ -1,0 +1,334 @@
+name: 🚀 Run tt-metal post-commit tests
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to test with'
+        required: true
+        type: number
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+  issues: write
+  checks: read
+
+jobs:
+  setup-branch:
+    name: "🔧 Setup branch for testing"
+    runs-on: ubuntu-latest
+    outputs:
+      branch-to-run: ${{
+        steps.check-fork.outputs.is-fork == 'true' &&
+        steps.mirror-branch.outputs.branch-to-run ||
+        steps.set-internal-branch.outputs.branch-to-run }}
+      is-fork: ${{ steps.check-fork.outputs.is-fork }}
+    steps:
+      - name: Get PR information
+        id: get-pr-info
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Manual dispatch - get PR info from API
+            PR_NUMBER="${{ github.event.inputs.pr_number }}"
+            PR_DATA=$(gh api repos/${{ github.repository }}/pulls/$PR_NUMBER)
+            HEAD_REPO=$(echo "$PR_DATA" | jq -r '.head.repo.full_name')
+            HEAD_REF=$(echo "$PR_DATA" | jq -r '.head.ref')
+            echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
+            echo "head-repo=$HEAD_REPO" >> $GITHUB_OUTPUT
+            echo "head-ref=$HEAD_REF" >> $GITHUB_OUTPUT
+          else
+            # PR event - use event data
+            echo "pr-number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+            echo "head-repo=${{ github.event.pull_request.head.repo.full_name }}" >> $GITHUB_OUTPUT
+            echo "head-ref=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check if this is a fork PR
+        id: check-fork
+        run: |
+          if [ "${{ steps.get-pr-info.outputs.head-repo }}" != "${{ github.repository }}" ]; then
+            echo "is-fork=true" >> $GITHUB_OUTPUT
+            echo "🍴 This is a fork PR from: ${{ steps.get-pr-info.outputs.head-repo }}"
+          else
+            echo "is-fork=false" >> $GITHUB_OUTPUT
+            echo "🏠 This is an internal PR"
+          fi
+
+      - name: Mirror fork branch if needed
+        id: mirror-branch
+        if: steps.check-fork.outputs.is-fork == 'true'
+        run: |
+          FORK_OWNER=$(echo "${{ steps.get-pr-info.outputs.head-repo }}" | cut -d'/' -f1)
+          SOURCE_BRANCH="${{ steps.get-pr-info.outputs.head-ref }}"
+          MIRRORED_BRANCH="mirror/$FORK_OWNER/$SOURCE_BRANCH"
+
+          echo "🪞 Triggering mirror workflow for fork branch"
+          echo "  - Source: $FORK_OWNER:$SOURCE_BRANCH"
+          echo "  - Target: $MIRRORED_BRANCH"
+
+          # Trigger the mirror workflow
+          gh workflow run "mirror-fork-branches.yml" \
+            --repo "${{ github.repository }}" \
+            --field source="$FORK_OWNER:$SOURCE_BRANCH" \
+            --field target_branch="$MIRRORED_BRANCH"
+
+          echo "branch-to-run=$MIRRORED_BRANCH" >> $GITHUB_OUTPUT
+          echo "✅ Mirror workflow triggered"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set branch name for internal PRs
+        id: set-internal-branch
+        if: steps.check-fork.outputs.is-fork == 'false'
+        run: |
+          BRANCH_NAME="${{ steps.get-pr-info.outputs.head-ref }}"
+          echo "branch-to-run=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          echo "📝 Using internal branch: $BRANCH_NAME"
+
+  wait-for-mirror:
+    name: "⏳ Wait for mirror completion"
+    needs: setup-branch
+    if: |
+      (contains(github.event.pull_request.labels.*.name, 'metal-post-commit-tests') ||
+       github.event_name == 'workflow_dispatch') &&
+      needs.setup-branch.outputs.is-fork == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for mirror workflow completion
+        run: |
+          echo "⏳ Waiting for mirror workflow to complete..."
+          sleep 60  # Give time for the mirror workflow to start
+
+          MAX_WAIT=600  # 10 minutes
+          WAIT_INTERVAL=30
+          elapsed=0
+
+          while [ $elapsed -lt $MAX_WAIT ]; do
+            # Check if mirror workflow is running
+            RUNNING_WORKFLOWS=$(gh run list --workflow "mirror-fork-branches.yml" \
+              --repo "${{ github.repository }}" \
+              --status "in_progress" \
+              --limit 5 \
+              --json status)
+
+            if [ "$(echo "$RUNNING_WORKFLOWS" | jq length)" -eq 0 ]; then
+              echo "✅ Mirror workflow appears to be complete"
+              break
+            fi
+
+            echo "⏳ Mirror workflow still running... (elapsed: ${elapsed}s)"
+            sleep $WAIT_INTERVAL
+            elapsed=$((elapsed + WAIT_INTERVAL))
+          done
+
+          if [ $elapsed -ge $MAX_WAIT ]; then
+            echo "⚠️ Timeout waiting for mirror workflow, proceeding anyway"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  detect-changes:
+    name: "📁 Detect file changes and determine tests"
+    needs: [setup-branch, wait-for-mirror]
+    if: |
+      always() &&
+      (contains(github.event.pull_request.labels.*.name, 'metal-post-commit-tests') ||
+       github.event_name == 'workflow_dispatch') &&
+      (needs.setup-branch.outputs.is-fork == 'false' || needs.wait-for-mirror.result != 'failure')
+    runs-on: ubuntu-latest
+    outputs:
+      run-blackhole: ${{ steps.determine-tests.outputs.run-blackhole }}
+      run-wormhole: ${{ steps.determine-tests.outputs.run-wormhole }}
+      should-skip: ${{ steps.determine-tests.outputs.should-skip }}
+    steps:
+      - name: Checkout the appropriate branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.setup-branch.outputs.branch-to-run }}
+          fetch-depth: 0
+
+      - name: Determine which tests to run
+        id: determine-tests
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Get the base branch - always use main for simplicity
+          BASE_REF="main"
+          echo "Base branch: $BASE_REF"
+
+          # Get the list of changed files by comparing the current branch with main
+          git fetch origin "$BASE_REF"
+          CHANGED_FILES=$(git diff --name-only origin/"$BASE_REF"...HEAD)
+
+          echo "📁 Changed files:"
+          echo "$CHANGED_FILES"
+
+          # Check if any files in tt_llk_blackhole directory are changed
+          BLACKHOLE_CHANGES=$(echo "$CHANGED_FILES" | grep -E "^tt_llk_blackhole/" || true)
+
+          # Check if any files in tt_llk_wormhole_b0 directory are changed
+          WORMHOLE_CHANGES=$(echo "$CHANGED_FILES" | grep -E "^tt_llk_wormhole_b0/" || true)
+
+          # Determine which tests to run
+          RUN_BLACKHOLE="false"
+          RUN_WORMHOLE="false"
+
+          if [ -n "$BLACKHOLE_CHANGES" ]; then
+            echo "🕳️ Blackhole files changed:"
+            echo "$BLACKHOLE_CHANGES"
+            RUN_BLACKHOLE="true"
+          fi
+
+          if [ -n "$WORMHOLE_CHANGES" ]; then
+            echo "🌀 Wormhole files changed:"
+            echo "$WORMHOLE_CHANGES"
+            RUN_WORMHOLE="true"
+          fi
+
+          echo "run-blackhole=$RUN_BLACKHOLE" >> $GITHUB_OUTPUT
+          echo "run-wormhole=$RUN_WORMHOLE" >> $GITHUB_OUTPUT
+
+          echo "📊 Test Configuration:"
+          echo "  - Blackhole tests: $RUN_BLACKHOLE"
+          echo "  - Wormhole tests: $RUN_WORMHOLE"
+
+          # Check if we should run any tests at all
+          if [ "$RUN_BLACKHOLE" = "false" ] && [ "$RUN_WORMHOLE" = "false" ]; then
+            echo "⚠️ No relevant changes detected in tt_llk_blackhole/ or tt_llk_wormhole_b0/"
+            echo "⏭️ Skipping tt-metal post-commit tests"
+            echo "should-skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "✅ Relevant changes detected, will run post-commit tests"
+            echo "should-skip=false" >> $GITHUB_OUTPUT
+          fi
+
+  trigger-tt-metal-tests:
+    name: "🚀 Run post-commit tests"
+    needs: [setup-branch, wait-for-mirror, detect-changes]
+    if: |
+      always() &&
+      (contains(github.event.pull_request.labels.*.name, 'metal-post-commit-tests') ||
+      github.event_name == 'workflow_dispatch') &&
+      needs.detect-changes.result == 'success' &&
+      needs.detect-changes.outputs.should-skip != 'true'
+    uses: |
+      tenstorrent/tt-metal/.github/workflows/test-llk-metal-integration.yaml@68cb0f4cb86e8f5f873805c0e9f4a14b50abc071
+    secrets: inherit
+    with:
+      mirrored_branch: ${{ needs.setup-branch.outputs.branch-to-run }}
+      run_all_post_commit: ${{ needs.detect-changes.outputs.run-wormhole == 'true' }}
+      run_blackhole_post_commit: ${{ needs.detect-changes.outputs.run-blackhole == 'true' }}
+      workflow_timeout: 360
+
+  post-comment:
+    name: "💬 Post workflow status comment"
+    needs: [setup-branch, detect-changes, trigger-tt-metal-tests]
+    if: |
+      always() &&
+      (contains(github.event.pull_request.labels.*.name, 'metal-post-commit-tests') ||
+       github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    outputs:
+      pr-number: ${{ steps.get-pr-number.outputs.pr-number }}
+      tt-metal-run-url: ${{ steps.find-run.outputs.run-url }}
+    steps:
+      - name: Get PR number
+        id: get-pr-number
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "pr-number=${{ github.event.inputs.pr_number }}" >> $GITHUB_OUTPUT
+          else
+            echo "pr-number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Find tt-metal workflow run
+        id: find-run
+        if: needs.trigger-tt-metal-tests.result == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🔍 Looking for the triggered tt-metal workflow run..."
+
+          # Wait a moment for the workflow to appear
+          sleep 15
+
+          # Get recent workflow runs from tt-metal repo
+          # Look for runs that started around the same time as this workflow
+          CURRENT_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          # Get workflow runs from the last 10 minutes
+          RUN_DATA=$(gh run list \
+            --repo tenstorrent/tt-metal \
+            --workflow test-llk-metal-integration.yaml \
+            --limit 5 \
+            --json databaseId,url,createdAt,status)
+
+          echo "Recent tt-metal runs:"
+          echo "$RUN_DATA" | jq -r '.[] | "ID: \(.databaseId) Status: \(.status) Created: \(.createdAt) URL: \(.url)"'
+
+          # Get the most recent run (likely ours)
+          LATEST_RUN=$(echo "$RUN_DATA" | jq -r '.[0]')
+
+          if [ "$LATEST_RUN" != "null" ] && [ -n "$LATEST_RUN" ]; then
+            RUN_ID=$(echo "$LATEST_RUN" | jq -r '.databaseId')
+            RUN_URL=$(echo "$LATEST_RUN" | jq -r '.url')
+            RUN_STATUS=$(echo "$LATEST_RUN" | jq -r '.status')
+
+            echo "🎯 Found likely tt-metal run:"
+            echo "  ID: $RUN_ID"
+            echo "  URL: $RUN_URL"
+            echo "  Status: $RUN_STATUS"
+
+            echo "run-url=$RUN_URL" >> $GITHUB_OUTPUT
+            echo "run-id=$RUN_ID" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ Could not find tt-metal workflow run"
+            echo "run-url=" >> $GITHUB_OUTPUT
+            echo "run-id=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post comment on PR
+        uses: mshick/add-pr-comment@v2
+        with:
+          issue: ${{ steps.get-pr-number.outputs.pr-number }}
+          message: |
+            ## 🚀 tt-metal post-commit tests
+
+            **Branch:** `${{ needs.setup-branch.outputs.branch-to-run }}`
+            **Test Configuration:**
+            - Wormhole tests: ${{
+                  needs.detect-changes.outputs.run-wormhole == 'true' &&
+                  '✅ Enabled' || '❌ Disabled' }}
+            - Blackhole tests: ${{
+                  needs.detect-changes.outputs.run-blackhole == 'true' &&
+                  '✅ Enabled' || '❌ Disabled' }}
+
+            ${{
+              needs.detect-changes.outputs.should-skip == 'true' &&
+              '**Status:** ⏭️ **Skipped** - No relevant changes in LLK directories' ||
+              format('**Status:** {0}',
+                needs.trigger-tt-metal-tests.result == 'success' &&
+                '✅ Tests succeeded' ||
+                needs.trigger-tt-metal-tests.result == 'skipped' &&
+                '⏭️ Skipped' ||
+                '❌ Tests failed')
+            }}
+
+            ## 🔗 Links
+            📊 **Post-commit tests:** [#${{ github.run_id }}](${{
+              github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+            ${{
+              needs.trigger-tt-metal-tests.result == 'failure' &&
+              '⚠️ Some of the post-commit tests have failed. Please check the logs above.' || ''
+            }}

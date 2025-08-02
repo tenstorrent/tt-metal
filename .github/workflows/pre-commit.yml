@@ -55,17 +55,19 @@ jobs:
 
       - name: Post comment on PR
         if: steps.check-comment.outputs.result == 'false'
-        uses: actions/github-script@v7
+        uses: mshick/add-pr-comment@v2
         with:
-          script: |
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number,
-              body:
-                "Thank you for your contribution! 🚀\n\n" +
-                "You can run tt-metal integration tests by adding the `blackhole-integration-tests` and/or " +
-                "`wormhole-integration-tests` labels to this pull request.\n\n" +
-                "📖 For more information, please refer to our [CONTRIBUTING](" +
-                "https://github.com/tenstorrent/tt-llk/blob/main/CONTRIBUTING.md) guide."
-            });
+          message: >
+            Thank you for your contribution! 🚀
+
+
+            You can run tt-metal integration tests by adding the `blackhole-integration-tests`
+            and/or `wormhole-integration-tests` labels to this pull request.
+
+
+            If you want to run metal post-commit tests, you can add the `metal-post-commit-tests`
+            label to this pull request.
+
+
+            📖 For more information, please refer to our
+            [CONTRIBUTING](https://github.com/tenstorrent/tt-llk/blob/main/CONTRIBUTING.md) guide.
