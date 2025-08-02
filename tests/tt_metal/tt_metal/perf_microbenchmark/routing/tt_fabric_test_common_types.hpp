@@ -90,12 +90,12 @@ enum class RoutingType {
 };
 
 enum class HighLevelTrafficPattern {
-    AllToAllUnicast,
+    AllToAll,
+    OneToAll,
     FullDeviceRandomPairing,
-    AllToAllMulticast,
-    UnidirectionalLinearMulticast,
-    FullRingMulticast,
-    HalfRingMulticast,
+    UnidirectionalLinear,
+    FullRing,
+    HalfRing,
 };
 
 struct TestFabricSetup {
