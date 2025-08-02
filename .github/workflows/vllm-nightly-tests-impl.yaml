@@ -33,6 +33,7 @@ jobs:
             mesh-device: T3K,
             tt-llama-text-ver: tt_transformers,
             wh-arch-yaml: wormhole_b0_80_arch_eth_dispatch.yaml,
+            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\"}",
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
