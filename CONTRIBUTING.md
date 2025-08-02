@@ -40,7 +40,7 @@ A breaking change is any change that:
          - If your change is affecting ttnn operations, additional checks might be required by the maintainers.
 
 4. **Merge only after validation**
-   - Do **not merge** the change into the submodule’s main branch until:
+   - Do **not merge** the change into the submodule's main branch until:
      - The `tt-metal` PR is **approved**.
      - **All checks are passing**.
      - Reviewers from both repositories have approved your changes.
@@ -66,6 +66,52 @@ Avoid the following:
 | 🧪 Test     | Open a PR in the tt-metal repo using your submodule branch            |
 | ✅ Validate | Ensure CI is green and the PR is approved in the tt-metal repo        |
 | 🔀 Merge    | Only merge to submodule main after successful validation and approval |
+
+## 🧪 Running tt-metal Integration Tests
+
+You can run integration tests in the `tt-metal` repository directly from your `tt-llk` pull request using GitHub labels. This is useful for testing your changes against the full `tt-metal` test suite without manually creating a PR in the `tt-metal` repository.
+
+### Available Test Labels
+
+Add one or more of these labels to your pull request to trigger the corresponding tests:
+
+- **`metal-post-commit-tests`** - **Smart detection** - Automatically determines which tests to run based on your file changes:
+  - If you modify files in `tt_llk_blackhole/`, runs Blackhole integration tests
+  - If you modify files in `tt_llk_wormhole_b0/`, runs Wormhole integration tests
+  - If you modify both directories, runs both test suites
+  - If no relevant changes detected, skips testing
+
+- **`wormhole-integration-tests`** - **Targeted testing** - Always runs Wormhole LLK unit tests using your branch changes, regardless of which files were modified
+
+- **`blackhole-integration-tests`** - **Targeted testing** - Always runs Blackhole LLK unit tests using your branch changes, regardless of which files were modified
+
+### How It Works
+
+1. **Add a label** to your pull request (see labels above)
+2. **Automatic branch handling**:
+   - For **fork PRs**: The system automatically mirrors your branch to the main repository
+   - For **internal PRs**: Uses your branch directly
+3. **Test execution**: Triggers the appropriate test suite in the `tt-metal` repository
+4. **Results**: You'll receive a comment on your PR with:
+   - Test configuration details
+   - Direct link to the running tests
+   - Status updates
+
+### When to Use Post-Commit Tests
+
+- **Before merging breaking changes** - Validate compatibility with `tt-metal`
+- **Testing new features** - Ensure your changes work in the full system
+- **Debugging issues** - Reproduce problems in the complete environment
+
+### Manual Testing Alternative
+
+For more control, you can still manually:
+
+1. Create a PR in `tt-metal` that points to your `tt-llk` branch
+2. Run the desired test workflows manually
+3. Review detailed results and logs
+
+The automated integration tests are a convenience feature - manual testing in `tt-metal` remains the authoritative validation method for breaking changes.
 
 ---
 
@@ -149,25 +195,28 @@ If you prefer to set up pre-commit manually or need to reinstall it, follow thes
 
 This project uses `clangd` to provide language server features like code completion, navigation, and live error checking. Follow these steps to set it up correctly:
 
-1.  **Install Clangd Extension**:
+1. **Install Clangd Extension**:
     First, install the `clangd` extension for your code editor (e.g., VSCode, Cursor).
 
-2.  **Download Dependencies**:
+2. **Download Dependencies**:
     `clangd` requires an external toolchain and several headers from the `tt-metal` project. You can download all the necessary dependencies by running the following script:
+
     ```bash
     cd tests
     ./setup_testing_env.sh
     cd ..
     ```
+
     This will download the SFPI toolchain. Headers will be downloaded automatically once you run the tests.
 
-3.  **Generate Compilation Flags**:
+3. **Generate Compilation Flags**:
     With the dependencies in place, run the `setup_clangd.sh` script from the repository root. This creates the `compile_flags.txt` file that `clangd` needs. You must specify a target architecture:
+
     ```bash
     ./setup_clangd.sh blackhole
     ```
 
-4.  **Reload file**:
+4. **Reload file**:
     After completing the setup, you might have to reload the file in the editor. That is not always the case.
 
 ### Spell Checking with `codespell`
