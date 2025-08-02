@@ -101,6 +101,7 @@ jobs:
           # Setup test branch in submodule
           cd ${{ env.SUBMODULE_PATH }}
           git remote set-url origin https://${{ secrets.TEMP_METAL_PAT }}@github.com/tenstorrent/tt-llk.git
+          git fetch --all
           git checkout -b "$TEST_BRANCH_NAME" "$MIRRORED_BRANCH"
           git push origin "$TEST_BRANCH_NAME"
           # Setup parent repository with submodule reference
