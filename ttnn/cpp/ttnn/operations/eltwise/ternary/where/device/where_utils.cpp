@@ -10,11 +10,15 @@
 
 namespace ttnn::operations::ternary {
 
-WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant) {
+WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastType broadcast_type) {
     switch (where_variant) {
         case WhereVariant::TTT:
-            reader_kernel = KernelName::ReaderNoBcastTTT;
-            compute_kernel = KernelName::ComputeNoBcastTTT;
+            if (broadcast_type == WhereBroadcastType::COL_BCAST) {
+                reader_kernel = KernelName::ReaderColBcastTTT;
+            } else {
+                reader_kernel = KernelName::ReaderNoBcastTTT;
+            }
+            compute_kernel = KernelName::ComputeNoBcastTTT;  // Same compute kernel for both
             writer_kernel = KernelName::WriterNoBcastTTT;
             break;
 
@@ -48,6 +52,7 @@ std::string get_kernel_file_path(KernelName kernel_name) {
         case KernelName::ReaderNoBcastTST: return fmt::format(dataflow, root, "ternary_reader_nobcast_tst.cpp");
         case KernelName::ReaderNoBcastTTS: return fmt::format(dataflow, root, "ternary_reader_nobcast_tts.cpp");
         case KernelName::ReaderNoBcastTSS: return fmt::format(dataflow, root, "ternary_reader_nobcast_tss.cpp");
+        case KernelName::ReaderColBcastTTT: return fmt::format(dataflow, root, "ternary_reader_colbcast_ttt.cpp");
 
         case KernelName::WriterNoBcastTTT:
             return "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
@@ -75,6 +80,35 @@ uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype) {
         return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
     }
     return std::bit_cast<uint32_t>(scalar);
+}
+
+std::map<std::string, std::string> make_ternary_dataflow_defines(
+    const DataType predicate_dtype, const DataType value_true_dtype, const DataType value_false_dtype) {
+    std::map<std::string, std::string> defines;
+
+    // Set up FILL_TILE_WITH_FIRST_COLUMN defines for value_true (cb_id_in1)
+    if (value_true_dtype == DataType::FLOAT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
+    } else if (value_true_dtype == DataType::INT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
+    } else if (value_true_dtype == DataType::UINT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
+    } else {
+        defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfloat16";
+    }
+
+    // Set up FILL_TILE_WITH_FIRST_COLUMN_B defines for value_false (cb_id_in2)
+    if (value_false_dtype == DataType::FLOAT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
+    } else if (value_false_dtype == DataType::INT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
+    } else if (value_false_dtype == DataType::UINT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
+    } else {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfloat16";
+    }
+
+    return defines;
 }
 
 }  // namespace ttnn::operations::ternary
