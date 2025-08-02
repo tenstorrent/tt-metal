@@ -2710,28 +2710,6 @@ tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_helper(FabricTestM
     }
 }
 
-// Clears the L1 buffer on every active ethernet core where telemetry data is buffered
-void clear_fabric_telemetry_data(MeshDeviceView* mesh_device) {
-    constexpr size_t telemetry_struct_size_bytes = 24;
-    const auto telemetry_buffer_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
-    std::vector<uint32_t> clearing_data_vec(telemetry_struct_size_bytes / sizeof(uint32_t), 0);
-    for (const auto& device : mesh_device->get_devices()) {
-        auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-        for (const auto& eth_logical_core : device->get_active_ethernet_cores(true)) {
-            // Clear the telemetry data
-            log_info(
-                tt::LogMetal,
-                "Clearing telemetry data for device {}, ethernet core {}",
-                device->id(),
-                eth_logical_core);
-            // tt::tt_metal::detail::WriteToDeviceL1(
-            //     device, eth_logical_core, telemetry_buffer_address, clearing_data_vec, CoreType::ETH);
-        }
-    }
-    log_info(tt::LogMetal, "Done clearing telemetry data");
-}
-
-
 // Reads back and report the bandwidth telemetry data from active Ethernet core L1.
 void read_fabric_telemetry_data(MeshDeviceView* mesh_device) {
     constexpr size_t telemetry_struct_size_bytes = 24;
@@ -3032,10 +3010,6 @@ void Run1DFabricPacketSendTest(
             false,
             is_6u_galaxy,
             edm_buffer_config);
-    }
-
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_telemetry()) {
-        clear_fabric_telemetry_data(test_fixture->view_.get());
     }
 
     // Other boiler plate setup

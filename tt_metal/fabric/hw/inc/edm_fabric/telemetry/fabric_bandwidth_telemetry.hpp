@@ -8,10 +8,7 @@
 #include "tt_metal/hw/inc/risc_attribs.h"
 
 #include <cstdint>
-#include <cstddef>  // Define FORCE_INLINE if not already defined
-#ifndef FORCE_INLINE
-#define FORCE_INLINE __attribute__((always_inline)) inline
-#endif
+#include <cstddef>
 
 /**
  * @brief Timestamp structure with 64-bit value accessible as full or split into high/low 32-bit parts
