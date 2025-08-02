@@ -1,8 +1,8 @@
-from models.experimental.uniad.reference.track_instance import Instances
+from models.experimental.uniad.reference.utils import Instances
 
 # from mmdet3d.core.bbox.iou_calculators.iou3d_calculator import (
 #     bbox_overlaps_nearest_3d as iou_3d, )
-from models.experimental.uniad.reference.uniad import denormalize_bbox
+from models.experimental.uniad.reference.utils import denormalize_bbox
 
 
 class RuntimeTrackerBase(object):
