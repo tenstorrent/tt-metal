@@ -176,8 +176,8 @@ foreach(ARCH IN LISTS ARCHS)
     set(HW_OBJ_SRC_PAIRS
         "tmu-crt0.o:tt_metal/hw/toolchain/tmu-crt0.S"
         "substitutes.o:tt_metal/hw/toolchain/substitutes.cpp"
-        "tdma_xmov.o:tt_metal/hw/firmware/src/tdma_xmov.c"
-        "noc.o:tt_metal/hw/firmware/src/${ARCH}/noc.c"
+        "tdma_xmov.o:tt_metal/hw/firmware/src/tt-1xx/tdma_xmov.c"
+        "noc.o:tt_metal/hw/firmware/src/tt-1xx/${ARCH}/noc.c"
     )
     set(ARCH_ALIAS ${ARCH})
 
@@ -211,7 +211,7 @@ foreach(ARCH IN LISTS ARCHS)
         -I${PROJECT_SOURCE_DIR}/tt_metal/include
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/debug
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tt-1xx
     )
 
     # Architecture specific include paths

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <enchantum/enchantum.hpp>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
@@ -11,6 +12,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <tracy/Tracy.hpp>
 
@@ -230,8 +232,8 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         (std::uint32_t)input_block_size_bytes};
 
     std::map<std::string, std::string> embedding_defines = {
-        {magic_enum::enum_name(embeddings_type).data(), "1"},
-        {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
+        {enchantum::to_string(embeddings_type).data(), "1"},
+        {enchantum::to_string(embeddings_index_type).data(), "1"}};
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -507,8 +509,8 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     }
 
     std::map<std::string, std::string> embedding_defines = {
-        {magic_enum::enum_name(embeddings_type).data(), "1"},
-        {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
+        {enchantum::to_string(embeddings_type).data(), "1"},
+        {enchantum::to_string(embeddings_index_type).data(), "1"}};
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -523,11 +525,8 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     // Tilized writer
     KernelHandle writer_kernel_id = 0;
     if (!output_sharded) {
-        std::vector<uint32_t> writer_compile_time_args = {
-            (std::uint32_t)out_cb_index,
-            (std::uint32_t)out_is_dram,
-            (std::uint32_t)output_stick_size_is_power_of_two,
-            (std::uint32_t)output_log2_stick_size};
+        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)out_cb_index, (std::uint32_t)output_page_size};
+        TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
         writer_kernel_id = tt_metal::CreateKernel(
             program,
@@ -730,8 +729,8 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     }
 
     std::map<std::string, std::string> embedding_defines = {
-        {magic_enum::enum_name(embeddings_type).data(), "1"},
-        {magic_enum::enum_name(embeddings_index_type).data(), "1"}};
+        {enchantum::to_string(embeddings_type).data(), "1"},
+        {enchantum::to_string(embeddings_index_type).data(), "1"}};
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -742,11 +741,8 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_page_size);
     uint32_t output_log2_stick_size =
         output_stick_size_is_power_of_two ? (std::uint32_t)std::log2(output_page_size) : 0;
-    std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)output_cb_index,
-        (std::uint32_t)out_is_dram,
-        (std::uint32_t)output_stick_size_is_power_of_two,
-        (std::uint32_t)output_log2_stick_size};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)output_page_size};
+    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     // Tilized writer
     auto writer_kernel_id = tt_metal::CreateKernel(

@@ -1,1 +1,1 @@
-../../../ttnn/integration_tests/mobilenetv2/test_mobilenetv2.py
+../../../../models/demos/mobilenetv2/tests/pcc/test_mobilenetv2.py
