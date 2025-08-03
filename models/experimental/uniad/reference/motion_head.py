@@ -220,7 +220,6 @@ class MotionHead(nn.Module):
         det_bbox_posembed = []
         for i in range(batch_size):
             bboxes, scores, labels, bbox_index, mask = bbox_results[i]
-            print("bboxes", bboxes)
             xy = bboxes.gravity_center[:, :2]
             x_norm = (xy[:, 0] - bev_range[0]) / (bev_range[3] - bev_range[0])
             y_norm = (xy[:, 1] - bev_range[1]) / (bev_range[4] - bev_range[1])

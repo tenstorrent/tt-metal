@@ -30,7 +30,6 @@ class AttentionTail(nn.Module):
     def forward(self, query, key, key_padding_mask, hw_lvl=None):
         B, N, C = query.shape
         _, L, _ = key.shape
-        # print('query, key, value', query.shape, value.shape, key.shape)
         q = self.q(query).reshape(B, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3).contiguous()
 
         k = self.k(key).reshape(B, L, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3).contiguous()
@@ -121,7 +120,6 @@ class Attention(nn.Module):
     def forward(self, query, key, value, key_padding_mask, hw_lvl):
         B, N, C = query.shape
         _, L, _ = key.shape
-        # print('query, key, value', query.shape, value.shape, key.shape)
         q = (
             self.q(query).reshape(B, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3).contiguous()
         )  # .permute(2, 0, 3, 1, 4)
