@@ -355,7 +355,6 @@ class DeformableDetrTransformerDecoder(nn.Module):
                 assert reference_points.shape[-1] == 2
                 reference_points_input = reference_points[:, :, None] * valid_ratios[:, None]
 
-            print("reference_points_input before layer", reference_points_input.shape)
             output = layer(
                 output,
                 key=key,
@@ -368,21 +367,17 @@ class DeformableDetrTransformerDecoder(nn.Module):
             output = output.permute(1, 0, 2)
 
             if reg_branches is not None:
-                print("new_reference_points reg bracnh")
                 tmp = reg_branches[lid](output)
                 if reference_points.shape[-1] == 4:
                     new_reference_points = tmp + inverse_sigmoid(reference_points)
-                    print("new_reference_points in if 1", new_reference_points.shape)
                     new_reference_points = new_reference_points.sigmoid()
                 else:
                     assert reference_points.shape[-1] == 2
                     new_reference_points = tmp
-                    print("new_reference_points in if 1", new_reference_points.shape)
                     new_reference_points[..., :2] = tmp[..., :2] + inverse_sigmoid(reference_points)
                     new_reference_points = new_reference_points.sigmoid()
                 reference_points = new_reference_points.detach()
 
-            print("reference_points detached", reference_points.shape)
             output = output.permute(1, 0, 2)
             if self.return_intermediate:
                 intermediate.append(output)

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 from models.experimental.uniad.reference.utils import Instances
 
 # from mmdet3d.core.bbox.iou_calculators.iou3d_calculator import (
@@ -27,7 +31,6 @@ class RuntimeTrackerBase(object):
                     if iou3ds.max() > iou_thre:
                         continue
                 # new track
-                # print("track {} has score {}, assign obj_id {}".format(i, track_instances.scores[i], self.max_obj_id))
                 track_instances.obj_idxes[i] = self.max_obj_id
                 self.max_obj_id += 1
             elif track_instances.obj_idxes[i] >= 0 and track_instances.scores[i] < self.filter_score_thresh:

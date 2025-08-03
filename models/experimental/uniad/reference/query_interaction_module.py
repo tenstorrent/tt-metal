@@ -50,7 +50,6 @@ class QueryInteractionModule(nn.Module):
         self.activation = F.relu
 
     def _update_track_embedding(self, track_instances: Instances) -> Instances:
-        print("track_instancestrack_instances", type(track_instances))
         dim = track_instances.query.shape[1]
         out_embed = track_instances.output_embedding
         query_pos = track_instances.query[:, : dim // 2]
@@ -89,30 +88,11 @@ class QueryInteractionModule(nn.Module):
 
     def _select_active_tracks(self, data: dict) -> Instances:
         track_instances: Instances = data["track_instances"]
-        print("Else is working")
         active_track_instances = track_instances[track_instances.obj_idxes >= 0]
 
         return active_track_instances
 
     def forward(self, data) -> Instances:
-        # print("QueryInteractionModule forward", data)
-        # print("data Query interaction", print(data["init_track_instances"].get_fields()))
-        # print("init_track_instances",data["init_track_instances"], type(data["init_track_instances"]))
-        print("data ref_pts", data["init_track_instances"].ref_pts.shape)
-        print("data query", data["init_track_instances"].query.shape)
-        print("data output_embedding - zero tensors", data["init_track_instances"].output_embedding.shape)
-        # print("data obj_idxes -1 tensors", data["init_track_instances"].obj_idxes.shape)
-        # print("data matched_gt_idxes -1 tensor", data["init_track_instances"].matched_gt_idxes.shape)
-        # print("data disappear_time - 0 tensors", data["init_track_instances"].disappear_time.shape)
-        # print("data iou - 0 float tensor", data["init_track_instances"].iou.shape)
-        # print("data scores - 0 float tensor", data["init_track_instances"].scores.shape)
-        # print("data track_scores - 0 float tensor", data["init_track_instances"].track_scores.shape)
-        # print("data pred_boxes - 0 float tensor", data["init_track_instances"].pred_boxes.shape)
-        # print("data pred_logits: 0 float tensor", data["init_track_instances"].pred_logits.shape)
-        # print("data mem_bank: 0 float tensor", data["init_track_instances"].mem_bank.shape)
-        # print("data mem_padding_mask: bool True", data["init_track_instances"].mem_padding_mask.shape)
-        # print("data save_period: 0 float tensor", data["init_track_instances"].save_period.shape)
-
         active_track_instances = self._select_active_tracks(data)
         active_track_instances = self._update_track_embedding(active_track_instances)
         init_track_instances: Inescalationstances = data["init_track_instances"]
