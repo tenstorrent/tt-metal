@@ -300,7 +300,7 @@ class MotionTransformerAttentionLayer(nn.Module):
             else:
                 assert ffn_cfgs[ffn_index]["embed_dims"] == self.embed_dims
             self.ffns.append(
-                FFN(embed_dim=256)
+                FFN(embed_dims=256)
             )  # ,feedforward_channels=512,num_fcs=2,ffn_drop=0.1,act_cfg={'type': 'ReLU', 'inplace': True}))
 
         self.norms = nn.ModuleList()
