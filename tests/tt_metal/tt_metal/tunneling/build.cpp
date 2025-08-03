@@ -10,6 +10,7 @@
 #include <vector>
 #include <string>
 #include <fmt/format.h>
+#include "tt_cluster.hpp"
 #include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 
 namespace {
@@ -49,7 +50,10 @@ std::string GetCommonOptions() {
 namespace lite_fabric {
 
 void CompileLiteFabric(
-    const std::string& root_dir, const std::string& out_dir, const std::vector<std::string>& extra_defines) {
+    std::shared_ptr<tt::Cluster> cluster,
+    const std::string& root_dir,
+    const std::string& out_dir,
+    const std::vector<std::string>& extra_defines) {
     const std::string lite_fabric_src = fmt::format("{}/tests/tt_metal/tt_metal/tunneling/lite_fabric.cpp", root_dir);
 
     std::vector<std::string> includes = {
@@ -79,8 +83,6 @@ void CompileLiteFabric(
         "IS_NOT_POW2_NUM_L1_BANKS=1",
         "LOG_BASE_2_OF_NUM_DRAM_BANKS=3",
         "NUM_DRAM_BANKS=8 -DNUM_L1_BANKS=130",
-        "PCIE_NOC_X=19",
-        "PCIE_NOC_Y=24",
         "TENSIX_FIRMWARE",
         "LOCAL_MEM_EN=0",
         "COMPILE_FOR_ERISC",
@@ -92,6 +94,13 @@ void CompileLiteFabric(
         // Fabric
         fmt::format("ROUTING_MODE={}", ROUTING_MODE_1D),
     };
+
+    auto soc_d = cluster->get_soc_desc(0);
+    auto pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
+    CoreCoord pcie_core = pcie_cores.empty() ? soc_d.grid_size : pcie_cores[0];
+
+    defines.push_back(fmt::format("PCIE_NOC_X={}", std::to_string(pcie_core.x)));
+    defines.push_back(fmt::format("PCIE_NOC_Y={}", std::to_string(pcie_core.y)));
 
     defines.insert(defines.end(), extra_defines.begin(), extra_defines.end());
 
