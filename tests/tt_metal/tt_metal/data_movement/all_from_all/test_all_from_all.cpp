@@ -402,7 +402,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
     if (arch_ == tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test on Blackhole, Issue #24584";
     }
-    uint32_t test_case_id = 70;
+    uint32_t test_case_id = 310;
 
     /* Parameters */
 
@@ -425,7 +425,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
         GTEST_SKIP() << "Skipping test on Blackhole, Issue #24584";
     }
 
-    uint32_t test_case_id = 71;
+    uint32_t test_case_id = 311;
 
     /* Parameters */
 
@@ -443,7 +443,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
 
 /* ======== 2x2 to 1x1 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From1x1DirectedIdeal) {
-    uint32_t test_case_id = 72;
+    uint32_t test_case_id = 312;
 
     /* Parameters */
 
@@ -459,7 +459,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From1x1DirectedIdeal) {
 
 /* ======== 4x4 to 1x1 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllFromAll4x4From1x1DirectedIdeal) {
-    uint32_t test_case_id = 73;
+    uint32_t test_case_id = 313;
 
     /* Parameters */
 
@@ -475,7 +475,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll4x4From1x1DirectedIdeal) {
 
 /* ======== 1x1 to 2x2 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllFromAll1x1From2x2DirectedIdeal) {
-    uint32_t test_case_id = 74;
+    uint32_t test_case_id = 314;
 
     /* Parameters */
 
@@ -491,7 +491,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll1x1From2x2DirectedIdeal) {
 
 /* ======== 1x1 to 4x4 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllFromAll1x1From4x4DirectedIdeal) {
-    uint32_t test_case_id = 75;
+    uint32_t test_case_id = 315;
 
     /* Parameters */
 
@@ -507,7 +507,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll1x1From4x4DirectedIdeal) {
 
 /* ======== 2x2 to 2x2 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From2x2DirectedIdeal) {
-    uint32_t test_case_id = 6;
+    uint32_t test_case_id = 316;
 
     /* Parameters */
 
@@ -524,13 +524,13 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From2x2DirectedIdeal) {
 /* ======== VIRTUAL CHANNELS ======== */
 
 TEST_F(DeviceFixture, TensixDataMovementAllFromAllVirtualChannels) {
-    uint32_t test_case_id = 155;
+    uint32_t test_case_id = 317;
 
     unit_tests::dm::all_from_all::virtual_channels_test(arch_, devices_, num_devices_, test_case_id);
 }
 
 TEST_F(DeviceFixture, TensixDataMovementAllFromAllCustom) {
-    uint32_t test_case_id = 160;
+    uint32_t test_case_id = 318;
 
     // Parameters
     CoreCoord mst_start_coord = {0, 0};

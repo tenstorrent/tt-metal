@@ -411,7 +411,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAllDirectedIdeal) {
     if (arch_ == tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test on Blackhole, Issue #24584";
     }
-    uint32_t test_case_id = 60;
+    uint32_t test_case_id = 300;
 
     /* Parameters */
 
@@ -434,7 +434,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAllPacketSizes) {
         GTEST_SKIP() << "Skipping test on Blackhole, Issue #24584";
     }
 
-    uint32_t test_case_id = 61;
+    uint32_t test_case_id = 301;
 
     /* Parameters */
 
@@ -452,7 +452,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAllPacketSizes) {
 
 /* ======== 2x2 to 1x1 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllToAll2x2To1x1DirectedIdeal) {
-    uint32_t test_case_id = 62;
+    uint32_t test_case_id = 302;
 
     /* Parameters */
 
@@ -468,7 +468,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAll2x2To1x1DirectedIdeal) {
 
 /* ======== 4x4 to 1x1 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllToAll4x4To1x1DirectedIdeal) {
-    uint32_t test_case_id = 63;
+    uint32_t test_case_id = 303;
 
     /* Parameters */
 
@@ -484,7 +484,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAll4x4To1x1DirectedIdeal) {
 
 /* ======== 1x1 to 2x2 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllToAll1x1To2x2DirectedIdeal) {
-    uint32_t test_case_id = 64;
+    uint32_t test_case_id = 304;
 
     /* Parameters */
 
@@ -500,7 +500,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAll1x1To2x2DirectedIdeal) {
 
 /* ======== 1x1 to 4x4 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllToAll1x1To4x4DirectedIdeal) {
-    uint32_t test_case_id = 65;
+    uint32_t test_case_id = 305;
 
     /* Parameters */
 
@@ -516,7 +516,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAll1x1To4x4DirectedIdeal) {
 
 /* ======== 2x2 to 2x2 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllToAll2x2To2x2DirectedIdeal) {
-    uint32_t test_case_id = 66;
+    uint32_t test_case_id = 306;
 
     /* Parameters */
 
@@ -533,13 +533,13 @@ TEST_F(DeviceFixture, TensixDataMovementAllToAll2x2To2x2DirectedIdeal) {
 /* ======== VIRTUAL CHANNELS ======== */
 
 TEST_F(DeviceFixture, TensixDataMovementAllToAllVirtualChannels) {
-    uint32_t test_case_id = 154;
+    uint32_t test_case_id = 307;
 
     unit_tests::dm::all_to_all::virtual_channels_test(arch_, devices_, num_devices_, test_case_id);
 }
 
 TEST_F(DeviceFixture, TensixDataMovementAllToAllCustom) {
-    uint32_t test_case_id = 160;
+    uint32_t test_case_id = 308;
 
     // Custom Parameters
     uint32_t num_of_transactions = 256;
