@@ -22,6 +22,7 @@ from tests.tt_metal.tt_metal.data_movement.python.test_metadata import TestMetad
 from tests.tt_metal.tt_metal.data_movement.python.stats_collector import StatsCollector
 from tests.tt_metal.tt_metal.data_movement.python.stats_reporter import StatsReporter
 from tests.tt_metal.tt_metal.data_movement.python.plotter import Plotter
+from tests.tt_metal.tt_metal.data_movement.python.performance_checker import PerformanceChecker
 from tests.tt_metal.tt_metal.data_movement.python.constants import *
 
 
@@ -65,7 +66,10 @@ def run_dm_tests(profile, verbose, gtest_filter, plot, report, arch_name):
         plotter.plot_dm_stats()
 
     # Check performance
-    performance_check(dm_stats, arch=arch, verbose=verbose, test_bounds=test_bounds, test_id_to_name=test_id_to_name)
+    performance_checker = PerformanceChecker(
+        dm_stats, arch=arch, verbose=verbose, test_bounds=test_bounds, test_id_to_name=test_id_to_name
+    )
+    performance_checker.run()
 
     logger.info("Data movement tests completed.")
 
@@ -79,67 +83,6 @@ def profile_dm_tests(verbose=False, gtest_filter=None):
         cmd += f' --gtest_filter="*{gtest_filter}*"'
 
     os.system(cmd)
-
-
-def performance_check(dm_stats, arch="blackhole", verbose=False, test_bounds=None, test_id_to_name=None):
-    # Tidy results' ranges
-    results_bounds = {}
-    for riscv in dm_stats.keys():
-        for run in dm_stats[riscv]["analysis"]["series"]:
-            run_host_id = run["duration_type"][0]["run_host_id"]
-            test_id = dm_stats[riscv]["attributes"][run_host_id]["Test id"]
-
-            if test_id not in results_bounds.keys():
-                results_bounds[test_id] = {riscv: {"latency": 0, "bandwidth": float("inf")}}
-            elif riscv not in results_bounds[test_id].keys():
-                results_bounds[test_id][riscv] = {
-                    "latency": 0,
-                    "bandwidth": float("inf"),
-                }
-
-            cycles = run["duration_cycles"]
-            results_bounds[test_id][riscv]["latency"] = max(results_bounds[test_id][riscv]["latency"], cycles)
-
-            attributes = dm_stats[riscv]["attributes"][run_host_id]
-            bandwidth = attributes["Number of transactions"] * attributes["Transaction size in bytes"] / cycles
-            results_bounds[test_id][riscv]["bandwidth"] = min(results_bounds[test_id][riscv]["bandwidth"], bandwidth)
-
-    # Performance checks per test
-    for test_id, bounds in results_bounds.items():
-        # Print latency and bandwidth perf results
-        if verbose:
-            logger.info("")
-            test_name = test_id_to_name.get(test_id, "Unknown Test")
-            logger.info(f"Perf results for test id: {test_id} ({test_name})")
-
-            logger.info(f"Latency")
-            for riscv in bounds.keys():
-                if bounds[riscv]["latency"] != float("inf"):
-                    logger.info(f"  {riscv}: {bounds[riscv]['latency']} cycles")
-
-            logger.info(f"Bandwidth")
-            for riscv in bounds.keys():
-                if bounds[riscv]["bandwidth"] != float("inf"):
-                    logger.info(f"  {riscv}: {bounds[riscv]['bandwidth']} Bytes/cycle")
-
-        if test_bounds is None or test_id not in test_bounds[arch].keys():
-            logger.warning(f"Test id {test_id} not found in {arch} test bounds.")
-            continue
-
-        for riscv in bounds.keys():
-            if riscv not in test_bounds[arch][test_id].keys():
-                continue
-
-            bw_within_bounds = test_bounds[arch][test_id][riscv]["bandwidth"] <= bounds[riscv]["bandwidth"]
-
-            # Print bounds check results
-            if verbose:
-                if not bw_within_bounds:
-                    logger.warning(f"{riscv} bandwidth not within perf bounds.")
-                else:
-                    logger.info(f"{riscv} bandwidth within perf bounds.")
-
-            assert bw_within_bounds
 
 
 def test_data_movement(

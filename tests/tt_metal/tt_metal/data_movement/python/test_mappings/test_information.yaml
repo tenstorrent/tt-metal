@@ -135,9 +135,15 @@ tests:
     name: "Loopback Directed Ideal"
 
   60:
+    name: "All to All Directed Ideal"
+
+  61:
     name: "All to All Packet Sizes"
 
   70:
+    name: "All from All Directed Ideal"
+
+  71:
     name: "All from All Packet Sizes"
 
   100:

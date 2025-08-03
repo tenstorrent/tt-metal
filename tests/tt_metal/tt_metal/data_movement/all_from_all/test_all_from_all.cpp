@@ -391,11 +391,8 @@ void custom_test(
 /  ============================================================= */
 
 /*
-IDEAS:
-    - Implement a for loop that shuffles through several coordinates to test grids of
-        different locations
-    - Implement a for loop that shuffles through several grid sizes to test grids of
-        different sizes
+TO-DO:
+    - Implement a test case that shuffles through several grid sizes to test grids of different sizes
 */
 
 /* ======== DIRECTED IDEAL ======== */
@@ -405,7 +402,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAllDirectedIdeal) {
     if (arch_ == tt::ARCH::BLACKHOLE) {
         GTEST_SKIP() << "Skipping test on Blackhole, Issue #24584";
     }
-    uint32_t test_case_id = 1;
+    uint32_t test_case_id = 70;
 
     /* Parameters */
 
@@ -428,7 +425,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
         GTEST_SKIP() << "Skipping test on Blackhole, Issue #24584";
     }
 
-    uint32_t test_case_id = 70;
+    uint32_t test_case_id = 71;
 
     /* Parameters */
 
@@ -446,7 +443,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAllPacketSizes) {
 
 /* ======== 2x2 to 1x1 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From1x1DirectedIdeal) {
-    uint32_t test_case_id = 2;
+    uint32_t test_case_id = 72;
 
     /* Parameters */
 
@@ -462,7 +459,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll2x2From1x1DirectedIdeal) {
 
 /* ======== 4x4 to 1x1 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllFromAll4x4From1x1DirectedIdeal) {
-    uint32_t test_case_id = 3;
+    uint32_t test_case_id = 73;
 
     /* Parameters */
 
@@ -478,7 +475,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll4x4From1x1DirectedIdeal) {
 
 /* ======== 1x1 to 2x2 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllFromAll1x1From2x2DirectedIdeal) {
-    uint32_t test_case_id = 4;
+    uint32_t test_case_id = 74;
 
     /* Parameters */
 
@@ -494,7 +491,7 @@ TEST_F(DeviceFixture, TensixDataMovementAllFromAll1x1From2x2DirectedIdeal) {
 
 /* ======== 1x1 to 4x4 ======== */
 TEST_F(DeviceFixture, TensixDataMovementAllFromAll1x1From4x4DirectedIdeal) {
-    uint32_t test_case_id = 5;
+    uint32_t test_case_id = 75;
 
     /* Parameters */
 
