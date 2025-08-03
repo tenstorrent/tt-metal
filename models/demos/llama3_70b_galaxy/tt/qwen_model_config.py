@@ -40,6 +40,7 @@ from models.demos.llama3_70b_galaxy.tt.model_config import (
     LlamaOptimizations,
     num_to_core_range_set,
     num_to_coregrid,
+    set_tg_attention_config,
 )
 
 
@@ -367,8 +368,8 @@ class TtQwenModelArgs(TtModelArgs):
                         1,
                         1,
                         32,
-                        1280 // num_cores_ln,
-                    ),
+                        self.dim_per_tp // num_cores_ln,
+                    ),  # (1, 1, 32, 2048 // num_cores_ln) originally
                     core_grid=ttnn.CoreRangeSet(
                         [
                             core_range,
@@ -957,7 +958,6 @@ class TtQwenModelArgs(TtModelArgs):
             )
 
             wo_shape_ring = (8192 // 8, 6144 // 4)  # Use padded K and N
-            # wo_shape_ring = (8192 // 8, 6144 // 4)  # Use padded K and N
             self.model_config["SHARDED_WO_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
                 k=wo_shape_ring[0],
                 n=wo_shape_ring[1],
@@ -982,21 +982,20 @@ class TtQwenModelArgs(TtModelArgs):
 
             # Use padded K and N
             self.model_config["W1W3_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
-                k=1280,
+                k=self.dim // 4,
                 n=3840,
             )
 
             # Use padded K and N
             self.model_config["W2_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
-                # k=3584,
-                k=3200,
-                n=6144 // 4,
+                k=3584,
+                n=self.dim_padded_24_cores // 4,
             )
 
             self.model_config["FF1_3_TG_RING_PROGCFG"] = self.matmul_1d_ring_config(
-                1,  # B
-                32,  # M
-                5120 // 4,  # K = 1280
+                1,
+                32,
+                self.dim // 4,
                 3840,  # Use padded N
                 RING_SIZE,
             )
@@ -1004,14 +1003,13 @@ class TtQwenModelArgs(TtModelArgs):
             self.model_config["FF2_TG_RING_PROGCFG"] = self.matmul_1d_ring_config(
                 1,
                 32,
-                # 3584,
-                3200,
-                6144 // 4,  # Use padded N
+                3584,
+                self.dim_padded_24_cores // 4,  # Use padded N
                 RING_SIZE,
             )
 
             self.model_config["SHARDED_FF12_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, 6144 // 4 // RING_SIZE),  # Use padded N
+                shape=(32, self.dim_padded_24_cores // 4 // RING_SIZE),  # Use padded N
                 core_grid=ring_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1056,7 +1054,7 @@ class TtQwenModelArgs(TtModelArgs):
             )
 
             self.model_config["FF2_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, 6144 // 4 // RING_SIZE),  # Use padded N
+                shape=(32, self.dim_padded_24_cores // 4 // RING_SIZE),  # Use padded N
                 core_grid=pf_mm_out_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1068,8 +1066,7 @@ class TtQwenModelArgs(TtModelArgs):
                 grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
             )
             LM_HEAD_RING_SIZE = 24
-            # self.lm_head_shape = (self.dim // 4, 151936 // 8)
-            self.lm_head_shape = (6144 // 4, 155648 // 8)
+            self.lm_head_shape = (self.dim // 4, 128 * 1024 // 8)
 
             lm_head_ring_core_range_set = ttnn.CoreRangeSet(
                 [
