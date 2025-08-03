@@ -5,6 +5,9 @@
 #pragma once
 
 #include <cstdint>
+#include <tt-metalium/fabric_edm_types.hpp>
+
+namespace lite_fabric {
 
 /*
 
@@ -63,30 +66,43 @@ struct LiteFabricConfig {
     // will stall until this value shows all eth cores are ready.
     volatile uint32_t primary_local_handshake = 0;
 
+    unsigned char padding1[12];
+
+    // Becomes 1 when the neighbour is ready
+    volatile uint32_t neighbour_handshake = 0;
+
     // X coordinate of the primary eth core on this chip
     volatile uint8_t primary_eth_core_x = 0;
 
     // Y coordinate of the primary eth core on this chip
     volatile uint8_t primary_eth_core_y = 0;
 
-    unsigned char padding1[8];
+    // This is the local primary core
+    volatile uint16_t is_primary = false;
 
-    // Becomes 1 when the neighbour is ready
-    volatile uint32_t neighbour_handshake = 0;
-
-    // This is the primary core
-    volatile uint32_t is_primary = false;
-
-    // Set to 1 to terminate
-    volatile uint32_t termination_signal = 0;
+    // This is on the MMIO
+    volatile uint16_t is_mmio = false;
 
     volatile InitState initial_state = InitState::UNKNOWN;
 
     volatile InitState current_state = InitState::UNKNOWN;
 
-    unsigned char padding[16];
+    // Set to 1 to terminate
+    volatile uint32_t termination_signal = 0;
+
+    unsigned char padding2[14];
+} __attribute__((packed));
+
+struct LiteFabricMemoryMap {
+    lite_fabric::LiteFabricConfig config;
+    lite_fabric::LiteFabricConfig config_out;
+    tt::tt_fabric::EDMChannelWorkerLocationInfo worker_location_info;
+    // ....
+    // Receiver and Sender buffers below
 };
 
 static_assert(sizeof(LiteFabricConfig) % 16 == 0);
 static_assert(offsetof(LiteFabricConfig, primary_local_handshake) % 16 == 0);
 static_assert(offsetof(LiteFabricConfig, neighbour_handshake) % 16 == 0);
+
+}  // namespace lite_fabric
