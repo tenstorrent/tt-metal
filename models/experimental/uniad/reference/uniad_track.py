@@ -6,7 +6,6 @@
 
 import torch
 import torch.nn as nn
-import warnings
 
 # from mmcv.runner import auto_fp16
 # from mmdet.models import DETECTORS
@@ -85,14 +84,7 @@ class UniADTrack(nn.Module):
         freeze_bev_encoder=False,
         queue_length=3,
     ):
-        super(UniADTrack, self).__init__(
-            img_backbone=img_backbone,
-            img_neck=img_neck,
-            pts_bbox_head=pts_bbox_head,
-            train_cfg=train_cfg,
-            test_cfg=test_cfg,
-            pretrained=pretrained,
-        )
+        super(UniADTrack, self).__init__()
 
         # ------mvx starting
 
@@ -180,10 +172,10 @@ class UniADTrack(nn.Module):
         else:
             raise ValueError(f"pretrained should be a dict, got {type(pretrained)}")
 
-        if self.with_img_backbone:
-            if img_pretrained is not None:
-                warnings.warn("DeprecationWarning: pretrained is a deprecated " "key, please consider using init_cfg.")
-                self.img_backbone.init_cfg = dict(type="Pretrained", checkpoint=img_pretrained)
+        # if self.with_img_backbone:
+        #     if img_pretrained is not None:
+        #         warnings.warn("DeprecationWarning: pretrained is a deprecated " "key, please consider using init_cfg.")
+        #         self.img_backbone.init_cfg = dict(type="Pretrained", checkpoint=img_pretrained)
 
         # -------------- mvx complte
 
@@ -231,10 +223,11 @@ class UniADTrack(nn.Module):
         )  # hyper-param for removing inactive queries
 
         self.query_interact = QueryInteractionModule(
-            qim_args,
+            # qim_args,
             dim_in=embed_dims,
             hidden_dim=embed_dims,
             dim_out=embed_dims,
+            update_query_pos=qim_args["update_query_pos"],
         )
 
         # {'type': 'DETRTrack3DCoder', 'post_center_range': [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0], 'pc_range': [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0], 'max_num': 300, 'num_classes': 10, 'score_threshold': 0.0, 'with_nms': False, 'iou_thres': 0.3}
@@ -249,10 +242,11 @@ class UniADTrack(nn.Module):
         )
 
         self.memory_bank = MemoryBank(
-            mem_args,
+            # mem_args,
             dim_in=embed_dims,
             hidden_dim=embed_dims,
             dim_out=embed_dims,
+            memory_bank_len=mem_args["memory_bank_len"],
         )
         self.mem_bank_len = 0 if self.memory_bank is None else self.memory_bank.max_his_length
         # self.criterion = build_loss(loss_cfg)
