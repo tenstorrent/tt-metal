@@ -207,7 +207,7 @@ jobs:
               echo "Triggering $workflow..."
               gh workflow run "$workflow" --ref "$PARENT_BRANCH_NAME" --repo "tenstorrent/tt-metal"
 
-              # Poll for run ID more efficiently
+              # Poll for run ID
               run_id=""
               for i in {1..12}; do  # Try for 60 seconds max
                 sleep 5
