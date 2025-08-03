@@ -23,8 +23,6 @@ from tt_metal.tools.profiler.common import (
     clear_profiler_runtime_artifacts,
 )
 
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
-
 PROG_EXMP_DIR = "programming_examples/profiler"
 TRACY_TESTS_DIR = "./tests/ttnn/tracy"
 
@@ -109,7 +107,6 @@ def get_function_name():
     return frame.f_code.co_name
 
 
-@skip_for_grayskull()
 def test_multi_op():
     OP_COUNT = 1000
     RUN_COUNT = 2
@@ -216,7 +213,6 @@ def test_full_buffer():
         assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
 
 
-@skip_for_blackhole()
 def test_dispatch_cores():
     OP_COUNT = 1
     RISC_COUNT = 1
@@ -289,8 +285,6 @@ def test_dispatch_cores():
 
 
 # Eth dispatch will be deprecated
-@skip_for_blackhole()
-@skip_for_grayskull()
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {"Ethernet CQ Dispatch": [590, 840, 1430, 1660, 2320], "Ethernet CQ Prefetch": [572, 4030]}
     devicesData = run_device_profiler_test(
@@ -334,7 +328,6 @@ def test_ethernet_dispatch_cores():
                 ), f"Wrong ethernet dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
 
 
-@skip_for_grayskull()
 def test_profiler_host_device_sync():
     TOLERANCE = 0.1
 
@@ -469,7 +462,6 @@ def test_noc_event_profiler():
         assert len(noc_trace_data) == 8
 
 
-@skip_for_blackhole()
 def test_fabric_event_profiler_unicast():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in ["wormhole_b0", "blackhole"]
@@ -527,7 +519,6 @@ def test_fabric_event_profiler_unicast():
     ), f"Incorrect number of fabric events found in noc trace: {fabric_event_count}, expected {EXPECTED_FABRIC_EVENT_COUNT}"
 
 
-@skip_for_blackhole()
 def test_fabric_event_profiler_1d_multicast():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in ["wormhole_b0", "blackhole"]
