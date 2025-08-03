@@ -97,7 +97,7 @@ class QueryInteractionModule(nn.Module):
         active_track_instances = self._update_track_embedding(active_track_instances)
         init_track_instances: Inescalationstances = data["init_track_instances"]
         merged_track_instances = Instances.cat([init_track_instances, active_track_instances])
-        return active_track_instances
+        return merged_track_instances
 
 
 # class QueryInteractionModule(nn.Module):
