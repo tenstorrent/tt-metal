@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.rmsnorm import RMSNorm
 
 
 class TtLlamaAttention(LightweightModule):
@@ -137,9 +139,13 @@ class TtLlamaAttention(LightweightModule):
         qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
 
         # Ring stuff
-        # 9216, 12288
+        # Llama3: 9216, 12288
+        # Qwen3: 6144, 12288
 
-        # [1, 1, 8192, 10240] -> [2304, 1536]
+        # Llama3: [1, 1, 8192, 10240] -> [2304, 1536]
+        # Qwen3: [1, 1, 5120, 10240] -> [1280, 1536]
+        print(f"qkv_cat.shape: {qkv_cat.shape}")
+        print(f"self.model_config['SHARDED_QKV_RING_MEMCFG']: {self.model_config['SHARDED_QKV_RING_MEMCFG']}")
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
             dtype=self.dtype,
@@ -171,6 +177,9 @@ class TtLlamaAttention(LightweightModule):
             configuration.dim // configuration.num_devices, configuration.dim
         )
 
+        logger.info(f"pt_wo.shape: {pt_wo.shape}")
+        logger.info(f"self.model_config['SHARDED_WO_RING_MEMCFG']: {self.model_config['SHARDED_WO_RING_MEMCFG']}")
+        logger.info(f"wo_mem_config: {wo_mem_config}")
         self.wo = ttnn.as_tensor(
             pt_wo,
             dtype=ttnn.bfloat8_b,
@@ -210,28 +219,48 @@ class TtLlamaAttention(LightweightModule):
             self.prefetch(prefetcher_setup, tt_ccl)
 
         # If we are using qk_norm, we need to add a layer norm to the q and k
-        if self.qk_norm:
-            q_norm_str = f"{layer_name}.q_norm.weight"
-            k_norm_str = f"{layer_name}.k_norm.weight"
+        q_norm_str = f"{layer_name}.q_norm"
+        k_norm_str = f"{layer_name}.k_norm"
 
-            self.q_norm = RMSNorm(
+        def norm_reshard(x, norm, mode):
+            """Hack until RMSNorm supports height-sharded output config"""
+            if mode == "decode":
+                mem_cfg = x.memory_config()
+                x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG, dtype=x.dtype)
+            x = norm(x, mode)
+            if mode == "decode":
+                x = ttnn.to_memory_config(x, mem_cfg, dtype=x.dtype)
+            return x
+
+        if f"{q_norm_str}.weight" in self.state_dict:
+            logger.info(f"Using q_norm: {q_norm_str}")
+            fn_q_norm = RMSNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
                 state_dict=self.state_dict,
-                state_dict_prefix=self.model_config[q_norm_str],
+                state_dict_prefix=None,
                 weight_cache_path=weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
-                weight_key="q_norm",
+                weight_key=q_norm_str,
             )
-            self.k_norm = RMSNorm(
+            self.q_norm = lambda x, mode: norm_reshard(x, fn_q_norm, mode)
+        else:
+            self.q_norm = lambda x, mode: x
+
+        if f"{k_norm_str}.weight" in self.state_dict:
+            logger.info(f"Using k_norm: {k_norm_str}")
+            fn_k_norm = RMSNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
                 state_dict=self.state_dict,
-                state_dict_prefix=self.model_config[k_norm_str],
+                state_dict_prefix=None,
                 weight_cache_path=weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
-                weight_key="k_norm",
+                weight_key=k_norm_str,
             )
+            self.k_norm = lambda x, mode: norm_reshard(x, fn_k_norm, mode)
+        else:
+            self.k_norm = lambda x, mode: x
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
@@ -339,6 +368,10 @@ class TtLlamaAttention(LightweightModule):
             qkv_memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
             use_optimal_ccl_for_llama=True,
         )
+
+        if self.qk_norm:
+            q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode")
+            k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode")
 
         # print("done create qkv heads")
         ttnn.deallocate(xqkv_fused_sharded)
@@ -507,6 +540,9 @@ class TtLlamaAttention(LightweightModule):
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
             ttnn.deallocate(q_heads_1QSD_pre_rot_bf8)
 
+        if self.qk_norm:
+            q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
+
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot,
             rot_mats[0],
@@ -515,6 +551,9 @@ class TtLlamaAttention(LightweightModule):
             is_decode_mode=False,
         )
         ttnn.deallocate(q_heads_1QSD_pre_rot)
+
+        if self.qk_norm:
+            k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
 
         if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             k_heads_1KSD_pre_rot_bf8 = k_heads_1KSD_pre_rot
