@@ -138,7 +138,6 @@ class SegDeformableTransformer(Transformer):
 
     def get_valid_ratio(self, mask):
         """Get the valid radios of feature maps of all  level."""
-        print("mask", mask)
         _, H, W = mask.shape
         valid_H = torch.sum(~mask[:, :, 0], 1)
         valid_W = torch.sum(~mask[:, 0, :], 1)
@@ -178,7 +177,6 @@ class SegDeformableTransformer(Transformer):
         lvl_pos_embed_flatten = []
         spatial_shapes = []
         for lvl, (feat, mask, pos_embed) in enumerate(zip(mlvl_feats, mlvl_masks, mlvl_pos_embeds)):
-            print("Iteraion:", lvl)
             bs, c, h, w = feat.shape
             spatial_shape = (h, w)
             spatial_shapes.append(spatial_shape)
@@ -196,23 +194,16 @@ class SegDeformableTransformer(Transformer):
         spatial_shapes = torch.as_tensor(spatial_shapes, dtype=torch.long, device=feat_flatten.device)
         # level_start_index = torch.cat((spatial_shapes.new_zeros(
         #     (1, )), spatial_shapes.prod(1).cumsum(0)[:-1]))
-        print("spatial_shapes", spatial_shapes)
         spatial_shapes_prod = spatial_shapes.prod(1)
         spatial_shapes_cumsum = spatial_shapes_prod.cumsum(0)
         spatial_shapes_cumsum_excl_last = spatial_shapes_cumsum[:-1]
-        print("spatial_shapes_cumsum_excl_last", spatial_shapes_cumsum_excl_last.shape, spatial_shapes_cumsum_excl_last)
         zeros = spatial_shapes.new_zeros((1,))
         level_start_index = torch.cat((zeros, spatial_shapes_cumsum_excl_last))
-        print("level_start_index", level_start_index)
-        print("before stack", mlvl_masks)
         valid_ratios = torch.stack([self.get_valid_ratio(m) for m in mlvl_masks], 1)
-        print("spatial_shapes", spatial_shapes, spatial_shapes.shape)
-        print("valid_ratios", valid_ratios, valid_ratios.shape)
         reference_points = self.get_reference_points(spatial_shapes, valid_ratios, device=feat.device)
 
         feat_flatten = feat_flatten.permute(1, 0, 2)  # (H*W, bs, embed_dims)
         lvl_pos_embed_flatten = lvl_pos_embed_flatten.permute(1, 0, 2)  # (H*W, bs, embed_dims)
-        print("valid_ratios", valid_ratios.shape, valid_ratios)
         memory = self.encoder(
             query=feat_flatten,
             key=None,
@@ -242,7 +233,6 @@ class SegDeformableTransformer(Transformer):
             pos_trans_out = self.pos_trans_norm(self.pos_trans(self.get_proposal_pos_embed(topk_coords_unact)))
             query_pos, query = torch.split(pos_trans_out, c, dim=2)
         else:
-            # print('query_embd',query_embed.shape, c)
             # query_embed N *(2C)
             query_pos, query = torch.split(query_embed, c, dim=1)
             query_pos = query_pos.unsqueeze(0).expand(bs, -1, -1)
@@ -254,16 +244,6 @@ class SegDeformableTransformer(Transformer):
         query = query.permute(1, 0, 2)
         memory = memory.permute(1, 0, 2)
         query_pos = query_pos.permute(1, 0, 2)
-        # print("Input Shapes Segformable:")
-        # print(f"  query: {query.shape}")
-        # print(f"  key: {None}")  # since it's explicitly None
-        # print(f"  value: {memory.shape}")
-        # print(f"  query_pos: {query_pos.shape}")
-        # print(f"  key_padding_mask: {mask_flatten.shape}")
-        # print(f"  reference_points: {reference_points.shape}")
-        # print(f"  spatial_shapes: {spatial_shapes.shape}")
-        # print(f"  level_start_index: {level_start_index.shape}")
-        # print(f"  valid_ratios: {valid_ratios.shape}")
 
         inter_states, inter_references = self.decoder(
             query=query,

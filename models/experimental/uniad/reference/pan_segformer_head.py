@@ -32,8 +32,6 @@ def IOU(intputs, targets):
 
 
 class SinePositionalEncoding(nn.Module):
-    print("SinePositionalEncoding executed")
-
     def __init__(
         self, num_feats, temperature=10000, normalize=False, scale=2 * math.pi, eps=1e-6, offset=0.0, init_cfg=None
     ):
@@ -50,7 +48,6 @@ class SinePositionalEncoding(nn.Module):
         self.offset = offset
 
     def forward(self, mask):
-        print("SinePositionalEncoding forward")
         # For convenience of exporting to ONNX, it's required to convert
         # `masks` from bool to int.
         mask = mask.to(torch.int)
@@ -106,7 +103,6 @@ class PansegformerHead(nn.Module):
         ),
         **kwargs,
     ):
-        print("PansegformerHead", PansegformerHead.__mro__)
         self.bev_h = bev_h
         self.bev_w = bev_w
         self.canvas_size = canvas_size
@@ -120,7 +116,6 @@ class PansegformerHead(nn.Module):
         self.quality_threshold_stuff = quality_threshold_stuff
         self.overlap_threshold_things = overlap_threshold_things
         self.overlap_threshold_stuff = overlap_threshold_stuff
-        print("self.as_two_stage", self.as_two_stage)
         if self.as_two_stage:
             transformer["as_two_stage"] = self.as_two_stage
         self.num_dec_things = 4  # thing_transformer_head['num_decoder_layers']
@@ -242,9 +237,7 @@ class PansegformerHead(nn.Module):
             #               size=feat.shape[-2:]).to(torch.bool).squeeze(0))
             img_masks_batched = img_masks[None]
             target_size = feat.shape[-2:]
-            print("Before img_masks_batched", img_masks_batched.shape)
             interpolated = F.interpolate(img_masks_batched, size=target_size)
-            print("After img_masks_batched", interpolated.shape)
             interpolated = interpolated.to(torch.bool)
             interpolated = interpolated.squeeze(0)
             mlvl_masks.append(interpolated)
@@ -269,15 +262,7 @@ class PansegformerHead(nn.Module):
             reg_branches=self.reg_branches if self.with_box_refine else None,
             cls_branches=self.cls_branches if self.as_two_stage else None,
         )
-        print(f"Shape of memory: {memory.shape}")
-        print(f"Shape of memory_pos: {memory_pos.shape}")
-        print(f"Shape of memory_mask: {memory_mask.shape}")
-        print(f"Shape of query_pos: {query_pos.shape}")
-        print(f"Shape of hs: {hs.shape}")
-        print(f"Shape of init_reference: {init_reference.shape}")
-        print(f"Shape of inter_references: {inter_references.shape}")
-        print(f"Shape of enc_outputs_class: {enc_outputs_class}")
-        print(f"Shape of enc_outputs_coord: {enc_outputs_coord}")
+
         memory = memory.permute(1, 0, 2)
         query = hs[-1].permute(1, 0, 2)
         query_pos = query_pos.permute(1, 0, 2)
@@ -296,14 +281,11 @@ class PansegformerHead(nn.Module):
             else:
                 reference = inter_references[lvl - 1]
             reference = inverse_sigmoid(reference)
-            print("reference after sigmoid", reference.shape)
             outputs_class = self.cls_branches[lvl](hs[lvl])
 
             tmp = self.reg_branches[lvl](hs[lvl])
 
             if reference.shape[-1] == 4:
-                print("reference", reference.shape)
-                print("tmp", tmp.shape)
                 tmp += reference
             else:
                 assert reference.shape[-1] == 2
@@ -313,9 +295,6 @@ class PansegformerHead(nn.Module):
             outputs_coords.append(outputs_coord)
 
         outputs_classes = torch.stack(outputs_classes)
-        # print("outputs_coordsoutputs_coords",outputs_coords)
-        for i in range(len(outputs_coords)):
-            print("outputs_coordsoutputs_coords", outputs_coords[i].shape)
         outputs_coords = torch.stack(outputs_coords)
 
         outs = {
@@ -397,21 +376,15 @@ class PansegformerHead(nn.Module):
 
     def _get_bboxes_single(self, cls_score, bbox_pred, img_shape, scale_factor, rescale=False):
         """ """
-        print("cls_score", type(cls_score), cls_score.shape)
-        print("bbox_pred", type(bbox_pred), bbox_pred.shape, bbox_pred.dtype)
         assert len(cls_score) == len(bbox_pred)
         max_per_img = 100
         # exclude background
         self.loss_cls = True
         if self.loss_cls:
             cls_score = cls_score.sigmoid()
-            print("max_per_img", max_per_img)
             scores, indexes = cls_score.view(-1).topk(max_per_img)
             det_labels = indexes % self.num_things_classes
             bbox_index = indexes // self.num_things_classes
-            print("det_labels", det_labels, det_labels.shape)
-            print("bbox_index", bbox_index, bbox_index.shape)
-            print("bbox_pred", bbox_pred)
             bbox_pred = bbox_pred[bbox_index]
         else:
             scores, det_labels = F.softmax(cls_score, dim=-1)[..., :-1].max(-1)
@@ -465,10 +438,7 @@ class PansegformerHead(nn.Module):
             index, bbox, labels = self._get_bboxes_single(cls_score, bbox_pred, img_shape, scale_factor, rescale)
 
             i = img_id
-            print("query torch: ", query.shape)
-            print("index: ", index, len(index), "i: ", i)
             thing_query = query[i : i + 1, index, :]
-            print("thing_query: ", thing_query.shape)
             thing_query_pos = query_pos[i : i + 1, index, :]
             joint_query = torch.cat([thing_query, self.stuff_query.weight[None, :, : self.embed_dims]], 1)
 
@@ -500,12 +470,10 @@ class PansegformerHead(nn.Module):
             scores_stuff = self.cls_stuff_branches[-1](stuff_query).sigmoid().reshape(-1)
 
             mask_pred = attn_map.reshape(-1, *hw_lvl[0])
-            print("mask_pred initial", mask_pred.shape)
 
             mask_pred = F.interpolate(mask_pred.unsqueeze(0), size=ori_shape[:2], mode="bilinear").squeeze(0)
 
             masks_all = mask_pred
-            print("masks_allmasks_all", masks_all.shape)
             # ss
             score_list.append(masks_all)
             drivable_list.append(masks_all[-1] > 0.5)
@@ -520,19 +488,14 @@ class PansegformerHead(nn.Module):
             ## mask wise merging
             seg_scores = (masks_all * seg_all.float()).sum((1, 2)) / sum_seg_all
             seg_scores = seg_scores**2
-            print("squared_scores", seg_scores.shape)
             scores_all *= seg_scores
 
-            print("scores_all", scores_all.shape)
             scores_all, index = torch.sort(scores_all, descending=True)
-            print("scores_all after sort", scores_all.shape, index.shape)
 
             masks_all = masks_all[index]
             labels_all = labels_all[index]
             bboxes_all = bboxes_all[index]
             seg_all = seg_all[index]
-            print("bboxes_all", bboxes_all.shape)
-            print("scores_all", scores_all.shape)
 
             bboxes_all[:, -1] = scores_all
 
@@ -549,7 +512,6 @@ class PansegformerHead(nn.Module):
             stuff_score_list.append(scores_st)
 
             results = torch.zeros((2, *mask_pred.shape[-2:]), device=mask_pred.device).to(torch.long)
-            print("results after zero", results.shape)
             id_unique = 1
             lane = torch.zeros((self.num_things_classes, *mask_pred.shape[-2:]), device=mask_pred.device).to(torch.long)
             lane_score = torch.zeros((self.num_things_classes, *mask_pred.shape[-2:]), device=mask_pred.device).to(

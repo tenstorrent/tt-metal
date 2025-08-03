@@ -3,21 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-# from mmcv.runner import auto_fp16
-# from mmdet.models import DETECTORS
 import copy
 import math
 import torch
 from torch import nn
 
-# from ..dense_heads.seg_head_plugin import IOU
-# from .uniad_track import UniADTrack
+
 from models.experimental.uniad.reference.planning_head import PlanningHeadSingleMode
 from models.experimental.uniad.reference.pan_segformer_head import PansegformerHead
 from models.experimental.uniad.reference.motion_head import MotionHead
 from models.experimental.uniad.reference.occ_head import OccHead
 
-# from mmdet.models.builder import build_head
+
 from einops import rearrange
 
 from models.experimental.uniad.reference.head import BEVFormerTrackHead

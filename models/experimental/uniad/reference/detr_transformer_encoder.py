@@ -1,8 +1,13 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 import torch
 from torch import nn
 from models.experimental.uniad.reference.utils import multi_scale_deformable_attn_pytorch
 from models.experimental.uniad.reference.ffn import FFN
 
+import warnings
 from typing import Optional
 
 
@@ -141,14 +146,17 @@ class DetrTransformerEncoder(nn.Module):
     ):
         super().__init__()
         self.layers = nn.ModuleList()
+
         for _ in range(num_layers):
-            attn = MultiScaleDeformableAttention(embed_dims, num_heads, num_levels, num_points, dropout)
-            ffn = FFN(embed_dims)
+            attentions = nn.ModuleList(
+                [MultiScaleDeformableAttention(embed_dims, num_heads, num_levels, num_points, dropout)]
+            )
+            ffns = nn.ModuleList([FFN(embed_dims)])
             norms = nn.ModuleList([nn.LayerNorm(embed_dims), nn.LayerNorm(embed_dims)])
-            layer = nn.ModuleDict({"attn": attn, "ffn": ffn, "norms": norms})
+            layer = nn.ModuleDict({"attentions": attentions, "ffns": ffns, "norms": norms})
             self.layers.append(layer)
 
-        self.post_norm = post_norm
+        self.post_norm = False
         self.embed_dims = embed_dims
 
     def forward(
@@ -156,33 +164,36 @@ class DetrTransformerEncoder(nn.Module):
         query,
         key=None,
         value=None,
-        identity=None,
         query_pos=None,
         key_padding_mask=None,
+        attn_masks=None,
+        query_key_padding_mask=None,
         reference_points=None,
         spatial_shapes=None,
         level_start_index=None,
         **kwargs,
     ):
         for i, layer in enumerate(self.layers):
-            identity = query
-            query = layer["attn"](
-                query=query,
-                key=key,
-                value=value,
+            temp_key = temp_value = query
+            query = layer["attentions"][0](
+                query,
+                temp_key,
+                temp_value,
+                identity=None,
                 query_pos=query_pos,
+                key_pos=query_pos,
+                attn_mask=None,
                 spatial_shapes=spatial_shapes,
                 reference_points=reference_points,
-                # level_start_index = level_start_index,
+                key_padding_mask=query_key_padding_mask,
+                **kwargs,
             )
-            query = layer["norms"][0](query + identity)
-
-            # if i == 0:
-            #     return query
             identity = query
-            query = layer["ffn"](query)
-            query = layer["norms"][1](query + identity)
 
-        # if self.post_norm is not None:
-        #     query = self.norms(query)
+            query = layer["norms"][0](query)
+
+            query = layer["ffns"][0](query)
+
+            query = layer["norms"][1](query)
+
         return query
