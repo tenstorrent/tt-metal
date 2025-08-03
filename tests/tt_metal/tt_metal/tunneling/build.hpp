@@ -5,10 +5,12 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace lite_fabric {
 
-void CompileLiteFabric(const std::string& root_dir, const std::string& out_dir);
+void CompileLiteFabric(
+    const std::string& root_dir, const std::string& out_dir, const std::vector<std::string>& defines = {});
 
 void LinkLiteFabric(const std::string& root_dir, const std::string& out_dir);
 
