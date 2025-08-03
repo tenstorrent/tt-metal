@@ -2,13 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import torch.nn as nn
 from typing import Union, Callable, Optional
 from torch import Tensor
 import torch.nn.functional as F
 
 import ttnn
+
+from models.experimental.uniad.tt.ttnn_multi_head_attention import TtMultiheadAttention
 
 
 class TtTransformerEncoderLayer:
@@ -32,17 +32,9 @@ class TtTransformerEncoderLayer:
         factory_kwargs = {"device": device, "dtype": dtype}
         self.parameters = parameters
         self.device = device
-        self.self_attn = nn.MultiheadAttention(
-            # parameters.self_attn,
-            # device,
-            d_model,
-            nhead,
-            dropout=dropout,
-            bias=bias,
-            batch_first=batch_first,
+        self.self_attn = TtMultiheadAttention(
+            device, parameters.self_attn, embed_dim=d_model, num_heads=nhead, batch_first=batch_first
         )
-        self.self_attn.load_state_dict(parameters["self_attn"].state_dict())
-        self.self_attn.eval()
         # Implementation of Feedforward model
         self.linear1 = ttnn.linear
         self.linear2 = ttnn.linear
@@ -68,19 +60,11 @@ class TtTransformerEncoderLayer:
         else:
             x = self.norm1(
                 x
-                + ttnn.from_torch(
-                    self.self_attn(
-                        ttnn.to_torch(x).to(dtype=torch.float),
-                        ttnn.to_torch(x).to(dtype=torch.float),
-                        ttnn.to_torch(x).to(dtype=torch.float),
-                        attn_mask=src_mask,
-                        key_padding_mask=src_key_padding_mask,
-                        is_causal=is_causal,
-                    )[0],
-                    device=self.device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat16,
-                ),
+                + self.self_attn(
+                    x,
+                    x,
+                    x,
+                )[0],
                 weight=self.parameters.norm1.weight,
                 bias=self.parameters.norm1.bias,
             )
