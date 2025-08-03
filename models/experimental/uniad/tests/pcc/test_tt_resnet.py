@@ -135,7 +135,7 @@ def create_uniad_model_resnet(model: ResNet, input_tensor, device=None):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
 def test_uniad_bottle_neck_layer_1(device, reset_seeds):
-    weights_path = "models/experimental/uniad/reference/uniad_base_e2e.pth"
+    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
 
     reference_model = ResNet(
         depth=101,
@@ -218,7 +218,7 @@ def test_uniad_bottle_neck_layer_1(device, reset_seeds):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
 def test_uniad_bottle_neck_layer3(device, reset_seeds):
-    weights_path = "models/experimental/uniad/reference/uniad_base_e2e.pth"
+    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
 
     reference_model = ResNet(
         depth=101,
@@ -302,7 +302,7 @@ def test_uniad_bottle_neck_layer3(device, reset_seeds):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
 def test_uniad_reslayer1(device, reset_seeds):
-    weights_path = "models/experimental/uniad/reference/uniad_base_e2e.pth"
+    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
 
     reference_model = ResNet(
         depth=101,
@@ -391,7 +391,7 @@ def test_uniad_reslayer1(device, reset_seeds):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
 def test_uniad_reslayer2(device, reset_seeds):
-    weights_path = "models/experimental/uniad/reference/uniad_base_e2e.pth"
+    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
 
     reference_model = ResNet(
         depth=101,
@@ -479,7 +479,7 @@ def test_uniad_reslayer2(device, reset_seeds):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
 def test_uniad_resnet(device, reset_seeds):
-    weights_path = "models/experimental/uniad/reference/uniad_base_e2e.pth"
+    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
 
     reference_model = ResNet(
         depth=101,

@@ -23,7 +23,7 @@ from models.experimental.uniad.tt.model_preprocessing_perception_transformer imp
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_perception_transformer_get_bev_features_function(device):
-    weights_path = "models/experimental/uniad/reference/uniad_base_e2e.pth"
+    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
 
     reference_model = PerceptionTransformer(
         num_feature_levels=4,
@@ -202,7 +202,7 @@ def test_perception_transformer_get_bev_features_function(device):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_perception_transformer_get_states_and_refs(device):
-    weights_path = "models/experimental/uniad/reference/uniad_base_e2e.pth"
+    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
 
     reference_model = PerceptionTransformer(
         num_feature_levels=4,
@@ -301,7 +301,7 @@ def test_perception_transformer_get_states_and_refs(device):
 
 
 # def test_perception_transformer():
-#     weights_path = "models/experimental/uniad/reference/uniad_base_e2e.pth"
+#     weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
 
 #     reference_model = PerceptionTransformer(
 #         num_feature_levels=4,

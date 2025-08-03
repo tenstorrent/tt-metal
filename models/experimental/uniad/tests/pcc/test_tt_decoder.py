@@ -45,7 +45,7 @@ def custom_preprocessor(model, name):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
 def test_uniad_decoder(device, reset_seeds):
-    weights_path = "models/experimental/uniad/reference/uniad_base_e2e.pth"
+    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
 
     reference_model = DetectionTransformerDecoder(num_layers=6, embed_dim=256, num_heads=8)
     weights = torch.load(weights_path, map_location=torch.device("cpu"))
