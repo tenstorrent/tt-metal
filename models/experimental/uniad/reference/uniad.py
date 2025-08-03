@@ -477,7 +477,7 @@ class UniAD(nn.Module):
         outs_occ = dict()
         if self.with_occ_head:
             occ_no_query = outs_motion["track_query"].shape[1] == 0
-            outs_occ = self.occ_head.forward_test(
+            outs_occ = self.occ_head(
                 bev_embed,
                 outs_motion,
                 no_query=occ_no_query,
@@ -546,7 +546,7 @@ class UniAD(nn.Module):
             img_feats = list(img_feats.values())
         if True:  # self.with_img_neck:
             img_feats = self.img_neck(img_feats)
-
+        # img_feats=[torch.randn([6, 256, 80, 45]), torch.randn([6, 256, 40, 23]), torch.randn([6, 256, 20, 12]), torch.randn([6, 256, 10, 6])]
         img_feats_reshaped = []
         for img_feat in img_feats:
             _, c, h, w = img_feat.size()
@@ -784,7 +784,6 @@ class UniAD(nn.Module):
             self.prev_bev = None
             track_instances = self._generate_empty_tracks()
             time_delta, l2g_r1, l2g_t1, l2g_r2, l2g_t2 = None, None, None, None, None
-
         else:
             track_instances = self.test_track_instances
             time_delta = timestamp - self.timestamp
