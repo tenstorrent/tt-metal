@@ -49,7 +49,7 @@ env:
   SUBMODULE_PATH: tt_metal/third_party/tt_llk
   WORKFLOW_TIMEOUT: ${{ inputs.workflow_timeout || 240 }}
   MAX_RETRIES: 3
-  POLL_INTERVAL: 60
+  POLL_INTERVAL: 120
 
 permissions:
   contents: write
