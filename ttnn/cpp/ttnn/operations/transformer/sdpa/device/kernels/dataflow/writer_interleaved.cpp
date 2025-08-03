@@ -21,12 +21,13 @@ void kernel_main() {
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(10);
     constexpr uint32_t k_num_chunks = get_compile_time_arg_val(11);
     constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(12);
-    constexpr uint32_t scale_val = get_compile_time_arg_val(13);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(14);
-    constexpr uint32_t is_causal = get_compile_time_arg_val(15) == 1;
-    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(16) == 1;
-    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(17) == 1;
-    constexpr uint32_t is_chunked = get_compile_time_arg_val(18) == 1;
+    constexpr uint32_t constant_offset_scalar_packed = get_compile_time_arg_val(13);
+    constexpr uint32_t scale_val = get_compile_time_arg_val(14);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(15);
+    constexpr uint32_t is_causal = get_compile_time_arg_val(16) == 1;
+    constexpr uint32_t use_provided_mask = get_compile_time_arg_val(17) == 1;
+    constexpr uint32_t use_padded_mask = get_compile_time_arg_val(18) == 1;
+    constexpr uint32_t is_chunked = get_compile_time_arg_val(19) == 1;
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_id = get_arg_val<uint32_t>(1);
@@ -59,9 +60,11 @@ void kernel_main() {
     uint32_t barrier_count = 0;
 
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
+    constexpr uint32_t cb_constant_offset_in = tt::CBIndex::c_4;
     constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;
 
     generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
+    generate_bcast_col_scalar(cb_constant_offset_in, constant_offset_scalar_packed);
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     for (uint32_t nb = local_batch_start; nb < local_batch_end; ++nb) {

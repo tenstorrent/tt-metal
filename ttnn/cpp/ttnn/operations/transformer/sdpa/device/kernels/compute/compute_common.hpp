@@ -101,7 +101,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
 }
 
 template <uint32_t in0_cb, uint32_t rows, uint32_t cols, uint32_t scale_fp32>
-void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
+void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, bool is_const_cb) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -110,7 +110,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
 
     exp_tile_init<true, true, scale_fp32>();
     cb_wait_front(in0_cb, rows * cols);
-    cb_wait_front(in1_cb, rows);
+    cb_wait_front(in1_cb, is_const_cb ? 1 : rows);
     cb_reserve_back(reduce_cb, rows);
 
     constexpr uint32_t dst_tiles = SUB_EXP_GRANULARITY;
@@ -120,7 +120,8 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
-                sub_tiles_bcast_cols(in0_cb, in1_cb, in0_index, i, j);
+                uint32_t tile_index_1 = is_const_cb ? 0 : i;
+                sub_tiles_bcast_cols(in0_cb, in1_cb, in0_index, tile_index_1, j);
                 exp_tile<true, true>(j);
                 in0_index++;
             }
@@ -309,14 +310,14 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num
 }
 
 template <uint32_t scale_fp32>
-void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
+void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles, bool is_const_cb) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: out_cb has num_tiles produced
     // Postcondition: in0_cb and in1_cb has num_tiles produced
 
     sub_tiles_init(in0_cb, in1_cb);
     exp_tile_init<EXP_APPROX_MODE, false>();
-    cb_wait_front(in0_cb, num_tiles);
+    cb_wait_front(in0_cb, is_const_cb ? 1 : num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
 
@@ -325,8 +326,8 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         acquire_dst();
-
-        sub_tiles(in0_cb, in1_cb, i, i, 0);
+        uint32_t tile_index_1 = is_const_cb ? 0 : i;
+        sub_tiles(in0_cb, in1_cb, tile_index_1, i, 0);
 
         exp_tile<EXP_APPROX_MODE, false, true, true>(0, static_cast<int>(VectorMode::C), scale_bf16);
 

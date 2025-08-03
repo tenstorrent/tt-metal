@@ -320,6 +320,11 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     class bfloat16 bfloat_identity_scalar(1.0f);
     uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
 
+    // Constant offset for SDPA optimization (44.25)
+    class bfloat16 bfloat_constant_offset_scalar(44.25f);
+    uint32_t packed_constant_offset_scalar =
+        pack_two_bfloat16_into_uint32({bfloat_constant_offset_scalar, bfloat_constant_offset_scalar});
+
     union {
         float f;
         uint32_t u;
@@ -364,6 +369,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         Sk_chunk_t,
         k_num_chunks,
         packed_identity_scalar,
+        packed_constant_offset_scalar,
         scale_union.u,
         num_cores,
         (std::uint32_t)is_causal,
@@ -508,6 +514,10 @@ operation::ProgramWithCallbacks sdpa_multi_core(
     auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_5, scalar_df}})
                             .set_page_size(tt::CBIndex::c_5, scalar_tile_size);
     auto cb_in5_id = CreateCircularBuffer(program, core_grid, c_in5_config);
+    // constant offset input (44.25)
+    auto c_in4_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_4, scalar_df}})
+                            .set_page_size(tt::CBIndex::c_4, scalar_tile_size);
+    auto cb_in4_id = CreateCircularBuffer(program, core_grid, c_in4_config);
     // identity column input
     auto c_in7_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_7, scalar_df}})
                             .set_page_size(tt::CBIndex::c_7, scalar_tile_size);
