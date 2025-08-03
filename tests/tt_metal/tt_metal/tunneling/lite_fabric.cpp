@@ -52,6 +52,8 @@ uint8_t my_logical_y_ __attribute__((used));
 uint8_t my_relative_x_ __attribute__((used));
 uint8_t my_relative_y_ __attribute__((used));
 
+void noc_local_state_init(uint8_t);
+
 int main() {
     configure_csr();
 

@@ -48,7 +48,8 @@ std::string GetCommonOptions() {
 
 namespace lite_fabric {
 
-void CompileLiteFabric(const std::string& root_dir, const std::string& out_dir) {
+void CompileLiteFabric(
+    const std::string& root_dir, const std::string& out_dir, const std::vector<std::string>& extra_defines) {
     const std::string lite_fabric_src = fmt::format("{}/tests/tt_metal/tt_metal/tunneling/lite_fabric.cpp", root_dir);
 
     std::vector<std::string> includes = {
@@ -91,6 +92,8 @@ void CompileLiteFabric(const std::string& root_dir, const std::string& out_dir) 
         // Fabric
         fmt::format("ROUTING_MODE={}", ROUTING_MODE_1D),
     };
+
+    defines.insert(defines.end(), extra_defines.begin(), extra_defines.end());
 
     std::ostringstream oss;
     oss << "riscv32-tt-elf-g++ ";
