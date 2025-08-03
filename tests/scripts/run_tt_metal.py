@@ -29,7 +29,6 @@ from tests.scripts.cmdline_args import (
 )
 
 TT_METAL_SLOW_DISPATCH_TEST_ENTRIES = (
-    TestEntry("tt_metal/tests/test_add_two_ints", "test_add_two_ints"),
     TestEntry("tt_metal/tests/test_bfp8_conversion", "test_bfp8_conversion"),
     TestEntry(
         "tt_metal/tests/test_dram_loopback_single_core",

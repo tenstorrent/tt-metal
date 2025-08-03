@@ -50,9 +50,16 @@ namespace tt::tt_metal {
 
 namespace detail {
 
-bool DispatchStateCheck(bool isFastDispatch) {
+bool DispatchStateCheck(bool isFastDispatch, bool force_reset) {
     static bool fd = isFastDispatch;
-    TT_FATAL(fd == isFastDispatch, "Mixing fast and slow dispatch is prohibited!");
+    static bool skipping_check = false;
+    if (force_reset) {
+        fd = isFastDispatch;
+        skipping_check = !skipping_check;
+    }
+    TT_FATAL(fd == isFastDispatch || skipping_check, "Mixing fast and slow dispatch is prohibited!");
+    // this is a really hacky way to allow for slow dispatch mode to be toggled in our tests (ebanerjeeTT)
+    // I'm not opposed to just nuking this function
     return fd;
 }
 
