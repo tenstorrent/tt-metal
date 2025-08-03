@@ -84,7 +84,7 @@ void MAIN {
                 cb_push_back(out_cb_id, onetile);
 
                 cb_pop_front(cb_intermed2, onetile);
-                tilize_uninit(cb_intermed2, out_cb_id);
+                tilize_uninit_with_dt(cb_intermed2, cb_in1, out_cb_id);
 
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
                 // Workaround, needs to be reverted to the following when fix is found:
