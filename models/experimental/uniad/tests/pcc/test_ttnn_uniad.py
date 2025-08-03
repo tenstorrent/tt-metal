@@ -6,7 +6,7 @@ from models.experimental.uniad.reference.utils import LiDARInstance3DBoxes
 
 
 def test_uniad_reference():
-    weights_path = "models/experimental/uniad/reference/uniad_base_e2e.pth"
+    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
     reference_model = UniAD(
         True,
         True,

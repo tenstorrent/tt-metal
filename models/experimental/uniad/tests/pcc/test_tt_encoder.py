@@ -22,7 +22,7 @@ def test_uniad_encoder(
     device,
     reset_seeds,
 ):
-    weights_path = "models/experimental/uniad/reference/uniad_base_e2e.pth"
+    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
 
     torch_model = encoder.BEVFormerEncoder(pc_range=[-15.0, -30.0, -2.0, 15.0, 30.0, 2.0])
 

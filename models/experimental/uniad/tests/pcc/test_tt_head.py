@@ -19,7 +19,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
 def test_head_get_detections(device, reset_seeds):
-    weights_path = "models/experimental/uniad/reference/uniad_base_e2e.pth"
+    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
 
     reference_model = BEVFormerTrackHead(
         args=(),
@@ -141,7 +141,7 @@ def test_head_get_detections(device, reset_seeds):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
 def test_head_get_bev_features(device, reset_seeds):
-    weights_path = "models/experimental/uniad/reference/uniad_base_e2e.pth"
+    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
 
     reference_model = BEVFormerTrackHead(
         args=(),
@@ -329,7 +329,7 @@ def test_head_get_bev_features(device, reset_seeds):
 
 
 # def test_head_reference():
-#     weights_path = "models/experimental/uniad/reference/uniad_base_e2e.pth"
+#     weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
 
 #     reference_model = BEVFormerTrackHead(
 #       args=(),
