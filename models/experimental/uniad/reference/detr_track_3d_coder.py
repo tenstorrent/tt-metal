@@ -79,12 +79,10 @@ class DETRTrack3DCoder(BaseBBoxCoder):
         if self.with_nms:
             boxes_for_nms = xywhr2xyxyr(img_metas[0]["box_type_3d"](final_box_preds[:, :], 9).bev)
             nms_mask = boxes_for_nms.new_zeros(boxes_for_nms.shape[0]) > 0
-            # print(self.nms_iou_thres)
             try:
                 selected = nms_bev(boxes_for_nms, final_scores, thresh=self.nms_iou_thres)
                 nms_mask[selected] = True
             except:
-                print("Error", boxes_for_nms, final_scores)
                 nms_mask = boxes_for_nms.new_ones(boxes_for_nms.shape[0]) > 0
         if self.post_center_range is not None:
             self.post_center_range = torch.tensor(self.post_center_range, device=scores.device)
