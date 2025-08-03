@@ -633,3 +633,17 @@ class Instances:
         return s
 
     __repr__ = __str__
+
+
+def bivariate_gaussian_activation_plan_head(ip):
+    mu_x = ip[..., 0:1]
+    mu_y = ip[..., 1:2]
+    # sig_x = ip[..., 2:] # empty tensors
+    # sig_y = ip[..., 3:]
+    # rho = ip[..., 4:]
+    # sig_x = ttnn.exp(sig_x)
+    # sig_y = ttnn.exp(sig_y)
+    # rho = ttnn.tanh(rho)
+    # out = ttnn.concat([mu_x, mu_y, sig_x, sig_y, rho], dim=-1)
+    out = ttnn.concat([mu_x, mu_y], dim=-1)
+    return out
