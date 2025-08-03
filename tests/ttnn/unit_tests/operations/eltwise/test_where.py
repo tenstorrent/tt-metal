@@ -23,18 +23,17 @@ def torch_equal_nan(a, b):
 @pytest.mark.parametrize(
     "c_shape, t_shape, f_shape",
     [
-        ((32, 128), (32, 1), (32, 128)),  # LLK - 32 height (1 tile high)
-        ((64, 1), (64, 128), (64, 128)),  # LLK - 64 height (2 tiles high)
-        # ((3, 2, 3, 64, 128), (3, 2, 3, 64, 128), (3, 2, 3, 64, 128)),  # LLK
-        # ((256,), (256,), (256,)),  # LLK
+        ((2, 3, 64, 128), (2, 3, 64, 128), (2, 3, 64, 128)),  # LLK
+        ((3, 2, 3, 64, 128), (3, 2, 3, 64, 128), (3, 2, 3, 64, 128)),  # LLK
+        ((256,), (256,), (256,)),  # LLK
     ],
 )
-@pytest.mark.parametrize("scalar", [15.5])
-@pytest.mark.parametrize("variant", ["TTT"])
-@pytest.mark.parametrize("condition", [1])
+@pytest.mark.parametrize("scalar", [15.5, float("nan"), float("inf"), 10.0, 5.0, -11.33])
+@pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
+@pytest.mark.parametrize("condition", [1, 0])
 def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, device):
     torch.manual_seed(0)
-    C = torch.randn(c_shape, dtype=torch.bfloat16)
+    C = torch.ones(c_shape, dtype=torch.float32) * condition
     if variant == "TTS":
         T = torch.randn(t_shape, dtype=torch.float32)
         F = scalar
@@ -42,12 +41,12 @@ def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, devic
         T = scalar
         F = torch.randn(f_shape, dtype=torch.float32)
     elif variant == "TTT":
-        T = torch.randn(t_shape, dtype=torch.bfloat16)
-        F = torch.ones(f_shape, dtype=torch.bfloat16) * 10
+        T = torch.randn(t_shape, dtype=torch.float32)
+        F = torch.ones(f_shape, dtype=torch.float32) * 10
     golden = torch.where(C.bool(), T, F)
     print(f"golden shape: {golden.shape}")
 
-    ttnn_C = ttnn.from_torch(C, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     if variant == "TTS":
         ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
         ttnn_F = scalar
@@ -55,8 +54,8 @@ def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, devic
         ttnn_T = scalar
         ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     elif variant == "TTT":
-        ttnn_T = ttnn.from_torch(T, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        ttnn_F = ttnn.from_torch(F, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
     result = ttnn.to_torch(ttnn_result)
 

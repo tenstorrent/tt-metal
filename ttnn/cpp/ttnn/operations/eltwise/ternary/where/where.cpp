@@ -180,16 +180,8 @@ Tensor WhereOperation::invoke(
         } else if (is_value_true_Tensor && !is_value_false_Tensor) {
             // TTS case: tensor-tensor-scalar
             const auto& t_true = std::get<Tensor>(value_true);
-            // For TTS case, we only need to check if predicate and t_true can be broadcasted
-            // Create a dummy tensor with same shape as predicate for broadcast checking
-            if (ternary_utils::have_same_shape(t_true, predicate) ||
-                ternary_utils::get_where_broadcast_type(predicate, t_true, predicate) ==
-                    ternary_utils::LocalWhereBroadcastType::COL_BCAST) {
-                if (ternary_utils::have_same_shape(t_true, predicate)) {
-                    log_info(tt::LogOp, "Where LLK - TTS (same shape)");
-                } else {
-                    log_info(tt::LogOp, "Where LLK - TTS (column broadcast)");
-                }
+            if (ternary_utils::have_same_shape(t_true, predicate)) {
+                log_info(tt::LogOp, "Where LLK - TTS (same shape)");
                 float scalar_false = std::get<float>(value_false);
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(predicate.dtype());
@@ -205,15 +197,8 @@ Tensor WhereOperation::invoke(
         } else if (!is_value_true_Tensor && is_value_false_Tensor) {
             // TST case: tensor-scalar-tensor
             const auto& t_false = std::get<Tensor>(value_false);
-            // For TST case, we only need to check if predicate and t_false can be broadcasted
-            if (ternary_utils::have_same_shape(predicate, t_false) ||
-                ternary_utils::get_where_broadcast_type(predicate, predicate, t_false) ==
-                    ternary_utils::LocalWhereBroadcastType::COL_BCAST) {
-                if (ternary_utils::have_same_shape(predicate, t_false)) {
-                    log_info(tt::LogOp, "Where LLK - TST (same shape)");
-                } else {
-                    log_info(tt::LogOp, "Where LLK - TST (column broadcast)");
-                }
+            if (ternary_utils::have_same_shape(predicate, t_false)) {
+                log_info(tt::LogOp, "Where LLK - TST (same shape)");
                 float scalar_true = std::get<float>(value_true);
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(predicate.dtype());
