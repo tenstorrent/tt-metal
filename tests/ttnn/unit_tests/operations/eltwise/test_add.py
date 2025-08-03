@@ -585,3 +585,19 @@ def test_add_with_sub_devices(device, input_a_sharded, input_b_sharded, out_shar
     output_tensor = ttnn.to_torch(output_tensor)
     assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
     assert output_tensor.shape == shape
+
+
+@pytest.mark.parametrize("h", [32, 64])
+@pytest.mark.parametrize("w", [32, 64])
+def test_add_1m(h, w, device):
+    torch.manual_seed(0)
+    a = torch.ones(1, 1) * 1_000_000
+    b = torch.ones(h, w)
+    torch_output_tensor = a + b
+
+    ta = ttnn.from_torch(a, device=device, layout=ttnn.TILE_LAYOUT)
+    tb = ttnn.from_torch(b, device=device, layout=ttnn.TILE_LAYOUT)
+    tc = ttnn.add(ta, tb, use_legacy=False)
+
+    output = ttnn.to_torch(tc)
+    assert_with_pcc(torch_output_tensor, output)
