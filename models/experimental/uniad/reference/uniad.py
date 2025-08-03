@@ -341,7 +341,7 @@ class UniAD(nn.Module):
                 group_id_list=[[0, 1, 2, 3, 4], [6, 7], [8], [5, 9]],
                 pc_range=[-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
                 use_nonlinear_optimizer=True,
-                anchor_info_path="models/experimental/uniad/reference/motion_head/motion_anchor_infos_mode6.pkl",
+                anchor_info_path="models/experimental/uniad/reference/motion_anchor_infos_mode6.pkl",
                 loss_traj={
                     "type": "TrajLoss",
                     "use_variance": True,
