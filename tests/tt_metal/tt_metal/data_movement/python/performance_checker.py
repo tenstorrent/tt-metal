@@ -4,7 +4,6 @@
 from loguru import logger  # type: ignore
 
 
-# FIX THIS prior to merging
 class PerformanceChecker:
     def __init__(self, dm_stats, arch="blackhole", verbose=False, test_bounds=None, test_id_to_name=None):
         self.dm_stats = dm_stats
