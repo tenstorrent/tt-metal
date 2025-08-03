@@ -303,6 +303,9 @@ run_yolov8x_perf() {
 
   pytest -n auto --disable-warnings models/demos/yolov8x/demo/demo.py --timeout 600
 
+  # Dataset Evaluation
+  pytest -n auto --disable-warnings models/experimental/yolo_eval/evaluate.py::test_yolov8x[res0-device_params0-tt_model] --timeout 600
+
 }
 run_yolov4_perf() {
 ## Removed coco dataset evaluation for now because CIv2 does not support downloading of the dataset.
@@ -327,8 +330,8 @@ run_vgg_unet_demo() {
  pytest -n auto --disable-warnings models/demos/vgg_unet/demo/demo.py --timeout 600
 
  # Dataset Evaluation
- pytest -n auto --disable-warnings models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet --timeout 600
-
+ pytest -n auto --disable-warnings models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet[device_params0-res0-1-pretrained_weight_true-tt_model] --timeout 600
+ pytest -n auto --disable-warnings models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp[wormhole_b0-device_params0-res0-1-pretrained_weight_true-tt_model] --timeout 600
 }
 
 

@@ -5,16 +5,12 @@
 
 ### Note:
 
-- On N300, Make sure to use `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml` with the pytest.
 
-- Or, make sure to set the following environment variable in the terminal:
-  ```
-  export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-  ```
-- To obtain the perf reports through profiler, please build with following command:
-  ```
-  ./build_metal.sh -p
-  ```
+To obtain the perf reports through profiler, please build with following command:
+```
+./build_metal.sh -p
+```
+
 
 ### Introduction
 YOLOv8 is one of the recent iterations in the YOLO series of real-time object detectors, offering cutting-edge performance in terms of accuracy and speed.
@@ -101,6 +97,16 @@ pytest --disable-warnings models/demos/yolov8x/tests/pcc/test_yolov8x.py::test_y
   pytest --disable-warnings models/demos/yolov8x/demo/demo.py::test_demo_dataset_dp
   ```
 
+
+### Performant Data evaluation with Trace+2CQ:
+
+#### Single Device (BS=1):
+
+Use the following command to run the performant evaluation with Trace+2CQs:
+
+```sh
+pytest models/experimental/yolo_eval/evaluate.py::test_yolov8x[res0-device_params0-tt_model]
+```
 
 #### Note: The post-processing is performed using PyTorch.
 
