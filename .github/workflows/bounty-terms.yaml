@@ -1,0 +1,13 @@
+name: Bounty Terms Workflow
+
+on:
+  issues:
+    types:
+      - assigned
+
+permissions:
+  issues: write
+
+jobs:
+  call-central-workflow:
+    uses: tenstorrent/tt-github-actions/.github/workflows/bounty-terms.yml@main
