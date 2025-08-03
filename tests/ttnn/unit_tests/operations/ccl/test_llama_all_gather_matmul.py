@@ -23,8 +23,8 @@ from tracy import signpost
 
 SUB_DEVICE_CRS = ttnn.CoreRangeSet(
     [
-        ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 3)),
-        ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(0, 7)),
+        # ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 3)),
+        # ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(0, 7)),
         ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
         ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
     ]
@@ -224,8 +224,7 @@ def run_llama_all_gather_matmul_impl(
     # )
     intermediate_core_range_set = ttnn.CoreRangeSet(
         [
-            ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(0, 3)),
-            ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(0, 7)),
+            ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 3)),
         ]
     )
     aggregated_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
