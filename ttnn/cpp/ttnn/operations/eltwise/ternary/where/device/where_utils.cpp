@@ -86,26 +86,37 @@ std::map<std::string, std::string> make_ternary_dataflow_defines(
     const DataType predicate_dtype, const DataType value_true_dtype, const DataType value_false_dtype) {
     std::map<std::string, std::string> defines;
 
-    // Set up FILL_TILE_WITH_FIRST_COLUMN defines for value_true (cb_id_in1)
-    if (value_true_dtype == DataType::FLOAT32) {
+    // Set up FILL_TILE_WITH_FIRST_COLUMN defines for predicate (cb_id_in0)
+    if (predicate_dtype == DataType::FLOAT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
-    } else if (value_true_dtype == DataType::INT32) {
+    } else if (predicate_dtype == DataType::INT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
-    } else if (value_true_dtype == DataType::UINT32) {
+    } else if (predicate_dtype == DataType::UINT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
     } else {
         defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column_bfloat16";
     }
 
-    // Set up FILL_TILE_WITH_FIRST_COLUMN_B defines for value_false (cb_id_in2)
-    if (value_false_dtype == DataType::FLOAT32) {
+    // Set up FILL_TILE_WITH_FIRST_COLUMN_B defines for value_true (cb_id_in1)
+    if (value_true_dtype == DataType::FLOAT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
-    } else if (value_false_dtype == DataType::INT32) {
+    } else if (value_true_dtype == DataType::INT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
-    } else if (value_false_dtype == DataType::UINT32) {
+    } else if (value_true_dtype == DataType::UINT32) {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column";
     } else {
         defines["FILL_TILE_WITH_FIRST_COLUMN_B"] = "fill_tile_with_first_column_bfloat16";
+    }
+
+    // Set up FILL_TILE_WITH_FIRST_COLUMN_C defines for value_false (cb_id_in2)
+    if (value_false_dtype == DataType::FLOAT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column";
+    } else if (value_false_dtype == DataType::INT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column";
+    } else if (value_false_dtype == DataType::UINT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column";
+    } else {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column_bfloat16";
     }
 
     return defines;

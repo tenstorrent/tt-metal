@@ -13,14 +13,16 @@ void kernel_main() {
     uint32_t src2_addr = get_arg_val<uint32_t>(2);
     uint32_t num_tiles = get_arg_val<uint32_t>(3);
     uint32_t start_id = get_arg_val<uint32_t>(4);
+    uint32_t output_width_tiles = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(3);
     constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(5);
 
     // Broadcast flags - compile time args
-    constexpr bool bcast_in1 = get_compile_time_arg_val(6) == 1;  // value_true broadcast
-    constexpr bool bcast_in2 = get_compile_time_arg_val(7) == 1;  // value_false broadcast
+    constexpr bool bcast_predicate = get_compile_time_arg_val(6) == 1;  // predicate broadcast
+    constexpr bool bcast_in1 = get_compile_time_arg_val(7) == 1;        // value_true broadcast
+    constexpr bool bcast_in2 = get_compile_time_arg_val(8) == 1;        // value_false broadcast
 
     uint32_t l1_write_addr_in0;
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
@@ -46,18 +48,31 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     for (uint32_t tile_id = start_id; tile_id < start_id + num_tiles; tile_id++) {
-        // Read predicate (always full)
+        // Read predicate
         cb_reserve_back(cb_id_in0, onetile);
         l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-        noc_async_read_tile(tile_id, s0, l1_write_addr_in0);
+        if constexpr (bcast_predicate) {
+            // For broadcast, map to the correct source tile based on row
+            uint32_t tile_row = tile_id / output_width_tiles;  // Which row of tiles we're in
+            uint32_t source_tile_id = tile_row;                // Source has only 1 tile per row
+            noc_async_read_tile(source_tile_id, s0, l1_write_addr_in0);
+        } else {
+            noc_async_read_tile(tile_id, s0, l1_write_addr_in0);
+        }
+        noc_async_read_barrier();
+        if constexpr (bcast_predicate) {
+            FILL_TILE_WITH_FIRST_COLUMN(cb_id_in0);
+        }
+        cb_push_back(cb_id_in0, onetile);
 
         // Read value_true
         cb_reserve_back(cb_id_in1, onetile);
         l1_write_addr_in1 = get_write_ptr(cb_id_in1);
         if constexpr (bcast_in1) {
-            // For broadcast, read only the first column of this tile
-            uint32_t col_tile_id = (tile_id / 32) * 32;  // Get tile ID for first column in row
-            noc_async_read_tile(col_tile_id, s1, l1_write_addr_in1);
+            // For broadcast, map to the correct source tile based on row
+            uint32_t tile_row = tile_id / output_width_tiles;  // Which row of tiles we're in
+            uint32_t source_tile_id = tile_row;                // Source has only 1 tile per row
+            noc_async_read_tile(source_tile_id, s1, l1_write_addr_in1);
         } else {
             noc_async_read_tile(tile_id, s1, l1_write_addr_in1);
         }
@@ -66,9 +81,10 @@ void kernel_main() {
         cb_reserve_back(cb_id_in2, onetile);
         l1_write_addr_in2 = get_write_ptr(cb_id_in2);
         if constexpr (bcast_in2) {
-            // For broadcast, read only the first column of this tile
-            uint32_t col_tile_id = (tile_id / 32) * 32;  // Get tile ID for first column in row
-            noc_async_read_tile(col_tile_id, s2, l1_write_addr_in2);
+            // For broadcast, map to the correct source tile based on row
+            uint32_t tile_row = tile_id / output_width_tiles;  // Which row of tiles we're in
+            uint32_t source_tile_id = tile_row;                // Source has only 1 tile per row
+            noc_async_read_tile(source_tile_id, s2, l1_write_addr_in2);
         } else {
             noc_async_read_tile(tile_id, s2, l1_write_addr_in2);
         }
@@ -77,13 +93,12 @@ void kernel_main() {
 
         // Apply broadcast fill if needed
         if constexpr (bcast_in1) {
-            FILL_TILE_WITH_FIRST_COLUMN(cb_id_in1);
+            FILL_TILE_WITH_FIRST_COLUMN_B(cb_id_in1);
         }
         if constexpr (bcast_in2) {
-            FILL_TILE_WITH_FIRST_COLUMN_B(cb_id_in2);
+            FILL_TILE_WITH_FIRST_COLUMN_C(cb_id_in2);
         }
 
-        cb_push_back(cb_id_in0, onetile);
         cb_push_back(cb_id_in1, onetile);
         cb_push_back(cb_id_in2, onetile);
     }

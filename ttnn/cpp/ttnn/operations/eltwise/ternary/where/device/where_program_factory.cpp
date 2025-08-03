@@ -307,6 +307,8 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             const auto& true_shape = value_true_tensor.value().logical_shape();
             const auto& false_shape = value_false_tensor.value().logical_shape();
 
+            // Check if predicate needs column broadcast (has width 1 vs value tensors)
+            bool bcast_predicate = (pred_shape[-1] == 1 && true_shape[-1] == false_shape[-1] && true_shape[-1] > 1);
             // Check if value_true needs column broadcast (has width 1 vs predicate)
             bool bcast_value_true = (true_shape[-1] == 1 && pred_shape[-1] > 1);
             // Check if value_false needs column broadcast (has width 1 vs predicate)
@@ -320,6 +322,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
                  value_true_tensor_cb,
                  value_false_is_dram,
                  value_false_tensor_cb,
+                 /* bcast_predicate (cb_id_in0) */ static_cast<uint32_t>(bcast_predicate),
                  /* bcast_in1 (value_true) */ static_cast<uint32_t>(bcast_value_true),
                  /* bcast_in2 (value_false) */ static_cast<uint32_t>(bcast_value_false)});
         } else {
@@ -433,16 +436,76 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
     };
 
-    CMAKE_UNIQUE_NAMESPACE::set_or_update_runtime_arguments(
-        program,
-        reader_kernel_id,
-        writer_kernel_id,
-        compute_kernel_id,
-        compute_with_storage_grid_size,
-        operation_attributes,
-        tensor_args,
-        output,
-        set_runtime_args);
+    if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
+        // Manually handle runtime arguments for broadcast case
+        const auto& pred_shape = predicate_tensor.logical_shape();
+        const auto& true_shape = value_true_tensor.value().logical_shape();
+        const auto& false_shape = value_false_tensor.value().logical_shape();
+
+        // For predicate broadcast, use value tensor width; for value broadcast, use predicate width
+        bool bcast_predicate = (pred_shape[-1] == 1 && true_shape[-1] == false_shape[-1] && true_shape[-1] > 1);
+        uint32_t target_width = bcast_predicate ? true_shape[-1] : pred_shape[-1];
+        uint32_t output_width_tiles = target_width / 32;  // Width in tiles (32 is standard tile width)
+
+        // Set reader runtime args manually for broadcast kernel
+        for (auto core : all_device_cores) {
+            // Standard runtime args (0-4) + output_width_tiles (5)
+            SetRuntimeArgs(
+                program,
+                reader_kernel_id,
+                core,
+                {
+                    predicate_tensor.buffer()->address(),
+                    value_true_tensor.value().buffer()->address(),
+                    value_false_tensor.value().buffer()->address(),
+                    static_cast<uint32_t>(num_output_tiles),  // num_tiles
+                    static_cast<uint32_t>(0),                 // start_id
+                    output_width_tiles                        // NEW: additional arg for broadcast
+                });
+        }
+
+        // Use standard runtime arg setup for writer and compute kernels only
+        // We skip the reader kernel since we handled it manually above
+        for (auto core : all_device_cores) {
+            // Writer kernel runtime args
+            SetRuntimeArgs(
+                program,
+                writer_kernel_id,
+                core,
+                {
+                    output.buffer()->address(),
+                    static_cast<uint32_t>(num_output_tiles),
+                    static_cast<uint32_t>(0)  // start_id
+                });
+
+            // Compute kernel runtime args (same as non-broadcast case)
+            if (variant == WhereVariant::TTS) {
+                auto bit_cast_scalar =
+                    pack_scalar_runtime_arg(operation_attributes.value_false_scalar.value(), output.dtype());
+                SetRuntimeArgs(
+                    program, compute_kernel_id, core, {static_cast<uint32_t>(num_output_tiles), bit_cast_scalar});
+            } else if (variant == WhereVariant::TST) {
+                auto bit_cast_scalar =
+                    pack_scalar_runtime_arg(operation_attributes.value_true_scalar.value(), output.dtype());
+                SetRuntimeArgs(
+                    program, compute_kernel_id, core, {static_cast<uint32_t>(num_output_tiles), bit_cast_scalar});
+            } else {
+                SetRuntimeArgs(program, compute_kernel_id, core, {static_cast<uint32_t>(num_output_tiles)});
+            }
+        }
+    } else {
+        // Use standard runtime argument setup for non-broadcast cases
+        CMAKE_UNIQUE_NAMESPACE::set_or_update_runtime_arguments(
+            program,
+            reader_kernel_id,
+            writer_kernel_id,
+            compute_kernel_id,
+            compute_with_storage_grid_size,
+            operation_attributes,
+            tensor_args,
+            output,
+            set_runtime_args);
+    }
 
     return {
         std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id, compute_with_storage_grid_size}};

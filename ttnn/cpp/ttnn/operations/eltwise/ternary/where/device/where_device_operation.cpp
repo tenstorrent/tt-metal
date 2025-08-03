@@ -177,7 +177,27 @@ TensorSpec WhereDeviceOperation::compute_output_specs(
         output_layout = tensor_args.predicate.layout();
     }
 
-    const auto output_shape = tensor_args.predicate.logical_shape();
+    // Compute the correct output shape, considering broadcast cases
+    auto output_shape = tensor_args.predicate.logical_shape();
+
+    // For column broadcast cases, determine the correct output shape
+    if (args.broadcast_type == WhereBroadcastType::COL_BCAST && args.where_variant == WhereVariant::TTT) {
+        const auto& predicate = tensor_args.predicate;
+        const auto& value_true = tensor_args.value_true.value();
+        const auto& value_false = tensor_args.value_false.value();
+
+        const auto& pred_shape = predicate.logical_shape();
+        const auto& true_shape = value_true.logical_shape();
+        const auto& false_shape = value_false.logical_shape();
+
+        // For column broadcast, determine which tensor has the target shape
+        if (pred_shape[-1] == 1 && true_shape[-1] == false_shape[-1] && true_shape[-1] > 1) {
+            // Predicate broadcast: output shape matches value tensors
+            output_shape = true_shape;
+        }
+        // For value tensor broadcast, output shape already matches predicate (no change needed)
+    }
+
     return TensorSpec(output_shape, tt::tt_metal::TensorLayout(args.dtype.value(), output_layout, args.memory_config));
 }
 
@@ -266,6 +286,8 @@ WhereDeviceOperation::invoke(
     // Check if we have column broadcast pattern (rank >= 2 and last dimension difference)
     if (pred_shape.rank() >= 2) {
         bool has_col_bcast = false;
+
+        // Case 1: value tensors need broadcasting (original cases)
         if ((true_shape[-1] == 1 && pred_shape[-1] > 1) || (false_shape[-1] == 1 && pred_shape[-1] > 1)) {
             // Check if all other dimensions match (excluding the last one)
             bool all_other_dims_match = true;
@@ -277,6 +299,20 @@ WhereDeviceOperation::invoke(
             }
             has_col_bcast = all_other_dims_match;
         }
+
+        // Case 2: predicate needs broadcasting (new case)
+        if (!has_col_bcast && pred_shape[-1] == 1 && true_shape[-1] == false_shape[-1] && true_shape[-1] > 1) {
+            // Check if all other dimensions match (excluding the last one)
+            bool all_other_dims_match = true;
+            for (int i = 0; i < pred_shape.rank() - 1; ++i) {
+                if (true_shape[i] != pred_shape[i] || false_shape[i] != pred_shape[i]) {
+                    all_other_dims_match = false;
+                    break;
+                }
+            }
+            has_col_bcast = all_other_dims_match;
+        }
+
         if (has_col_bcast) {
             broadcast_type = WhereBroadcastType::COL_BCAST;
         }

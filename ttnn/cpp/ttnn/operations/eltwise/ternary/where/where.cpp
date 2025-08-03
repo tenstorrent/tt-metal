@@ -167,6 +167,7 @@ Tensor WhereOperation::invoke(
                 }
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(predicate.dtype());
+
                 return ttnn::prim::where(
                     queue_id,
                     predicate,
