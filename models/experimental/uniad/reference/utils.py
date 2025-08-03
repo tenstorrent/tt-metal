@@ -338,7 +338,7 @@ class Instances:
                 ret.set(k, ret_list)
 
             else:
-                ret.set(k, v)
+                ret.set(k, v[item])
         return ret
 
     def __len__(self) -> int:
