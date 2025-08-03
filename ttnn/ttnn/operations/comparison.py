@@ -22,6 +22,14 @@ def pearson_correlation_coefficient(expected, actual):
     expected = torch.Tensor(expected)
     actual = torch.Tensor(actual)
 
+    if expected.is_complex() and actual.is_complex():
+        expected = torch.view_as_real(expected.clone())
+        actual = torch.view_as_real(actual.clone())
+
+    if not (expected.is_floating_point() or actual.is_floating_point()):
+        expected = expected.to(torch.float)
+        actual = actual.to(torch.float)
+
     if expected.dtype != actual.dtype:
         actual = actual.type(expected.dtype)
 
@@ -60,12 +68,23 @@ def pearson_correlation_coefficient(expected, actual):
     if expected.dtype == torch.bfloat16:
         expected = expected.type(torch.float32)
         actual = actual.type(torch.float32)
-    output = np.min(
-        np.ma.corrcoef(
-            np.ma.masked_invalid(torch.squeeze(expected).detach().numpy()).flatten(),
-            np.ma.masked_invalid(torch.squeeze(actual).detach().numpy()).flatten(),
+
+    # If one tensor is constant, perform allclose comparison with default tolerances
+    if torch.max(expected) == torch.min(expected) or torch.max(actual) == torch.min(actual):
+        logger.warning(
+            "One tensor is constant. Performing allclose comparison with default tolerances instead of pearson correlation coefficient."
         )
+        return float(torch.allclose(expected, actual))
+
+    output = np.ma.corrcoef(
+        np.ma.masked_invalid(torch.squeeze(expected).detach().numpy()).flatten(),
+        np.ma.masked_invalid(torch.squeeze(actual).detach().numpy()).flatten(),
     )
+
+    # Remove correlation coefficient with self (typically always 1.0)
+    mask = np.ones(output.shape, dtype=bool)
+    np.fill_diagonal(mask, 0)
+    output = np.min(output[mask])
 
     if isinstance(output, np.ma.core.MaskedConstant):
         return 1.0
