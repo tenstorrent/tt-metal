@@ -7,7 +7,6 @@ target_link_libraries(
     INTERFACE
         pthread
         nlohmann_json::nlohmann_json
-        magic_enum::magic_enum
         fmt::fmt-header-only
         small_vector
         Boost::algorithm
