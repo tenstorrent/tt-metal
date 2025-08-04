@@ -13,10 +13,6 @@ The MobileNetV2 model has been pre-trained on the ImageNet dataset and can be us
   - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
 - login to huggingface with: `huggingface-cli login` or by setting the token with the command `export HF_TOKEN=<token>`
    - To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens
-- [8x8 core grid size support] For **Wormhole n300** cards, setting the following environment variable is required:
-    ```
-    export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-    ```
 
 ## How to Run
 - Use the following command to run the model:

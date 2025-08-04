@@ -10,10 +10,6 @@ YOLOv4 is a state-of-the-art real-time object detection model introduced in 2020
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
   - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
-- [8x8 core grid size support] For **Wormhole n300** cards, setting the following environment variable is required:
-   ```
-   export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-   ```
 
 ## How to Run
 ### For 320x320:

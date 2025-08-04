@@ -13,10 +13,6 @@ Read more about llama3 at [llama.com/llama3](https://www.llama.com/models/llama-
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 - Submit request to access weights from Meta: [Llama Downloads](https://www.llama.com/llama-downloads)
 - Submit permissions on HuggingFace and have a HF personal access token: [Llama 3.1 70B Instruct](https://huggingface.co/meta-llama/Llama-3.1-70B-Instruct)
-- [8x8 core grid size support] For **Wormhole n300** cards, setting the following environment variable is required:
-   ```
-   export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-   ```
 
 ## How to Run
 ### Run in one command:

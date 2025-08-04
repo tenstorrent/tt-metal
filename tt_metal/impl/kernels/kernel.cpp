@@ -35,11 +35,59 @@ namespace tt {
 
 namespace tt_metal {
 
+namespace fs = std::filesystem;
+
+namespace {
+// Kernel path searching:
+//
+// If the path doesn't exist as a absolute/relative path, then it must be relative to
+// TT_METAL_HOME/TT_METAL_KERNEL_PATH.
+//
+std::vector<fs::path> source_search_paths(const fs::path& given_file_name) {
+    std::vector<fs::path> paths = {given_file_name};
+
+    TT_ASSERT(
+        fs::exists(given_file_name) || (!fs::path(given_file_name).is_absolute()),
+        "Kernel source path {} must be relative to TT_METAL_HOME/TT_METAL_KERNEL_PATH or be an absolute path to a "
+        "valid file",
+        given_file_name);
+
+    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
+    if (rtoptions.is_root_dir_specified()) {
+        auto root_dir_search_path = fs::path(rtoptions.get_root_dir()) / given_file_name;
+        paths.push_back(root_dir_search_path);
+    }
+
+    if (rtoptions.is_kernel_dir_specified()) {
+        auto kernel_dir_search_path = fs::path(rtoptions.get_kernel_dir()) / given_file_name;
+        paths.push_back(kernel_dir_search_path);
+    }
+
+    auto system_kernel_dir_search_path = fs::path(rtoptions.get_system_kernel_dir()) / given_file_name;
+    paths.push_back(system_kernel_dir_search_path);
+
+    return paths;
+}
+}  // namespace
+
+KernelSource::KernelSource(const std::string& source, const SourceType& source_type) :
+    source_(source), source_type_(source_type) {
+    if (source_type == FILE_PATH) {
+        auto search_paths = source_search_paths(source);
+        auto itr = std::ranges::find_if(search_paths, [](const auto& path) { return fs::exists(path); });
+        if (itr == search_paths.end()) {
+            log_critical(LogMetal, "Kernel file searched in {}!", source, fmt::join(search_paths, ", "));
+            TT_THROW("Kernel file {} doesn't exist in any of the searched paths!", source);
+        }
+        path_ = *itr;
+    }
+};
+
 Kernel::Kernel(
-    const KernelSource &kernel_src,
-    const CoreRangeSet &core_range_set,
-    const std::vector<uint32_t> &compile_args,
-    const std::map<std::string, std::string> &defines) :
+    const KernelSource& kernel_src,
+    const CoreRangeSet& core_range_set,
+    const std::vector<uint32_t>& compile_args,
+    const std::map<std::string, std::string>& defines) :
     kernel_src_(kernel_src),
     core_range_set_(core_range_set),
     max_runtime_args_per_core_(0),
@@ -63,8 +111,8 @@ Kernel::Kernel(
     }
     this->core_to_runtime_args_ = {max_x + 1, std::vector<std::vector<uint32_t>>(max_y + 1, std::vector<uint32_t>())};
     this->core_to_runtime_args_data_ = {max_x + 1, std::vector<RuntimeArgsData>(max_y + 1, RuntimeArgsData{})};
-    for (auto &runtime_args_data_x : this->core_to_runtime_args_data_) {
-        for (auto &runtime_args_data : runtime_args_data_x) {
+    for (auto& runtime_args_data_x : this->core_to_runtime_args_data_) {
+        for (auto& runtime_args_data : runtime_args_data_x) {
             runtime_args_data.rt_args_data = nullptr;
             runtime_args_data.rt_args_count = 0;
         }
@@ -90,14 +138,14 @@ void KernelImpl::register_kernel_elf_paths_with_watcher(IDevice& device) const {
 
 std::string Kernel::name() const { return this->kernel_src_.name(); }
 
-const std::set<CoreCoord> &Kernel::logical_cores() const { return this->logical_cores_; }
+const std::set<CoreCoord>& Kernel::logical_cores() const { return this->logical_cores_; }
 
 std::vector<CoreRange> Kernel::logical_coreranges() const {
     auto crs = this->core_range_set_.ranges();
     return {crs.begin(), crs.end()};
 }
 
-bool Kernel::is_on_logical_core(const CoreCoord &logical_core) const {
+bool Kernel::is_on_logical_core(const CoreCoord& logical_core) const {
     return this->core_range_set_.contains(logical_core);
 }
 
@@ -136,7 +184,7 @@ void Kernel::add_defines(const std::map<std::string, std::string>& defines) {
 
 void KernelImpl::process_defines(
     const std::function<void(const std::string& define, const std::string& value)> callback) const {
-    for (const auto &[define, value] : this->defines_) {
+    for (const auto& [define, value] : this->defines_) {
         callback(define, value);
     }
 }
@@ -150,7 +198,7 @@ void DataMovementKernel::process_defines(
 
 void ComputeKernel::process_defines(
     const std::function<void(const std::string& define, const std::string& value)> callback) const {
-    for (const auto &[define, value] : this->defines_) {
+    for (const auto& [define, value] : this->defines_) {
         callback(define, value);
     }
     // pass default noc mode as compute does not need it, just for compile to pass
@@ -249,7 +297,7 @@ std::string Kernel::compute_hash() const {
         this->config_hash());
 }
 
-std::vector<uint32_t> &Kernel::runtime_args(const CoreCoord &logical_core) {
+std::vector<uint32_t>& Kernel::runtime_args(const CoreCoord& logical_core) {
     // TODO (abhullar): Should this check only be enabled in debug mode?
     TT_FATAL(
         logical_core.x < this->core_to_runtime_args_.size() &&
@@ -260,7 +308,7 @@ std::vector<uint32_t> &Kernel::runtime_args(const CoreCoord &logical_core) {
     return this->core_to_runtime_args_[logical_core.x][logical_core.y];
 }
 
-RuntimeArgsData &Kernel::runtime_args_data(const CoreCoord &logical_core) {
+RuntimeArgsData& Kernel::runtime_args_data(const CoreCoord& logical_core) {
     // TODO (abhullar): Should this check only be enabled in debug mode?
     TT_FATAL(
         logical_core.x < this->core_to_runtime_args_.size() &&
@@ -271,30 +319,34 @@ RuntimeArgsData &Kernel::runtime_args_data(const CoreCoord &logical_core) {
     return this->core_to_runtime_args_data_[logical_core.x][logical_core.y];
 }
 
-std::vector<std::vector<std::vector<uint32_t>>> &Kernel::runtime_args() { return this->core_to_runtime_args_; }
+std::vector<std::vector<std::vector<uint32_t>>>& Kernel::runtime_args() { return this->core_to_runtime_args_; }
 
-std::vector<std::vector<RuntimeArgsData>> &Kernel::runtime_args_data() { return this->core_to_runtime_args_data_; }
+std::vector<std::vector<RuntimeArgsData>>& Kernel::runtime_args_data() { return this->core_to_runtime_args_data_; }
 
-std::vector<uint32_t> &Kernel::common_runtime_args() { return this->common_runtime_args_; }
+std::vector<uint32_t>& Kernel::common_runtime_args() { return this->common_runtime_args_; }
 
-RuntimeArgsData &Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
+RuntimeArgsData& Kernel::common_runtime_args_data() { return this->common_runtime_args_data_; }
 
 // Ensure that unique and common runtime args do not overflow reserved region in L1.
 void Kernel::validate_runtime_args_size(
-    size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord &logical_core) {
+    size_t num_unique_rt_args, size_t num_common_rt_args, const CoreCoord& logical_core) {
     uint32_t total_rt_args = (num_unique_rt_args + num_common_rt_args);
     uint32_t idle_eth_max_runtime_args = MetalContext::instance().hal().get_dev_size(
-                                            HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) /
-                                            sizeof(uint32_t);
+                                             HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) /
+                                         sizeof(uint32_t);
     uint32_t max_rt_args = is_idle_eth() ? idle_eth_max_runtime_args : max_runtime_args;
 
     if (total_rt_args > max_rt_args) {
-        log_warning(tt::LogMetal, "Too many runtime args, unique: {} common: {} on {}", num_unique_rt_args, num_common_rt_args, this->processor());
-        TT_THROW("{} unique+common runtime args targeting kernel {} on {} are too large. Max allowable is {}", total_rt_args, this->name(), logical_core.str(), max_runtime_args);
+        TT_THROW(
+            "{} unique+common runtime args targeting kernel {} on {} are too large. Max allowable is {}",
+            total_rt_args,
+            this->name(),
+            logical_core.str(),
+            max_runtime_args);
     }
 }
 
-void Kernel::set_runtime_args(const CoreCoord &logical_core, stl::Span<const uint32_t> runtime_args) {
+void Kernel::set_runtime_args(const CoreCoord& logical_core, stl::Span<const uint32_t> runtime_args) {
     // TODO (abhullar): If we don't include this check then user can write runtime args to a core that the kernel is not
     // placed on.
     //                  Should this check only be enabled in debug mode?
@@ -306,7 +358,7 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, stl::Span<const uin
 
     // Keep state for validation, to be able to check from both set_runtime_args() and set_common_runtime_args() APIs.
 
-    auto &set_rt_args = this->core_to_runtime_args_[logical_core.x][logical_core.y];
+    auto& set_rt_args = this->core_to_runtime_args_[logical_core.x][logical_core.y];
     // TODO: Only allow setting once
     if (set_rt_args.empty()) {
         if (runtime_args.size() > max_runtime_args_per_core_) {
@@ -321,7 +373,10 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, stl::Span<const uin
     } else {
         TT_FATAL(
             set_rt_args.size() == runtime_args.size(),
-            "Illegal Runtime Args on {}: Number of runtime args cannot be modified from {} to {}!", logical_core.str(), set_rt_args.size(), runtime_args.size());
+            "Illegal Runtime Args on {}: Number of runtime args cannot be modified from {} to {}!",
+            logical_core.str(),
+            set_rt_args.size(),
+            runtime_args.size());
         std::memcpy(
             this->core_to_runtime_args_data_[logical_core.x][logical_core.y].rt_args_data,
             runtime_args.data(),
@@ -330,7 +385,7 @@ void Kernel::set_runtime_args(const CoreCoord &logical_core, stl::Span<const uin
 }
 
 void Kernel::set_common_runtime_args(stl::Span<const uint32_t> common_runtime_args) {
-    auto &set_rt_args = this->common_runtime_args_;
+    auto& set_rt_args = this->common_runtime_args_;
     TT_FATAL(
         set_rt_args.empty(),
         "Illegal Common Runtime Args: Can only set common runtime args once. Get and modify args in place instead.");
@@ -342,12 +397,13 @@ void Kernel::set_common_runtime_args(stl::Span<const uint32_t> common_runtime_ar
 
 // Pads runtime args to count
 void Kernel::set_runtime_args_count(CoreRangeSet& core_ranges, uint32_t count) {
-
-    for (const CoreRange &core_range : core_ranges.ranges()) {
+    for (const CoreRange& core_range : core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
-                auto &set_rt_args = this->core_to_runtime_args_[x][y];
-                if (set_rt_args.empty()) continue;
+                auto& set_rt_args = this->core_to_runtime_args_[x][y];
+                if (set_rt_args.empty()) {
+                    continue;
+                }
 
                 TT_ASSERT(count >= core_to_runtime_args_data_[x][y].size());
                 core_to_runtime_args_data_[x][y].rt_args_count = count;
@@ -364,7 +420,8 @@ void Kernel::set_common_runtime_args_count(uint32_t count) {
 }
 
 bool Kernel::is_idle_eth() const {
-    return std::holds_alternative<EthernetConfig>(this->config()) && std::get<EthernetConfig>(this->config()).eth_mode == Eth::IDLE;
+    return std::holds_alternative<EthernetConfig>(this->config()) &&
+           std::get<EthernetConfig>(this->config()).eth_mode == Eth::IDLE;
 }
 
 uint32_t KernelImpl::get_binary_packed_size(IDevice* device, int index) const {
@@ -379,7 +436,7 @@ uint32_t KernelImpl::get_binary_text_size(IDevice* device, int index) const {
     return iter != this->binaries_.end() ? iter->second[index]->get_text_size() : 0;
 }
 
-void ComputeKernel::set_build_options(JitBuildOptions &build_options) const {
+void ComputeKernel::set_build_options(JitBuildOptions& build_options) const {
     build_options.set_hlk_math_fidelity_all_cores(this->config_.math_fidelity);
     build_options.set_hlk_math_approx_mode_all_cores(this->config_.math_approx_mode);
     build_options.fp32_dest_acc_en = this->config_.fp32_dest_acc_en;
@@ -429,10 +486,11 @@ void KernelImpl::set_binaries(uint32_t build_key, std::vector<const ll_api::memo
     // Try inserting an empry vector, as that is cheap to construct
     // and avoids an additonal move.
     auto pair = binaries_.insert({build_key, {}});
-    if (pair.second)
+    if (pair.second) {
         pair.first->second = std::move(binaries);
-    else
+    } else {
         TT_ASSERT(pair.first->second == binaries);
+    }
 }
 
 bool DataMovementKernel::binaries_exist_on_disk(const IDevice* device) const {
@@ -449,7 +507,7 @@ bool DataMovementKernel::binaries_exist_on_disk(const IDevice* device) const {
 
 void DataMovementKernel::read_binaries(IDevice* device) {
     TT_ASSERT(this->binaries_exist_on_disk(device));
-    std::vector<ll_api::memory const*> binaries;
+    std::vector<const ll_api::memory*> binaries;
 
     // TODO(pgk): move the procssor types into the build system.  or just use integer indicies
     // TODO(pgk): consolidate read_binaries where possible
@@ -460,9 +518,8 @@ void DataMovementKernel::read_binaries(IDevice* device) {
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device->build_id(), tensix_core_type, dm_class_idx, riscv_id);
     auto load_type = MetalContext::instance().hal().get_jit_build_config(tensix_core_type, riscv_id, 0).memory_load;
-    ll_api::memory const& binary_mem = llrt::get_risc_binary(
-        build_state.get_target_out_path(this->kernel_full_name_),
-        load_type);
+    const ll_api::memory& binary_mem =
+        llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
     binaries.push_back(&binary_mem);
     uint32_t binary_size = binary_mem.get_packed_size();
     log_debug(LogLoader, "RISC={}, name={}, size={} (bytes)", riscv_id, this->name(), binary_size);
@@ -495,7 +552,7 @@ bool EthernetKernel::binaries_exist_on_disk(const IDevice* device) const {
 void EthernetKernel::read_binaries(IDevice* device) {
     // untested
     TT_ASSERT(this->binaries_exist_on_disk(device));
-    std::vector<ll_api::memory const*> binaries;
+    std::vector<const ll_api::memory*> binaries;
     uint32_t erisc_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t dm_class_idx = enchantum::to_underlying(HalProcessorClassType::DM);
@@ -511,8 +568,9 @@ void EthernetKernel::read_binaries(IDevice* device) {
                 // text_addr and some of span's addr point to IRAM base address.
                 // However it need to be placed L1 kernel base address for FW to copy it to IRAM then kick off
                 // The kernel can run with IRAM base address once it started.
-                binary_mem.set_text_addr(tt::tt_metal::MetalContext::instance().hal().erisc_iram_relocate_dev_addr(
-                    (uint64_t)binary_mem.get_text_addr()));
+                binary_mem.set_text_addr(
+                    tt::tt_metal::MetalContext::instance().hal().erisc_iram_relocate_dev_addr(
+                        (uint64_t)binary_mem.get_text_addr()));
                 std::function<void(uint64_t& addr)> update_callback = [](uint64_t& addr) {
                     addr = tt::tt_metal::MetalContext::instance().hal().erisc_iram_relocate_dev_addr(addr);
                 };
@@ -555,7 +613,7 @@ bool ComputeKernel::binaries_exist_on_disk(const IDevice* device) const {
 
 void ComputeKernel::read_binaries(IDevice* device) {
     TT_ASSERT(this->binaries_exist_on_disk(device));
-    std::vector<ll_api::memory const*> binaries;
+    std::vector<const ll_api::memory*> binaries;
     uint32_t tensix_core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
@@ -609,7 +667,8 @@ RISCV EthernetKernel::processor() const {
 
 RISCV ComputeKernel::processor() const { return RISCV::COMPUTE; }
 
-bool DataMovementKernel::configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const {
+bool DataMovementKernel::configure(
+    IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const {
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot configure kernel because it is not on core {}", logical_core.str());
     }
@@ -623,7 +682,8 @@ bool DataMovementKernel::configure(IDevice* device, const CoreCoord &logical_cor
     return true;
 }
 
-bool EthernetKernel::configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const {
+bool EthernetKernel::configure(
+    IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const {
     auto device_id = device->id();
     auto ethernet_core = device->ethernet_core_from_logical_core(logical_core);
     const ll_api::memory& binary_mem =
@@ -643,7 +703,8 @@ bool EthernetKernel::configure(IDevice* device, const CoreCoord &logical_core, u
     return true;
 }
 
-bool ComputeKernel::configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const {
+bool ComputeKernel::configure(
+    IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const {
     bool pass = true;
     if (not is_on_logical_core(logical_core)) {
         TT_THROW("Cannot configure kernel because it is not on core {}", logical_core.str());
@@ -660,7 +721,7 @@ bool ComputeKernel::configure(IDevice* device, const CoreCoord &logical_core, ui
     return pass;
 }
 
-std::ostream &operator<<(std::ostream &os, const DataMovementProcessor &processor) {
+std::ostream& operator<<(std::ostream& os, const DataMovementProcessor& processor) {
     switch (processor) {
         case DataMovementProcessor::RISCV_0: os << "RISCV_0"; break;
         case DataMovementProcessor::RISCV_1: os << "RISCV_1"; break;

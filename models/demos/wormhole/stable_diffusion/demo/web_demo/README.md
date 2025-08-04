@@ -4,11 +4,6 @@
 Stable Diffusion is a latent text-to-image diffusion model capable of generating photo-realistic images given any text input. These instructions pertain to running Stable Diffusion with an interactive web interface.
 
 ## How to Run
-- [8x8 core grid size support] For **Wormhole n300** cards, setting the following environment variable is required:
-   ```
-   export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-   ```
-
 > [!NOTE]
 > In order to post the generated image from the SD model to your local computer, make sure to ssh into the port 8501:
 > ```

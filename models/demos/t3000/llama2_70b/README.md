@@ -11,10 +11,6 @@ Read more about llama2_70b at [llama.com/llama2](https://www.llama.com/llama2/).
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 - The host machine must have at least 512 GB of memory.
-- [8x8 core grid size support] For **Wormhole n300** cards, setting the following environment variable is required:
-   ```
-   export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-   ```
 
 ## How to Run
 1. Download the Llama2-70B weights from [Meta](https://llama.meta.com/llama2/):

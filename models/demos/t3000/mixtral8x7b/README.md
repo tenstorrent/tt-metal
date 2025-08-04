@@ -9,10 +9,6 @@ Read more about Mixtral-8x7B at the Huggingface page for [mistralai/Mixtral-8x7B
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
-- [8x8 core grid size support] For **Wormhole n300** cards, setting the following environment variable is required:
-   ```
-   export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-   ```
 
 ## How to Run
 ### Download the weights and repack
@@ -32,7 +28,7 @@ python models/demos/t3000/mixtral8x7b/scripts/repack_weights.py <path_to_checkpo
 ```
 
 ### Set up environment
-1. Set async and dispatch over ethernet cores env vars:
+1. Set async:
 ```bash
 export TT_METAL_ASYNC_DEVICE_QUEUE=1
 ```

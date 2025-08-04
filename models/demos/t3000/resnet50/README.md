@@ -19,13 +19,13 @@ Read more about it at:
 ## How to Run
 + To run the demo use:
 ```python
-WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/t3000/resnet50/demo/demo.py::test_demo_sample
+pytest --disable-warnings models/demos/t3000/resnet50/demo/demo.py::test_demo_sample
 ```
 Where 16 is the batch size per device, and `models/demos/ttnn_resnet/demo/images/` is where the images are located.
 
 + Our second demo is designed to run ImageNet dataset, run it with:
 ```python
-WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/t3000/resnet50/demo/demo.py::test_demo_imagenet
+pytest --disable-warnings models/demos/t3000/resnet50/demo/demo.py::test_demo_imagenet
 ```
 The 16 refers to batch size per device here and 100 is the number of iterations(batches), hence the model will process 100 batches of size 128, total of 12800 images per device.
 
@@ -34,7 +34,7 @@ The 16 refers to batch size per device here and 100 is the number of iterations(
 ### LoudBox / QuietBox End-to-End Performance
 + For end-to-end performance, run
 ```python
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/t3000/resnet50/tests/test_perf_e2e_resnet50.py::test_perf_trace_2cqs
+  pytest models/demos/t3000/resnet50/tests/test_perf_e2e_resnet50.py::test_perf_trace_2cqs
 ```
 + This will generate a CSV with the timings and throughputs.
 + **Expected end-to-end perf**: For batch = 16 per device, or batch 128 in total, it is about `35,800 fps` currently. This may vary machine to machine.

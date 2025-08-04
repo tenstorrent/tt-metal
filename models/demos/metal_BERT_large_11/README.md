@@ -19,8 +19,6 @@ Replace `BATCH_SIZE` with the appropriate size for your device according to this
 | 8          | :white_check_mark: | :white_check_mark: | :white_check_mark: *|
 | 12         | :white_check_mark: | :x:                | :x:                 |
 
-*For batch size 8 on **Wormhole n300** cards, setting the following environment variable is required: `export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml`
-
 ### Run the Demo
 ```
 pytest --disable-warnings models/demos/metal_BERT_large_11/demo/demo.py::test_demo -k BATCH_SIZE

@@ -14,11 +14,6 @@
   pip install -r models/demos/yolov9c/web_demo/server/requirements.txt
   ```
 
-- [8x8 core grid size support] For **Wormhole n300** cards, setting the following environment variable is required:
-   ```
-   export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-   ```
-
 – Run the following command on the server to execute the Yolov9c model for the DETECTION task:
   ```
   source models/demos/yolov9c/web_demo/server/run_uvicorn_detection.sh

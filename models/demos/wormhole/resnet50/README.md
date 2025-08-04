@@ -19,13 +19,13 @@ Read more about it at:
 ## Demo
 + To run the demo use:
 ```python
-WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/wormhole/resnet50/demo/demo.py::test_demo_sample
+pytest --disable-warnings models/demos/wormhole/resnet50/demo/demo.py::test_demo_sample
 ```
 Where 16 is the batch size per device, and `models/demos/ttnn_resnet/demo/images/` is where the images are located.
 
 + Our second demo is designed to run ImageNet dataset, run this with
 ```python
-WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/wormhole/resnet50/demo/demo.py::test_demo_trace_with_imagenet
+pytest --disable-warnings models/demos/wormhole/resnet50/demo/demo.py::test_demo_trace_with_imagenet
 ```
 The 16 refers to batch size per device here and 100 is the number of iterations(batches), hence the model will process 100 batches of size 16 (32 for n300), total of 1600 (3200 for n300) images.
 
@@ -33,7 +33,7 @@ The 16 refers to batch size per device here and 100 is the number of iterations(
 ### Wormhole Device Performance
 + To obtain device performance, run
 ```python
-WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/resnet50/tests/test_perf_device_resnet50.py::test_perf_device
+pytest models/demos/wormhole/resnet50/tests/test_perf_device_resnet50.py::test_perf_device
 ```
 + This will run the model for 4 times and generate CSV reports under `<this repo dir>/generated/profiler/reports/ops/<report name>`. The report file name is logged in the run output.
 + It will also show a sumary of the device throughput in the run output.
@@ -41,7 +41,7 @@ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/
 ### Wormhole End-to-End Performance
 + For end-to-end performance, run
 ```python
-WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py::test_perf_trace_2cqs
+pytest models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py::test_perf_trace_2cqs
 ```
 + This will generate a CSV with the timings and throughputs.
 + **Expected end-to-end perf**: For batch = 16, it is about `4,700 fps` currently. This may vary machine to machine.
