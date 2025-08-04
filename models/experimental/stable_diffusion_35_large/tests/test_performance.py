@@ -6,7 +6,6 @@ import pytest
 import ttnn
 from ..tt.fun_pipeline import TtStableDiffusion3Pipeline, TimingCollector
 from ..tt.parallel_config import StableDiffusionParallelManager, EncoderParallelManager, create_vae_parallel_config
-from models.demos.utils.llm_demo_utils import verify_perf
 
 
 @pytest.mark.parametrize(
@@ -275,13 +274,19 @@ def test_sd35_performance(
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
 
-    verify_perf(
-        measurements,
-        expected_metrics,
-        high_tol_percentage=1.2,  # 20% tolerance
-        expected_measurements={k: True for k in expected_metrics.keys()},
-        lower_is_better_metrics=set(expected_metrics.keys()),
-    )
+    low_tol = 0.75
+    pass_perf_check = True
+    for k in expected_metrics.keys():
+        if measurements[k] > expected_metrics[k] or measurements[k] < expected_metrics[k] * low_tol:
+            print(
+                f"Warning: {k} is outside of the tolerance range. Expected: {expected_metrics[k]}, Actual: {measurements[k]}"
+            )
+            pass_perf_check = False
+    if pass_perf_check:
+        print("Perf check passed!")
+    else:
+        print("Perf check failed!")
+        assert False, "Perf check failed!"
 
     for submesh_device in parallel_manager.submesh_devices:
         ttnn.synchronize_device(submesh_device)
