@@ -8,7 +8,6 @@ import statistics
 import json
 from PIL import Image
 
-import ttnn
 from loguru import logger
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
 from models.experimental.stable_diffusion_xl_base.tests.test_sdxl_accuracy import sdxl_get_prompts
@@ -19,7 +18,6 @@ from conftest import is_6u, is_galaxy
 from models.experimental.stable_diffusion_xl_base.conftest import get_device_name
 
 IS_RING_6U_LOCAL = os.environ.get("RING_6U", "0") == "1"
-NUM_DEVICES_LOCAL = ttnn.GetNumAvailableDevices()
 DEVICE_NAME_LOCAL = get_device_name()
 
 NEW_JSON_FILE_NAME = "sdxl_test_results_with_reset.json"
@@ -75,22 +73,15 @@ def test_accuracy_with_reset(
     total_denoising_time, total_vae_time = 0.0, 0.0
     min_inference_time, max_inference_time = float("inf"), float("-inf")
 
-    need_yaml_bool = not is_galaxy() and NUM_DEVICES_LOCAL > 1
-    logger.info(f"num_devices: {NUM_DEVICES_LOCAL}, need_yaml_bool: {need_yaml_bool}")
-
     for current_start in range(start_from, start_from + num_prompts, reset_period):
         current_num_prompts = min(reset_period, start_from + num_prompts - current_start)
 
         env = ["env"]
-        prefix_for_yaml = (
-            ["WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml"] if need_yaml_bool else []
-        )  # required in CI
         prefix_for_throttle = [
             "TT_MM_THROTTLE_PERF=5"
         ]  # for galaxies it is a must, for other machines beeing super safe
         command = (
             env
-            + prefix_for_yaml
             + prefix_for_throttle
             + [
                 "pytest",

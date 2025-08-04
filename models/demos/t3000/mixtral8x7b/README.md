@@ -16,10 +16,9 @@ python models/demos/t3000/mixtral8x7b/scripts/repack_weights.py <path_to_checkpo
 ```
 
 ### Set up environment
-1. Set async and dispatch over ethernet cores env vars:
+1. Set async:
 ```bash
 export TT_METAL_ASYNC_DEVICE_QUEUE=1
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
 ```
 
 2. Prepare the weight cache directory:
