@@ -9,10 +9,36 @@ from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
 
 
 @pytest.mark.parametrize(
+    "low, high, step",
+    [
+        (-126.0, 127.1, 0.001),  # Exp2 Working range - Overflow from 128(inf), Underflow till -127(<0)
+        (-5.0, 5.1, 0.001),  # Check for smaller range
+    ],
+)
+def test_exp2_arange(low, high, step, device):
+    input_tensor = torch.arange(low, high, step, dtype=torch.bfloat16)
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_result = ttnn.exp2(tt_in)
+    result = ttnn.to_torch(tt_result)
+    assert_with_ulp(golden, result, 2)
+
+
+@pytest.mark.parametrize(
     "low, high",
     [
-        (-5, 5),  # Check for smaller range
-        (-126, 127),  # Exp2 Working range - Overflow from 128(inf), Underflow till -127(<0)
+        (-5, 5),
+        (-126, 127),
     ],
 )
 def test_exp2_ULP(low, high, device):
