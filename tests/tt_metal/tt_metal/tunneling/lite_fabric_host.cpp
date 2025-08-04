@@ -189,6 +189,7 @@ std::unique_ptr<tt::tt_metal::Program> LaunchLiteFabricWithMetal(std::map<chip_i
                 .defines =
                     {
                         {"METAL_LAUNCH", "1"},
+                        {"COMPILE_FOR_LITE_FABRIC", "1"},
                     },
             });
     }

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <tt-metalium/fabric_edm_types.hpp>
+#include "lite_fabric_constants.hpp"
 
 namespace lite_fabric {
 
@@ -95,10 +96,15 @@ struct LiteFabricConfig {
 
 struct LiteFabricMemoryMap {
     lite_fabric::LiteFabricConfig config;
-    lite_fabric::LiteFabricConfig config_out;
-    tt::tt_fabric::EDMChannelWorkerLocationInfo worker_location_info;
-    // ....
-    // Receiver and Sender buffers below
+    tt::tt_fabric::EDMChannelWorkerLocationInfo sender_location_info;
+    uint32_t sender_flow_control_semaphore;
+    unsigned char padding0[12];
+    uint32_t sender_connection_live_semaphore;
+    unsigned char padding1[12];
+    uint32_t worker_semaphore;
+    unsigned char padding2[12];
+    unsigned char sender_channel_buffer[CHANNEL_BUFFER_SLOTS * CHANNEL_BUFFER_SIZE];
+    unsigned char receiver_channel_buffer[CHANNEL_BUFFER_SLOTS * CHANNEL_BUFFER_SIZE];
 };
 
 static_assert(sizeof(LiteFabricConfig) % 16 == 0);
