@@ -119,7 +119,7 @@ public:
      * @param data_format The target data format for the buffer
      * @param host_data Pointer to the source data on the host
      * @param src_data_format The source data format of the host data
-     * @param device_range The range of mesh coordinates defining the sub-grid to write to
+     * @param device_range If the buffer is replicated, the range of mesh coordinates defining the sub-grid to write to. If the buffer is sharded, this is ignored.
      * @param blocking If true, the operation blocks until completion; if false, it's asynchronous
      * @param region Optional buffer region to write to; if not provided, writes to the entire buffer area
      */
