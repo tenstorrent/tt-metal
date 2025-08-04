@@ -47,6 +47,7 @@ Tensor = ttnn._ttnn.tensor.Tensor
 
 
 CoreGrid = ttnn._ttnn.types.CoreGrid
+CoreType = ttnn._ttnn.types.CoreType
 
 ThrottleLevel = ttnn._ttnn.operations.core.ThrottleLevel
 
