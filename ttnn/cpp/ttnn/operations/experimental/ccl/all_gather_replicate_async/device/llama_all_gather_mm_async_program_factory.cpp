@@ -84,7 +84,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
         tensor_slicer.output_page_offset,
         tensor_slicer.num_cols *
             weight_tensor_width /* weight_output_page_offset: stride across a tensor slice in the weight_tensor */,
-        tt::CB::c_in3 /* cb_index_start */
+        tt::CB::c_in3 /* start_cb_index */
     );
     matmul_fused_op_signaler->init_fused_op(
         program,

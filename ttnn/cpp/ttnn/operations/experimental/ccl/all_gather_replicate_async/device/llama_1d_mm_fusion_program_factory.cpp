@@ -2930,7 +2930,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_o
             fused_op_signaler,
             global_cb,
             sub_device_id,
-            fused_op_signaler->cb_index_start,
+            fused_op_signaler->start_cb_index,
             std::nullopt);
     auto override_runtime_arguments_callback =
         [shared_vars](

@@ -118,7 +118,7 @@ struct MatmulFusedOpSignaler {
     CoreCoord privilaged_core_physical;
 
     /* Info for Llama All Gather*/
-    uint32_t cb_index_start = 0;
+    uint32_t start_cb_index = 0;
 
     bool initialized_all_gather = false;
     bool initialized_reduce_scatter = false;
