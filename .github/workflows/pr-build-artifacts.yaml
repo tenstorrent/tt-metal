@@ -44,8 +44,5 @@ jobs:
     with:
       version: "22.04"
       toolchain: cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
-      # Cannot do a Sanitizer build as that's not compatible with the downstream test.
-      # Also cannot be Release if the other build was chosen to be Release as the GitHub artifact
-      # name clashes.
       build-type: "Release"
       skip-tt-train: true
