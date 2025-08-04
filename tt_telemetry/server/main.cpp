@@ -16,6 +16,7 @@
 #include <boost/functional/hash.hpp>
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_graph.hpp>
@@ -101,19 +102,25 @@ namespace std {
     };
 }
 
-static ChipIdentifier get_chip_identifier_from_umd_chip_id(chip_id_t chip_id) {
-    const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
-        {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
-        {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
-    };
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& tray_bus_ids = ubb_bus_ids.at(cluster.arch());
-    const auto bus_id = cluster.get_bus_id(chip_id);
-    auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
-    if (tray_bus_id_it != tray_bus_ids.end()) {
-        auto ubb_asic_id = bus_id & 0x0F;
-        return { .id = chip_id, .galaxy_ubb = GalaxyUbbIdentifier{tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_asic_id} };
+static ChipIdentifier get_chip_identifier_from_umd_chip_id(const tt::Cluster &cluster, chip_id_t chip_id) {
+    if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::GALAXY) {
+        const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
+            {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
+            {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
+        };
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& tray_bus_ids = ubb_bus_ids.at(cluster.arch());
+        const auto bus_id = cluster.get_bus_id(chip_id);
+        auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
+        if (tray_bus_id_it != tray_bus_ids.end()) {
+            auto ubb_asic_id = bus_id & 0x0F;
+            return { .id = chip_id, .galaxy_ubb = GalaxyUbbIdentifier{tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_asic_id} };
+        }
+
+        // Invalid UBB, drop through
     }
+
+    // 
     return { .id = chip_id, .galaxy_ubb = {} }; // invalid UBB ID if not found
 }
 
@@ -213,9 +220,10 @@ static std::ostream &operator<<(std::ostream &os, const tt::tt_metal::ClusterTyp
 **************************************************************************************************/
 
 std::map<tt::umd::ethernet_channel_t, CoreCoord> map_ethernet_channel_to_core_coord(const tt::Cluster &cluster, tt::umd::chip_id_t chip_id) {
+    // logical_eth_core_to_chan_map should be a 1:1 mapping and therefore easily invertible
     std::map<tt::umd::ethernet_channel_t, CoreCoord> ethernet_channel_to_core_coord;
     for (const auto &[core, channel]: cluster.get_soc_desc(chip_id).logical_eth_core_to_chan_map) {
-        //TODO: assert channel not already in map
+        TT_ASSERT(ethernet_channel_to_core_coord.count(channel) == 0, "Multiple Ethernet cores in logical_eth_core_to_chan_map map to Ethernet channel {}", channel);
         ethernet_channel_to_core_coord.insert({ channel, core });
     }
     return ethernet_channel_to_core_coord;
@@ -226,12 +234,13 @@ std::unordered_map<ChipLinkEndpoint, ChipLinkEndpoint> map_endpoints_to_remote_e
     std::unordered_map<ChipLinkEndpoint, ChipLinkEndpoint> endpoint_to_remote;
 
     for (const auto &[chip_id, remote_chip_and_channel_by_channel]: cluster.get_ethernet_connections()) {
-        ChipIdentifier from_chip = get_chip_identifier_from_umd_chip_id(chip_id);
+        ChipIdentifier from_chip = get_chip_identifier_from_umd_chip_id(cluster, chip_id);
         
         auto ethernet_channel_to_core_coord = map_ethernet_channel_to_core_coord(cluster, chip_id);
         
         for (const auto &[channel, remote_chip_and_channel]: remote_chip_and_channel_by_channel) {
-            //TODO: assert that channel is in map
+            TT_ASSERT(ethernet_channel_to_core_coord.count(channel) != 0, "Channel {} missing in ethernet_channel_to_core_coord map for {}", channel, from_chip);
+
             CoreCoord from_ethernet_core = ethernet_channel_to_core_coord[channel];
             ChipLinkEndpoint from{ .chip = from_chip, .ethernet_core = from_ethernet_core, .channel = channel };
 
@@ -239,11 +248,12 @@ std::unordered_map<ChipLinkEndpoint, ChipLinkEndpoint> map_endpoints_to_remote_e
             tt::umd::ethernet_channel_t remote_channel;
             std::tie(remote_chip_id, remote_channel) = remote_chip_and_channel;
 
-            ChipIdentifier to_chip = get_chip_identifier_from_umd_chip_id(remote_chip_id);
+            ChipIdentifier to_chip = get_chip_identifier_from_umd_chip_id(cluster, remote_chip_id);
 
             auto remote_ethernet_channel_to_core_coord = map_ethernet_channel_to_core_coord(cluster, remote_chip_id);
 
-            //TODO: assert channel is in map
+            TT_ASSERT(remote_ethernet_channel_to_core_coord.count(remote_channel) != 0, "Remote channel {} missing in remote_ethernet_channel_to_core_coord map for {}", remote_channel, remote_chip_id);
+
             CoreCoord remote_ethernet_core = remote_ethernet_channel_to_core_coord[remote_channel];
             ChipLinkEndpoint to{ .chip = to_chip, .ethernet_core = remote_ethernet_core, .channel = remote_channel };
 
@@ -286,7 +296,9 @@ std::vector<ChipLink> get_local_links(const tt::Cluster &cluster) {
             }
         } else {
             // No reverse mapping.
-            ++it;   //TODO: replace with an assert!
+            log_fatal(tt::LogAlways, "Endpoint {} -> {} exists but the reverse does not", from, to);
+            TT_THROW("Endpoint appears to be one-sided: from->to does not have a corresponding to->from");
+            ++it;
         }
     }
 
@@ -339,12 +351,12 @@ int main() {
     std::cout << "Cluster Type: " << cluster_type << std::endl;
 
     for (const auto &[chip_id, remote_chip_and_channel_by_channel]: ethernet_connections) {
-        std::cout << get_chip_identifier_from_umd_chip_id(chip_id) << std::endl;
+        std::cout << get_chip_identifier_from_umd_chip_id(cluster, chip_id) << std::endl;
         for (const auto &[channel, remote_chip_and_channel]: remote_chip_and_channel_by_channel) {
             tt::umd::chip_id_t remote_chip_id;
             tt::umd::ethernet_channel_t remote_channel;
             std::tie(remote_chip_id, remote_channel) = remote_chip_and_channel;
-            std::cout << "  Channel " << channel << " -> [" << get_chip_identifier_from_umd_chip_id(remote_chip_id) 
+            std::cout << "  Channel " << channel << " -> [" << get_chip_identifier_from_umd_chip_id(cluster, remote_chip_id) 
                       << "], Channel " << remote_channel 
                       << " (Link Status: " << (is_ethernet_link_up(cluster, chip_id, channel) ? "UP" : "DOWN") << '/' << (is_ethernet_link_up(cluster, remote_chip_id, remote_channel) ? "UP" : "DOWN") <<  ')'
                       << std::endl;
