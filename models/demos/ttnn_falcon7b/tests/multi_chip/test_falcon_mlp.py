@@ -47,15 +47,8 @@ def torch_model():
         ),
     ),
 )
-@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM", "BFLOAT16-L1"))
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        1,
-        2,
-    ],
-    indirect=True,
-)
+@pytest.mark.parametrize("model_config_str", ("BFLOAT16-DRAM",))
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
 def test_falcon_mlp(
     mesh_device,
     model_name,

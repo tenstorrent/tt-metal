@@ -500,6 +500,7 @@ void MetalContext::construct_control_plane(const std::filesystem::path& mesh_gra
 
 void MetalContext::initialize_control_plane() {
     if (custom_mesh_graph_desc_path_.has_value()) {
+        log_debug(tt::LogDistributed, "Using custom mesh graph descriptor: {}", custom_mesh_graph_desc_path_.value());
         std::filesystem::path mesh_graph_desc_path = std::filesystem::path(custom_mesh_graph_desc_path_.value());
         TT_FATAL(
             std::filesystem::exists(mesh_graph_desc_path),
@@ -510,6 +511,7 @@ void MetalContext::initialize_control_plane() {
         this->construct_control_plane(mesh_graph_desc_path);
         return;
     }
+    log_debug(tt::LogDistributed, "Using default mesh graph descriptor.");
 
     // Default mode, auto select mesh graph descriptor. In future, we can add a way for user to specify custom
     // descriptors

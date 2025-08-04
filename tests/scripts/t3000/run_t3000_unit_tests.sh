@@ -44,7 +44,16 @@ run_t3000_ttmetal_tests() {
 }
 
 run_t3000_dual_rank_big_mesh_tests() {
-  tt-run --rank-binding tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml --mpi-args "--allow-run-as-root --tag-output" build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter="*BigMeshDualRankTest2x4*"
+  local rank_binding="tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml"
+  local mpi_args="--allow-run-as-root --tag-output"
+
+  # Run tests using the helper function
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter="*BigMeshDualRankTest2x4*"
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*MeshWorkloadTestSuite*"
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter="*MeshWorkloadTestT3000*"
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" build/test/ttnn/unit_tests_ttnn --gtest_filter="*LaunchOperationT3000Test*"
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" build/test/ttnn/unit_tests_ttnn --gtest_filter="*LaunchOperationTest*"
+  tt-run --rank-binding "$rank_binding" --mpi-args "$mpi_args" pytest -svv "models/demos/ttnn_falcon7b/tests/multi_chip/test_falcon_mlp.py::test_falcon_mlp"
 }
 
 run_t3000_ttfabric_tests() {

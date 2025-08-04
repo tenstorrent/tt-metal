@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import pathlib
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -594,7 +595,7 @@ def as_tensor(
     preprocess: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
     mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
     use_device_tilizer: bool = False,
-    enable_multihost_format: bool = True,
+    enable_multihost_format: Optional[bool] = None,
 ) -> ttnn.Tensor:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`.
@@ -628,6 +629,10 @@ def as_tensor(
 
     dtype_name = dtype.name if dtype is not None else "None"
     layout_name = layout.name if layout is not None else "None"
+
+    if enable_multihost_format is None:
+        # TODO: #16067 - Remove `using_distributed_env`, when we remove the legacy format.
+        enable_multihost_format = ttnn.using_distributed_env()
 
     if use_device_tilizer:
         if device is None:
@@ -703,8 +708,10 @@ def as_tensor(
             storage_type = f"_multi_device_{device.get_num_devices()}"
         else:
             storage_type = ""
-
-        cache_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}.bin"
+        if enable_multihost_format:
+            cache_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}_{os.getenv('TT_HOST_RANK')}.bin"
+        else:
+            cache_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}.bin"
 
         cache_path = pathlib.Path(cache_file_name)
 
