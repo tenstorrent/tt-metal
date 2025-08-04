@@ -32,7 +32,7 @@ static Tensor pool2d_invoke(
     uint32_t channels,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::optional<std::array<uint32_t, 2>> dilation = std::nullopt,
     bool ceil_mode = false,
     bool count_include_pad = true,
@@ -40,6 +40,7 @@ static Tensor pool2d_invoke(
     const std::optional<const MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
     bool in_place_halo = false) {
+    std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
     uint32_t dilation_h = dilation.has_value() ? dilation.value().at(0) : 1;
     uint32_t dilation_w = dilation.has_value() ? dilation.value().at(1) : 1;
     sliding_window::SlidingWindowConfig sliding_window_config{
@@ -47,7 +48,7 @@ static Tensor pool2d_invoke(
         .input_hw = {input_h, input_w},
         .window_hw = {kernel_size.at(0), kernel_size.at(1)},
         .stride_hw = {stride.at(0), stride.at(1)},
-        .padding = {padding.at(0), padding.at(0), padding.at(1), padding.at(1)},
+        .padding = {padding_4d.at(0), padding_4d.at(1), padding_4d.at(2), padding_4d.at(3)},
         .dilation_hw = {dilation_h, dilation_w},
         .ceil_mode = ceil_mode,
         .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
@@ -144,7 +145,7 @@ static Tensor pool2d_invoke(
         .input_hw = {input_h, input_w},
         .window_hw = {kernel_size.at(0), kernel_size.at(1)},
         .stride_hw = {stride.at(0), stride.at(1)},
-        .padding = {padding.at(0), padding.at(0), padding.at(1), padding.at(1)},
+        .padding = {padding_4d.at(0), padding_4d.at(1), padding_4d.at(2), padding_4d.at(3)},
         .dilation_hw = {dilation_h, dilation_w},
         .num_cores_nhw = num_cores_nhw,
         .num_cores_c = num_cores_c,
@@ -196,7 +197,7 @@ Tensor MaxPool2DOp::invoke(
     uint32_t channels,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     std::array<uint32_t, 2> dilation,
     bool ceil_mode,
     const std::optional<const MemoryConfig>& memory_config,
@@ -231,7 +232,7 @@ Tensor AvgPool2DOp::invoke(
     uint32_t channels,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
-    std::array<uint32_t, 2> padding,
+    std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
     bool ceil_mode,
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
