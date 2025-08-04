@@ -34,12 +34,12 @@ inline void setup_connection_and_headers(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint64_t noc_dest_addr,
     uint32_t packet_payload_size_bytes) {
-    DPRINT << "setup_connection_and_headers: opening connection..." << ENDL();
+    //DPRINT << "setup_connection_and_headers: opening connection..." << ENDL();
     // connect to edm
     connection.open();
-    DPRINT << "setup_connection_and_headers: setting header..." << ENDL();
+    //DPRINT << "setup_connection_and_headers: setting header..." << ENDL();
     packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_dest_addr}, packet_payload_size_bytes);
-    DPRINT << "setup_connection_and_headers: completed" << ENDL();
+    //DPRINT << "setup_connection_and_headers: completed" << ENDL();
 }
 
 inline void send_packet(
@@ -92,7 +92,7 @@ inline void teardown_connection(tt::tt_fabric::WorkerToFabricEdmSender& connecti
 
 void kernel_main() {
     using namespace tt::tt_fabric;\
-    DPRINT << "=== 3WAY KERNEL START ===" << ENDL();
+    //DPRINT << "=== 3WAY KERNEL START ===" << ENDL();
 
     size_t rt_args_idx = 0;
     uint32_t source_l1_buffer_address = get_arg_val<uint32_t>(rt_args_idx++);
@@ -122,16 +122,16 @@ void kernel_main() {
     uint32_t direct_hops = get_arg_val<uint32_t>(rt_args_idx++);
 
     //printf("RT ARGS: direct_hops=0x%x\n", direct_hops);
-    DPRINT << "RT ARGS: direct_hops=" << HEX() << direct_hops << ENDL();
+    //DPRINT << "RT ARGS: direct_hops=" << HEX() << direct_hops << ENDL();
     uint16_t left_hops = direct_hops >> 16;
     uint16_t right_hops = direct_hops & 0xFFFF;
     //printf("PARSED: left_hops=%d right_hops=%d\n", left_hops, right_hops);
     //printf("MCAST_MODE: 0x%x\n", mcast_mode);
-    DPRINT << "PARSED: left_hops=" << left_hops << " right_hops=" << right_hops << ENDL();
-    DPRINT << "MCAST_MODE: " << HEX() << mcast_mode << ENDL();
+    //DPRINT << "PARSED: left_hops=" << left_hops << " right_hops=" << right_hops << ENDL();
+    //DPRINT << "MCAST_MODE: " << HEX() << mcast_mode << ENDL();
 
     //printf("Building EDM connections...\n");
-    DPRINT << "Building EDM connections..." << ENDL();
+    //DPRINT << "Building EDM connections..." << ENDL();
 
     tt::tt_fabric::WorkerToFabricEdmSender left_connection = 
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
@@ -141,8 +141,8 @@ void kernel_main() {
 
     //printf("EDM connections built successfully\n");
     //printf("Allocating packet headers...\n");
-    DPRINT << "EDM connections built successfully" << ENDL();
-    DPRINT << "Allocating packet headers..." << ENDL();
+    // DPRINT << "EDM connections built successfully" << ENDL();
+    // DPRINT << "Allocating packet headers..." << ENDL();
 
     volatile tt_l1_ptr PACKET_HEADER_TYPE* north_packet_header = PacketHeaderPool::allocate_header();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* south_packet_header = PacketHeaderPool::allocate_header();
@@ -156,12 +156,12 @@ void kernel_main() {
     zero_l1_buf((uint32_t*)right_packet_header, sizeof(PACKET_HEADER_TYPE));
 
     //printf("Headers zeroed. Setting up direct connections...\n");
-    DPRINT << "Headers zeroed. Setting up direct connections..." << ENDL();
+    // DPRINT << "Headers zeroed. Setting up direct connections..." << ENDL();
 
 
     if (left_hops > 0) {
         //printf("Setting up LEFT (west) connection with %d hops\n", left_hops);
-        DPRINT << "Setting up LEFT (west) connection with " << left_hops << " hops" << ENDL();
+        // DPRINT << "Setting up LEFT (west) connection with " << left_hops << " hops" << ENDL();
         set_mcast_header(
             left_packet_header,
             eth_chan_directions::WEST,
@@ -171,16 +171,13 @@ void kernel_main() {
         setup_connection_and_headers(
             left_connection, left_packet_header, noc_dest_addr, packet_payload_size_bytes);
         //printf("LEFT connection setup completed\n");
-        DPRINT << "LEFT connection setup completed" << ENDL();
-    } else {
-        //printf("LEFT connection SKIPPED (0 hops)\n");
-        DPRINT << "LEFT connection SKIPPED (0 hops)" << ENDL();
-    }
+        // DPRINT << "LEFT connection setup completed" << ENDL();
+    } 
 
     // Setup right (east) direct connection  
     if (right_hops > 0) {
         //printf("Setting up RIGHT (east) connection with %d hops\n", right_hops);
-        DPRINT << "Setting up RIGHT (east) connection with " << right_hops << " hops" << ENDL();
+        // DPRINT << "Setting up RIGHT (east) connection with " << right_hops << " hops" << ENDL();
         set_mcast_header(
             right_packet_header,
             eth_chan_directions::EAST,
@@ -190,17 +187,15 @@ void kernel_main() {
         setup_connection_and_headers(
             right_connection, right_packet_header, noc_dest_addr, packet_payload_size_bytes);
         //printf("RIGHT connection setup completed\n");
-        DPRINT << "RIGHT connection setup completed" << ENDL();
-    } else {
-        //printf("RIGHT connection SKIPPED (0 hops)\n");
-        DPRINT << "RIGHT connection SKIPPED (0 hops)" << ENDL();
+        // DPRINT << "RIGHT connection setup completed" << ENDL();
     }
+
         
     //printf("Setting up trunk connections...\n");
-    DPRINT << "Setting up trunk connections..." << ENDL();
+    // DPRINT << "Setting up trunk connections..." << ENDL();
     if constexpr (mcast_mode & 0x1) {
         //printf("Setting up NORTH trunk with %d hops\n", north_trunk_hops);
-        DPRINT << "Setting up NORTH trunk with " << north_trunk_hops << " hops" << ENDL();
+        // DPRINT << "Setting up NORTH trunk with " << north_trunk_hops << " hops" << ENDL();
         // North trunk present
         set_mcast_header(
             north_packet_header,
@@ -211,14 +206,11 @@ void kernel_main() {
         setup_connection_and_headers(
             north_trunk_connection, north_packet_header, noc_dest_addr, packet_payload_size_bytes);
         //printf("NORTH trunk setup completed\n");
-        DPRINT << "NORTH trunk setup completed" << ENDL();
-    } else {
-        //printf("NORTH trunk DISABLED\n");
-        DPRINT << "NORTH trunk DISABLED" << ENDL();
+        // DPRINT << "NORTH trunk setup completed" << ENDL();
     }
     if constexpr (mcast_mode & 0x2) {
         //printf("Setting up SOUTH trunk with %d hops\n", south_trunk_hops);
-        DPRINT << "Setting up SOUTH trunk with " << south_trunk_hops << " hops" << ENDL();
+        // DPRINT << "Setting up SOUTH trunk with " << south_trunk_hops << " hops" << ENDL();
         // South trunk present
         set_mcast_header(
             south_packet_header,
@@ -229,39 +221,35 @@ void kernel_main() {
         setup_connection_and_headers(
             south_trunk_connection, south_packet_header, noc_dest_addr, packet_payload_size_bytes);
         //printf("SOUTH trunk setup completed\n");
-        DPRINT << "SOUTH trunk setup completed" << ENDL();
-    } else {
-        //printf("SOUTH trunk DISABLED\n");
-        DPRINT << "SOUTH trunk DISABLED" << ENDL();
+        // DPRINT << "SOUTH trunk setup completed" << ENDL();
     }
 
-    DPRINT << "All connections setup completed. About to start send loop..." << ENDL();
-    DPRINT << "num_packets=" << num_packets << " mcast_mode=" << HEX() << mcast_mode << ENDL();
-    DPRINT << "left_hops=" << left_hops << " right_hops=" << right_hops << ENDL();
+    // DPRINT << "All connections setup completed. About to start send loop..." << ENDL();
+    // DPRINT << "num_packets=" << num_packets << " mcast_mode=" << HEX() << mcast_mode << ENDL();
+    // DPRINT << "left_hops=" << left_hops << " right_hops=" << right_hops << ENDL();
 
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
 
-    DPRINT << "Preparing to send packets..." << ENDL();
+    // DPRINT << "Preparing to send packets..." << ENDL();
 
-    //printf("Starting packet send loop for %d packets...\n", num_packets);
-    DPRINT << "Starting packet send loop for " << num_packets << " packets..." << ENDL();
+    // //printf("Starting packet send loop for %d packets...\n", num_packets);
+    // DPRINT << "Starting packet send loop for " << num_packets << " packets..." << ENDL();
     uint64_t start_timestamp = get_timestamp();
 
     // loop over for num packets
     for (uint32_t i = 0; i < num_packets; i++) {
-        if (i == 0) {
-            DPRINT << "Sending packet 0..." << ENDL();
-        }
-        if (i == num_packets - 1) {
-            DPRINT << "Sending final packet " << i << "..." << ENDL();
-        }
+        // if (i == 0) {
+        //     DPRINT << "Sending packet 0..." << ENDL();
+        // }
+        // if (i == num_packets - 1) {
+        //     DPRINT << "Sending final packet " << i << "..." << ENDL();
+        // }
 #ifndef BENCHMARK_MODE
         time_seed = prng_next(time_seed);
 #endif
         if constexpr (mcast_mode & 0x1) {
             // North Trunk Mcast
-            if (i == 0) DPRINT << "Sending NORTH trunk packet 0" << ENDL();
             send_packet(
                 north_packet_header,
                 noc_dest_addr,
@@ -272,7 +260,6 @@ void kernel_main() {
         }
         if constexpr (mcast_mode & 0x2) {
             // South Trunk Mcast
-            if (i == 0) DPRINT << "Sending SOUTH trunk packet 0" << ENDL();
             send_packet(
                 south_packet_header,
                 noc_dest_addr,
@@ -283,7 +270,6 @@ void kernel_main() {
         }
         
         if (left_hops > 0) {
-            if (i == 0) DPRINT << "Sending LEFT direct packet 0" << ENDL();
             send_packet(
                 left_packet_header,
                 noc_dest_addr,
@@ -294,7 +280,6 @@ void kernel_main() {
         }
 
         if (right_hops > 0) {
-            if (i == 0) DPRINT << "Sending RIGHT direct packet 0" << ENDL();
             send_packet(
                 right_packet_header,
                 noc_dest_addr,
@@ -309,35 +294,35 @@ void kernel_main() {
 #endif
     }
 
-    DPRINT << "Send loop completed. Starting teardown..." << ENDL();
+    //DPRINT << "Send loop completed. Starting teardown..." << ENDL();
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
-    DPRINT << "Tearing down connections..." << ENDL();
+    //DPRINT << "Tearing down connections..." << ENDL();
     if constexpr (mcast_mode & 0x1) {
-        DPRINT << "Tearing down NORTH trunk" << ENDL();
+        //DPRINT << "Tearing down NORTH trunk" << ENDL();
         teardown_connection(north_trunk_connection);
     }
     if constexpr (mcast_mode & 0x2) {
-        DPRINT << "Tearing down SOUTH trunk" << ENDL();
+        //DPRINT << "Tearing down SOUTH trunk" << ENDL();
         teardown_connection(south_trunk_connection);
     }
     
     if (left_hops > 0) {
-        DPRINT << "Tearing down LEFT connection" << ENDL();
+        //DPRINT << "Tearing down LEFT connection" << ENDL();
         teardown_connection(left_connection);
     }
     if (right_hops > 0) {
-        DPRINT << "Tearing down RIGHT connection" << ENDL();
+        //DPRINT << "Tearing down RIGHT connection" << ENDL();
         teardown_connection(right_connection);
     }
 
-    DPRINT << "Waiting for NOC barrier..." << ENDL();
+    //DPRINT << "Waiting for NOC barrier..." << ENDL();
 
-    DPRINT << "Waiting for NOC barrier..." << ENDL();
+    //DPRINT << "Waiting for NOC barrier..." << ENDL();
     noc_async_write_barrier();
 
     uint64_t bytes_sent = packet_payload_size_bytes * num_packets;
 
-    DPRINT << "Writing test results..." << ENDL();
+    //DPRINT << "Writing test results..." << ENDL();
     // write out results
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
     test_results[TT_FABRIC_CYCLES_INDEX] = (uint32_t)cycles_elapsed;
@@ -345,5 +330,5 @@ void kernel_main() {
     test_results[TT_FABRIC_WORD_CNT_INDEX] = (uint32_t)bytes_sent;
     test_results[TT_FABRIC_WORD_CNT_INDEX + 1] = bytes_sent >> 32;
     
-    DPRINT << "=== 3WAY KERNEL COMPLETE === bytes_sent=" << bytes_sent << ENDL();
+    //DPRINT << "=== 3WAY KERNEL COMPLETE === bytes_sent=" << bytes_sent << ENDL();
 }
