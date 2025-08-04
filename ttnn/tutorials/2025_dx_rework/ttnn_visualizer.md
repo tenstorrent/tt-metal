@@ -1,77 +1,95 @@
 # TTNN Visualizer
 
-In this example we will explore ttnn visualizer tool that allows you to easily and intuitively explore neural network models. The main features of this tool include:
-- Detailed list of all operations used within the model,
-- Interactive graph visualization of operations
-- Detailed and interactive L1, DRAM, and circular buffer memory plots
-- Filterable list of tensor details
-- Overview of all buffers for the entire model run
-- Visualization of input and output tensors with core tiling and sharding details
-- Visualize inputs/outputs per tensor or tensor allocation across each core
-- Detailed insights into L1 peak memory consumption, with an interactive graph of allocation over time
-- Navigate a tree of device operations with associated buffers and circular buffers
-- Operation flow graph for a holistic view of model execution
-- Load reports via the local file system or through an SSH connection
-- Supports multiple instances of the application running concurrently.
+In this tutorial, we’ll explore the **TTNN Visualizer** – a powerful tool designed to help developers understand and optimize models running on Tenstorrent hardware. This tool offers intuitive, in-depth insights into your neural network’s execution flow, memory usage, and performance characteristics.
 
-TTNN Visualizer has been specially prepared to give you a complete overview of the model's properties - from the operations used, through memory allocation, to the achieved performance. It lets you easily se what performance optimizations can be done.
+**Main features include:**
 
-You can find all the information in the official [tool repository](https://github.com/tenstorrent/ttnn-visualizer).
-There is also a video version of this tutorial available at this [link](https://youtu.be/lHtcD8cHoes?feature=shared).
+* A detailed, searchable list of all operations used within the model
+* Interactive graph visualizations of operations and data flow
+* L1, DRAM, and circular buffer memory plots with interactivity
+* Tensor-level insights, including shape, layout, type, and memory placement
+* Complete overview of all buffers used during the model run
+* Core-level input/output visualization with sharding and tiling details
+* L1 memory usage over time, including peak memory visualization
+* Hierarchical view of device operations with associated memory buffers
+* High-level operation flow graph for the full model
+* Ability to load reports from local files or remote servers via SSH
+* Support for running multiple instances of the tool simultaneously
+
+TTNN Visualizer gives you a comprehensive overview of how your model utilizes hardware resources. It helps identify optimization opportunities, debug bottlenecks, and better understand your model’s execution at the system level.
+
+For more details, visit the official [ttnn-visualizer GitHub repository](https://github.com/tenstorrent/ttnn-visualizer). You can also watch the full walkthrough video [here](https://youtu.be/lHtcD8cHoes?feature=shared).
+
+---
 
 ## Prerequisites
 
-Using ttnn visualizer is divided into two parts:
-- Model profiling and data collection,
-- Data visualization and analysis.
+The visualization workflow is divided into two stages:
 
-For the first stage of data collection, the [tt-metal](https://github.com/tenstorrent/tt-metal) project will be required. Visualizer operates on two sets of files – memory report and performance report – to obtain them we use profiling. We need to build the project for profiling, to do this please follow the [installing instructions](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md) in tt-metal repository or just build project as:
+1. **Model profiling and data collection**
+2. **Visualization and analysis using TTNN Visualizer**
+
+To collect profiling data, you’ll need the [tt-metal](https://github.com/tenstorrent/tt-metal) project. The visualizer expects two sets of files:
+
+* A **memory report**
+* A **performance report**
+
+You can generate both by enabling profiling during model execution. To do this, clone and build `tt-metal` with the profiler enabled:
 
 ```bash
 ./build_metal.sh -p
 ```
 
-To install ttnn-visualizer simply use `pip` command like:
+Then, install `ttnn-visualizer` via pip:
 
 ```bash
 pip install ttnn-visualizer
 ```
-For more information about system requirements or installing from source please refer to the [ttnn-visualizer repository](https://github.com/tenstorrent/ttnn-visualizer/blob/main/docs/getting-started.md).
 
-> **NOTE**
->
-> If you are connecting to the remote server to use Tenstorrent systems you can install the visualizer on your local machine and connect to remote server through it or just download profiling output files to your local machine and use them locally.
+For installation from source or system requirements, see the [getting started guide](https://github.com/tenstorrent/ttnn-visualizer/blob/main/docs/getting-started.md).
 
-## Running TTNN-visualizer
+> **NOTE:**
+> You can run the visualizer on your local machine and either connect remotely to your Tenstorrent system via SSH or copy the generated profiling files to your local machine for offline analysis.
 
-After successful installation we can start the tool by simply typing in the terminal:
+---
 
-```
+## Running TTNN Visualizer
+
+Once installed, launch the application using:
+
+```bash
 ttnn-visualizer
 ```
 
-This results in creating start endpoint at [`localhost:8000`](http://localhost:8000/) go ahead and open it in your browser (we recommend Chrome browser for this action). You should see homepage:
+This starts a local server at [http://localhost:8000](http://localhost:8000). Open this address in a browser (preferably Chrome). You’ll be greeted by the visualizer’s homepage:
 
-![1_ttnn-visualizer-homepage](images/1_ttnn-visualizer-homepage.jpg)
+![TTNN Visualizer Homepage](images/1_ttnn-visualizer-homepage.jpg)
 
-By default we start at `Reports` tab, which allows you to upload necessary files from local machine or connect directly via Remote sync with your machine. In this example we will use the first option. Currently other tabs are unavailable they will be functional after uploading profiling reports. Keep in mind that memory report unlocks tabs from Operations to Graph and Performance tab is unlocked with performance report.
+Initially, you’ll only see the **Reports** tab active. Once the memory and performance reports are uploaded, all other tabs become available.
 
-## Model profiling
+---
 
-In this tutorial we will profile yolov4 model on 320x320 images from COCO dataset, you can find model in [tt-metal/models/demos/convnet_mnist](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov4).
+## Model Profiling
 
-### Obtaining memory report
+In this tutorial, we’ll profile the YOLOv4 model (320x320 input) trained on the COCO dataset. The model can be found in:
 
-To start with we will obtain memory report. For this we first need to set configuration options. There are two ways to do that:
-- Create setup file and place all config there - set with `TTNN_CONFIG_PATH`,
-- Explicitly set options in terminal with `TTNN_CONFIG_OVERRIDES`.
+[`tt-metal/models/demos/yolov4`](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov4)
 
-For simplicity and ease of change we will create a setup file and set `TTNN_CONFIG_PATH` globlal variable as the path to it.
+> **NOTE**
+> This tutorial uses the predefined YOLOv4 model as an example, but you can profile any model by wrapping it in a pytest test case and following the same steps. For more information on creating custom test cases, refer to the [tt-metal documentation](https://github.com/tenstorrent/tt-metal).
 
-1. Create `vis.setup` file
-2. Open file with editor of your choice and paste general config:
+### Generating the Memory Report
 
-```
+TTNN uses configuration options for profiling. These can be set either through:
+
+* A configuration file (`TTNN_CONFIG_PATH`)
+* Inline overrides (`TTNN_CONFIG_OVERRIDES`)
+
+We’ll use a config file for flexibility:
+
+1. **Create a setup file** called `vis.setup` and paste in the following:
+
+```json
 {
     "enable_fast_runtime_mode": false,
     "enable_logging": true,
@@ -83,35 +101,44 @@ For simplicity and ease of change we will create a setup file and set `TTNN_CONF
 }
 ```
 
-You can find explanation of all options in [ttnn-visualizer](https://github.com/tenstorrent/ttnn-visualizer) repository docs.
+Here's what each configuration option does:
 
-3. Set `TTNN_CONFIG_PATH`
-    - Open terminal
-    - Set variable
+* **enable_fast_runtime_mode** - Must be disabled to enable logging,
+* **enable_logging** - Synchronizes main thread after every operation and logs the operation,
+* **report_name** (*optional*) - Name of the report used by the visualizer. If not provided, no data will be dumped to disk,
+* **enable_detailed_buffer_report** (if *report_name* is set) - Enable to visualize the detailed buffer report after every operation,
+* **enable_graph_report** (if *report_name* is set) - Enable to visualize the graph after every operation,
+* **enable_detailed_tensor_report** (if *report_name* is set) - Enable to visualize the values of input and output tensors of every operation,
+* **enable_comparison_mode** (if *report_name* is set) - Enable to test the output of operations against their golden implementation.
 
-    ```bash
-    export TTNN_CONFIG_PATH=path/to/vis.setup
-    ```
-> **NOTE**
->
-> Remember to set also all necessary global variables described in `tt-metal` repository!
+> **NOTE:**
+> This config file corresponds to the recommended setup in TTNN Visualizer docs, but feel free to adjust it to your needs.
 
-We are ready for profiling. Start profiling with:
+2. **Set the path** to this file in your environment:
+
+```bash
+export TTNN_CONFIG_PATH=path/to/vis.setup
+```
+
+> **Note:**
+> Ensure all required global variables from `tt-metal` are also exported.
+
+Now run the profiling by simply running pytest:
 
 ```bash
 pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[0-pretrained_weight_true-0]
 ```
 
-Ath the very top you should see the logs looking like:
+At the start of execution, you should see logs similar to:
 
 ```bash
-(python_env) /root/tt-metal$ pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[0-pretrained_weight_true-0][resolution0-103-1-act_dtype0-weight_dtype0-device_params0]
+(python_env) /root/tt-metal$ pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[0-pretrained_weight_true-0]
 2025-08-01 09:20:51.664 | DEBUG    | ttnn:<module>:73 - Loading ttnn configuration from /root/tt-metal/vis.setup
 2025-08-01 09:20:51.665 | DEBUG    | ttnn:<module>:83 - Initial ttnn.CONFIG:
 Config{cache_path=/root/.cache/ttnn,model_cache_path=/root/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false, \
-    enable_fast_runtime_mode=false,throw_exception_on_fallback=false,enable_logging=true,enable_graph_report=false,enable_detailed_buffer_report=true, \
-    enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false, \
-    comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=ttnn_visualizer_tutorial,generated/ttnn/reports/4042956046390500517}
+   enable_fast_runtime_mode=false,throw_exception_on_fallback=false,enable_logging=true,enable_graph_report=false,enable_detailed_buffer_report=true, \
+   enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false, \
+   comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=ttnn_visualizer_tutorial,4042956046390500517}
 2025-08-01 09:20:51.754 | info     |   SiliconDriver | Opened PCI device 4; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:197)
 2025-08-01 09:20:51.758 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:192)
 2025-08-01 09:20:51.758 | info     |   SiliconDriver | Opened PCI device 4; KMD version: 1.34.0; API: 1; IOMMU: disabled (pci_device.cpp:197)
@@ -121,81 +148,183 @@ Config{cache_path=/root/.cache/ttnn,model_cache_path=/root/.cache/ttnn/models,tm
 2025-08-01 09:20:51.836 | info     |   SiliconDriver | Opening local chip ids/pci ids: {0}/[4] and remote chip ids {} (cluster.cpp:157)
 ```
 
-In the `Config{` at the very end you can see a path to memory report directory - in this case `generated/ttnn/reports/4042956046390500517`.
+In the configuration output, look for the report path at the end:
 
-After the whole run is over in the output direcotry two new files will be created `config.json` and `db.sqlite`. After uploading direcotry to the ttnn-visualizer as memory report first four tabs will be available to use.
+```bash
+Config{...root_report_path=generated/ttnn/reports,report_name=ttnn_visualizer_tutorial,4042956046390500517}
+```
 
-> **NOTE**
->
-> In this tutorial we use predefined model, but you can use any model you want just close it in pytest test case - for more information refer to docs.
+The final number (`4042956046390500517`) indicates the memory report output directory. Once execution completes, navigate to `generated/ttnn/reports/4042956046390500517/` which will contain:
 
+* `config.json`
+* `db.sqlite`
 
-### Obtaining performance report
+Upload this entire directory to the visualizer under the **Memory reports** section.
 
-For the second part to obtain report of the model we need to use `tracy profiler`. If you are using the same terminal we need to unset previous configuration since we don't want to generate everything again:
+---
+
+### Generating the Performance Report
+
+For the performance report, we'll use the `tracy profiler`. If you're using the same terminal session, first unset the previous configuration to avoid regenerating the memory report:
 
 ```bash
 unset TTNN_CONFIG_PATH
-```
-if you set `TTNN_CONFIG_OVERRIDES` use:
-
-```bash
+# Or if set inline:
 unset TTNN_CONFIG_OVERRIDES
 ```
 
-Profiling starts with:
+Run profiling using Tracy:
 
 ```bash
 python -m tracy -p -r -v -m pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py::test_yolov4[0-pretrained_weight_true-0]
 ```
-In this case the path with output files is displayed at the very end of the program like:
+
+At the end, the tool will output the path to a directory looking like:
 
 ```bash
-2025-08-01 10:51:02.593 | INFO     | tt_metal.tools.profiler.process_ops_logs:generate_reports:643 - OPs' perf analysis is finished! Generating reports ...
-2025-08-01 10:51:02.593 | INFO     | tt_metal.tools.profiler.process_ops_logs:generate_reports:661 - Copying runtime artifacts
-2025-08-01 10:51:02.652 | INFO     | tt_metal.tools.profiler.process_ops_logs:generate_reports:670 - Generating OPs CSV
 2025-08-01 10:51:02.731 | INFO     | tt_metal.tools.profiler.process_ops_logs:generate_reports:905 - OPs csv generated at: /root/tt-metal/generated/profiler/reports/2025_08_01_10_51_02/ops_perf_results_2025_08_01_10_51_02.csv
 ```
-Output should contain two `csv` files and one `.tracy` file. To ttnn-visualizer we pass the whole: `/root/tt-metal/generated/profiler/reports/2025_08_01_10_51_02/` directory.
 
-## Result analysis
+containing:
 
-### Upload files
+* `ops_perf_results_<timestamp>.csv`
+* `device_profile_log.txt`
+* `<name>.tracy` (Tracy file)
 
-Start by uploading both directories to appropriate placeholders on homepage. IF everything was done correctly another tabs should now be avalible to use.
+Upload this entire directory to the visualizer as the **Performance report**.
 
-![2_uplad_files](2_upload_files.jpg)
+---
 
-### Operations
+## Result Analysis
 
-Operations tab let's you browse through all operations used in model. You can filter them to look for te one that you are interested in the most, expand them to see on what exact input data operation was working on and what was the Python execution time of it.
+### Uploading Reports
 
-![3_Operations_tab](3_Operations_tab.jpg)
+Once both report directories are uploaded, all analysis tabs will become available:
 
-Near each operation Memory detail button is visible. By clicking it you will be transferred to memory page site that allows you to see in more details memory allocation characteristics. You are able to see the exact adress space on each core tensor is occupying, what underneath operations are used and how they alocate new memory or use existing one.
+![Upload](2_upload_files.jpg)
 
-![4_Operation_details](4_operation_details.jpg)
+> **NOTE:**
+> If everything went according to plan, you should see a message at the bottom of the page that both reports have been synchronized.
 
-### Tensors
+---
 
-Tensors tab allow you to see all the tensors used in model (provide Tensor level view). You are able to explore their datatype, layout or memory layout and placement (DRAM or L1). If the tensor would be sharded additional information would be displayed here.
+### Operations Tab
 
-![5_Tensors_tab][5_Tensors_tab.jpg]
+This tab provides a complete, interactive list of all operations in your model:
 
-Useful you can see high consuming tensors – potential optimization:
+* Filter/search operations by name,
+* View input and output tensors per operation,
+* See Python-level execution time,
+* Click “Memory Details” to inspect memory layout for each operation.
 
-![6_Tensors_high_usage](6_Tensors_high_usage)
+![Operations Tab](3_Operations_tab.jpg)
 
-### Buffers
+Memory Details offers a breakdown of:
 
-Buffers tab can give you information memory allocation, how tensors are allocated – which memory type and places in memory,
+* Per-core tensor placement (L1, DRAM),
+* Tile layout and memory reuse,
+* Operation-to-buffer relationships.
 
-![7_Buffers_tab](7_Buffers_tab.jpg)
+![Operation Memory Details](4_operation_details.jpg)
 
-### Graph
+---
 
-![8_graph_tab](8_graph_tab.jpg)
+### Tensors Tab
 
-### Performance
+The Tensors tab provides detailed insights into all tensors used throughout your model's execution. View comprehensive tensor information including:
 
-![9_Performance_tab](9_Performance_tab.jpg)
+* Shape, datatype, layout (e.g., row-major or tiled),
+* Placement (L1 or DRAM),
+* Sharding details,
+* Tensor movement between operations.
+
+![Tensors Tab](5_Tensors_tab.jpg)
+
+You can also filter tensors by high memory usage, making it easy to identify optimization candidates.
+
+![High Usage Tensors](6_Tensors_high_usage)
+
+---
+
+### Buffers Tab
+
+Visualize all memory buffers used during execution:
+
+* Table and chart views available,
+* See allocation location (L1, DRAM),
+* Correlate buffers with operations and tensor flow,
+* Understand buffer reuse and lifetimes.
+
+Useful for estimating memory headroom or pinpointing inefficient allocations.
+
+![Buffers Tab](7_Buffers_tab.jpg)
+
+---
+
+### Graph Tab
+
+Visual representation of the model:
+
+* Shows operations as nodes and tensor flow as edges,
+* Click nodes for details on inputs, outputs, and execution,
+* Zoom and pan to explore subnetworks or specific paths,
+* Helpful for understanding overall model structure and execution paths.
+
+![Graph Tab](8_graph_tab.jpg)
+
+---
+
+### Performance Tab
+
+Here you’ll find advanced profiling data:
+
+* Operation runtime (ms) and execution order,
+* Number of cores used per op,
+* FLOPs and utilization analysis,
+* Charts showing runtime distribution per operation category,
+* Identify runtime bottlenecks or underutilized operations.
+
+Toggle **Matmul Optimization Analysis** to get hints about suboptimal matrix ops.
+
+![Performance Tab](9_Performance_tab.jpg)
+
+Use this tab to:
+
+* Optimize kernel configurations,
+* Increase parallelism where needed,
+* Understand memory and compute utilization in detail.
+
+> **NOTE**
+> A comprehensive performance report analysis guide can be found in the official [tt-perf-report](https://github.com/tenstorrent/tt-perf-report) repository.
+
+---
+
+## Recap
+
+To summarize:
+
+1. **Build tt-metal with profiler support**:
+
+   ```bash
+   ./build_metal.sh -p
+   ```
+2. **Install and launch TTNN Visualizer**:
+
+   ```bash
+   pip install ttnn-visualizer
+   ttnn-visualizer
+   ```
+3. **Generate profiling data**:
+
+   * Memory Report: Use `pytest` with config
+   * Performance Report: Use `tracy`
+4. **Upload the report directories** to the visualizer
+5. **Explore model details** using:
+
+   * **Operations**: See execution flow and memory per operation
+   * **Tensors**: Inspect data types, layout, and sharding
+   * **Buffers**: Analyze memory allocation
+   * **Graph**: Visualize the model’s structure
+   * **Performance**: Find and fix performance bottlenecks
+
+TTNN Visualizer gives you everything you need to deeply understand your model’s interaction with the hardware — and where it can be improved.
