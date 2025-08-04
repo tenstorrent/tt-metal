@@ -380,72 +380,68 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
 
 std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_t> split_work_to_cores(
     const CoreCoord grid_size, const uint32_t units_to_divide, const bool row_wise) {
-    // ZoneScoped;
-    //     if (units_to_divide == 0) {
-    //         return std::make_tuple(0, CoreRangeSet(), CoreRangeSet(), CoreRangeSet(), 0, 0);
-    //     }
-    //     uint32_t num_cores_x = grid_size.x, num_cores_y = grid_size.y, max_num_cores = num_cores_x * num_cores_y,
-    //              target_num_cores;
-    //     CoreRangeSet all_cores;
-    //     if (units_to_divide >= max_num_cores) {
-    //         target_num_cores = max_num_cores;
-    //         all_cores = CoreRangeSet(CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1}));
-    //     } else {
-    //         target_num_cores = units_to_divide;
-    //         all_cores = num_cores_to_corerangeset(target_num_cores, grid_size, row_wise);
-    //     }
-    //
-    //     CoreRangeSet core_group_1;
-    //     CoreRangeSet core_group_2;
-    //     uint32_t units_per_core_group_1 = units_to_divide / target_num_cores;
-    //     uint32_t units_per_core_group_2 = 0;
-    //     uint32_t num_cores_with_more_work = units_to_divide % target_num_cores;
-    //     // Evenly divided units to all target cores
-    //     if (units_to_divide % target_num_cores == 0) {
-    //         core_group_1 = all_cores;
-    //     }
-    //     // Uneven division of units across cores
-    //     // This case should only be hit when there are more units of work than a full grid of cores
-    //     // which is implicitly assumed in the following logic
-    //     else {
-    //         // Group of cores that do more work
-    //         uint32_t num_core_group_1_cores = num_cores_with_more_work;
-    //         uint32_t num_core_group_2_cores = target_num_cores - num_core_group_1_cores;
-    //         core_group_1 = num_cores_to_corerangeset(num_core_group_1_cores, grid_size, row_wise);
-    //         const auto& last_core_group_1 = (*core_group_1.ranges().rbegin()).end_coord;
-    //         if (row_wise) {
-    //             // Start in the same row
-    //             if (last_core_group_1.x != num_cores_x - 1) {
-    //                 core_group_2 = num_cores_to_corerangeset(
-    //                     {last_core_group_1.x + 1, last_core_group_1.y}, num_core_group_2_cores, grid_size, row_wise);
-    //             }
-    //             // Start in the next row
-    //             else {
-    //                 core_group_2 = num_cores_to_corerangeset(
-    //                     {0, last_core_group_1.y + 1}, num_core_group_2_cores, grid_size, row_wise);
-    //             }
-    //         } else {
-    //             // Start in the same column
-    //             if (last_core_group_1.y != num_cores_y - 1) {
-    //                 core_group_2 = num_cores_to_corerangeset(
-    //                     {last_core_group_1.x, last_core_group_1.y + 1}, num_core_group_2_cores, grid_size, row_wise);
-    //             }
-    //             // Start in the next column
-    //             else {
-    //                 core_group_2 = num_cores_to_corerangeset(
-    //                     {last_core_group_1.x + 1, 0}, num_core_group_2_cores, grid_size, row_wise);
-    //             }
-    //         }
-    //         units_per_core_group_2 = units_per_core_group_1;
-    //         units_per_core_group_1++;
-    //     }
-    //
-    //     return std::make_tuple(
-    //         target_num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2);
+    ZoneScoped;
+    if (units_to_divide == 0) {
+        return std::make_tuple(0, CoreRangeSet(), CoreRangeSet(), CoreRangeSet(), 0, 0);
+    }
+    uint32_t num_cores_x = grid_size.x, num_cores_y = grid_size.y, max_num_cores = num_cores_x * num_cores_y,
+             target_num_cores;
+    CoreRangeSet all_cores;
+    if (units_to_divide >= max_num_cores) {
+        target_num_cores = max_num_cores;
+        all_cores = CoreRangeSet(CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1}));
+    } else {
+        target_num_cores = units_to_divide;
+        all_cores = num_cores_to_corerangeset(target_num_cores, grid_size, row_wise);
+    }
 
-    const auto target_num_cores = grid_size.x * grid_size.y;
-    auto core_grid = num_cores_to_corerangeset(target_num_cores, grid_size, row_wise);
-    return split_work_to_cores(core_grid, units_to_divide, row_wise);
+    CoreRangeSet core_group_1;
+    CoreRangeSet core_group_2;
+    uint32_t units_per_core_group_1 = units_to_divide / target_num_cores;
+    uint32_t units_per_core_group_2 = 0;
+    uint32_t num_cores_with_more_work = units_to_divide % target_num_cores;
+    // Evenly divided units to all target cores
+    if (units_to_divide % target_num_cores == 0) {
+        core_group_1 = all_cores;
+    }
+    // Uneven division of units across cores
+    // This case should only be hit when there are more units of work than a full grid of cores
+    // which is implicitly assumed in the following logic
+    else {
+        // Group of cores that do more work
+        uint32_t num_core_group_1_cores = num_cores_with_more_work;
+        uint32_t num_core_group_2_cores = target_num_cores - num_core_group_1_cores;
+        core_group_1 = num_cores_to_corerangeset(num_core_group_1_cores, grid_size, row_wise);
+        const auto& last_core_group_1 = (*core_group_1.ranges().rbegin()).end_coord;
+        if (row_wise) {
+            // Start in the same row
+            if (last_core_group_1.x != num_cores_x - 1) {
+                core_group_2 = num_cores_to_corerangeset(
+                    {last_core_group_1.x + 1, last_core_group_1.y}, num_core_group_2_cores, grid_size, row_wise);
+            }
+            // Start in the next row
+            else {
+                core_group_2 = num_cores_to_corerangeset(
+                    {0, last_core_group_1.y + 1}, num_core_group_2_cores, grid_size, row_wise);
+            }
+        } else {
+            // Start in the same column
+            if (last_core_group_1.y != num_cores_y - 1) {
+                core_group_2 = num_cores_to_corerangeset(
+                    {last_core_group_1.x, last_core_group_1.y + 1}, num_core_group_2_cores, grid_size, row_wise);
+            }
+            // Start in the next column
+            else {
+                core_group_2 = num_cores_to_corerangeset(
+                    {last_core_group_1.x + 1, 0}, num_core_group_2_cores, grid_size, row_wise);
+            }
+        }
+        units_per_core_group_2 = units_per_core_group_1;
+        units_per_core_group_1++;
+    }
+
+    return std::make_tuple(
+        target_num_cores, all_cores, core_group_1, core_group_2, units_per_core_group_1, units_per_core_group_2);
 }
 
 }  // namespace tt_metal
