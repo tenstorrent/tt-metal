@@ -40,8 +40,79 @@ from models.demos.llama3_70b_galaxy.tt.model_config import (
     LlamaOptimizations,
     num_to_core_range_set,
     num_to_coregrid,
-    set_tg_attention_config,
 )
+
+
+def set_tg_attention_config(model_config, dim):
+    sub_core_grids = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+        ]
+    )
+    start_core = ttnn.CoreCoord(1, 0)
+    shard_spec_n_cores_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+        start_core, 10, sub_core_grids, row_wise=False
+    )
+
+    #
+    model_config["CREATE_HEAD_INPUT_MEMCFG"] = (
+        None
+        if dim < 4096
+        else ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                shard_spec_n_cores_grid,
+                [
+                    32,
+                    128,
+                ],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+    )
+
+    # Memory layout for create heads output
+    model_config["CREATE_HEAD_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            sub_core_grids,
+            [
+                32,
+                128,
+            ],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    num_cores = 40 if dim == 8192 else (24 if dim == 4096 else (20 if dim == 3072 else 12))
+
+    model_config["QKV_OUT_GATHERED_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
+        shape=(32 * mesh_cols, 32),  # mesh_cols = 4
+        core_grid=num_to_coregrid(num_cores),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    model_config["SELF_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
+        shape=(32 * mesh_rows, dim // 4 // min(32, dim // 4 // 32)),
+        core_grid=num_to_coregrid(min(32, dim // 4 // 32)),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
+        shape=(32, 128),  # mesh_cols = 4
+        core_grid=ttnn.num_cores_to_corerangeset_in_subcoregrids(start_core, 32, sub_core_grids, row_wise=True),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    return model_config
 
 
 class TtQwenModelArgs(TtModelArgs):
