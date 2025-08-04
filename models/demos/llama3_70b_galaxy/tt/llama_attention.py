@@ -353,6 +353,9 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(x)
         # xqkv_fused_sharded -> [1, 1, 32, 12288 // 8]
 
+        logger.info(f"xqkv_fused_sharded.shape: {xqkv_fused_sharded.shape}")
+        logger.info(f"xqkv_fused_sharded memory config: {xqkv_fused_sharded.memory_config()}")
+
         ###
         # Reshape and rotary embeddings
         ###
@@ -369,15 +372,44 @@ class TtLlamaAttention(LightweightModule):
             use_optimal_ccl_for_llama=True,
         )
 
+        logger.info(f"q_heads_pre_rot_1BQD.shape: {q_heads_pre_rot_1BQD.shape}")
+        logger.info(f"q_heads_pre_rot_1BQD memory config: {q_heads_pre_rot_1BQD.memory_config()}")
+        logger.info(f"k_heads_pre_rot_1BKD.shape: {k_heads_pre_rot_1BKD.shape}")
+        logger.info(f"k_heads_pre_rot_1BKD memory config: {k_heads_pre_rot_1BKD.memory_config()}")
+        logger.info(f"v_heads_1BKD.shape: {v_heads_1BKD.shape}")
+        logger.info(f"v_heads_1BKD memory config: {v_heads_1BKD.memory_config()}")
+
         if self.qk_norm:
+            rm_mem_cfg_qkv = q_heads_pre_rot_1BQD.memory_config()
+            reshape_output_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(64, 128),
+                core_grid=ttnn.CoreRangeSet(
+                    [ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]
+                ),  # resharding tensor to 1 core
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=reshape_output_mem_cfg)
+            k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=reshape_output_mem_cfg)
+
+            q_heads_pre_rot_1BQD = ttnn.reshape(q_heads_pre_rot_1BQD, [1, 1, 64, 128])
+            k_heads_pre_rot_1BKD = ttnn.reshape(k_heads_pre_rot_1BKD, [1, 1, 64, 128])
+
+            # Reshape to tile layout for norm
             q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.TILE_LAYOUT)
             k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.TILE_LAYOUT)
 
             q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode")
             k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode")
 
-            q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.ROW_MAJOR_LAYOUT)
-            k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT)
+            q_heads_pre_rot_1BQD = ttnn.to_layout(
+                q_heads_pre_rot_1BQD, ttnn.ROW_MAJOR_LAYOUT, memory_config=rm_mem_cfg_qkv
+            )
+            k_heads_pre_rot_1BKD = ttnn.to_layout(
+                k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT, memory_config=rm_mem_cfg_qkv
+            )
 
         # print("done create qkv heads")
         ttnn.deallocate(xqkv_fused_sharded)

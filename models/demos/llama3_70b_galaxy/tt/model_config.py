@@ -464,6 +464,7 @@ class TtModelArgs:
         self.max_prefill_chunk_size = max_seq_len
         self.use_prefetcher = False
         self.max_top_k = 32
+        self.qk_norm = False
 
         if self.num_devices == 32:
             self.use_prefetcher = True

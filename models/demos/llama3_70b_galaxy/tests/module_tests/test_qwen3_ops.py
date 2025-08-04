@@ -31,6 +31,135 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 @pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("input_tensor_mesh_shape", [1, 1, 32, 1280], indirect=True)
+@pytest.mark.parametrize("num_links", 1)
+@pytest.mark.parametrize("cluster_axis", 1)
+@pytest.mark.parametrize("dim", 3)
+@pytest.mark.parametrize(
+    "qkv_memory_config",
+    ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            sub_core_grids,
+            [
+                32,
+                128,
+            ],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    ),
+)
+@pytest.mark.parametrize("use_noc1_only", [False])
+@pytest.mark.parametrize("use_optimal_ccl_for_llama", [False])
+def test_qwen3_tg_rs_create_heads(
+    device,
+    dtype,
+    input_tensor_mesh_shape,
+    num_links,
+    cluster_axis,
+    dim,
+    qkv_memory_config,
+    use_noc1_only,
+    use_optimal_ccl_for_llama,
+):
+    """
+    Test rs_create_heads operation for Qwen3 model.
+    Generates a random xqkv tensor and runs rs_create_heads to compute q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, v_heads_1BKD.
+    """
+    torch.manual_seed(0)
+
+    galaxy_type = "6U" if ttnn.GetNumPCIeDevices() == 32 else "4U"
+
+    # Create random input tensors
+    torch_xqkv_tensor = torch_random(input_tensor_mesh_shape, -1, 1, dtype=torch.bfloat16)
+
+    # Compute reference output using PyTorch:
+    torch_q_heads_pre_rot_1BQD = torch_xqkv_tensor[:, :, :, : 128 * 8]
+    torch_k_heads_pre_rot_1BKD = torch_xqkv_tensor[:, :, :, 128 * 8 : 128 * 9]
+    torch_v_heads_1BKD = torch_xqkv_tensor[:, :, :, 128 * 9 :]
+
+    # Set up persistent buffers to mimick tt_ccl settings
+    RS_CREATE_HEADS_PACKET_WORKER_CRS = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 0)),
+            ttnn.CoreRange(ttnn.CoreCoord(1, 1), ttnn.CoreCoord(2, 1)),
+        ]
+    )
+    RS_CREATE_HEADS_INTERIM_MEMCFG = ttnn.create_sharded_memory_config(
+        shape=(32, 512),
+        core_grid=RS_CREATE_HEADS_PACKET_WORKER_CRS,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    persistent_buffers = [None, None]
+
+    cluster_shape = (8, 4)
+    num_pages_per_packet = 4
+    shard_height = 32
+
+    # Create persistent buffers for cluster_axis
+    buffer_mem_cfg = RS_CREATE_HEADS_INTERIM_MEMCFG
+    torch_buffer = torch.zeros(
+        (*cluster_shape, shard_height, cluster_shape[cluster_axis] * num_pages_per_packet * 32 * 5)
+    )
+    persistent_buffers[cluster_axis] = ttnn.from_torch(
+        torch_buffer,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=buffer_mem_cfg,
+        mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=(0, 1), mesh_shape=cluster_shape),
+    )
+
+    # Convert to ttnn tensors with appropriate memory configuration
+    xqkv_tensor = ttnn.from_torch(
+        torch_xqkv_tensor, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype, memory_config=qkv_memory_config
+    )
+
+    # Perform rs_create_heads using ttnn
+    (
+        q_heads_pre_rot_1BQD,
+        k_heads_pre_rot_1BKD,
+        v_heads_1BKD,
+    ) = ttnn.experimental.llama_rs_create_heads(
+        input_tensor=xqkv_tensor,
+        intermediate_packet_buffer=persistent_buffers[cluster_axis],
+        dim=dim,
+        cross_device_semaphore=ttnn.create_global_semaphore(
+            device, ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))]), 0
+        ),
+        subdevice_id=ttnn.SubDeviceId(1),
+        cluster_axis=cluster_axis,
+        mesh_device=device,
+        topology={"6U": ttnn.Topology.Ring, "4U": ttnn.Topology.Linear}.get(galaxy_type),
+        num_links=num_links,
+        num_heads=8,
+        num_kv_heads=1,
+        memory_config=qkv_memory_config,
+        qkv_memory_config=qkv_memory_config,
+        use_noc1_only=use_noc1_only,
+        use_optimal_ccl_for_llama=use_optimal_ccl_for_llama,
+    )
+
+    # Convert back to torch for comparison
+    output_q_heads_pre_rot_1BQD = ttnn.to_torch(q_heads_pre_rot_1BQD)
+    output_k_heads_pre_rot_1BKD = ttnn.to_torch(k_heads_pre_rot_1BKD)
+    output_v_heads_1BKD = ttnn.to_torch(v_heads_1BKD)
+
+    # Set PCC threshold based on data type
+    target_pcc = 0.9999 if dtype == ttnn.bfloat16 else 0.999
+
+    # Assert results match with expected precision
+    assert_with_pcc(torch_xqkv_tensor, output_q_heads_pre_rot_1BQD, pcc=target_pcc)
+    assert_with_pcc(torch_xqkv_tensor, output_k_heads_pre_rot_1BKD, pcc=target_pcc)
+    assert_with_pcc(torch_xqkv_tensor, output_v_heads_1BKD, pcc=target_pcc)
+
+
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("m_size", [32, 64, 128])
 @pytest.mark.parametrize("k_size", [32, 64])
 @pytest.mark.parametrize("n_size", [32, 64, 128])
