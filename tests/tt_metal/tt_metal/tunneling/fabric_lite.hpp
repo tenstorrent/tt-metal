@@ -46,8 +46,6 @@ enum class InitState : uint16_t {
     ETH_HANDSHAKE_LOCAL,
     // Ready for traffic
     READY,
-    // Terminated
-    TERMINATED,
 };
 
 struct LiteFabricConfig {
@@ -88,8 +86,8 @@ struct LiteFabricConfig {
 
     volatile InitState current_state = InitState::UNKNOWN;
 
-    // Set to 1 to terminate
-    volatile uint32_t termination_signal = 0;
+    // Set to 1 to enable routing
+    volatile uint32_t routing_enabled = 1;
 
     unsigned char padding2[14];
 } __attribute__((packed));

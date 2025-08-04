@@ -99,9 +99,6 @@ void routing_init(volatile LiteFabricConfig* config_struct) {
             case InitState::READY: {
                 break;
             }
-            case InitState::TERMINATED: {
-                break;
-            }
             case InitState::ETH_HANDSHAKE_LOCAL: {
                 if (config_struct->is_primary) {
                     // Tell subordinate cores we are ready to receive their handshake

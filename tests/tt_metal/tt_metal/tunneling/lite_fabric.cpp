@@ -138,6 +138,7 @@ constexpr uint32_t sender_connection_live_semaphore_address =
 static_assert(sender_connection_live_semaphore_address % 16 == 0);
 
 BEGIN_MAIN_FUNCTION() {
+    invalidate_l1_cache();
     // Test values
     auto dptr = reinterpret_cast<volatile uint32_t*>(0x20000);
     dptr[0] = 0xdeadbeef;
@@ -225,6 +226,10 @@ BEGIN_MAIN_FUNCTION() {
         local_sender_flow_control_semaphore_addresses);
 
     lite_fabric::routing_init(&structs->config);
+
+    while (structs->config.routing_enabled) {
+        invalidate_l1_cache();
+    }
 
     receiver_channel_0_trid_tracker.all_buffer_slot_transactions_acked();
 
