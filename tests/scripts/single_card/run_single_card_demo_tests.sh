@@ -74,12 +74,7 @@ run_segformer_func() {
 run_sentencebert_func() {
 
   #SentenceBERT Demo
-  pytest --disable-warnings models/demos/sentence_bert/demo/demo.py --timeout 600; fail+=$?
-
-  #SentenceBERT eval
-  # comment out SentenceBERT eval from CI tests for now until dataset_evaluation test is available in CIv2 (issue: #25866)
-
-  #pytest --disable-warnings models/demos/sentence_bert/demo/dataset_evaluation.py--timeout 600; fail+=$?
+  pytest models/demos/sentence_bert/demo/demo.py
 
 }
 
