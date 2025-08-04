@@ -22,7 +22,7 @@ class TtMemoryBank:
         eps=1e-05,
         model_args=None,
     ):
-        self.memory_bank_len = memory_bank_len
+        self.max_his_length = memory_bank_len
         self.device = device
         self.params = params
         self.dim_in = dim_in
