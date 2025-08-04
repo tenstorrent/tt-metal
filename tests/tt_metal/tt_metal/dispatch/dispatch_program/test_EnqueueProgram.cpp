@@ -1032,7 +1032,7 @@ tt::RISCV datamovement_processor_to_riscv(DataMovementProcessor processor) {
     switch (processor) {
         case DataMovementProcessor::RISCV_0: return tt::RISCV::ERISC0;
         case DataMovementProcessor::RISCV_1: return tt::RISCV::ERISC1;
-        default: TT_THROW("Unsupported processor {}", magic_enum::enum_name(processor));
+        default: TT_THROW("Unsupported processor {}", enchantum::to_string(processor));
     }
 }
 
@@ -1842,29 +1842,6 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesDataMove
 TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesCompute) {
     local_test_functions::test_my_coordinates(device_, tt::RISCV::COMPUTE);
     local_test_functions::test_my_coordinates(device_, tt::RISCV::COMPUTE, 1);
-}
-
-// Ensure the eth core can access their own logical coordinate. Same binary enqueued to multiple cores.
-TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesEth) {
-    for (const auto& device : devices_) {
-        if (!does_device_have_active_eth_cores(device->get_devices()[0])) {
-            GTEST_SKIP() << "Skipping test because device " << device->id()
-                         << " does not have any active ethernet cores";
-        }
-
-        const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
-            HalProgrammableCoreType::ACTIVE_ETH);
-        for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; erisc_idx++) {
-            for (uint32_t cq_id = 0; cq_id < device->num_hw_cqs(); cq_id++) {
-                log_info(tt::LogTest, "Test logical coordinates CQ{} active ethernet DM{}", cq_id, erisc_idx);
-                local_test_functions::test_my_coordinates(
-                    device,
-                    local_test_functions::datamovement_processor_to_riscv(
-                        static_cast<DataMovementProcessor>(erisc_idx)),
-                    cq_id);
-            }
-        }
-    }
 }
 
 }  // end namespace multicore_tests

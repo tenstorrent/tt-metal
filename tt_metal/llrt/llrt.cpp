@@ -313,10 +313,6 @@ void send_msg_to_eth_mailbox(
         TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
     }
 
-    std::cerr << "send_msg_to_eth_mailbox " << virtual_core.str() << " " << (uint32_t)msg_type << " " << args.size()
-              << " " << wait_for_ack << " " << timeout_ms << " args = " << fmt::format("{:#x}", fmt::join(args, ", "))
-              << std::endl;
-
     bool is_eth_core = internal_::is_active_eth_core(device_id, virtual_core);
     TT_ASSERT(
         is_eth_core,
@@ -482,8 +478,6 @@ void set_metal_eth_fw_run_flag(chip_id_t device_id, const CoreCoord& virtual_cor
     if (!hal.get_device_feature_enabled(tt::tt_metal::DeviceFeature::ETH_FW_API)) {
         TT_THROW("Ethernet mailbox API not supported on device {}", device_id);
     }
-
-    std::cerr << "set_metal_eth_fw_run_flag " << virtual_core.str() << " " << enable << std::endl;
 
     const auto run_flag_addr = hal.get_dev_addr(k_CoreType, tt_metal::HalL1MemAddrType::ETH_METAL_RUN_FLAG);
     std::vector<uint32_t> en = {enable};

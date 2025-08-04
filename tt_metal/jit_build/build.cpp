@@ -511,9 +511,9 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
     this->defines_ = env_.defines_;
     uint32_t l1_cache_disable_mask = rtoptions.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
     uint32_t erisc_mask = (tt::llrt::DebugHartFlags::RISCV_ER0 | tt::llrt::DebugHartFlags::RISCV_ER1);
-    // if ((l1_cache_disable_mask & erisc_mask) == erisc_mask) {
-    this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
-    // }
+    if ((l1_cache_disable_mask & erisc_mask) == erisc_mask) {
+        this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
+    }
 
     // 0: core_id = 0 and not cooperative
     // 1: core_id = 0 and cooperative

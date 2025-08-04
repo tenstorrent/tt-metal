@@ -276,14 +276,14 @@ TEST_F(CommandQueueSingleCardFixture, TensixActiveEthTestSubDeviceBasicEthProgra
 
         for (uint32_t i = 0; i < num_iters; i++) {
             EnqueueProgram(device->command_queue(), waiter_program, false);
-            device->set_sub_device_stall_group({SubDeviceId{0}});
+            device->set_sub_device_stall_group({{SubDeviceId{0}}});
             // Test blocking on one sub-device
             EnqueueProgram(device->command_queue(), syncer_program, true);
             EnqueueProgram(device->command_queue(), incrementer_program, false);
             device->reset_sub_device_stall_group();
         }
         Synchronize(device);
-        detail::DumpDeviceProfileResults(device);
+        detail::ReadDeviceProfilerResults(device);
     }
 }
 
