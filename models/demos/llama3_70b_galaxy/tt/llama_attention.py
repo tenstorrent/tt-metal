@@ -499,6 +499,9 @@ class TtLlamaAttention(LightweightModule):
                 device=self.mesh_device,
             )
 
+            q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.ROW_MAJOR_LAYOUT)
+            k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT)
+
         # print("done create qkv heads")
         ttnn.deallocate(xqkv_fused_sharded)
 
