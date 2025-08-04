@@ -622,13 +622,12 @@ def test_yolov9c(device, model_type, res, reset_seeds):
     "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_yolov8s(device, model_type, res, reset_seeds):
+def test_yolov8s(device, model_type, res, model_location_generator, reset_seeds):
     from models.demos.yolov8s.runner.performant_runner import YOLOv8sPerformantRunner
+    from models.demos.yolov8s.common import load_torch_model
 
     if model_type == "torch_model":
-        torch_model = YOLO("yolov8s.pt")
-        torch_model = torch_model.model
-        model = torch_model.eval()
+        model = load_torch_model(model_location_generator)
     else:
         model = YOLOv8sPerformantRunner(device, device_batch_size=1)
         logger.info("Inferencing using ttnn Model")
