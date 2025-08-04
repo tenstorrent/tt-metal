@@ -25,7 +25,7 @@
 #include "env_lib.hpp"
 #include "erisc_datamover_builder.hpp"
 #include "fabric_edm_packet_header.hpp"
-#include "fabric_host_interface.h"
+#include "hostdevcommon/fabric_common.h"
 #include "fabric_types.hpp"
 #include "hal.hpp"
 #include "host_api.hpp"

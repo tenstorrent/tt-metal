@@ -6,7 +6,7 @@
 
 #include "eth_l1_address_map.h"
 #include "noc/noc_parameters.h"
-#include <fabric_host_interface.h>
+#include "hostdevcommon/fabric_common.h"
 
 #if not(defined(KERNEL_BUILD) || defined(FW_BUILD))
 static_assert(false, "tt_fabric_interface.h should only be included in kernel or firmware build");
@@ -21,6 +21,8 @@ struct endpoint_sync_t {
 
 static_assert(sizeof(endpoint_sync_t) == 4);
 
+constexpr uint32_t CLIENT_HEADER_BUFFER_ENTRIES = 4;
+constexpr uint32_t PUSH_CLIENT_INTERFACE_SIZE = 288;
 constexpr uint32_t NUM_WR_CMD_BUFS = 4;
 constexpr uint32_t DEFAULT_MAX_NOC_SEND_WORDS = (NOC_MAX_BURST_WORDS * NOC_WORD_BYTES) / PACKET_WORD_SIZE_BYTES;
 constexpr uint32_t DEFAULT_MAX_ETH_SEND_WORDS = 2 * 1024;
