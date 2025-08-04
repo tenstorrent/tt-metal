@@ -24,7 +24,13 @@ UNARY_OPERATIONS = {
         None,
         "exp",
     ),
-    "exp_approx_21f": (
+    "exp21f": (
+        torch.exp,
+        ttnn.exp,
+        None,
+        "exp",
+    ),
+    "exp_21f_round_nearest": (
         torch.exp,
         ttnn.exp,
         None,

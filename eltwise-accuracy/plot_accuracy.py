@@ -216,6 +216,11 @@ def plot(plot_entry):
             ax.axvline(x=vertical_line[0], color="k", linestyle="--")
             label_y = ax.get_ylim()[1] / 2
             ax.text(vertical_line[0], label_y, vertical_line[1])
+    if "horizontal_lines" in plot_params:
+        for horizontal_line in plot_params["horizontal_lines"]:
+            ax.axhline(y=horizontal_line[0], color="k", linestyle="--")
+            label_x = ax.get_xlim()[1] / 2
+            ax.text(label_x, horizontal_line[0], horizontal_line[1])
 
     if yticks is not None:
         # print(f"yticks = {yticks}")
