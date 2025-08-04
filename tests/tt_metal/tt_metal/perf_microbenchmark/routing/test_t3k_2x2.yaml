@@ -137,7 +137,7 @@ Tests:
     defaults:
       ftype: unicast
     patterns:
-      - type: all_to_all_unicast
+      - type: all_to_all
         iterations: 2
   # ======================================================================================
   # Test 4: Parameterized Unicast Test
