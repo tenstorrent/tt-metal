@@ -119,6 +119,18 @@ decltype(auto) validate_and_get_reference_value(
     return reference_value;
 }
 
+// Returns offset of the mesh device view in the system mesh.
+MeshCoordinate compute_system_mesh_offset(const MeshDeviceView& view) {
+    const auto origin_fabric_node_id = view.get_fabric_node_id(MeshCoordinate::zero_coordinate(view.shape().dims()));
+    const auto system_mesh_shape = SystemMesh::instance().shape();
+    for (const auto& coord : MeshCoordinateRange(system_mesh_shape)) {
+        if (coord.to_linear_index(system_mesh_shape) == origin_fabric_node_id.chip_id) {
+            return coord;
+        }
+    }
+    TT_THROW("Failed to find offset for mesh device view");
+}
+
 }  // namespace
 
 MeshDevice::ScopedDevices::ScopedDevices(
@@ -287,7 +299,7 @@ std::map<int, std::shared_ptr<MeshDevice>> MeshDevice::create_unit_meshes(
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices),
         std::make_unique<MeshDeviceView>(
-            MeshShape(1, device_ids.size()), extract_locals(scoped_devices->root_devices()), fabric_node_ids),
+            MeshShape(1, device_ids.size()), scoped_devices->root_devices(), fabric_node_ids),
         std::shared_ptr<MeshDevice>());
 
     auto submeshes = mesh_device->create_submeshes(MeshShape(1, 1));
@@ -328,6 +340,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_unit_mesh(
 
 std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
     const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset) {
+    auto lock_api = this->lock_api();
     TT_FATAL(
         std::all_of(submesh_shape.cbegin(), submesh_shape.cend(), [](size_t dim) { return dim > 0; }),
         "Invalid submesh shape: ({}). All dimensions must be positive.",
@@ -448,9 +461,8 @@ IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
 
 IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const { return view_->get_device(coord); }
 
-tt_fabric::FabricNodeId MeshDevice::get_device_fabric_node_id(const MeshCoordinate& coord) const {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    return control_plane.get_fabric_node_id_from_physical_chip_id(view_->get_device(coord)->id());
+tt_fabric::FabricNodeId MeshDevice::get_fabric_node_id(const MeshCoordinate& coord) const {
+    return view_->get_fabric_node_id(coord);
 }
 
 MeshCommandQueue& MeshDevice::mesh_command_queue(std::size_t cq_id) const {
@@ -486,10 +498,8 @@ const MeshShape& MeshDevice::shape() const { return view_->shape(); }
 bool MeshDevice::is_local(const MeshCoordinate& coord) const { return view_->is_local(coord); }
 
 void MeshDevice::reshape(const MeshShape& new_shape) {
-    TT_FATAL(view_->fully_local(), "Cannot reshape a mesh that is partially distributed");
-    TT_FATAL(
-        new_shape.mesh_size() == this->num_devices(),
-        "New shape must have the same number of devices as current shape");
+    const auto num_devices = view_->shape().mesh_size();
+    TT_FATAL(new_shape.mesh_size() == num_devices, "New shape must have the same number of devices as current shape");
 
     // MeshDeviceView requires devices to be provided as a 1D array in row-major order for the target mesh shape.
     // The physical connectivity between devices must be preserved when reshaping.
@@ -507,41 +517,44 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
     // For a 2x2 mesh shape:
     // - Preserves original 2x2 physical connectivity
     // - Row-major order will be: [0,1,3,2]
-    std::unordered_map<chip_id_t, size_t> physical_device_id_to_linearized_index;
-    for (size_t i = 0; i < this->num_devices(); i++) {
-        physical_device_id_to_linearized_index[this->get_devices()[i]->id()] = i;
+    std::unordered_set<tt::tt_fabric::FabricNodeId> current_fabric_nodes;
+    for (const auto& coord : MeshCoordinateRange(view_->shape())) {
+        current_fabric_nodes.insert(view_->get_fabric_node_id(coord));
     }
 
     // From an MxN mesh, we can always reduce rank to a 1xM*N Line mesh.
     // However, going from a Line mesh to an MxN mesh is not always possible.
-    std::vector<IDevice*> new_device_order;
+    std::vector<MaybeRemote<IDevice*>> new_device_order;
     std::vector<tt::tt_fabric::FabricNodeId> new_fabric_node_ids;
-    new_device_order.reserve(num_devices());
-    new_fabric_node_ids.reserve(num_devices());
+    new_device_order.reserve(num_devices);
+    new_fabric_node_ids.reserve(num_devices);
     if (new_shape.is_line_topology()) {
         auto line_coords = view_->get_line_coordinates();
         for (const auto& coord : line_coords) {
-            new_device_order.push_back(this->get_device(coord));
+            new_device_order.push_back(
+                view_->is_local(coord) ? MaybeRemote<IDevice*>::local(this->get_device(coord))
+                                       : MaybeRemote<IDevice*>::remote());
             new_fabric_node_ids.push_back(view_->get_fabric_node_id(coord));
         }
     } else {
-        auto new_mapped_devices = SystemMesh::instance().get_mapped_devices(new_shape);
-        new_fabric_node_ids = std::move(new_mapped_devices.fabric_node_ids);
-
-        for (const auto maybe_remote_device_id : new_mapped_devices.device_ids) {
-            TT_FATAL(maybe_remote_device_id.is_local(), "Device is not local");
-            if (physical_device_id_to_linearized_index.find(*maybe_remote_device_id) ==
-                physical_device_id_to_linearized_index.end()) {
-                TT_THROW(
-                    "User has requested a reshape of the MeshDevice to shape: {}, but it is not possible to form a "
-                    "physically connected mesh grid with the opened devices from the original shape: {}.",
-                    new_shape,
-                    view_->shape());
-            }
-            new_device_order.push_back(get_device(*maybe_remote_device_id));
+        // Do our best at requesting a new set of mapped devices from system mesh, starting at the offset of the first
+        // device in the original mesh.
+        auto new_mapped_devices =
+            SystemMesh::instance().get_mapped_devices(new_shape, compute_system_mesh_offset(*view_));
+        for (int i = 0; i < new_mapped_devices.device_ids.size(); i++) {
+            TT_FATAL(
+                current_fabric_nodes.contains(new_mapped_devices.fabric_node_ids[i]),
+                "User has requested a reshape of the MeshDevice to shape: {}, but it is not possible to form a "
+                "physically connected mesh grid with the opened devices from the original shape: {}.",
+                new_shape,
+                view_->shape());
+            new_device_order.push_back(
+                new_mapped_devices.device_ids[i].is_local()
+                    ? MaybeRemote<IDevice*>::local(get_device(*new_mapped_devices.device_ids[i]))
+                    : MaybeRemote<IDevice*>::remote());
         }
+        new_fabric_node_ids = std::move(new_mapped_devices.fabric_node_ids);
     }
-
     auto new_view = std::make_unique<MeshDeviceView>(new_shape, new_device_order, new_fabric_node_ids);
     view_ = std::move(new_view);
 }
@@ -550,7 +563,7 @@ bool MeshDevice::close() {
     ZoneScoped;
     log_trace(tt::LogMetal, "Closing mesh device {}", this->id());
 
-    DumpMeshDeviceProfileResults(*this, ProfilerDumpState::LAST_FD_DUMP);
+    ReadMeshDeviceProfilerResults(*this, ProfilerReadState::LAST_FD_READ);
 
     // TODO #20966: Remove these calls
     for (auto device : view_->get_devices()) {

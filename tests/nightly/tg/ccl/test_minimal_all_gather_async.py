@@ -85,4 +85,4 @@ def test_all_gather_async(
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
     )
-    ttnn.DumpDeviceProfiler(submesh_device)
+    ttnn.ReadDeviceProfiler(submesh_device)
