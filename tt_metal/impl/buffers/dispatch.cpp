@@ -436,6 +436,14 @@ InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_
         const PartialPageSpec partial_page_spec = calculate_partial_page_spec(buffer);
         const uint32_t num_full_pages = total_pages_to_write;
         total_pages_to_write = num_full_pages * partial_page_spec.num_partial_pages_per_full_page;
+        dispatch_params.emplace<InterleavedBufferWriteLargePageDispatchParams>(
+            buffer,
+            dst_page_index,
+            partial_page_spec,
+            total_pages_to_write,
+            num_full_pages,
+            cq_id,
+            expected_num_workers_completed);
     } else {
         dispatch_params.emplace<InterleavedBufferWriteDispatchParams>(
             buffer, dst_page_index, total_pages_to_write, cq_id, expected_num_workers_completed);
