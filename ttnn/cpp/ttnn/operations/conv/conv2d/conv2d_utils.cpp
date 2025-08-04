@@ -370,7 +370,6 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     uint32_t window_h,
     uint32_t window_w,
     bool fp32_accum,
-    bool split_reader_enabled,
     bool full_inner_dim) {
     if (act_block_h_override > 0) {
         TT_ASSERT(
@@ -842,7 +841,9 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             // Set act_block_h_override to min value to
             // be conservative with L1 memory usage.
             conv_config.act_block_h_override = constants::TILE_HEIGHT;
-            if (conv_config.enable_split_reader) {
+            // Split reader is currently only supported for height sharded convs that are not 1d deptwise.
+            if (conv_config.enable_split_reader && shard_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+                !conv_is_1d_deptwise) {
                 // Split reader needs at least 2 tiles in height to work.
                 conv_config.act_block_h_override *= 2;
             }
@@ -1001,7 +1002,6 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
         kernel_size[0],
         kernel_size[1],
         get_fp32_dest_acc_en(compute_config),
-        conv_config.enable_split_reader && input_parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED,
         conv_config.full_inner_dim);
     return {opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config};
 }
