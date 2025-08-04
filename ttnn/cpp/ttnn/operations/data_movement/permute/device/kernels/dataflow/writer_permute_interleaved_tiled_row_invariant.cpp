@@ -51,19 +51,19 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     // 0) Read compile-time constants
     // ------------------------------------------------------------------------
-    constexpr bool dst_is_dram = (get_compile_time_arg_val(0) == 1);
-    constexpr uint32_t element_size = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(2);
-    constexpr uint32_t output_H = get_compile_time_arg_val(3);
-    constexpr uint32_t H = get_compile_time_arg_val(4);
-    constexpr uint32_t W = get_compile_time_arg_val(5);
-    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(6);
-    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(7);
-    constexpr uint32_t FACE_HEIGHT = get_compile_time_arg_val(8);
-    constexpr uint32_t FACE_WIDTH = get_compile_time_arg_val(9);
-    constexpr bool needs_padding = (get_compile_time_arg_val(10) == 1);
-    constexpr uint32_t RANK = get_compile_time_arg_val(11);
-    constexpr uint32_t permuted_input_h_index = get_compile_time_arg_val(12);
+    constexpr uint32_t element_size = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
+    constexpr uint32_t output_H = get_compile_time_arg_val(2);
+    constexpr uint32_t H = get_compile_time_arg_val(3);
+    constexpr uint32_t W = get_compile_time_arg_val(4);
+    constexpr uint32_t TILE_HEIGHT = get_compile_time_arg_val(5);
+    constexpr uint32_t TILE_WIDTH = get_compile_time_arg_val(6);
+    constexpr uint32_t FACE_HEIGHT = get_compile_time_arg_val(7);
+    constexpr uint32_t FACE_WIDTH = get_compile_time_arg_val(8);
+    constexpr bool needs_padding = (get_compile_time_arg_val(9) == 1);
+    constexpr uint32_t RANK = get_compile_time_arg_val(10);
+    constexpr uint32_t permuted_input_h_index = get_compile_time_arg_val(11);
+    constexpr auto dst_args = TensorAccessorArgs<12>();
 
     // ------------------------------------------------------------------------
     // 1) Read runtime arguments
@@ -107,10 +107,8 @@ void kernel_main() {
 
     // Address generator
     const uint32_t tile_bytes = get_tile_size(cb_id_out0);
-    const auto input_data_format = get_dataformat(cb_id_out0);
 
-    const InterleavedAddrGenFast<dst_is_dram, TILE_HW> s = {
-        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = input_data_format};
+    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
 
     // ------------------------------------------------------------------------
     // 3) Height dimension remainder logic

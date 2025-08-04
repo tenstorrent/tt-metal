@@ -99,8 +99,8 @@ CloseDevice = ttnn._ttnn.device.CloseDevice
 CloseDevices = ttnn._ttnn.device.CloseDevices
 
 
-def DumpDeviceProfiler(device):
-    ttnn._ttnn.device.DumpDeviceProfiler(device)
+def ReadDeviceProfiler(device):
+    ttnn._ttnn.device.ReadDeviceProfiler(device)
 
 
 GetNumAvailableDevices = ttnn._ttnn.device.GetNumAvailableDevices

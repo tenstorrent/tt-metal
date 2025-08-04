@@ -15,7 +15,6 @@
 #include <iomanip>
 #include <sstream>
 #include <memory>
-#include <magic_enum/magic_enum.hpp>
 
 #include "tt_fabric_test_context.hpp"
 
@@ -165,5 +164,18 @@ int main(int argc, char** argv) {
 
     test_context.close_devices();
 
+    // Check if any tests failed validation and throw at the end
+    if (test_context.has_test_failures()) {
+        const auto& failed_tests = test_context.get_all_failed_tests();
+        log_error(tt::LogTest, "=== FINAL TEST SUMMARY ===");
+        log_error(tt::LogTest, "Total failed tests: {}", failed_tests.size());
+        log_error(tt::LogTest, "Failed tests:");
+        for (const auto& failed_test : failed_tests) {
+            log_error(tt::LogTest, "  - {}", failed_test);
+        }
+        TT_THROW("Some tests failed golden comparison validation. See summary above.");
+    }
+
+    log_info(tt::LogTest, "All tests completed successfully");
     return 0;
 }

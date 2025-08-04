@@ -58,21 +58,10 @@ def prepare_linear_params(device, weights, bias, dtype):
 
 
 def prepare_conv_params(
-    device,
     weights,
     bias,
     dtype,
-    fp32_dest_acc_en=False,
-    math_fidelity=ttnn.MathFidelity.HiFi2,
-    packer_l1_acc=False,
 ):
-    compute_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=math_fidelity,
-        fp32_dest_acc_en=fp32_dest_acc_en,
-        packer_l1_acc=packer_l1_acc,
-    )
-
     dtype = ttnn.float32 if dtype == ttnn.bfloat8_b else dtype
     tt_weights = ttnn.from_torch(weights, dtype)
     tt_bias = ttnn.from_torch(bias, dtype) if bias is not None else None
@@ -83,26 +72,16 @@ def prepare_conv_params(
         "kernel_size": (tt_weights.shape[2], tt_weights.shape[3]),
     }
 
-    return compute_config, tt_weights, tt_bias, conv_params
+    return tt_weights, tt_bias, conv_params
 
 
 def prepare_split_conv_params(
-    device,
     weights,
     bias,
     dtype,
     split_in,
     split_out,
-    fp32_dest_acc_en=False,
-    math_fidelity=ttnn.MathFidelity.HiFi2,
 ):
-    compute_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=math_fidelity,
-        fp32_dest_acc_en=fp32_dest_acc_en,
-        packer_l1_acc=False,
-    )
-
     dtype = ttnn.float32 if dtype == ttnn.bfloat8_b else dtype  # TODO: figure out why PCC drops when dtype is used
 
     Cout, Cin, _, _ = weights.shape
@@ -155,7 +134,7 @@ def prepare_split_conv_params(
         ]
         for tt_w_out in tt_weights
     ]
-    return compute_config, tt_weights, tt_bias, conv_params
+    return tt_weights, tt_bias, conv_params
 
 
 def split_conv2d(

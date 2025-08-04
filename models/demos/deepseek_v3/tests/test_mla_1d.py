@@ -126,15 +126,22 @@ def reference_forward(
     return out, cache
 
 
-def get_cache_on_host(tt_cache, mesh_device):
+def get_cache_on_host(tt_cache: ttnn.Tensor, row_idx: int, mesh_device: ttnn.MeshDevice) -> torch.Tensor:
     """
     Get the KVPE cache on the host from the TTNN cache.
-    This specifically retrieves the first row of the mesh_device.
+
+    Args:
+        tt_cache (ttnn.Tensor): The TTNN cache tensor.
+        row_idx (int): The row index to get the cache from.
+        mesh_device (ttnn.MeshDevice): The mesh device to get the cache from.
+    Returns:
+        torch.Tensor: The cache tensor on the host.
     """
+    mesh_shape = list(mesh_device.shape)
+    select_devices = slice(row_idx * mesh_shape[1], (row_idx + 1) * mesh_shape[1])
+
     host_cache = []
-    for i, t in enumerate(
-        ttnn.get_device_tensors(tt_cache)[: list(mesh_device.shape)[1]]
-    ):  # Only get from first row of mesh_device
+    for i, t in enumerate(ttnn.get_device_tensors(tt_cache)[select_devices]):  # Only get from first row of mesh_device
         host_t = t.cpu().to_torch()
         host_cache.append(host_t)
     host_cache = torch.concat(host_cache, dim=0)
@@ -170,10 +177,10 @@ def test_forward_pass(
     reference,
     hf_config_short,
     tmp_path,
-    mesh_row,
+    mesh_device,
 ):
     hf_config = hf_config_short
-    mesh_shape = list(mesh_row.shape)
+    mesh_shape = list(mesh_device.shape)
 
     dp_factor = mesh_shape[1] if mode == "decode" else 1
     paged_config = (
@@ -190,17 +197,18 @@ def test_forward_pass(
     ############################
     # Setup: Convert weights and get weight_config
     logger.info(f"Converting weights for MLA1D to {tmp_path}")
-    weight_config = MLA1D.convert_weights(hf_config, reference_model.state_dict(), tmp_path, mesh_row)
+    state_dicts = [reference_model.state_dict()] * mesh_shape[0]  # Duplicate state dicts for each row in the mesh
+    weight_config = MLA1D.convert_weights(hf_config, state_dicts, tmp_path, mesh_device)
 
     # Generate appropriate configs
-    ccl = CCL1D(hf_config, mesh_row)
+    ccl = CCL1D(mesh_row)
     if mode == "prefill":
-        model_config = MLA1D.prefill_model_config(hf_config, mesh_row, ccl)
+        model_config = MLA1D.prefill_model_config(hf_config, mesh_device)
     else:
-        model_config = MLA1D.decode_model_config(hf_config, mesh_row, ccl)
+        model_config = MLA1D.decode_model_config(hf_config, mesh_device)
 
     # Create a new model state
-    model_state = MLA1D.create_state(hf_config, mesh_row, dp_factor, paged_config)
+    model_state = MLA1D.create_state(hf_config, mesh_device, dp_factor, paged_config, ccl)
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state)
@@ -238,8 +246,8 @@ def test_forward_pass(
     # TODO: Need to handle padding for batch
     tt_input = ttnn.from_torch(
         torch_input,
-        device=mesh_row,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_row, dims=(None, -1), mesh_shape=mesh_shape),
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=mesh_shape),
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
@@ -249,9 +257,9 @@ def test_forward_pass(
     if mode == "decode":
         position_idxs_tensor = ttnn.from_torch(
             torch.tensor(position_idxs),
-            device=mesh_row,
+            device=mesh_device,
             mesh_mapper=ttnn.ShardTensor2dMesh(
-                mesh_row, dims=(None, 0), mesh_shape=mesh_shape
+                mesh_device, dims=(None, 0), mesh_shape=mesh_shape
             ),  # TODO: Shard on batch when DP
             dtype=ttnn.int32,
         )
@@ -260,17 +268,17 @@ def test_forward_pass(
             batch_size,
             dp_factor=dp_factor,
             config=paged_config,
-            mesh_device=mesh_row,
+            mesh_device=mesh_device,
         )
 
     # RoPE stuff
     rope_setup = RotarySetup(
-        device=mesh_row,
+        device=mesh_device,
         batch_size=batch_size,
         hf_config=hf_config,
     )
     rope_setup_dp = RotarySetup(
-        device=mesh_row,
+        device=mesh_device,
         batch_size=batch_size,
         hf_config=hf_config,
         use_dp=True,
@@ -298,18 +306,23 @@ def test_forward_pass(
     ### TTNN forward pass
     ############################
     logger.info("Running TTNN forward pass")
+
+    cur_row_idx = randint(0, mesh_shape[0] - 1)
+
     if mode == "prefill":
         tt_output = MLA1D.forward_prefill(tt_input, run_config, user_id, rope_tensors)
     else:
-        tt_output = MLA1D.forward_decode(tt_input, run_config, position_idxs_tensor, rope_tensors, tt_page_table)
+        tt_output = MLA1D.forward_decode(
+            tt_input, run_config, position_idxs_tensor, rope_tensors, tt_page_table, cur_row_idx
+        )
 
     tt_output_torch = ttnn.to_torch(
-        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_row, dims=(0, -1), mesh_shape=mesh_shape)
-    )[:1, ...]
+        tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_shape)
+    )[cur_row_idx, ...]
 
     if mode == "decode":
         # Torch Shape: [batch_size, seq_len, hidden_size]
-        tt_output_torch = tt_output_torch.squeeze(0).permute(1, 0, 2)
+        tt_output_torch = tt_output_torch.permute(1, 0, 2)
 
     ############################
     ### Validation
@@ -331,13 +344,15 @@ def test_forward_pass(
 
         if mode == "decode":
             tt_cache = get_cache_on_host(
-                run_config["kvpe_cache"], mesh_row
+                run_config["kvpe_cache"], cur_row_idx, mesh_device
             )  # [DP Factor * max_num_blocks, nh, block_size, head_dim + rope_head_dim]
             tt_cache = MLA1D.from_paged_cache(tt_cache, page_table, dp_factor).squeeze(
                 1
             )  # [bsz, max_seq_len, head_dim + rope_head_dim]
         else:
-            tt_cache = get_cache_on_host(run_config["kvpe_cache"], mesh_row)[: MLA1D.MAX_BATCH_SIZE, ...].squeeze(
+            tt_cache = get_cache_on_host(run_config["kvpe_cache"], cur_row_idx, mesh_device)[
+                : MLA1D.MAX_BATCH_SIZE, ...
+            ].squeeze(
                 1
             )  # [bsz, max_seq_len, head_dim + rope_head_dim]
 

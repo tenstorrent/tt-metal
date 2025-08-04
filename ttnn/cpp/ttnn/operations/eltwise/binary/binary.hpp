@@ -288,6 +288,8 @@ constexpr auto subalpha = ttnn::register_operation<
 constexpr auto logical_right_shift = ttnn::register_operation<
     "ttnn::logical_right_shift",
     operations::binary::BinaryOperation<operations::binary::BinaryOpType::LOGICAL_RIGHT_SHIFT>>();
+constexpr auto xlogy = ttnn::
+    register_operation<"ttnn::xlogy", operations::binary::BinaryOperation<operations::binary::BinaryOpType::XLOGY>>();
 
 template <typename InputBType>
 ttnn::Tensor operator+(const ttnn::Tensor& lhs, InputBType rhs) {

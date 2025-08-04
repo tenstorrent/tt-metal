@@ -8,6 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 #include "fill_pad_program_factory.hpp"
@@ -95,6 +96,8 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
     if (sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_time_args);
         compute_defines["SHARDED"] = "1";
+    } else {
+        tt::tt_metal::TensorAccessorArgs(*tens_buffer).append_to(writer_compile_time_args);
     }
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(

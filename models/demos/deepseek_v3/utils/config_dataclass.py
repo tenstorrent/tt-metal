@@ -105,28 +105,28 @@ class AllReduceConfig(OpConfigBase):
 class AllGatherAsyncConfig(OpConfigBase):
     """Common parameters for a ttnn.experimental.all_gather_async op"""
 
-    mesh_device: ConfigDevice
-    cluster_axis: int
-    dim: int
-    multi_device_global_semaphore: object
-    num_links: int
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
-    topology: ttnn.Topology = ttnn.Topology.Linear
+    mesh_device: ConfigDevice | None = None
+    cluster_axis: int | None = None
+    dim: int | None = None
+    multi_device_global_semaphore: object | None = None
+    num_links: int | None = None
+    memory_config: ttnn.MemoryConfig | None = None
+    topology: ttnn.Topology | None = None
 
 
 @dataclass
 class ReduceScatterAsyncConfig(OpConfigBase):
     """Common parameters for a ttnn.experimental.reduce_scatter_async op"""
 
-    mesh_device: ConfigDevice
-    cluster_axis: int
-    dim: int
-    from_remote_multi_device_global_semaphore: object
-    to_remote_multi_device_global_semaphore: object
-    math_op: ttnn.ReduceType
-    num_links: int
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
-    topology: ttnn.Topology = ttnn.Topology.Linear
+    mesh_device: ConfigDevice | None = None
+    cluster_axis: int | None = None
+    dim: int | None = None
+    from_remote_multi_device_global_semaphore: object | None = None
+    to_remote_multi_device_global_semaphore: object | None = None
+    math_op: ttnn.ReduceType | None = None
+    num_links: int | None = None
+    memory_config: ttnn.MemoryConfig | None = None
+    topology: ttnn.Topology | None = None
 
 
 @dataclass
