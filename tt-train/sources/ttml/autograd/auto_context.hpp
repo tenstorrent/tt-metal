@@ -9,6 +9,7 @@
 #include <random>
 
 #include "core/mesh_device.hpp"
+#include "core/tt_profiler.hpp"
 #include "graph.hpp"
 
 namespace ttml::autograd {
@@ -58,6 +59,9 @@ public:
 
     [[nodiscard]] DistributedContext& get_distributed_context() const;
 
+    core::TTProfiler& get_profiler();
+    void close_profiler();
+
 private:
     AutoContext();
     uint32_t m_seed = 5489U;
@@ -70,6 +74,7 @@ private:
     std::unique_ptr<core::MeshDevice> m_device;
 
     std::shared_ptr<DistributedContext> m_distributed_context;
+    std::unique_ptr<core::TTProfiler> m_profiler;
 
     friend class ttsl::Indestructible<AutoContext>;
 };

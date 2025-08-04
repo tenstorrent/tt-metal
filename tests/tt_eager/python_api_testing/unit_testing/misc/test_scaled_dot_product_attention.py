@@ -1066,4 +1066,4 @@ def test_sdpa_benchmark(device):
                             )
                             logger.error(f"Error: {e}")
 
-                ttnn.DumpDeviceProfiler(device)
+                ttnn.ReadDeviceProfiler(device)

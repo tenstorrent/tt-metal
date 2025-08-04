@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "accumulation_device_operation.hpp"
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::reduction::accumulation {
@@ -19,8 +19,6 @@ void AccumulationDeviceOperation::validate_on_program_cache_miss(
     const auto& input_shape{input_tensor.logical_shape()};
     auto& optional_out{tensor_args.opt_output};
     auto out_memory_config{optional_out.has_value() ? optional_out->memory_config() : attributes.output_memory_config};
-    const auto& input_dtype{attributes.dtype};
-    const auto& dim = attributes.dim;
 
     if (optional_out.has_value()) {
         const auto& preallocated_output_shape = optional_out.value().logical_shape();
@@ -37,7 +35,7 @@ void AccumulationDeviceOperation::validate_on_program_cache_miss(
         input_tensor.storage_type() == StorageType::DEVICE,
         "ttnn accumulation operations (cumprod, cumsum) require input to be on a Tenstorrent device. "
         "The input tensor is stored on {}.",
-        magic_enum::enum_name(input_tensor.storage_type()));
+        enchantum::to_string(input_tensor.storage_type()));
 
     TT_FATAL(
         input_tensor.buffer() != nullptr,
@@ -51,13 +49,13 @@ void AccumulationDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_tensor.layout() == Layout::TILE,
         "The provided input tensor has a non-tile layout: {}.",
-        magic_enum::enum_name(input_tensor.layout()));
+        enchantum::to_string(input_tensor.layout()));
 
     TT_FATAL(
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "ttnn accumulation operations (cumprod, cumsum) require the memory layout of the input tensor to be "
         "interleaved. Instead, it is {}.",
-        magic_enum::enum_name(input_tensor.memory_config().memory_layout()));
+        enchantum::to_string(input_tensor.memory_config().memory_layout()));
 }
 
 void AccumulationDeviceOperation::validate_on_program_cache_hit(

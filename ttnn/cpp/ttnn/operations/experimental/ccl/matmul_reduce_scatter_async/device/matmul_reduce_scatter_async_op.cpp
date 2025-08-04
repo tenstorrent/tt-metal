@@ -36,8 +36,6 @@ void MatmulReduceScatterAsync::validate_with_output_tensors(
     TT_ASSERT(input_tensors.size() == 2, "MatmulReduceScatterAsync requires 2 input tensors: [input, weight]");
     auto& input_tensor = input_tensors[0];
     auto& weight_tensor = input_tensors[1];
-    auto& intermediate_tensor = output_tensors.at(0).value();
-    auto& reduce_scatter_output_tensor = output_tensors.at(1).value();
     // // Reduce Scatter validate
     // this->reduce_scatter_minimal_async_struct.validate_with_output_tensors(
     //     {}, {intermediate_tensor, reduce_scatter_output_tensor});
@@ -104,7 +102,7 @@ tt::tt_metal::operation::ProgramWithCallbacks MatmulReduceScatterAsync::create_p
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
     auto mesh_device = input_tensors[0].mesh_device();
-    ttnn::ccl::SenderRecieverConfig config = ::ttnn::ccl::get_device_sender_receiver_config(
+    ::ttnn::ccl::get_device_sender_receiver_config(
         mesh_device->get_device(mesh_coord),
         this->reduce_scatter_minimal_async_struct.devices,
         this->reduce_scatter_minimal_async_struct.topology);
@@ -203,6 +201,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     const std::optional<const Tensor>& bias,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config_rs,
+    const std::optional<MemoryConfig>& intermediate_memory_config_rs,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     const std::optional<MemoryConfig>& memory_config_mm,
@@ -266,6 +265,7 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
         num_links,
         devices.size(),
         memory_config_rs.value_or(input_tensor.memory_config()),
+        intermediate_memory_config_rs.value_or(input_tensor.memory_config()),
         topology,
         multi_device_global_semaphore,
         barrier_semaphore,

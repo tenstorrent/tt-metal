@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <enchantum/enchantum.hpp>
+
 #include <stdint.h>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
@@ -106,7 +108,7 @@ static void configure_risc_settings(
             }
         }
     } else {
-        TT_THROW("Unsupported architecture for RISC configuration: {}", magic_enum::enum_name(arch));
+        TT_THROW("Unsupported architecture for RISC configuration: {}", enchantum::to_string(arch));
     }
 }
 
@@ -255,9 +257,6 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     std::array<size_t, num_receiver_channels>& num_receiver_buffer_slots,
     std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots,
     std::array<size_t, num_downstream_sender_channels>& num_downstream_sender_buffer_slots) {
-    static const std::vector<std::vector<std::pair<size_t, size_t>>> linear_buffer_slot_options = {
-        {{8, 16}}, {{8, 16}}};
-
     static const std::vector<std::vector<std::pair<size_t, size_t>>> ring_buffer_slot_options = {
         {{8, 8}, {4, 8}}, {{8, 8}, {4, 8}}};
 
@@ -271,6 +270,18 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     static const std::vector<std::vector<std::vector<std::pair<size_t, size_t>>>>
         ring_buffer_slot_options_dateline_upstream_adjcent = {
             {{{16, 8}, {8, 8}}, {{16, 8}, {8, 8}}}, {{{16, 8}, {8, 8}}, {{16, 8}, {8, 8}}}};
+
+    auto get_num_buffer_slots = [](Topology topology) -> const std::vector<std::pair<size_t, size_t>>& {
+        static tt::stl::Indestructible<std::vector<std::pair<size_t, size_t>>> mesh_slots(
+            std::vector<std::pair<size_t, size_t>>{{4, 8}});
+        static tt::stl::Indestructible<std::vector<std::pair<size_t, size_t>>> other_slots(
+            std::vector<std::pair<size_t, size_t>>{{8, 16}});
+        if (topology == Topology::Mesh) {
+            return mesh_slots.get();
+        } else {
+            return other_slots.get();
+        }
+    };
 
     auto get_optimal_num_slots = [this](
                                      auto& buffer_slot_options,
@@ -329,7 +340,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     } else if (arch == tt::ARCH::BLACKHOLE) {
         arch_index = 1;
     } else {
-        TT_THROW("Unsupported architecture: {}", magic_enum::enum_name(arch));
+        TT_THROW("Unsupported architecture: {}", enchantum::to_string(arch));
     }
 
     if (topology == Topology::Ring) {
@@ -475,7 +486,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
         size_t default_num_sender_buffer_slots;
         size_t default_num_receiver_buffer_slots;
         get_optimal_num_slots(
-            linear_buffer_slot_options[arch_index],
+            get_num_buffer_slots(topology),
             this->num_used_sender_channels,
             this->num_used_receiver_channels,
             default_num_sender_buffer_slots,
@@ -970,7 +981,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         } else if (dispatch_core_type == CoreType::ETH) {
             return tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR;
         } else {
-            TT_THROW("Fabric Mux does not support core type {}", magic_enum::enum_name(dispatch_core_type));
+            TT_THROW("Fabric Mux does not support core type {}", enchantum::to_string(dispatch_core_type));
         }
     }();
 

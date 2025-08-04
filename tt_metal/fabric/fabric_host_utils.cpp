@@ -5,10 +5,10 @@
 #include "control_plane.hpp"
 #include "fabric_host_utils.hpp"
 
+#include <tt-metalium/fabric.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/assert.hpp>
-#include <magic_enum/magic_enum.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <tt-metalium/metal_soc_descriptor.h>
 #include "impl/context/metal_context.hpp"
@@ -16,7 +16,6 @@
 #include <set>
 #include <vector>
 #include <algorithm>
-#include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "fabric/hw/inc/fabric_routing_mode.h"
 #include "fabric_context.hpp"
 #include <queue>
@@ -26,17 +25,7 @@
 namespace tt::tt_fabric {
 
 bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
-    return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
-}
-
-bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
-    return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS ||
-           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
+    return is_1d_fabric_config(fabric_config) || is_2d_fabric_config(fabric_config);
 }
 
 uint32_t get_sender_channel_count(tt::tt_fabric::Topology topology) {
@@ -55,8 +44,9 @@ uint32_t get_downstream_edm_count(tt::tt_fabric::Topology topology) {
     }
 }
 
-FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, tt::ClusterType cluster_type) {
-    if (cluster_type == tt::ClusterType::GALAXY && fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {
+FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, tt::tt_metal::ClusterType cluster_type) {
+    if (cluster_type == tt::tt_metal::ClusterType::GALAXY &&
+        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {
         return FabricType::TORUS_XY;
     }
     return FabricType::MESH;

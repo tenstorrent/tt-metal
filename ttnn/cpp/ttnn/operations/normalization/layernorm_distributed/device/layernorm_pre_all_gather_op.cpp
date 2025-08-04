@@ -10,8 +10,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 
-#include <magic_enum/magic_enum.hpp>
-
 #include <optional>
 
 using uint32_t = std::uint32_t;
@@ -54,7 +52,8 @@ operation::ProgramWithCallbacks LayerNormPreAllGather::create_program(
     const auto& a = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
 
-    return layernorm_pre_allgather_multi_core(a, output_tensor, this->norm_type, this->compute_kernel_config);
+    return layernorm_pre_allgather_multi_core(
+        a, output_tensor, this->norm_type, this->compute_kernel_config, this->use_2d_core_grid);
 }
 
 }  // namespace ttnn::operations::normalization

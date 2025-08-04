@@ -87,13 +87,6 @@ Tensor optimized_conv_new(
         input_bias_format_params = {
             .pad_shape = bias.value().padded_shape(), .pad_value = 0, .target_layout = Layout::TILE};
     }
-    auto output_layout = untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
-    auto arch = is_device_tensor(a)
-                    ? a.device()->arch()
-                    : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-    bool fp32_accum =
-        a.device()->arch() == tt::ARCH::WORMHOLE_B0;  // && compute_kernel_config.has_value()) ?
-                                                      // compute_kernel_config.value().fp32_dest_acc_en : false;
     auto optimized_conv_op = OptimizedConvNew(
         sliding_window_config,
         output_channels,
@@ -250,6 +243,8 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
 
     auto kernel_dims =
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second});
+
+    const SkipMcast& skip_mcast = conv_skip_mcast(parallelization_config, memory_config.memory_layout());
     conv_op_l1_usage l1_usage = calculate_L1_usage(
         compute_kernel_config,
         block_config,
@@ -273,7 +268,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             kernel_dims[1],
             sliding_window_config.get_output_shape()[2],
             has_bias),
-        is_singlecore_skip_mcast(parallelization_config, input_tensor_a.memory_config().memory_layout()));
+        skip_mcast.skip_activation_mcast);
 
     TT_FATAL(
         actual_cb_size == l1_usage.CB_allocation_size,
@@ -308,8 +303,6 @@ operation::OpPerformanceModel OptimizedConvNew::create_op_performance_model(
     uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
     uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
     uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
-    uint32_t pad_h = (uint32_t)sliding_window_config.get_pad_h();
-    uint32_t pad_w = (uint32_t)sliding_window_config.get_pad_w();
     uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
     uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
 

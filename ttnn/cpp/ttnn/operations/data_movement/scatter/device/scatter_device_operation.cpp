@@ -5,7 +5,9 @@
 #include "scatter_device_operation.hpp"
 #include "scatter_program_factory.hpp"
 
-#include <magic_enum/magic_enum.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
+
+#include <enchantum/enchantum.hpp>
 
 namespace ttnn::operations::data_movement::scatter {
 
@@ -48,14 +50,14 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         input_dtype == src_dtype,
         "input_dtype differs from src_dtype (input_dtype: {}, src_dtype: {}).",
-        magic_enum::enum_name(input_dtype),
-        magic_enum::enum_name(src_dtype));
+        enchantum::to_string(input_dtype),
+        enchantum::to_string(src_dtype));
 
     TT_FATAL(
         index_dtype == DataType::INT32 || index_dtype == DataType::UINT8 || index_dtype == DataType::UINT16 ||
             index_dtype == DataType::UINT32,
         "index_dtype is not integer, it is {}.",
-        magic_enum::enum_name(index_dtype));
+        enchantum::to_string(index_dtype));
 
     TT_FATAL(!input_tensor.is_sharded(), "Sharded tensors are not supported - input_tensor is sharded.");
     TT_FATAL(!index_tensor.is_sharded(), "Sharded tensors are not supported - index_tensor is sharded.");
@@ -81,6 +83,16 @@ ScatterDeviceOperation::spec_return_value_t ScatterDeviceOperation::compute_outp
 ScatterDeviceOperation::tensor_return_value_t ScatterDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
+}
+
+tt::tt_metal::operation::OpPerformanceModelGeneral<ScatterDeviceOperation::tensor_return_value_t>
+ScatterDeviceOperation::create_op_performance_model(
+    const operation_attributes_t& op_attr, const tensor_args_t& inputs, const Tensor& output) {
+    const auto& input_tensor = inputs.input_tensor;
+    int ideal_dev_clock_cycles = data_movement::common_tm_bw_model(input_tensor, output);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
+        {input_tensor}, {output}, ideal_dev_clock_cycles);
+    return result;
 }
 
 ScatterDeviceOperation::invocation_result_t ScatterDeviceOperation::invoke(

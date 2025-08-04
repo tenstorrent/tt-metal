@@ -160,7 +160,7 @@ def test_matmul(
     output_dtype,
     input_layout,
 ):
-    run_matmul(
+    (result, msg), e2e_perf = run_matmul(
         device,
         matmul_specs,
         compute_kernel_config,
@@ -172,6 +172,8 @@ def test_matmul(
         output_dtype,
         input_layout,
     )
+    assert result, msg
+    logger.info(f"e2e_perf: {e2e_perf}")
 
 
 def run(

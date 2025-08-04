@@ -236,7 +236,15 @@ class Tt_vgg_unet:
         self.d4 = Tt_decoder_block(device, conv_args.d4, parameters.d4)
         self.out = Conv(device, conv_args.out, parameters.out)
 
-    def __call__(self, x):
+    def __call__(self, input, min_channels=16):
+        n, c, h, w = input.shape
+        channel_padding_needed = min_channels - c
+        if channel_padding_needed > 0:
+            x = ttnn.pad(input, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
+            ttnn.deallocate(input)
+            input = x
+        x = ttnn.permute(input, (0, 2, 3, 1))
+        x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
         x = self.s1_0(x)
         x = self.s1_2(x)
         s1 = x
