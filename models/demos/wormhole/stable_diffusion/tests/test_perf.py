@@ -50,7 +50,7 @@ def test_stable_diffusion_unet_trace(device):
     assert is_wormhole_b0() or is_blackhole(), "SD 1.4 runs on Wormhole B0 or Blackhole"
 
     if is_wormhole_b0():
-        os.environ["SLOW_MATMULS"] = "1"
+        os.environ["TT_MM_THROTTLE_PERF"] = "5"
 
     profiler.clear()
     torch.manual_seed(0)
@@ -174,7 +174,7 @@ def test_stable_diffusion_unet_trace(device):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8 * 8192, "trace_region_size": 6458368}], indirect=True)
 def test_stable_diffusion_vae_trace(device):
     if is_wormhole_b0():
-        os.environ["SLOW_MATMULS"] = "1"
+        os.environ["TT_MM_THROTTLE_PERF"] = "5"
 
     profiler.clear()
     torch.manual_seed(0)
@@ -253,7 +253,7 @@ def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected
         num_inference_steps >= 4
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"
     # Until di/dt issues are resolved
-    os.environ["SLOW_MATMULS"] = "1"
+    os.environ["TT_MM_THROTTLE_PERF"] = "5"
     # Clear global profiler state before starting measurements
     profiler.clear()
 
@@ -409,7 +409,7 @@ def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "expected_kernel_samples_per_second",
-    ((10.65),),
+    ((11.30),),
 )
 def test_stable_diffusion_device_perf(expected_kernel_samples_per_second):
     subdir = "ttnn_stable_diffusion"
@@ -428,7 +428,7 @@ def test_stable_diffusion_device_perf(expected_kernel_samples_per_second):
         if "WH_ARCH_YAML" in os.environ:
             wh_arch_yaml_backup = os.environ["WH_ARCH_YAML"]
         os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
-        os.environ["SLOW_MATMULS"] = "1"
+        os.environ["TT_MM_THROTTLE_PERF"] = "5"
 
     post_processed_results = run_device_perf(command, subdir, iterations, cols, batch, has_signposts=True)
     expected_results = check_device_perf(post_processed_results, margin, expected_perf_cols, assert_on_fail=True)
