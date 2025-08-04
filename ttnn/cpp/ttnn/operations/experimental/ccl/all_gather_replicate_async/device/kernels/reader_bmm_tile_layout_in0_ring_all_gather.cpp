@@ -20,12 +20,12 @@ void kernel_main() {
     };
 
     // Compile time args
-    constexpr uint32_t shard_width_in_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(1);
+    constexpr uint32_t multicast_chunk_width_in_tiles = get_compile_time_arg_val(0);  // 1/4 of K per step
+    constexpr uint32_t shard_height_in_tiles = get_compile_time_arg_val(1);           // per_core_M
     constexpr uint32_t batch = get_compile_time_arg_val(2);
 
-    // All Gather specific
-    constexpr uint32_t ring_size = get_compile_time_arg_val(3);
+    // Multicast specific
+    constexpr uint32_t num_multicast_steps = get_compile_time_arg_val(3);  // Always 4
     uint32_t signal_semaphore_addr = get_semaphore(get_compile_time_arg_val(4));
     DPRINT << "signal_semaphore_addr: " << signal_semaphore_addr << ENDL();
     DPRINT << "fused_op_receiver_signal_semaphore_addr[0]: " << fused_op_receiver_signal_semaphore_addr[0] << ENDL();
@@ -41,24 +41,22 @@ void kernel_main() {
     }
     bool is_hop_core = core_type == (uint32_t)CORE_TYPE::HOP_CORE;
 
-    uint32_t ring_idx = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t next_core_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t next_core_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t noc = get_arg_val<uint32_t>(rt_args_idx++);
-    bool end_of_hop = (bool)get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t* unpadded_in0_shard_widths_in_tiles = (uint32_t*)get_arg_addr(rt_args_idx);
-    rt_args_idx += ring_size;
+    uint32_t ring_idx = get_arg_val<uint32_t>(rt_args_idx++);         // Core index for multicast addressing
+    uint32_t multicast_steps = get_arg_val<uint32_t>(rt_args_idx++);  // Should be 4
+
+    // No ring topology arguments needed for multicast
+    // No unpadded widths array needed since uniform 1/4 chunks
 
     volatile tt_l1_ptr uint32_t* l1_signal_sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
-    uint64_t remote_signal_semaphore_addr = get_noc_addr(next_core_noc_x, next_core_noc_y, signal_semaphore_addr, noc);
+    // No remote signal semaphore needed for multicast approach
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(5);
     constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(6);
 
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
-    constexpr uint32_t shard_size_in_tiles = shard_width_in_tiles * shard_height_in_tiles;
-    constexpr uint32_t shard_size_bytes = shard_size_in_tiles * in0_single_tile_size_bytes;
+    constexpr uint32_t multicast_chunk_size_in_tiles = multicast_chunk_width_in_tiles * shard_height_in_tiles;
+    constexpr uint32_t multicast_chunk_size_bytes = multicast_chunk_size_in_tiles * in0_single_tile_size_bytes;
 
     DPRINT << "core_type: " << static_cast<uint32_t>(core_type) << ENDL();
 
@@ -79,6 +77,8 @@ void kernel_main() {
 
     return;
 
+    // COMMENTED OUT: Original ring-based all-gather code preserved for reference
+    /*
     // Reserving/pushing the local shard is done in compute
     cb_reserve_back(cb_id_in2, (ring_size - 1) * shard_size_in_tiles);
 
@@ -123,4 +123,5 @@ void kernel_main() {
         }
     }
     noc_async_atomic_barrier();
+    */
 }

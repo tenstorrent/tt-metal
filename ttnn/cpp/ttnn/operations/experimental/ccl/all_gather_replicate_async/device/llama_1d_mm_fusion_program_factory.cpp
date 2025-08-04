@@ -1677,6 +1677,7 @@ process_gather_in0_program_and_create_override_variables(
     const uint32_t num_cores = all_worker_cores.num_cores();
     const uint32_t ring_size =
         fused_op_signaler->ring_size;  // use ccl ring size instead of num_cores = local core ring size for fused op
+    const uint32_t ring_index = fused_op_signaler->start_ring_index;
 
     for (uint32_t idx = 0; idx < ring_size; idx++) {
         log_info(
@@ -1708,12 +1709,13 @@ process_gather_in0_program_and_create_override_variables(
     log_info(tt::LogOp, "LLONG FUSION: in0_buffer: {}", in0_buffer->address());
     log_info(tt::LogOp, "LLONG FUSION: in1_buffer: {}", in1_buffer->address());
 
-    /* Inner dim padding */
-    const uint32_t Kt_pad = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
-    in0_block_w = Kt_pad / ring_size;
+    /* Inner dim - no padding needed for multicast approach */
+    const uint32_t Kt_total = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
+    constexpr uint32_t num_multicast_steps = 4;
+    in0_block_w = Kt_total / num_multicast_steps;  // Each step sends 1/4 of K dimension
 
-    uint32_t num_blocks = Kt_pad / in0_block_w;
-    log_info(tt::LogOp, "LLONG FUSION: Kt_pad: {}", Kt_pad);
+    uint32_t num_blocks = num_multicast_steps;  // Always 4 blocks now
+    log_info(tt::LogOp, "LLONG FUSION: Kt_total: {}", Kt_total);
     log_info(tt::LogOp, "LLONG FUSION: in0_block_w: {}", in0_block_w);
     log_info(tt::LogOp, "LLONG FUSION: num_blocks: {}", num_blocks);
     // Only enable packer l1 accumulation when there are spills, otherwise
@@ -1732,14 +1734,14 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    /* in0 */
-    uint32_t in0_shard_width_in_tiles = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
-    uint32_t in0_CB_tiles = per_core_M * in0_shard_width_in_tiles;
+    /* in0 - each multicast step sends 1/4 of data to all cores */
+    uint32_t multicast_chunk_width_in_tiles = Kt_total / num_multicast_steps;  // 1/4 of K
+    uint32_t in0_CB_tiles = per_core_M * multicast_chunk_width_in_tiles;       // Buffer for 1/4 chunk
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
     log_info(
         tt::LogOp,
-        "LLONG FUSION: in0_shard_width_in_tiles: {}, in0_CB_tiles: {}, in0_CB_size: {}",
-        in0_shard_width_in_tiles,
+        "LLONG FUSION: multicast_chunk_width_in_tiles: {}, in0_CB_tiles: {}, in0_CB_size: {}",
+        multicast_chunk_width_in_tiles,
         in0_CB_tiles,
         in0_CB_size);
 
@@ -1750,7 +1752,7 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t in1_tensor_width_in_tiles = b.padded_shape()[-1] / in1_tile.get_tile_shape()[1];
 
     if (in1_is_dram_sharded || in1_is_dram_interleaved) {
-        in1_CB_tiles = 2 * in0_shard_width_in_tiles * per_core_N;  // Double buffered
+        in1_CB_tiles = 2 * multicast_chunk_width_in_tiles * per_core_N;  // Double buffered
     } else {
         in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_tile_shape()[0];
         in1_shard_width_in_tiles =
@@ -1775,13 +1777,12 @@ process_gather_in0_program_and_create_override_variables(
         in1_shard_width_in_dram = in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1];
     }
 
-    /* in2 */
+    /* in2 - not needed for multicast approach since all cores receive same data */
     uint32_t in2_single_tile_size = in0_single_tile_size;
-    uint32_t in2_CB_tiles = (ring_size - 1) * in0_CB_tiles;  // All shards except local
-    uint32_t in2_CB_size = in2_CB_tiles * in2_single_tile_size;
-    log_info(tt::LogOp, "LLONG FUSION: in2_single_tile_size: {}", in2_single_tile_size);
-    log_info(tt::LogOp, "LLONG FUSION: in2_CB_tiles: {}", in2_CB_tiles);
-    log_info(tt::LogOp, "LLONG FUSION: in2_CB_size: {}", in2_CB_size);
+    uint32_t in2_CB_tiles = 0;  // No additional buffer needed for multicast
+    uint32_t in2_CB_size = 0;
+    log_info(
+        tt::LogOp, "LLONG FUSION: in2 not needed for multicast - CB2 tiles: {}, size: {}", in2_CB_tiles, in2_CB_size);
 
     /* out */
     uint32_t out_block_tiles = per_core_M * per_core_N;
@@ -1789,12 +1790,8 @@ process_gather_in0_program_and_create_override_variables(
     uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
     uint32_t interm0_CB_size = out_CB_tiles * interm0_single_tile_size;
 
-    uint32_t K_ = K;
-    std::vector<uint32_t> unpadded_in0_shard_widths_in_tiles(num_cores, 0);
-    for (uint32_t i = 0; i < num_cores && K_ > 0; ++i) {
-        unpadded_in0_shard_widths_in_tiles[i] = std::min(K_, in0_shard_width_in_tiles);
-        K_ -= unpadded_in0_shard_widths_in_tiles[i];
-    }
+    // No need for unpadded widths since no padding and uniform 1/4 chunks
+    // All multicast steps send exactly the same amount: multicast_chunk_width_in_tiles
 
     /* semaphores */
     auto in0_signal_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
@@ -1947,19 +1944,19 @@ process_gather_in0_program_and_create_override_variables(
         }
     }
 
-    /* Compile time args */
-    std::vector<uint32_t> in0_sender_compile_time_args = {
-        (std::uint32_t)in0_shard_width_in_tiles,
-        (std::uint32_t)per_core_M,  // in0_shard_height_in_tiles
-        (std::uint32_t)batch,       // batch
-        (std::uint32_t)ring_size,   // ring_size
+    /* Compile time args for multicast receiver */
+    std::vector<uint32_t> in0_multicast_receiver_compile_time_args = {
+        (std::uint32_t)multicast_chunk_width_in_tiles,  // 1/4 of K per step
+        (std::uint32_t)per_core_M,                      // in0_shard_height_in_tiles
+        (std::uint32_t)batch,                           // batch
+        (std::uint32_t)num_multicast_steps,             // 4 steps instead of ring_size
         (std::uint32_t)in0_signal_semaphore_id,
         (std::uint32_t)src0_cb_index,
-        (std::uint32_t)src2_cb_index,
-        (std::uint32_t)fused_op_signaler->fused_op_receiver_signal_semaphores[0],
-        (std::uint32_t)fused_op_signaler->fused_op_receiver_signal_semaphores[1],
-        (std::uint32_t)fused_op_signaler->fused_op_receiver_signal_semaphores[2],
-        (std::uint32_t)fused_op_signaler->fused_op_receiver_signal_semaphores[3],
+        (std::uint32_t)src2_cb_index,  // Keep for compatibility, though not used
+        (std::uint32_t)fused_op_signaler->fused_op_receiver_signal_semaphores[0],  // Step 0
+        (std::uint32_t)fused_op_signaler->fused_op_receiver_signal_semaphores[1],  // Step 1
+        (std::uint32_t)fused_op_signaler->fused_op_receiver_signal_semaphores[2],  // Step 2
+        (std::uint32_t)fused_op_signaler->fused_op_receiver_signal_semaphores[3],  // Step 3
     };
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
@@ -1994,7 +1991,7 @@ process_gather_in0_program_and_create_override_variables(
     log_info(tt::LogOp, "LLONG FUSION: in1_block_num_tiles: {}", in1_block_num_tiles);
     log_info(tt::LogOp, "LLONG FUSION: in1_block_size_bytes: {}", in1_block_size_bytes);
     std::vector<uint32_t> compute_kernel_args = {
-        in0_block_w,             // in0_block_w
+        in0_block_w,             // in0_block_w (now 1/4 of K)
         in0_num_subblocks,       // in0_num_subblocks
         in0_block_num_tiles,     // in0_block_num_tiles
         in0_subblock_num_tiles,  // in0_subblock_num_tiles
@@ -2005,7 +2002,7 @@ process_gather_in0_program_and_create_override_variables(
         in1_tensor_size_bytes,  // in1_tensor_size_bytes
         in1_per_core_w,         // in1_per_core_w
 
-        num_blocks,  // num_blocks
+        num_multicast_steps,  // Always 4 steps instead of variable num_blocks
 
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
@@ -2018,7 +2015,7 @@ process_gather_in0_program_and_create_override_variables(
         in1_is_dram_sharded,      // in1_is_dram_sharded
         src0_cb_index,
         src1_cb_index,
-        src2_cb_index,
+        src2_cb_index,  // Keep for compatibility though not used
         sync_cb_index,
         sync_cb2_index,
     };
@@ -2077,13 +2074,13 @@ process_gather_in0_program_and_create_override_variables(
     auto mm_kernel_in0_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_replicate_async/device/kernels/"
-        "reader_bmm_tile_layout_in0_ring_all_gather.cpp",
+        "reader_bmm_tile_layout_in0_ring_all_gather.cpp",  // Keep same kernel name
         all_cores,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
             .noc_mode = noc_mode,
-            .compile_args = in0_sender_compile_time_args});
+            .compile_args = in0_multicast_receiver_compile_time_args});  // NEW ARGS
     // Each core needs to signal to all RS cores, need to get a count of how many cores are in all_cores
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
         program,
@@ -2184,29 +2181,19 @@ process_gather_in0_program_and_create_override_variables(
         const auto& core = worker_cores_vec[i];
         const auto& core_noc = device->worker_core_from_logical_core(core);
 
-        /* in0 */
+        /* in0 - multicast receiver setup (no ring topology needed) */
         auto core_type = CORE_TYPE::WORKER_CORE;  // worker core
-        CoreCoord next_core;
-        if (send_to_hop_core) {
-            next_core = hop_cores_vec[0];  // Send to first hop core
-        } else {
-            uint32_t next_i = i == 0 ? num_cores - 1 : i - 1;
-            next_core = worker_cores_vec[next_i % num_cores];
-        }
-        const auto& next_core_noc = device->worker_core_from_logical_core(next_core);
-        uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device, use_dedicated_noc);
 
         std::vector<uint32_t> mm_in0_args = {
             (std::uint32_t)core_type,
-            fused_op_signaler->start_ring_index,  // ring_index
-            next_core_noc.x,                      // next_core_noc_x
-            next_core_noc.y,                      // next_core_noc_y
-            noc,
-            (std::uint32_t)false,  // end_of_hop
+            (std::uint32_t)ring_index,           // Core index for multicast addressing
+            (std::uint32_t)num_multicast_steps,  // 4 steps
+            // No next_core coordinates needed for multicast reception
+            // Multicast sender coordinates would be determined elsewhere
         };
 
-        mm_in0_args.insert(
-            mm_in0_args.end(), unpadded_in0_shard_widths_in_tiles.begin(), unpadded_in0_shard_widths_in_tiles.end());
+        // No need for unpadded widths array since no padding and uniform chunks
+        // Add fused op semaphores directly
         mm_in0_args.insert(
             mm_in0_args.end(),
             fused_op_signaler->fused_op_receiver_signal_semaphores.begin(),
@@ -2252,12 +2239,9 @@ process_gather_in0_program_and_create_override_variables(
         /* compute */
         std::vector<uint32_t> mm_kernel_compute_args = {
             (std::uint32_t)core_type,
-            i,  // ring_idx
+            i,  // core_idx (not ring_idx anymore)
         };
-        mm_kernel_compute_args.insert(
-            mm_kernel_compute_args.end(),
-            unpadded_in0_shard_widths_in_tiles.begin(),
-            unpadded_in0_shard_widths_in_tiles.end());
+        // No need for unpadded widths since all steps process uniform 1/4 chunks
 
         tt_metal::SetRuntimeArgs(program, mm_kernel, core, mm_kernel_compute_args);
     }
@@ -2270,18 +2254,11 @@ process_gather_in0_program_and_create_override_variables(
         const auto& core = hop_cores_vec[i];
         const auto& core_noc = device->worker_core_from_logical_core(core);
 
-        /* in0 */
-        CoreCoord next_core = end_of_hop ? worker_cores_vec[num_cores - 1] : hop_cores_vec[i + 1];
-        const auto& next_core_noc = device->worker_core_from_logical_core(next_core);
-        uint32_t noc = get_preferred_noc(core_noc, next_core_noc, device, use_dedicated_noc);
-
+        /* in0 - hop cores not needed for multicast, but keeping for compatibility */
         std::vector<uint32_t> mm_in0_args = {
             (std::uint32_t)core_type,
-            0,                // ring_index
-            next_core_noc.x,  // next_core_noc_x
-            next_core_noc.y,  // next_core_noc_y
-            noc,
-            (std::uint32_t)end_of_hop,  // end_of_hop
+            (std::uint32_t)i,  // Core index
+            // Hop cores may not be needed for multicast approach
         };
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_id, core, mm_in0_args);
 
