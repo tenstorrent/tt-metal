@@ -16,7 +16,6 @@ from models.utility_functions import (
 from models.utility_functions import skip_for_grayskull
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedForward
 
 
 @torch.no_grad()
@@ -64,14 +63,7 @@ def test_qwen_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
         k[len(first_layer_prefix) + 1 :]: v for k, v in state_dict_ref.items() if (k.startswith(first_layer_prefix))
     }
 
-    # reference_model = model_args_ref.reference_mlp()
-    reference_model = FeedForward(
-        dim=5120,
-        hidden_dim=25600,
-        multiple_of=1,
-        ffn_dim_multiplier=None,
-        llama3=False,
-    )
+    reference_model = model_args_ref.reference_mlp()
     reference_model.load_state_dict(partial_state_dict_ref)
 
     logger.info(f"Reference Model Loaded")
@@ -138,22 +130,18 @@ def test_qwen_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
             else ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
         )
-
         logger.info("Run Qwen_MLP")
         tt_output = tt_model(tt_input, mode)
-        logger.info(f"tt_output shape: {tt_output.shape}")
 
         tt_output_torch = ttnn.to_torch(
             tt_output,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
         )
-        logger.info(f"tt_output_torch shape: {tt_output_torch.shape}")
         logger.info("Qwen MLP Done")
 
         tt_output_torch = tt_output_torch[:, :1, :, : model_args.dim]
 
-        ref_input = torch_input[:, :, :, : model_args.dim]
-        reference_output = reference_model(ref_input)
+        reference_output = reference_model(torch_input[:, :, :1, : model_args.dim])
 
         pcc_required = 0.99
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

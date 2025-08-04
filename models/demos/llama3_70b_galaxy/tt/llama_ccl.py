@@ -284,7 +284,7 @@ class TT_CCL:
             )
             if not self.use_qwen_mlp
             else ttnn.from_torch(
-                torch.zeros((1, 1, 32, 3200)),
+                torch.zeros((1, 1, self.max_batch_size, 3200)),
                 device=self.mesh_device,
                 layout=ttnn.TILE_LAYOUT,
                 dtype=ttnn.bfloat8_b,
@@ -545,10 +545,10 @@ class TT_CCL:
                 if not self.use_qwen_mlp
                 else {
                     "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                    "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                    "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
                     "FF1": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
                     "FF3": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
-                    "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                    "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
                 }
             )
             for key, shape in buffers_dict.items():
@@ -997,7 +997,7 @@ class TT_CCL:
         use_optimal_ccl_for_llama=False,
     ):
         topology = ttnn.Topology.Linear
-
+        breakpoint()
         if self.mode == "prefill":
             persistent_buffer = None
             if self.use_ring_ag_prefill and buffer_key is not None:
