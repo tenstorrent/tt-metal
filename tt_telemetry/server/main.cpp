@@ -4,6 +4,8 @@
  * 
  * TODO
  * ----
+ * - Add the logic that test_system_health.cpp uses to determine number of connections and write
+ *   a loop that iterates them all and prints health.
  * - cluster.get_ethernet_connections() <-- Does this return chips on other hosts in a cluster?
  *   What about the remote side of each connection? Need to test on a multi-host system.
  * - Need to handle other cluster types (including N300, etc., which have most of their Ethernet
