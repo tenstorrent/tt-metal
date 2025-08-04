@@ -79,8 +79,10 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::LEZ:
         case UnaryOpType::GEZ:
         case UnaryOpType::NEZ: return "SFPU_OP_UNARY_COMP_INCLUDE";
-        case UnaryOpType::HARDSIGMOID: return "SFPU_OP_ACTIVATIONS_INCLUDE";
         case UnaryOpType::WHERE_TSS: return "SFPU_OP_WHERE_INCLUDE";
+        case UnaryOpType::SOFTSIGN:
+        case UnaryOpType::HARDSIGMOID:
+        case UnaryOpType::CELU: return "SFPU_OP_ACTIVATIONS_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
 }
@@ -358,6 +360,15 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                     fmt::format("unary_min_tile({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
             }
             break;
+        case UnaryOpType::CELU:
+            op_init_and_name = {
+                "celu_tile_init();",
+                fmt::format(
+                    "celu_tile({}, {:#x}u, {:#x}u);",
+                    idst,
+                    std::bit_cast<uint32_t>(param0),
+                    std::bit_cast<uint32_t>(1.0f / param0))};
+            break;
         case UnaryOpType::HARDSHRINK: op_init_and_name = {}; break;
         case UnaryOpType::WHERE_TSS: {
             std::string where_call;
@@ -564,6 +575,9 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             break;
         case UnaryOpType::HARDSIGMOID:
             op_init_and_name = {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
+            break;
+        case UnaryOpType::SOFTSIGN:
+            op_init_and_name = {"softsign_tile_init();", fmt::format("softsign_tile({});", idst)};
             break;
         case UnaryOpType::MISH: op_init_and_name = {}; break;
         case UnaryOpType::IDENTITY: op_init_and_name = {}; break;
