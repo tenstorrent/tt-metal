@@ -61,8 +61,6 @@ Tensor where_impl(
 
 inline bool have_same_shape(const Tensor& a, const Tensor& b) { return (a.logical_shape() == b.logical_shape()); }
 
-// Use consolidated broadcast utilities from where_utils.hpp
-
 }  // namespace ternary_utils
 
 Tensor WhereOperation::invoke(

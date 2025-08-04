@@ -17,7 +17,7 @@ enum class KernelName {
     ReaderNoBcastTST,
     ReaderNoBcastTTS,
     ReaderNoBcastTSS,
-    ReaderColBcastTTT,  // New broadcast version for TTT
+    ReaderColBcastTTT,
     WriterNoBcastTTT,
     WriterNoBcastTST,
     WriterNoBcastTTS,
@@ -43,9 +43,6 @@ uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype);
 // Create dataflow defines for ternary where operation
 std::map<std::string, std::string> make_ternary_dataflow_defines(
     const DataType predicate_dtype, const DataType value_true_dtype, const DataType value_false_dtype);
-
-// Forward declarations for broadcast utilities
-using Tensor = tt::tt_metal::Tensor;
 
 // Broadcast detection and validation utilities
 struct WhereBroadcastInfo {
