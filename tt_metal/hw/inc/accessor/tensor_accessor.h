@@ -31,7 +31,7 @@ uint64_t get_dram_bank_base_offset(uint32_t bank_id, uint8_t noc) {
 }  // namespace tensor_accessor
 
 // Forward declaration for ShardPagesAddressIterator
-template <typename Accessor, bool CheckBounds>
+template <typename Accessor>
 class ShardPagesAddressIterator;
 
 /**
@@ -205,21 +205,18 @@ public:
     }
 
     // Shard iterator
-    template <bool CheckBounds = true>
-    ShardPagesAddressIterator<TensorAccessor, CheckBounds> get_shard_pages_address_iterator(
+    const ShardPagesAddressIterator<TensorAccessor> shard_pages_address_iterator(
         uint32_t shard_id, uint32_t start_page_offset = 0, uint8_t noc = noc_index) const {
-        return ShardPagesAddressIterator<TensorAccessor, CheckBounds>(*this, shard_id, start_page_offset, noc);
+        return ShardPagesAddressIterator<TensorAccessor>(*this, shard_id, start_page_offset, noc);
     }
 
-    template <bool CheckBounds = true>
-    ShardPagesAddressIterator<TensorAccessor, CheckBounds> shard_pages_begin(
+    const ShardPagesAddressIterator<TensorAccessor> shard_pages_begin(
         uint32_t shard_id, uint8_t noc = noc_index) const {
-        return get_shard_pages_address_iterator(shard_id, 0, noc);
+        return shard_pages_address_iterator(shard_id, 0, noc);
     }
-    template <bool CheckBounds = true>
-    ShardPagesAddressIterator<TensorAccessor, CheckBounds> shard_pages_end(
-        uint32_t shard_id, uint8_t noc = noc_index) const {
-        return get_shard_pages_address_iterator(shard_id, dspec().shard_volume(), noc);
+
+    const ShardPagesAddressIterator<TensorAccessor> shard_pages_end(uint32_t shard_id, uint8_t noc = noc_index) const {
+        return shard_pages_address_iterator(shard_id, dspec().shard_volume(), noc);
     }
 
 private:
@@ -266,8 +263,7 @@ public:
     const size_t bank_base_address = 0;
     const uint32_t page_size = 0;
 
-    friend class ShardPagesAddressIterator<TensorAccessor, true>;
-    friend class ShardPagesAddressIterator<TensorAccessor, false>;
+    friend class ShardPagesAddressIterator<TensorAccessor>;
 };
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -299,7 +295,7 @@ template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)
     -> TensorAccessor<decltype(tensor_accessor::make_dspec_from_args(args))>;
 
-template <typename Accessor, bool CheckBounds>
+template <typename Accessor>
 class ShardPagesAddressIterator {
 public:
     using ArrayU32 = std::array<uint32_t, Accessor::DSpec::rank_ct>;
@@ -309,40 +305,47 @@ public:
     using value_type = const uint64_t;
     using difference_type = std::ptrdiff_t;
     using reference = const uint64_t&;
+    using pointer = const uint64_t*;
 
     // Constructor that initializes the iterator at a starting position
     ShardPagesAddressIterator(
         const Accessor& accessor, uint32_t shard_id = 0, uint32_t start_page_offset = 0, uint8_t noc = noc_index) :
-        accessor_(accessor), current_page_id_in_shard_(start_page_offset), current_shard_id_(shard_id), noc_(noc) {
+        accessor(accessor), current_page_id_in_shard(start_page_offset), current_shard_id(shard_id), noc(noc) {
         PageMapping current_page_mapping{
             .bank_id = shard_id % accessor.dspec().num_banks(),
             .bank_page_offset =
                 shard_id / accessor.dspec().num_banks() * accessor.dspec().shard_volume() + start_page_offset};
-        calculate_current_page_coords(shard_id, start_page_offset);
-        current_noc_addr_ = accessor_.get_noc_addr(current_page_mapping, 0, noc);
+        calculate_current_location(shard_id, start_page_offset);
+        current_noc_addr = accessor.get_noc_addr(current_page_mapping, 0, noc);
+        ASSERT(current_page_id_in_shard <= accessor.dspec().shard_volume());
     }
 
     // Get NOC address for current position with optional offset
     uint32_t get_page_id() const {
         uint32_t page_id = 0;
-        for (uint32_t i = 0; i < accessor_.dspec().rank(); ++i) {
-            page_id += global_page_coord_[i] * accessor_.dspec().tensor_strides()[i];
+        for (uint32_t i = 0; i < accessor.dspec().rank(); ++i) {
+            page_id += global_page_coord[i] * accessor.dspec().tensor_strides()[i];
         }
         return page_id;
     }
-    uint64_t get_noc_addr(const uint32_t offset = 0) const { return current_noc_addr_ + offset; }
+    uint64_t get_noc_addr(const uint32_t offset = 0) const { return current_noc_addr + offset; }
 
-    reference operator*() const { return current_noc_addr_; }
+    reference operator*() const { return current_noc_addr; }
 
     // Operator ++/--
     ShardPagesAddressIterator& operator++() {
+        if (current_page_id_in_shard >= accessor.dspec().shard_volume()) {
+            return *this;  // End iterator
+        }
+
         do {
-            current_noc_addr_ += accessor_.page_size;
-            current_page_id_in_shard_++;
-            if (current_page_id_in_shard_ >= accessor_.dspec().shard_volume()) {
+            current_noc_addr += accessor.page_size;
+            current_page_id_in_shard++;
+            if (current_page_id_in_shard >= accessor.dspec().shard_volume()) {
                 break;
             }
-        } while (!update_current_page_coords());
+        } while (!update_local_global_page_coord());
+        ASSERT(current_page_id_in_shard <= accessor.dspec().shard_volume());
         return *this;
     }
 
@@ -361,13 +364,18 @@ public:
     }
 
     ShardPagesAddressIterator& operator+=(difference_type steps) {
+        if (current_page_id_in_shard >= accessor.dspec().shard_volume()) {
+            return *this;  // End iterator
+        }
+
         do {
-            current_noc_addr_ += steps * accessor_.page_size;
-            current_page_id_in_shard_ += steps;
-            if (current_page_id_in_shard_ >= accessor_.dspec().shard_volume()) {
+            current_noc_addr += steps * accessor.page_size;
+            current_page_id_in_shard += steps;
+            if (current_page_id_in_shard >= accessor.dspec().shard_volume()) {
                 break;
             }
-        } while (!update_current_page_coords(steps));
+        } while (!update_local_global_page_coord(steps));
+        ASSERT(current_page_id_in_shard <= accessor.dspec().shard_volume());
         return *this;
     }
 
@@ -382,23 +390,22 @@ public:
     ShardPagesAddressIterator operator-(difference_type steps) const { return *this + (-steps); }
 
     difference_type operator-(const ShardPagesAddressIterator& other) const {
-        return current_page_id_in_shard_ - other.current_page_id_in_shard_;
+        return current_page_id_in_shard - other.current_page_id_in_shard;
+    }
+
+    const uint64_t& operator[](difference_type n) const {
+        auto temp = *this;
+        temp += n;
+        return *temp;
     }
 
     // Equality comparison
-    bool operator==(const ShardPagesAddressIterator& other) const {
-        return current_shard_id_ == other.current_shard_id_ &&
-               current_page_id_in_shard_ == other.current_page_id_in_shard_;
-    }
+    bool operator==(const ShardPagesAddressIterator& other) const { return current_noc_addr == other.current_noc_addr; }
 
     // Inequality comparison
     bool operator!=(const ShardPagesAddressIterator& other) const { return !(*this == other); }
 
-    bool operator<(const ShardPagesAddressIterator& other) const {
-        return current_shard_id_ < other.current_shard_id_ ||
-               (current_shard_id_ == other.current_shard_id_ &&
-                current_page_id_in_shard_ < other.current_page_id_in_shard_);
-    }
+    bool operator<(const ShardPagesAddressIterator& other) const { return get_page_id() < other.get_page_id(); }
 
     bool operator>(const ShardPagesAddressIterator& other) const { return other < *this; }
 
@@ -407,100 +414,82 @@ public:
     bool operator>=(const ShardPagesAddressIterator& other) const { return !(*this < other); }
 
 private:
-    const Accessor& accessor_;
-    uint32_t current_page_id_in_shard_;
-    uint32_t current_shard_id_;
-    uint64_t current_noc_addr_;
-    uint8_t noc_;
+    const Accessor& accessor;
+    uint32_t current_page_id_in_shard = 0;
+    uint32_t current_shard_id = 0;
+    uint64_t current_noc_addr = 0;
+    uint8_t noc = noc_index;
 
-    // Those are needed only when CheckBounds is true
-    ArrayU32 page_coord_within_shard_{};
-    ArrayU32 global_page_coord_{};
-    ArrayU32 shard_coord_{};
+    ArrayU32 local_page_coord = {};
+    ArrayU32 global_page_coord = {};
+    ArrayU32 shard_coord = {};
 
-    void calculate_current_page_coords(uint32_t shard_id, uint32_t page_id_in_shard) {
-        const auto& dspec = accessor_.dspec();
+    // Calculates global page coordinate and checks if it's within logical tensor bounds
+    bool update_global_page_coord() {
+        const auto& dspec = accessor.dspec();
+        for (uint32_t i = 0; i < dspec.rank(); ++i) {
+            global_page_coord[i] = shard_coord[i] * dspec.shard_shape()[i] + local_page_coord[i];
+            // Check bounds - some shards at edges might have fewer pages (in case of padding)
+            if (global_page_coord[i] >= dspec.tensor_shape()[i]) {
+                return false;  // Page is outside logical tensor bounds
+            }
+        }
+        return true;
+    }
+
+    // Calculates shard coordinate, page coordinate within shard, and global page coordinate
+    void calculate_current_location(uint32_t shard_id, uint32_t page_id_in_shard) {
+        const auto& dspec = accessor.dspec();
 
         // Calculate shard coordinates once and store them
         uint32_t remaining_shard_id = shard_id;
         for (int i = dspec.rank() - 1; i >= 0; --i) {
-            shard_coord_[i] = remaining_shard_id % dspec.shard_grid()[i];
+            shard_coord[i] = remaining_shard_id % dspec.shard_grid()[i];
             remaining_shard_id /= dspec.shard_grid()[i];
         }
 
         // Calculate initial page coordinates within shard
         uint32_t temp_page_id = page_id_in_shard;
         for (int i = dspec.rank() - 1; i >= 0; --i) {
-            page_coord_within_shard_[i] = temp_page_id % dspec.shard_shape()[i];
+            local_page_coord[i] = temp_page_id % dspec.shard_shape()[i];
             temp_page_id /= dspec.shard_shape()[i];
         }
 
         // Calculate initial global coordinates
-        for (uint32_t i = 0; i < dspec.rank(); ++i) {
-            global_page_coord_[i] = shard_coord_[i] * dspec.shard_shape()[i] + page_coord_within_shard_[i];
-        }
+        update_global_page_coord();
     }
 
-    // Optimized version for step=1 (most common case)
-    bool update_current_page_coords() {
-        if constexpr (!CheckBounds) {
-            return true;
-        } else {
-            const auto& dspec = accessor_.dspec();
+    // Updates local_page_coord and global_page_coord by incrementing the rightmost dimension
+    // Returns false if page is outside logical tensor bounds (padded tile)
+    bool update_local_global_page_coord() {
+        const auto& dspec = accessor.dspec();
 
-            // Incrementally update page_coord_within_shard_ like a multi-dimensional counter
-            // Start from the rightmost (last) dimension and carry over when needed
-            for (int i = dspec.rank() - 1; i >= 0; --i) {
-                page_coord_within_shard_[i]++;
-                if (page_coord_within_shard_[i] < dspec.shard_shape()[i]) {
-                    // No overflow, we can stop here
-                    break;
-                }
-                // Overflow - reset this dimension and continue to next dimension
-                page_coord_within_shard_[i] = 0;
+        // Incrementally update local_page_coord like a multi-dimensional counter
+        // Start from the rightmost (last) dimension and carry over when needed
+        for (int i = dspec.rank() - 1; i >= 0; --i) {
+            local_page_coord[i]++;
+            // No overflow
+            if (local_page_coord[i] < dspec.shard_shape()[i]) {
+                break;
             }
-
-            // Update global coordinates based on updated page coordinates
-            for (uint32_t i = 0; i < dspec.rank(); ++i) {
-                global_page_coord_[i] = shard_coord_[i] * dspec.shard_shape()[i] + page_coord_within_shard_[i];
-
-                // Check bounds - some shards at edges might have fewer pages (in case of padding)
-                if (global_page_coord_[i] >= dspec.tensor_shape()[i]) {
-                    return false;  // Page is outside tensor bounds
-                }
-            }
-
-            return true;  // Page is within tensor bounds
+            // Overflow - reset this dimension and continue to next dimension
+            local_page_coord[i] = 0;
         }
+
+        return update_global_page_coord();
     }
 
-    // Generic version for arbitrary steps
-    bool update_current_page_coords(uint32_t step) {
-        if constexpr (!CheckBounds) {
-            return true;
-        } else {
-            const auto& dspec = accessor_.dspec();
+    // Generic version of update_local_global_page_coord for arbitrary steps
+    bool update_local_global_page_coord(uint32_t step) {
+        const auto& dspec = accessor.dspec();
 
-            // Incrementally update page_coord_within_shard_ like a multi-dimensional counter
-            // Start from the rightmost (last) dimension and carry over when needed
-            uint32_t carry = step;
-            for (int i = dspec.rank() - 1; i >= 0 && carry > 0; --i) {
-                uint32_t new_coord = page_coord_within_shard_[i] + carry;
-                page_coord_within_shard_[i] = new_coord % dspec.shard_shape()[i];
-                carry = new_coord / dspec.shard_shape()[i];
-            }
-
-            // Update global coordinates based on updated page coordinates
-            for (uint32_t i = 0; i < dspec.rank(); ++i) {
-                global_page_coord_[i] = shard_coord_[i] * dspec.shard_shape()[i] + page_coord_within_shard_[i];
-
-                // Check bounds - some shards at edges might have fewer pages (in case of padding)
-                if (global_page_coord_[i] >= dspec.tensor_shape()[i]) {
-                    return false;  // Page is outside tensor bounds
-                }
-            }
-
-            return true;  // Page is within tensor bounds
+        uint32_t carry = step;
+        for (int i = dspec.rank() - 1; i >= 0 && carry > 0; --i) {
+            uint32_t new_coord = local_page_coord[i] + carry;
+            local_page_coord[i] = new_coord % dspec.shard_shape()[i];
+            carry = new_coord / dspec.shard_shape()[i];
         }
+
+        return update_global_page_coord();
     }
 };
