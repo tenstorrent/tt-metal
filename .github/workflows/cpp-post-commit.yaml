@@ -97,13 +97,6 @@ jobs:
           # https://github.com/tenstorrent/tt-metal/issues/20166
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher }}
-
-      # - name: Install TT-Lens Debug tool
-      #   run: |
-      #     echo "Installing TT-Lens Debug tool"
-      #     pip3 install git+https://github.com/tenstorrent/tt-exalens
-      #   shell: bash
-
       - name: ${{ matrix.test-group.name }} tests
         #GH Issue 16167
         if: ${{ !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools') }}

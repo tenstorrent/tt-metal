@@ -494,7 +494,7 @@ TEST(Debugging, Test_Eth) {
     }
     auto device = CreateDevice(0);
 
-    for (int i = 0; i < 1; ++i) {
+    for (int i = 0; i < 10; ++i) {
         constexpr uint32_t num_writes = 60000;
         // NOTE: kernel ring buffer size = 16,384
         constexpr uint32_t total_size = num_writes * sizeof(uint32_t);

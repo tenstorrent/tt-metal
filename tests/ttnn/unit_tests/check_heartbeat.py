@@ -22,19 +22,19 @@ context = init_ttexalens()
 # for f in erisc_count*; do echo "--- $f ---"; cat "$f"; echo; done
 
 
-def print_erisc_count_files():
-    btu_files = [f for f in os.listdir(".") if f.startswith("erisc_count_")]
-    for fname in sorted(btu_files):
-        print(f"--- {fname} ---")
-        try:
-            with open(fname, "r") as f:
-                print(f.read())
-        except Exception as e:
-            print(f"Could not read {fname}: {e}")
-        print()
+# def print_erisc_count_files():
+#     btu_files = [f for f in os.listdir(".") if f.startswith("erisc_count_")]
+#     for fname in sorted(btu_files):
+#         print(f"--- {fname} ---")
+#         try:
+#             with open(fname, "r") as f:
+#                 print(f.read())
+#         except Exception as e:
+#             print(f"Could not read {fname}: {e}")
+#         print()
 
 
-print_erisc_count_files()
+# print_erisc_count_files()
 
 # Read heartbeat from core e0,4 to e0,11
 for col in range(4, 12):

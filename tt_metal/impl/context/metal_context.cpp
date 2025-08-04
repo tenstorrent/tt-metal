@@ -955,41 +955,6 @@ void MetalContext::initialize_firmware(
             } else {
                 // Active ethernet firmware launched immediately. Set the enable flag to 1 so FW doesn't exit
                 // immediately.
-
-                {
-                    // Keeping track of how many times we launched the active ethernet firmware.
-                    // Make the erisc_count file name based on the virtual core x and y.
-                    std::string erisc_count_file = fmt::format("erisc_count_{}_{}", virtual_core.x, virtual_core.y);
-                    int fd = open(erisc_count_file.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0666);
-                    if (fd != -1) {
-                        if (flock(fd, LOCK_EX) != -1) {
-                            long count = 0;
-                            char buffer[21] = {0};
-                            ssize_t bytes_read = read(fd, buffer, 20);
-                            if (bytes_read == 0) {
-                                // First run. Zero the count on this core
-                                auto l1_addr = hal_->get_dev_addr(core_type, HalL1MemAddrType::DEBUG_RUN_COUNT);
-                                cluster_->write_core(
-                                    &count, sizeof(uint32_t), tt_cxy_pair(device_id, virtual_core), l1_addr);
-                                cluster_->l1_barrier(device_id);
-                            } else if (bytes_read > 0) {
-                                try {
-                                    count = std::stol(std::string(buffer));
-                                } catch (const std::exception& e) {
-                                    count = 0;
-                                }
-                            }
-                            count++;
-                            std::string new_count_str = std::to_string(count);
-                            ftruncate(fd, 0);
-                            lseek(fd, 0, SEEK_SET);
-                            write(fd, new_count_str.c_str(), new_count_str.length());
-                            flock(fd, LOCK_UN);
-                        }
-                        close(fd);
-                    }
-                }
-                tt::llrt::internal_::set_metal_eth_fw_run_flag(device_id, virtual_core, false);
                 tt::llrt::internal_::send_msg_to_eth_mailbox(
                     device_id,
                     virtual_core,
