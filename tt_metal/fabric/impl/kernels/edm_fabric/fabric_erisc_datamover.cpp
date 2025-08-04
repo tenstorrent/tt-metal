@@ -2318,7 +2318,8 @@ void kernel_main() {
     }
 
     auto open_downstream_edm_noc_interface = [&](uint32_t edm_index) {
-        downstream_edm_noc_interfaces[edm_index].template open<true, tt::tt_fabric::worker_handshake_noc>();
+        downstream_edm_noc_interfaces[edm_index]
+            .template open<false, use_posted_writes_for_connection_open, tt::tt_fabric::worker_handshake_noc>();
         *downstream_edm_noc_interfaces[edm_index].from_remote_buffer_free_slots_ptr = 0;
         ASSERT(
             get_ptr_val(downstream_edm_noc_interfaces[edm_index].worker_credits_stream_id) ==

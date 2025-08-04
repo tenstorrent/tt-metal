@@ -423,7 +423,7 @@ void MetalContext::set_fabric_config(
         const auto fabric_type = get_fabric_type(fabric_config);
         if (fabric_type == tt::tt_fabric::FabricType::TORUS_X || fabric_type == tt::tt_fabric::FabricType::TORUS_Y ||
             fabric_type == tt::tt_fabric::FabricType::TORUS_XY) {
-            TT_THROW("2D fabric with torus topology is not supported for non-GALAXY clusters.");
+            TT_THROW("2D fabric with torus topology is only supported on GALAXY clusters.");
         }
     }
 

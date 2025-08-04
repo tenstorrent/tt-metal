@@ -161,6 +161,7 @@ FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
 }
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
+    this->topology = topology;
     const bool is_2D_routing = FabricContext::is_2D_topology(topology);
     uint32_t num_sender_channels = get_sender_channel_count(is_2D_routing);
     uint32_t num_downstream_edms = get_downstream_edm_count(is_2D_routing);
@@ -1223,22 +1224,22 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         this->downstream_vcs_sender_channel_buffer_index_semaphore_id[4],
 
         this->downstream_edms_connected,
-        this->downstream_edm_vcs_buffer_base_address[0].value_or(0),
-        this->downstream_edm_vcs_noc_x[0].value_or(0),
-        this->downstream_edm_vcs_noc_y[0].value_or(0),
-        this->downstream_edm_vcs_semaphore_address[0].value_or(-1),
-        this->downstream_edm_vcs_worker_registration_address[0].value_or(0),
-        this->downstream_edm_vcs_worker_location_info_address[0].value_or(0),
-        this->receiver_channels_local_buffer_index_address[0],  // extend the following 3 for 2D. need 3 each for 2D.
-
-        this->downstream_edm_vcs_buffer_base_address[1] != std::nullopt,
         this->downstream_edm_vcs_buffer_base_address[1].value_or(0),
         this->downstream_edm_vcs_noc_x[1].value_or(0),
         this->downstream_edm_vcs_noc_y[1].value_or(0),
         this->downstream_edm_vcs_semaphore_address[1].value_or(-1),
         this->downstream_edm_vcs_worker_registration_address[1].value_or(0),
         this->downstream_edm_vcs_worker_location_info_address[1].value_or(0),
-        this->receiver_channels_local_buffer_index_address[1],
+        this->receiver_channels_local_buffer_index_address[1],  // extend the following 3 for 2D. need 3 each for 2D.
+
+        this->downstream_edm_vcs_buffer_base_address[2] != std::nullopt,
+        this->downstream_edm_vcs_buffer_base_address[2].value_or(0),
+        this->downstream_edm_vcs_noc_x[2].value_or(0),
+        this->downstream_edm_vcs_noc_y[2].value_or(0),
+        this->downstream_edm_vcs_semaphore_address[2].value_or(-1),
+        this->downstream_edm_vcs_worker_registration_address[2].value_or(0),
+        this->downstream_edm_vcs_worker_location_info_address[2].value_or(0),
+        this->receiver_channels_local_buffer_index_address[2],
         // this is the receiver channel's local sem for flow controlling with downstream fabric sender
         this->receiver_channels_downstream_flow_control_semaphore_id[0].value_or(-1),
         this->receiver_channels_downstream_flow_control_semaphore_id[1].value_or(-1),
@@ -1459,25 +1460,26 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
     auto adapter_spec = downstream_edm.build_connection_to_fabric_channel(ds_edm_send_chan);
 
     if (is_2D_routing) {
-        uint32_t val = this->downstream_edm_vcs_noc_x[0].value_or(0);
+        uint32_t val = this->downstream_edm_vcs_noc_x[1].value_or(0);
         val |= (ds_noc_x << (ds_dir * 8));
-        this->downstream_edm_vcs_noc_x[0] = val;
+        this->downstream_edm_vcs_noc_x[1] = val;
 
-        val = this->downstream_edm_vcs_noc_y[0].value_or(0);
+        val = this->downstream_edm_vcs_noc_y[1].value_or(0);
         val |= (ds_noc_y << (ds_dir * 8));
-        this->downstream_edm_vcs_noc_y[0] = val;
+        this->downstream_edm_vcs_noc_y[1] = val;
 
         this->downstream_edms_connected |= 0x1 << ds_dir;
     } else {
-        this->downstream_edm_vcs_noc_x[0] = ds_noc_x;
-        this->downstream_edm_vcs_noc_y[0] = ds_noc_y;
+        this->downstream_edm_vcs_noc_x[1] = ds_noc_x;
+        this->downstream_edm_vcs_noc_y[1] = ds_noc_y;
+        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[1] = adapter_spec.buffer_index_semaphore_id;
         this->downstream_edms_connected = 1;
     }
 
-    this->downstream_edm_vcs_buffer_base_address[0] = adapter_spec.edm_buffer_base_addr;
-    this->downstream_edm_vcs_semaphore_address[0] = adapter_spec.edm_l1_sem_addr;
-    this->downstream_edm_vcs_worker_registration_address[0] = adapter_spec.edm_connection_handshake_addr;
-    this->downstream_edm_vcs_worker_location_info_address[0] = adapter_spec.edm_worker_location_info_addr;
+    this->downstream_edm_vcs_buffer_base_address[1] = adapter_spec.edm_buffer_base_addr;
+    this->downstream_edm_vcs_semaphore_address[1] = adapter_spec.edm_l1_sem_addr;
+    this->downstream_edm_vcs_worker_registration_address[1] = adapter_spec.edm_connection_handshake_addr;
+    this->downstream_edm_vcs_worker_location_info_address[1] = adapter_spec.edm_worker_location_info_addr;
 
     // VC 1
     if (!fabric_context.need_deadlock_avoidance_support(this->direction)) {
@@ -1511,12 +1513,15 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
         1,
         ds_dir);
 
-    this->downstream_edm_vcs_noc_x[1] = ds_noc_x;
-    this->downstream_edm_vcs_noc_y[1] = ds_noc_y;
-    this->downstream_edm_vcs_buffer_base_address[1] = adapter_spec.edm_buffer_base_addr;
-    this->downstream_edm_vcs_semaphore_address[1] = adapter_spec.edm_l1_sem_addr;
-    this->downstream_edm_vcs_worker_registration_address[1] = adapter_spec.edm_connection_handshake_addr;
-    this->downstream_edm_vcs_worker_location_info_address[1] = adapter_spec.edm_worker_location_info_addr;
+    this->downstream_edm_vcs_noc_x[2] = ds_noc_x;
+    this->downstream_edm_vcs_noc_y[2] = ds_noc_y;
+    this->downstream_edm_vcs_buffer_base_address[2] = adapter_spec.edm_buffer_base_addr;
+    this->downstream_edm_vcs_semaphore_address[2] = adapter_spec.edm_l1_sem_addr;
+    this->downstream_edm_vcs_worker_registration_address[2] = adapter_spec.edm_connection_handshake_addr;
+    this->downstream_edm_vcs_worker_location_info_address[2] = adapter_spec.edm_worker_location_info_addr;
+    if (!is_2D_routing) {
+        this->downstream_vcs_sender_channel_buffer_index_semaphore_id[2] = adapter_spec.buffer_index_semaphore_id;
+    }
 }
 
 eth_chan_directions FabricEriscDatamoverBuilder::get_direction() const { return this->direction; }
