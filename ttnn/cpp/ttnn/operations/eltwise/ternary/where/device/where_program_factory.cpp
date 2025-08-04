@@ -302,17 +302,12 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     } else {
         // TTT: c_0 = predicate, c_1 = value_true, c_2 = value_false
         if (broadcast_type == WhereBroadcastType::COL_BCAST) {
-            // Determine which tensors need broadcast based on shapes
-            const auto& pred_shape = predicate_tensor.logical_shape();
-            const auto& true_shape = value_true_tensor.value().logical_shape();
-            const auto& false_shape = value_false_tensor.value().logical_shape();
-
-            // Check if predicate needs column broadcast (has width 1 vs value tensors)
-            bool bcast_predicate = (pred_shape[-1] == 1 && true_shape[-1] == false_shape[-1] && true_shape[-1] > 1);
-            // Check if value_true needs column broadcast (has width 1 vs predicate)
-            bool bcast_value_true = (true_shape[-1] == 1 && pred_shape[-1] > 1);
-            // Check if value_false needs column broadcast (has width 1 vs predicate)
-            bool bcast_value_false = (false_shape[-1] == 1 && pred_shape[-1] > 1);
+            // Use consolidated broadcast detection
+            auto broadcast_info =
+                get_where_broadcast_info(predicate_tensor, value_true_tensor.value(), value_false_tensor.value());
+            bool bcast_predicate = broadcast_info.predicate_broadcast;
+            bool bcast_value_true = broadcast_info.value_true_broadcast;
+            bool bcast_value_false = broadcast_info.value_false_broadcast;
 
             // Add broadcast flags for column broadcast version
             reader_config = tt_metal::ReaderDataMovementConfig(
@@ -438,12 +433,13 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
 
     if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
         // Manually handle runtime arguments for broadcast case
+        // Use consolidated broadcast detection
+        auto broadcast_info =
+            get_where_broadcast_info(predicate_tensor, value_true_tensor.value(), value_false_tensor.value());
+        bool bcast_predicate = broadcast_info.predicate_broadcast;
+
         const auto& pred_shape = predicate_tensor.logical_shape();
         const auto& true_shape = value_true_tensor.value().logical_shape();
-        const auto& false_shape = value_false_tensor.value().logical_shape();
-
-        // For predicate broadcast, use value tensor width; for value broadcast, use predicate width
-        bool bcast_predicate = (pred_shape[-1] == 1 && true_shape[-1] == false_shape[-1] && true_shape[-1] > 1);
         uint32_t target_width = bcast_predicate ? true_shape[-1] : pred_shape[-1];
         uint32_t output_width_tiles = target_width / 32;  // Width in tiles (32 is standard tile width)
 
