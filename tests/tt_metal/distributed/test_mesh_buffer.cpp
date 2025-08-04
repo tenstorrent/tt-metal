@@ -687,6 +687,66 @@ TEST_F(MeshBufferTestSuite, ColMajorShardingAndReplication) {
     }
 }
 
+TEST_F(MeshBufferTestSuite, ColMajorShardingAndReplicationWithFloat32ToBfloat16Conversion) {
+    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = single_tile_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+
+    std::vector<Shape2D> global_buffer_shapes = {{256, 64}, {1024, 1024}, {128, 32}, {512, 64}, {2048, 256}};
+
+    for (int i = 0; i < global_buffer_shapes.size(); i++) {
+        auto global_buffer_shape = global_buffer_shapes[i];
+        Shape2D shard_shape = {global_buffer_shape.height() / mesh_device_->num_rows(), 0};
+        uint32_t global_buffer_size = global_buffer_shape.height() * global_buffer_shape.width() * sizeof(uint16_t);
+        Shape2D global_buffer_read_shape = {
+            global_buffer_shape.height(), global_buffer_shape.width() * mesh_device_->num_cols()};
+        Shape2D shard_read_shape = {
+            global_buffer_shape.height() / mesh_device_->num_rows(), global_buffer_shape.width()};
+
+        ShardOrientation shard_orientation = ShardOrientation::COL_MAJOR;
+
+        ShardedBufferConfig sharded_config{
+            .global_size = global_buffer_size,
+            .global_buffer_shape = global_buffer_shape,
+            .shard_shape = shard_shape,
+            .shard_orientation = shard_orientation,
+        };
+
+        ShardedBufferConfig sharded_read_view_config{
+            .global_size = global_buffer_read_shape.height() * global_buffer_read_shape.width() * sizeof(uint16_t),
+            .global_buffer_shape = global_buffer_read_shape,
+            .shard_shape = shard_read_shape,
+            .shard_orientation = ShardOrientation::ROW_MAJOR};
+
+        auto mesh_buffer = MeshBuffer::create(sharded_config, per_device_buffer_config, mesh_device_.get());
+        std::vector<float> src_vec = std::vector<float>(global_buffer_shape.height() * global_buffer_shape.width(), 0);
+        std::iota(src_vec.begin(), src_vec.end(), 0);
+
+        auto mesh_buffer_read_view = MeshBuffer::create(
+            sharded_read_view_config, per_device_buffer_config, mesh_device_.get(), mesh_buffer->address());
+
+        EnqueueWriteMeshBufferWithConversion(
+            mesh_device_->mesh_command_queue(), mesh_buffer, DataFormat::Float16_b, src_vec, DataFormat::Float32);
+
+        std::vector<bfloat16> golden_vec(src_vec.size(), 0);
+        std::transform(src_vec.begin(), src_vec.end(), golden_vec.begin(), [](float f) { return bfloat16(f); });
+        std::vector<uint16_t> golden_vec_uint16(src_vec.size(), 0);
+        std::transform(golden_vec.begin(), golden_vec.end(), golden_vec_uint16.begin(), [](bfloat16 bf16) {
+            return bf16.to_packed();
+        });
+
+        std::vector<uint16_t> dst_vec = std::vector<uint16_t>(src_vec.size(), 0);
+        EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), dst_vec, mesh_buffer_read_view);
+
+        for (int i = 0; i < dst_vec.size(); i++) {
+            uint32_t expected_index =
+                (i / global_buffer_read_shape.width()) * global_buffer_shape.width() + i % global_buffer_shape.width();
+            EXPECT_EQ(golden_vec_uint16[expected_index], dst_vec[i]);
+        }
+    }
+}
+
 TEST_F(MeshBufferTestSuite, MultiShardReadWrite) {
     constexpr uint32_t NUM_ITERS = 50;
     uint32_t seed = tt::parse_env("TT_METAL_SEED", 0);
