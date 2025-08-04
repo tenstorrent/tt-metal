@@ -1,0 +1,52 @@
+#pragma once
+
+/*
+ * telemetry/chip_identifier.hpp
+ *
+ * Enriched chip identification, including information about tray and board position, where
+ * applicable (e.g., on Galaxy machines). The basic tt::umd::chip_id_t is always the fallback.
+ */
+
+#include <ostream>
+
+#include <third_party/umd/device/api/umd/device/types/cluster_descriptor_types.h>
+#include <llrt/tt_cluster.hpp>
+
+struct GalaxyUbbIdentifier {
+    uint32_t tray_id;
+    uint32_t asic_id;
+
+    bool operator<(const GalaxyUbbIdentifier &other) const;
+    bool operator==(const GalaxyUbbIdentifier &other) const;
+};
+
+struct ChipIdentifier {
+    tt::umd::chip_id_t id;
+    std::optional<GalaxyUbbIdentifier> galaxy_ubb;
+
+    bool operator<(const ChipIdentifier &other) const;
+    bool operator==(const ChipIdentifier &other) const;
+};
+
+std::ostream &operator<<(std::ostream &os, const ChipIdentifier &chip);
+
+size_t hash_value(const GalaxyUbbIdentifier &g);
+size_t hash_value(const ChipIdentifier &c);
+
+namespace std {
+    template<>
+    struct hash<GalaxyUbbIdentifier> {
+        size_t operator()(const GalaxyUbbIdentifier &g) const noexcept {
+            return hash_value(g);
+        }
+    };
+    
+    template<>
+    struct hash<ChipIdentifier> {
+        size_t operator()(const ChipIdentifier &c) const noexcept {
+            return hash_value(c);
+        }
+    };
+}
+
+ChipIdentifier get_chip_identifier_from_umd_chip_id(const tt::Cluster &cluster, chip_id_t chip_id);
