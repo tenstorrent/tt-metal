@@ -21,6 +21,11 @@ from models.demos.deepseek_v3.utils.test_utils import (
 
 
 @pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
     "mode, seq_len",
     [
         ("decode", 32),
@@ -51,6 +56,7 @@ def test_forward_pass(
     hf_config,
     tmp_path,
     mesh_device,
+    ccl,
 ):
     num_module_layers, _ = mesh_device.shape
 
@@ -77,7 +83,9 @@ def test_forward_pass(
     # Generate module configs and state
     weight_config = RMSNormClass.convert_weights(hf_config, [state_dict] * num_module_layers, tmp_path, mesh_device)
     model_config = get_model_config(RMSNormClass, mode, hf_config, mesh_device)
-    model_state = RMSNormClass.create_state(hf_config, mesh_device)
+    model_state = RMSNormClass.create_state(
+        hf_config, mesh_device, *[ccl for _ in range(1) if RMSNormClass is DistributedRMSNorm]
+    )
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Convert the input to TTNN tensor
