@@ -421,34 +421,42 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
         res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
     };
 
-    if (has_device) {
-        if (is_torch_and_ttnn_type_identical(dtype, tensor) || dtype.has_value()) {
-            DataType expected_dtype = DataType::INVALID;
-            if (dtype.has_value()) {
-                expected_dtype = dtype.value();
-            } else if (tensor.attr("dtype").equal(torch.attr("float32"))) {
-                expected_dtype = DataType::FLOAT32;
-            } else if (tensor.attr("dtype").equal(torch.attr("bfloat16"))) {
-                expected_dtype = DataType::BFLOAT16;
-            } else if (tensor.attr("dtype").equal(torch.attr("INT32"))) {
-                expected_dtype = DataType::INT32;
-            } else if (tensor.attr("dtype").equal(torch.attr("uint8"))) {
-                expected_dtype = DataType::UINT8;
-            }
+    if ((tensor.attr("numel")().cast<int>() == 0) || (tensor.attr("dim")().cast<int>() == 0)) {
+        // to tile the tensor it must have non-zero volume or a sufficient rank -- if this fails
+        // the tensor must be constructed on host.
+        do_host_conversion_through_fallback();
+    } else if (memory_config.is_sharded()) {
+        do_host_conversion_through_fallback();
+    } else if (
+        optional_tile.has_value() && (((optional_tile->get_tile_shape()[0] % tt::constants::TILE_WIDTH) != 0) ||
+                                      ((optional_tile->get_tile_shape()[1] % tt::constants::TILE_HEIGHT) != 0))) {
+        res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
+        res.construct_with_data_type = dtype;
+    } else if (has_device && (is_torch_and_ttnn_type_identical(dtype, tensor) || dtype.has_value())) {
+        DataType expected_dtype = DataType::INVALID;
+        if (dtype.has_value()) {
+            expected_dtype = dtype.value();
+        } else if (tensor.attr("dtype").equal(torch.attr("float32"))) {
+            expected_dtype = DataType::FLOAT32;
+        } else if (tensor.attr("dtype").equal(torch.attr("bfloat16"))) {
+            expected_dtype = DataType::BFLOAT16;
+        } else if (tensor.attr("dtype").equal(torch.attr("INT32"))) {
+            expected_dtype = DataType::INT32;
+        } else if (tensor.attr("dtype").equal(torch.attr("uint8"))) {
+            expected_dtype = DataType::UINT8;
+        }
 
-            if (expected_dtype != DataType::INVALID) {
-                PyFromTorchConversionInput input{
-                    .torch_dtype = tensor.attr("dtype").attr("__str__")().cast<std::string>(),
-                    .optional_data_type = expected_dtype,
-                    .optional_layout = layout.value_or(Layout::ROW_MAJOR),
-                };
+        if (expected_dtype != DataType::INVALID) {
+            PyFromTorchConversionInput input{
+                .torch_dtype =
+                    tensor.attr("dtype").attr("__str__")().cast<std::string>().substr(6 /* cut off `torch.` prefix*/),
+                .optional_data_type = expected_dtype,
+                .optional_layout = layout.value_or(Layout::ROW_MAJOR),
+            };
 
-                auto it = conversion_map.find(input);
-                if (it != conversion_map.end()) {
-                    res = it->second;
-                } else {
-                    do_host_conversion_through_fallback();
-                }
+            auto it = conversion_map.find(input);
+            if (it != conversion_map.end()) {
+                res = it->second;
             } else {
                 do_host_conversion_through_fallback();
             }
