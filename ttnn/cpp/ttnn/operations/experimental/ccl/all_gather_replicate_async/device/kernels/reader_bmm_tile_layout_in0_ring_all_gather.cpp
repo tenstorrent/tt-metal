@@ -11,13 +11,12 @@
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
 void kernel_main() {
-    return;
     DPRINT << "reader_bmm_tile_layout_in0_ring_all_gather" << ENDL();
     std::array<uint32_t, 4> fused_op_receiver_signal_semaphore_addr = {
-        get_compile_time_arg_val(7),
-        get_compile_time_arg_val(8),
-        get_compile_time_arg_val(9),
-        get_compile_time_arg_val(10),
+        get_semaphore(get_compile_time_arg_val(7)),
+        get_semaphore(get_compile_time_arg_val(8)),
+        get_semaphore(get_compile_time_arg_val(9)),
+        get_semaphore(get_compile_time_arg_val(10)),
     };
 
     // Compile time args
@@ -75,7 +74,8 @@ void kernel_main() {
        "fused_op_receiver_signal_semaphore_addr_ptr value: " <<  *reinterpret_cast<volatile tt_l1_ptr
        uint32_t*>(fused_op_receiver_signal_semaphore_addr_ptr[3]) << ENDL();
     */
-    noc_semaphore_wait_min(fused_op_receiver_signal_semaphore_addr_ptr, 5);
+    noc_semaphore_wait_min(fused_op_receiver_signal_semaphore_addr_ptr, 2);
+    noc_semaphore_set(fused_op_receiver_signal_semaphore_addr_ptr, 0);
 
     return;
 
