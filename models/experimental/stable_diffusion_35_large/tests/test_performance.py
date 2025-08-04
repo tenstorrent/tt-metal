@@ -5,7 +5,7 @@ import statistics
 import pytest
 import ttnn
 from ..tt.fun_pipeline import TtStableDiffusion3Pipeline, TimingCollector
-from ..tt.parallel_config import StableDiffusionParallelManager, EncoderParallelManager
+from ..tt.parallel_config import StableDiffusionParallelManager, EncoderParallelManager, create_vae_parallel_config
 
 
 @pytest.mark.parametrize(
@@ -28,7 +28,7 @@ from ..tt.parallel_config import StableDiffusionParallelManager, EncoderParallel
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 8192, "trace_region_size": 25000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 25000000}],
     indirect=True,
 )
 def test_sd35_performance(
@@ -67,21 +67,32 @@ def test_sd35_performance(
     )
 
     # HACK: reshape submesh device 0 from 2D to 1D
+    encoder_device = parallel_manager.submesh_devices[0]
     if parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape[1] != 4:
+        # If reshaping, vae_device must be on submesh 0. That means T5 can't fit, so disable it.
+        vae_device = parallel_manager.submesh_devices[0]
+        enable_t5_text_encoder = False
+
         cfg_shape = parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape
         assert cfg_shape[0] * cfg_shape[1] == 4, f"Cannot reshape {cfg_shape} to a 1x4 mesh"
         print(f"Reshaping submesh device 0 from {cfg_shape} to (1, 4) for CLIP + T5")
-        parallel_manager.submesh_devices[0].reshape(ttnn.MeshShape(1, 4))
+        encoder_device.reshape(ttnn.MeshShape(1, 4))
+    else:
+        # vae_device can only be on submesh 1 if submesh is not getting reshaped.
+        vae_device = parallel_manager.submesh_devices[1]
+        enable_t5_text_encoder = True
+
+    print(f"T5 enabled: {enable_t5_text_encoder}")
+
     encoder_parallel_manager = EncoderParallelManager(
-        parallel_manager.submesh_devices[0],
+        encoder_device,
         topology,
         mesh_axis=1,  # 1x4 submesh, parallel on axis 1
         num_links=num_links,
     )
+    vae_parallel_manager = create_vae_parallel_config(vae_device, parallel_manager)
     # HACK: reshape submesh device 0 from 1D to 2D
-    parallel_manager.submesh_devices[0].reshape(
-        ttnn.MeshShape(*parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape)
-    )
+    encoder_device.reshape(ttnn.MeshShape(*parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape))
 
     if guidance_scale > 1 and cfg_factor == 1:
         guidance_cond = 2
@@ -92,10 +103,11 @@ def test_sd35_performance(
     pipeline = TtStableDiffusion3Pipeline(
         checkpoint_name=f"stabilityai/stable-diffusion-3.5-{model_name}",
         mesh_device=mesh_device,
-        enable_t5_text_encoder=True,
+        enable_t5_text_encoder=enable_t5_text_encoder,
         guidance_cond=guidance_cond,
         parallel_manager=parallel_manager,
         encoder_parallel_manager=encoder_parallel_manager,
+        vae_parallel_manager=vae_parallel_manager,
         height=image_h,
         width=image_w,
         model_location_generator=model_location_generator,
