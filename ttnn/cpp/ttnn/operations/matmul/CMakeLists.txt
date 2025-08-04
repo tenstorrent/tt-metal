@@ -31,4 +31,12 @@ target_link_libraries(
         TTNN::Core
 )
 
+install(
+    TARGETS
+        ttnn_op_matmul
+    FILE_SET
+    kernels
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/matmul
+        COMPONENT ttnn-runtime
+)
 install(TARGETS ttnn_op_matmul LIBRARY COMPONENT tar)
