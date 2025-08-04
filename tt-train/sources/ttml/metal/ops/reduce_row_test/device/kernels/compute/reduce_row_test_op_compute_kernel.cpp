@@ -86,7 +86,7 @@ void calculate_and_reduce_sum() {
     cb_reserve_back(cb_output, onetile);
 
     tile_regs_acquire();
-    reduce_init_delta<false, PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_input, cb_reduction_scaler, cb_output);
+    reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_input, cb_reduction_scaler, cb_output);
     for (uint32_t col = 0; col < Wt; ++col) {
         reduce_tile<PoolType::SUM, ReduceDim::REDUCE_ROW>(
             cb_input,
@@ -95,7 +95,7 @@ void calculate_and_reduce_sum() {
             /* tile_idx */ 0,
             /* reduction_idx */ reduction_register);
     }
-    reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_output);
+    reduce_uninit();
     tile_regs_commit();
 
     tile_regs_wait();

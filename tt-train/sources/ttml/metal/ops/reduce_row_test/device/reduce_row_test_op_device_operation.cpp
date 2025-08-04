@@ -100,7 +100,7 @@ ReduceRowTestDeviceOperation::tensor_return_value_t ReduceRowTestDeviceOperation
     return output_tensor;
 }
 
-tt::stl::hash::hash_t ReduceRowTestDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t ReduceRowTestDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input;
     const auto& input_logical_shape = input.logical_shape();
