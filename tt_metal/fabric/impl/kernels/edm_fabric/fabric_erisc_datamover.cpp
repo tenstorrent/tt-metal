@@ -1589,6 +1589,103 @@ void __attribute__((noinline)) wait_for_static_connection_to_ready(
     }
 }
 
+// Returns the number of starting credits for the specified sender channel `i`
+// Generally, we will always start with `SENDER_NUM_BUFFERS` of credits,
+// except for channels which service transient/worker connections. Those
+// sender channels use counter based credit schemes so they are initialized
+// to 0.
+template <size_t i>
+constexpr size_t get_credits_init_val() {
+    if constexpr (is_2d_fabric) {
+        return i == my_direction ? 0 : SENDER_NUM_BUFFERS_ARRAY[i];
+    } else {
+        return i == 0 ? 0 : SENDER_NUM_BUFFERS_ARRAY[i];
+    }
+};
+
+template <size_t NUM_SENDER_CHANNELS, typename EdmChannelWorkerIFs>
+void __attribute__((noinline)) init_local_sender_channel_worker_interfaces(
+    std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_live_semaphore_addresses,
+    std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_connection_info_addresses,
+    EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
+    std::array<size_t, NUM_SENDER_CHANNELS>& local_sender_flow_control_semaphores) {
+    // manual unrol because previously, going from having this in a loop to unrolling this would
+    // lead to a performance regression. Having these unrolled is needed to enable some performance optimizations
+    // because setup will differ in that each will be a different type. Keeping them unrolled here let's us
+    // stay safe from perf regression due to weirdness of codegen.
+    {
+        auto connection_live_semaphore_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[0]);
+        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
+            local_sender_connection_info_addresses[0]);
+        new (&local_sender_channel_worker_interfaces.template get<0>())
+            tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS_ARRAY[0]>(
+                connection_worker_info_ptr,
+                reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[0]),
+                reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
+                sender_channel_ack_cmd_buf_ids[0],
+                get_credits_init_val<0>());
+    }
+    {
+        auto connection_live_semaphore_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[1]);
+        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
+            local_sender_connection_info_addresses[1]);
+        new (&local_sender_channel_worker_interfaces.template get<1>())
+            tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS_ARRAY[1]>(
+                connection_worker_info_ptr,
+                reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[1]),
+                reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
+                sender_channel_ack_cmd_buf_ids[1],
+                get_credits_init_val<1>());
+    }
+#ifdef FABRIC_2D
+    {
+        auto connection_live_semaphore_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[2]);
+        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
+            local_sender_connection_info_addresses[2]);
+        new (&local_sender_channel_worker_interfaces.template get<2>())
+            tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS_ARRAY[2]>(
+                connection_worker_info_ptr,
+                reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[2]),
+                reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
+                sender_channel_ack_cmd_buf_ids[2],
+                get_credits_init_val<2>());
+    }
+    {
+        auto connection_live_semaphore_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_connection_live_semaphore_addresses[3]);
+        auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
+            local_sender_connection_info_addresses[3]);
+        new (&local_sender_channel_worker_interfaces.template get<3>())
+            tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS_ARRAY[3]>(
+                connection_worker_info_ptr,
+                reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(local_sender_flow_control_semaphores[3]),
+                reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
+                sender_channel_ack_cmd_buf_ids[3],
+                get_credits_init_val<3>());
+    }
+#endif
+    if constexpr (NUM_SENDER_CHANNELS == 3 || NUM_SENDER_CHANNELS == 5) {
+        {
+            static_assert(NUM_SENDER_CHANNELS > VC1_SENDER_CHANNEL);
+            auto connection_live_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(
+                local_sender_connection_live_semaphore_addresses[VC1_SENDER_CHANNEL]);
+            auto connection_worker_info_ptr = reinterpret_cast<volatile tt::tt_fabric::EDMChannelWorkerLocationInfo*>(
+                local_sender_connection_info_addresses[VC1_SENDER_CHANNEL]);
+            new (&local_sender_channel_worker_interfaces.template get<VC1_SENDER_CHANNEL>())
+                tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS_ARRAY[VC1_SENDER_CHANNEL]>(
+                    connection_worker_info_ptr,
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(
+                        local_sender_flow_control_semaphores[VC1_SENDER_CHANNEL]),
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_live_semaphore_ptr),
+                    sender_channel_ack_cmd_buf_ids[VC1_SENDER_CHANNEL],
+                    get_credits_init_val<VC1_SENDER_CHANNEL>());
+        }
+    }
+}
+
 constexpr uint32_t get_vc0_downstream_sender_channel_free_slots_stream_id() {
     return sender_channel_free_slots_stream_ids[1 + my_direction];
 }
@@ -1985,10 +2082,6 @@ void kernel_main() {
     // create the sender channnel buffers with input array of number of buffers
     auto local_sender_channels = tt::tt_fabric::EthChannelBuffers<SENDER_NUM_BUFFERS_ARRAY>::make(
         std::make_index_sequence<NUM_SENDER_CHANNELS>{});
-
-    DPRINT << "NUM_SENDER_CHANNELS = " << (uint32_t)NUM_SENDER_CHANNELS << " NUM_RECEIVER_CHANNELS "
-           << (uint32_t)NUM_RECEIVER_CHANNELS << " NUM_USED_RECEIVER_CHANNELS " << (uint32_t)NUM_USED_RECEIVER_CHANNELS
-           << ENDL();
 
     std::array<size_t, NUM_SENDER_CHANNELS> local_sender_flow_control_semaphores =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(

@@ -91,6 +91,7 @@ void CompileLiteFabric(
         "FW_BUILD",
         "NOC_INDEX=0",
         "DISPATCH_MESSAGE_ADDR=0",
+        "COMPILE_FOR_LITE_FABRIC=1",
         // Fabric
         fmt::format("ROUTING_MODE={}", ROUTING_MODE_1D),
     };
