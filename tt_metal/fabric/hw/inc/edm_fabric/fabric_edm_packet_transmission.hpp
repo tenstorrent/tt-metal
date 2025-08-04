@@ -4,12 +4,18 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "dataflow_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "edm_fabric_worker_adapters.hpp"
 #include "fabric_edm_types.hpp"
+
+#if !defined(COMPILE_FOR_LITE_FABRIC)
+
 #include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp"
-#include <cstdint>
+
+#endif
 
 // If the hop/distance counter equals to the below value, it indicates that it has
 // arrived at (atleast one of) the intended destination(s)
