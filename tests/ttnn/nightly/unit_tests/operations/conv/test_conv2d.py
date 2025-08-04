@@ -798,10 +798,10 @@ def test_conv_dram(
         (2, 128, 256, 9, 9, 3, 3, 1, 1, 1),
         (2, 576, 576, 9, 9, 3, 3, 0, 0, 1),
         (2, 960, 960, 5, 5, 3, 3, 0, 0, 1),
-        (2, 256, 2048, 9, 9, 3, 3, 1, 1, 1),
         (2, 512, 2048, 17, 17, 3, 3, 1, 1, 1),
         (2, 768, 768, 17, 17, 3, 3, 0, 0, 1),
-        (2, 1280, 2560, 15, 15, 3, 3, 1, 1, 1),
+        (2, 1280, 4096, 15, 15, 2, 2, 1, 1, 2),
+        (2, 1280, 5120, 15, 15, 2, 2, 1, 1, 2),
         (2, 1280, 1280, 17, 17, 3, 3, 1, 1, 1),
         [1, 3024, 1232, 14, 14, 1, 1, 0, 0, 1],
         (2, 768, 32, 9, 9, 3, 3, 1, 1, 1),
@@ -853,11 +853,14 @@ def test_conv_ws(
     enable_act_double_buffer,
     enable_weights_double_buffer,
 ):
+    print("Device Core Grid:", device.core_grid)
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 grid for wormhole_b0")
 
-    if input_channels == 2560 and auto_shard:
-        pytest.skip("Skipping 2560 input channels with auto_shard due to #23712")
+    if input_channels == 5120 and is_wormhole_b0():
+        act_block_w_div = 1
+    if input_channels == 4096 and is_blackhole():
+        act_block_w_div = 1
 
     stride_h = stride
     stride_w = stride
@@ -902,10 +905,6 @@ def test_conv_ws(
     if tilized_input:
         tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
         tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
-
-    if auto_shard and (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
-        if input_channels == 2048:
-            pytest.skip("Test is not supported on n300 (8,7) grid due to #13541")
 
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=weights_dtype,
