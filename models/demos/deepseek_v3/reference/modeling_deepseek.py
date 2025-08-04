@@ -401,7 +401,9 @@ class MoEGate(nn.Module):
         if self.topk_method == "noaux_tc":
             assert not self.training
             scores_for_choice = scores.view(bsz * seq_len, -1) + self.e_score_correction_bias.unsqueeze(0)
-            group_scores = topk_bitonic(scores_for_choice.view(bsz * seq_len, self.n_group, -1), k=2, dim=-1)[0].sum(
+            group_scores = self.topk_fn(
+                scores_for_choice.view(bsz * seq_len, self.n_group, -1), k=2, dim=-1, sorted=True
+            )[0].sum(
                 dim=-1
             )  # [n, n_group]
 
