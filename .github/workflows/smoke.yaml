@@ -63,7 +63,7 @@ jobs:
           TT_METAL_WATCHER_TEST_MODE: 1
         run: |
           # Run a single test to warm up caches before the full test suite
-          /usr/bin/${{ inputs.product }}-validation-smoke --gtest_filter="DispatchFixture.TensixFailOnDuplicateKernelCreationDataflow" || true
+          /usr/bin/${{ inputs.product }}-validation-smoke --gtest_filter="MeshDispatchFixture.TensixFailOnDuplicateKernelCreationDataflow" || true
 
       - name: Run a test
         id: test
