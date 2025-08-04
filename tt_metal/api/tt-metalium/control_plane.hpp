@@ -13,6 +13,7 @@
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/multi_mesh_types.hpp>
 #include <hostdevcommon/fabric_common.h>
+#include <tt-metalium/distributed_context.hpp>
 
 #include <map>
 #include <unordered_map>
@@ -76,6 +77,10 @@ public:
     // Queries that are MeshScope-aware (i.e. return results for local mesh or global mesh)
     MeshShape get_physical_mesh_shape(MeshId mesh_id, MeshScope scope = MeshScope::GLOBAL) const;
     MeshCoordinateRange get_coord_range(MeshId mesh_id, MeshScope scope = MeshScope::GLOBAL) const;
+
+    // Returns distributed context for `mesh_id`, if it is distributed across multiple hosts.
+    // Returns `nullptr` if the mesh is a single-host mesh.
+    const tt::tt_metal::distributed::multihost::DistributedContext* get_distributed_context(MeshId mesh_id) const;
 
     // Return valid ethernet channels on the specificed routing plane
     std::vector<chan_id_t> get_valid_eth_chans_on_routing_plane(
@@ -174,13 +179,13 @@ public:
     // by SPI-ROM firmware)
     uint64_t get_asic_id(chip_id_t chip_id) const;
 
-    // Check if the provided mesh is local to this host
-    bool is_local_mesh(MeshId mesh_id) const;
-
     // Get the mesh graph from the routing table
     const MeshGraph& get_mesh_graph() const;
 
 private:
+    // Check if the provided mesh is local to this host
+    bool is_local_mesh(MeshId mesh_id) const;
+
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
     // TODO: remove this from local node control plane. Can get it from the global control plane
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;
@@ -279,6 +284,10 @@ private:
 
     std::unique_ptr<FabricContext> fabric_context_;
     LocalMeshBinding local_mesh_binding_;
+
+    // Distributed contexts for each multi-host mesh, that this host is part of - this is typically a single mesh.
+    std::unordered_map<MeshId, std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>>
+        distributed_contexts_;
 };
 
 }  // namespace tt::tt_fabric

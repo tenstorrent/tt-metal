@@ -28,6 +28,8 @@
 #include "core_coord.hpp"
 #include "compressed_routing_table.hpp"
 #include "hostdevcommon/fabric_common.h"
+#include "distributed/multihost/single_host_context.hpp"
+#include "distributed_context.hpp"
 #include "fabric_types.hpp"
 #include "hal_types.hpp"
 #include "host_api.hpp"
@@ -131,6 +133,29 @@ std::vector<chip_id_t> get_adjacent_chips_from_ethernet_connections(
     }
 
     return adjacent_chips;
+}
+
+// Creates distributed contexts for `mesh_ids` that are distributed across multiple hosts.
+// In production deployments, `mesh_ids` is typically a single mesh that may or may not span multiple hosts.
+std::unordered_map<MeshId, std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>>
+create_distributed_contexts(const std::vector<MeshId>& mesh_ids, const MeshGraph& mesh_graph) {
+    std::unordered_map<MeshId, std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>>
+        distributed_contexts;
+    for (const auto mesh_id : mesh_ids) {
+        std::vector<int> ranks;
+        for (const auto& [_, host_rank_id] : mesh_graph.get_host_ranks(mesh_id)) {
+            ranks.push_back(*host_rank_id);
+        }
+
+        std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> distributed_context;
+        if (ranks.size() > 1) {
+            distributed_context =
+                tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->create_sub_context(
+                    tt::stl::make_span(ranks));
+            distributed_contexts.emplace(mesh_id, std::move(distributed_context));
+        }
+    }
+    return distributed_contexts;
 }
 
 }  // namespace
@@ -351,6 +376,9 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
 ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
+    this->distributed_contexts_ =
+        create_distributed_contexts(this->local_mesh_binding_.mesh_ids, *this->routing_table_generator_->mesh_graph);
+
     // Printing, only enabled with log_debug
     this->routing_table_generator_->mesh_graph->print_connectivity();
 
@@ -361,7 +389,6 @@ ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     // Query and generate intermesh ethernet links per physical chip
     this->initialize_intermesh_eth_links();
     this->generate_local_intermesh_link_table();
-
 }
 
 ControlPlane::ControlPlane(
@@ -2112,6 +2139,12 @@ MeshCoordinateRange ControlPlane::get_coord_range(MeshId mesh_id, MeshScope scop
 bool ControlPlane::is_local_mesh(MeshId mesh_id) const {
     const auto& local_mesh_ids = local_mesh_binding_.mesh_ids;
     return std::find(local_mesh_ids.begin(), local_mesh_ids.end(), mesh_id) != local_mesh_ids.end();
+}
+
+const tt::tt_metal::distributed::multihost::DistributedContext* ControlPlane::get_distributed_context(
+    MeshId mesh_id) const {
+    auto distributed_context = distributed_contexts_.find(mesh_id);
+    return distributed_context != distributed_contexts_.end() ? distributed_context->second.get() : nullptr;
 }
 
 ControlPlane::~ControlPlane() = default;

@@ -9,6 +9,7 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
+#include <tt-metalium/distributed_context.hpp>
 
 #include <functional>
 #include <vector>
@@ -73,6 +74,10 @@ public:
     // Returns the coordinates of populated shards in the buffer.
     const std::set<distributed::MeshCoordinate>& shard_coords() const;
 
+    // Returns the distributed context for the buffer.
+    // Returns `nullptr` if the buffer is not distributed across multiple hosts.
+    const distributed::multihost::DistributedContext* context() const;
+
 private:
     // Converts a global coordinate to a local coordinate.
     // Returns `std::nullopt` if the coordinate is out of local bounds.
@@ -87,8 +92,10 @@ private:
     };
 
     DistributedHostBuffer(
-        distributed::DistributedMeshContainer<Shard> shards, std::set<distributed::MeshCoordinate> populated_shards) :
-        shards_(std::move(shards)), shard_coords_(std::move(populated_shards)) {}
+        distributed::DistributedMeshContainer<Shard> shards,
+        std::set<distributed::MeshCoordinate> populated_shards,
+        const distributed::multihost::DistributedContext* context) :
+        shards_(std::move(shards)), shard_coords_(std::move(populated_shards)), context_(context) {}
 
     // The shards of the buffer.
     // Remote shards are never materialized, but not all of the local shards are necessarily populated.
@@ -96,6 +103,10 @@ private:
 
     // Keeps track of global shards that were attempted to be written to.
     std::set<distributed::MeshCoordinate> shard_coords_;
+
+    // The distributed context for the buffer.
+    // `nullptr` if the buffer is not distributed across multiple hosts.
+    const distributed::multihost::DistributedContext* context_ = nullptr;
 };
 
 }  // namespace tt::tt_metal
