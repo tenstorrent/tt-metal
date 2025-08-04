@@ -1821,9 +1821,8 @@ void UnicastCommon(BaseFabricFixture* fixture, bool atomic_inc, bool fused, bool
 
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        atomic_inc
-            ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_unified_sender.cpp"
-            : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
+        atomic_inc ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_sender.cpp"
+                   : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
         {sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -1832,9 +1831,8 @@ void UnicastCommon(BaseFabricFixture* fixture, bool atomic_inc, bool fused, bool
 
     auto receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
-        atomic_inc
-            ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_unified_receiver.cpp"
-            : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
+        atomic_inc ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_receiver.cpp"
+                   : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
         {receiver_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -1998,9 +1996,8 @@ void MulticastCommon(BaseFabricFixture* fixture, bool atomic_inc, bool fused, bo
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        atomic_inc
-            ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_unified_sender.cpp"
-            : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
+        atomic_inc ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_sender.cpp"
+                   : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
         {sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -2055,7 +2052,7 @@ void MulticastCommon(BaseFabricFixture* fixture, bool atomic_inc, bool fused, bo
             auto receiver_kernel = tt_metal::CreateKernel(
                 receiver_program,
                 atomic_inc ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/"
-                             "test_linear_api_atomic_inc_unified_receiver.cpp"
+                             "test_linear_api_atomic_inc_receiver.cpp"
                            : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
                 receiver_logical_core,
                 tt_metal::DataMovementConfig{
