@@ -10,7 +10,7 @@ import time
 from ...reference.vae_decoder import VaeDecoder
 from ...tt.fun_vae_decoder.fun_vae_decoder import sd_vae_decode, TtVaeDecoderParameters
 from ...tt.utils import assert_quality, to_torch
-from models.utility_functions import comp_allclose, comp_pcc
+from models.utility_functions import comp_pcc
 from ...tt.parallel_config import StableDiffusionParallelManager, create_vae_parallel_config
 import tracy
 
@@ -155,18 +155,19 @@ def test_vae_decoder(
     tt_out = sd_vae_decode(tt_inp, parameters)
 
     tracy.signpost("Performance pass")
-    for i in range(10):
+    duration = 0
+    num_itr = 10
+    for i in range(num_itr):
         start_time = time.time()
         tt_out = sd_vae_decode(tt_inp, parameters)
         ttnn.synchronize_device(vae_device)
         end_time = time.time()
+        duration += end_time - start_time
         logger.info(f"vae_decode {i} time: {end_time-start_time}")
 
         tt_out_torch = to_torch(tt_out).permute(0, 3, 1, 2)
 
-        logger.info(print_stats("torch", out))
-        logger.info(print_stats("tt", tt_out_torch, device=vae_device))
         assert_quality(out, tt_out_torch, pcc=0.99, ccc=0.99)
-        print(comp_allclose(out, tt_out_torch))
         result, output = comp_pcc(out, tt_out_torch)
-        logger.info(f"Comparison result Pass:{result}, Output {output}, in: {torch.count_nonzero(tt_out_torch)}")
+
+    logger.info(f"vae_decode Ave time  : {duration/num_itr}, num_itr: {num_itr}")
