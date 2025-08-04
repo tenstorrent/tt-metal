@@ -10,7 +10,7 @@ class CCL1D:
     A class to handle all CCL (Collective Communication Library) operations
     """
 
-    def __init__(self, hf_config, mesh_device):
+    def __init__(self, mesh_device):
         self.mesh_device = mesh_device
         self.grid = mesh_device.compute_with_storage_grid_size()
         self.num_cores = self.grid.x * self.grid.y

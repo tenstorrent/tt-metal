@@ -5,12 +5,14 @@
 from pathlib import Path
 
 import torch
+import ttnn.experimental
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm_base import RMSNormBase
 from models.demos.deepseek_v3.utils.config_dataclass import (
-    AllGatherConfig,
+    AllGatherAsyncConfig,
     FromWeightConfig,
     MeshDeviceStub,
     OpConfigBase,
@@ -19,8 +21,10 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 )
 from models.demos.deepseek_v3.utils.config_helpers import get_state_dicts, save_and_get_path
 from models.demos.deepseek_v3.utils.run_config import (
+    MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
     ModelPrefillConfig,
+    ModelState,
     RunDecodeConfig,
     RunPrefillConfig,
     WeightConfig,
@@ -104,10 +108,10 @@ class DistributedRMSNorm(RMSNormBase):
             "rms_norm_pre_all_gather": RMSNormPreAllGatherConfig(
                 dtype=ttnn.bfloat16,
             ),
-            "all_gather": AllGatherConfig(
+            "all_gather": AllGatherAsyncConfig(
                 dim=3,
                 cluster_axis=1,
-                mesh_device=mesh_device,
+                mesh_device=MeshDeviceStub(mesh_device.shape),
                 memory_config=rms_norm_stats_memory_config,
                 topology=ttnn.Topology.Linear,
             ),
@@ -116,6 +120,25 @@ class DistributedRMSNorm(RMSNormBase):
                 weight=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 dtype=ttnn.bfloat16,
             ),
+        }
+
+    @classmethod
+    def create_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL1D) -> ModelState:
+        """Create the model state for this module.
+
+        Args:
+            hf_config: HuggingFace model configuration object
+            mesh_device: TTNN mesh device the model will be placed later on
+            ccl: CCL1D instance for async CCLs
+
+        Returns:
+            ModelState containing the state information for this module
+        """
+        return {
+            MESH_DEVICE_STATE_DICT_KEY: mesh_device,
+            "all_gather": {
+                "multi_device_global_semaphore": ccl.get_semaphore(1),
+            },
         }
 
     @classmethod
@@ -135,7 +158,7 @@ class DistributedRMSNorm(RMSNormBase):
         tt_stats = ttnn.rms_norm_pre_all_gather(x, program_config=program_config, **cfg["rms_norm_pre_all_gather"])
 
         # AllGather stats
-        tt_gathered_stats = ttnn.all_gather(tt_stats, **cfg["all_gather"])
+        tt_gathered_stats = ttnn.experimental.all_gather_async(tt_stats, **cfg["all_gather"])
         ttnn.deallocate(tt_stats)
 
         # Run distributed rmsnorm part 2
