@@ -17,10 +17,20 @@ target_link_libraries(
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_BINARY_DIR}/tt_telemetry")
 
 add_executable(tt_telemetry_server)
-target_sources(tt_telemetry_server PRIVATE server/main.cpp)
+target_sources(
+    tt_telemetry_server
+    PRIVATE
+        server/main.cpp
+        telemetry/chip_identifier.cpp
+        telemetry/ethernet_endpoint.cpp
+        telemetry/ethernet_link.cpp
+        telemetry/ethernet_helpers.cpp
+        telemetry/print_helpers.cpp
+)
 target_include_directories(
     tt_telemetry_server
     PRIVATE
+        include
         ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}/common
