@@ -76,11 +76,11 @@ def test_uniad_memory_bank(
         device=device,
     )
 
-    print(dir(tt_model))
-
     ttnn_output = tt_model.forward(data)
     ttnn_output_embedding = ttnn_output.output_embedding
     ttnn_mem_bank = ttnn.to_torch(ttnn_output.mem_bank)
     ttnn_save_period = ttnn.to_torch(ttnn_output.save_period)
 
     assert_with_pcc(torch_output.output_embedding, ttnn_output_embedding, 0.99)
+    assert_with_pcc(torch_output.mem_bank, ttnn_mem_bank, 0.99)
+    assert_with_pcc(torch_output.save_period, ttnn_save_period, 0.99)

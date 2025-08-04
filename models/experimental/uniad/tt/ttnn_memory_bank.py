@@ -22,6 +22,7 @@ class TtMemoryBank:
         eps=1e-05,
         model_args=None,
     ):
+        self.memory_bank_len = memory_bank_len
         self.device = device
         self.params = params
         self.dim_in = dim_in
@@ -86,6 +87,7 @@ class TtMemoryBank:
             A, B, C = track_instances.mem_bank.shape
             track_instances.mem_bank = ttnn.reshape(track_instances.mem_bank, (A, B * C))
             ttnn_output = ttnn.embedding(indices_tensor, track_instances.mem_bank)
+            track_instances.mem_bank = ttnn.reshape(track_instances.mem_bank, (A, B, C))
             ttnn_output = ttnn.to_layout(ttnn_output, ttnn.TILE_LAYOUT)
             ttnn_output = ttnn.typecast(ttnn_output, dtype=ttnn.bfloat16)
             ttnn_output = ttnn.reshape(ttnn_output, (ttnn_output.shape[0], B, C))
