@@ -12,7 +12,7 @@
 #include "fabric_edm_packet_header_validate.hpp"
 #include "fabric_stream_regs.hpp"
 #include "fabric_edm_types.hpp"
-#include "fabric_host_interface.h"
+#include "hostdevcommon/fabric_common.h"
 #include "edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/hw/inc/utils/utils.h"

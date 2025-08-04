@@ -27,7 +27,7 @@
 
 #include "control_plane.hpp"
 #include "device_pool.hpp"
-#include "fabric_host_interface.h"
+#include "hostdevcommon/fabric_common.h"
 #include "fabric_types.hpp"
 #include "fmt/base.h"
 #include "fmt/ranges.h"

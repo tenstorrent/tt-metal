@@ -10,7 +10,7 @@
 #include "noc_overlay_parameters.h"
 #include "ethernet/dataflow_api.h"
 #include "eth_chan_noc_mapping.h"
-#include <fabric_host_interface.h>
+#include "hostdevcommon/fabric_common.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 
 using namespace tt::tt_fabric;

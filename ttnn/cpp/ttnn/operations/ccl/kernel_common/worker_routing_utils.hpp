@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "fabric_host_interface.h"
+#include "hostdevcommon/fabric_common.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 
 namespace ccl_routing_utils {
