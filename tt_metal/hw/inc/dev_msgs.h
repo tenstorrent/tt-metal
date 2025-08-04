@@ -34,6 +34,8 @@ struct profiler_msg_template_t {
 #include "core_config.h"
 #include "noc/noc_parameters.h"
 #include "dev_mem_map.h"
+// Deprecated in favor of dev_mem_map.h. Keep to avoid breaking changes.
+#include "eth_l1_address_map.h"
 
 #if defined(COMPILE_FOR_ERISC)
 #define GET_MAILBOX_ADDRESS_DEV(x) (&(((mailboxes_t tt_l1_ptr*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))

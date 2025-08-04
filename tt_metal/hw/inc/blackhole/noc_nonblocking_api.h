@@ -5,6 +5,7 @@
 #pragma once
 
 #include <stdint.h>
+#include "risc_attribs.h"
 #include "noc_parameters.h"
 #include "dev_msgs.h"
 #include "noc_overlay_parameters.h"

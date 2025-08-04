@@ -53,6 +53,7 @@ HalCoreInfoType create_tensix_mem_map() {
         ((MEM_MAP_END + default_l1_kernel_config_size - 1) | (max_alignment - 1)) + 1;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LOCAL_L1_INIT_SCRATCH)] =
         MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_LITE_BARRIER)] = MEM_TENSIX_FABRIC_LITE_BARRIER;
 
     std::vector<uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT), 0);
@@ -76,6 +77,7 @@ HalCoreInfoType create_tensix_mem_map() {
         MEM_L1_SIZE - mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DEFAULT_UNRESERVED)];
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LOCAL_L1_INIT_SCRATCH)] =
         MEM_BRISC_LOCAL_SIZE + MEM_NCRISC_LOCAL_SIZE + (3 * MEM_TRISC_LOCAL_SIZE);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_LITE_BARRIER)] = sizeof(uint32_t);
 
     // Base FW api not supported on WH
     std::vector<uint32_t> fw_mailbox_addr(static_cast<std::size_t>(FWMailboxMsg::COUNT), 0);

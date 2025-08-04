@@ -1,7 +1,7 @@
 set(UNIT_TESTS_TUNNELING_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_lite_fabric.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/build.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/lite_fabric_host.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/lite_fabric_host_util.cpp
 )
 
 function(create_unit_test_executable)
