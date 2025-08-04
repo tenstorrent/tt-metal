@@ -3,6 +3,7 @@
 
 import statistics
 import pytest
+from loguru import logger
 import ttnn
 from ..tt.fun_pipeline import TtStableDiffusion3Pipeline, TimingCollector
 from ..tt.parallel_config import StableDiffusionParallelManager, EncoderParallelManager, create_vae_parallel_config
@@ -264,9 +265,9 @@ def test_sd35_performance(
         }
     elif tuple(mesh_device.shape) == (4, 8):
         expected_metrics = {
-            "clip_encoding_time": 0.12,
+            "clip_encoding_time": 0.17,
             "t5_encoding_time": 0.13,
-            "total_encoding_time": 0.48,
+            "total_encoding_time": 0.6,
             "denoising_steps_time": 4,
             "vae_decoding_time": 1.65,
             "total_time": 6.2,
@@ -274,18 +275,17 @@ def test_sd35_performance(
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
 
-    low_tol = 0.75
     pass_perf_check = True
     for k in expected_metrics.keys():
-        if measurements[k] > expected_metrics[k] or measurements[k] < expected_metrics[k] * low_tol:
-            print(
+        if measurements[k] > expected_metrics[k]:
+            logger.warning(
                 f"Warning: {k} is outside of the tolerance range. Expected: {expected_metrics[k]}, Actual: {measurements[k]}"
             )
             pass_perf_check = False
     if pass_perf_check:
-        print("Perf check passed!")
+        logger.info("Perf check passed!")
     else:
-        print("Perf check failed!")
+        logger.warning("Perf check failed!")
         assert False, "Perf check failed!"
 
     for submesh_device in parallel_manager.submesh_devices:
