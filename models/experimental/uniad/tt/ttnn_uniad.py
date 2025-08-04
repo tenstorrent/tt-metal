@@ -14,8 +14,12 @@ from models.experimental.uniad.tt.ttnn_head import TtBEVFormerTrackHead
 from models.experimental.uniad.tt.ttnn_resnet import TtResNet
 from models.experimental.uniad.tt.ttnn_fpn import TtFPN
 from models.experimental.uniad.reference.runtime_tracker_base import RuntimeTrackerBase
-from models.experimental.uniad.tt.ttnn_query_interaction import TtQueryInteractionModule
-from models.experimental.uniad.tt.ttnn_memory_bank import TtMemoryBank
+
+# from models.experimental.uniad.tt.ttnn_query_interaction import TtQueryInteractionModule
+from models.experimental.uniad.reference.query_interaction_module import QueryInteractionModule
+
+# from models.experimental.uniad.tt.ttnn_memory_bank import TtMemoryBank
+from models.experimental.uniad.reference.memory_bank import MemoryBank
 from models.experimental.uniad.reference.detr_track_3d_coder import DETRTrack3DCoder
 from models.experimental.uniad.tt.ttnn_planning_head import TtPlanningHeadSingleMode
 from models.experimental.uniad.reference.pan_segformer_head import PansegformerHead
@@ -230,14 +234,14 @@ class TtUniAD:
             miss_tolerance=miss_tolerance,
         )  # hyper-param for removing inactive queries
 
-        self.query_interact = TtQueryInteractionModule(
+        self.query_interact = QueryInteractionModule(
             # qim_args,
             dim_in=embed_dims,
             hidden_dim=embed_dims,
             dim_out=embed_dims,
             update_query_pos=qim_args["update_query_pos"],
-            params=parameters.query_interact,
-            device=device,
+            # params=parameters.query_interact,
+            # device=device,
         )
 
         # {'type': 'DETRTrack3DCoder', 'post_center_range': [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0], 'pc_range': [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0], 'max_num': 300, 'num_classes': 10, 'score_threshold': 0.0, 'with_nms': False, 'iou_thres': 0.3}
@@ -251,14 +255,14 @@ class TtUniAD:
             iou_thres=0.3,
         )
 
-        self.memory_bank = TtMemoryBank(
+        self.memory_bank = MemoryBank(
             # mem_args,
             dim_in=embed_dims,
             hidden_dim=embed_dims,
             dim_out=embed_dims,
             memory_bank_len=mem_args["memory_bank_len"],
-            params=parameters.memory_bank,
-            device=device,
+            # params=parameters.memory_bank,
+            # device=device,
         )
         self.mem_bank_len = 0 if self.memory_bank is None else self.memory_bank.max_his_length
         # self.criterion = build_loss(loss_cfg)
@@ -482,9 +486,119 @@ class TtUniAD:
         bev_embed = result_track[0]["bev_embed"]
 
         if self.with_seg_head:
-            result_seg = self.seg_head.forward_test(bev_embed, gt_lane_labels, gt_lane_masks, img_metas, rescale)
+            result_seg = self.seg_head.forward_test(
+                ttnn.to_torch(bev_embed).to(torch.float),
+                [ttnn.to_torch(gt_lane_labels[0]).to(torch.int32)],
+                [ttnn.to_torch(gt_lane_masks[0]).to(torch.int32)],
+                img_metas,
+                rescale,
+            )
 
         if self.with_motion_head:
+            #         result_track[0]["track_query_embeddings"]=ttnn.from_torch(
+            #     result_track[0]["track_query_embeddings"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            # )
+            #         print("result_track[0]",result_track[0]["track_bbox_results"])
+            #         result_track[0]["track_bbox_results"] = [
+            #     [
+            #         ttnn_utils.TtLiDARInstance3DBoxes(
+            #             ttnn.from_torch(
+            #                 result_track[0]["track_bbox_results"][0][0].tensor,
+            #                 dtype=ttnn.bfloat16,
+            #                 device=self.device,
+            #                 layout=ttnn.TILE_LAYOUT,
+            #             ),
+            #             box_dim=9,
+            #         ),
+            #         ttnn.from_torch(
+            #             result_track[0]["track_bbox_results"][0][1], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            #         ),
+            #         ttnn.from_torch(
+            #             result_track[0]["track_bbox_results"][0][2], device=self.device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT
+            #         ),
+            #         ttnn.from_torch(
+            #             result_track[0]["track_bbox_results"][0][3], device=self.device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT
+            #         ),
+            #         ttnn.from_torch(
+            #             result_track[0]["track_bbox_results"][0][4], device=self.device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT
+            #         ),
+            #     ]
+            # ]
+            #         result_track[0]["boxes_3d"] = ttnn_utils.TtLiDARInstance3DBoxes(
+            #             ttnn.from_torch(result_track[0]["boxes_3d"].tensor, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT),
+            #             box_dim=9,
+            #         )
+            #         result_track[0]["scores_3d"] = ttnn.from_torch(
+            #             result_track[0]["scores_3d"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            #         )
+            #         result_track[0]["labels_3d"] = ttnn.from_torch(
+            #             result_track[0]["labels_3d"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            #         )
+            #         result_track[0]["track_scores"] = ttnn.from_torch(
+            #             result_track[0]["track_scores"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            #         )
+            #         result_track[0]["track_ids"] = ttnn.from_torch(
+            #             result_track[0]["track_ids"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            #         )
+            #         result_track[0]["sdc_boxes_3d"] = ttnn_utils.TtLiDARInstance3DBoxes(
+            #             ttnn.from_torch(result_track[0]["sdc_boxes_3d"].tensor, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT),
+            #             box_dim=9,
+            #         )
+            #         result_track[0]["sdc_scores_3d"] = ttnn.from_torch(
+            #             result_track[0]["sdc_scores_3d"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            #         )
+            #         result_track[0]["sdc_track_scores"] = ttnn.from_torch(
+            #             result_track[0]["sdc_track_scores"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            #         )
+            #         result_track[0]["sdc_track_bbox_results"] = [
+            #             [
+            #                 ttnn_utils.TtLiDARInstance3DBoxes(
+            #                     ttnn.from_torch(
+            #                         result_track[0]["sdc_track_bbox_results"][0][0].tensor,
+            #                         dtype=ttnn.bfloat16,
+            #                         device=self.device,
+            #                         layout=ttnn.TILE_LAYOUT,
+            #                     ),
+            #                     box_dim=9,
+            #                 ),
+            #                 ttnn.from_torch(
+            #                     result_track[0]["sdc_track_bbox_results"][0][1], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            #                 ),
+            #                 ttnn.from_torch(
+            #                     result_track[0]["sdc_track_bbox_results"][0][2], device=self.device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT
+            #                 ),
+            #                 ttnn.from_torch(
+            #                     result_track[0]["sdc_track_bbox_results"][0][3], device=self.device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT
+            #                 ),
+            #                 ttnn.from_torch(
+            #                     result_track[0]["sdc_track_bbox_results"][0][4], device=self.device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT
+            #                 ),
+            #             ]
+            #         ]
+            #         result_track[0]["sdc_embedding"] = ttnn.from_torch(
+            #             result_track[0]["sdc_embedding"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            #         )
+            #         result_track[0]["boxes_3d_det"] = ttnn_utils.TtLiDARInstance3DBoxes(
+            #             ttnn.from_torch(result_track[0]["boxes_3d_det"].tensor, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT),
+            #             box_dim=9,
+            #         )
+            #         result_track[0]["scores_3d_det"] = ttnn.from_torch(
+            #             result_track[0]["scores_3d_det"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            #         )
+            #         result_track[0]["labels_3d_det"] = ttnn.from_torch(
+            #             result_track[0]["labels_3d_det"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            #         )
+
+            #         result_seg[0]["args_tuple"] = [
+            #         ttnn.from_torch(result_seg[0]["args_tuple"][0], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            #         ttnn.from_torch(result_seg[0]["args_tuple"][1], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            #         ttnn.from_torch(result_seg[0]["args_tuple"][2], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            #         ttnn.from_torch(result_seg[0]["args_tuple"][3], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            #         None,
+            #         ttnn.from_torch(result_seg[0]["args_tuple"][5], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
+            #         [ttnn.from_torch(torch.zeros(50, 50), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)],
+            #     ]
+
             result_motion, outs_motion = self.motion_head.forward_test(
                 bev_embed, outs_track=result_track[0], outs_seg=result_seg[0]
             )
@@ -883,7 +997,7 @@ class TtUniAD:
         # track_instances.track_scores = track_scores  # [300]
         track_instances.pred_logits = ttnn.to_torch(output_classes[-1, 0])  # [300, num_cls]
         track_instances.pred_boxes = ttnn.to_torch(output_coords[-1, 0])  # [300, box_dim]
-        track_instances.output_embedding = ttnn.to_torch(query_feats[-1][0])  # [300, feat_dim]
+        track_instances.output_embedding = ttnn.to_torch(query_feats[-1][0]).to(torch.float)  # [300, feat_dim]
         track_instances.ref_pts = ttnn.to_torch(last_ref_pts[0])
         # hard_code: assume the 901 query is sdc query
         track_instances.obj_idxes[900] = -2
@@ -909,6 +1023,8 @@ class TtUniAD:
         # print("tt_track_instances.mem_padding_mask",tt_track_instances.mem_padding_mask)
         # tt_track_instances.mem_bank = ttnn.from_torch(track_instances.mem_bank, dtype=ttnn.bfloat16, device=self.device)
 
+        track_instances.mem_bank = track_instances.mem_bank.to(torch.float)
+
         """ update with memory_bank """
         if self.memory_bank is not None:
             track_instances = self.memory_bank(track_instances)
@@ -922,3 +1038,86 @@ class TtUniAD:
         out["track_instances"] = out_track_instances
         out["track_obj_idxes"] = track_instances.obj_idxes
         return out
+
+    def _det_instances2results(self, instances, results, img_metas):
+        """
+        Outs:
+        active_instances. keys:
+        - 'pred_logits':
+        - 'pred_boxes': normalized bboxes
+        - 'scores'
+        - 'obj_idxes'
+        out_dict. keys:
+            - boxes_3d (torch.Tensor): 3D boxes.
+            - scores (torch.Tensor): Prediction scores.
+            - labels_3d (torch.Tensor): Box labels.
+            - attrs_3d (torch.Tensor, optional): Box attributes.
+            - track_ids
+            - tracking_score
+        """
+        # filter out sleep querys
+        if instances.pred_logits.numel() == 0:
+            return [None]
+        bbox_dict = dict(
+            cls_scores=instances.pred_logits,
+            bbox_preds=instances.pred_boxes,
+            track_scores=instances.scores,
+            obj_idxes=instances.obj_idxes,
+        )
+        bboxes_dict = self.bbox_coder.decode(bbox_dict, img_metas=img_metas)[0]
+        bboxes = bboxes_dict["bboxes"]
+        bboxes = img_metas[0]["box_type_3d"](bboxes, 9)
+        labels = bboxes_dict["labels"]
+        scores = bboxes_dict["scores"]
+
+        track_scores = bboxes_dict["track_scores"]
+        obj_idxes = bboxes_dict["obj_idxes"]
+        result_dict = results[0]
+        result_dict_det = dict(
+            boxes_3d_det=bboxes.to("cpu"),
+            scores_3d_det=scores.cpu(),
+            labels_3d_det=labels.cpu(),
+        )
+        if result_dict is not None:
+            result_dict.update(result_dict_det)
+        else:
+            result_dict = None
+
+        return [result_dict]
+
+    def upsample_bev_if_tiny(self, outs_track):
+        if outs_track["bev_embed"].shape[0] == 100 * 100:
+            assert False, "It is not passing the if condition so, ttnn implementation is not done"
+            # For tiny model
+            # bev_emb
+            bev_embed = outs_track["bev_embed"]  # [10000, 1, 256]
+            dim, _, _ = bev_embed.size()
+            w = h = int(math.sqrt(dim))
+            assert h == w == 100
+
+            bev_embed = rearrange(bev_embed, "(h w) b c -> b c h w", h=h, w=w)  # [1, 256, 100, 100]
+            bev_embed = nn.Upsample(scale_factor=2)(bev_embed)  # [1, 256, 200, 200]
+            bev_embed = rearrange(bev_embed, "b c h w -> (h w) b c")
+            outs_track["bev_embed"] = bev_embed
+
+            # prev_bev
+            prev_bev = outs_track.get("prev_bev", None)
+            if prev_bev is not None:
+                if self.training:
+                    #  [1, 10000, 256]
+                    prev_bev = rearrange(prev_bev, "b (h w) c -> b c h w", h=h, w=w)
+                    prev_bev = nn.Upsample(scale_factor=2)(prev_bev)  # [1, 256, 200, 200]
+                    prev_bev = rearrange(prev_bev, "b c h w -> b (h w) c")
+                    outs_track["prev_bev"] = prev_bev
+                else:
+                    #  [10000, 1, 256]
+                    prev_bev = rearrange(prev_bev, "(h w) b c -> b c h w", h=h, w=w)
+                    prev_bev = nn.Upsample(scale_factor=2)(prev_bev)  # [1, 256, 200, 200]
+                    prev_bev = rearrange(prev_bev, "b c h w -> (h w) b c")
+                    outs_track["prev_bev"] = prev_bev
+
+            # bev_pos
+            bev_pos = outs_track["bev_pos"]  # [1, 256, 100, 100]
+            bev_pos = nn.Upsample(scale_factor=2)(bev_pos)  # [1, 256, 200, 200]
+            outs_track["bev_pos"] = bev_pos
+        return outs_track
