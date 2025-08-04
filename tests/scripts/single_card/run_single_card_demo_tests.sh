@@ -287,13 +287,16 @@ run_yolov8s_perf() {
 
 }
 
-# commenting out the test from CI due to HF issue. TODO explore AWS alternative suggested by infra team.
-# Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
-# run_mobilenetv2_perf(){
 
-#  pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo --timeout 600
+run_mobilenetv2_perf(){
 
-# }
+ # mobilenetv2 demo
+ pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo_dp --timeout 600
+
+ # mobilenetv2 eval
+  pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp --timeout 600
+
+}
 
 run_yolov8s_world_perf() {
 
