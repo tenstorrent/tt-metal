@@ -1649,6 +1649,12 @@ process_gather_in0_program_and_create_override_variables(
     const bool in1_is_dram_sharded =
         in1_buffer->is_dram() && b.is_sharded() && !global_cb.has_value();  // read from DRAM directly
 
+    log_info(tt::LogOp, "LLONG FUSION: in0_block_w: {}", in0_block_w);
+    log_info(tt::LogOp, "LLONG FUSION: out_subblock_h: {}", out_subblock_h);
+    log_info(tt::LogOp, "LLONG FUSION: out_subblock_w: {}", out_subblock_w);
+    log_info(tt::LogOp, "LLONG FUSION: per_core_M: {}", per_core_M);
+    log_info(tt::LogOp, "LLONG FUSION: per_core_N: {}", per_core_N);
+
     /* Core setup */
     constexpr bool row_major = true;
     CoreRangeSet all_worker_cores = b.shard_spec().value().grid;
@@ -1957,6 +1963,10 @@ process_gather_in0_program_and_create_override_variables(
         (std::uint32_t)fused_op_signaler->fused_op_receiver_signal_semaphores[1],  // Step 1
         (std::uint32_t)fused_op_signaler->fused_op_receiver_signal_semaphores[2],  // Step 2
         (std::uint32_t)fused_op_signaler->fused_op_receiver_signal_semaphores[3],  // Step 3
+        (std::uint32_t)ring_index,                                                 // first chunk index
+        (std::uint32_t)(ring_index - 1 + ring_size) % ring_size,                   // second chunk index
+        (std::uint32_t)(ring_index - 2 + ring_size) % ring_size,                   // third chunk index
+        (std::uint32_t)(ring_index - 3 + ring_size) % ring_size,                   // fourth chunk index
     };
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
@@ -2194,10 +2204,6 @@ process_gather_in0_program_and_create_override_variables(
 
         // No need for unpadded widths array since no padding and uniform chunks
         // Add fused op semaphores directly
-        mm_in0_args.insert(
-            mm_in0_args.end(),
-            fused_op_signaler->fused_op_receiver_signal_semaphores.begin(),
-            fused_op_signaler->fused_op_receiver_signal_semaphores.end());
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_id, core, mm_in0_args);
 
         /* in1 */

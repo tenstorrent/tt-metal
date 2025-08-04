@@ -9,7 +9,6 @@
 #include "debug/dprint.h"
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
-
 void kernel_main() {
     DPRINT << "reader_bmm_tile_layout_in0_ring_all_gather" << ENDL();
     std::array<uint32_t, 4> fused_op_receiver_signal_semaphore_addr = {
@@ -17,6 +16,12 @@ void kernel_main() {
         get_semaphore(get_compile_time_arg_val(8)),
         get_semaphore(get_compile_time_arg_val(9)),
         get_semaphore(get_compile_time_arg_val(10)),
+    };
+    std::array<uint32_t, 4> chunk_indices = {
+        get_compile_time_arg_val(11),
+        get_compile_time_arg_val(12),
+        get_compile_time_arg_val(13),
+        get_compile_time_arg_val(14),
     };
 
     // Compile time args
@@ -36,13 +41,12 @@ void kernel_main() {
     // Runtime args
     uint32_t rt_args_idx = 0;
     uint32_t core_type = get_arg_val<uint32_t>(rt_args_idx++);
-    if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE) {
-        return;
-    }
-    bool is_hop_core = core_type == (uint32_t)CORE_TYPE::HOP_CORE;
 
     uint32_t ring_idx = get_arg_val<uint32_t>(rt_args_idx++);         // Core index for multicast addressing
     uint32_t multicast_steps = get_arg_val<uint32_t>(rt_args_idx++);  // Should be 4
+    if (core_type == (uint32_t)CORE_TYPE::IDLE_CORE) {
+        return;
+    }
 
     // No ring topology arguments needed for multicast
     // No unpadded widths array needed since uniform 1/4 chunks
@@ -60,24 +64,17 @@ void kernel_main() {
 
     DPRINT << "core_type: " << static_cast<uint32_t>(core_type) << ENDL();
 
-    volatile tt_l1_ptr uint32_t* fused_op_receiver_signal_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fused_op_receiver_signal_semaphore_addr[ring_idx]);
-    /*
-        DPRINT << "fused_op_receiver_signal_semaphore_addr_ptr value: " <<  *reinterpret_cast<volatile tt_l1_ptr
-       uint32_t*>(fused_op_receiver_signal_semaphore_addr_ptr[0]) << ENDL(); DPRINT <<
-       "fused_op_receiver_signal_semaphore_addr_ptr value: " <<  *reinterpret_cast<volatile tt_l1_ptr
-       uint32_t*>(fused_op_receiver_signal_semaphore_addr_ptr[1]) << ENDL(); DPRINT <<
-       "fused_op_receiver_signal_semaphore_addr_ptr value: " <<  *reinterpret_cast<volatile tt_l1_ptr
-       uint32_t*>(fused_op_receiver_signal_semaphore_addr_ptr[2]) << ENDL(); DPRINT <<
-       "fused_op_receiver_signal_semaphore_addr_ptr value: " <<  *reinterpret_cast<volatile tt_l1_ptr
-       uint32_t*>(fused_op_receiver_signal_semaphore_addr_ptr[3]) << ENDL();
-    */
-    noc_semaphore_wait_min(fused_op_receiver_signal_semaphore_addr_ptr, 1);
-    noc_semaphore_set(fused_op_receiver_signal_semaphore_addr_ptr, 0);
+    for (uint32_t istep = 0; istep < num_multicast_steps; istep++) {
+        volatile tt_l1_ptr uint32_t* fused_op_receiver_signal_semaphore_addr_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                fused_op_receiver_signal_semaphore_addr[chunk_indices[istep]]);
+
+        noc_semaphore_wait_min(fused_op_receiver_signal_semaphore_addr_ptr, 1);
+        noc_semaphore_set(fused_op_receiver_signal_semaphore_addr_ptr, 0);
+    }
 
     return;
 
-    // COMMENTED OUT: Original ring-based all-gather code preserved for reference
     /*
     // Reserving/pushing the local shard is done in compute
     cb_reserve_back(cb_id_in2, (ring_size - 1) * shard_size_in_tiles);
@@ -116,12 +113,7 @@ void kernel_main() {
         }
     }
 
-    if (!is_hop_core) {
-        for (uint32_t b = 0; b < batch - 1; ++b) {  // for rest batches, not need to gather in0 anymore
-            cb_reserve_back(cb_id_in2, (ring_size - 1) * shard_size_in_tiles);
-            cb_push_back(cb_id_in2, (ring_size - 1) * shard_size_in_tiles);
-        }
-    }
+
     noc_async_atomic_barrier();
     */
 }
