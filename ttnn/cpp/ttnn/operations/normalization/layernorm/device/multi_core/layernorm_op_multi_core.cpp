@@ -349,7 +349,11 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         program,
         large_tensor_needed and !use_row_major_kernel and !rms_norm
             ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_large_tensor.cpp"
+#ifdef LAYERNORM_WELFORD
             : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp",
+#else
+            : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute_legacy/layernorm.cpp",
+#endif
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
