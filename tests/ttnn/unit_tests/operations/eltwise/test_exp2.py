@@ -5,7 +5,38 @@
 import torch
 import pytest
 import ttnn
+import numpy as np
 from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
+
+
+def test_exp2_arange_masking(device):
+    low = -126.0
+    high = 127.0
+
+    # Generate all possible bit pattersn for bf16
+    all_bitpatterns = np.arange(0, 2**16, dtype=np.uint16)
+    float32_bits = all_bitpatterns.astype(np.uint32) << 16
+    all_values = float32_bits.view(np.float32)
+
+    # masking to working range
+    mask = (all_values >= low) & (all_values < high)
+    selected_values = all_values[mask]
+    input_tensor = torch.tensor(selected_values, dtype=torch.bfloat16)
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.exp2)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_result = ttnn.exp2(tt_in)
+    result = ttnn.to_torch(tt_result)
+    assert_with_ulp(golden, result, 2)
 
 
 @pytest.mark.parametrize(
