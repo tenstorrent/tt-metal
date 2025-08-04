@@ -1,0 +1,51 @@
+name: PR Build Artifacts
+# This workflow exists to build artifacts on every pull request, ensuring that
+# the latest code changes are always built and packaged for downstream GitLab CI tests.
+# It is triggered only on PR events and produces the necessary build artifacts
+# that can be consumed by external systems (such as GitLab pipelines) for further testing.
+# This separation is required because GitLab CI cannot directly trigger or consume
+# artifacts from the main post-commit or scheduled workflows, so this workflow
+# guarantees that up-to-date build outputs are always available for GitLab-triggered jobs.
+# Note: We do not want to block the PR gate on artifact upload—this workflow is for integration/testing only,
+# not for production use.
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+
+concurrency:
+  # Use github.run_id on main branch (or any protected branch)
+  # This ensure that no runs get cancelled on main
+  # Use github.event.pull_request.number on pull requests, so it's unique per pull request
+  # and will cancel obsolete runs
+  # Use github.ref on other branches, so it's unique per branch
+  # Possibly PRs can also just use `github.ref`, but for now just copy/pasting from
+  # https://www.meziantou.net/how-to-cancel-github-workflows-when-pushing-new-commits-on-a-branch.htm
+  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.event.pull_request.number || github.ref }}-${{ inputs.build-type || 'default' }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: write
+  packages: write
+
+jobs:
+  build:
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      version: "22.04"
+      toolchain: cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake
+      # Cannot do a Sanitizer build as that's not compatible with the downstream test.
+      # Also cannot be Release if the other build was chosen to be Release as the GitHub artifact
+      # name clashes.
+      build-type: "Release"
+      skip-tt-train: true
