@@ -342,7 +342,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     std::map<std::string, std::string> writer_mcast_sender_defines;
     std::map<std::string, std::string> compute_defines;
 
-    const SkipMcast& skip_mcast = conv_skip_mcast(parallelization_config, a.memory_config().memory_layout());
+    const SkipMcast skip_mcast = conv_skip_mcast(parallelization_config, a.memory_config().memory_layout());
     const bool skip_activation_mcast = skip_mcast.skip_activation_mcast;
     const bool skip_weights_mcast = skip_mcast.skip_weights_mcast;
     if (skip_activation_mcast) {

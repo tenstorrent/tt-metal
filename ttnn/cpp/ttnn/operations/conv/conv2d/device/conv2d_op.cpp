@@ -244,7 +244,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
     auto kernel_dims =
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second});
 
-    const SkipMcast& skip_mcast = conv_skip_mcast(parallelization_config, memory_config.memory_layout());
+    const SkipMcast skip_mcast = conv_skip_mcast(parallelization_config, memory_config.memory_layout());
     conv_op_l1_usage l1_usage = calculate_L1_usage(
         compute_kernel_config,
         block_config,

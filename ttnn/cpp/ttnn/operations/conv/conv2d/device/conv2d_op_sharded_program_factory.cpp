@@ -80,7 +80,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const uint32_t out_subblock_h_ntiles = block_config.out_subblock_h_ntiles;
     const uint32_t out_subblock_w_ntiles = block_config.out_subblock_w_ntiles;
 
-    const SkipMcast& skip_mcast = conv_skip_mcast(parallelization_config, a.memory_config().memory_layout());
+    const SkipMcast skip_mcast = conv_skip_mcast(parallelization_config, a.memory_config().memory_layout());
     const bool skip_activation_mcast = skip_mcast.skip_activation_mcast;
     const bool skip_weights_mcast = skip_mcast.skip_weights_mcast;
 
