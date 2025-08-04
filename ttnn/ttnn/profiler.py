@@ -6,8 +6,6 @@ import contextlib
 import os
 
 import ttnn
-from contextlib import contextmanager
-import inspect
 
 
 def start_tracy_zone(source: str, functName: str, lineNum: int, color: int = 0):
