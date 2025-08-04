@@ -174,8 +174,15 @@ bool vecadd_multi_core(
 }
 }  // namespace unit_tests_common::vecadd::test_vecadd_multi_core
 
+<<<<<<< HEAD
 
+=======
+<<<<<<< HEAD
+>>>>>>> 8497e3ce88 (Revert "killed broken test")
 TEST_F(MeshDispatchFixture, DISABLED_VecaddMultiCore) {
+=======
+TEST_F(MeshDispatchFixture, VecaddMultiCore) {
+>>>>>>> 82119f8ba7 (Revert "killed broken test")
     GTEST_SKIP();
     uint32_t num_tiles = 64;
     ASSERT_TRUE(unit_tests_common::vecadd::test_vecadd_multi_core::vecadd_multi_core(this, devices_.at(0), num_tiles));
