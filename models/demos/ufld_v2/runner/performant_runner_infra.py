@@ -55,7 +55,9 @@ class UFLDPerformanceRunnerInfra:
             if self.torch_input_tensor is None
             else self.torch_input_tensor
         )
-        self.torch_model = load_torch_model(model_location_generator=self.model_location_generator)
+        self.torch_model = load_torch_model(
+            model_location_generator=self.model_location_generator, use_pretrained_weight=True
+        )
         self.ttnn_ufld_v2_model = load_ttnn_model(self.device, self.torch_model, self.torch_input_tensor)
         self.torch_output_tensor_1, self.torch_output_tensor_2 = self.torch_model(self.torch_input_tensor)
 
