@@ -81,14 +81,13 @@ SubDeviceManager::SubDeviceManager(
 SubDeviceManager::~SubDeviceManager() {
     for (const auto& allocator : sub_device_allocators_) {
         if (allocator) {
-            // Clear the bank managers, this makes subsequent buffer deallocations fast
+            // Deallocate all buffers at the bank level first
+            // This frees the memory without accessing individual Buffer objects
+            allocator->deallocate_buffers();
+
+            // Now clear the allocator's tracking structures and bank managers
+            // This ensures allocated_buffers_ set is cleared to prevent dangling pointers
             allocator->clear();
-            // Deallocate all buffers
-            // This is done to set buffer object status to Deallocated
-            const auto allocated_buffers = allocator->get_allocated_buffers();
-            for (auto buf = allocated_buffers.begin(); buf != allocated_buffers.end();) {
-                tt::tt_metal::DeallocateBuffer(*(*(buf++)));
-            }
         }
     }
 }

@@ -21,7 +21,6 @@
 #include "sub_device_test_utils.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
 
 namespace tt::tt_metal {
 
