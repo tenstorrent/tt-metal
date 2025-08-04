@@ -31,22 +31,6 @@
 #include <telemetry/print_helpers.hpp>
 
 
-/**************************************************************************************************
- Link Status App
-**************************************************************************************************/
-    
-static bool is_ethernet_link_up(const tt::Cluster &cluster, tt::umd::chip_id_t chip_id, tt::umd::ethernet_channel_t ethernet_channel) {
-    for (const auto &[core, channel]: cluster.get_soc_desc(chip_id).logical_eth_core_to_chan_map) {
-        if (ethernet_channel == channel) {
-            // Found the channel on the chip we are interested in, we now have the core coordinates
-            return cluster.is_ethernet_link_up(chip_id, core);
-        }
-    }
-
-    // Invalid chip ID or channel -> not connected
-    return false;
-}
-
 int main() {
     const tt::tt_metal::MetalContext &instance = tt::tt_metal::MetalContext::instance();
     const tt::Cluster &cluster = instance.get_cluster();
@@ -69,7 +53,7 @@ int main() {
             std::tie(remote_chip_id, remote_channel) = remote_chip_and_channel;
             std::cout << "  Channel " << channel << " -> [" << get_chip_identifier_from_umd_chip_id(cluster, remote_chip_id) 
                       << "], Channel " << remote_channel 
-                      << " (Link Status: " << (is_ethernet_link_up(cluster, chip_id, channel) ? "UP" : "DOWN") << '/' << (is_ethernet_link_up(cluster, remote_chip_id, remote_channel) ? "UP" : "DOWN") <<  ')'
+                      << " (Link Status: " << (is_ethernet_endpoint_up(cluster, chip_id, channel) ? "UP" : "DOWN") << '/' << (is_ethernet_endpoint_up(cluster, remote_chip_id, remote_channel) ? "UP" : "DOWN") <<  ')'
                       << std::endl;
         }
     }
@@ -89,7 +73,7 @@ int main() {
     for (const auto &[chip_id, endpoints]: get_ethernet_endpoints_by_chip(cluster)) {
         std::cout << chip_id << std::endl;
         for (const auto &endpoint: endpoints) {
-            std::cout << "  " << endpoint << std::endl;
+            std::cout << "  " << endpoint << ": " << (is_ethernet_endpoint_up(cluster, endpoint) ? "UP" : "DOWN") << std::endl;
         }
     }
 
