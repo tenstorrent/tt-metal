@@ -99,7 +99,7 @@ run_llama3_func() {
 
 }
 
-## comment out ufld_v2 from CI tests for now unitl dataset_evaluation test failure is debugged.
+
 run_ufld_v2_func() {
   #ufld_v2
   pytest -n auto models/demos/ufld_v2/demo/demo.py --timeout 600
@@ -271,11 +271,7 @@ run_yolov8s_perf() {
 }
 
 
-<<<<<<< HEAD
-#  pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo --timeout 600
-=======
 run_mobilenetv2_perf(){
->>>>>>> d9cf4f2677 (enable mobilenet_v2 demo,eval in ci)
 
  # mobilenetv2 demo
  pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo_dp --timeout 600
@@ -320,17 +316,18 @@ run_yolov7_demo() {
 
 run_yolov6l_perf() {
 
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto --disable-warnings models/demos/yolov6l/demo/demo.py --timeout 600
+  pytest -n auto --disable-warnings models/demos/yolov6l/demo/demo.py --timeout 600
 
 }
 
-# Commenting out VGG_Unet Demo since CIv2 does not support dataset download from Kaggle
-# Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
-# run_vgg_unet_demo() {
+run_vgg_unet_demo() {
+ # vgg_unet demo
+  pytest -n auto models/demos/vgg_unet/demo/demo.py::test_demo_dp --timeout 600
 
-#  pytest -n auto models/demos/vgg_unet/demo/demo.py --timeout 600
+ # vgg_unet eval
+  pytest -n auto models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet_dp --timeout 600
 
-# }
+}
 
 run_yolov6l_demo() {
 
