@@ -1396,12 +1396,12 @@ void RunTest2DMCastEWConnAPI(
     auto device_offset = trunk_dir == RoutingDirection::N ? -1 : 1;
     auto east_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::E][branch_east_hops - 1];
     east_fabric_node_id.chip_id += device_offset * ew_dim;
-    auto left_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(east_fabric_node_id); //make this west direct
+    auto right_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(east_fabric_node_id); //make this west direct
     auto west_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::W][branch_west_hops - 1];
     west_fabric_node_id.chip_id += device_offset * ew_dim;
-    auto right_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(west_fabric_node_id); //mae this east direct
-    auto left_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::E][direct_left_hops - 1];
-    auto right_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::W][direct_right_hops - 1];
+    auto left_recv_phys_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(west_fabric_node_id); //mae this east direct
+    auto right_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::E][direct_left_hops - 1];
+    auto left_fabric_node_id = end_fabric_node_ids_by_dir[RoutingDirection::W][direct_right_hops - 1];
     std::vector<uint32_t> rx_physical_device_ids;
     for(size_t i = 0; i < end_fabric_node_ids_by_dir[RoutingDirection::E].size(); i++){
         if(i < direct_right_hops){

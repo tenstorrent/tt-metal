@@ -482,8 +482,8 @@ void fabric_set_unicast_route(
 
 void fabric_set_mcast_route(
     volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header,
-    uint16_t dst_dev_id,   // Ignore this, since Low Latency Mesh Fabric does not support arbitrary 2D Mcasts yet
-    uint16_t dst_mesh_id,  // Ignore this, since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
+    uint16_t dst_dev_id,   
+    uint16_t dst_mesh_id,  
     uint16_t e_num_hops,
     uint16_t w_num_hops,
     uint16_t n_num_hops,
@@ -491,9 +491,6 @@ void fabric_set_mcast_route(
     uint32_t spine_hops = 0;
     uint32_t mcast_branch = 0;
 
-    // For 2D Mcast, mcast spine runs N/S and branches are E/W
-    // If api is called with east and/or west hops != 0, it may be a 2D mcast
-    // If so, set the forwarding flags for east and/or west branchs.
     if (e_num_hops) {
         mcast_branch |= LowLatencyMeshRoutingFields::FORWARD_EAST;
     }

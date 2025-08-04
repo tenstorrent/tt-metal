@@ -80,6 +80,10 @@ void set_mcast_header(
     } else if (trunk_direction == eth_chan_directions::SOUTH) {
         s_hops = trunk_hops;
     }
+    else{
+        n_hops = 0;
+        s_hops = 0;
+    }
 
     fabric_set_mcast_route((LowLatencyMeshPacketHeader*)packet_header, 0, 0, e_hops, w_hops, n_hops, s_hops);
 }
