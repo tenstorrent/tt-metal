@@ -19,10 +19,11 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(3);
     constexpr uint32_t cb_id_in2 = get_compile_time_arg_val(5);
 
-    // Broadcast flags - compile time args
-    constexpr bool bcast_predicate = get_compile_time_arg_val(6) == 1;  // predicate broadcast
-    constexpr bool bcast_in1 = get_compile_time_arg_val(7) == 1;        // value_true broadcast
-    constexpr bool bcast_in2 = get_compile_time_arg_val(8) == 1;        // value_false broadcast
+    // Broadcast flags - now using preprocessor defines for better performance
+    // These are set as compile-time defines in the program factory
+    // #define BCAST_PREDICATE 1     // predicate broadcast
+    // #define BCAST_VALUE_TRUE 1    // value_true broadcast
+    // #define BCAST_VALUE_FALSE 1   // value_false broadcast
 
     uint32_t l1_write_addr_in0;
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
@@ -48,57 +49,55 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     for (uint32_t tile_id = start_id; tile_id < start_id + num_tiles; tile_id++) {
-        // Read predicate
+        // Calculate broadcast indices once per iteration
+        uint32_t tile_row = tile_id / output_width_tiles;
+        uint32_t source_tile_id = tile_row;
+
+        // Reserve all circular buffers upfront
         cb_reserve_back(cb_id_in0, onetile);
-        l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-        if constexpr (bcast_predicate) {
-            // For broadcast, map to the correct source tile based on row
-            uint32_t tile_row = tile_id / output_width_tiles;  // Which row of tiles we're in
-            uint32_t source_tile_id = tile_row;                // Source has only 1 tile per row
-            noc_async_read_tile(source_tile_id, s0, l1_write_addr_in0);
-        } else {
-            noc_async_read_tile(tile_id, s0, l1_write_addr_in0);
-        }
-        noc_async_read_barrier();
-        if constexpr (bcast_predicate) {
-            FILL_TILE_WITH_FIRST_COLUMN(cb_id_in0);
-        }
-        cb_push_back(cb_id_in0, onetile);
-
-        // Read value_true
         cb_reserve_back(cb_id_in1, onetile);
-        l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-        if constexpr (bcast_in1) {
-            // For broadcast, map to the correct source tile based on row
-            uint32_t tile_row = tile_id / output_width_tiles;  // Which row of tiles we're in
-            uint32_t source_tile_id = tile_row;                // Source has only 1 tile per row
-            noc_async_read_tile(source_tile_id, s1, l1_write_addr_in1);
-        } else {
-            noc_async_read_tile(tile_id, s1, l1_write_addr_in1);
-        }
-
-        // Read value_false
         cb_reserve_back(cb_id_in2, onetile);
-        l1_write_addr_in2 = get_write_ptr(cb_id_in2);
-        if constexpr (bcast_in2) {
-            // For broadcast, map to the correct source tile based on row
-            uint32_t tile_row = tile_id / output_width_tiles;  // Which row of tiles we're in
-            uint32_t source_tile_id = tile_row;                // Source has only 1 tile per row
-            noc_async_read_tile(source_tile_id, s2, l1_write_addr_in2);
-        } else {
-            noc_async_read_tile(tile_id, s2, l1_write_addr_in2);
-        }
 
+        // Get write pointers
+        l1_write_addr_in0 = get_write_ptr(cb_id_in0);
+        l1_write_addr_in1 = get_write_ptr(cb_id_in1);
+        l1_write_addr_in2 = get_write_ptr(cb_id_in2);
+
+        // Start all NOC reads in parallel - using preprocessor defines for optimal performance
+#if BCAST_PREDICATE
+        noc_async_read_tile(source_tile_id, s0, l1_write_addr_in0);
+#else
+        noc_async_read_tile(tile_id, s0, l1_write_addr_in0);
+#endif
+
+#if BCAST_VALUE_TRUE
+        noc_async_read_tile(source_tile_id, s1, l1_write_addr_in1);
+#else
+        noc_async_read_tile(tile_id, s1, l1_write_addr_in1);
+#endif
+
+#if BCAST_VALUE_FALSE
+        noc_async_read_tile(source_tile_id, s2, l1_write_addr_in2);
+#else
+        noc_async_read_tile(tile_id, s2, l1_write_addr_in2);
+#endif
+
+        // Single barrier for all reads
         noc_async_read_barrier();
 
-        // Apply broadcast fill if needed
-        if constexpr (bcast_in1) {
-            FILL_TILE_WITH_FIRST_COLUMN_B(cb_id_in1);
-        }
-        if constexpr (bcast_in2) {
-            FILL_TILE_WITH_FIRST_COLUMN_C(cb_id_in2);
-        }
+        // Apply broadcast fills if needed - using preprocessor defines
+#if BCAST_PREDICATE
+        FILL_TILE_WITH_FIRST_COLUMN(cb_id_in0);
+#endif
+#if BCAST_VALUE_TRUE
+        FILL_TILE_WITH_FIRST_COLUMN_B(cb_id_in1);
+#endif
+#if BCAST_VALUE_FALSE
+        FILL_TILE_WITH_FIRST_COLUMN_C(cb_id_in2);
+#endif
 
+        // Push all buffers together (maintains pipeline)
+        cb_push_back(cb_id_in0, onetile);
         cb_push_back(cb_id_in1, onetile);
         cb_push_back(cb_id_in2, onetile);
     }

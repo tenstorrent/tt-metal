@@ -83,7 +83,10 @@ uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype) {
 }
 
 std::map<std::string, std::string> make_ternary_dataflow_defines(
-    const DataType predicate_dtype, const DataType value_true_dtype, const DataType value_false_dtype) {
+    const DataType predicate_dtype,
+    const DataType value_true_dtype,
+    const DataType value_false_dtype,
+    const WhereBroadcastInfo& broadcast_info) {
     auto get_fill_function = [](DataType dtype) -> std::string {
         return (dtype == DataType::FLOAT32 || dtype == DataType::INT32 || dtype == DataType::UINT32)
                    ? "fill_tile_with_first_column"
@@ -93,7 +96,11 @@ std::map<std::string, std::string> make_ternary_dataflow_defines(
     return {
         {"FILL_TILE_WITH_FIRST_COLUMN", get_fill_function(predicate_dtype)},
         {"FILL_TILE_WITH_FIRST_COLUMN_B", get_fill_function(value_true_dtype)},
-        {"FILL_TILE_WITH_FIRST_COLUMN_C", get_fill_function(value_false_dtype)}};
+        {"FILL_TILE_WITH_FIRST_COLUMN_C", get_fill_function(value_false_dtype)},
+        // Broadcast flags as preprocessor defines for optimal performance
+        {"BCAST_PREDICATE", broadcast_info.predicate_broadcast ? "1" : "0"},
+        {"BCAST_VALUE_TRUE", broadcast_info.value_true_broadcast ? "1" : "0"},
+        {"BCAST_VALUE_FALSE", broadcast_info.value_false_broadcast ? "1" : "0"}};
 }
 
 // Check if two tensors are broadcastable (for validation)

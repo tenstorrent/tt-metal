@@ -331,11 +331,17 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         }
     }
 
-    // Create reader defines for broadcast kernels
+    // Create reader defines for broadcast kernels with optimized preprocessor defines
     std::map<std::string, std::string> reader_defines;
     if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
+        // Get broadcast info for preprocessor optimization
+        auto broadcast_info =
+            get_where_broadcast_info(predicate_tensor, value_true_tensor.value(), value_false_tensor.value());
         reader_defines = make_ternary_dataflow_defines(
-            predicate_tensor.dtype(), value_true_tensor.value().dtype(), value_false_tensor.value().dtype());
+            predicate_tensor.dtype(),
+            value_true_tensor.value().dtype(),
+            value_false_tensor.value().dtype(),
+            broadcast_info);
     }
 
     auto reader_kernel_id = tt_metal::CreateKernel(

@@ -40,10 +40,6 @@ std::string get_kernel_file_path(KernelName kernel_name);
 
 uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype);
 
-// Create dataflow defines for ternary where operation
-std::map<std::string, std::string> make_ternary_dataflow_defines(
-    const DataType predicate_dtype, const DataType value_true_dtype, const DataType value_false_dtype);
-
 // Broadcast detection and validation utilities
 struct WhereBroadcastInfo {
     WhereBroadcastType type = WhereBroadcastType::NONE;
@@ -51,6 +47,13 @@ struct WhereBroadcastInfo {
     bool value_true_broadcast = false;
     bool value_false_broadcast = false;
 };
+
+// Create dataflow defines for ternary where operation (with broadcast optimization)
+std::map<std::string, std::string> make_ternary_dataflow_defines(
+    const DataType predicate_dtype,
+    const DataType value_true_dtype,
+    const DataType value_false_dtype,
+    const WhereBroadcastInfo& broadcast_info);
 
 // Check if two tensors are broadcastable (for validation)
 bool are_tensors_broadcastable(const Tensor& a, const Tensor& b);
