@@ -139,10 +139,6 @@ bool vecadd_multi_core(
         "kernels/add_multi_core.cpp",
         cores,
         ComputeConfig{.math_approx_mode = false, .compile_args = compute_compile_time_args, .defines = {}});
-<<<<<<< HEAD
-=======
-
->>>>>>> 82119f8ba7 (Revert "killed broken test")
     for (int i = 0; i < num_core; ++i) {
         // Set runtime arguments for each core.
         CoreCoord core = {0, i};
@@ -178,11 +174,8 @@ bool vecadd_multi_core(
 }
 }  // namespace unit_tests_common::vecadd::test_vecadd_multi_core
 
-<<<<<<< HEAD
+
 TEST_F(MeshDispatchFixture, DISABLED_VecaddMultiCore) {
-=======
-TEST_F(MeshDispatchFixture, VecaddMultiCore) {
->>>>>>> 82119f8ba7 (Revert "killed broken test")
     GTEST_SKIP();
     uint32_t num_tiles = 64;
     ASSERT_TRUE(unit_tests_common::vecadd::test_vecadd_multi_core::vecadd_multi_core(this, devices_.at(0), num_tiles));
