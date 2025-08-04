@@ -158,7 +158,10 @@ class UniAD(nn.Module):
             self.img_neck = FPN(
                 in_channels=[512, 1024, 2048],
                 out_channels=256,
+                start_level=0,
+                add_extra_convs="on_output",
                 num_outs=4,
+                relu_before_extra_convs=True,
             )
 
         self.train_cfg = train_cfg
