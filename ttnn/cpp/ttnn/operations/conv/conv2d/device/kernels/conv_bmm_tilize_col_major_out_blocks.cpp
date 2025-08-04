@@ -121,8 +121,6 @@ void MAIN {
 
     constexpr uint32_t mm_in0_cb_id = height_sharded ? tilized_in0_cb_id : in0_cb_id;
 
-// TODO change for better split reader
-// ------------------------------------------------------------
 #ifdef SPLIT_READER
     constexpr bool split_reader = true;
     constexpr uint32_t in0_num_subblocks_read_last = reader_num_subblocks / 2;
@@ -131,7 +129,6 @@ void MAIN {
     constexpr bool split_reader = false;
     constexpr uint32_t in0_num_subblocks_read = reader_num_subblocks;
 #endif
-    // ------------------------------------------------------------
 
     mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION

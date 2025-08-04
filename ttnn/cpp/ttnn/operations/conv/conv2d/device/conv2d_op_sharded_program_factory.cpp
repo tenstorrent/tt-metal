@@ -234,7 +234,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     uint32_t act_block_w_datums = act_matrix_width / num_blocks_act_w;
     uint32_t act_block_h_datums = act_matrix_height / num_blocks_act_h;
 
-    // ------------------------------------------------------------
     uint32_t act_block_h_nsubblocks_split = block_config.act_block_h_ntiles;
     uint32_t act_block_h_nsubblocks_split_last = 0;
     if (enable_split_reader) {
@@ -246,7 +245,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     uint32_t act_block_num_tiles_split = act_block_h_nsubblocks_split * act_block_w_ntiles;
     uint32_t act_block_num_tiles_split_last = act_block_h_nsubblocks_split_last * act_block_w_ntiles;
-    // ------------------------------------------------------------
 
     // weight block info
     uint32_t weight_block_w_datums = weight_matrix_width / num_blocks_weight_w;
@@ -784,24 +782,24 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         act_num_subblocks,
         act_block_num_tiles,
         act_subblock_num_tiles,
-        enable_split_reader ? 1 : act_subblock_h_ntiles,  // 4
+        enable_split_reader ? 1 : act_subblock_h_ntiles,
 
         weight_num_subblocks,
         weight_block_num_tiles,
-        weight_block_w_ntiles,  // 7
+        weight_block_w_ntiles,
 
         num_blocks_act_h_per_core,
         in0_num_blocks_w,
-        num_blocks_weight_w_per_core,  // 10
+        num_blocks_weight_w_per_core,
 
         out_subblock_h_ntiles,
         out_subblock_w_ntiles,
-        out_subblock_num_tiles,  // 13
+        out_subblock_num_tiles,
 
         height_sharded,
         untilize_out,
 
-        bias_ntiles_per_core,  // 16
+        bias_ntiles_per_core,
 
         get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
@@ -812,7 +810,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,
 
         get_cb_info_by_name(cb_info, Conv2dCb::OUT).index,
-        get_cb_info_by_name(cb_info, Conv2dCb::TEMP_SUM).index,  // 25
+        get_cb_info_by_name(cb_info, Conv2dCb::TEMP_SUM).index,
         partials_cb_uses_output,
         conv_act_c_blocks,
         enable_split_reader ? block_config.act_block_h_ntiles : act_num_subblocks,
