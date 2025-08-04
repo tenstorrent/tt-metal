@@ -496,78 +496,93 @@ def custom_preprocessor(model, name):
 
     if isinstance(model, FPN):
         neck = model
-        parameters["img_neck"] = {}
 
         # Lateral Convs
-        parameters["img_neck"]["lateral_convs"] = {}
+        parameters["fpn"] = {}
 
-        parameters["img_neck"]["lateral_convs"]["0"] = {}
-        parameters["img_neck"]["lateral_convs"]["0"]["conv"] = {}
-        parameters["img_neck"]["lateral_convs"]["0"]["conv"]["weight"] = ttnn.from_torch(
-            neck.lateral_convs[0].conv.weight, dtype=ttnn.float32
-        )
-        bias = neck.lateral_convs[0].conv.bias.reshape((1, 1, 1, -1))
-        parameters["img_neck"]["lateral_convs"]["0"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
-        parameters["img_neck"]["lateral_convs"]["0"]["conv"]["height"] = 80
-        parameters["img_neck"]["lateral_convs"]["0"]["conv"]["width"] = 45
-        parameters["img_neck"]["lateral_convs"]["0"]["conv"]["batch"] = 6
+        # Lateral Convs
+        parameters["fpn"]["lateral_convs"] = {}
 
-        parameters["img_neck"]["lateral_convs"]["1"] = {}
-        parameters["img_neck"]["lateral_convs"]["1"]["conv"] = {}
-        parameters["img_neck"]["lateral_convs"]["1"]["conv"]["weight"] = ttnn.from_torch(
-            neck.lateral_convs[1].conv.weight, dtype=ttnn.float32
+        parameters["fpn"]["lateral_convs"]["0"] = {}
+        parameters["fpn"]["lateral_convs"]["0"]["conv"] = {}
+        parameters["fpn"]["lateral_convs"]["0"]["conv"]["weight"] = ttnn.from_torch(
+            model.lateral_convs[0].conv.weight, dtype=ttnn.float32
         )
-        bias = neck.lateral_convs[1].conv.bias.reshape((1, 1, 1, -1))
-        parameters["img_neck"]["lateral_convs"]["1"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
-        parameters["img_neck"]["lateral_convs"]["1"]["conv"]["height"] = 40
-        parameters["img_neck"]["lateral_convs"]["1"]["conv"]["width"] = 23
-        parameters["img_neck"]["lateral_convs"]["1"]["conv"]["batch"] = 6
+        bias = model.lateral_convs[0].conv.bias.reshape((1, 1, 1, -1))
+        parameters["fpn"]["lateral_convs"]["0"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["fpn"]["lateral_convs"]["0"]["conv"]["height"] = 80
+        parameters["fpn"]["lateral_convs"]["0"]["conv"]["width"] = 45
+        parameters["fpn"]["lateral_convs"]["0"]["conv"]["batch"] = 6
 
-        parameters["img_neck"]["lateral_convs"]["2"] = {}
-        parameters["img_neck"]["lateral_convs"]["2"]["conv"] = {}
-        parameters["img_neck"]["lateral_convs"]["2"]["conv"]["weight"] = ttnn.from_torch(
-            neck.lateral_convs[2].conv.weight, dtype=ttnn.float32
+        parameters["fpn"]["lateral_convs"]["1"] = {}
+        parameters["fpn"]["lateral_convs"]["1"]["conv"] = {}
+        parameters["fpn"]["lateral_convs"]["1"]["conv"]["weight"] = ttnn.from_torch(
+            model.lateral_convs[1].conv.weight, dtype=ttnn.float32
         )
-        bias = neck.lateral_convs[2].conv.bias.reshape((1, 1, 1, -1))
-        parameters["img_neck"]["lateral_convs"]["2"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
-        parameters["img_neck"]["lateral_convs"]["2"]["conv"]["height"] = 20
-        parameters["img_neck"]["lateral_convs"]["2"]["conv"]["width"] = 12
-        parameters["img_neck"]["lateral_convs"]["2"]["conv"]["batch"] = 6
+        bias = model.lateral_convs[1].conv.bias.reshape((1, 1, 1, -1))
+        parameters["fpn"]["lateral_convs"]["1"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["fpn"]["lateral_convs"]["1"]["conv"]["height"] = 40
+        parameters["fpn"]["lateral_convs"]["1"]["conv"]["width"] = 23
+        parameters["fpn"]["lateral_convs"]["1"]["conv"]["batch"] = 6
+
+        parameters["fpn"]["lateral_convs"]["2"] = {}
+        parameters["fpn"]["lateral_convs"]["2"]["conv"] = {}
+        parameters["fpn"]["lateral_convs"]["2"]["conv"]["weight"] = ttnn.from_torch(
+            model.lateral_convs[2].conv.weight, dtype=ttnn.float32
+        )
+        bias = model.lateral_convs[2].conv.bias.reshape((1, 1, 1, -1))
+        parameters["fpn"]["lateral_convs"]["2"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["fpn"]["lateral_convs"]["2"]["conv"]["height"] = 20
+        parameters["fpn"]["lateral_convs"]["2"]["conv"]["width"] = 12
+        parameters["fpn"]["lateral_convs"]["2"]["conv"]["batch"] = 6
         # FPN Convs
-        parameters["img_neck"]["fpn_convs"] = {}
+        parameters["fpn"]["fpn_convs"] = {}
 
-        parameters["img_neck"]["fpn_convs"]["0"] = {}
-        parameters["img_neck"]["fpn_convs"]["0"]["conv"] = {}
-        parameters["img_neck"]["fpn_convs"]["0"]["conv"]["weight"] = ttnn.from_torch(
-            neck.fpn_convs[0].conv.weight, dtype=ttnn.float32
+        parameters["fpn"]["fpn_convs"]["0"] = {}
+        parameters["fpn"]["fpn_convs"]["0"]["conv"] = {}
+        parameters["fpn"]["fpn_convs"]["0"]["conv"]["weight"] = ttnn.from_torch(
+            model.fpn_convs[0].conv.weight, dtype=ttnn.float32
         )
-        bias = neck.fpn_convs[0].conv.bias.reshape((1, 1, 1, -1))
-        parameters["img_neck"]["fpn_convs"]["0"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
-        parameters["img_neck"]["fpn_convs"]["0"]["conv"]["height"] = 80
-        parameters["img_neck"]["fpn_convs"]["0"]["conv"]["width"] = 45
-        parameters["img_neck"]["fpn_convs"]["0"]["conv"]["batch"] = 6
+        bias = model.fpn_convs[0].conv.bias.reshape((1, 1, 1, -1))
+        parameters["fpn"]["fpn_convs"]["0"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["fpn"]["fpn_convs"]["0"]["conv"]["height"] = 80
+        parameters["fpn"]["fpn_convs"]["0"]["conv"]["width"] = 45
+        parameters["fpn"]["fpn_convs"]["0"]["conv"]["batch"] = 6
 
-        parameters["img_neck"]["fpn_convs"]["1"] = {}
-        parameters["img_neck"]["fpn_convs"]["1"]["conv"] = {}
-        parameters["img_neck"]["fpn_convs"]["1"]["conv"]["weight"] = ttnn.from_torch(
-            neck.fpn_convs[1].conv.weight, dtype=ttnn.float32
+        parameters["fpn"]["fpn_convs"]["1"] = {}
+        parameters["fpn"]["fpn_convs"]["1"]["conv"] = {}
+        parameters["fpn"]["fpn_convs"]["1"]["conv"]["weight"] = ttnn.from_torch(
+            model.fpn_convs[1].conv.weight, dtype=ttnn.float32
         )
-        bias = neck.fpn_convs[1].conv.bias.reshape((1, 1, 1, -1))
-        parameters["img_neck"]["fpn_convs"]["1"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
-        parameters["img_neck"]["fpn_convs"]["1"]["conv"]["height"] = 80
-        parameters["img_neck"]["fpn_convs"]["1"]["conv"]["width"] = 45
-        parameters["img_neck"]["fpn_convs"]["1"]["conv"]["batch"] = 6
+        bias = model.fpn_convs[1].conv.bias.reshape((1, 1, 1, -1))
+        parameters["fpn"]["fpn_convs"]["1"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["fpn"]["fpn_convs"]["1"]["conv"]["height"] = 40
+        parameters["fpn"]["fpn_convs"]["1"]["conv"]["width"] = 23
+        parameters["fpn"]["fpn_convs"]["1"]["conv"]["batch"] = 6
 
-        parameters["img_neck"]["fpn_convs"]["2"] = {}
-        parameters["img_neck"]["fpn_convs"]["2"]["conv"] = {}
-        parameters["img_neck"]["fpn_convs"]["2"]["conv"]["weight"] = ttnn.from_torch(
-            neck.fpn_convs[2].conv.weight, dtype=ttnn.float32
+        parameters["fpn"]["fpn_convs"]["2"] = {}
+        parameters["fpn"]["fpn_convs"]["2"]["conv"] = {}
+        parameters["fpn"]["fpn_convs"]["2"]["conv"]["weight"] = ttnn.from_torch(
+            model.fpn_convs[2].conv.weight, dtype=ttnn.float32
         )
-        bias = neck.fpn_convs[2].conv.bias.reshape((1, 1, 1, -1))
-        parameters["img_neck"]["fpn_convs"]["2"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
-        parameters["img_neck"]["fpn_convs"]["2"]["conv"]["height"] = 40
-        parameters["img_neck"]["fpn_convs"]["2"]["conv"]["width"] = 23
-        parameters["img_neck"]["fpn_convs"]["2"]["conv"]["batch"] = 6
+        bias = model.fpn_convs[2].conv.bias.reshape((1, 1, 1, -1))
+        parameters["fpn"]["fpn_convs"]["2"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["fpn"]["fpn_convs"]["2"]["conv"]["height"] = 20
+        parameters["fpn"]["fpn_convs"]["2"]["conv"]["width"] = 12
+        parameters["fpn"]["fpn_convs"]["2"]["conv"]["batch"] = 6
+
+        parameters["fpn"]["fpn_convs"]["3"] = {}
+        parameters["fpn"]["fpn_convs"]["3"]["conv"] = {}
+        parameters["fpn"]["fpn_convs"]["3"]["conv"]["weight"] = ttnn.from_torch(
+            model.fpn_convs[3].conv.weight, dtype=ttnn.float32
+        )
+        bias = model.fpn_convs[3].conv.bias.reshape((1, 1, 1, -1))
+        parameters["fpn"]["fpn_convs"]["3"]["conv"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["fpn"]["fpn_convs"]["3"]["conv"]["height"] = 20
+        parameters["fpn"]["fpn_convs"]["3"]["conv"]["width"] = 12
+        parameters["fpn"]["fpn_convs"]["3"]["conv"]["batch"] = 6
+
+        parameters["model_args"] = neck  # For conv configs
 
     if isinstance(model, MotionHead):
         motion_head = model
