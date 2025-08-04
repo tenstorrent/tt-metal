@@ -113,7 +113,7 @@ transformation_mats_decode = rope_setup_decode.get_trans_mats()
 position_ids = torch.arange(batch)
 
 
-# Step 3: Retreive the relevant cos/sin matrices
+# Step 3: Retrieve the relevant cos/sin matrices
 cos_sin_matrices = rope_setup_decode.get_rot_mats(position_ids)
 cos_matrix, sin_matrix = cos_sin_matrices
 
