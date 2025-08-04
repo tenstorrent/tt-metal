@@ -12,8 +12,11 @@ constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(0);
 constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(1);
 tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_addr_arg);
 constexpr uint32_t notification_mailbox_address = get_compile_time_arg_val(2);
-constexpr uint32_t target_address = get_compile_time_arg_val(3);
+uint32_t target_address = get_compile_time_arg_val(3);
 constexpr uint32_t is_fused_mode = get_compile_time_arg_val(4);  // 0 = atomic inc only, 1 = fused mode
+constexpr bool is_scatter = get_compile_time_arg_val(5) == 1;
+constexpr bool is_inline = get_compile_time_arg_val(6) == 1;
+constexpr bool is_chip_multicast = get_compile_time_arg_val(7) == 1;
 
 void kernel_main() {
     uint32_t rt_arg_idx = 0;
@@ -33,8 +36,6 @@ void kernel_main() {
 
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
-
-    // Initialize the notification mailbox to 0
     *atomic_poll_addr = 0;
 
     // Initialize data area to 0 if in fused mode
@@ -47,13 +48,11 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_packets; i++) {
         uint32_t expected_atomic_value = i + 1;
 
-        DPRINT << "bef inc i:" << (int)i << "\n";
         WAYPOINT("FPW");
         while (expected_atomic_value != *atomic_poll_addr) {
             invalidate_l1_cache();
         }
         WAYPOINT("FPD");
-        DPRINT << "after inc\n";
 
         if constexpr (is_fused_mode) {
             // Verify that data was also written (check that at least some data is non-zero)

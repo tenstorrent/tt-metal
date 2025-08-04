@@ -16,7 +16,9 @@ tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(t
 constexpr uint32_t notification_mailbox_address = get_compile_time_arg_val(2);
 uint32_t target_address = get_compile_time_arg_val(3);
 constexpr uint32_t is_fused_mode = get_compile_time_arg_val(4);  // 0 = atomic inc only, 1 = fused mode
-constexpr bool is_chip_multicast = get_compile_time_arg_val(5) == 1;
+constexpr bool is_scatter = get_compile_time_arg_val(5) == 1;
+constexpr bool is_inline = get_compile_time_arg_val(6) == 1;
+constexpr bool is_chip_multicast = get_compile_time_arg_val(7) == 1;
 
 void kernel_main() {
     size_t rt_arg_idx = 0;

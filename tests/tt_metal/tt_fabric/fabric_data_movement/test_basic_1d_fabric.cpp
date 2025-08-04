@@ -1751,7 +1751,7 @@ TEST_F(Fabric1DFixture, DISABLED_TestEDMConnectionStressTestQuick) {
     }
 }
 
-void UnicastCommon(BaseFabricFixture* fixture, bool is_scatter, bool is_inline) {
+void UnicastCommon(BaseFabricFixture* fixture, bool atomic_inc, bool fused, bool is_scatter, bool is_inline) {
     uint32_t num_hops = 1;
     RoutingDirection direction = RoutingDirection::E;  // East direction
     uint32_t num_packets = 10;
@@ -1812,14 +1812,18 @@ void UnicastCommon(BaseFabricFixture* fixture, bool is_scatter, bool is_inline) 
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
+        worker_mem_map.notification_mailbox_address,
         worker_mem_map.target_address,
+        fused,
         is_scatter,
         is_inline,
         0};
 
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
+        atomic_inc
+            ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_unified_sender.cpp"
+            : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
         {sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -1828,7 +1832,9 @@ void UnicastCommon(BaseFabricFixture* fixture, bool is_scatter, bool is_inline) 
 
     auto receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
+        atomic_inc
+            ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_unified_receiver.cpp"
+            : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
         {receiver_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -1897,151 +1903,7 @@ void UnicastCommon(BaseFabricFixture* fixture, bool is_scatter, bool is_inline) 
     EXPECT_EQ(sender_bytes, receiver_bytes);
 }
 
-void AtomicIncCommon(BaseFabricFixture* fixture, bool fused) {
-    uint32_t num_hops = 1;
-    RoutingDirection direction = RoutingDirection::E;  // East direction
-    uint32_t num_packets = 10;
-    uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const auto& devices = fixture->get_devices();
-
-    if (devices.size() < 2) {
-        GTEST_SKIP() << "Test requires at least 2 devices";
-    }
-    FabricNodeId src_fabric_node_id(MeshId{0}, 0);
-    FabricNodeId dst_fabric_node_id(MeshId{0}, 0);
-    // Find a device num_hops away in specified direction.
-    std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
-    std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
-    chip_id_t src_physical_device_id;
-    chip_id_t dst_physical_device_id;
-    std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
-    std::vector<chan_id_t> eth_chans;
-    chan_id_t edm_port;
-    fabric_hops[direction] = num_hops;
-
-    const auto& fabric_context = control_plane.get_fabric_context();
-    const auto topology = fabric_context.get_fabric_topology();
-
-    if (!find_device_with_neighbor_in_multi_direction(
-            fixture,
-            src_fabric_node_id,
-            end_fabric_node_ids_by_dir,
-            src_physical_device_id,
-            physical_end_device_ids_by_dir,
-            fabric_hops)) {
-        GTEST_SKIP() << "No path found between sender and receivers";
-    }
-    dst_physical_device_id = physical_end_device_ids_by_dir[direction][num_hops - 1];
-    dst_fabric_node_id = end_fabric_node_ids_by_dir[direction][num_hops - 1];
-
-    // get a port to connect to
-    eth_chans = control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, direction);
-    if (eth_chans.size() == 0) {
-        GTEST_SKIP() << "No active eth chans to connect to";
-    }
-    edm_port = *eth_chans.begin();
-
-    auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
-    auto* receiver_device = DevicePool::instance().get_active_device(dst_physical_device_id);
-    CoreCoord sender_logical_core = {0, 0};
-    CoreCoord receiver_logical_core = {1, 0};
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
-    CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
-
-    tt_metal::Program sender_program = tt_metal::CreateProgram();
-    tt_metal::Program receiver_program = tt_metal::CreateProgram();
-
-    // Get memory layout using proper memory mapping
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
-
-    std::vector<uint32_t> compile_time_args = {
-        worker_mem_map.test_results_address,
-        worker_mem_map.test_results_size_bytes,
-        worker_mem_map.notification_mailbox_address,
-        worker_mem_map.target_address,
-        fused,  // 1 = fused mode
-        0};     // is_chip_multicast = false
-
-    auto sender_kernel = tt_metal::CreateKernel(
-        sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_unified_sender.cpp",
-        {sender_logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args});
-
-    auto receiver_kernel = tt_metal::CreateKernel(
-        receiver_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_unified_receiver.cpp",
-        {receiver_logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args});
-
-    std::vector<uint32_t> sender_runtime_args = {
-        worker_mem_map.source_l1_buffer_address,
-        worker_mem_map.packet_payload_size_bytes,
-        num_packets,
-        time_seed,
-        receiver_virtual_core.x,
-        receiver_virtual_core.y,
-        0,
-        0};
-
-    std::vector<uint32_t> receiver_runtime_args = {
-        worker_mem_map.packet_payload_size_bytes,
-        num_packets,
-        time_seed,
-    };
-
-    auto worker_teardown_semaphore_id = tt_metal::CreateSemaphore(sender_program, sender_logical_core, 0);
-    auto worker_buffer_index_semaphore_id = tt_metal::CreateSemaphore(sender_program, sender_logical_core, 0);
-    append_worker_to_fabric_edm_sender_rt_args(
-        edm_port, worker_teardown_semaphore_id, worker_buffer_index_semaphore_id, sender_runtime_args);
-
-    tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
-    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
-
-    fixture->RunProgramNonblocking(receiver_device, receiver_program);
-    fixture->RunProgramNonblocking(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(sender_device, sender_program);
-    fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
-
-    // Validate results by reading from L1 memory
-    std::vector<uint32_t> sender_status;
-    std::vector<uint32_t> receiver_status;
-
-    tt_metal::detail::ReadFromDeviceL1(
-        sender_device,
-        sender_logical_core,
-        worker_mem_map.test_results_address,
-        worker_mem_map.test_results_size_bytes,
-        sender_status,
-        CoreType::WORKER);
-
-    tt_metal::detail::ReadFromDeviceL1(
-        receiver_device,
-        receiver_logical_core,
-        worker_mem_map.test_results_address,
-        worker_mem_map.test_results_size_bytes,
-        receiver_status,
-        CoreType::WORKER);
-
-    EXPECT_EQ(sender_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
-    EXPECT_EQ(receiver_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
-
-    uint64_t sender_operations =
-        ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
-    uint64_t receiver_operations =
-        ((uint64_t)receiver_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | receiver_status[TT_FABRIC_WORD_CNT_INDEX];
-    EXPECT_EQ(sender_operations, receiver_operations);
-    EXPECT_EQ(sender_operations, num_packets);
-}
-
-void MulticastCommon(BaseFabricFixture* fixture, bool is_scatter, bool is_inline) {
+void MulticastCommon(BaseFabricFixture* fixture, bool atomic_inc, bool fused, bool is_scatter, bool is_inline) {
     uint32_t start_distance = 1;
     uint32_t range = 3;
     RoutingDirection dir = RoutingDirection::E;  // East direction
@@ -2125,7 +1987,9 @@ void MulticastCommon(BaseFabricFixture* fixture, bool is_scatter, bool is_inline
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
+        worker_mem_map.notification_mailbox_address,
         worker_mem_map.target_address,
+        fused,
         is_scatter,
         is_inline,
         1};  // is_chip_multicast
@@ -2134,7 +1998,9 @@ void MulticastCommon(BaseFabricFixture* fixture, bool is_scatter, bool is_inline
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
+        atomic_inc
+            ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_unified_sender.cpp"
+            : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
         {sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -2188,7 +2054,9 @@ void MulticastCommon(BaseFabricFixture* fixture, bool is_scatter, bool is_inline
             auto receiver_program = tt_metal::CreateProgram();
             auto receiver_kernel = tt_metal::CreateKernel(
                 receiver_program,
-                "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
+                atomic_inc ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/"
+                             "test_linear_api_atomic_inc_unified_receiver.cpp"
+                           : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
                 receiver_logical_core,
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -2266,250 +2134,32 @@ void MulticastCommon(BaseFabricFixture* fixture, bool is_scatter, bool is_inline
     }
 }
 
-void MulticastAtomicIncCommon(BaseFabricFixture* fixture, bool fused) {
-    uint32_t start_distance = 1;
-    uint32_t range = 3;
-    RoutingDirection dir = RoutingDirection::E;  // East direction
-    uint32_t num_packets = 100;
-    CoreCoord sender_logical_core = {0, 0};
-    CoreCoord receiver_logical_core = {1, 0};
-    std::vector<tt_metal::Program> receiver_programs;
+// 1D Linear Fabric API Tests
+TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocUnicastWrite1D) { UnicastCommon(this, false, false, false, false); }
 
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocAtomicInc1D) { UnicastCommon(this, true, false, false, false); }
 
-    // use control plane to find a mesh with 3 devices
-    auto user_meshes = control_plane.get_user_physical_mesh_ids();
-    std::optional<MeshId> mesh_id;
-    for (const auto& mesh : user_meshes) {
-        auto mesh_shape = control_plane.get_physical_mesh_shape(mesh);
-        if (mesh_shape.mesh_size() >= 3) {
-            mesh_id = mesh;
-            break;
-        }
-    }
-    if (!mesh_id.has_value()) {
-        GTEST_SKIP() << "No mesh found for 3 chip mcast test";
-    }
+TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocScatterWrite1D) { UnicastCommon(this, false, false, true, false); }
 
-    // Check topology and fabric config
-    const auto topology = control_plane.get_fabric_context().get_fabric_topology();
-    const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-    assert(
-        (topology == Topology::Linear || topology == Topology::Ring) &&
-        (fabric_config == tt_fabric::FabricConfig::FABRIC_1D ||
-         fabric_config == tt_fabric::FabricConfig::FABRIC_1D_RING));
+TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocInlineWrite1D) { UnicastCommon(this, false, false, false, true); }
 
-    // Find a device num_hops away in specified direction.
-    FabricNodeId src_fabric_node_id(MeshId{0}, 0);
-    std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
-    std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
-    chip_id_t src_phys_chip_id;
-    std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
-    fabric_hops[dir] = start_distance + range - 1;
+TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocFusedAtomicInc1D) { UnicastCommon(this, true, true, false, false); }
 
-    // Get the mcast sender device and mcast receiver devices that satisfy the input number of hops in forward and
-    // backward directions.
-    if (!find_device_with_neighbor_in_multi_direction(
-            fixture,
-            src_fabric_node_id,
-            end_fabric_node_ids_by_dir,
-            src_phys_chip_id,
-            physical_end_device_ids_by_dir,
-            fabric_hops)) {
-        log_info(tt::LogTest, "No Mcast destinations found for {} hops in {}", fabric_hops[dir], dir);
-        GTEST_SKIP() << "Skipping Test";
-    }
-
-    // adjust physical_end_device_ids_by_dir and end_fabric_node_ids_by_dir to start from start_distance
-    auto first_hop_phys_chip_id = physical_end_device_ids_by_dir[dir][0];  // needed to get link_idx
-    physical_end_device_ids_by_dir[dir] = std::vector(
-        physical_end_device_ids_by_dir[dir].begin() + start_distance - 1, physical_end_device_ids_by_dir[dir].end());
-    end_fabric_node_ids_by_dir[dir] = std::vector(
-        end_fabric_node_ids_by_dir[dir].begin() + start_distance - 1, end_fabric_node_ids_by_dir[dir].end());
-
-    tt::tt_metal::distributed::MeshShape mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
-    auto last_recv_phys_chip_id = physical_end_device_ids_by_dir[dir][range - 1];
-    auto first_recv_phys_chip_id = physical_end_device_ids_by_dir[dir][0];
-
-    auto* sender_device = DevicePool::instance().get_active_device(src_phys_chip_id);
-    auto* last_recv_device = DevicePool::instance().get_active_device(last_recv_phys_chip_id);
-
-    auto first_recv_fabric_node_id = end_fabric_node_ids_by_dir[dir][0];
-    auto last_recv_fabric_node_id = end_fabric_node_ids_by_dir[dir][range - 1];
-
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
-    CoreCoord receiver_virtual_core = last_recv_device->worker_core_from_logical_core(receiver_logical_core);
-
-    // test parameters
-    auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
-    uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
-
-    // common compile time args for sender and receiver (atomic increment specific)
-    std::vector<uint32_t> compile_time_args = {
-        worker_mem_map.test_results_address,
-        worker_mem_map.test_results_size_bytes,
-        worker_mem_map.notification_mailbox_address,
-        worker_mem_map.target_address,
-        fused,  // fused mode flag
-        1};     // is_chip_multicast = true
-
-    // Create the sender program (using atomic increment sender kernel)
-    auto sender_program = tt_metal::CreateProgram();
-    auto sender_kernel = tt_metal::CreateKernel(
-        sender_program,
-        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_unified_sender.cpp",
-        {sender_logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args});
-
-    log_info(tt::LogTest, "mesh dimensions: {:x}", mesh_shape.dims());
-    log_info(tt::LogTest, "mesh dimension 0: {:x}", mesh_shape[0]);
-    log_info(tt::LogTest, "mesh dimension 1: {:x}", mesh_shape[1]);
-    log_info(
-        tt::LogTest, "Mcast Src: MeshId {} ChipId {}", src_fabric_node_id.mesh_id.get(), src_fabric_node_id.chip_id);
-    log_info(
-        tt::LogTest,
-        "Mcast Dst: from MeshId {} ChipId {} to MeshId {} ChipId {}",
-        first_recv_fabric_node_id.mesh_id.get(),
-        first_recv_fabric_node_id.chip_id,
-        last_recv_fabric_node_id.mesh_id.get(),
-        last_recv_fabric_node_id.chip_id);
-    log_info(tt::LogTest, "Mcast Receiver Core (Logical): {},{}", receiver_logical_core.x, receiver_logical_core.y);
-
-    // Runtime args for atomic increment sender (with multicast parameters)
-    std::vector<uint32_t> sender_runtime_args = {
-        worker_mem_map.source_l1_buffer_address,
-        worker_mem_map.packet_payload_size_bytes,
-        num_packets,
-        time_seed,
-        receiver_virtual_core.x,
-        receiver_virtual_core.y,
-        start_distance,
-        range};
-
-    // append the EDM connection rt args for fwd connection
-    chip_id_t dst_chip_id = first_hop_phys_chip_id;
-    const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(dst_chip_id);
-    uint32_t link_idx = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id)[0];
-    append_fabric_connection_rt_args(
-        src_fabric_node_id, dst_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
-
-    tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
-
-    // Runtime args for atomic increment receiver
-    std::vector<uint32_t> receiver_runtime_args = {
-        worker_mem_map.packet_payload_size_bytes,
-        num_packets,
-        time_seed,
-    };
-
-    // Create and launch the receiver program for validation on all mcast receiver devices
-    for (auto& [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (auto physical_end_device_id : physical_end_device_ids) {
-            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_id);
-            // Create the receiver program for validation (using atomic increment receiver kernel)
-            auto receiver_program = tt_metal::CreateProgram();
-            auto receiver_kernel = tt_metal::CreateKernel(
-                receiver_program,
-                "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_unified_receiver.cpp",
-                receiver_logical_core,
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                    .noc = tt_metal::NOC::RISCV_0_default,
-                    .compile_args = compile_time_args});
-
-            tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
-            fixture->RunProgramNonblocking(receiver_device, receiver_program);
-            receiver_programs.push_back(std::move(receiver_program));
-            log_info(tt::LogTest, "{} Rx Launched on physical device {}", routing_direction, physical_end_device_id);
-        }
-    }
-
-    // Launch sender program and wait for sender to finish
-    fixture->RunProgramNonblocking(sender_device, sender_program);
-    log_info(tt::LogTest, "Sender Launched on physical device {}", src_phys_chip_id);
-
-    fixture->WaitForSingleProgramDone(sender_device, sender_program);
-    log_info(tt::LogTest, "Sender Finished");
-
-    // Wait for receivers to finish
-    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
-            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_ids[i]);
-            fixture->WaitForSingleProgramDone(receiver_device, receiver_programs[i]);
-        }
-    }
-    log_info(tt::LogTest, "All Receivers Finished");
-
-    // Validate the status and operations processed by sender and receiver
-    std::vector<uint32_t> sender_status;
-
-    tt_metal::detail::ReadFromDeviceL1(
-        sender_device,
-        sender_logical_core,
-        worker_mem_map.test_results_address,
-        worker_mem_map.test_results_size_bytes,
-        sender_status,
-        CoreType::WORKER);
-
-    EXPECT_EQ(sender_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
-
-    uint64_t sender_operations =
-        ((uint64_t)sender_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | sender_status[TT_FABRIC_WORD_CNT_INDEX];
-
-    for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
-        for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
-            auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_ids[i]);
-
-            log_info(
-                tt::LogTest,
-                "Checking Status of {} Rx on core ({}, {}) on physical device {}",
-                routing_direction,
-                receiver_logical_core.x,
-                receiver_logical_core.y,
-                physical_end_device_ids[i]);
-
-            std::vector<uint32_t> recv_status;
-
-            tt_metal::detail::ReadFromDeviceL1(
-                receiver_device,
-                receiver_logical_core,
-                worker_mem_map.test_results_address,
-                worker_mem_map.test_results_size_bytes,
-                recv_status,
-                CoreType::WORKER);
-            EXPECT_EQ(recv_status[TT_FABRIC_STATUS_INDEX], TT_FABRIC_STATUS_PASS);
-            uint64_t recv_operations =
-                ((uint64_t)recv_status[TT_FABRIC_WORD_CNT_INDEX + 1] << 32) | recv_status[TT_FABRIC_WORD_CNT_INDEX];
-
-            EXPECT_EQ(sender_operations, recv_operations);
-            EXPECT_EQ(sender_operations, num_packets);
-        }
-    }
+TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocUnicastWrite1D) {
+    MulticastCommon(this, false, false, false, false);
 }
 
-// 1D Linear Fabric API Tests
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocUnicastWrite1D) { UnicastCommon(this, false, false); }
+TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocAtomicInc1D) { MulticastCommon(this, true, false, false, false); }
 
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocAtomicInc1D) { AtomicIncCommon(this, false); }
+TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocScatterWrite1D) {
+    MulticastCommon(this, false, false, true, false);
+}
 
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocScatterWrite1D) { UnicastCommon(this, true, false); }
+TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocInlineWrite1D) { MulticastCommon(this, false, false, false, true); }
 
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocInlineWrite1D) { UnicastCommon(this, false, true); }
-
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocFusedAtomicInc1D) { AtomicIncCommon(this, true); }
-
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocUnicastWrite1D) { MulticastCommon(this, false, false); }
-
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocAtomicInc1D) { MulticastAtomicIncCommon(this, false); }
-
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocScatterWrite1D) { MulticastCommon(this, true, false); }
-
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocInlineWrite1D) { MulticastCommon(this, false, true); }
-
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocFusedAtomicInc1D) { MulticastAtomicIncCommon(this, true); }
+TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocFusedAtomicInc1D) {
+    MulticastCommon(this, true, true, false, false);
+}
 
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric
