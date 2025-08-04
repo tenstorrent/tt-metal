@@ -452,9 +452,10 @@ InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_
     return dispatch_params;
 }
 
-void copy_with_conversion(
+// Copy with conversion between data formats.
+static void copy_with_conversion(
     const void* src,
-    size_t src_offset,
+    size_t src_offset,  // Offset in destination data format bytes.
     tt::DataFormat src_data_format,
     void* dst,
     tt::DataFormat data_format,

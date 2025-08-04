@@ -119,9 +119,13 @@ public:
      * @param data_format The target data format for the buffer
      * @param host_data Pointer to the source data on the host
      * @param src_data_format The source data format of the host data
-     * @param device_range If the buffer is replicated, the range of mesh coordinates defining the sub-grid to write to. If the buffer is sharded, this is ignored.
+     * @param device_range If the buffer is replicated, the range of mesh coordinates defining the sub-grid to write to.
+     * If the buffer is sharded, this is ignored.
      * @param blocking If true, the operation blocks until completion; if false, it's asynchronous
      * @param region Optional buffer region to write to; if not provided, writes to the entire buffer area
+     *
+     * @note If the identity conversion is not used, the region specified must be a multiple of the buffer data format
+     * element size, and the corresponding source size must be a multiple of the source data format element size.
      */
     virtual void enqueue_write_shard_to_sub_grid_with_conversion(
         const MeshBuffer& buffer,
@@ -153,6 +157,9 @@ public:
      * @note All host data in the shard_data_transfers must be in the same source format
      * @note The data conversion is performed during the write operation for each shard
      *
+     * @note If the identity conversion is not used, each region specified in the shard_data_transfers must be a
+     * multiple of the buffer data format element size, and the corresponding source size must be a multiple of the
+     * source data format element size.
      * @see ShardDataTransfer for details on specifying per-shard data and regions
      */
     virtual void enqueue_write_shards_with_conversion(
@@ -178,7 +185,6 @@ public:
      * @param src_data_format The source data format of the host data
      * @param blocking If true, the operation blocks until completion; if false, it's asynchronous
      *
-     * @note The host_data is broadcasted to all shards in the MeshBuffer
      * @note The data conversion is performed during the write operation
      */
     virtual void enqueue_write_mesh_buffer_with_conversion(
