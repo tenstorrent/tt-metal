@@ -380,14 +380,6 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     }
 }
 
-void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueTrace, cq, trace_id, blocking);
-    detail::DispatchStateCheck(true);
-    TT_FATAL(cq.device()->get_trace(trace_id) != nullptr, "Trace instance {} must exist on device", trace_id);
-    cq.enqueue_trace(trace_id, blocking);
-}
-
 }  // namespace tt::tt_metal
 
 std::ostream& operator<<(std::ostream& os, const EnqueueCommandType& type) {
@@ -395,7 +387,6 @@ std::ostream& operator<<(std::ostream& os, const EnqueueCommandType& type) {
         case EnqueueCommandType::ENQUEUE_READ_BUFFER: os << "ENQUEUE_READ_BUFFER"; break;
         case EnqueueCommandType::ENQUEUE_WRITE_BUFFER: os << "ENQUEUE_WRITE_BUFFER"; break;
         case EnqueueCommandType::ENQUEUE_PROGRAM: os << "ENQUEUE_PROGRAM"; break;
-        case EnqueueCommandType::ENQUEUE_TRACE: os << "ENQUEUE_TRACE"; break;
         case EnqueueCommandType::ENQUEUE_RECORD_EVENT: os << "ENQUEUE_RECORD_EVENT"; break;
         case EnqueueCommandType::ENQUEUE_WAIT_FOR_EVENT: os << "ENQUEUE_WAIT_FOR_EVENT"; break;
         case EnqueueCommandType::FINISH: os << "FINISH"; break;

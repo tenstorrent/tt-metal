@@ -19,11 +19,14 @@
 #include "hal_types.hpp"
 #include "sub_device.hpp"
 #include "sub_device_types.hpp"
+#include <tt-metalium/mesh_trace_id.hpp>
 
+namespace tt::tt_metal::distributed {
+class MeshTraceBuffer;
+}
 namespace tt::tt_metal {
 
 class IDevice;
-class TraceBuffer;
 
 class SubDeviceManager {
 public:
@@ -55,9 +58,9 @@ public:
     const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const;
     std::unique_ptr<Allocator>& sub_device_allocator(SubDeviceId sub_device_id);
 
-    std::shared_ptr<TraceBuffer>& create_trace(uint32_t tid);
-    void release_trace(uint32_t tid);
-    std::shared_ptr<TraceBuffer> get_trace(uint32_t tid);
+    std::shared_ptr<distributed::MeshTraceBuffer>& create_trace(const distributed::MeshTraceId& trace_id);
+    void release_trace(const distributed::MeshTraceId& trace_id);
+    std::shared_ptr<distributed::MeshTraceBuffer> get_trace(const distributed::MeshTraceId& trace_id);
 
     uint8_t num_sub_devices() const;
     bool has_allocations() const;
@@ -97,7 +100,7 @@ private:
     std::vector<uint8_t> noc_mcast_data_start_index_;
     std::vector<uint8_t> noc_unicast_data_start_index_;
 
-    std::unordered_map<uint32_t, std::shared_ptr<TraceBuffer>> trace_buffer_pool_;
+    std::unordered_map<distributed::MeshTraceId, std::shared_ptr<distributed::MeshTraceBuffer>> trace_buffer_pool_;
 
     // TODO #15944: Temporary until migration to actual fabric is complete
     std::optional<SubDeviceId> fabric_sub_device_id_ = std::nullopt;

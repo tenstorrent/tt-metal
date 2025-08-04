@@ -1627,20 +1627,20 @@ public:
 The functions listed below allow a MeshTrace to be captured, binarized and run/replayed on a MeshDevice post binarization. These are exposed through the MeshDevice class, which maintains an internal state of the live MeshTraces, existing in its distributed DRAM address space. The main APIs exposed for the MeshTrace feature are wrappers around these functions.
 
 ```cpp
-// Maps to BeginMeshTraceCapture
-uint32_t MeshDevice::begin_trace_capture(CommandQueueHandle cq_handle);
+// Maps to BeginTraceCapture
+void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
 
-// Maps to EndMeshTraceCapture
-void MeshDevice::end_trace(CommandQueueHandle cq_handle, const uint32_t tid);
+// Maps to EndTraceCapture
+void MeshDevice::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
 
-// Maps to EnqueueMeshTrace
-void MeshDevice::replay_trace(CommandQueueHandle cq_handle, const uint32_t tid, const bool blocking);
+// Maps to ReplayTrace
+void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
 
 // Maps to ReleaseTrace
-void MeshDevice::release_trace(const uint32_t tid);
+void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id);
 
 // Get the underlying MeshTrace metadata corresponding to an ID.
-std::shared_ptr<MeshTraceBuffer> MeshDevice::get_trace(const uint32_t tid);
+std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& trace_id);
 ```
 
 ### 3.12.2 MeshTrace Capture and Execution

@@ -849,88 +849,6 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids = 
 
 // clang-format off
 /**
- * Begins capture on a trace, when the trace is in capture mode all programs pushed into the trace queue will have their execution delayed until the trace is instantiated and enqueued.
- * The capture must be later ended via EndTraceCapture, and finally scheduled to be executed via ReplayTrace.
- * Beginning a trace capture enabled buffer allocations until capture has ended.
- *
- * Return value: Trace ID
- *
- * | Argument        | Description                                                            | Type                          | Valid Range                        | Required |
- * |-----------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device          | The device holding being traced.                                       | IDevice*                      |                                    | Yes      |
- * | cq_id           | The command queue id associated with the trace.                        | uint8_t                       |                                    | Yes      |
-*/
-// clang-format on
-uint32_t BeginTraceCapture(IDevice* device, uint8_t cq_id);
-
-// clang-format off
-/**
- * Completes capture on a trace, if captured commands do not conform to the rules of the trace, the trace will be invalidated.
- * This trace can be enqueued for execution via ReplayTrace on the same device command queue.
- * After ending a trace capture, buffer allocations on device are disabled until either a new trace begins capture,
- * or all traces on the device are released
- *
- * Return value: void
- *
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device       | The device holding being traced.                                       | IDevice*                      |                                    | Yes      |
- * | cq_id        | The command queue id associated with the trace.                        | uint8_t                       |                                    | Yes      |
- * | tid          | A unique id from BeginTraceCapture for the trace being captured        | uint32_t                      |                                    | Yes      |
- */
-// clang-format on
-void EndTraceCapture(IDevice* device, uint8_t cq_id, uint32_t tid);
-
-// clang-format off
-/**
- * Replay a trace of previously generated commands and data.
- *
- * Return value: void
- *
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device       | The device holding the trace.                                          | IDevice*                      |                                    | Yes      |
- * | cq_id        | The command queue id associated with the trace.                        | uint8_t                       |                                    | Yes      |
- * | trace_id     | A unique id representing an existing captured trace.                   | uint32_t                      |                                    | Yes      |
- * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
- */
-// clang-format on
-void ReplayTrace(IDevice* device, uint8_t cq_id, uint32_t tid, bool blocking);
-
-// clang-format off
-/**
- * Release a previously instantiated trace, deallocating the associated trace buffers on device
- * This operation is not thread-safe, user must ensure that the trace being released is no longer needed by device threads
- * If this releases the last trace on a device, then buffer allocations are re-enabled
- *
- * Return value: void
- *
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device       | The device holding the trace.                                          | IDevice*                      |                                    | Yes      |
- * | trace_id     | A unique id representing an existing captured trace.                   | uint32_t                      |                                    | Yes      |
- */
-// clang-format on
-void ReleaseTrace(IDevice* device, uint32_t tid);
-
-// clang-format off
-/**
- * Enqueues a trace of previously generated commands and data.
- *
- * Return value: void
- *
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
- * | trace_id     | A unique id representing an existing on-device trace, which has been   | uint32_t                      |                                    | Yes      |
- * |              | instantiated via InstantiateTrace where the trace_id is returned       |                               |                                    |          |
- * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
- */
-// clang-format on
-void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking);
-
-// clang-format off
-/**
  * Begin Light Metal Binary capturing on host and all devices. This will trace host API calls and device (metal trace) workloads to a
  * binary blob returned to caller when tracing is finished, which can later be rerun directly from binary.
  * Note: This LightMetalBinary Trace/Replay feature is currently under active development and is not fully supported, use at own risk.
@@ -949,22 +867,6 @@ void LightMetalBeginCapture();
  */
 // clang-format on
 LightMetalBinary LightMetalEndCapture();
-
-// clang-format off
-/**
- * Load an existing trace descriptor onto a particular device and command queue and assign it as user-provided trace id. Useful for Light Metal Binary replay.
- *
- * Return value: void
- *
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device       | The device to load the trace onto.                                     | IDevice *                     |                                    | Yes      |
- * | cq_id        | The command queue id to load the trace onto.                           | uint8_t                       |                                    | Yes      |
- * | trace_id     | A unique id to represent the trace on device.                          | uint32_t                      |                                    | Yes      |
- * | trace_desc   | The trace descriptor to load onto the device.                          | TraceDescriptor&              |                                    | Yes      |
- */
-// clang-format on
-void LoadTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id, const TraceDescriptor& trace_desc);
 
 // clang-format off
 /**
