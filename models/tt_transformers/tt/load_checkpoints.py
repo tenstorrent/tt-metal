@@ -305,6 +305,12 @@ def map_meta_to_hf_keys(loaded_weights):
         "feed_forward.w1.weight": "mlp.gate_proj.weight",
         "feed_forward.w3.weight": "mlp.up_proj.weight",
         "feed_forward.w2.weight": "mlp.down_proj.weight",
+        "feed_forward.1.weight": "mlp.gate_proj.weight",
+        "feed_forward.3.weight": "mlp.up_proj.weight",
+        "feed_forward.2.weight": "mlp.down_proj.weight",
+        "1.weight": "gate_proj.weight",
+        "3.weight": "up_proj.weight",
+        "2.weight": "down_proj.weight",
         # Direct mappings for when we get just the final components
         "w1.weight": "gate_proj.weight",
         "w2.weight": "down_proj.weight",
