@@ -123,8 +123,7 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixKernelUnderMetalRootDirA
 
 TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixNonExistentKernel) {
     const std::string& kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/non_existent_kernel.cpp";
-    this->create_kernel(kernel_file);
-    EXPECT_THROW(detail::CompileProgram(this->device_, this->program_), std::exception);
+    EXPECT_THROW(this->create_kernel(kernel_file), std::exception);
 }
 
 }  // namespace tt::tt_metal
