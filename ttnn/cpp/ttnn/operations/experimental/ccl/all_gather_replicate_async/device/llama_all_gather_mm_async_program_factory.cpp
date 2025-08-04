@@ -86,11 +86,11 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
             weight_tensor_width /* weight_output_page_offset: stride across a tensor slice in the weight_tensor */,
         tt::CB::c_in3 /* cb_index_start */
     );
-    CoreRangeSet mcast_recv = output_tensor.memory_config().shard_spec()->grid;
-    CoreRangeSet mcast_sender = intermediate_tensor.memory_config().shard_spec()->grid;
-    CoreRangeSet mcast_crs = mcast_recv.merge(mcast_sender);
     matmul_fused_op_signaler->init_fused_op(
-        program, sender_device, mcast_crs, ttnn::experimental::ccl::FusedOpSignalerMode::SINGLE);
+        program,
+        sender_device,
+        aggregated_tensor.memory_config().shard_spec()->grid.bounding_box(),
+        ttnn::experimental::ccl::FusedOpSignalerMode::SINGLE);
     // Section end for fusion signaler initialization
 
     const bool enable_async_intermediate_tensor = false;
