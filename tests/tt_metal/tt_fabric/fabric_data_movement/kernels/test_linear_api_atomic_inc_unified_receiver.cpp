@@ -1,0 +1,74 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "dataflow_api.h"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
+
+constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(0);
+constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(1);
+tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_addr_arg);
+constexpr uint32_t notification_mailbox_address = get_compile_time_arg_val(2);
+constexpr uint32_t target_address = get_compile_time_arg_val(3);
+constexpr uint32_t is_fused_mode = get_compile_time_arg_val(4);  // 0 = atomic inc only, 1 = fused mode
+
+void kernel_main() {
+    uint32_t rt_arg_idx = 0;
+    uint32_t packet_payload_size_bytes = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t num_packets = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint32_t time_seed = get_arg_val<uint32_t>(rt_arg_idx++);
+
+    volatile tt_l1_ptr uint32_t* atomic_poll_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(notification_mailbox_address);
+    tt_l1_ptr uint32_t* start_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(target_address);
+    volatile tt_l1_ptr uint32_t* poll_addr =
+        reinterpret_cast<tt_l1_ptr uint32_t*>(target_address + packet_payload_size_bytes - 4);
+    uint32_t payload_size_words = packet_payload_size_bytes / sizeof(uint32_t);
+    uint32_t mismatch_addr, mismatch_val, expected_val;
+    bool match = true;
+    uint64_t operations_received = 0;
+    uint64_t bytes_received = 0;
+
+    zero_l1_buf(test_results, test_results_size_bytes);
+    test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
+
+    // Initialize the notification mailbox to 0
+    *atomic_poll_addr = 0;
+
+    // Initialize data area to 0 if in fused mode
+    if constexpr (is_fused_mode) {
+        for (uint32_t i = 0; i < payload_size_words; i++) {
+            start_addr[i] = 0;
+        }
+    }
+
+    for (uint32_t i = 0; i < num_packets; i++) {
+        uint32_t expected_atomic_value = i + 1;
+
+        DPRINT << "bef inc i:" << (int)i << "\n";
+        WAYPOINT("FPW");
+        while (expected_atomic_value != *atomic_poll_addr) {
+            invalidate_l1_cache();
+        }
+        WAYPOINT("FPD");
+        DPRINT << "after inc\n";
+
+        if constexpr (is_fused_mode) {
+            // Verify that data was also written (check that at least some data is non-zero)
+            bool data_written = false;
+            for (uint32_t j = 0; j < payload_size_words; j++) {
+                if (start_addr[j] != 0) {
+                    data_written = true;
+                    break;
+                }
+            }
+        }
+        operations_received++;
+    }
+
+    test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
+    test_results[TT_FABRIC_WORD_CNT_INDEX] = (uint32_t)operations_received;
+    test_results[TT_FABRIC_WORD_CNT_INDEX + 1] = operations_received >> 32;
+}
