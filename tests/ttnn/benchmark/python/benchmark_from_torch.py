@@ -69,7 +69,10 @@ import inspect
 @pytest.mark.parametrize(
     "size_multiplier",
     [
-        # 1, 2, 4, 8,
+        1,
+        2,
+        4,
+        8,
         16,
     ],
 )
@@ -96,7 +99,9 @@ def test_benchmark_from_torch(
         if not use_device:
             moved = ttnn.to_device(ttnn_tensor, device=device)
 
-    benchmark.pedantic(from_torch, iterations=10, rounds=5, warmup_rounds=1)
+        ttnn.synchronize_device(device)
+
+    benchmark.pedantic(from_torch, iterations=10, rounds=1, warmup_rounds=1)
 
 
 @pytest.mark.parametrize("use_device", [True, False])
@@ -161,5 +166,6 @@ def test_benchmark_to_torch(
 
     def to_torch():
         ttnn.to_torch(ttnn_input_tensor, device=device if use_device else None, dtype=torch_dtype)
+        ttnn.synchronize_device(device)
 
     benchmark.pedantic(to_torch, iterations=10, rounds=5, warmup_rounds=1)
