@@ -1195,7 +1195,7 @@ const std::vector<OverlayReg> OLP::registers = {
 
      },
      "// Reading this register will give you a stream id of a stream that finished its blob (according to "
-     "STREAM_BLOB_AUTO_CFG_DONE_REG_INDEX)\n// Subsequent reads will give you the next stream, untill all streams are "
+     "STREAM_BLOB_AUTO_CFG_DONE_REG_INDEX)\n// Subsequent reads will give you the next stream, until all streams are "
      "read, after which it will loop\n// This register is only valid if BLOB_NEXT_AUTO_CFG_DONE_VALID is set (i.e. if "
      "STREAM_BLOB_AUTO_CFG_DONE_REG_INDEX non-zero)\n// Exists only in stream 0\n"},
     {"STREAM_RECEIVER_ENDPOINT_SET_MSG_HEADER",

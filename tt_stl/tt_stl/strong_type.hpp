@@ -59,7 +59,7 @@ concept HasConstexprThreeWayCompare = requires(T t) {
     { std::bool_constant<(T{}.operator<=>(T{}), true)>() } -> std::same_as<std::true_type>;
 };
 
-// lambdas are guarenteed to be unique according to the standard,
+// lambdas are guaranteed to be unique according to the standard,
 // so the default Tag allows each StrongType instantiation
 // to be truly unique
 template <typename T, typename Tag = decltype([]() {})>
