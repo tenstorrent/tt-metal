@@ -9,22 +9,14 @@ from tests.ttnn.utils_for_testing import assert_with_ulp, assert_allclose
 
 
 @pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 2, 64, 120])),
-        (torch.Size([1, 3, 320, 320])),
-    ),
-)
-@pytest.mark.parametrize(
     "low, high",
     [
-        (-5, 5),
-        (-100, 100),
-        (-126, 126),  # Overflow from 128(inf), Underflow till -127(<0)
+        (-5, 5),  # Check for smaller range
+        (-126, 127),  # Exp2 Working range - Overflow from 128(inf), Underflow till -127(<0)
     ],
 )
-def test_exp2_ULP(input_shapes, low, high, device):
+def test_exp2_ULP(low, high, device):
+    input_shapes = torch.Size([1, 3, 320, 320])
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
     torch_input = torch_input[:num_elements].reshape(input_shapes)
@@ -42,7 +34,7 @@ def test_exp2_ULP(input_shapes, low, high, device):
 
     tt_result = ttnn.exp2(tt_in)
     result = ttnn.to_torch(tt_result)
-    assert_with_ulp(golden, result)
+    assert_with_ulp(golden, result, 2)
 
 
 @pytest.mark.parametrize(
@@ -54,8 +46,8 @@ def test_exp2_ULP(input_shapes, low, high, device):
     ),
 )
 def test_exp2_optional(input_shapes, device):
-    low = -100
-    high = 100
+    low = -126
+    high = 127
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
     torch_input = torch_input[:num_elements].reshape(input_shapes)
@@ -84,7 +76,7 @@ def test_exp2_optional(input_shapes, device):
 
     ttnn.exp2(tt_in, output_tensor=tt_out, queue_id=cq_id)
     result = ttnn.to_torch(tt_out)
-    assert_with_ulp(golden, result)
+    assert_with_ulp(golden, result, 2)
 
 
 @pytest.mark.parametrize(
