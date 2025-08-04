@@ -55,11 +55,8 @@ struct WhereBroadcastInfo {
     bool value_false_broadcast = false;
 };
 
-// Check if two tensors are broadcastable for general validation (permissive)
-bool are_tensors_broadcastable_general(const Tensor& a, const Tensor& b);
-
-// Check if two tensors are broadcastable for LLK path (restrictive - only column broadcast)
-bool are_tensors_broadcastable_llk(const Tensor& a, const Tensor& b);
+// Check if two tensors are broadcastable (for validation)
+bool are_tensors_broadcastable(const Tensor& a, const Tensor& b);
 
 // Comprehensive broadcast type detection for WHERE TTT operation
 WhereBroadcastInfo get_where_broadcast_info(

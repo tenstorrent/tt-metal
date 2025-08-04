@@ -44,7 +44,6 @@ def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, devic
         T = torch.randn(t_shape, dtype=torch.float32)
         F = torch.ones(f_shape, dtype=torch.float32) * 10
     golden = torch.where(C.bool(), T, F)
-    print(f"golden shape: {golden.shape}")
 
     ttnn_C = ttnn.from_torch(C, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     if variant == "TTS":
@@ -606,3 +605,18 @@ def test_addcdiv_edgcase_fp32(device):
     # golden_tensor tensor([ 0.5000,    -inf,     inf,     nan, -1.5000,  0.0000])
 
     assert torch_equal_nan(output_tensor1, golden_tensor)
+
+
+def test_ttnn_where_forge_nan(device):
+    C = torch.ones(1, 4, 1, dtype=torch.float32)
+    T = torch.randn(1, 4, 768, dtype=torch.float32)
+    F = torch.ones(1, 4, 768, dtype=torch.float32) * float("nan")
+    golden = torch.where(C != 0, T, F)
+
+    ttnn_C = ttnn.from_torch(C, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
+    result = ttnn.to_torch(ttnn_result)
+
+    assert torch_equal_nan(result, golden)

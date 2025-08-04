@@ -59,25 +59,25 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
 
     if (args.where_variant == WhereVariant::TTT) {
         TT_FATAL(
-            are_tensors_broadcastable_general(predicate_tensor, value_true_tensor.value()),
+            are_tensors_broadcastable(predicate_tensor, value_true_tensor.value()),
             "Where TTT operation requires predicate and value_true to be broadcastable. Predicate: {}, Value true: {}",
             predicate_tensor.logical_shape(),
             value_true_tensor.value().logical_shape());
         TT_FATAL(
-            are_tensors_broadcastable_general(predicate_tensor, value_false_tensor.value()),
+            are_tensors_broadcastable(predicate_tensor, value_false_tensor.value()),
             "Where TTT operation requires predicate and value_false to be broadcastable. Predicate: {}, Value false: "
             "{}",
             predicate_tensor.logical_shape(),
             value_false_tensor.value().logical_shape());
         TT_FATAL(
-            are_tensors_broadcastable_general(value_true_tensor.value(), value_false_tensor.value()),
+            are_tensors_broadcastable(value_true_tensor.value(), value_false_tensor.value()),
             "Where TTT operation requires value_true and value_false to be broadcastable. Value true: {}, Value false: "
             "{}",
             value_true_tensor.value().logical_shape(),
             value_false_tensor.value().logical_shape());
     } else if (args.where_variant == WhereVariant::TTS) {
         TT_FATAL(
-            are_tensors_broadcastable_general(predicate_tensor, value_true_tensor.value()),
+            are_tensors_broadcastable(predicate_tensor, value_true_tensor.value()),
             "Where TTS operation requires predicate and value_true to be broadcastable. Predicate: {}, Value true: {}",
             predicate_tensor.logical_shape(),
             value_true_tensor.value().logical_shape());
@@ -86,7 +86,7 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
             "Where TTS operation requires value_false_scalar to be set in operation attributes");
     } else if (args.where_variant == WhereVariant::TST) {
         TT_FATAL(
-            are_tensors_broadcastable_general(predicate_tensor, value_false_tensor.value()),
+            are_tensors_broadcastable(predicate_tensor, value_false_tensor.value()),
             "Where TST operation requires predicate and value_false to be broadcastable. Predicate: {}, Value false: "
             "{}",
             predicate_tensor.logical_shape(),

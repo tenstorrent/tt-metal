@@ -96,8 +96,8 @@ std::map<std::string, std::string> make_ternary_dataflow_defines(
         {"FILL_TILE_WITH_FIRST_COLUMN_C", get_fill_function(value_false_dtype)}};
 }
 
-// Check if two tensors are broadcastable for general validation (permissive)
-bool are_tensors_broadcastable_general(const Tensor& a, const Tensor& b) {
+// Check if two tensors are broadcastable (for validation)
+bool are_tensors_broadcastable(const Tensor& a, const Tensor& b) {
     const auto& a_shape = a.logical_shape();
     const auto& b_shape = b.logical_shape();
 
@@ -131,51 +131,6 @@ bool are_tensors_broadcastable_general(const Tensor& a, const Tensor& b) {
     // Check that all other dimensions are broadcastable
     for (int i = 0; i < rank - 2; ++i) {
         if (a_shape[i] != b_shape[i] && a_shape[i] != 1 && b_shape[i] != 1) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-// Check if two tensors are broadcastable for LLK path (restrictive - only column broadcast)
-bool are_tensors_broadcastable_llk(const Tensor& a, const Tensor& b) {
-    const auto& a_shape = a.logical_shape();
-    const auto& b_shape = b.logical_shape();
-
-    // Same shape is always valid
-    if (a_shape == b_shape) {
-        return true;
-    }
-
-    // Check for column broadcast: tensors have same rank and all dimensions match except width
-    if (a_shape.rank() != b_shape.rank() || a_shape.rank() < 2) {
-        return false;
-    }
-
-    auto rank = a_shape.rank();
-    auto a_w = a_shape[-1];
-    auto a_h = a_shape[-2];
-    auto b_w = b_shape[-1];
-    auto b_h = b_shape[-2];
-
-    // Heights must match exactly (no height broadcasting supported in LLK kernel)
-    if (a_h != b_h) {
-        return false;
-    }
-
-    // For column broadcast: one width must be 1, other > 1 (pure column broadcast)
-    // OR both widths must be same (same shape)
-    bool same_width = (a_w == b_w);
-    bool column_broadcast = (a_w == 1 && b_w > 1) || (a_w > 1 && b_w == 1);
-
-    if (!(same_width || column_broadcast)) {
-        return false;
-    }
-
-    // All other dimensions must match exactly (no broadcasting on other dims)
-    for (int i = 0; i < rank - 2; ++i) {
-        if (a_shape[i] != b_shape[i]) {
             return false;
         }
     }
