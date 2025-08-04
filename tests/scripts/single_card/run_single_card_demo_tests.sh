@@ -63,11 +63,13 @@ run_gemma3_perf() {
 
 run_segformer_func() {
   #Segformer Segmentation Demo
-  pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py --timeout 600; fail+=$?
+  pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py::test_demo_semantic_segmentation --timeout 600; fail+=$?
 
-  ## Commenting out Segformer Classification Demo. Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
   #Segformer Classification Demo
-  # pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py --timeout 600; fail+=$?
+  pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py::test_segformer_classification_demo --timeout 600; fail+=$?
+
+  #Segformer Segmentation Eval
+  pytest --disable-warnings models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer --timeout 600; fail+=$?
 
 }
 
