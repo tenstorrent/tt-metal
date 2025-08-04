@@ -141,8 +141,8 @@ void kernel_main() {
 
     //printf("EDM connections built successfully\n");
     //printf("Allocating packet headers...\n");
-    // DPRINT << "EDM connections built successfully" << ENDL();
-    // DPRINT << "Allocating packet headers..." << ENDL();
+    //DPRINT << "EDM connections built successfully" << ENDL();
+    //DPRINT << "Allocating packet headers..." << ENDL();
 
     volatile tt_l1_ptr PACKET_HEADER_TYPE* north_packet_header = PacketHeaderPool::allocate_header();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* south_packet_header = PacketHeaderPool::allocate_header();
@@ -156,12 +156,12 @@ void kernel_main() {
     zero_l1_buf((uint32_t*)right_packet_header, sizeof(PACKET_HEADER_TYPE));
 
     //printf("Headers zeroed. Setting up direct connections...\n");
-    // DPRINT << "Headers zeroed. Setting up direct connections..." << ENDL();
+    //DPRINT << "Headers zeroed. Setting up direct connections..." << ENDL();
 
 
     if (left_hops > 0) {
         //printf("Setting up LEFT (west) connection with %d hops\n", left_hops);
-        // DPRINT << "Setting up LEFT (west) connection with " << left_hops << " hops" << ENDL();
+        //DPRINT << "Setting up LEFT (west) connection with " << left_hops << " hops" << ENDL();
         set_mcast_header(
             left_packet_header,
             eth_chan_directions::WEST,
@@ -171,13 +171,13 @@ void kernel_main() {
         setup_connection_and_headers(
             left_connection, left_packet_header, noc_dest_addr, packet_payload_size_bytes);
         //printf("LEFT connection setup completed\n");
-        // DPRINT << "LEFT connection setup completed" << ENDL();
+        //DPRINT << "LEFT connection setup completed" << ENDL();
     } 
 
     // Setup right (east) direct connection  
     if (right_hops > 0) {
         //printf("Setting up RIGHT (east) connection with %d hops\n", right_hops);
-        // DPRINT << "Setting up RIGHT (east) connection with " << right_hops << " hops" << ENDL();
+        //DPRINT << "Setting up RIGHT (east) connection with " << right_hops << " hops" << ENDL();
         set_mcast_header(
             right_packet_header,
             eth_chan_directions::EAST,
@@ -187,15 +187,15 @@ void kernel_main() {
         setup_connection_and_headers(
             right_connection, right_packet_header, noc_dest_addr, packet_payload_size_bytes);
         //printf("RIGHT connection setup completed\n");
-        // DPRINT << "RIGHT connection setup completed" << ENDL();
+        //DPRINT << "RIGHT connection setup completed" << ENDL();
     }
 
         
     //printf("Setting up trunk connections...\n");
-    // DPRINT << "Setting up trunk connections..." << ENDL();
+    //DPRINT << "Setting up trunk connections..." << ENDL();
     if constexpr (mcast_mode & 0x1) {
         //printf("Setting up NORTH trunk with %d hops\n", north_trunk_hops);
-        // DPRINT << "Setting up NORTH trunk with " << north_trunk_hops << " hops" << ENDL();
+        //DPRINT << "Setting up NORTH trunk with " << north_trunk_hops << " hops" << ENDL();
         // North trunk present
         set_mcast_header(
             north_packet_header,
@@ -206,11 +206,11 @@ void kernel_main() {
         setup_connection_and_headers(
             north_trunk_connection, north_packet_header, noc_dest_addr, packet_payload_size_bytes);
         //printf("NORTH trunk setup completed\n");
-        // DPRINT << "NORTH trunk setup completed" << ENDL();
+        //DPRINT << "NORTH trunk setup completed" << ENDL();
     }
     if constexpr (mcast_mode & 0x2) {
         //printf("Setting up SOUTH trunk with %d hops\n", south_trunk_hops);
-        // DPRINT << "Setting up SOUTH trunk with " << south_trunk_hops << " hops" << ENDL();
+        //DPRINT << "Setting up SOUTH trunk with " << south_trunk_hops << " hops" << ENDL();
         // South trunk present
         set_mcast_header(
             south_packet_header,
@@ -221,29 +221,29 @@ void kernel_main() {
         setup_connection_and_headers(
             south_trunk_connection, south_packet_header, noc_dest_addr, packet_payload_size_bytes);
         //printf("SOUTH trunk setup completed\n");
-        // DPRINT << "SOUTH trunk setup completed" << ENDL();
+        //DPRINT << "SOUTH trunk setup completed" << ENDL();
     }
 
-    // DPRINT << "All connections setup completed. About to start send loop..." << ENDL();
-    // DPRINT << "num_packets=" << num_packets << " mcast_mode=" << HEX() << mcast_mode << ENDL();
-    // DPRINT << "left_hops=" << left_hops << " right_hops=" << right_hops << ENDL();
+    //DPRINT << "All connections setup completed. About to start send loop..." << ENDL();
+    //DPRINT << "num_packets=" << num_packets << " mcast_mode=" << HEX() << mcast_mode << ENDL();
+    //DPRINT << "left_hops=" << left_hops << " right_hops=" << right_hops << ENDL();
 
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
 
-    // DPRINT << "Preparing to send packets..." << ENDL();
+    //DPRINT << "Preparing to send packets..." << ENDL();
 
     // //printf("Starting packet send loop for %d packets...\n", num_packets);
-    // DPRINT << "Starting packet send loop for " << num_packets << " packets..." << ENDL();
+    //DPRINT << "Starting packet send loop for " << num_packets << " packets..." << ENDL();
     uint64_t start_timestamp = get_timestamp();
 
     // loop over for num packets
     for (uint32_t i = 0; i < num_packets; i++) {
         // if (i == 0) {
-        //     DPRINT << "Sending packet 0..." << ENDL();
+        //     //DPRINT << "Sending packet 0..." << ENDL();
         // }
         // if (i == num_packets - 1) {
-        //     DPRINT << "Sending final packet " << i << "..." << ENDL();
+        //     //DPRINT << "Sending final packet " << i << "..." << ENDL();
         // }
 #ifndef BENCHMARK_MODE
         time_seed = prng_next(time_seed);
