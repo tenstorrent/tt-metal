@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from loguru import logger
 import torch
 import torchvision
@@ -288,44 +287,24 @@ def run_mobilenetv2_image_classification_eval(
 ):
     from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
     from models.demos.mobilenetv2.runner.performant_runner import MobileNetV2Trace2CQ
-    import torchvision.models as models
+    from models.demos.mobilenetv2.common import load_torch_model
     from models.demos.ttnn_resnet.tests.demo_utils import get_batch
 
-    weights_path = "models/demos/mobilenetv2/mobilenet_v2-b0353104.pth"
     model_version = "microsoft/resnet-50"
     image_processor = AutoImageProcessor.from_pretrained(model_version)
 
-    if model_type == "torch_model":
-        torch_model = models.mobilenet_v2(pretrained=True)
-    else:
-        if not os.path.exists(weights_path):
-            os.system("bash models/demos/mobilenetv2/weights_download.sh")
-
-        reference_model = Mobilenetv2()
-
-        state_dict = torch.load(weights_path)
-        ds_state_dict = {k: v for k, v in state_dict.items()}
-        new_state_dict = {
-            name1: parameter2
-            for (name1, _), (_, parameter2) in zip(reference_model.state_dict().items(), ds_state_dict.items())
-            if isinstance(parameter2, torch.FloatTensor)
-        }
-        reference_model.load_state_dict(new_state_dict)
-
-        reference_model.eval()
-
-        mobilenetv2_trace_2cq = MobileNetV2Trace2CQ()
-
-        mobilenetv2_trace_2cq.initialize_mobilenetv2_trace_2cqs_inference(
-            device,
-            device_batch_size,
-            ttnn.bfloat8_b,
-            ttnn.bfloat8_b,
-        )
-
+    reference_model = Mobilenetv2()
+    reference_model = load_torch_model(reference_model, model_location_generator)
+    mobilenetv2_trace_2cq = MobileNetV2Trace2CQ()
+    mobilenetv2_trace_2cq.initialize_mobilenetv2_trace_2cqs_inference(
+        device,
+        device_batch_size,
+        ttnn.bfloat8_b,
+        ttnn.bfloat8_b,
+    )
     evaluation(
         device=device,
-        model=mobilenetv2_trace_2cq if model_type == "tt_model" else torch_model,
+        model=mobilenetv2_trace_2cq if model_type == "tt_model" else reference_model,
         model_location_generator=model_location_generator,
         model_type=model_type,
         model_name="mobilenetv2",
