@@ -4,7 +4,10 @@
 
 #pragma once
 
+#if !defined(COMPILE_FOR_LITE_FABRIC)
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
+#endif
+
 #include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 

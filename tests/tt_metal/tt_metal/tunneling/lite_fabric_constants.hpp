@@ -51,8 +51,11 @@ constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 2;
 
 constexpr size_t MAX_NUM_SENDER_CHANNELS = 5;
 
+// Only 1 receiver because 1 erisc
 constexpr uint32_t NUM_RECEIVER_CHANNELS = 1;
+constexpr uint32_t NUM_USED_RECEIVER_CHANNELS = 1;
 
+// Only 1 sender because no upstream edm
 constexpr uint32_t NUM_SENDER_CHANNELS = 1;
 
 constexpr size_t VC1_SENDER_CHANNEL = NUM_SENDER_CHANNELS - 1;
@@ -61,13 +64,13 @@ constexpr uint8_t NUM_TRANSACTION_IDS = 4;
 
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_NUM_BUFFERS_ARRAY = {8};
 
-constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_NUM_BUFFERS_ARRAY = {16};
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_NUM_BUFFERS_ARRAY = {8};
+
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_ARRAY = RECEIVER_NUM_BUFFERS_ARRAY;
 
 static_assert(NUM_SENDER_CHANNELS == 1);
 
 constexpr uint32_t CHANNEL_BUFFER_SIZE = 4096 + sizeof(tt::tt_fabric::LowLatencyPacketHeader);
-
-constexpr uint32_t CHANNEL_BUFFER_SLOTS = 8;
 
 constexpr size_t RECEIVER_CHANNEL_BASE_ID = NUM_SENDER_CHANNELS;
 constexpr size_t SENDER_CHANNEL_BASE_ID = 0;
@@ -76,12 +79,12 @@ constexpr size_t SENDER_CHANNEL_BASE_ID = 0;
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 #include "noc_nonblocking_api.h"
 
-constexpr std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> to_receiver_packets_sent_streams =
-    take_first_n_elements<MAX_NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint32_t>(
+constexpr std::array<uint32_t, NUM_RECEIVER_CHANNELS> to_receiver_packets_sent_streams =
+    take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint32_t>(
         std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS>{to_receiver_0_pkts_sent_id, to_receiver_1_pkts_sent_id});
 
-constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_streams =
-    take_first_n_elements<MAX_NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint32_t>(
+constexpr std::array<uint32_t, NUM_SENDER_CHANNELS> to_sender_packets_acked_streams =
+    take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint32_t>(
         std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>{
             to_sender_0_pkts_acked_id,
             to_sender_1_pkts_acked_id,
@@ -89,8 +92,8 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_
             to_sender_3_pkts_acked_id,
             to_sender_4_pkts_acked_id});
 
-constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_completed_streams =
-    take_first_n_elements<MAX_NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint32_t>(
+constexpr std::array<uint32_t, NUM_SENDER_CHANNELS> to_sender_packets_completed_streams =
+    take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint32_t>(
         std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>{
             to_sender_0_pkts_completed_id,
             to_sender_1_pkts_completed_id,
@@ -117,10 +120,35 @@ constexpr uint32_t my_direction = 0;  // No direction for 1D fabric
 // Used for acks
 constexpr std::array<uint8_t, NUM_SENDER_CHANNELS> sender_channel_ack_cmd_buf_ids = {BRISC_AT_CMD_BUF};
 
+// Not using multi txq / 2 erisc
+constexpr uint32_t NUM_ACTIVE_ERISCS = 1;
+constexpr uint32_t DEFAULT_ETH_TXQ = 0;
+constexpr bool multi_txq_enabled = false;
+constexpr uint32_t sender_txq_id = DEFAULT_ETH_TXQ;
+constexpr uint32_t receiver_txq_id = DEFAULT_ETH_TXQ;
+constexpr bool enable_first_level_ack = false;
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> local_receiver_completion_counter_ptrs = {0};
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> local_receiver_ack_counter_ptrs = {0};
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> to_sender_remote_completion_counter_addrs = {0};
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> to_sender_remote_ack_counter_addrs = {0};
+
+// Misc
+constexpr std::array<size_t, MAX_NUM_RECEIVER_CHANNELS> RX_CH_TRID_STARTS = {0, 4};
+constexpr bool fuse_receiver_flush_and_completion_ptr = true;
+constexpr uint8_t num_eth_ports = 32;  // Not used in 1D fabric
+constexpr bool ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK = false;
+constexpr bool ETH_TXQ_SPIN_WAIT_SEND_NEXT_DATA = false;
+constexpr bool SKIP_CONNECTION_LIVENESS_CHECK = false;
+constexpr bool enable_ring_support = false;
+constexpr bool enable_trid_flush_check_on_noc_txn = false;
+
 namespace tt::tt_fabric {
 
-constexpr uint8_t worker_handshake_noc = noc_index;
+constexpr uint8_t worker_handshake_noc = NOC_INDEX;
 constexpr uint8_t edm_to_downstream_noc = 0;                 // Used?
 constexpr bool local_chip_noc_equals_downstream_noc = true;  // Used?
+
+constexpr uint8_t local_chip_data_cmd_buf = BRISC_WR_CMD_BUF;  // Used
+constexpr uint8_t forward_and_local_write_noc_vc = 2;          // FabricEriscDatamoverConfig::DEFAULT_NOC_VC
 }
 #endif
