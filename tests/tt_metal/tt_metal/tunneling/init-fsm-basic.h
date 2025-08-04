@@ -15,14 +15,13 @@
 #include <stddef.h>
 #include "blackhole/eth_chan_noc_mapping.h"
 #include "dataflow_api_addrgen.h"
-#include "debug/assert.h"
-#include "debug/dprint.h"
 #include "ethernet/dataflow_api.h"
 #include "dataflow_api.h"
 #include "ethernet/tunneling.h"
 #include "risc_common.h"
-#include "fabric_lite.hpp"
+#include "lite_fabric.hpp"
 #include "blackhole/dev_mem_map.h"
+#include "risc_interface.hpp"
 
 namespace lite_fabric {
 
@@ -36,14 +35,15 @@ void wait_val(uint32_t addr, uint32_t val) {
 
 void routing_init(volatile lite_fabric::LiteFabricConfig* config_struct) {
     invalidate_l1_cache();
-    auto my_y = get_absolute_logical_y();
+    // This value should not be used. It comes from metal.
+    // auto my_y = get_absolute_logical_y();
     int number_of_other_eth_chs = __builtin_popcount(config_struct->eth_chans_mask) - 1;
     ASSERT(number_of_other_eth_chs > 0);
 
     // For running with metal
     // Assumes kernel ring buffer is size of 1 and the other ethernet core is not running any program
     // Assumes go message is after launch message in mailbox struct
-    const auto eth_send_launch_go_msg = []() {
+    [[maybe_unused]] const auto eth_send_launch_go_msg = []() {
         uintptr_t launch_msg_addr = (uintptr_t)&(((mailboxes_t*)MEM_AERISC_MAILBOX_BASE)->launch);
         constexpr uint32_t launch_and_go_msg_size_bytes =
             ((sizeof(launch_msg_t) * launch_msg_buffer_num_entries) + sizeof(go_msg_t) + 15) & ~0xF;
@@ -60,6 +60,11 @@ void routing_init(volatile lite_fabric::LiteFabricConfig* config_struct) {
 
     // Send the binary over ethernet to the connected core
     const auto eth_send_binary = [=]() {
+        internal_::eth_send_packet<false>(
+            0,
+            MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH >> 4,
+            MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH >> 4,
+            MEM_ERISC_LOCAL_SIZE >> 4);
         internal_::eth_send_packet<false>(
             0, config_struct->binary_addr >> 4, config_struct->binary_addr >> 4, config_struct->binary_size >> 4);
     };
@@ -80,11 +85,9 @@ void routing_init(volatile lite_fabric::LiteFabricConfig* config_struct) {
 
         switch (config_struct->current_state) {
             case lite_fabric::InitState::UNKNOWN: {
-                DPRINT << "Unknown state" << ENDL();
                 do {
                     invalidate_l1_cache();
                 } while (config_struct->current_state == lite_fabric::InitState::UNKNOWN);
-                DPRINT << "Unknown state -> " << (uint32_t)config_struct->current_state << ENDL();
                 break;
             }
             case lite_fabric::InitState::ETH_INIT_FROM_HOST: {
@@ -101,21 +104,21 @@ void routing_init(volatile lite_fabric::LiteFabricConfig* config_struct) {
                     wait_val(handshake_addr, 1);
                     // Safe to modify config_struct now
                     config_struct->primary_local_handshake = 2;
-                    internal_::eth_send_packet(0, local_handshake_addr >> 4, handshake_addr >> 4, 1 << 4);
+                    internal_::eth_send_packet(0, local_handshake_addr >> 4, handshake_addr >> 4, 1);
 
                     // Wait for ack
                     wait_val(handshake_addr, 3);
                 } else {
                     // Send first signal to mmio to indicate we have started
                     config_struct->primary_local_handshake = 1;
-                    internal_::eth_send_packet(0, local_handshake_addr >> 4, handshake_addr >> 4, 1 << 4);
+                    internal_::eth_send_packet(0, local_handshake_addr >> 4, handshake_addr >> 4, 1);
 
                     // wait for signal from mmio
                     wait_val(handshake_addr, 2);
 
                     // send ack to mmio
                     config_struct->primary_local_handshake = 3;
-                    internal_::eth_send_packet(0, local_handshake_addr >> 4, handshake_addr >> 4, 1 << 4);
+                    internal_::eth_send_packet(0, local_handshake_addr >> 4, handshake_addr >> 4, 1);
                 }
                 config_struct->current_state = lite_fabric::InitState::READY;
                 break;
@@ -125,21 +128,31 @@ void routing_init(volatile lite_fabric::LiteFabricConfig* config_struct) {
                 ASSERT(is_mmio);
                 config_struct->is_primary = false;
                 config_struct->is_mmio = false;
+                config_struct->routing_enabled = 1;
                 config_struct->current_state = lite_fabric::InitState::ETH_HANDSHAKE_NEIGHBOUR;
                 config_struct->initial_state = lite_fabric::InitState::ETH_HANDSHAKE_NEIGHBOUR;
-
+#if defined(METAL_LAUNCH)
                 eth_send_config();
                 eth_send_binary();
                 eth_send_launch_go_msg();
 
+#else
+                ConnectedRisc1Interface::assert_connected_dm1_reset();
+                ConnectedRisc1Interface::set_pc(MEM_AERISC_FIRMWARE_BASE);
+                eth_send_config();
+                eth_send_binary();
+                ConnectedRisc1Interface::deassert_connected_dm1_reset();
+#endif
+
                 break;
-            }
-            case lite_fabric::InitState::READY: {
-                DPRINT << "Init complete" << ENDL();
-                return;
             }
             case lite_fabric::InitState::ETH_HANDSHAKE_LOCAL: {
                 break;
+            }
+            default: {
+                ASSERT(false);
+                while (true) {
+                };
             }
         }
     }
