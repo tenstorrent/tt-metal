@@ -37,7 +37,6 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
     const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output, unsigned int groups) {
     // If we end up here for concat with more than 2 tensors on any other dim we should have
     // taken another path
-    std::cout << "reached s2s_tiled_concat_two_tensors_height_multi_core" << std::endl;
     TT_FATAL(dim == 3, "Sharded concat with tiled inputs only supports dim=3 (was {})", dim);
     TT_FATAL(input_tensors.size() == 2, "Expected 2 input tensors (was {})", input_tensors.size());
 
@@ -123,8 +122,6 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
         }
         return tt::tt_metal::CreateCircularBuffer(program, cores, config);
     };
-
-    std::cout << "Creating circular buffers for input tensors" << std::endl;
 
     const auto create_cb_from_tensor =
         [&create_circular_buffer](
@@ -224,7 +221,6 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
         UpdateDynamicCircularBufferAddress(program, cb_output, *output_tensors[0].buffer());
     };
 
-    std::cout << "Created program for s2s_tiled_concat_two_tensors_height_multi_core" << std::endl;
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 

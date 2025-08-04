@@ -24,7 +24,7 @@
 #include <utility>
 
 // toggle this to enable debug prints
-constexpr bool debug_concat = true;
+constexpr bool debug_concat = false;
 inline void concat_db_print(bool condition, const std::string& msg) {
     if constexpr (debug_concat) {
         if (condition) {
@@ -118,32 +118,14 @@ MassagedConcat build_untilize_rm_retilize_concat(
                     TT_FATAL(
                         input_tensor.layout() == ttnn::TILE_LAYOUT,
                         "ttnn.concat: expected all input tensors to be in tile layout");
-                    // if(is_all_zeros(input_tensor)) std::cout << "input_tensor is all zeros!" << std::endl;
-                    // else std::cout << "input_tensor is not all zeros!" << std::endl;
                     auto untilized_tensor = ttnn::untilize(input_tensor);
                     // untilized, so now we have a padded rm tensor. we slice to
                     // remove the padding.
                     const auto& input_shape = input_tensor.logical_shape();
-                    std::cout << "input_shape: " << input_shape << std::endl;
                     std::vector<uint32_t> begins_vec(input_shape.rank(), 0);
                     tt::stl::Span<const uint32_t> begins = begins_vec;
-                    std::cout << "begins: ";
-                    for (const auto& v : begins) {
-                        std::cout << v << " ";
-                    }
-                    std::cout << std::endl;
                     tt::stl::Span<const uint32_t> ends = input_shape.view();
-                    std::cout << "ends: ";
-                    for (const auto& v : ends) {
-                        std::cout << v << " ";
-                    }
-                    std::cout << std::endl;
                     std::vector<uint32_t> steps_vec(input_shape.rank(), 1);
-                    std::cout << "steps: ";
-                    for (const auto& v : steps_vec) {
-                        std::cout << v << " ";
-                    }
-                    std::cout << std::endl;
                     tt::stl::Span<const uint32_t> steps = steps_vec;
 
                     // we now perform a padding-oblivious slice to remove the
@@ -151,8 +133,6 @@ MassagedConcat build_untilize_rm_retilize_concat(
                     // FIXME: change this to a legit slice call once
                     // padding-oblivious entry point is uplifted to the slice
                     // op.
-                    // if(is_all_zeros(untilized_tensor)) std::cout << "untilized_tensor is all zeros!" << std::endl;
-                    // else std::cout << "untilized_tensor is not all zeros!" << std::endl;
                     untilized_tensor = tt::tt_metal::operation::run(
                         SliceDeviceOperation{
                             ttnn::Shape(begins), ttnn::Shape(ends), ttnn::Shape(steps), output_memory_config},
@@ -161,7 +141,6 @@ MassagedConcat build_untilize_rm_retilize_concat(
                         {std::nullopt},
                         queue_id)[0];
 
-                    std::cout << "untilized_tensor shape: " << untilized_tensor.logical_shape() << std::endl;
                     untilized_tensor = ttnn::reshape(untilized_tensor, input_tensor.logical_shape());
                     return untilized_tensor;
                 });

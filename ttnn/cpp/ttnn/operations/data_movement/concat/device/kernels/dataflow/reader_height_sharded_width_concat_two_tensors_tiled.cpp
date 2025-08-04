@@ -24,10 +24,8 @@ void kernel_main() {
     constexpr uint32_t tile_size = get_compile_time_arg_val(11);
     constexpr uint32_t groups = get_compile_time_arg_val(12);
 
-    // constexpr uint32_t bf16_tile_size = 32 * 32 * 2;
-    constexpr uint32_t bf16_tile_size = tile_size;
-    constexpr uint32_t input0_stride = bf16_tile_size * input0_num_tiles_width / groups;
-    constexpr uint32_t input1_stride = bf16_tile_size * input1_num_tiles_width / groups;
+    constexpr uint32_t input0_stride = tile_size * input0_num_tiles_width / groups;
+    constexpr uint32_t input1_stride = tile_size * input1_num_tiles_width / groups;
     constexpr uint32_t group_stride = input0_stride + input1_stride;
 
     const uint32_t base_l1_read_addr_0 = get_read_ptr(input0_transpose_cb);
@@ -38,11 +36,9 @@ void kernel_main() {
 
     cb_push_back(input0_cb, input0_num_tiles_height * input0_num_tiles_width);
     cb_push_back(input1_cb, input1_num_tiles_height * input1_num_tiles_width);
-    // DPRINT << "we here?" << ENDL();
 
     for (uint32_t i = 0; i < input0_num_tiles_height; i++) {
         cb_reserve_back(concat_cb, output_num_tiles_width);
-        // DPRINT << "tile " << i << " of " << input0_num_tiles_height << ENDL();
 
         cb_wait_front(input0_transpose_cb, input0_num_tiles_width);
 
@@ -76,5 +72,4 @@ void kernel_main() {
 
         cb_push_back(concat_cb, output_num_tiles_width);
     }
-    // DPRINT << "done concat" << ENDL();
 }
