@@ -125,7 +125,7 @@ struct AlignedPacketDims {
 };
 
 AlignedPacketDims compute_aligned_packet_dims(
-    const DataType& dtype, const uint32_t page_size_bytes, const uint32_t num_pages, const uint32_t alignment);
+    const DataType& dtype, uint32_t page_size_bytes, uint32_t num_pages, uint32_t alignment);
 
 struct Fabric1DRoute {
     const uint32_t num_hops;
