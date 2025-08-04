@@ -86,7 +86,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const auto this_fabric_id = get_fabric_node_id_from_physical_chip_id(this_device->id());
 
     const auto [num_hops, dst_is_forward, next_fabric_id] =
-        detail::one_d_fabric_routing(mesh_device, send_coord, receive_coord, topology);
+        detail::fabric_1d_routing(mesh_device, send_coord, receive_coord, topology);
 
     const bool output_is_dram = output_tensors.at(0).buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 

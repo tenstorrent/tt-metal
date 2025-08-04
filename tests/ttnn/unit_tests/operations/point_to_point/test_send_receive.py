@@ -89,8 +89,8 @@ def test_send_receive(mesh_device, shape_coords, layout, dtype):
 
     sent_tensor = ttnn.point_to_point(
         input_tensor,
-        coord0,
         coord1,
+        coord0,
         ttnn.Topology.Linear,
         semaphore,
     )
@@ -106,8 +106,8 @@ def test_send_receive(mesh_device, shape_coords, layout, dtype):
     )
     ttnn.point_to_point(
         sent_tensor,
-        coord1,
         coord0,
+        coord1,
         ttnn.Topology.Linear,
         semaphore,
         optional_output_tensor=return_tensor,

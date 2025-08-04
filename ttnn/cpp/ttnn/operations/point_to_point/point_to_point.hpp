@@ -17,8 +17,8 @@ struct ExecutePointToPoint {
     static ttnn::Tensor invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
-        const MeshCoordinate& send_coord,
-        const MeshCoordinate& receive_coord,
+        const MeshCoordinate& receiver_coord,
+        const MeshCoordinate& sender_coord,
         const ccl::Topology topology,
         const GlobalSemaphore& semaphore,
         const std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt);

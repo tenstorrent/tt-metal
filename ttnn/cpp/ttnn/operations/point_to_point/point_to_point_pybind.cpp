@@ -42,11 +42,11 @@ void py_bind_point_to_point(py::module& module) {
                 >>> input_tensor = ttnn.from_torch(
                 >>>     input_tensor_torch, device=mesh_device, mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0)
                 >>> )
-                >>> coord0, coord1 = (ttnn.MeshCoordinate(c) for c in ((0,0), (0,1)))
+                >>> sender_coord, receiver_coord = (ttnn.MeshCoordinate(c) for c in ((0,0), (0,1)))
                 >>> sent_tensor = ttnn.point_to_point(
                         input_tensor,
-                        coord0,
-                        coord1,
+                        receiver_coord,
+                        sender_coord,
                         ttnn.Topology.Linear,
                         receiver_semaphore)
                 >>>  sent_tensor_torch = ttnn.to_torch(
@@ -63,18 +63,18 @@ void py_bind_point_to_point(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const MeshCoordinate& send_coord,
-               const MeshCoordinate& receive_coord,
+               const MeshCoordinate& receiver_coord,
+               const MeshCoordinate& sender_coord,
                const ccl::Topology topology,
                const GlobalSemaphore& semaphore,
                const std::optional<ttnn::Tensor> optional_output_tensor,
                QueueId queue_id) {
                 return self(
-                    queue_id, input_tensor, send_coord, receive_coord, topology, semaphore, optional_output_tensor);
+                    queue_id, input_tensor, receiver_coord, sender_coord, topology, semaphore, optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
-            py::arg("send_coord"),
-            py::arg("receive_coord"),
+            py::arg("receiver_coord"),
+            py::arg("sender_coord"),
             py::arg("topology"),
             py::arg("semaphore"),
             py::kw_only(),

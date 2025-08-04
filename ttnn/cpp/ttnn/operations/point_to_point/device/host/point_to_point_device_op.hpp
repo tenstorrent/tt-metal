@@ -16,8 +16,8 @@ namespace operations::point_to_point {
 
 struct PointToPointOp {
     struct operation_attributes_t {
-        const MeshCoordinate& send_coord;
         const MeshCoordinate& receive_coord;
+        const MeshCoordinate& send_coord;
         const ::ttnn::ccl::Topology topology;
         const tt::tt_metal::GlobalSemaphore semaphore;
 
@@ -102,12 +102,12 @@ struct PointToPointOp {
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor& input_tensor,
         const ::ttnn::ccl::Topology& topology,
-        const MeshCoordinate& send_coord,
-        const MeshCoordinate& receive_coord,
+        const MeshCoordinate& receiver_coord,
+        const MeshCoordinate& sender_coord,
         const tt::tt_metal::GlobalSemaphore& semaphore,
         const std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt) {
         return std::make_tuple(
-            operation_attributes_t{send_coord, receive_coord, topology, semaphore, input_tensor.tensor_spec()},
+            operation_attributes_t{receiver_coord, sender_coord, topology, semaphore, input_tensor.tensor_spec()},
             tensor_args_t{input_tensor, optional_output_tensor});
     };
 
@@ -116,13 +116,27 @@ private:
 };
 
 namespace detail {
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> compute_aligned_packet_dims(
+
+struct AlignedPacketDims {
+    const uint32_t packet_size_bytes;
+    const uint32_t max_num_pages_per_packet;
+    const uint32_t num_page_segments;
+    const uint32_t total_packets;
+};
+
+AlignedPacketDims compute_aligned_packet_dims(
     const DataType& dtype, const uint32_t page_size_bytes, const uint32_t num_pages, const uint32_t alignment);
 
-std::tuple<uint32_t, bool, tt::tt_fabric::FabricNodeId> one_d_fabric_routing(
+struct Fabric1DRoute {
+    const uint32_t num_hops;
+    const bool is_forward;
+    const tt::tt_fabric::FabricNodeId neighbor_id;
+};
+
+Fabric1DRoute fabric_1d_routing(
     const MeshDevice* mesh_device,
-    const MeshCoordinate& src_coord,
-    const MeshCoordinate& dest_coord,
+    const MeshCoordinate& sender_coord,
+    const MeshCoordinate& receiver_coord,
     ::ttnn::ccl::Topology topology);
 
 }  // namespace detail
@@ -130,8 +144,8 @@ std::tuple<uint32_t, bool, tt::tt_fabric::FabricNodeId> one_d_fabric_routing(
 device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> send_program_factory(
     const PointToPointOp::tensor_args_t& tensor_args,
     const PointToPointOp::operation_attributes_t& operation_attributes,
-    const MeshCoordinate& send_coord,
-    const MeshCoordinate& receive_coord,
+    const MeshCoordinate& sender_coord,
+    const MeshCoordinate& receiver_coord,
     PointToPointOp::tensor_return_value_t& output_tensor);
 
 device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variables_t> receive_program_factory(

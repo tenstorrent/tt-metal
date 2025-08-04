@@ -16,7 +16,7 @@ namespace ttnn::operations::point_to_point {
 
 namespace detail {
 
-std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> compute_aligned_packet_dims(
+AlignedPacketDims compute_aligned_packet_dims(
     const DataType& dtype, const uint32_t page_size_bytes, const uint32_t num_pages, const uint32_t alignment) {
     const uint32_t fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
 
@@ -38,48 +38,48 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> compute_aligned_packet_dims(
         total_packets = num_page_segments * num_pages;
     }
 
-    return std::make_tuple(packet_size_bytes, max_num_pages_per_packet, num_page_segments, total_packets);
+    return {packet_size_bytes, max_num_pages_per_packet, num_page_segments, total_packets};
 }
 
-auto one_d_fabric_routing_vector(const MeshCoordinate& src_coord, const MeshCoordinate& dest_coord) {
+auto fabric_1d_routing_vector(const MeshCoordinate& sender_coord, const MeshCoordinate& receiver_coord) {
     // transmit along row
-    if (src_coord[0] == dest_coord[0]) {
+    if (sender_coord[0] == receiver_coord[0]) {
         constexpr auto dim = 1;
-        const int hops = dest_coord[dim] - src_coord[dim];
+        const int hops = receiver_coord[dim] - sender_coord[dim];
         bool is_fwd = (hops > 0);
 
         return std::make_tuple(std::abs(hops), is_fwd, dim);
     }
     // transmit along col
-    else if (src_coord[1] == dest_coord[1]) {
+    else if (sender_coord[1] == receiver_coord[1]) {
         constexpr auto dim = 0;
-        const int hops = dest_coord[dim] - src_coord[dim];
+        const int hops = receiver_coord[dim] - sender_coord[dim];
         bool is_fwd = (hops > 0);
 
         return std::make_tuple(std::abs(hops), is_fwd, dim);
     } else {
-        TT_THROW("Routing coordinates {} and {} invalid for 1D fabric", src_coord, dest_coord);
+        TT_THROW("Routing coordinates {} and {} invalid for 1D fabric", sender_coord, receiver_coord);
         return std::make_tuple(0, false, 0);
     }
 }
 
-std::tuple<uint32_t, bool, tt::tt_fabric::FabricNodeId> one_d_fabric_routing(
+Fabric1DRoute fabric_1d_routing(
     const MeshDevice* mesh_device,
-    const MeshCoordinate& src_coord,
-    const MeshCoordinate& dest_coord,
+    const MeshCoordinate& sender_coord,
+    const MeshCoordinate& receiver_coord,
     const ::ttnn::ccl::Topology topology) {
     const auto& mesh_shape = mesh_device->get_view().shape();
 
     // sign indicates direction, however fabrics' forward/backward concept is reversed
-    const auto [line_hops, line_is_forward, dim] = one_d_fabric_routing_vector(src_coord, dest_coord);
+    const auto [line_hops, line_is_forward, dim] = fabric_1d_routing_vector(sender_coord, receiver_coord);
 
     TT_FATAL(line_hops != 0, "Should not be send/receiving to the same device");
 
-    auto get_neighbor_id = [&src_coord, &mesh_device, &mesh_shape, dim](
+    auto get_neighbor_id = [&sender_coord, &mesh_device, &mesh_shape, dim](
                                bool is_forward, MeshCoordinate::BoundaryMode boundary_mode) {
-        const auto neighbor_coord = src_coord.get_neighbor(mesh_shape, (is_forward ? 1 : -1), dim, boundary_mode);
+        const auto neighbor_coord = sender_coord.get_neighbor(mesh_shape, (is_forward ? 1 : -1), dim, boundary_mode);
 
-        TT_FATAL(neighbor_coord.has_value(), "Can't find neighbor for {}", src_coord);
+        TT_FATAL(neighbor_coord.has_value(), "Can't find neighbor for {}", sender_coord);
         auto next_device = mesh_device->get_device(neighbor_coord.value());
         const auto next_fabric_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(next_device->id());
 
@@ -94,11 +94,11 @@ std::tuple<uint32_t, bool, tt::tt_fabric::FabricNodeId> one_d_fabric_routing(
             bool ring_is_forward = (ring_hops > 0);
 
             const auto next_fabric_id = get_neighbor_id(ring_is_forward, MeshCoordinate::BoundaryMode::WRAP);
-            return std::make_tuple(std::abs(ring_hops), !ring_is_forward, next_fabric_id);
+            return {std::abs(ring_hops), !ring_is_forward, next_fabric_id};
         }
     }
     const auto next_fabric_id = get_neighbor_id(line_is_forward, MeshCoordinate::BoundaryMode::NONE);
-    return std::make_tuple(line_hops, !line_is_forward, next_fabric_id);
+    return {line_hops, !line_is_forward, next_fabric_id};
 }
 }  // namespace detail
 
@@ -108,9 +108,7 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(!input_tensor.is_sharded(), "Point to point does not yet support sharded configs");
 
-    auto mesh_device = dynamic_cast<MeshDevice*>(input_tensor.device());
-    TT_FATAL(mesh_device != nullptr, "Point to point expected input tensor on mesh device");
-
+    auto mesh_device = input_tensor.device();
     const auto&& device_ids = mesh_device->get_device_ids();
 
     TT_FATAL(
@@ -124,7 +122,7 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
         "Mesh device must contain receiver coordinate device");
 
     auto semaphore_device = dynamic_cast<MeshDevice*>(operation_attributes.semaphore.device());
-    TT_FATAL(semaphore_device != nullptr, "Point to point expected semaphore on mesh device");
+    TT_FATAL(semaphore_device != nullptr, "Semaphore must be allocated on MeshDevice");
     TT_FATAL(
         semaphore_device->get_view().contains(operation_attributes.receive_coord) &&
             semaphore_device->get_view().contains(operation_attributes.send_coord),
@@ -203,9 +201,13 @@ PointToPointOp::SendReceive::cached_mesh_workload_t PointToPointOp::SendReceive:
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    const auto& send_coordinate = operation_attributes.send_coord;
-    const auto& receive_coordinate = operation_attributes.receive_coord;
-    std::array<MeshCoordinate, 2> use_coords = {send_coordinate, receive_coordinate};
+    std::array<MeshCoordinate, 2> use_coords = {operation_attributes.send_coord, operation_attributes.receive_coord};
+
+    const auto& coords = tensor_coords.coords();
+    for (const auto& c : use_coords) {
+        auto it = std::find(coords.begin(), coords.end(), c);
+        TT_FATAL(it != coords.end(), "Tensor not present on coordinate: {}", c);
+    }
 
     for (const auto& coord : use_coords) {
         auto cached_workload = create_at(operation_attributes, coord, tensor_args, tensor_return_value);
