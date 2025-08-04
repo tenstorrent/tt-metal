@@ -14,7 +14,6 @@ import torch
 from loguru import logger
 from sklearn.metrics import average_precision_score, precision_recall_curve
 from torch import nn
-from ultralytics import YOLO
 
 import ttnn
 from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs
@@ -222,7 +221,7 @@ def evaluation(
         elif model_name == "YOLOv7":
             from models.demos.yolov7.demo.demo_utils import preprocess as preprocess_yolov7
 
-            im = preprocess_yolov7(im0s)
+            im = preprocess_yolov7(im0s, res=res)
         else:
             im = preprocess(im0s, res=res)
 
@@ -289,6 +288,9 @@ def evaluation(
             elif model_name in ["YOLOv10", "YOLOv8s", "YOLOv11n", "YOLOv8x", "YOLOv7", "YOLOv6l"]:
                 preds = model.run(ttnn_im)
                 preds = ttnn.to_torch(preds, dtype=torch.float32)
+            elif model_name in ["YOLOv10"]:
+                preds = model.run(ttnn_im.permute(0, 3, 1, 2))
+                preds = ttnn.to_torch(preds, dtype=torch.float32)
             elif model_name == "YOLOv9c":
                 preds_temp = model.run(ttnn_im)
                 preds = ttnn.clone(preds_temp[0])
@@ -327,7 +329,6 @@ def evaluation(
                 batch,
                 classes,
                 source_list[index],
-                img_for_yolov7[index],
                 data_set,
                 save_dir=save_dir,
             )[0]
@@ -468,12 +469,12 @@ def test_run_yolov4_eval(
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_yolov8s_world(device, model_type, res, reset_seeds):
+def test_yolov8s_world(device, model_type, res, reset_seeds, model_location_generator):
     from models.demos.yolov8s_world.runner.performant_runner import YOLOv8sWorldPerformantRunner
-    from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import attempt_load
+    from models.demos.yolov8s_world.common import load_torch_model
 
     if model_type == "torch_model":
-        model = attempt_load("yolov8s-world.pt", map_location="cpu")
+        model = load_torch_model(model_location_generator).model
     else:
         model = YOLOv8sWorldPerformantRunner(
             device,
@@ -481,7 +482,7 @@ def test_yolov8s_world(device, model_type, res, reset_seeds):
             ttnn.bfloat16,  # act_dtype
             ttnn.bfloat8_b,  # weight_dtype
             resolution=res,
-            model_location_generator=None,
+            model_location_generator=model_location_generator,
         )
 
         model._capture_yolov8s_world_trace_2cqs()
@@ -511,16 +512,12 @@ def test_yolov8s_world(device, model_type, res, reset_seeds):
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_yolov8x(device, model_type, res, reset_seeds):
+def test_yolov8x(device, model_type, res, reset_seeds, model_location_generator):
     from models.demos.yolov8x.runner.performant_runner import YOLOv8xPerformantRunner
-
-    torch_model = YOLO("yolov8x.pt")
-    torch_model = torch_model.model
-    model = torch_model.eval()
+    from models.demos.yolov8x.common import load_torch_model
 
     if model_type == "torch_model":
-        torch_model = YOLO("yolov8x.pt")
-        torch_model = torch_model.model
+        torch_model = load_torch_model(model_location_generator=model_location_generator)
         model = torch_model.eval()
         logger.info("Inferencing using Torch Model")
     else:
@@ -552,12 +549,12 @@ def test_yolov8x(device, model_type, res, reset_seeds):
     "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_yolov10x(device, model_type, res, reset_seeds):
+def test_yolov10x(device, model_type, res, reset_seeds, model_location_generator):
     from models.demos.yolov10x.runner.performant_runner import YOLOv10PerformantRunner
     from models.demos.yolov10x.common import load_torch_model
 
     if model_type == "torch_model":
-        model = load_torch_model()
+        model = load_torch_model(model_location_generator)
         logger.info("Inferencing using Torch Model")
     else:
         model = YOLOv10PerformantRunner(
@@ -592,12 +589,12 @@ def test_yolov10x(device, model_type, res, reset_seeds):
     "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_yolov9c(device, model_type, res, reset_seeds):
+def test_yolov9c(device, model_type, res, reset_seeds, model_location_generator):
     from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
-    from models.demos.yolov9c.demo.demo_utils import load_torch_model
+    from models.demos.yolov9c.common import load_torch_model
 
     if model_type == "torch_model":
-        model = load_torch_model(model_task="detect")
+        model = load_torch_model(model_task="detect", model_location_generator=model_location_generator)
         logger.info("Inferencing using Torch Model")
     else:
         model = YOLOv9PerformantRunner(
@@ -607,9 +604,8 @@ def test_yolov9c(device, model_type, res, reset_seeds):
             ttnn.bfloat8_b,
             model_task="detect",
             resolution=(640, 640),
-            model_location_generator=None,
+            model_location_generator=model_location_generator,
         )
-        model._capture_yolov9_trace_2cqs()
         logger.info("Inferencing using ttnn Model")
 
     save_dir = "models/demos/yolov9c/demo/runs"
@@ -637,12 +633,12 @@ def test_yolov9c(device, model_type, res, reset_seeds):
     "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_yolov8s(device, model_type, res, reset_seeds):
+def test_yolov8s(device, model_type, res, reset_seeds, model_location_generator):
     from models.demos.yolov8s.runner.performant_runner import YOLOv8sPerformantRunner
+    from models.demos.yolov8s.common import load_torch_model
 
     if model_type == "torch_model":
-        torch_model = YOLO("yolov8s.pt")
-        torch_model = torch_model.model
+        torch_model = load_torch_model(model_location_generator=model_location_generator)
         model = torch_model.eval()
     else:
         model = YOLOv8sPerformantRunner(device, device_batch_size=1)
@@ -673,15 +669,14 @@ def test_yolov8s(device, model_type, res, reset_seeds):
     "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_yolov11n(device, model_type, res, reset_seeds):
+def test_yolov11n(device, model_type, res, reset_seeds, model_location_generator):
     from models.demos.yolov11.runner.performant_runner import YOLOv11PerformantRunner
+    from models.demos.yolov11.common import load_torch_model
 
     if model_type == "torch_model":
-        model = YOLO("yolo11n.pt")
-        model = model.model
+        model = load_torch_model(model_location_generator=model_location_generator)
     else:
         model = YOLOv11PerformantRunner(device, act_dtype=ttnn.bfloat8_b, weight_dtype=ttnn.bfloat8_b)
-        model._capture_yolov11_trace_2cqs()
         logger.info("Inferencing using ttnn Model")
 
     save_dir = "models/demos/yolov11/demo/runs"
@@ -709,33 +704,17 @@ def test_yolov11n(device, model_type, res, reset_seeds):
     "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_yolov7(device, model_type, res, reset_seeds):
+def test_yolov7(device, model_type, res, reset_seeds, model_location_generator):
     from models.demos.yolov7.reference import yolov7_model, yolov7_utils
-    from models.demos.yolov7.reference.model import Yolov7_model
-    from models.demos.yolov7.reference.yolov7_utils import download_yolov7_weights
-    from models.demos.yolov7.ttnn_yolov7_utils import load_weights
     from models.demos.yolov7.runner.performant_runner import YOLOv7PerformantRunner
     import sys
+    from models.demos.yolov7.common import load_torch_model
 
     sys.modules["models.common"] = yolov7_utils
     sys.modules["models.yolo"] = yolov7_model
 
     if model_type == "torch_model":
-        torch_model = Yolov7_model()
-
-        new_state_dict = {}
-        keys = [name for name, parameter in torch_model.state_dict().items()]
-        ds_state_dict = {k: v for k, v in torch_model.state_dict().items()}
-        values = [parameter for name, parameter in ds_state_dict.items()]
-        for i in range(len(keys)):
-            new_state_dict[keys[i]] = values[i]
-        torch_model.load_state_dict(new_state_dict)
-        torch_model.eval()
-
-        weights_path = "tests/ttnn/integration_tests/yolov7/yolov7.pt"
-        weights_path = download_yolov7_weights(weights_path)
-        load_weights(torch_model, weights_path)
-
+        torch_model = load_torch_model(model_location_generator=model_location_generator)
         logger.info("Inferencing [Torch] Model")
     else:
         model = YOLOv7PerformantRunner(
@@ -744,9 +723,8 @@ def test_yolov7(device, model_type, res, reset_seeds):
             ttnn.bfloat16,
             ttnn.bfloat16,
             resolution=(640, 640),
-            model_location_generator=None,
+            model_location_generator=model_location_generator,
         )
-        model._capture_yolov7_trace_2cqs()
         logger.info("Inferencing using ttnn Model")
 
     save_dir = "models/demos/yolov7/demo/runs/detect"

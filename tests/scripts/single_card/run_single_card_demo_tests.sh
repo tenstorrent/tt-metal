@@ -85,6 +85,9 @@ run_yolov11_func() {
  #Yolov11 Demo
  pytest --disable-warnings models/demos/yolov11/demo/demo.py --timeout 600; fail+=$?
 
+ #Yolov11 Eval
+ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/experimental/yolo_eval/evaluate.py::test_yolov11n --timeout 600; fail+=$?
+
 }
 
 run_llama3_func() {
@@ -278,13 +281,18 @@ run_whisper_perf() {
 }
 
 run_yolov9c_perf() {
-
+  # yolov9c demo
   pytest -n auto --disable-warnings models/demos/yolov9c/demo/demo.py --timeout 600
+  # yolov9c eval
+  pytest -n auto --disable-warnings models/experimental/yolo_eval/evaluate.py::test_yolov9c --timeout 600
 
 }
 run_yolov8s_perf() {
 
+  # yolov8s demo
   pytest -n auto --disable-warnings models/demos/yolov8s/demo/demo.py --timeout 600
+  # yolov8s eval
+  pytest -n auto --disable-warnings models/experimental/yolo_eval/evaluate.py::test_yolov8s --timeout 600
 
 }
 
@@ -301,7 +309,11 @@ run_mobilenetv2_perf(){
 
 run_yolov8s_world_perf() {
 
+  # yolov8s_world demo
   pytest -n auto --disable-warnings models/demos/yolov8s_world/demo/demo.py --timeout 600
+
+  # yolov8s_world eval
+  pytest -n auto --disable-warnings models/experimental/yolo_eval/evaluate.py:: test_yolov8s_world--timeout 600
 
 }
 
@@ -320,7 +332,11 @@ run_swin_v2_demo() {
 
 run_yolov8x_perf() {
 
+  # yolov8x demo
   pytest -n auto --disable-warnings models/demos/yolov8x/demo/demo.py --timeout 600
+
+  # yolov8x eval
+  pytest -n auto --disable-warnings models/experimental/yolo_eval/evaluate.py::test_yolov8x --timeout 600
 
 }
 run_yolov4_perf() {
@@ -328,15 +344,20 @@ run_yolov4_perf() {
   pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4 --timeout 600
   pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4_dp --timeout 600
 }
-run_yolov10x_demo() {
 
+run_yolov10x_demo() {
+  # yolov10x demo
   pytest -n auto --disable-warnings  models/demos/yolov10x/demo/demo.py --timeout 600
+  #yolov10x eval
+  pytest -n auto --disable-warnings models/experimental/yolo_eval/evaluate.py::test_yolov10x --timeout 600
 
 }
 
 run_yolov7_demo() {
-
+  # yolov7 demo
   pytest -n auto models/demos/yolov7/demo/demo.py --timeout 600
+  # yolov7 eval
+  pytest -n auto models/experimental/yolo_eval/evaluate.py::test_yolov7 --timeout 600
 
 }
 
