@@ -18,6 +18,7 @@ void disable_erisc_app();
 
 // Pointer to exit routine, (so it may be called from a kernel).
 [[gnu::noreturn]] extern void (*erisc_exit)();
+
 #endif
 
 inline uint32_t debug_get_which_riscv() {
@@ -40,7 +41,7 @@ inline uint32_t debug_get_which_riscv() {
 #endif
 }
 
-void clear_previous_launch_message_entry_for_watcher() {
+inline void clear_previous_launch_message_entry_for_watcher() {
     uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
     // Before the read pointer has been incremented, clear the watcher info 1 entries before to ensure that we don't
     // report stale data

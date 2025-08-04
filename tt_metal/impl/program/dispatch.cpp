@@ -25,6 +25,7 @@
 #include <unordered_set>
 #include <variant>
 #include <vector>
+#include <enchantum/enchantum.hpp>
 
 #include "assert.hpp"
 #include "buffer.hpp"
@@ -117,7 +118,7 @@ DispatchWriteOffsets get_dispatch_write_offset(CoreType core_type, bool prefer_z
         case CoreType::WORKER:
             return prefer_zero ? DispatchWriteOffsets::DISPATCH_WRITE_OFFSET_ZERO
                                : DispatchWriteOffsets::DISPATCH_WRITE_OFFSET_TENSIX_L1_CONFIG_BASE;
-        default: TT_THROW("Invalid core type get_dispatch_write_offset {}", magic_enum::enum_name(core_type));
+        default: TT_THROW("Invalid core type get_dispatch_write_offset {}", enchantum::to_string(core_type));
     }
 }
 

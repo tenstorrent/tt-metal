@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <csetjmp>
 #include <cstring>
-#include "hw/inc/risc_common.h"
+#include "tt_metal/hw/inc/risc_common.h"
 
 void __attribute__((noinline)) Application();
 
@@ -35,18 +35,14 @@ extern "C" [[gnu::section(".start"), gnu::optimize("Os")]] void _start(void) {
     wzerorange(__ldm_bss_start, __ldm_bss_end);
     erisc_exit = return_to_base_fw;
 
-#if defined(WATCHER_ENABLED)
     // NOLINTNEXTLINE(cert-err52-cpp)
     if (setjmp(gJumpBuf)) {
         // Returned from the longjmp
         invalidate_l1_cache();
         return;
+    } else {
+        Application();
     }
-    Application();
-#else
-    // Long jumps are not needed when watcher is disabled
-    Application();
-#endif
 
     // Dump values to debug buffer
     // NOLINTNEXTLINE(hicpp-no-assembler)
