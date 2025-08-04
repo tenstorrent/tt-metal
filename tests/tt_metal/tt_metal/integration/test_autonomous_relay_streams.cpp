@@ -300,7 +300,7 @@ void build_and_run_autonomous_stream_test(
     auto second_relay_stream_overlay_blob_cb =
         CreateCircularBuffer(program, second_relay_core, relay_stream_overlay_blob_buffer_cb_config);
 
-    // Sender/Receiver CBs for pulling in/pushing out stimulus data taht we can output compare
+    // Sender/Receiver CBs for pulling in/pushing out stimulus data that we can output compare
     constexpr uint32_t cb_index = CBIndex::c_0;
     const uint32_t cb_size = page_size_plus_header * read_write_cb_num_pages;
     auto const& cb_config = tt_metal::CircularBufferConfig(cb_size, {{cb_index, tt::DataFormat::Float16_b}})

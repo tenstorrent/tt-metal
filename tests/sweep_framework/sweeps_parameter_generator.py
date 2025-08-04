@@ -211,7 +211,7 @@ if __name__ == "__main__":
         "--tag",
         required=False,
         default=os.getenv("USER"),
-        help="Custom tag for the vectors you are generating. This is to keep copies seperate from other people's test vectors. By default, this will be your username. You are able to specify a tag when running tests using the runner.",
+        help="Custom tag for the vectors you are generating. This is to keep copies separate from other people's test vectors. By default, this will be your username. You are able to specify a tag when running tests using the runner.",
     )
     parser.add_argument("--explicit", required=False, action="store_true")
     parser.add_argument(
