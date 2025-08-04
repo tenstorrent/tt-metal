@@ -172,9 +172,6 @@ constexpr auto multigammaln = ttnn::register_operation<
 constexpr auto sinh = ttnn::register_operation<
     "ttnn::sinh",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SINH>>();
-constexpr auto softsign = ttnn::register_operation<
-    "ttnn::softsign",
-    operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SOFTSIGN>>();
 constexpr auto swish = ttnn::register_operation<
     "ttnn::swish",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::SWISH>>();
@@ -187,10 +184,6 @@ constexpr auto std_hw = ttnn::register_operation<
 constexpr auto normalize_hw = ttnn::register_operation<
     "ttnn::normalize_hw",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::NORMALIZE_HW>>();
-
-constexpr auto hardswish = ttnn::register_operation<
-    "ttnn::hardswish",
-    operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::HARDSWISH>>();
 constexpr auto hardtanh = ttnn::register_operation<
     "ttnn::hardtanh",
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::HARDTANH>>();
@@ -222,9 +215,6 @@ constexpr auto softshrink = ttnn::register_operation<
 constexpr auto logit = ttnn::register_operation<
     "ttnn::logit",
     operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::LOGIT>>();
-constexpr auto celu = ttnn::register_operation<
-    "ttnn::celu",
-    operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::CELU>>();
 constexpr auto tril = ttnn::register_operation<
     "ttnn::tril",
     operations::unary::ExecuteUnaryCompositeOpWithInt<operations::unary::UnaryCompositeOpType::TRIL>>();

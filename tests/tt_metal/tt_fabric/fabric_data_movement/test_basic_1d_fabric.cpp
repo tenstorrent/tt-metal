@@ -511,7 +511,7 @@ void RunTestUnicastRaw(
     fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
 
     if (enable_fabric_tracing) {
-        tt_metal::detail::DumpDeviceProfileResults(sender_device);
+        tt_metal::detail::ReadDeviceProfilerResults(sender_device);
     }
 
     // Validate the status and packets processed by sender and receiver
@@ -766,7 +766,7 @@ void RunTestUnicastTGGateways(BaseFabricFixture* fixture) {
         GTEST_SKIP();
     }
 
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::ClusterType::TG) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::TG) {
         log_info(tt::LogTest, "This test is only for TG");
         GTEST_SKIP();
     }
@@ -1498,7 +1498,7 @@ void RunTestChipMCast1D(
     log_info(tt::LogTest, "All Receivers Finished");
 
     if (enable_fabric_tracing) {
-        tt_metal::detail::DumpDeviceProfileResults(sender_device);
+        tt_metal::detail::ReadDeviceProfilerResults(sender_device);
     }
 
     // Validate the status and packets processed by sender and receiver

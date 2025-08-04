@@ -313,11 +313,7 @@ jobs:
 
           # Trigger workflow with appropriate inputs
           echo "Triggering $WORKFLOW..."
-          if [ "$WORKFLOW" = "blackhole-post-commit.yaml" ]; then
-            gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" -f enable-ttnn-unit-tests=true --repo "${{ github.repository }}"
-          else
-            gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}"
-          fi
+          gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "${{ github.repository }}"
 
           # Wait for the new run to appear and ensure it's created after trigger time
           run_id=""
@@ -476,8 +472,14 @@ jobs:
           PR_NUMBER="${{ inputs.recheck_tests == true && needs.recheck-tests.outputs.pr-number || needs.update-submodule.outputs.pr-number }}"
 
           # Mark as ready if needed
-          [ "${{ inputs.draft }}" == "true" ] && gh pr ready "$PR_NUMBER" --repo "${{ github.repository }}" 2>/dev/null || true
-
+          if [ "${{ inputs.draft }}" = "true" ] || [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "Marking PR as ready for review"
+            if gh pr ready "$PR_NUMBER" --repo "${{ github.repository }}" 2>/dev/null; then
+              echo "ℹ️ PR converted to ready-for-review"
+            else
+              echo "⚠️ PR already ready or failed to convert (check permissions)"
+            fi
+          fi
           # Build test status for PR body update
           TEST_STATUS="### 🧪 Test Status"$'\n'
 

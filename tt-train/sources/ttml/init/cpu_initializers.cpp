@@ -11,6 +11,22 @@
 
 namespace ttml::init {
 
+namespace {
+struct constant_distribution {
+    using result_type = float;
+
+    constant_distribution(float value) : value(value) {
+    }
+
+    template <typename G>
+    float operator()([[maybe_unused]] G& g) {
+        return value;
+    }
+
+    float value;
+};
+}  // namespace
+
 xt::xarray<float> uniform_init(const ttnn::Shape& shape, UniformRange range) {
     std::vector<float> data(shape.volume());
     uniform_init(data, range);
@@ -46,20 +62,22 @@ void normal_init(std::vector<float>& vec, NormalParams params) {
     uint32_t seed = gen();
     core::parallel_generate(
         std::span{vec.data(), vec.size()},
-        [params]() { return std::uniform_real_distribution<float>(params.mean, params.stddev); },
+        [params]() { return std::normal_distribution<float>(params.mean, params.stddev); },
         seed);
 }
 
 void constant_init(std::vector<float>& vec, float value) {
-    std::fill(vec.begin(), vec.end(), value);
+    auto& gen = autograd::ctx().get_generator();
+    uint32_t seed = gen();
+    core::parallel_generate(
+        std::span{vec.data(), vec.size()}, [value]() { return constant_distribution{value}; }, seed);
 }
 
 void xavier_uniform_init(std::vector<float>& vec, FanParams params) {
-    auto& [fan_in, fan_out] = params;
-    float limit = std::sqrt(6.0F / (float)(fan_in + fan_out));
-
     auto& gen = autograd::ctx().get_generator();
     uint32_t seed = gen();
+    auto& [fan_in, fan_out] = params;
+    float limit = std::sqrt(6.0F / (float)(fan_in + fan_out));
     core::parallel_generate(
         std::span{vec.data(), vec.size()},
         [limit]() { return std::uniform_real_distribution<float>(-limit, limit); },
@@ -67,21 +85,18 @@ void xavier_uniform_init(std::vector<float>& vec, FanParams params) {
 }
 
 void xavier_normal_init(std::vector<float>& vec, FanParams params) {
+    auto& gen = autograd::ctx().get_generator();
+    uint32_t seed = gen();
     auto& [fan_in, fan_out] = params;
     float stddev = std::sqrt(2.0F / (float)(fan_in + fan_out));
-
     core::parallel_generate(
-        std::span{vec.data(), vec.size()},
-        [stddev]() { return std::normal_distribution<float>(0.0F, stddev); },
-        autograd::ctx().get_generator()());
+        std::span{vec.data(), vec.size()}, [stddev]() { return std::normal_distribution<float>(0.0F, stddev); }, seed);
 }
 
 void kaiming_uniform_init(std::vector<float>& vec, int fan_in) {
-    float limit = std::sqrt(3.0F / (float)fan_in);
-
-    std::uniform_real_distribution<float> dist(-limit, limit);
     auto& gen = autograd::ctx().get_generator();
     uint32_t seed = gen();
+    float limit = std::sqrt(3.0F / (float)fan_in);
     core::parallel_generate(
         std::span{vec.data(), vec.size()},
         [limit]() { return std::uniform_real_distribution<float>(-limit, limit); },
@@ -89,12 +104,11 @@ void kaiming_uniform_init(std::vector<float>& vec, int fan_in) {
 }
 
 void kaiming_normal_init(std::vector<float>& vec, int fan_out) {
+    auto& gen = autograd::ctx().get_generator();
+    uint32_t seed = gen();
     float stddev = std::sqrt(2.0F / (float)fan_out);
-
     core::parallel_generate(
-        std::span{vec.data(), vec.size()},
-        [stddev]() { return std::normal_distribution<float>(0.0F, stddev); },
-        autograd::ctx().get_generator()());
+        std::span{vec.data(), vec.size()}, [stddev]() { return std::normal_distribution<float>(0.0F, stddev); }, seed);
 }
 
 }  // namespace ttml::init

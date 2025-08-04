@@ -17,6 +17,7 @@ class DropoutTest : public ::testing::Test {
 protected:
     void SetUp() override {
         ttml::autograd::ctx().open_device();
+        ttml::autograd::ctx().set_seed(42);
     }
 
     void TearDown() override {
@@ -35,10 +36,12 @@ TEST_F(DropoutTest, TestSeed) {
     for (auto& shape : shapes) {
         fmt::println("Testing shape: {}", shape);
         xt::xarray<float> xtensor_a = xt::empty<float>(shape);
+        auto rng = ttml::autograd::ctx().get_generator();
+        uint32_t seed = rng();
         ttml::core::parallel_generate(
             std::span{xtensor_a.data(), xtensor_a.size()},
             []() { return std::uniform_real_distribution<float>(-0.5f, 0.5f); },
-            42);
+            seed);
 
         auto xtensor_a_tensor = ttml::core::from_xtensor(xtensor_a, device);
         auto num_cache_before = device->num_program_cache_entries();

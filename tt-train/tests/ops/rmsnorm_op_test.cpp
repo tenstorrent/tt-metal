@@ -19,6 +19,7 @@ class RMSNormOpTest : public ::testing::Test {
 protected:
     void SetUp() override {
         ttml::autograd::ctx().open_device();
+        ttml::autograd::ctx().set_seed(42);
     }
 
     void TearDown() override {
@@ -322,10 +323,14 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
     // Generate random input data
     std::array<uint32_t, 4> gamma_shape = {1, 1, 1, shape[3]};
     xt::xarray<float> x_data = xt::empty<float>(shape);
-    core::parallel_generate<float>(x_data, []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); }, 42);
+    auto rng = autograd::ctx().get_generator();
+    uint32_t seed1 = rng();
+    core::parallel_generate<float>(x_data, []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); }, seed1);
 
     xt::xarray<float> gamma_data = xt::empty<float>(gamma_shape);
-    core::parallel_generate<float>(gamma_data, []() { return std::uniform_real_distribution<float>(0.0F, 1.0F); }, 42);
+    uint32_t seed2 = rng();
+    core::parallel_generate<float>(
+        gamma_data, []() { return std::uniform_real_distribution<float>(0.0F, 1.0F); }, seed2);
 
     // Test forward pass - kernel vs composite
     auto x_kernel = autograd::create_tensor(core::from_xtensor(x_data, device));

@@ -21,6 +21,7 @@ class CrossEntropyForwardTest : public ::testing::Test {
 protected:
     void SetUp() override {
         ttml::autograd::ctx().open_device();
+        ttml::autograd::ctx().set_seed(42);
     }
 
     void TearDown() override {
@@ -122,10 +123,12 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Batch) {
 
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
+    auto rng = ttml::autograd::ctx().get_generator();
+    uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
-        42);
+        seed);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
 
     std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
@@ -169,10 +172,12 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Batch) {
 
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
+    auto rng = ttml::autograd::ctx().get_generator();
+    uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
-        42);
+        seed);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
 
     std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
@@ -215,10 +220,12 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Large_Forward) {
 
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
+    auto rng = ttml::autograd::ctx().get_generator();
+    uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
-        42);
+        seed);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
 
     std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);
@@ -261,10 +268,12 @@ TEST_F(CrossEntropyForwardTest, CrossEntropyForward_Huge_Forward) {
 
     std::mt19937 gen(42);
     xt::xarray<float> input_tensor = xt::empty<float>({N, C, H, W});
+    auto rng = ttml::autograd::ctx().get_generator();
+    uint32_t seed = rng();
     ttml::core::parallel_generate(
         std::span{input_tensor.data(), input_tensor.size()},
         []() { return std::uniform_real_distribution<float>(-10.0F, 10.0F); },
-        42);
+        seed);
     xt::xarray<uint32_t> target_tensor = xt::zeros<uint32_t>({N, H});
 
     std::uniform_int_distribution<uint32_t> class_dist(0, W - 1);

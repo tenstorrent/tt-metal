@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <iostream>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -582,7 +582,7 @@ chan_id_t ControlPlane::get_downstream_eth_chan_id(
     // If no match found, return a channel from candidate_target_chans
     // Enabled for TG Dispatch on Fabric
     // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::ClusterType::TG) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
         while (src_routing_plane_id >= candidate_target_chans.size()) {
             src_routing_plane_id = src_routing_plane_id % candidate_target_chans.size();
         }
@@ -1591,7 +1591,7 @@ void ControlPlane::print_ethernet_channels() const {
     for (const auto& [fabric_node_id, fabric_eth_channels] : this->router_port_directions_to_physical_eth_chan_map_) {
         ss << fabric_node_id << ": " << std::endl;
         for (const auto& [direction, eth_chans] : fabric_eth_channels) {
-            ss << "   " << magic_enum::enum_name(direction) << ":";
+            ss << "   " << enchantum::to_string(direction) << ":";
             for (const auto& eth_chan : eth_chans) {
                 ss << " " << (std::uint16_t)eth_chan;
             }
