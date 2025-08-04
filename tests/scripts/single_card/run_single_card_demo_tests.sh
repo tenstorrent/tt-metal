@@ -106,7 +106,7 @@ run_ufld_v2_func() {
   #ufld_v2
   pytest -n auto models/demos/ufld_v2/demo/demo.py --timeout 600
   #ufld_v2 eval
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/demo/dataset_evaluation.py --timeout 1500
+  pytest -n auto models/demos/ufld_v2/demo/dataset_evaluation.py --timeout 1500
 }
 run_vgg_func() {
 
@@ -272,13 +272,20 @@ run_yolov8s_perf() {
 
 }
 
-# commenting out the test from CI due to HF issue. TODO explore AWS alternative suggested by infra team.
-# Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
-# run_mobilenetv2_perf(){
 
+<<<<<<< HEAD
 #  pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo --timeout 600
+=======
+run_mobilenetv2_perf(){
+>>>>>>> d9cf4f2677 (enable mobilenet_v2 demo,eval in ci)
 
-# }
+ # mobilenetv2 demo
+ pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo_dp --timeout 600
+
+ # mobilenetv2 eval
+  pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp --timeout 600
+
+}
 
 run_yolov8s_world_perf() {
 
