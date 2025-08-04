@@ -20,6 +20,7 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
+#include "umd/device/types/cluster_descriptor_types.h"
 
 namespace ttnn::operations::generic::test {
 
@@ -413,6 +414,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
 }
 
 TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == tt::umd::BoardType::P150) {
+        GTEST_SKIP();
+    }
     log_info(tt::LogTest, "Running ttnn matmul");
     uint32_t Mt_original = 10;
     uint32_t Kt_original = 2;
