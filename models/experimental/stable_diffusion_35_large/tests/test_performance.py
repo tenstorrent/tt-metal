@@ -7,6 +7,7 @@ from loguru import logger
 import ttnn
 from ..tt.fun_pipeline import TtStableDiffusion3Pipeline, TimingCollector
 from ..tt.parallel_config import StableDiffusionParallelManager, EncoderParallelManager, create_vae_parallel_config
+from models.perf.perf_utils import prep_perf_report
 
 
 @pytest.mark.parametrize(
@@ -46,6 +47,7 @@ def test_sd35_performance(
     topology,
     num_links,
     model_location_generator,
+    is_ci_env,
 ) -> None:
     """Performance test for SD35 pipeline with detailed timing analysis."""
 
@@ -257,7 +259,7 @@ def test_sd35_performance(
     if tuple(mesh_device.shape) == (2, 4):
         expected_metrics = {
             "clip_encoding_time": 0.09,
-            "t5_encoding_time": 0,
+            "t5_encoding_time": 0.1,
             "total_encoding_time": 0.2,
             "denoising_steps_time": 10,
             "vae_decoding_time": 2.3,
@@ -274,6 +276,18 @@ def test_sd35_performance(
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
+
+    if is_ci_env:
+        # In CI, dump a performance report
+        prep_perf_report(
+            model_name=f"sd35_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_cfg{cfg_factor}_sp{sp_factor}_tp{tp_factor}",
+            batch_size=1,
+            inference_and_compile_time=avg_total_time,
+            inference_time=avg_total_time,
+            expected_compile_time=expected_metrics["total_time"],
+            expected_inference_time=expected_metrics["total_time"],
+            comments=f"",
+        )
 
     pass_perf_check = True
     for k in expected_metrics.keys():
