@@ -135,6 +135,7 @@ def run_dtype_conversion_on_device(
     [
         torch.float64,
         torch.int64,
+        torch.bfloat16,
         torch.float16,
         torch.float32,
         torch.int32,

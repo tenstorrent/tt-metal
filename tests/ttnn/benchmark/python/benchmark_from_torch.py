@@ -66,7 +66,13 @@ import inspect
         ttnn.int32,
     ],
 )
-@pytest.mark.parametrize("size_multiplier", [1, 2, 4, 8, 16])
+@pytest.mark.parametrize(
+    "size_multiplier",
+    [
+        # 1, 2, 4, 8,
+        16,
+    ],
+)
 def test_benchmark_from_torch(
     benchmark, device, use_device, ttnn_dtype, torch_dtype, ttnn_layout, size_multiplier, request
 ):
