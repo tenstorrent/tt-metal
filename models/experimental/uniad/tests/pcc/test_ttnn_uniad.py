@@ -1,11 +1,17 @@
 import torch
+import pytest
 
+import ttnn
 from models.experimental.uniad.reference.uniad import UniAD
+from models.experimental.uniad.tt.ttnn_uniad import TtUniAD
 import numpy as np
 from models.experimental.uniad.reference.utils import LiDARInstance3DBoxes
 
+from models.experimental.uniad.tt.model_preprocessing_uniad import create_uniad_model_parameters_perception_transformer
 
-def test_uniad_reference():
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
+def test_uniad_reference(device, reset_seeds):
     weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
     reference_model = UniAD(
         True,
@@ -318,6 +324,197 @@ def test_uniad_reference():
         ]
     ]
 
+    ttnn_rescale = True
+    ttnn_img = [ttnn.from_torch(img[0], device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)]
+    ttnn_timestamp = [ttnn.from_torch(timestamp[0], device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)]
+    ttnn_l2g_r_mat = [ttnn.from_torch(l2g_r_mat, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)]
+    ttnn_l2g_t = [ttnn.from_torch(l2g_t, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)]
+
+    ttnn_gt_lane_labels = [ttnn.from_torch(gt_lane_labels[0], device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32)]
+    ttnn_gt_lane_bboxes = [ttnn.from_torch(gt_lane_bboxes[0], device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32)]
+    ttnn_gt_lane_masks = [ttnn.from_torch(gt_lane_masks[0], device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32)]
+
+    ttnn_gt_segmentation = [
+        ttnn.from_torch(gt_segmentation[0], device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32)
+    ]
+    ttnn_gt_instance = [ttnn.from_torch(gt_instance[0], device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32)]
+    ttnn_gt_centerness = [
+        ttnn.from_torch(gt_centerness[0], device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    ]
+
+    ttnn_gt_offset = [(ttnn.from_torch(gt_offset[0], device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16))]
+    ttnn_gt_flow = [ttnn.from_torch(gt_flow[0], device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)]
+    ttnn_gt_backward_flow = [
+        ttnn.from_torch(gt_backward_flow[0], device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    ]
+
+    ttnn_gt_occ_has_invalid_frame = [
+        ttnn.from_torch(gt_occ_has_invalid_frame[0], device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32)
+    ]
+    ttnn_gt_occ_img_is_valid = [
+        ttnn.from_torch(gt_occ_img_is_valid[0], device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32)
+    ]
+    ttnn_sdc_planning = [ttnn.from_torch(sdc_planning[0], device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)]
+    ttnn_sdc_planning_mask = [
+        ttnn.from_torch(sdc_planning_mask[0], device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    ]
+    ttnn_command = [ttnn.from_torch(command, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32)]
+
+    ttnn_img_metas = img_metas[:]
+
+    parameters = create_uniad_model_parameters_perception_transformer(reference_model, device)
+
+    ttnn_model = TtUniAD(
+        parameters,
+        device,
+        True,
+        True,
+        True,
+        True,
+        task_loss_weight={"track": 1.0, "map": 1.0, "motion": 1.0, "occ": 1.0, "planning": 1.0},
+        **{
+            "gt_iou_threshold": 0.3,
+            "queue_length": 3,
+            "use_grid_mask": True,
+            "video_test_mode": True,
+            "num_query": 900,
+            "num_classes": 10,
+            "vehicle_id_list": [0, 1, 2, 3, 4, 6, 7],
+            "pc_range": [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
+            "img_backbone": {
+                "type": "ResNet",
+                "depth": 101,
+                "num_stages": 4,
+                "out_indices": (1, 2, 3),
+                "frozen_stages": 4,
+                "norm_cfg": {"type": "BN2d", "requires_grad": False},
+                "norm_eval": True,
+                "style": "caffe",
+                "dcn": {"type": "DCNv2", "deform_groups": 1, "fallback_on_stride": False},
+                "stage_with_dcn": (False, False, True, True),
+            },
+            "img_neck": {
+                "type": "FPN",
+                "in_channels": [512, 1024, 2048],
+                "out_channels": 256,
+                "start_level": 0,
+                "add_extra_convs": "on_output",
+                "num_outs": 4,
+                "relu_before_extra_convs": True,
+            },
+            "freeze_img_backbone": True,
+            "freeze_img_neck": True,
+            "freeze_bn": True,
+            "freeze_bev_encoder": True,
+            "score_thresh": 0.4,
+            "filter_score_thresh": 0.35,
+            "qim_args": {
+                "qim_type": "QIMBase",
+                "merger_dropout": 0,
+                "update_query_pos": True,
+                "fp_ratio": 0.3,
+                "random_drop": 0.1,
+            },
+            "mem_args": {"memory_bank_type": "MemoryBank", "memory_bank_score_thresh": 0.0, "memory_bank_len": 4},
+            "loss_cfg": {
+                "type": "ClipMatcher",
+                "num_classes": 10,
+                "weight_dict": None,
+                "code_weights": [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.2, 0.2],
+                "assigner": {
+                    "type": "HungarianAssigner3DTrack",
+                    "cls_cost": {"type": "FocalLossCost", "weight": 2.0},
+                    "reg_cost": {"type": "BBox3DL1Cost", "weight": 0.25},
+                    "pc_range": [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
+                },
+                "loss_cls": {"type": "FocalLoss", "use_sigmoid": True, "gamma": 2.0, "alpha": 0.25, "loss_weight": 2.0},
+                "loss_bbox": {"type": "L1Loss", "loss_weight": 0.25},
+            },
+            "pts_bbox_head": {
+                "type": "BEVFormerTrackHead",
+                "bev_h": 50,
+                "bev_w": 50,
+                "num_query": 900,
+                "num_classes": 10,
+                "in_channels": 256,
+                "sync_cls_avg_factor": True,
+                "with_box_refine": True,
+                "as_two_stage": False,
+                "past_steps": 4,
+                "fut_steps": 4,
+                "transformer": {
+                    "type": "PerceptionTransformer",
+                    "rotate_prev_bev": True,
+                    "use_shift": True,
+                    "use_can_bus": True,
+                    "embed_dims": 256,
+                    "encoder": {
+                        "type": "BEVFormerEncoder",
+                        "num_layers": 6,
+                        "pc_range": [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
+                        "num_points_in_pillar": 4,
+                        "return_intermediate": False,
+                        "transformerlayers": {
+                            "type": "BEVFormerLayer",
+                            "attn_cfgs": [
+                                {"type": "TemporalSelfAttention", "embed_dims": 256, "num_levels": 1},
+                                {
+                                    "type": "SpatialCrossAttention",
+                                    "pc_range": [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
+                                    "deformable_attention": {
+                                        "type": "MSDeformableAttention3D",
+                                        "embed_dims": 256,
+                                        "num_points": 8,
+                                        "num_levels": 4,
+                                    },
+                                    "embed_dims": 256,
+                                },
+                            ],
+                            "feedforward_channels": 512,
+                            "ffn_dropout": 0.1,
+                            "operation_order": ("self_attn", "norm", "cross_attn", "norm", "ffn", "norm"),
+                        },
+                    },
+                    "decoder": {
+                        "type": "DetectionTransformerDecoder",
+                        "num_layers": 6,
+                        "return_intermediate": True,
+                        "transformerlayers": {
+                            "type": "DetrTransformerDecoderLayer",
+                            "attn_cfgs": [
+                                {"type": "MultiheadAttention", "embed_dims": 256, "num_heads": 8, "dropout": 0.1},
+                                {"type": "CustomMSDeformableAttention", "embed_dims": 256, "num_levels": 1},
+                            ],
+                            "feedforward_channels": 512,
+                            "ffn_dropout": 0.1,
+                            "operation_order": ("self_attn", "norm", "cross_attn", "norm", "ffn", "norm"),
+                        },
+                    },
+                },
+                "bbox_coder": {
+                    "type": "NMSFreeCoder",
+                    "post_center_range": [-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
+                    "pc_range": [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0],
+                    "max_num": 300,
+                    "voxel_size": [0.2, 0.2, 8],
+                    "num_classes": 10,
+                },
+                "positional_encoding": {
+                    "type": "LearnedPositionalEncoding",
+                    "num_feats": 128,
+                    "row_num_embed": 50,
+                    "col_num_embed": 50,
+                },
+                "loss_cls": {"type": "FocalLoss", "use_sigmoid": True, "gamma": 2.0, "alpha": 0.25, "loss_weight": 2.0},
+                "loss_bbox": {"type": "L1Loss", "loss_weight": 0.25},
+                "loss_iou": {"type": "GIoULoss", "loss_weight": 0.0},
+            },
+            "train_cfg": None,
+            "pretrained": None,
+            "test_cfg": None,
+        },
+    )
+
     reference_output = reference_model(
         return_loss=False,
         rescale=rescale,
@@ -342,4 +539,26 @@ def test_uniad_reference():
         command=command,
     )
 
-    print("reference_output", reference_output)
+    ttnn_output = ttnn_model(
+        return_loss=False,
+        rescale=ttnn_rescale,
+        img_metas=ttnn_img_metas,
+        img=ttnn_img,
+        timestamp=ttnn_timestamp,
+        l2g_r_mat=ttnn_l2g_r_mat,
+        l2g_t=ttnn_l2g_t,
+        gt_lane_labels=ttnn_gt_lane_labels,
+        gt_lane_bboxes=ttnn_gt_lane_bboxes,
+        gt_lane_masks=ttnn_gt_lane_masks,
+        gt_segmentation=ttnn_gt_segmentation,
+        gt_instance=ttnn_gt_instance,
+        gt_centerness=ttnn_gt_centerness,
+        gt_offset=ttnn_gt_offset,
+        gt_flow=ttnn_gt_flow,
+        gt_backward_flow=ttnn_gt_backward_flow,
+        gt_occ_has_invalid_frame=ttnn_gt_occ_has_invalid_frame,
+        gt_occ_img_is_valid=ttnn_gt_occ_img_is_valid,
+        sdc_planning=ttnn_sdc_planning,
+        sdc_planning_mask=ttnn_sdc_planning_mask,
+        command=ttnn_command,
+    )
