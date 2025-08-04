@@ -7,16 +7,15 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
+#include "tt-metalium/fabric_edm_packet_header.hpp"
 
 constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(0);
 constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(1);
 tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_addr_arg);
 constexpr uint32_t notification_mailbox_address = get_compile_time_arg_val(2);
 uint32_t target_address = get_compile_time_arg_val(3);
-constexpr uint32_t is_fused_mode = get_compile_time_arg_val(4);  // 0 = atomic inc only, 1 = fused mode
-constexpr bool is_scatter = get_compile_time_arg_val(5) == 1;
-constexpr bool is_inline = get_compile_time_arg_val(6) == 1;
-constexpr bool is_chip_multicast = get_compile_time_arg_val(7) == 1;
+constexpr NocSendType noc_send_type = static_cast<NocSendType>(get_compile_time_arg_val(4));
+constexpr bool is_chip_multicast = get_compile_time_arg_val(5) == 1;
 
 void kernel_main() {
     uint32_t rt_arg_idx = 0;
@@ -38,8 +37,7 @@ void kernel_main() {
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
     *atomic_poll_addr = 0;
 
-    // Initialize data area to 0 if in fused mode
-    if constexpr (is_fused_mode) {
+    if constexpr (noc_send_type == NOC_FUSED_UNICAST_ATOMIC_INC) {
         for (uint32_t i = 0; i < payload_size_words; i++) {
             start_addr[i] = 0;
         }
@@ -54,8 +52,7 @@ void kernel_main() {
         }
         WAYPOINT("FPD");
 
-        if constexpr (is_fused_mode) {
-            // Verify that data was also written (check that at least some data is non-zero)
+        if constexpr (noc_send_type == NOC_FUSED_UNICAST_ATOMIC_INC) {
             bool data_written = false;
             for (uint32_t j = 0; j < payload_size_words; j++) {
                 if (start_addr[j] != 0) {

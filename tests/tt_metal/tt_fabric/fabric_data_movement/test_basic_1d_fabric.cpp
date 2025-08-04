@@ -1751,7 +1751,7 @@ TEST_F(Fabric1DFixture, DISABLED_TestEDMConnectionStressTestQuick) {
     }
 }
 
-void UnicastCommon(BaseFabricFixture* fixture, bool atomic_inc, bool fused, bool is_scatter, bool is_inline) {
+void UnicastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type) {
     uint32_t num_hops = 1;
     RoutingDirection direction = RoutingDirection::E;  // East direction
     uint32_t num_packets = 10;
@@ -1814,15 +1814,14 @@ void UnicastCommon(BaseFabricFixture* fixture, bool atomic_inc, bool fused, bool
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.notification_mailbox_address,
         worker_mem_map.target_address,
-        fused,
-        is_scatter,
-        is_inline,
+        noc_send_type,
         0};
 
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        atomic_inc ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_sender.cpp"
-                   : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
+        noc_send_type == NOC_FUSED_UNICAST_ATOMIC_INC || noc_send_type == NOC_UNICAST_ATOMIC_INC
+            ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_sender.cpp"
+            : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
         {sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -1831,15 +1830,16 @@ void UnicastCommon(BaseFabricFixture* fixture, bool atomic_inc, bool fused, bool
 
     auto receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
-        atomic_inc ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_receiver.cpp"
-                   : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
+        noc_send_type == NOC_FUSED_UNICAST_ATOMIC_INC || noc_send_type == NOC_UNICAST_ATOMIC_INC
+            ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_receiver.cpp"
+            : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
         {receiver_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = compile_time_args});
 
-    if (is_inline) {
+    if (noc_send_type == NOC_UNICAST_INLINE_WRITE) {
         worker_mem_map.packet_payload_size_bytes = 4;
     }
 
@@ -1901,7 +1901,7 @@ void UnicastCommon(BaseFabricFixture* fixture, bool atomic_inc, bool fused, bool
     EXPECT_EQ(sender_bytes, receiver_bytes);
 }
 
-void MulticastCommon(BaseFabricFixture* fixture, bool atomic_inc, bool fused, bool is_scatter, bool is_inline) {
+void MulticastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type) {
     uint32_t start_distance = 1;
     uint32_t range = 3;
     RoutingDirection dir = RoutingDirection::E;  // East direction
@@ -1987,17 +1987,16 @@ void MulticastCommon(BaseFabricFixture* fixture, bool atomic_inc, bool fused, bo
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.notification_mailbox_address,
         worker_mem_map.target_address,
-        fused,
-        is_scatter,
-        is_inline,
+        noc_send_type,
         1};  // is_chip_multicast
 
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        atomic_inc ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_sender.cpp"
-                   : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
+        noc_send_type == NOC_FUSED_UNICAST_ATOMIC_INC || noc_send_type == NOC_UNICAST_ATOMIC_INC
+            ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_atomic_inc_sender.cpp"
+            : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_unicast_write_sender.cpp",
         {sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -2018,7 +2017,7 @@ void MulticastCommon(BaseFabricFixture* fixture, bool atomic_inc, bool fused, bo
         last_recv_fabric_node_id.chip_id);
     log_info(tt::LogTest, "Mcast Receiver Core (Logical): {},{}", receiver_logical_core.x, receiver_logical_core.y);
 
-    if (is_inline) {
+    if (noc_send_type == NOC_UNICAST_INLINE_WRITE) {
         worker_mem_map.packet_payload_size_bytes = 4;
     }
 
@@ -2051,9 +2050,10 @@ void MulticastCommon(BaseFabricFixture* fixture, bool atomic_inc, bool fused, bo
             auto receiver_program = tt_metal::CreateProgram();
             auto receiver_kernel = tt_metal::CreateKernel(
                 receiver_program,
-                atomic_inc ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/"
-                             "test_linear_api_atomic_inc_receiver.cpp"
-                           : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
+                noc_send_type == NOC_FUSED_UNICAST_ATOMIC_INC || noc_send_type == NOC_UNICAST_ATOMIC_INC
+                    ? "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/"
+                      "test_linear_api_atomic_inc_receiver.cpp"
+                    : "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/test_linear_api_receiver.cpp",
                 receiver_logical_core,
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -2132,30 +2132,30 @@ void MulticastCommon(BaseFabricFixture* fixture, bool atomic_inc, bool fused, bo
 }
 
 // 1D Linear Fabric API Tests
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocUnicastWrite1D) { UnicastCommon(this, false, false, false, false); }
+TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocUnicastWrite1D) { UnicastCommon(this, NOC_UNICAST_WRITE); }
 
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocAtomicInc1D) { UnicastCommon(this, true, false, false, false); }
+TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocAtomicInc1D) { UnicastCommon(this, NOC_UNICAST_ATOMIC_INC); }
 
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocScatterWrite1D) { UnicastCommon(this, false, false, true, false); }
+TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocScatterWrite1D) { UnicastCommon(this, NOC_UNICAST_SCATTER_WRITE); }
 
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocInlineWrite1D) { UnicastCommon(this, false, false, false, true); }
+TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocInlineWrite1D) { UnicastCommon(this, NOC_UNICAST_INLINE_WRITE); }
 
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocFusedAtomicInc1D) { UnicastCommon(this, true, true, false, false); }
-
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocUnicastWrite1D) {
-    MulticastCommon(this, false, false, false, false);
+TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocFusedAtomicInc1D) {
+    UnicastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC);
 }
 
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocAtomicInc1D) { MulticastCommon(this, true, false, false, false); }
+TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocUnicastWrite1D) { MulticastCommon(this, NOC_UNICAST_WRITE); }
+
+TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocAtomicInc1D) { MulticastCommon(this, NOC_UNICAST_ATOMIC_INC); }
 
 TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocScatterWrite1D) {
-    MulticastCommon(this, false, false, true, false);
+    MulticastCommon(this, NOC_UNICAST_SCATTER_WRITE);
 }
 
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocInlineWrite1D) { MulticastCommon(this, false, false, false, true); }
+TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocInlineWrite1D) { MulticastCommon(this, NOC_UNICAST_INLINE_WRITE); }
 
 TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocFusedAtomicInc1D) {
-    MulticastCommon(this, true, true, false, false);
+    MulticastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC);
 }
 
 }  // namespace fabric_router_tests

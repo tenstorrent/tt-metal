@@ -15,10 +15,8 @@ constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(1);
 tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_addr_arg);
 constexpr uint32_t notification_mailbox_address = get_compile_time_arg_val(2);
 uint32_t target_address = get_compile_time_arg_val(3);
-constexpr uint32_t is_fused_mode = get_compile_time_arg_val(4);
-constexpr bool is_scatter = get_compile_time_arg_val(5) == 1;
-constexpr bool is_inline = get_compile_time_arg_val(6) == 1;
-constexpr bool is_chip_multicast = get_compile_time_arg_val(7) == 1;
+constexpr NocSendType noc_send_type = static_cast<NocSendType>(get_compile_time_arg_val(4));
+constexpr bool is_chip_multicast = get_compile_time_arg_val(5) == 1;
 
 void kernel_main() {
     size_t rt_arg_idx = 0;
@@ -47,79 +45,93 @@ void kernel_main() {
         tt_l1_ptr uint32_t* start_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address);
         fill_packet_data(start_addr, packet_payload_size_bytes / 16, time_seed);
 
-        // Test fabric_unicast_noc_unicast_write function
         if constexpr (is_chip_multicast) {
-            if constexpr (is_scatter) {
-                uint16_t first_chunk_size = packet_payload_size_bytes / 2;
-                fabric_multicast_noc_scatter_write(
-                    &connection,
-                    packet_header,
-                    source_l1_buffer_address,
-                    packet_payload_size_bytes,
-                    tt::tt_fabric::NocUnicastScatterCommandHeader{
-                        {get_noc_addr(noc_x_start, noc_y_start, target_address),
-                         get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size)},
-                        first_chunk_size},
-                    start_distance,
-                    range,
-                    0  // route_id
-                );
-            } else if constexpr (is_inline) {
-                fabric_multicast_noc_unicast_inline_write(
-                    &connection,
-                    packet_header,
-                    tt::tt_fabric::NocUnicastInlineWriteCommandHeader{
-                        get_noc_addr(noc_x_start, noc_y_start, target_address), 0xDEADBEEF},
-                    start_distance,
-                    range,
-                    0  // route_id
-                );
-            } else {
-                fabric_multicast_noc_unicast_write(
-                    &connection,
-                    packet_header,
-                    source_l1_buffer_address,
-                    packet_payload_size_bytes,
-                    tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(noc_x_start, noc_y_start, target_address)},
-                    start_distance,
-                    range,
-                    0  // route_id
-                );
+            switch (noc_send_type) {
+                case NOC_UNICAST_WRITE: {
+                    fabric_multicast_noc_unicast_write(
+                        &connection,
+                        packet_header,
+                        source_l1_buffer_address,
+                        packet_payload_size_bytes,
+                        tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(noc_x_start, noc_y_start, target_address)},
+                        start_distance,
+                        range,
+                        0  // route_id
+                    );
+                } break;
+                case NOC_UNICAST_INLINE_WRITE: {
+                    fabric_multicast_noc_unicast_inline_write(
+                        &connection,
+                        packet_header,
+                        tt::tt_fabric::NocUnicastInlineWriteCommandHeader{
+                            get_noc_addr(noc_x_start, noc_y_start, target_address), 0xDEADBEEF},
+                        start_distance,
+                        range,
+                        0  // route_id
+                    );
+                } break;
+                case NOC_UNICAST_SCATTER_WRITE: {
+                    uint16_t first_chunk_size = packet_payload_size_bytes / 2;
+                    fabric_multicast_noc_scatter_write(
+                        &connection,
+                        packet_header,
+                        source_l1_buffer_address,
+                        packet_payload_size_bytes,
+                        tt::tt_fabric::NocUnicastScatterCommandHeader{
+                            {get_noc_addr(noc_x_start, noc_y_start, target_address),
+                             get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size)},
+                            first_chunk_size},
+                        start_distance,
+                        range,
+                        0  // route_id
+                    );
+                } break;
+                default: {
+                    ASSERT(false);
+                } break;
             }
         } else {
-            if constexpr (is_scatter) {
-                uint16_t first_chunk_size = packet_payload_size_bytes / 2;
-                fabric_unicast_noc_scatter_write(
-                    &connection,
-                    packet_header,
-                    source_l1_buffer_address,
-                    packet_payload_size_bytes,
-                    tt::tt_fabric::NocUnicastScatterCommandHeader{
-                        {get_noc_addr(noc_x_start, noc_y_start, target_address),
-                         get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size)},
-                        first_chunk_size},
-                    1,
-                    0  // route_id
-                );
-            } else if constexpr (is_inline) {
-                fabric_unicast_noc_unicast_inline_write(
-                    &connection,
-                    packet_header,
-                    tt::tt_fabric::NocUnicastInlineWriteCommandHeader{
-                        get_noc_addr(noc_x_start, noc_y_start, target_address), 0xDEADBEEF},
-                    1,
-                    0  // route_id
-                );
-            } else {
-                fabric_unicast_noc_unicast_write(
-                    &connection,
-                    packet_header,
-                    source_l1_buffer_address,
-                    packet_payload_size_bytes,
-                    tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(noc_x_start, noc_y_start, target_address)},
-                    1,
-                    0  // route_id
-                );
+            switch (noc_send_type) {
+                case NOC_UNICAST_WRITE: {
+                    fabric_unicast_noc_unicast_write(
+                        &connection,
+                        packet_header,
+                        source_l1_buffer_address,
+                        packet_payload_size_bytes,
+                        tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(noc_x_start, noc_y_start, target_address)},
+                        1,
+                        0  // route_id
+                    );
+                } break;
+                case NOC_UNICAST_INLINE_WRITE: {
+                    fabric_unicast_noc_unicast_inline_write(
+                        &connection,
+                        packet_header,
+                        tt::tt_fabric::NocUnicastInlineWriteCommandHeader{
+                            get_noc_addr(noc_x_start, noc_y_start, target_address), 0xDEADBEEF},
+                        1,
+                        0  // route_id
+                    );
+
+                } break;
+                case NOC_UNICAST_SCATTER_WRITE: {
+                    uint16_t first_chunk_size = packet_payload_size_bytes / 2;
+                    fabric_unicast_noc_scatter_write(
+                        &connection,
+                        packet_header,
+                        source_l1_buffer_address,
+                        packet_payload_size_bytes,
+                        tt::tt_fabric::NocUnicastScatterCommandHeader{
+                            {get_noc_addr(noc_x_start, noc_y_start, target_address),
+                             get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size)},
+                            first_chunk_size},
+                        1,
+                        0  // route_id
+                    );
+                } break;
+                default: {
+                    ASSERT(false);
+                } break;
             }
         }
         noc_async_writes_flushed();

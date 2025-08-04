@@ -15,10 +15,8 @@ constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(1);
 tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_addr_arg);
 constexpr uint32_t notification_mailbox_address = get_compile_time_arg_val(2);
 uint32_t target_address = get_compile_time_arg_val(3);
-constexpr uint32_t is_fused_mode = get_compile_time_arg_val(4);  // 0 = atomic inc only, 1 = fused mode
-constexpr bool is_scatter = get_compile_time_arg_val(5) == 1;
-constexpr bool is_inline = get_compile_time_arg_val(6) == 1;
-constexpr bool is_chip_multicast = get_compile_time_arg_val(7) == 1;
+constexpr NocSendType noc_send_type = static_cast<NocSendType>(get_compile_time_arg_val(4));
+constexpr bool is_chip_multicast = get_compile_time_arg_val(5) == 1;
 
 void kernel_main() {
     size_t rt_arg_idx = 0;
@@ -44,70 +42,76 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_packets; i++) {
         if constexpr (is_chip_multicast) {
-            if constexpr (is_fused_mode) {
-                fabric_multicast_noc_fused_unicast_with_atomic_inc(
-                    &connection,
-                    packet_header,
-                    source_l1_buffer_address,
-                    packet_payload_size_bytes,
-                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                        get_noc_addr(noc_x_start, noc_y_start, target_address),  // data write address
-                        get_noc_addr(
-                            noc_x_start, noc_y_start, notification_mailbox_address),  // atomic increment address
-                        1,                                                            // val: increment by 1
-                        std::numeric_limits<uint16_t>::max(),                         // wrap: max value
-                        true                                                          // flush
-                    },
-                    start_distance,
-                    range,
-                    0  // route_id
-                );
-            } else {
-                fabric_multicast_noc_unicast_atomic_inc(
-                    &connection,
-                    packet_header,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                        get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
-                        1,                                     // val: increment by 1
-                        std::numeric_limits<uint16_t>::max(),  // wrap: max value
-                        true                                   // flush
-                    },
-                    start_distance,
-                    range,
-                    0  // route_id
-                );
+            switch (noc_send_type) {
+                case NOC_UNICAST_ATOMIC_INC: {
+                    fabric_multicast_noc_unicast_atomic_inc(
+                        &connection,
+                        packet_header,
+                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                            get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
+                            1,
+                            std::numeric_limits<uint16_t>::max(),
+                            true},
+                        start_distance,
+                        range,
+                        0  // route_id
+                    );
+                } break;
+                case NOC_FUSED_UNICAST_ATOMIC_INC: {
+                    fabric_multicast_noc_fused_unicast_with_atomic_inc(
+                        &connection,
+                        packet_header,
+                        source_l1_buffer_address,
+                        packet_payload_size_bytes,
+                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                            get_noc_addr(noc_x_start, noc_y_start, target_address),
+                            get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
+                            1,
+                            std::numeric_limits<uint16_t>::max(),
+                            true},
+                        start_distance,
+                        range,
+                        0  // route_id
+                    );
+                } break;
+                default: {
+                    ASSERT(false);
+                } break;
             }
         } else {
-            if constexpr (is_fused_mode) {
-                fabric_unicast_noc_fused_unicast_with_atomic_inc(
-                    &connection,
-                    packet_header,
-                    source_l1_buffer_address,
-                    packet_payload_size_bytes,
-                    tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                        get_noc_addr(noc_x_start, noc_y_start, target_address),  // data write address
-                        get_noc_addr(
-                            noc_x_start, noc_y_start, notification_mailbox_address),  // atomic increment address
-                        1,                                                            // val: increment by 1
-                        std::numeric_limits<uint16_t>::max(),                         // wrap: max value
-                        true                                                          // flush
-                    },
-                    1,  // num_hops
-                    0   // route_id
-                );
-            } else {
-                fabric_unicast_noc_unicast_atomic_inc(
-                    &connection,
-                    packet_header,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                        get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
-                        1,                                     // val: increment by 1
-                        std::numeric_limits<uint16_t>::max(),  // wrap: max value
-                        true                                   // flush
-                    },
-                    1,  // num_hops
-                    0   // route_id
-                );
+            switch (noc_send_type) {
+                case NOC_UNICAST_ATOMIC_INC: {
+                    fabric_unicast_noc_unicast_atomic_inc(
+                        &connection,
+                        packet_header,
+                        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                            get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
+                            1,
+                            std::numeric_limits<uint16_t>::max(),
+                            true},
+                        1,
+                        0  // route_id
+                    );
+                } break;
+                case NOC_FUSED_UNICAST_ATOMIC_INC: {
+                    fabric_unicast_noc_fused_unicast_with_atomic_inc(
+                        &connection,
+                        packet_header,
+                        source_l1_buffer_address,
+                        packet_payload_size_bytes,
+                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                            get_noc_addr(noc_x_start, noc_y_start, target_address),
+                            get_noc_addr(noc_x_start, noc_y_start, notification_mailbox_address),
+                            1,
+                            std::numeric_limits<uint16_t>::max(),
+                            true},
+                        1,
+                        0  // route_id
+                    );
+                } break;
+                default: {
+                    ASSERT(false);
+                } break;
             }
         }
         noc_async_writes_flushed();
