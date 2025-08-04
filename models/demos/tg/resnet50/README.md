@@ -15,7 +15,7 @@ ResNet50 is a deep convolutional neural network architecture with 50 layers, des
 
 + To run the demo use:
 ```python
-WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/tg/resnet50/demo/demo.py::test_demo_sample
+pytest --disable-warnings models/demos/tg/resnet50/demo/demo.py::test_demo_sample
 ```
 - Where 16 is the batch size per device, and `models/demos/ttnn_resnet/demo/images/` is where the images are located.
 - Our model supports batch size of 2 and 1 as well, however the demo focuses on batch size 16 per device which has the highest throughput among the three options.
@@ -24,7 +24,7 @@ This demo includes preprocessing, postprocessing and inference time for batch si
 
 + Our second demo is designed to run ImageNet dataset, run this with
 ```python
-WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/demos/tg/resnet50/demo/demo.py::test_demo_imagenet
+pytest --disable-warnings models/demos/tg/resnet50/demo/demo.py::test_demo_imagenet
 ```
 - The 16 refers to batch size per device here and 100 is the number of iterations(batches), hence the model will process 100 batches of size 512, total of 51200 images per device.
 - Note that the first time the model is run, ImageNet images must be downloaded from huggingface and stored in  `models/demos/ttnn_resnet/demo/images/`; therefore you need to login to huggingface using your token: `huggingface-cli login` or by setting the token with the command `export HF_TOKEN=<token>`

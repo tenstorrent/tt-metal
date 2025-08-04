@@ -10,7 +10,6 @@ from loguru import logger
 # Set flags for CI, if CI environment is setup
 if os.getenv("CI") == "true":
     os.environ["TT_METAL_ASYNC_DEVICE_QUEUE"] = "1"
-    os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
 
 import ttnn
 from models.common.rmsnorm import RMSNorm as TtRMSNorm

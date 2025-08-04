@@ -11,10 +11,6 @@ The entry point to Swin_S model is swin_s in `models/experimental/swin_s/tt/tt_s
 model picks up weights from "IMAGENET1K_V1" as mentioned [here](https://github.com/pytorch/vision/blob/main/torchvision/models/swin_transformer.py) under Swin_S_Weights
 
 ## How to Run:
-If running on Wormhole N300 (not required for N150 or Blackhole), the following environment variable needs to be set as the model requires at least 8x8 core grid size:
-```sh
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-```
 
 To obtain the perf reports through profiler, please build with the following command:
 ```
