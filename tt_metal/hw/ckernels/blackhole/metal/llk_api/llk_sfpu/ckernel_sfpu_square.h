@@ -1,16 +1,13 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "ckernel.h"
-#include "ckernel_defs.h"
+#include "sfpi.h"
+#include "ckernel_sfpu_mul_int32.h"
 
-using namespace sfpi;
-
-namespace ckernel {
-namespace sfpu {
+namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_square() {
@@ -25,5 +22,10 @@ inline void calculate_square() {
     }
 }
 
-}  // namespace sfpu
-}  // namespace ckernel
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_square_int32() {
+    constexpr uint dst_offset = 0;
+    mul_int32<APPROXIMATION_MODE, ITERATIONS>(dst_offset);
+}
+
+}  // namespace ckernel::sfpu
