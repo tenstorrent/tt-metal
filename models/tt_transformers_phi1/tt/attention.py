@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
+from models.common.rmsnorm import RMSNorm, LayerNorm
 from models.tt_transformers_phi1.tt.ccl import tt_all_gather, tt_all_reduce
 from models.tt_transformers_phi1.tt.model_config import OpGroup, TensorGroup
 
@@ -270,7 +270,7 @@ class Attention(LightweightModule):
             self.q_norm = lambda x, mode: x
 
         if f"{k_norm_str}.weight" in self.state_dict:
-            fn_k_norm = RMSNorm(
+            fn_k_norm = LayerNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
                 eps=configuration.norm_eps,

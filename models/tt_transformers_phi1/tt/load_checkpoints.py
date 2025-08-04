@@ -138,8 +138,8 @@ def map_hf_to_meta_keys(loaded_weights):
         "model.layers.{layer}.layernorm.bias": "layers.{layer}.attention_norm.bias",
         "lm_head.bias": "output.bias",
         "model.layers.{layer}.input_layernorm.bias": "layers.{layer}.attention_norm.bias",
-        "model.final_layernorm.weight": "layers.norm.weight",
-        "model.final_layernorm.bias": "layers.norm.bias",
+        "model.final_layernorm.weight": "norm.weight",
+        "model.final_layernorm.bias": "norm.bias",
     }
 
     meta_state_dict = {}
