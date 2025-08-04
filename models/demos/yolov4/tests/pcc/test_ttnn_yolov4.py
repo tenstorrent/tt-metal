@@ -12,6 +12,7 @@ from models.demos.yolov4.common import (
     YOLOV4_BOXES_PCC,
     YOLOV4_BOXES_PCC_BLACKHOLE,
     YOLOV4_CONFS_PCC,
+    YOLOV4_L1_SMALL_SIZE,
     image_to_tensor,
     load_image,
     load_torch_model,
@@ -72,7 +73,7 @@ def run_yolov4(device, model_location_generator, use_pretrained_weight, resoluti
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 16384}],
+    [{"l1_small_size": YOLOV4_L1_SMALL_SIZE}],
     indirect=True,
     ids=["0"],
 )
