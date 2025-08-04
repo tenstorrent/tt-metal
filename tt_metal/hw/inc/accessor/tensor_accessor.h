@@ -361,15 +361,14 @@ public:
     }
 
     ShardPagesAddressIterator& operator+=(difference_type steps) {
-        if constexpr (!CheckBounds) {
-            current_page_id_in_shard_ += steps;
+        do {
             current_noc_addr_ += steps * accessor_.page_size;
-            ASSERT(current_page_id_in_shard_ < accessor_.dspec().shard_volume());
-            return *this;
-        } else {
-            // TODO: Implement bounds checking
-            return *this;
-        }
+            current_page_id_in_shard_ += steps;
+            if (current_page_id_in_shard_ >= accessor_.dspec().shard_volume()) {
+                break;
+            }
+        } while (!update_current_page_coords(steps));
+        return *this;
     }
 
     ShardPagesAddressIterator operator+(difference_type steps) const {
@@ -442,6 +441,7 @@ private:
         }
     }
 
+    // Optimized version for step=1 (most common case)
     bool update_current_page_coords() {
         if constexpr (!CheckBounds) {
             return true;
@@ -464,7 +464,37 @@ private:
             for (uint32_t i = 0; i < dspec.rank(); ++i) {
                 global_page_coord_[i] = shard_coord_[i] * dspec.shard_shape()[i] + page_coord_within_shard_[i];
 
-                // Check bounds - some shards at edges might have fewer pages
+                // Check bounds - some shards at edges might have fewer pages (in case of padding)
+                if (global_page_coord_[i] >= dspec.tensor_shape()[i]) {
+                    return false;  // Page is outside tensor bounds
+                }
+            }
+
+            return true;  // Page is within tensor bounds
+        }
+    }
+
+    // Generic version for arbitrary steps
+    bool update_current_page_coords(uint32_t step) {
+        if constexpr (!CheckBounds) {
+            return true;
+        } else {
+            const auto& dspec = accessor_.dspec();
+
+            // Incrementally update page_coord_within_shard_ like a multi-dimensional counter
+            // Start from the rightmost (last) dimension and carry over when needed
+            uint32_t carry = step;
+            for (int i = dspec.rank() - 1; i >= 0 && carry > 0; --i) {
+                uint32_t new_coord = page_coord_within_shard_[i] + carry;
+                page_coord_within_shard_[i] = new_coord % dspec.shard_shape()[i];
+                carry = new_coord / dspec.shard_shape()[i];
+            }
+
+            // Update global coordinates based on updated page coordinates
+            for (uint32_t i = 0; i < dspec.rank(); ++i) {
+                global_page_coord_[i] = shard_coord_[i] * dspec.shard_shape()[i] + page_coord_within_shard_[i];
+
+                // Check bounds - some shards at edges might have fewer pages (in case of padding)
                 if (global_page_coord_[i] >= dspec.tensor_shape()[i]) {
                     return false;  // Page is outside tensor bounds
                 }
