@@ -1742,7 +1742,8 @@ process_gather_in0_program_and_create_override_variables(
 
     /* in0 - each multicast step sends 1/4 of data to all cores */
     uint32_t multicast_chunk_width_in_tiles = Kt_total / num_multicast_steps;  // 1/4 of K
-    uint32_t in0_CB_tiles = per_core_M * multicast_chunk_width_in_tiles;       // Buffer for 1/4 chunk
+    uint32_t in0_CB_tiles =
+        per_core_M * multicast_chunk_width_in_tiles * num_multicast_steps;  // Buffer for all 4 chunk
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
     log_info(
         tt::LogOp,
