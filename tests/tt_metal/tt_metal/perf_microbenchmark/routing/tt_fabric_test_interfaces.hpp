@@ -32,11 +32,12 @@ public:
     virtual FabricNodeId get_fabric_node_id(const MeshCoordinate& device_coord) const = 0;
     virtual FabricNodeId get_fabric_node_id(MeshId mesh_id, const MeshCoordinate& device_coord) const = 0;
     virtual MeshCoordinate get_device_coord(const FabricNodeId& node_id) const = 0;
-    virtual uint32_t get_worker_noc_encoding(const MeshCoordinate& device_coord, CoreCoord logical_core) const = 0;
-    virtual uint32_t get_worker_noc_encoding(const FabricNodeId& node_id, CoreCoord logical_core) const = 0;
+    virtual uint32_t get_worker_noc_encoding(CoreCoord logical_core) const = 0;
     virtual CoreCoord get_worker_grid_size() const = 0;
     virtual uint32_t get_worker_id(const FabricNodeId& node_id, CoreCoord logical_core) const = 0;
-    virtual std::vector<FabricNodeId> get_all_node_ids() const = 0;
+    virtual std::vector<FabricNodeId> get_local_node_ids() const = 0;
+    virtual std::vector<FabricNodeId> get_global_node_ids() const = 0;
+    virtual bool is_local_fabric_node_id(const FabricNodeId& id) const = 0;
     virtual uint32_t get_l1_unreserved_base() const = 0;
     virtual uint32_t get_l1_unreserved_size() const = 0;
     virtual uint32_t get_l1_alignment() const = 0;
@@ -108,6 +109,11 @@ public:
     virtual FabricNodeId get_neighbor_node_id(
         const FabricNodeId& src_node_id, const RoutingDirection& direction) const = 0;
     virtual bool validate_num_links_supported(uint32_t num_links) const = 0;
+};
+
+class IDistributedContextManager {
+    virtual uint32_t get_randomized_master_seed() const = 0;
+    virtual void barrier() const = 0;
 };
 
 }  // namespace fabric_tests

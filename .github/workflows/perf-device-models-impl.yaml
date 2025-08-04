@@ -172,7 +172,7 @@ jobs:
         with:
           model_name: "sentence_bert"
           commands: |
-            # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/sentence_bert/tests -m models_device_performance_bare_metal
+            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/sentence_bert/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -265,7 +265,8 @@ jobs:
         env:
           TRACY_NO_INVARIANT_CHECK: 1
         run: |
-          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_$(date +%Y_%m_%d).csv
+          CLEAN_NAME=$(echo "${{ matrix.test-info.name }}" | tr ' ' '-')
+          export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
@@ -275,12 +276,17 @@ jobs:
         run: |
           ls -hal ${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
 
+      - name: Clean test name for artifact
+        run: |
+          CLEAN_NAME=$(echo "${{ matrix.test-info.name }}" | tr ' ' '-')
+          echo "ARTIFACT_NAME=device-perf-report-csv-${{ matrix.test-info.test-type }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}-${CLEAN_NAME}" >> "$GITHUB_ENV"
+
       - name: Upload device perf report
         timeout-minutes: 5
         if: ${{ !cancelled() && steps.check-device-perf-report.conclusion == 'success' }}
         uses: actions/upload-artifact@v4
         with:
-          name: device-perf-report-csv-${{ matrix.test-info.test-type }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
+          name: ${{ env.ARTIFACT_NAME }}
           path: /work/${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main

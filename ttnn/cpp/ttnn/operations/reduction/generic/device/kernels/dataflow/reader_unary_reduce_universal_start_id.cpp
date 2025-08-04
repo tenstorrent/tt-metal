@@ -36,7 +36,7 @@ void kernel_main() {
     for (uint32_t i = start_id; i < start_id + num_tiles; i++) {
         cb_reserve_back(cb_id_in0, onetile);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        noc_async_read_tile(i, tensor_accessor, l1_write_addr);
+        noc_async_read_page(i, tensor_accessor, l1_write_addr);
         noc_async_read_barrier();
         cb_push_back(cb_id_in0, onetile);
     }

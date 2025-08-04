@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/core/span.hpp>
+#include <tt_stl/span.hpp>
 #include <device.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <algorithm>
@@ -29,6 +29,7 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/event/dispatch.hpp"
 #include "tt_metal/impl/device/dispatch.hpp"
+#include <tt-metalium/graph_tracking.hpp>
 
 enum class CoreType;
 
@@ -663,6 +664,10 @@ void write_sharded_buffer_to_core(
     // Currently since writing sharded tensors uses write_linear, we write the padded pages on width
     // Alternative write each page row into separate commands, or have a strided linear write
 
+    if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
+        return;
+    }
+
     dispatch_params.reset_params_for_core(core, core_page_mapping);
 
     while (dispatch_params.core_num_pages_remaining_to_write != 0) {
@@ -698,6 +703,11 @@ void write_to_device_buffer(
     CoreType dispatch_core_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
+
+    if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
+        return;
+    }
+
     const BufferDispatchConstants buf_dispatch_constants =
         generate_buffer_dispatch_constants(sysmem_manager, dispatch_core_type, cq_id);
 
@@ -789,6 +799,10 @@ BufferReadDispatchParams initialize_interleaved_buf_read_dispatch_params(
 template <typename T>
 void issue_read_buffer_dispatch_command_sequence(
     Buffer& buffer, T& dispatch_params, tt::stl::Span<const SubDeviceId> sub_device_ids, CoreType dispatch_core_type) {
+    if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(&buffer)) {
+        return;
+    }
+
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
     uint32_t num_worker_counters = sub_device_ids.size();
     tt::tt_metal::DeviceCommandCalculator calculator;

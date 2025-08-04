@@ -23,12 +23,12 @@ from ..tt.utils import assert_quality
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(("use_program_cache"), [False, True])
-def test_t5_encoder(*, device: ttnn.Device, use_program_cache: bool, model_name: bool) -> None:
+def test_t5_encoder(*, device: ttnn.Device, use_program_cache: bool, model_name: str) -> None:
     if use_program_cache:
-        ttnn.enable_program_cache(device)
+        device.enable_program_cache()
 
     hf_model = T5EncoderModel.from_pretrained(
-        f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="text_encoder_3"
+        f"stabilityai/stable-diffusion-3.5-{model_name}", subfolder="text_encoder_3", local_files_only=True
     )
 
     with torch.device("meta"):
@@ -72,15 +72,15 @@ def test_t5_encoder(*, device: ttnn.Device, use_program_cache: bool, model_name:
     tt_tokens = tt_tokens_host.to(device)
 
     logger.info("compiling...")
-    tt_model(tt_tokens)
+    tt_model(tt_tokens, device)
 
     logger.info("executing...")
     start_time = time.time()
-    tt_output = tt_model(tt_tokens)
+    tt_output = tt_model(tt_tokens, device)
     logger.info(f"TT-NN runtime: {time.time() - start_time}")
     logger.info("done...")
 
     tt_output_torch = ttnn.to_torch(tt_output)
 
     assert output.shape == tt_output_torch.shape
-    assert_quality(output, tt_output, pcc=0.945)
+    assert_quality(output, tt_output_torch, pcc=0.945)

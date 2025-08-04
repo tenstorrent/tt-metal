@@ -27,10 +27,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
     uint32_t W = ashape[-1];
     uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
     uint32_t bC = bshape.rank() >= 3 ? bshape[-3] : 1;
-    uint32_t bH = bshape[-2];
-    uint32_t bW = bshape[-1];
     uint32_t NC = N * C;
-    uint32_t HW = H * W;
 
     uint32_t Wt = W / TILE_WIDTH;
     uint32_t Ht = H / TILE_HEIGHT;
@@ -101,7 +98,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
     tt_metal::CircularBufferConfig src1_cb_config =
         tt_metal::CircularBufferConfig(num_input_tiles * src1_single_tile_size, {{src1_cb_index, src1_cb_data_format}})
             .set_page_size(src1_cb_index, src1_single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_device_cores, src1_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_device_cores, src1_cb_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = output_sharded ? num_tiles_per_shard : 2;
@@ -245,10 +242,7 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
         uint32_t W = ashape[-1];
         uint32_t bN = bshape.rank() >= 4 ? bshape[-4] : 1;
         uint32_t bC = bshape.rank() >= 3 ? bshape[-3] : 1;
-        uint32_t bH = bshape[-2];
-        uint32_t bW = bshape[-1];
         uint32_t NC = N * C;
-        uint32_t HW = H * W;
 
         uint32_t Wt = W / TILE_WIDTH;
         uint32_t Ht = H / TILE_HEIGHT;

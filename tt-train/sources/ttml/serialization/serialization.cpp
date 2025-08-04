@@ -82,16 +82,13 @@ void write_ttnn_tensor(MsgPackFile& file, std::string_view name, const tt::tt_me
     // once we decide to use other parallelization techniques (tensor parallel, FSDP) we need to update this code
     if (data_type == tt::tt_metal::DataType::BFLOAT16) {
         auto* device = &ttml::autograd::ctx().get_device();
-        ttml::core::MeshToXTensorVariant<float> composer = ttml::core::VectorMeshToXTensor<float>(device->shape());
-        auto data_all_devices = ttml::core::to_xtensor<float>(tensor, composer);
+        auto data_all_devices = ttml::core::to_xtensor<float>(tensor, core::IdentityComposer{});
         // pick weights from first device
         auto data = data_all_devices.front();
         file.put(std::string(name) + "/data", std::span<const float>(data.data(), data.size()));
     } else if (data_type == tt::tt_metal::DataType::UINT32) {
         auto* device = &ttml::autograd::ctx().get_device();
-        ttml::core::MeshToXTensorVariant<uint32_t> composer =
-            ttml::core::VectorMeshToXTensor<uint32_t>(device->shape());
-        auto data_all_devices = ttml::core::to_xtensor<uint32_t>(tensor, composer);
+        auto data_all_devices = ttml::core::to_xtensor<uint32_t>(tensor, ttml::core::IdentityComposer{});
         // pick weights from first device
         auto data = data_all_devices.front();
         file.put(std::string(name) + "/data", std::span<const uint32_t>(data.data(), data.size()));

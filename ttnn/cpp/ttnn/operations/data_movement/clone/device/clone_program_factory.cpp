@@ -43,7 +43,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     uint32_t aligned_input_unit_size = round_up_to_mul32(input_unit_size);
     auto src_cb_config = CircularBufferConfig(2 * aligned_input_unit_size, {{src_cb_id, input_data_format}})
                              .set_page_size(src_cb_id, aligned_input_unit_size);
-    auto src_cb = CreateCircularBuffer(program, all_cores, src_cb_config);
+    CreateCircularBuffer(program, all_cores, src_cb_config);
 
     uint32_t dst_cb_id = src_cb_id;
     if (convert_dtype) {
@@ -51,7 +51,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
         uint32_t aligned_output_unit_size = round_up_to_mul32(output_unit_size);
         auto dst_cb_config = CircularBufferConfig(2 * aligned_output_unit_size, {{dst_cb_id, output_data_format}})
                                  .set_page_size(dst_cb_id, aligned_output_unit_size);
-        auto dst_cb = CreateCircularBuffer(program, all_cores, dst_cb_config);
+        CreateCircularBuffer(program, all_cores, dst_cb_config);
     }
 
     auto input_buffer = input.buffer();
