@@ -12,6 +12,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -93,10 +94,8 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
     };
 
     // Reader compile-time args
-    uint32_t src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (uint32_t)std::log2<decltype(stick_size)>(stick_size) : 0;
-    std::vector<uint32_t> reader_compile_time_args = {src0_is_dram, stick_size_is_power_of_two, log2_stick_size};
+    std::vector<uint32_t> reader_compile_time_args = {stick_size};
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index, out_is_dram};
@@ -489,10 +488,8 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
 
     /** reader
      */
-    uint32_t src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(block_size_nbytes);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (uint32_t)std::log2(block_size_nbytes) : 0;
-    std::vector<uint32_t> reader_ct_args = {src0_is_dram, stick_size_is_power_of_two, log2_stick_size};
+    std::vector<uint32_t> reader_ct_args = {block_size_nbytes};
+    TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/tilize/device/kernels/dataflow/"
