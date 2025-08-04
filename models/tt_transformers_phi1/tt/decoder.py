@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
+from models.common.rmsnorm import RMSNorm, LayerNorm
 from models.tt_transformers_phi1.tt.attention import Attention
 from models.tt_transformers_phi1.tt.distributed_norm import DistributedNorm
 from models.tt_transformers_phi1.tt.mlp import MLP
@@ -62,7 +62,7 @@ class TransformerBlock(LightweightModule):
             model_config=self.model_config,
         )
         self.attention_norm = DistributedNorm(
-            RMSNorm(
+            LayerNorm(
                 device=mesh_device,
                 dim=args.dim,
                 eps=args.norm_eps,
@@ -79,24 +79,26 @@ class TransformerBlock(LightweightModule):
             args,
             TG=args.is_galaxy,
         )
-        self.ff_norm = DistributedNorm(
-            RMSNorm(
-                device=mesh_device,
-                dim=args.dim,
-                eps=args.norm_eps,
-                state_dict=state_dict,
-                state_dict_prefix=args.get_state_dict_prefix("", layer_num),
-                weight_cache_path=None if args.dummy_weights else weight_cache_path,
-                weight_dtype=ttnn.bfloat16,
-                weight_key="ffn_norm",
-                is_distributed=self.args.is_distributed_norm,
-                sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
-                sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
-                ccl_topology=self.args.ccl_topology(),
-            ),
-            args,
-            TG=args.is_galaxy,
-        )
+        ffn_norm_str = f"layers.{self.layer_num}.ffn_norm"
+        if f"{ffn_norm_str}.weight" in self.state_dict:
+            self.ff_norm = DistributedNorm(
+                LayerNorm(
+                    device=mesh_device,
+                    dim=args.dim,
+                    eps=args.norm_eps,
+                    state_dict=state_dict,
+                    state_dict_prefix=args.get_state_dict_prefix("", layer_num),
+                    weight_cache_path=None if args.dummy_weights else weight_cache_path,
+                    weight_dtype=ttnn.bfloat16,
+                    weight_key="ffn_norm",
+                    is_distributed=self.args.is_distributed_norm,
+                    sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
+                    sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
+                    ccl_topology=self.args.ccl_topology(),
+                ),
+                args,
+                TG=args.is_galaxy,
+            )
 
     def forward(
         self,
@@ -118,6 +120,7 @@ class TransformerBlock(LightweightModule):
         ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)
+        x_new = x
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
             attn_in,
@@ -130,28 +133,61 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
-        # Here x and attn_out are both fractured across devices
-        h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
-        ttnn.deallocate(attn_out)
-        if mode == "prefill":
-            x.deallocate(True)
 
-        # Norms take fractured inputs and output replicated across devices
-        ff_in = self.ff_norm(h, mode)
-        if TG and mode == "decode":
-            ff_in = ttnn.to_memory_config(ff_in, memory_config=self.model_config["MLP_ACT_MEMCFG"])
+        
+        # # Here x and attn_out are both fractured across devices
+        # h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
+        # ttnn.deallocate(attn_out)
+        # if mode == "prefill":
+        #     x.deallocate(True)
+
+        # # Norms take fractured inputs and output replicated across devices
+        # ff_in = self.ff_norm(h, mode)
+        # if TG and mode == "decode":
+        #     ff_in = ttnn.to_memory_config(ff_in, memory_config=self.model_config["MLP_ACT_MEMCFG"])
+        # # MLP takes replicated inputs and produces fractured outputs
+        # ff_out = self.feed_forward.forward(ff_in, mode)
+        # # ff_out and h are both fractured across devices
+        # activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
+        #     decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
+        # )
+        # out = ttnn.add(
+        #     h,
+        #     ff_out,
+        #     memory_config=skip_mem_cfg,
+        #     dtype=self.args.ccl_dtype
+        #     if TG and not self.args.is_distributed_norm(mode)
+        #     else activation_dtype or ttnn.bfloat16,
+        # )
+        # return out  # fractured across devices
+
+        input_mem_cfg = self.norm.sharded_output_config if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        x = ttnn.all_gather(x, dim=3, num_links=1, topology=self.args.ccl_topology(), memory_config=input_mem_cfg)
         # MLP takes replicated inputs and produces fractured outputs
-        ff_out = self.feed_forward.forward(ff_in, mode)
-        # ff_out and h are both fractured across devices
+        feed_forward_hidden_states = self.feed_forward.forward(x, mode)
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
         )
+        # hidden_states = attn_out+ feed_forward_hidden_states + x
         out = ttnn.add(
-            h,
-            ff_out,
+            attn_out,
+            feed_forward_hidden_states,
             memory_config=skip_mem_cfg,
             dtype=self.args.ccl_dtype
             if TG and not self.args.is_distributed_norm(mode)
             else activation_dtype or ttnn.bfloat16,
         )
+        out = ttnn.add(
+            out,
+            x_new,
+            # memory_config=skip_mem_cfg,
+            # dtype=self.args.ccl_dtype
+            # if TG and not self.args.is_distributed_norm(mode)
+            # else activation_dtype or ttnn.bfloat16,
+        )
+
+        ttnn.deallocate(attn_out)
+        ttnn.deallocate(feed_forward_hidden_states)
+        ttnn.deallocate(x_new)
+
         return out  # fractured across devices

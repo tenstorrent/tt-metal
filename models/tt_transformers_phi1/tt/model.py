@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
+from models.common.rmsnorm import RMSNorm, LayerNorm
 from models.tt_transformers_phi1.tt.common import copy_host_to_device
 from models.tt_transformers_phi1.tt.decoder import TransformerBlock
 from models.tt_transformers_phi1.tt.distributed_norm import DistributedNorm
@@ -55,6 +55,7 @@ class Transformer(LightweightModule):
             args.rope_theta,
             args.rope_scaling_factor,
             args.orig_context_len,
+            args.partial_rotary_factor,
         )
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
@@ -73,7 +74,7 @@ class Transformer(LightweightModule):
             for i in tqdm(range(self.n_layers))
         ]
         self.norm = DistributedNorm(
-            RMSNorm(
+            LayerNorm(
                 device=mesh_device,
                 dim=args.dim,
                 eps=args.norm_eps,

@@ -26,6 +26,7 @@ class RotarySetup(LightweightModule):
         rope_theta: float,
         scale_factor: float,  # use None to disable rope scaling
         orig_context_len: int,  # only used if scaling enabled
+        partial_rotary_factor: float = 1.0,  # use 1.0 for full rotary, < 1.0 for partial rotary
         datatype=ttnn.bfloat16,
     ):
         super().__init__()
@@ -33,6 +34,7 @@ class RotarySetup(LightweightModule):
         self.batch_size = batch_size
         self.head_dim = head_dim
         self.device = device
+        self.partial_rotary_factor = partial_rotary_factor
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
         if self.num_devices == 32:
@@ -43,7 +45,7 @@ class RotarySetup(LightweightModule):
 
         # Generate the cos/sin matrices needed for ttnn.embedding op
         cos_matrix, sin_matrix = compute_gather_cos_sin(
-            dhead=head_dim,
+            dhead=int (head_dim * partial_rotary_factor),
             end=max_seq_len * 2,
             theta=rope_theta,
             scale_factor=scale_factor,
@@ -66,11 +68,23 @@ class RotarySetup(LightweightModule):
             mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
 
-        self.batch_grid = (
-            ttnn.CoreGrid(y=4, x=8)
-            if ttnn.get_arch_name() == "blackhole"
-            else ttnn.num_cores_to_corerangeset(batch_size, self.core_grid, row_wise=True)
-        )
+        # Fix: Use proper core grid based on batch size for blackhole architecture
+        if ttnn.get_arch_name() == "blackhole":
+            # Use appropriate core grid based on batch size to avoid L1 memory overflow
+            if batch_size == 1:
+                self.batch_grid = ttnn.CoreGrid(y=1, x=1)
+            elif batch_size <= 4:
+                self.batch_grid = ttnn.CoreGrid(y=1, x=batch_size)
+            elif batch_size <= 8:
+                self.batch_grid = ttnn.CoreGrid(y=1, x=8)
+            elif batch_size <= 16:
+                self.batch_grid = ttnn.CoreGrid(y=2, x=8)
+            elif batch_size <= 32:
+                self.batch_grid = ttnn.CoreGrid(y=4, x=8)
+            else:
+                raise ValueError(f"Batch size {batch_size} not supported for blackhole architecture")
+        else:
+            self.batch_grid = ttnn.num_cores_to_corerangeset(batch_size, self.core_grid, row_wise=True)
         # Generate the transformation matrix
         trans_mat = get_rot_transformation_mat(dhead=ttnn.TILE_SIZE).repeat(
             1,
@@ -180,7 +194,7 @@ class RotarySetup(LightweightModule):
             sin = sin[:, : self.batch_size_per_device_group, :, :]
 
         mem_config = ttnn.create_sharded_memory_config(
-            shape=(ttnn.TILE_SIZE, self.head_dim),
+            shape=(ttnn.TILE_SIZE, int(self.head_dim * self.partial_rotary_factor)),
             core_grid=self.batch_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
