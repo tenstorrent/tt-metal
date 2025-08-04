@@ -322,9 +322,15 @@ operation::ProgramWithCallbacks layernorm_multi_core(
                                   : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                     "reader_unary_interleaved_ln.cpp";
     reader_kernel_path = large_tensor_needed
+#ifdef LAYERNORM_WELFORD
                              ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                "reader_unary_interleaved_ln_large_tensor.cpp"
+#else
+                             ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow_legacy/"
+                               "reader_unary_interleaved_ln_large_tensor.cpp"
+#endif
                              : reader_kernel_path;
+
     auto reader_kernels_id = CreateKernel(
         program,
         reader_kernel_path,
@@ -350,8 +356,10 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         large_tensor_needed and !use_row_major_kernel and !rms_norm
             ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_large_tensor.cpp"
 #ifdef LAYERNORM_WELFORD
+            ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_large_tensor.cpp"
             : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp",
 #else
+            ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute_legacy/layernorm_large_tensor.cpp"
             : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute_legacy/layernorm.cpp",
 #endif
         all_cores,
