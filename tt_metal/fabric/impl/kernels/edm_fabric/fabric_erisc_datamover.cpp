@@ -538,7 +538,7 @@ FORCE_INLINE uint32_t get_processing_mask(
     // prepares the mask for mcast and returns if mcast is active or not
     auto get_mask_for_mcast = [&](uint32_t& mask) -> bool {
         bool mcast_active = false;
-        // need to consume locally if mcast is active
+        // need to consume locally as well
         mask |= get_mask_for_direction(static_cast<eth_chan_directions>(my_direction));
         for (uint8_t i = eth_chan_directions::EAST; i < eth_chan_directions::COUNT; i++) {
             if (packet_header->mcast_params[i]) {
@@ -553,7 +553,8 @@ FORCE_INLINE uint32_t get_processing_mask(
     uint32_t mask = 0;
 
     if (packet_header->is_mcast_active) {
-        packet_header->is_mcast_active = get_mask_for_mcast(mask);
+        // we dont deactivate the mcast flag once set
+        get_mask_for_mcast(mask);
     } else {
         auto dest_chip_id = packet_header->dst_start_chip_id;
         auto dest_mesh_id = packet_header->dst_start_mesh_id;
@@ -675,16 +676,16 @@ FORCE_INLINE void forward_to_downstream_edm(
     ROUTING_FIELDS_TYPE cached_routing_fields,
     std::array<tt::tt_fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>, NUM_USED_RECEIVER_CHANNELS>& downstream_edm_interface,
     uint8_t transaction_id) {
-    // TODO: this check breaks inter-mesh routing since we do not route in a global dimension-ordered routing fashion
-    // need to relax this constraint for inter-mesh links maybe?
-    /*
-    if constexpr (
-        (my_direction == eth_chan_directions::EAST || my_direction == eth_chan_directions::WEST) &&
-        (downstream_direction == eth_chan_directions::NORTH || downstream_direction == eth_chan_directions::SOUTH)) {
-        // E/W routers cannot forward to N/S because of dimension order routing
-        // TODO: should we assert or just return?
-        return;
-    }*/
+    // Dimension-order routing contraint: ignore any packets that make a turn from the E/W axis to N/S axis
+    // Inter-mesh routers are excluded from this constraint as they can be along any dimension
+    if constexpr (!is_intermesh_router) {
+        if constexpr (
+            (my_direction == eth_chan_directions::EAST || my_direction == eth_chan_directions::WEST) &&
+            (downstream_direction == eth_chan_directions::NORTH ||
+             downstream_direction == eth_chan_directions::SOUTH)) {
+            return;
+        }
+    }
 
     uint16_t payload_size_bytes = packet_start->payload_size_bytes;
 
@@ -696,7 +697,12 @@ FORCE_INLINE void forward_to_downstream_edm(
             packet_start, cached_routing_fields);
 
         size_t idx = get_downstream_edm_interface_index<rx_channel_id, downstream_direction>();
+#if defined(DYNAMIC_ROUTING_ENABLED)
+        constexpr bool increment_pointers = !has_both_axes || (downstream_direction == eth_chan_directions::NORTH ||
+                                                               downstream_direction == eth_chan_directions::SOUTH);
+#else
         constexpr bool increment_pointers = !has_both_axes;
+#endif
         forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, increment_pointers>(
             packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface[idx], transaction_id);
     }

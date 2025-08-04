@@ -1027,6 +1027,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         this->fuse_receiver_flush_and_completion_ptr,
         fabric_context.need_deadlock_avoidance_support(this->direction),
         this->dateline_connection,
+        control_plane.is_intermesh_eth_link(local_physical_chip_id, this->my_eth_core_logical),
         is_handshake_master,
         this->handshake_address,
         this->channel_buffer_size,
@@ -1121,7 +1122,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         0x00c0ffee};
 
     // insert the sender channel num buffers
-    const size_t sender_channel_num_buffers_idx = 12;
+    const size_t sender_channel_num_buffers_idx = 13;
     ct_args.insert(
         ct_args.begin() + sender_channel_num_buffers_idx,
         this->sender_channels_num_buffers.begin(),
