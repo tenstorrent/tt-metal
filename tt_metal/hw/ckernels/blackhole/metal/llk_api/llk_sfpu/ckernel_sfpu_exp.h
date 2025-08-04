@@ -13,6 +13,7 @@ namespace sfpu {
 
 sfpi_inline sfpi::vFloat sfpu_exp(sfpi::vFloat val) { return _sfpu_exp_(val); }
 
+template <bool is_fp32_dest_acc_en = false>
 sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
     sfpi::vFloat y = 0.0f;
     v_if(val > -88.0f) {
@@ -22,7 +23,7 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
 
         constexpr float CONST_D1 = 0.40196114e-7f;
         constexpr int CONST_D2 = 0xf94ee7;
-        constexpr int CONST_D3 = 0x560;
+        constexpr int CONST_D3 = 0x560e;
 
         sfpi::vFloat d1 = sfpi::vFloat(CONST_D1);
         sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(CONST_D2) + zif, 0);
@@ -34,6 +35,10 @@ sfpi_inline sfpi::vFloat _sfpu_exp_21f_(sfpi::vFloat val) {
             sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), 127U + zii));  // restore exponent
 
         y = sfpi::reinterpret<sfpi::vFloat>(zii);
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            y = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
+        }
     }
     v_endif;
     return y;
@@ -44,7 +49,8 @@ template <
     bool FAST_APPROX,
     bool SCALE_EN = false,
     int ITERATIONS = 8,
-    bool SKIP_POSITIVE_CHECK = false>
+    bool SKIP_POSITIVE_CHECK = false,
+    bool is_fp32_dest_acc_en = false>
 void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_FP16B) {
     if constexpr (APPROXIMATION_MODE) {
         _calculate_exponential_<APPROXIMATION_MODE, SCALE_EN, ITERATIONS, FAST_APPROX, SKIP_POSITIVE_CHECK>(
@@ -55,7 +61,7 @@ void calculate_exponential(const uint exp_base_scale_factor = p_sfpu::kCONST_1_F
             if constexpr (SCALE_EN) {
                 val = val * sfpi::s2vFloat16b(exp_base_scale_factor);
             }
-            sfpi::vFloat result = _sfpu_exp_21f_(val);
+            sfpi::vFloat result = _sfpu_exp_21f_<is_fp32_dest_acc_en>(val);
             sfpi::dst_reg[0] = result;
             sfpi::dst_reg++;
         }
