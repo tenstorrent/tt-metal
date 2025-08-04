@@ -7,6 +7,7 @@
 #include <array>
 #include <vector>
 
+#include "tt_metal/fabric/fabric_context.hpp"
 #include <tt-metalium/mesh_graph.hpp>
 
 namespace tt::tt_fabric {
@@ -298,7 +299,7 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
         args.insert(args.end(), metadata_args.begin(), metadata_args.end());
     }
 
-    bool is_2d_fabric = (this->parameters.topology == Topology::Mesh);
+    bool is_2d_fabric = FabricContext::is_2D_topology(this->parameters.topology);
 
     // push chip send type
     if (!is_sync_config) {

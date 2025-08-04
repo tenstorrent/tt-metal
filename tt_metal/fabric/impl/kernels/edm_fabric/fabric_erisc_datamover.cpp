@@ -591,14 +591,12 @@ FORCE_INLINE size_t get_downstream_edm_interface_index() {
         if constexpr (rx_channel_id == 1) {
             // when we are on VC1, we stay on VC1 if traffic does not make turns
             if constexpr (
-                (my_direction == eth_chan_directions::NORTH || my_direction == eth_chan_directions::SOUTH) &&
-                (downstream_direction == eth_chan_directions::NORTH ||
-                 downstream_direction == eth_chan_directions::SOUTH)) {
-                downstream_edm_interface_index = NUM_USED_RECEIVER_CHANNELS - 1;
-            } else if constexpr (
-                (my_direction == eth_chan_directions::EAST || my_direction == eth_chan_directions::WEST) &&
-                (downstream_direction == eth_chan_directions::EAST ||
-                 downstream_direction == eth_chan_directions::WEST)) {
+                ((my_direction == eth_chan_directions::NORTH || my_direction == eth_chan_directions::SOUTH) &&
+                 (downstream_direction == eth_chan_directions::NORTH ||
+                  downstream_direction == eth_chan_directions::SOUTH)) ||
+                ((my_direction == eth_chan_directions::EAST || my_direction == eth_chan_directions::WEST) &&
+                 (downstream_direction == eth_chan_directions::EAST ||
+                  downstream_direction == eth_chan_directions::WEST))) {
                 downstream_edm_interface_index = NUM_USED_RECEIVER_CHANNELS - 1;
             }
         }
@@ -1648,10 +1646,16 @@ void populate_local_sender_channel_free_slots_stream_id_ordered_map(
     uint32_t has_downstream_edm_vc0_buffer_connection,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered) {
     if constexpr (is_2d_fabric) {
-        for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+        // setup VC0 credits (we have one extra stream reg for VC0 and hence can do +1)
+        for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS - 1; i++) {
             local_sender_channel_free_slots_stream_ids_ordered[i] = sender_channel_free_slots_stream_ids[i + 1];
         }
         local_sender_channel_free_slots_stream_ids_ordered[my_direction] = sender_channel_free_slots_stream_ids[0];
+        // setup VC1 credits (only if present)
+        if constexpr (NUM_SENDER_CHANNELS == MAX_NUM_SENDER_CHANNELS) {
+            local_sender_channel_free_slots_stream_ids_ordered[NUM_SENDER_CHANNELS - 1] =
+                vc1_sender_channel_free_slots_stream_id;
+        }
     } else {
         for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
             local_sender_channel_free_slots_stream_ids_ordered[i] = sender_channel_free_slots_stream_ids[i];
@@ -2154,8 +2158,7 @@ void kernel_main() {
         }
     }
 
-    static_assert(!enable_deadlock_avoidance || !is_2d_fabric, "2D mode does not yet support ring/torus");
-    if constexpr (enable_deadlock_avoidance && is_receiver_channel_serviced[NUM_USED_RECEIVER_CHANNELS - 1]) {
+    if constexpr (enable_deadlock_avoidance && is_receiver_channel_serviced[NUM_RECEIVER_CHANNELS - 1]) {
         if (has_downstream_edm_vc1_buffer_connection) {
             const auto local_sem_address_for_acks =
                 is_2d_fabric ? local_sem_for_acks_from_downstream_edm[NUM_USED_RECEIVER_CHANNELS - 1]
@@ -2339,7 +2342,7 @@ void kernel_main() {
             edm_index++;
             has_downstream_edm >>= 1;
         }
-        if constexpr (enable_deadlock_avoidance) {
+        if constexpr (enable_deadlock_avoidance && is_receiver_channel_serviced[0]) {
             if (has_downstream_edm_vc1_buffer_connection) {
                 open_downstream_edm_noc_interface(NUM_USED_RECEIVER_CHANNELS - 1);
             }

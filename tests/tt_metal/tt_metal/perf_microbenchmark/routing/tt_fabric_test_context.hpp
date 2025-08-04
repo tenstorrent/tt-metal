@@ -33,6 +33,7 @@ const std::string default_built_tests_dump_file = "built_tests.yaml";
 using TestFixture = tt::tt_fabric::fabric_tests::TestFixture;
 using TestDevice = tt::tt_fabric::fabric_tests::TestDevice;
 using TestConfig = tt::tt_fabric::fabric_tests::TestConfig;
+using TestFabricSetup = tt::tt_fabric::fabric_tests::TestFabricSetup;
 using TrafficParameters = tt::tt_fabric::fabric_tests::TrafficParameters;
 using TestTrafficConfig = tt::tt_fabric::fabric_tests::TestTrafficConfig;
 using TestTrafficSenderConfig = tt::tt_fabric::fabric_tests::TestTrafficSenderConfig;
@@ -282,7 +283,7 @@ public:
         }
     }
 
-    void open_devices(Topology topology, RoutingType routing_type) { fixture_->open_devices(topology, routing_type); }
+    void open_devices(const TestFabricSetup& fabric_setup) { fixture_->open_devices(fabric_setup); }
 
     void initialize_sync_memory() {
         if (!global_sync_) {
@@ -530,6 +531,8 @@ private:
             hops = traffic_config.hops;
             dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
                 traffic_config.src_node_id, hops.value(), traffic_config.parameters.chip_send_type);
+            log_info(
+                tt::LogTest, "for src: {}, from hops: {}, got dst nodes: {}", src_node_id, hops.value(), dst_node_ids);
         } else {
             dst_node_ids = traffic_config.dst_node_ids.value();
 

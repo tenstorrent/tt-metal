@@ -59,6 +59,16 @@ struct pair_hash {
     }
 };
 
+struct tuple_hash {
+    template <class T1, class T2, class T3>
+    std::size_t operator()(const std::tuple<T1, T2, T3>& t) const {
+        auto h1 = std::hash<T1>{}(std::get<0>(t));
+        auto h2 = std::hash<T2>{}(std::get<1>(t));
+        auto h3 = std::hash<T3>{}(std::get<2>(t));
+        return h1 ^ (h2 << 1) ^ (h3 << 2);
+    }
+};
+
 class TestFixture : public IDeviceInfoProvider, public IRouteManager, public IDistributedContextManager {
     static constexpr uint32_t ROW_DIM = 0;
     static constexpr uint32_t COL_DIM = 1;
@@ -69,6 +79,10 @@ class TestFixture : public IDeviceInfoProvider, public IRouteManager, public IDi
 
     static const std::unordered_map<std::pair<Topology, RoutingType>, tt::tt_fabric::FabricConfig, pair_hash>
         topology_to_fabric_config_map;
+
+    static const std::
+        unordered_map<std::tuple<Topology, std::string, RoutingType>, tt::tt_fabric::FabricConfig, tuple_hash>
+            torus_topology_to_fabric_config_map;
 
 public:
     void init(std::optional<PhysicalMeshConfig> physical_mesh_config = std::nullopt) {
@@ -84,14 +98,31 @@ public:
         return control_plane_ptr_->get_coord_range(local_mesh_id_, MeshScope::LOCAL);
     }
 
-    void open_devices(Topology topology, RoutingType routing_type) {
-        auto it = topology_to_fabric_config_map.find({topology, routing_type});
-        TT_FATAL(
-            it != topology_to_fabric_config_map.end(),
-            "Unsupported topology: {} with routing type: {}",
-            topology,
-            routing_type);
-        auto new_fabric_config = it->second;
+    void open_devices(const TestFabricSetup& fabric_setup) {
+        const auto& topology = fabric_setup.topology;
+        const auto& routing_type = fabric_setup.routing_type.value();
+
+        FabricConfig new_fabric_config;
+        if (topology == Topology::Torus) {
+            const auto& torus_config = fabric_setup.torus_config.value();
+            auto it = torus_topology_to_fabric_config_map.find({topology, torus_config, routing_type});
+            TT_FATAL(
+                it != torus_topology_to_fabric_config_map.end(),
+                "Unsupported topology: {} with torus_config: {} and routing type: {}",
+                topology,
+                torus_config,
+                routing_type);
+            new_fabric_config = it->second;
+        } else {
+            auto it = topology_to_fabric_config_map.find({topology, routing_type});
+            TT_FATAL(
+                it != topology_to_fabric_config_map.end(),
+                "Unsupported topology: {} with routing type: {}",
+                topology,
+                routing_type);
+            new_fabric_config = it->second;
+        }
+
         if (new_fabric_config != current_fabric_config_) {
             if (are_devices_open_) {
                 log_info(tt::LogTest, "Closing devices and switching to new fabric config: {}", new_fabric_config);
@@ -192,9 +223,11 @@ public:
         return control_plane_ptr_->get_fabric_context().get_fabric_max_payload_size_bytes();
     }
 
-    bool is_2d_fabric() const override { return topology_ == Topology::Mesh; }
+    bool is_2d_fabric() const override { return control_plane_ptr_->get_fabric_context().is_2D_routing_enabled(); }
 
-    bool use_dynamic_routing() const override { return routing_type_ == RoutingType::Dynamic; }
+    bool use_dynamic_routing() const override {
+        return control_plane_ptr_->get_fabric_context().is_dynamic_routing_enabled();
+    }
 
     /**
      * This function takes hop information and computes the actual destination nodes that would be visited during a ring
@@ -647,6 +680,7 @@ public:
                 num_devices = mesh_shape_[NS_DIM] + mesh_shape_[EW_DIM] - 1;
                 return num_devices;
             }
+            case tt::tt_fabric::Topology::Torus:
             case tt::tt_fabric::Topology::Ring: {
                 if (wrap_around_mesh_) {
                     // sync using full ring mcast, ie, mcast on both forward/backward path.
@@ -758,7 +792,7 @@ public:
                     split_hops.push_back({{dir, hop_count}});
                 }
             }
-        } else if (this->topology_ == Topology::Mesh) {
+        } else if (this->topology_ == Topology::Mesh || this->topology_ == Topology::Torus) {
             // For mesh topology, handle all cases including three-entry case
             split_hops.reserve(8);
 
@@ -865,7 +899,7 @@ public:
                     return direction;
                 }
             }
-        } else if (topology_ == Topology::Mesh) {
+        } else if (topology_ == Topology::Mesh || topology_ == Topology::Torus) {
             // TODO: update this logic once 2D mcast is supported
             // for now we return the first direction that is non-zero
             // for 2D, since we use dimension order routing, lookup the directions in the order of N, S, E, W
@@ -913,6 +947,7 @@ public:
         uint32_t global_sync_val = 0;
 
         switch (topology_) {
+            case tt::tt_fabric::Topology::Torus:
             case tt::tt_fabric::Topology::Ring: {
                 if (wrap_around_mesh_) {
                     // Get ring neighbors - returns nullopt for non-perimeter devices
@@ -1467,7 +1502,7 @@ private:
         const MeshCoordinate& src_coords, const MeshCoordinate& displacement) const {
         std::vector<uint32_t> coords(src_coords.dims(), 0);
         for (size_t i = 0; i < src_coords.dims(); ++i) {
-            coords[i] = src_coords[i] + displacement[i];
+            coords[i] = (src_coords[i] + displacement[i]) % mesh_shape_[i];
         }
         return MeshCoordinate(coords);
     }
@@ -1531,7 +1566,7 @@ private:
             displacements.push_back(get_displacement_from_hops({{RoutingDirection::S, hops[RoutingDirection::S]}}));
             displacements.push_back(get_displacement_from_hops({{RoutingDirection::E, hops[RoutingDirection::E]}}));
             displacements.push_back(get_displacement_from_hops({{RoutingDirection::W, hops[RoutingDirection::W]}}));
-        } else if (topology_ == Topology::Mesh) {
+        } else if (topology_ == Topology::Mesh || topology_ == Topology::Torus) {
             displacements.reserve(4);
             displacements.push_back(get_displacement_from_hops(
                 {{RoutingDirection::N, hops[RoutingDirection::N]}, {RoutingDirection::E, hops[RoutingDirection::E]}}));
