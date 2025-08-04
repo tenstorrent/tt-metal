@@ -31,6 +31,8 @@ public:
         MeshDevice* mesh_device, uint32_t id, std::function<std::lock_guard<std::mutex>()> lock_api_function);
     ~SDMeshCommandQueue() override = default;
 
+    std::optional<MeshTraceId> trace_id() const override;
+
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) override;
 
