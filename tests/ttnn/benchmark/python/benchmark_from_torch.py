@@ -72,30 +72,25 @@ def test_benchmark_from_torch(
 ):
     if ttnn_layout == ttnn.ROW_MAJOR_LAYOUT and ttnn_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b]:
         pytest.skip("ROW_MAJOR_LAYOUT not supported with bfloat8_b/bfloat4_b")
-    with ttnn.tracy_zone(request.node.nodeid):
-        height = int(8096 / 16) * size_multiplier
-        width = int(8100 / 16) * size_multiplier
-        with ttnn.tracy_zone("startup tensor creation"):
-            if torch_dtype in [torch.int32, torch.uint8]:
-                torch_input_tensor = torch.randint(0, 100, (height, width), dtype=torch_dtype)
-            else:
-                torch_input_tensor = torch.rand((height, width), dtype=torch_dtype)
+    height = int(8096 / 16) * size_multiplier
+    width = int(8100 / 16) * size_multiplier
+    if torch_dtype in [torch.int32, torch.uint8]:
+        torch_input_tensor = torch.randint(0, 100, (height, width), dtype=torch_dtype)
+    else:
+        torch_input_tensor = torch.rand((height, width), dtype=torch_dtype)
 
-        def from_torch():
-            with ttnn.tracy_zone("bench body"):
-                ttnn_tensor = ttnn.from_torch(
-                    torch_input_tensor,
-                    device=device if use_device else None,
-                    dtype=ttnn_dtype,
-                    layout=ttnn_layout,
-                )
+    def from_torch():
+        ttnn_tensor = ttnn.from_torch(
+            torch_input_tensor,
+            device=device if use_device else None,
+            dtype=ttnn_dtype,
+            layout=ttnn_layout,
+        )
 
-                if not use_device:
-                    with ttnn.tracy_zone("moving to device"):
-                        moved = ttnn.to_device(ttnn_tensor, device=device)
+        if not use_device:
+            moved = ttnn.to_device(ttnn_tensor, device=device)
 
-        with ttnn.tracy_zone("benchmark run"):
-            benchmark.pedantic(from_torch, iterations=10, rounds=5, warmup_rounds=1)
+    benchmark.pedantic(from_torch, iterations=10, rounds=5, warmup_rounds=1)
 
 
 @pytest.mark.parametrize("use_device", [True, False])
@@ -144,25 +139,21 @@ def test_benchmark_to_torch(
 
     log = logging.getLogger(__name__)
 
-    with ttnn.tracy_zone(request.node.nodeid):
-        height = int(8096 / 16) * size_multiplier
-        width = int(8100 / 16) * size_multiplier
-        with ttnn.tracy_zone("create initial tensor"):
-            log.info("Create initial tensor")
-            match ttnn_dtype:
-                case ttnn.int32 | ttnn.uint8:
-                    tmp_torch = torch.randint(0, 100, (height, width), dtype=torch.int32)
+    height = int(8096 / 16) * size_multiplier
+    width = int(8100 / 16) * size_multiplier
+    log.info("Create initial tensor")
+    match ttnn_dtype:
+        case ttnn.int32 | ttnn.uint8:
+            tmp_torch = torch.randint(0, 100, (height, width), dtype=torch.int32)
 
-                case _:
-                    tmp_torch = torch.rand(height, width, dtype=torch.float32)
+        case _:
+            tmp_torch = torch.rand(height, width, dtype=torch.float32)
 
-            ttnn_input_tensor = ttnn.from_torch(tmp_torch, device=device, dtype=ttnn_dtype, layout=ttnn_layout)
+    ttnn_input_tensor = ttnn.from_torch(tmp_torch, device=device, dtype=ttnn_dtype, layout=ttnn_layout)
 
-            log.info("Tensor create OK")
+    log.info("Tensor create OK")
 
-        def to_torch():
-            with ttnn.tracy_zone("to_torch"):
-                ttnn.to_torch(ttnn_input_tensor, device=device if use_device else None, dtype=torch_dtype)
+    def to_torch():
+        ttnn.to_torch(ttnn_input_tensor, device=device if use_device else None, dtype=torch_dtype)
 
-        with ttnn.tracy_zone("run benchmark"):
-            benchmark.pedantic(to_torch, iterations=10, rounds=5, warmup_rounds=1)
+    benchmark.pedantic(to_torch, iterations=10, rounds=5, warmup_rounds=1)

@@ -390,19 +390,16 @@ def to_torch(
 
         else:
             if tensor.layout != ttnn.TILE_LAYOUT:
-                with ttnn.tracy_zone("to tile layout"):
-                    tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
+                tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
 
-            with ttnn.tracy_zone("typecast"):
-                tensor = ttnn.typecast(tensor, dtype=torch_dtype_to_ttnn_dtype[dtype])
+            tensor = ttnn.typecast(tensor, dtype=torch_dtype_to_ttnn_dtype[dtype])
 
             on_device_typecast = True
 
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, cq_id=cq_id)
 
-    with ttnn.tracy_zone("to_torch cpu"):
-        tensor = tensor.to_torch(mesh_composer=mesh_composer)
+    tensor = tensor.to_torch(mesh_composer=mesh_composer)
 
     if torch_rank is not None:
         while len(tensor.shape) > torch_rank:
@@ -413,8 +410,7 @@ def to_torch(
     torch_tensor = tensor
 
     if dtype is not None and not on_device_typecast:
-        with ttnn.tracy_zone("host-side typecast"):
-            torch_tensor = torch_tensor.to(dtype=dtype)
+        torch_tensor = torch_tensor.to(dtype=dtype)
 
     return torch_tensor
 

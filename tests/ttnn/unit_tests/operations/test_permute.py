@@ -357,8 +357,8 @@ def test_permute_4d_cn(device, shape, dtype):
     torch.manual_seed(2005)
     torch_tensor = random_torch_tensor(dtype, shape)
     input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_output_tensor = ttnn.permute(input_tensor, (1, 0, 2, 3))
-    output_tensor = ttnn.to_torch(ttnn_output_tensor)
+    output_tensor = ttnn.permute(input_tensor, (1, 0, 2, 3))
+    output_tensor = ttnn.to_torch(output_tensor)
     torch_output = torch.permute(torch_tensor, (1, 0, 2, 3))
     assert torch_output.shape == output_tensor.shape
     assert_with_pcc(torch_output, output_tensor, 0.9999)

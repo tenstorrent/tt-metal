@@ -39,8 +39,8 @@ def find_max_subblock(out_block_h, out_block_w):
 
 @pytest.mark.parametrize("n", [2])
 @pytest.mark.parametrize("c", [5])
-@pytest.mark.parametrize("h", [3])
-@pytest.mark.parametrize("w", [7])
+@pytest.mark.parametrize("h", [384])
+@pytest.mark.parametrize("w", [768])
 @pytest.mark.parametrize("tile_h", [1, 2, 4, 8, 16, 32])
 @pytest.mark.parametrize("tile_w", [16, 32])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
@@ -50,9 +50,6 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
         pytest.skip("transpose tile does not support tile height less than 16")
     # minimum tile_h = 4 for fbloat, as exponents are packed into uint32 (4 exponents minmum)
     torch.manual_seed(0)
-    import logging
-
-    logger = logging.getLogger()
     torch_input_tensor = torch.randn((n, c, h, w), dtype=torch.bfloat16)
     input_tensor = ttnn.from_torch(
         torch_input_tensor,
@@ -67,11 +64,6 @@ def test_tiny_tiles_bfloat(device, n, c, h, w, tile_h, tile_w, dtype, transpose_
         expected_pcc = 0.9999
     elif dtype == ttnn.bfloat4_b:
         expected_pcc = 0.989
-
-    # logger.debug(f"torch_input_tensor:\n{format_tensor_as_string(torch_input_tensor.tolist())}")
-    # logger.debug(f"input_tensor:\n{format_tensor_as_string(input_tensor.to_list())}")
-    # logger.debug(f"output_tensor:\n{format_tensor_as_string(output_tensor.tolist())}")
-
     assert_with_pcc(torch_input_tensor, output_tensor, expected_pcc)
 
 
