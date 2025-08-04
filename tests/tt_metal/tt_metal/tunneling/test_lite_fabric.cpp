@@ -113,9 +113,13 @@ TEST(Tunneling, LiteFabricInitWithMetal) {
     CHECK_TEST_REQS();
 
     auto devices = tt::tt_metal::detail::CreateDevices({0, 1});
+    auto desc = lite_fabric::GetSystemDescriptor2Devices(devices, 0, 1);
 
-    auto lite_fabric = lite_fabric::LaunchLiteFabricWithMetal(devices);
+    auto lite_fabric = lite_fabric::LaunchLiteFabricWithMetal(devices, desc);
+
+    lite_fabric::TerminateLiteFabric(tt::tt_metal::MetalContext::instance().get_cluster(), desc);
 
     tt::tt_metal::detail::WaitProgramDone(devices[0], *lite_fabric);
+
     tt::tt_metal::detail::CloseDevices(devices);
 }

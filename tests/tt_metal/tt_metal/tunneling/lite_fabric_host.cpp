@@ -10,14 +10,11 @@
 #include "fabric_lite.hpp"
 
 #include "kernel_types.hpp"
-#include "llrt.hpp"
 #include "program.hpp"
 #include "rtoptions.hpp"
-#include "tt_align.hpp"
 #include "tt_cluster.hpp"
 #include "assert.hpp"
 #include "context/metal_context.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "impl/kernels/kernel_impl.hpp"
@@ -26,6 +23,16 @@
 #include "lite_fabric_host.hpp"
 #include <umd/device/types/xy_pair.h>
 #include <tt-metalium/control_plane.hpp>
+
+namespace {
+uint32_t GetStateAddress() {
+    uint32_t state_addr =
+        tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_LITE_CONFIG) +
+        offsetof(lite_fabric::LiteFabricMemoryMap, config) + offsetof(lite_fabric::LiteFabricConfig, current_state);
+    return state_addr;
+}
+}  // namespace
 
 namespace lite_fabric {
 
@@ -43,7 +50,9 @@ uint32_t GetEthChannelMask(chip_id_t device_id) {
 }
 
 SystemDescriptor GetSystemDescriptor2Devices(
-    const auto& devices, chip_id_t mmio_device_id, chip_id_t connected_device_id) {
+    const std::map<chip_id_t, tt::tt_metal::IDevice*>& devices,
+    chip_id_t mmio_device_id,
+    chip_id_t connected_device_id) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
     SystemDescriptor desc;
@@ -145,11 +154,7 @@ void SetPC(std::shared_ptr<tt::Cluster> cluster, tt_cxy_pair virtual_core, uint3
 }
 
 void wait_for_state(tt::Cluster& cluster, tt_cxy_pair virtual_core, lite_fabric::InitState state) {
-    uint32_t state_addr =
-        tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_LITE_CONFIG) +
-        offsetof(lite_fabric::LiteFabricMemoryMap, config) + offsetof(lite_fabric::LiteFabricConfig, current_state);
-
+    uint32_t state_addr = GetStateAddress();
     std::vector<uint32_t> readback{static_cast<uint32_t>(lite_fabric::InitState::UNKNOWN)};
     while (static_cast<lite_fabric::InitState>(readback[0]) != state) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -157,9 +162,9 @@ void wait_for_state(tt::Cluster& cluster, tt_cxy_pair virtual_core, lite_fabric:
     }
 }
 
-std::unique_ptr<tt::tt_metal::Program> LaunchLiteFabricWithMetal(std::map<chip_id_t, tt::tt_metal::IDevice*>& devices) {
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(devices, 0, 1);
-    log_info(tt::LogMetal, "Eth Mask = {:0b}", desc.enabled_eth_channels[0]);
+std::unique_ptr<tt::tt_metal::Program> LaunchLiteFabricWithMetal(
+    std::map<chip_id_t, tt::tt_metal::IDevice*>& devices, const SystemDescriptor& desc) {
+    log_info(tt::LogMetal, "Eth Mask = {:0b}", desc.enabled_eth_channels.at(0));
 
     lite_fabric::LiteFabricConfig config{};
     config.is_primary = true;
@@ -168,7 +173,7 @@ std::unique_ptr<tt::tt_metal::Program> LaunchLiteFabricWithMetal(std::map<chip_i
     config.current_state = lite_fabric::InitState::ETH_INIT_NEIGHBOUR;
     config.binary_addr = 0;
     config.binary_size = 0;
-    config.eth_chans_mask = desc.enabled_eth_channels[0];
+    config.eth_chans_mask = desc.enabled_eth_channels.at(0);
 
     // Compile kernels
     auto pgm = std::make_unique<tt::tt_metal::Program>();
@@ -229,6 +234,24 @@ std::unique_ptr<tt::tt_metal::Program> LaunchLiteFabricWithMetal(std::map<chip_i
     }
 
     return pgm;
+}
+
+void TerminateLiteFabric(tt::Cluster& cluster, const SystemDescriptor& desc) {
+    uint32_t routing_enabled_address =
+        tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_LITE_CONFIG) +
+        offsetof(lite_fabric::LiteFabricMemoryMap, config) + offsetof(lite_fabric::LiteFabricConfig, routing_enabled);
+    uint32_t enabled = 0;
+    for (const auto& tunnel_1x : desc.tunnels_from_mmio) {
+        log_info(
+            tt::LogMetal,
+            "Host to terminate Device {} {} (virtual={})",
+            0,
+            tunnel_1x.mmio_core_logical,
+            tunnel_1x.mmio_core_virtual);
+        cluster.write_core((void*)&enabled, sizeof(uint32_t), tunnel_1x.mmio_cxy_virtual(), routing_enabled_address);
+    }
+    cluster.l1_barrier(0);
 }
 
 }  // namespace lite_fabric

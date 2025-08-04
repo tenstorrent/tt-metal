@@ -138,9 +138,6 @@ void routing_init(volatile lite_fabric::LiteFabricConfig* config_struct) {
                 DPRINT << "Init complete" << ENDL();
                 return;
             }
-            case lite_fabric::InitState::TERMINATED: {
-                break;
-            }
             case lite_fabric::InitState::ETH_HANDSHAKE_LOCAL: {
                 break;
             }

@@ -44,7 +44,9 @@ void SetResetState(std::shared_ptr<tt::Cluster> cluster, tt_cxy_pair virtual_cor
 void SetPC(std::shared_ptr<tt::Cluster> cluster, tt_cxy_pair virtual_core, uint32_t pc_addr, uint32_t pc_val);
 
 SystemDescriptor GetSystemDescriptor2Devices(
-    const auto& devices, chip_id_t mmio_device_id, chip_id_t connected_device_id);
+    const std::map<chip_id_t, tt::tt_metal::IDevice*>& devices,
+    chip_id_t mmio_device_id,
+    chip_id_t connected_device_id);
 
 // Returns the binary and local init scratch address for a kernel
 std::pair<const ll_api::memory&, uint32_t> GetBinaryMetadata(
@@ -52,6 +54,9 @@ std::pair<const ll_api::memory&, uint32_t> GetBinaryMetadata(
 
 void wait_for_state(tt::Cluster& cluster, tt_cxy_pair virtual_core, lite_fabric::InitState state);
 
-std::unique_ptr<tt::tt_metal::Program> LaunchLiteFabricWithMetal(std::map<chip_id_t, tt::tt_metal::IDevice*>& devices);
+std::unique_ptr<tt::tt_metal::Program> LaunchLiteFabricWithMetal(
+    std::map<chip_id_t, tt::tt_metal::IDevice*>& devices, const SystemDescriptor& desc);
+
+void TerminateLiteFabric(tt::Cluster& cluster, const SystemDescriptor& desc);
 
 }  // namespace lite_fabric
