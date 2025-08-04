@@ -13,6 +13,15 @@
 #define ETH_READ_REG(addr) (*((volatile uint32_t*)((addr))))
 
 #define ETH_WORD_SIZE_BYTES 16
+#define BYTES_TO_ETH_WORD_SHIFT 4
+
+// Doesn't round up/ceil, just truncates for perf where we don't care about the remainder
+// and we know the input is already a multiple of ETH_WORD_SIZE_BYTES
+inline uint32_t bytes_to_eth_words_truncated(uint32_t num_bytes) { return num_bytes >> BYTES_TO_ETH_WORD_SHIFT; }
+
+inline uint32_t bytes_to_eth_words(uint32_t num_bytes) {
+    return (num_bytes + (ETH_WORD_SIZE_BYTES - 1)) >> BYTES_TO_ETH_WORD_SHIFT;
+}
 
 inline void eth_txq_reg_write(uint32_t qnum, uint32_t offset, uint32_t val) {
     ETH_WRITE_REG(ETH_TXQ0_REGS_START + (qnum * ETH_TXQ_REGS_SIZE) + offset, val);
