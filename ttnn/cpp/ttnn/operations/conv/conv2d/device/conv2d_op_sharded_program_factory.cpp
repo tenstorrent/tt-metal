@@ -150,19 +150,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             "Out_block_h must be divisible by out_subblock_h!");
     }
 
-    // Compute the 2d matrix shape
-    auto [act_matrix_shape, act_matrix_shape_unpadded] =
-        optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
-            ashape_with_channels_padded,
-            sliding_window_config,
-            parallelization_config.num_cores_nhw,
-            out_block_h_ntiles);
-    TT_FATAL(act_matrix_shape.size() == 3, "act_matrix_shape should have be of size 3");
-    TT_FATAL(act_matrix_shape[0] == 1, "act_matrix_shape should have 1 as the first dimension");
-    uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
-    uint32_t act_matrix_width = (uint32_t)act_matrix_shape[2];
-
-    const uint32_t act_matrix_height_unpadded = (uint32_t)act_matrix_shape_unpadded[1];
+    const uint32_t act_matrix_height_ntiles = out_block_h_ntiles * parallelization_config.num_cores_nhw;
+    const uint32_t act_matrix_height = act_matrix_height_ntiles * tt::constants::TILE_HEIGHT;
 
     if (has_bias) {
         if (is_conv_1d_depthwise_conv) {
@@ -176,8 +165,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     }
 
     // Tile size divisibility checks
-    TT_FATAL(
-        act_matrix_height % tt::constants::TILE_HEIGHT == 0, "Height of activation matrix needs to be divisible by 32");
     TT_FATAL(
         weight_matrix_height % tt::constants::TILE_HEIGHT == 0, "Height of weight matrix needs to be divisible by 32");
     TT_FATAL(
@@ -194,9 +181,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         TT_FATAL(bias.value().storage_type() == StorageType::DEVICE, "Bias should be on device");
         TT_FATAL(bias.value().device() == a.device(), "Bias should be on the same device as act tensor");
     }
-
-    // Convert tensor dims to tile dims
-    const uint32_t act_matrix_height_ntiles = act_matrix_height / tt::constants::TILE_HEIGHT;
 
     TT_FATAL(
         act_matrix_height_ntiles % act_block_h_ntiles == 0,
@@ -220,7 +204,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const uint32_t num_blocks_weight_w = weight_matrix_width_ntiles / weight_block_w_ntiles;
 
     // act block info
-    uint32_t act_block_w_datums = act_matrix_width / num_blocks_act_w;
     uint32_t act_block_h_datums = act_matrix_height / num_blocks_act_h;
 
     uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles / block_config.out_subblock_h_ntiles;
@@ -298,14 +281,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         bias_ntiles =
             bias.value().padded_shape()[3] / tt::constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
     }
-
-    uint32_t output_height_padded_to_tile_height = tt::round_up(act_matrix_height_unpadded, tt::constants::TILE_HEIGHT);
-    uint32_t output_height_num_tiles = output_height_padded_to_tile_height / tt::constants::TILE_HEIGHT;
-    TT_FATAL(
-        output_height_num_tiles <= act_matrix_height_ntiles,
-        "output_height_num_tiles {} should be less than or equal to act_matrix_height_ntiles {}",
-        output_height_num_tiles,
-        act_matrix_height_ntiles);
 
     const uint32_t window_outer = num_blocks_act_w;
     const uint32_t window_inner = block_sharded ? filter_h : filter_h * filter_w / num_blocks_act_w;
@@ -620,9 +595,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             }
         } else if (is_conv_1d_depthwise_conv) {
             // 1D Depthwise Conv (height sharded)
-            TT_FATAL(
-                act_block_w_datums == tt::round_up(conv_act_size_c * filter_w, tt::constants::TILE_WIDTH), "Error");
-
             compute_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/compute_depthwise_conv1d.cpp";
             reader_kernel = "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_depthwise_conv1d.cpp";
             writer_mcast_sender_kernel =
@@ -634,9 +606,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
         } else {
             // Height sharded conv
-            TT_FATAL(
-                act_block_w_datums == tt::round_up(conv_act_size_c * filter_w, tt::constants::TILE_WIDTH), "Error");
-
             reader_kernel =
                 "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
                 "reader_conv_activations_padded_with_halo_3x3_weights_v2.cpp";
