@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
-
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #include "debug/dprint.h"
 
 #define ALWI inline __attribute__((always_inline))
@@ -36,6 +36,8 @@ void kernel_main() {
     constexpr uint32_t grid_log2_size = get_compile_time_arg_val(10);
     constexpr uint32_t input_height = get_compile_time_arg_val(11);
     constexpr uint32_t input_width = get_compile_time_arg_val(12);
+
+    DPRINT << "height" << input_height << " width" << input_width << "\n";
 
     const auto s0 =
         get_interleaved_addr_gen<grid_is_dram, grid_size_is_power_of_two>(grid_addr, grid_stick_nbytes, grid_log2_size);
@@ -79,79 +81,135 @@ void kernel_main() {
     // reader copied the data from DRAM to CB buffer.
     for (uint32_t i = start_page_id; i < end_id; ++i) {
         // cb_reserve_back(grid_cb_index, 1);
+
         uint32_t l1_write_stick_addr = get_write_ptr(grid_cb_index);
         uint64_t grid_noc_addr = get_noc_addr(i, s0);
 
-        noc_async_read(grid_noc_addr, l1_write_stick_addr, grid_stick_nbytes);
+        {
+            DeviceZoneScopedN("DRAM");
+            noc_async_read(grid_noc_addr, l1_write_stick_addr, grid_stick_nbytes);
 
-        noc_async_read_barrier();
+            noc_async_read_barrier();
+        }
+
+        // cb_reserve_back(scalar_cb_index, 1);
 
         // Read the first two bfloat16 values (grid coordinates) from the L1 buffer
-        volatile tt_l1_ptr uint16_t* grid_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_stick_addr);
-        uint16_t h_coord_raw = grid_ptr[0];  // First bfloat16 coordinate (x)
-        uint16_t w_coord_raw = grid_ptr[1];  // Second bfloat16 coordinate (y)
 
-        float h_coord_rel = bfloat16_to_float(h_coord_raw);
-        float w_coord_rel = bfloat16_to_float(w_coord_raw);
+        float h_coord_rel, w_coord_rel;
+
+        {
+            DeviceZoneScopedN("Logi0");
+            volatile tt_l1_ptr uint16_t* grid_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_stick_addr);
+            uint16_t h_coord_raw = grid_ptr[0];  // First bfloat16 coordinate (x)
+            uint16_t w_coord_raw = grid_ptr[1];  // Second bfloat16 coordinate (y)
+
+            h_coord_rel = bfloat16_to_float(h_coord_raw);
+            w_coord_rel = bfloat16_to_float(w_coord_raw);
+        }
 
         DPRINT << h_coord_rel << " " << w_coord_rel << "\n";
 
-        float h_coord_image = (h_coord_rel + 1) * input_height / 2 - 0.5;
-        float w_coord_image = (w_coord_rel + 1) * input_width / 2 - 0.5;
-        uint32_t h0 = int(h_coord_image);
-        uint32_t h1 = h0 + 1;
-        uint32_t w0 = int(w_coord_image);
-        uint32_t w1 = w0 + 1;
+        float h_coord_image, w_coord_image;
+        uint32_t h0, h1, w0, w1;
+
+        float input_height_f = float(input_height);
+        float input_width_f = float(input_width);
+
+        {
+            DeviceZoneScopedN("Logi1");
+            h_coord_image = (h_coord_rel + 1) * input_height_f / 0.5 - 0.5;
+            w_coord_image = (w_coord_rel + 1) * input_width_f / 0.5 - 0.5;
+
+            h0 = int(h_coord_image);
+            h1 = h0 + 1;
+            w0 = int(w_coord_image);
+            w1 = w0 + 1;
+        }
+        DPRINT << h_coord_image << " " << w_coord_image << "\n";
+        DPRINT << "L1\n";
 
         // read the input sticks
 
-        read_input_stick(0, h0, w0);
-        read_input_stick(0, h0, w1);
-        read_input_stick(0, h1, w0);
-        read_input_stick(0, h1, w1);
+        // read_input_stick(0, h0, w0);
+        // read_input_stick(0, h0, w1);
+        // read_input_stick(0, h1, w0);
+        // read_input_stick(0, h1, w1);
 
         // compute scalars
 
         float weight_h0, weight_h1, weight_w0, weight_w1;
 
         // petak u 6 racunanje weightova, mnogo scuffed ali dobro, za sad zelim da radi
+        {
+            DeviceZoneScopedN("Logi2");
+            if (h0 < 0 || h0 >= input_height_f) {
+                weight_h0 = 0;
+            } else {
+                weight_h0 = 1 - (h_coord_image - h0);
+            }
 
-        if (h0 < 0 || h0 >= input_height) {
-            weight_h0 = 0;
-        } else {
-            weight_h0 = 1 - (h_coord_image - h0);
+            if (h1 < 0 || h1 >= input_height_f) {
+                weight_h1 = 0;
+            } else {
+                weight_h1 = h_coord_image - h0;
+            }
+
+            if (w0 < 0 || w0 >= input_width_f) {
+                weight_w0 = 0;
+            } else {
+                weight_w0 = 1 - (w_coord_image - w0);
+            }
+
+            if (w1 < 0 || w1 >= input_width_f) {
+                weight_w1 = 0;
+            } else {
+                weight_w1 = w_coord_image - w0;
+            }
         }
 
-        if (h1 < 0 || h1 >= input_height) {
-            weight_h1 = 0;
-        } else {
-            weight_h1 = h_coord_image - h0;
+        DPRINT << "L2\n";
+
+        DPRINT << "weight_w0 " << weight_w0 << " weight_w1 " << weight_w1 << " weight_h0 " << weight_h0 << " weight_h1 "
+               << weight_h1 << "\n";
+
+        // cb_reserve_back(scalar_cb_index, 1);
+
+        // uint32_t scalar_cb_addr = get_write_ptr(scalar_cb_index);
+
+        float wei1, wei2, wei3, wei4;
+        {
+            DeviceZoneScopedN("Logi3");
+            wei1 = weight_h0 * weight_w0;
+            wei2 = weight_h0 * weight_w1;
+            wei3 = weight_h1 * weight_w0;
+            wei4 = weight_h1 * weight_w1;
+            fill_four_val(
+                get_write_ptr(scalar_cb_index),
+                // float_to_bfloat16(wei1),
+                // float_to_bfloat16(wei2),
+                // float_to_bfloat16(wei3),
+                // float_to_bfloat16(wei4)
+                float_to_bfloat16(wei1),
+                float_to_bfloat16(wei2),
+                float_to_bfloat16(wei3),
+                float_to_bfloat16(wei4));
         }
 
-        if (w0 < 0 || w0 >= input_width) {
-            weight_w0 = 0;
-        } else {
-            weight_w0 = 1 - (w_coord_image - w0);
+        {
+            DeviceZoneScopedN("Nista");
         }
 
-        if (w1 < 0 || w1 >= input_width) {
-            weight_w1 = 0;
-        } else {
-            weight_w1 = w_coord_image - w0;
-        }
+        DPRINT << "L3\n";
+        // wei1 = wei1 + 1.0;
+        // wei2 = wei2 + 1.0;
+        // wei3 = wei3 + 1.0;
+        // wei4 = wei4 + 1.0;
+        DPRINT << wei1 << " " << wei2 << " " << wei3 << " " << wei4 << '\n';
 
-        cb_reserve_back(scalar_cb_index, 1);
+        // cb_pop_front(scalar_cb_index, 1);
 
-        uint32_t scalar_cb_addr = get_write_ptr(scalar_cb_index);
-
-        fill_four_val(
-            get_write_ptr(scalar_cb_addr),
-            float_to_bfloat16(weight_h0 * weight_w0),
-            float_to_bfloat16(weight_h0 * weight_w1),
-            float_to_bfloat16(weight_h1 * weight_w0),
-            float_to_bfloat16(weight_h1 * weight_w1));
-
-        cb_push_back(scalar_cb_index, 1);
+        // cb_push_back(scalar_cb_index, 1);
     }
     DPRINT << "READER FINISHED" << "\n";
 }
