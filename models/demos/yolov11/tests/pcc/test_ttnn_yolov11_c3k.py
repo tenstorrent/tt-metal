@@ -5,6 +5,7 @@
 import pytest
 
 import ttnn
+from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE
 from models.demos.yolov11.reference.yolov11 import C3k as torch_c3k
 from models.demos.yolov11.tt.model_preprocessing import create_yolov11_input_tensors, create_yolov11_model_parameters
 from models.demos.yolov11.tt.ttnn_yolov11_c3k import TtnnC3K as ttnn_c3k
@@ -56,7 +57,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV11_L1_SMALL_SIZE}], indirect=True)
 def test_yolo_v11_c3k(
     device,
     reset_seeds,
