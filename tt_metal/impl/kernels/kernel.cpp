@@ -37,6 +37,7 @@ namespace tt_metal {
 
 namespace fs = std::filesystem;
 
+namespace {
 // Kernel path searching:
 //
 // If the path doesn't exist as a absolute/relative path, then it must be relative to
@@ -67,6 +68,7 @@ std::vector<fs::path> source_search_paths(const fs::path& given_file_name) {
 
     return paths;
 }
+}  // namespace
 
 KernelSource::KernelSource(const std::string& source, const SourceType& source_type) :
     source_(source), source_type_(source_type) {
