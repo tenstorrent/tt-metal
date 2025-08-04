@@ -6,6 +6,7 @@ import pytest
 import ttnn
 from ..tt.fun_pipeline import TtStableDiffusion3Pipeline, TimingCollector
 from ..tt.parallel_config import StableDiffusionParallelManager, EncoderParallelManager, create_vae_parallel_config
+from models.demos.utils.llm_demo_utils import verify_perf
 
 
 @pytest.mark.parametrize(
@@ -156,11 +157,6 @@ def test_sd35_performance(
     print("Running performance measurement iterations...")
     all_timings = []
 
-    from tracy import Profiler
-
-    profiler = Profiler()
-
-    profiler.enable()
     for i in range(3):
         print(f"Performance run {i+1}/3...")
 
@@ -185,7 +181,6 @@ def test_sd35_performance(
         timing_data = timer.get_timing_data()
         all_timings.append(timing_data)
 
-    profiler.disable()
     # Calculate statistics
     clip_times = [t.clip_encoding_time for t in all_timings]
     t5_times = [t.t5_encoding_time for t in all_timings]
@@ -249,6 +244,44 @@ def test_sd35_performance(
 
     # Clean up
     pipeline.timing_collector = None
+
+    # Validate performance
+    measurements = {
+        "clip_encoding_time": statistics.mean(clip_times),
+        "t5_encoding_time": statistics.mean(t5_times),
+        "total_encoding_time": statistics.mean(total_encoding_times),
+        "denoising_steps_time": total_denoising_time,
+        "vae_decoding_time": statistics.mean(vae_times),
+        "total_time": statistics.mean(total_times),
+    }
+    if tuple(mesh_device.shape) == (2, 4):
+        expected_metrics = {
+            "clip_encoding_time": 0.09,
+            "t5_encoding_time": 0,
+            "total_encoding_time": 0.2,
+            "denoising_steps_time": 10,
+            "vae_decoding_time": 2.3,
+            "total_time": 12.3,
+        }
+    elif tuple(mesh_device.shape) == (4, 8):
+        expected_metrics = {
+            "clip_encoding_time": 0.12,
+            "t5_encoding_time": 0.13,
+            "total_encoding_time": 0.48,
+            "denoising_steps_time": 4,
+            "vae_decoding_time": 1.65,
+            "total_time": 6.2,
+        }
+    else:
+        assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
+
+    verify_perf(
+        measurements,
+        expected_metrics,
+        high_tol_percentage=1.2,  # 20% tolerance
+        expected_measurements={k: True for k in expected_metrics.keys()},
+        lower_is_better_metrics=set(expected_metrics.keys()),
+    )
 
     for submesh_device in parallel_manager.submesh_devices:
         ttnn.synchronize_device(submesh_device)
