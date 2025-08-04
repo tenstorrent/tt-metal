@@ -74,6 +74,10 @@ void MAIN {
 
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in, cb_inb, cb_x);
+#else
+#ifdef RMSNORM
+    binary_op_init_common(cb_in, cb_in, cb_xmm2);
+#endif
 #endif
 
     cb_wait_front(cb_scaler, 1);  // comes from the reader
