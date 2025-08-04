@@ -69,7 +69,7 @@ jobs:
             arch: wormhole_b0,
             runs-on: ["arch-wormhole_b0", "${{ inputs.topology }}", "${{ inputs.extra-tag }}", "bare-metal", "pipeline-perf"],
             save-perf-data: true,
-            cmd: 'TT_MM_THROTTLE_PERF=5 pytest models/experimental/stable_diffusion_35_large/tests/test_performance.py -k "t3k_cfg2_sp4_tp4"',
+            cmd: 'TT_MM_THROTTLE_PERF=5 pytest models/experimental/stable_diffusion_35_large/tests/test_performance.py -k "tg_cfg2_sp4_tp4"',
             owner_id: U03FJB5TM5Y # Colman Glagovich
           },
         ]
