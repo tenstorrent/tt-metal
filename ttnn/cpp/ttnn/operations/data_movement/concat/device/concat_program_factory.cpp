@@ -37,6 +37,7 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
     const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output, unsigned int groups) {
     // If we end up here for concat with more than 2 tensors on any other dim we should have
     // taken another path
+    std::cout << "reached s2s_tiled_concat_two_tensors_height_multi_core" << std::endl;
     TT_FATAL(dim == 3, "Sharded concat with tiled inputs only supports dim=3 (was {})", dim);
     TT_FATAL(input_tensors.size() == 2, "Expected 2 input tensors (was {})", input_tensors.size());
 
@@ -123,6 +124,8 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
         return tt::tt_metal::CreateCircularBuffer(program, cores, config);
     };
 
+    std::cout << "Creating circular buffers for input tensors" << std::endl;
+
     const auto create_cb_from_tensor =
         [&create_circular_buffer](
             uint32_t idx, const Tensor& input_tensor, uint32_t total_num_tiles) -> tt::tt_metal::CBHandle {
@@ -147,8 +150,10 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
     const auto total_num_output_tiles = get_total_num_tiles_per_shard(num_tiles_for_output_shard);
     const CBHandle cb_output = create_cb_from_tensor(cb_output_id, output, total_num_output_tiles);
 
-    const auto bf16_data_format = tt::tt_metal::datatype_to_dataformat_converter(DataType::BFLOAT16);
-    const auto bf16_tile_size = tt::tt_metal::detail::TileSize(bf16_data_format);
+    // const auto bf16_data_format = tt::tt_metal::datatype_to_dataformat_converter(DataType::BFLOAT16);
+    // const auto bf16_tile_size = tt::tt_metal::detail::TileSize(bf16_data_format);
+    const auto bf16_data_format = data_format;
+    const auto bf16_tile_size = tile_size;
 
     const auto in0_total_tiles_width = std::get<1>(num_tiles_for_each_input_shard[0]);
     const uint32_t cb_input0_transpose_id = cb_inputs.size() + 1;
@@ -219,6 +224,7 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
         UpdateDynamicCircularBufferAddress(program, cb_output, *output_tensors[0].buffer());
     };
 
+    std::cout << "Created program for s2s_tiled_concat_two_tensors_height_multi_core" << std::endl;
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 

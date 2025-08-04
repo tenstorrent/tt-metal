@@ -6,7 +6,7 @@
 
 #include "compute_kernel_api/transpose_wh.h"
 
-constexpr uint32_t MAX_BATCH_SIZE = 8;
+constexpr uint32_t MAX_BATCH_SIZE = 4;
 
 template <uint32_t BatchSize = 1>
 FORCE_INLINE void transpose(uint32_t cb_in, uint32_t cb_out) {

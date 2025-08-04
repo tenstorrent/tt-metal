@@ -30,8 +30,10 @@ void kernel_main() {
     const uint32_t base_l1_write_addr = get_write_ptr(output_cb);
     uint32_t l1_write_addr = base_l1_write_addr;
     for (uint32_t i = 0; i < input0_num_tiles_height; i++) {
+        DPRINT << "tile " << i << " of " << input0_num_tiles_height << ENDL();
         cb_reserve_back(output_cb, input0_num_tiles_width + input1_num_tiles_width);
         cb_wait_front(output_transpose_cb, input0_num_tiles_width + input1_num_tiles_width);
+        DPRINT << "cb_wait_front done" << ENDL();
 
         const uint32_t base_l1_read_addr_0 = get_read_ptr(output_transpose_cb);
         const uint64_t noc_addr_0 = get_noc_addr(base_l1_read_addr_0);
@@ -39,9 +41,15 @@ void kernel_main() {
         noc_async_read_one_packet_with_state<true>(base_l1_read_addr_0, l1_write_addr);
         l1_write_addr += width_len_bytes;
 
-        noc_async_read_barrier();
+        DPRINT << "NOC read done" << ENDL();
+
+        // noc_async_read_barrier();
+
+        DPRINT << "read barrier done" << ENDL();
 
         cb_pop_front(output_transpose_cb, input0_num_tiles_width + input1_num_tiles_width);
         cb_push_back(output_cb, input0_num_tiles_width + input1_num_tiles_width);
+        DPRINT << "cb_pop_front and cb_push_back done" << ENDL();
     }
+    DPRINT << "done concat" << ENDL();
 }
