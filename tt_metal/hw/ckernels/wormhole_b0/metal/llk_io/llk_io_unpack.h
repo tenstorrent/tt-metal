@@ -65,7 +65,7 @@ inline __attribute__((__always_inline__)) void apply_mm_stagger(int operand) {
 // Wait for N tiles available in the incoming stream
 inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
     // TODO(MO): Manually uncomment until issue #6619 is resolved
-    // DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
+    DeviceZoneScopedSumN1("CB-COMPUTE-WAIT-FRONT");
     std::uint32_t input = operand;
     volatile tt_l1_ptr std::uint32_t* tiles_received_ptr = get_cb_tiles_received_ptr(operand);
     std::uint16_t num_tiles_u = (std::uint16_t)num_tiles;
@@ -74,6 +74,7 @@ inline void llk_wait_tiles(int operand, std::int32_t num_tiles) {
 
     uint16_t num_tiles_recv;
     do {
+        zone.inc_counter();
         tiles_received = (std::uint16_t)reg_read((std::uint32_t)tiles_received_ptr);
         num_tiles_recv = tiles_received - get_local_cb_interface(input).tiles_acked;
     } while (num_tiles_recv < num_tiles_u);
