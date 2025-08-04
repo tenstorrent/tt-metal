@@ -48,11 +48,14 @@ public:
 
         // Fabric node ID is set for host-local and host-remote devices globally.
         std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+
+        // Shape of requested mesh.
+        MeshShape mesh_shape;
     };
 
     // Returns devices that should be mapped to a MeshDevice according to the shape and offset.
     MappedDevices get_mapped_devices(
-        const MeshShape& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
+        const std::optional<MeshShape>& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
 };
 
 }  // namespace tt::tt_metal::distributed
