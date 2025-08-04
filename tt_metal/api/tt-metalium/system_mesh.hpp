@@ -49,7 +49,7 @@ public:
         // Fabric node ID is set for host-local and host-remote devices globally.
         std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
 
-        // Shape of requested mesh.
+        // Shape of requested mesh if provided, otherwise the system mesh global shape.
         MeshShape mesh_shape;
     };
 

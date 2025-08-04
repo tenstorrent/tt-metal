@@ -22,7 +22,7 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     const std::vector<int>& physical_device_ids = {},
     size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
-// Open a mesh device with the system mesh shape (default).
+// Open a mesh device with optionally-provided mesh shape, defaults to system mesh global shape if not provided.
 std::shared_ptr<MeshDevice> open_mesh_device(
     size_t l1_small_size,
     size_t trace_region_size,
