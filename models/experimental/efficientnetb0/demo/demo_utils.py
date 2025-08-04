@@ -4,54 +4,9 @@
 
 import torchvision
 from datasets import load_dataset
-from loguru import logger
-import requests
 import os
-import logging
 import torch
-
-
-def preprocess():
-    """
-    Define the transform for the input image/frames.
-    Resize, crop, convert to tensor, and apply ImageNet normalization stats.
-    """
-    transform = torchvision.transforms.Compose(
-        [
-            torchvision.transforms.ToPILImage(),
-            torchvision.transforms.Resize(224),
-            torchvision.transforms.CenterCrop(224),
-            torchvision.transforms.ToTensor(),
-            torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ]
-    )
-
-    return transform
-
-
-def download_images(img_path):
-    logging.getLogger("datasets").setLevel(logging.ERROR)
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["train"]["image"][0]
-    image.save(img_path)
-    logger.info(f"Input image saved to {img_path}")
-
-
-def load_imagenet_labels(imagenet_class_labels_path):
-    url = "https://raw.githubusercontent.com/pytorch/hub/master/imagenet_classes.txt"
-    os.makedirs(os.path.dirname(imagenet_class_labels_path), exist_ok=True)
-    response = requests.get(url)
-    if response.status_code == 200:
-        with open(imagenet_class_labels_path, "w") as f:
-            f.write(response.text)
-        logger.info(f"Downloaded to {imagenet_class_labels_path}")
-    else:
-        logger.info(f"Failed to download: {response.status_code}")
-
-    with open(imagenet_class_labels_path, "r") as f:
-        categories = [line.strip() for line in f.readlines() if line.strip()]
-
-    return categories
+import glob
 
 
 def get_batch(data_loader):
@@ -79,3 +34,56 @@ def get_batch(data_loader):
             images = torch.cat((images, img), dim=0)
 
     return images, labels
+
+
+class InputExample(object):
+    def __init__(self, image, label=None):
+        self.image = image
+        self.label = label
+
+
+def get_data_loader(input_loc, batch_size, iterations, download_entire_dataset=False):
+    img_dir = input_loc + "/"
+    data_path = os.path.join(img_dir, "*G")
+    files = glob.glob(data_path)
+
+    def loader():
+        examples = []
+        for f1 in files:
+            examples.append(
+                InputExample(
+                    image=get_input(f1),
+                    label=get_label(f1),
+                )
+            )
+            if len(examples) == batch_size:
+                yield examples
+                del examples
+                examples = []
+
+    def loader_hf():
+        examples = []
+        for f1 in files:
+            examples.append(
+                InputExample(
+                    image=f1["image"],
+                    label=f1["label"],
+                )
+            )
+            if len(examples) == batch_size:
+                yield examples
+                del examples
+                examples = []
+
+    if len(files) == 0:
+        files_raw = iter(
+            load_dataset("imagenet-1k", split="validation", use_auth_token=True, streaming=not download_entire_dataset)
+        )
+        files = []
+        sample_count = batch_size * iterations
+        for _ in range(sample_count):
+            files.append(next(files_raw))
+        del files_raw
+        return loader_hf()
+
+    return loader()

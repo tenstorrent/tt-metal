@@ -26,13 +26,24 @@ pytest --disable-warnings models/experimental/efficientnetb0/tests/pcc/test_ttnn
 Use the following command to run the e2e perf:
 
 -  For overall rutime inference (end-2-end), use the following command to run:
+**_Single-Device (BS-1):_**<br>
 ```sh
-pytest --disable-warnings models/experimental/efficientnetb0/tests/perf/test_e2e_performant.py
+pytest --disable-warnings models/experimental/efficientnetb0/tests/perf/test_e2e_performant.py::test_e2e_performant
 ```
-- end-2-end perf varies between 2300 to 2500 FPS.
+- end-2-end perf is 74 FPS.
+**_Multi-Device (DP-2,N300):_**<br>
+```sh
+pytest --disable-warnings models/experimental/efficientnetb0/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
+```
+- end-2-end perf is 146 FPS.
 
 ## Model demo with trace
 - Use the following command to run the demo:
+**_Single-Device (BS-1):_**<br>
 ```sh
-pytest --disable-warnings models/experimental/efficientnetb0/demo/demo.py
+pytest --disable-warnings models/experimental/efficientnetb0/demo/demo.py::test_demo
+```
+**_Multi-Device (DP-2,N300):_**<br>
+```sh
+pytest --disable-warnings models/experimental/efficientnetb0/demo/demo.py::test_demo_dp
 ```
