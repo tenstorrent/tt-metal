@@ -11,6 +11,7 @@
 #include <tt-metalium/command_queue.hpp>
 #include <bmm_op.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt-metalium/core_coord.hpp"
 
 using namespace tt::constants;
@@ -131,17 +132,28 @@ void matmul_single_core(
     tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     // Create the data movement kernels and the compute kernel
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        tt_metal::DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = reader_compile_time_args});
 
+    std::vector<uint32_t> writer_compile_time_args;
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        tt_metal::DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = writer_compile_time_args});
 
     // Compile time arguments for the kernels
     // Note that these take effect at the kernel's compile time. Chaning these values will require recompilation of the

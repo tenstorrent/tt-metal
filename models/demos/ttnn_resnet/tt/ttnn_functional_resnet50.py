@@ -198,6 +198,7 @@ class resnet50Bottleneck:
                     enable_weights_double_buffer=True if input_width < 56 else False,
                     enable_split_reader=enable_split_reader,
                     enable_subblock_padding=enable_subblock_padding,
+                    full_inner_dim=True,
                 ),
             }
 
@@ -404,6 +405,7 @@ class resnet50Bottleneck:
                 enable_weights_double_buffer=True,
                 enable_split_reader=enable_split_reader,
                 enable_subblock_padding=enable_subblock_padding,
+                full_inner_dim=True,
             ),
         }
 

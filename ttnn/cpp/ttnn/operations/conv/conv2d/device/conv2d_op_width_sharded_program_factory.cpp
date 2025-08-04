@@ -115,10 +115,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     // parallelization config
     const auto& p_config = parallelization_config;
-    uint32_t num_cores_x = p_config.grid_size.x;
-    uint32_t num_cores_y = p_config.grid_size.y;
-    // weight_width_sliced determines is 1d-sysarr-conv or 2d-sysarr-conv
-    bool weight_width_sliced = p_config.per_core_out_matrix_width_ntile < weight_matrix_width_ntiles;
     uint32_t input_channels_padded = shard_shape[1] * input_num_cores;
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
     // check is for 16-byte alignment
@@ -134,7 +130,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     uint32_t filter_h = (uint32_t)sliding_window_config.window_hw.first;   // filter_h
     uint32_t filter_w = (uint32_t)sliding_window_config.window_hw.second;  // filter_W
-    uint32_t stride_h = (uint32_t)sliding_window_config.stride_hw.first;
     uint32_t stride_w = (uint32_t)sliding_window_config.stride_hw.second;
     uint32_t dilation_h = (uint32_t)sliding_window_config.dilation_hw.first;
     uint32_t dilation_w = (uint32_t)sliding_window_config.dilation_hw.second;
@@ -158,7 +153,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     TT_FATAL(act_matrix_shape[0] == 1, "Error");
     uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
     uint32_t act_matrix_width = (uint32_t)act_matrix_shape[2];
-    uint32_t act_matrix_height_unpadded = (uint32_t)act_matrix_shape_unpadded[1];
 
     // TODO: Move all these TT_FATALs/checks to validate?
 
@@ -348,14 +342,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     std::map<std::string, std::string> writer_mcast_sender_defines;
     std::map<std::string, std::string> compute_defines;
 
-    compute_defines["WIDTH_SHARDED"] = "1";
-
-    if (output_num_cores == 1) {
-        writer_mcast_sender_defines["SKIP_MCAST"] = "1";
-    }
-    bool skip_mcast = is_singlecore_skip_mcast(p_config, a.memory_config().memory_layout());
-    if (skip_mcast) {
+    const SkipMcast& skip_mcast = conv_skip_mcast(parallelization_config, a.memory_config().memory_layout());
+    const bool skip_activation_mcast = skip_mcast.skip_activation_mcast;
+    const bool skip_weights_mcast = skip_mcast.skip_weights_mcast;
+    if (skip_activation_mcast) {
         reader_defines["SKIP_MCAST"] = "1";
+    }
+    if (skip_weights_mcast) {
+        writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
     if (has_bias) {
         writer_defines["FUSE_BIAS"] = "1";
@@ -403,14 +397,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         a.memory_config().shard_spec().value().shape,
         has_bias,
         false,
-        skip_mcast);
+        skip_activation_mcast);
 
     std::vector<std::vector<uint16_t>> conv_sharded_input_top_left_indices =
         ttnn::operations::sliding_window::generate_sliding_window_op_config(
             op_trace_metadata, shard_boundaries, stride_w, true, act_block_h_datums, 0);
 
     // create sharded ttnn config tensors
-    tt::tt_metal::DataType indices_tt_dtype = tt::tt_metal::DataType::UINT16;
     Tensor conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
         conv_sharded_input_top_left_indices, parallel_config);
     conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
@@ -451,9 +444,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
         bias_ntiles,
         get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
-
-        skip_mcast ? get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index
-                   : get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
+        get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
         get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_SECOND_READER).index,
@@ -532,7 +523,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
             .compile_args = weights_kernel_compile_args,
             .defines = writer_defines});
 
-    auto compute_id = CreateKernel(
+    CreateKernel(
         program,
         compute_kernel_path,
         all_cores,

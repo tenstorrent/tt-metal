@@ -62,7 +62,7 @@ void kernel_main() {
                     cb_reserve_back(cb_id_in0, input_granularity);
                     l1_write_addr_in0 = get_write_ptr(cb_id_in0);
                 }
-                noc_async_read_tile(read_tile_id, tensor_accessor, l1_write_addr_in0);
+                noc_async_read_page(read_tile_id, tensor_accessor, l1_write_addr_in0);
                 l1_write_addr_in0 += input_tile_bytes;
                 read_tile_id += inner_tile_size;
                 input_granularity_index++;

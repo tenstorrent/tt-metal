@@ -12,7 +12,7 @@ This test suite addresses the functionality and performance (i.e. bandwidth) of 
 | One to all           | 6-8        | Writes transaction from one core to all cores.                                       |
 | One to all Multicast | 9-14, 52   | Writes transaction from one core to all cores using multicast.                       |
 | One From All         | 15, 30     | Read transactions between one gatherer Tensix core and multiple sender Tensix cores. |
-| Loopback             | 16         | Does a loopback operation where one cores writes to itself.                          |
+| Loopback             | 16, 55     | Does a loopback operation where one cores writes to itself.                          |
 | Reshard Hardcoded    | 17-20      | Uses existing reshard tests to analyse their bandwidth and latency.                  |
 | Conv Hardcoded       | 21-23      | Uses existing conv tests to analyse their bandwidth and latency.                     |
 | Deinterleave         | 200-201    | Tests deinterleaving                                                                 |
@@ -34,7 +34,7 @@ TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_data_movement --g
 Before running any tests, build the repo with profiler and tests: ```./build_metal.sh --enable-profiler --build-tests```
 Then, for performance checks and more extensive testing, our Python test can be run as follows:
 ```
-pytest tests/tt_metal/tt_metal/data_movement <options>
+pytest tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py <options>
 ```
 
 Options can be used to disable new profiling (i.e. use existing results), enable plotting of results etc.
