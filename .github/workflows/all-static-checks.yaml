@@ -148,3 +148,17 @@ jobs:
         with:
           checks: "files,duppatterns,syntax"
           experimental_checks: "avoid-shadowing"
+  check-symlinks-valid:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for broken symlinks
+        run: |
+          broken_links=$(find . -type l ! -exec test -e {} \; -print)
+          if [ -n "$broken_links" ]; then
+            echo "Broken symlinks found:"
+            echo "$broken_links"
+            exit 1
+          else
+            echo "All symlinks are valid."
+          fi
