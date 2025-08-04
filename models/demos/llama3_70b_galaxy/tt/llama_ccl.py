@@ -29,6 +29,7 @@ class TT_CCL:
         worker_sub_device_id,
         mode="decode",
         allocate_prefill_buffers=True,
+        use_qwen_mlp=False,
     ):
         self.mode = mode
         all_crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
@@ -50,6 +51,7 @@ class TT_CCL:
         self.max_top_k = model_args.max_top_k
         self.max_batch_size = model_args.max_batch_size
         self.cluster_shape = model_args.cluster_shape
+        self.use_qwen_mlp = use_qwen_mlp
 
         # Double buffered on each axis
         self.gather_semaphore_handles = [[], []]
@@ -245,13 +247,24 @@ class TT_CCL:
         persistent_buffers["SAMPLING_INDICES"] = tt_buffer
 
         # Binary Mult + Silu
-        tt_buffer = ttnn.from_torch(
-            torch.zeros((1, 1, self.max_batch_size, 3584)),
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
-            memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        tt_buffer = (
+            ttnn.from_torch(
+                torch.zeros((1, 1, self.max_batch_size, 3584)),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            if not self.use_qwen_mlp
+            else ttnn.from_torch(
+                torch.zeros((1, 1, self.max_batch_size, 3200)),
+                device=self.mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=ttnn.bfloat8_b,
+                memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
         )
         persistent_buffers["BINARY_MUL"] = tt_buffer
 
@@ -473,13 +486,23 @@ class TT_CCL:
             if self.model_config is None:
                 return persistent_buffers
 
-            buffers_dict = {
-                "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
-                "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
-                "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
-                "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
-            }
+            buffers_dict = (
+                {
+                    "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
+                    "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
+                    "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
+                    "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                }
+                if not self.use_qwen_mlp
+                else {
+                    "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
+                    "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    "FF1": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
+                    "FF3": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
+                    "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                }
+            )
             for key, shape in buffers_dict.items():
                 tt_intermediate_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),
@@ -515,16 +538,28 @@ class TT_CCL:
         for seqlen in self.support_seqlens:
             ag_persistent_buffers = {}
 
-            buffers_dict = {
-                "QKV": [(1, 1, seqlen, 1280)],
-                "WO": [(1, 1, seqlen, 2048)],
-                "FF1": [(1, 1, seqlen, 3584)],
-                "FF3": [(1, 1, seqlen, 3584)],
-                "FF2": [(1, 1, seqlen, 2048)],
-                "LAYERNORM": [(1, 1, seqlen, 128)],
-                "LM_HEAD": [(1, 1, 32, 16384)],
-                "SAMPLING": [(1, 1, 32, 128 * 1024)],
-            }
+            buffers_dict = (
+                {
+                    "QKV": [(1, 1, seqlen, 1280)],
+                    "WO": [(1, 1, seqlen, 2048)],
+                    "FF1": [(1, 1, seqlen, 3584)],
+                    "FF3": [(1, 1, seqlen, 3584)],
+                    "FF2": [(1, 1, seqlen, 2048)],
+                    "LAYERNORM": [(1, 1, seqlen, 128)],
+                    "LM_HEAD": [(1, 1, 32, 16384)],
+                    "SAMPLING": [(1, 1, 32, 128 * 1024)],
+                }
+                if not self.use_qwen_mlp
+                else {
+                    "QKV": [(1, 1, seqlen, 1280)],
+                    "WO": [(1, 1, seqlen, 2048)],
+                    "FF1": [(1, 1, seqlen, 3200)],
+                    "FF3": [(1, 1, seqlen, 3200)],
+                    "FF2": [(1, 1, seqlen, 2048)],
+                    "LAYERNORM": [(1, 1, seqlen, 128)],
+                }
+            )
+
             for key, shape in buffers_dict.items():
                 tt_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),
@@ -925,6 +960,7 @@ class TT_CCL:
         use_optimal_ccl_for_llama=False,
     ):
         topology = ttnn.Topology.Linear
+        breakpoint()
         if self.mode == "prefill":
             persistent_buffer = None
             if self.use_ring_ag_prefill and buffer_key is not None:

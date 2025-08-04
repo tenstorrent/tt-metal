@@ -7,7 +7,6 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.rmsnorm import RMSNorm
 
 
 class TtLlamaAttention(LightweightModule):
@@ -222,45 +221,47 @@ class TtLlamaAttention(LightweightModule):
         q_norm_str = f"{layer_name}.q_norm"
         k_norm_str = f"{layer_name}.k_norm"
 
-        def norm_reshard(x, norm, mode):
-            """Hack until RMSNorm supports height-sharded output config"""
-            if mode == "decode":
-                mem_cfg = x.memory_config()
-                x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG, dtype=x.dtype)
-            x = norm(x, mode)
-            if mode == "decode":
-                x = ttnn.to_memory_config(x, mem_cfg, dtype=x.dtype)
-            return x
+        self.qk_norm = False
 
-        if f"{q_norm_str}.weight" in self.state_dict:
-            logger.info(f"Using q_norm: {q_norm_str}")
-            fn_q_norm = RMSNorm(
-                device=self.mesh_device,
-                dim=self.head_dim,
-                state_dict=self.state_dict,
-                state_dict_prefix=None,
-                weight_cache_path=weight_cache_path,
-                weight_dtype=ttnn.bfloat16,
-                weight_key=q_norm_str,
-            )
-            self.q_norm = lambda x, mode: norm_reshard(x, fn_q_norm, mode)
-        else:
-            self.q_norm = lambda x, mode: x
+        # def norm_reshard(x, norm, mode):
+        #     """Hack until RMSNorm supports height-sharded output config"""
+        #     # if mode == "decode":
+        #     #     mem_cfg = x.memory_config()
+        #     #     x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG, dtype=x.dtype)
+        #     x = norm(x, mode)
+        #     # if mode == "decode":
+        #     #     x = ttnn.to_memory_config(x, mem_cfg, dtype=x.dtype)
+        #     return x
 
-        if f"{k_norm_str}.weight" in self.state_dict:
-            logger.info(f"Using k_norm: {k_norm_str}")
-            fn_k_norm = RMSNorm(
-                device=self.mesh_device,
-                dim=self.head_dim,
-                state_dict=self.state_dict,
-                state_dict_prefix=None,
-                weight_cache_path=weight_cache_path,
-                weight_dtype=ttnn.bfloat16,
-                weight_key=k_norm_str,
-            )
-            self.k_norm = lambda x, mode: norm_reshard(x, fn_k_norm, mode)
-        else:
-            self.k_norm = lambda x, mode: x
+        # if f"{q_norm_str}.weight" in self.state_dict:
+        #     logger.info(f"Using q_norm: {q_norm_str}")
+        #     fn_q_norm = RMSNorm(
+        #         device=self.mesh_device,
+        #         dim=self.head_dim,
+        #         state_dict=self.state_dict,
+        #         state_dict_prefix=None,
+        #         weight_cache_path=weight_cache_path,
+        #         weight_dtype=ttnn.bfloat16,
+        #         weight_key=q_norm_str,
+        #     )
+        #     self.q_norm = lambda x, mode: norm_reshard(x, fn_q_norm, mode)
+        # else:
+        #     self.q_norm = lambda x, mode: x
+
+        # if f"{k_norm_str}.weight" in self.state_dict:
+        #     logger.info(f"Using k_norm: {k_norm_str}")
+        #     fn_k_norm = RMSNorm(
+        #         device=self.mesh_device,
+        #         dim=self.head_dim,
+        #         state_dict=self.state_dict,
+        #         state_dict_prefix=None,
+        #         weight_cache_path=weight_cache_path,
+        #         weight_dtype=ttnn.bfloat16,
+        #         weight_key=k_norm_str,
+        #     )
+        #     self.k_norm = lambda x, mode: norm_reshard(x, fn_k_norm, mode)
+        # else:
+        #     self.k_norm = lambda x, mode: x
 
     def prefetch(self, prefetcher_setup, tt_ccl):
         self.prefetcher_setup = prefetcher_setup
@@ -381,21 +382,42 @@ class TtLlamaAttention(LightweightModule):
 
         if self.qk_norm:
             rm_mem_cfg_qkv = q_heads_pre_rot_1BQD.memory_config()
-            reshape_output_mem_cfg = ttnn.create_sharded_memory_config(
-                shape=(64, 128),
+            reshape_intermediate_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(64, 128),  # [1, 8, 8, 128] ==> *[1, 1, 64, 128]* ==> [1, 1, 64, 32 * 4 = 128]
                 core_grid=ttnn.CoreRangeSet(
-                    [ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))
+                    ]  # This captures the fact that we are using 1 core (height sharded)
                 ),  # resharding tensor to 1 core
-                strategy=ttnn.ShardStrategy.HEIGHT,
+                strategy=ttnn.ShardStrategy.HEIGHT,  # Literally stating to the device to perform width sharding
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
 
+            # Reshape to 64, 32 to perform norm on 4 cores
+            reshape_output_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(64, 32),  # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> *[1, 1, 64, 32 * 4 = 128]*
+                core_grid=ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 0))
+                    ]  # This captures the fact that we ar eusing 4 cores (width sharded)
+                ),  # resharding tensor to 1 core
+                strategy=ttnn.ShardStrategy.WIDTH,  # Literally stating to the device to perform width sharding
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            # q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=reshape_intermediate_mem_cfg)
+            # k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=reshape_intermediate_mem_cfg)
+
+            # q_heads_pre_rot_1BQD = ttnn.reshape(q_heads_pre_rot_1BQD, [1, 1, 64, 128])
+            # k_heads_pre_rot_1BKD = ttnn.reshape(k_heads_pre_rot_1BKD, [1, 1, 64, 128])
+
             q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=reshape_output_mem_cfg)
             k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=reshape_output_mem_cfg)
 
-            q_heads_pre_rot_1BQD = ttnn.reshape(q_heads_pre_rot_1BQD, [1, 1, 64, 128])
-            k_heads_pre_rot_1BKD = ttnn.reshape(k_heads_pre_rot_1BKD, [1, 1, 64, 128])
+            q_heads_pre_rot_1BQD = ttnn.reshape(q_heads_pre_rot_1BQD, [1, 1, 64, 32])
+            k_heads_pre_rot_1BKD = ttnn.reshape(k_heads_pre_rot_1BKD, [1, 1, 64, 32])
 
             # Reshape to tile layout for norm
             q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.TILE_LAYOUT)

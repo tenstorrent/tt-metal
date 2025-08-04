@@ -483,7 +483,8 @@ class TtQwenModelArgs(TtModelArgs):
 
             def w1_w3_prg_config(seq_len, use_interleaved):
                 if seq_len == 128:
-                    return self.matmul_1d_config(128, 2048, 3584, grid=ttnn.CoreGrid(x=7, y=4), overwrite_per_core_k=16)
+                    # return self.matmul_1d_config(128, 2048, 3584, grid=ttnn.CoreGrid(x=7, y=4), overwrite_per_core_k=16)
+                    return self.matmul_1d_config(128, 2048, 3200, grid=ttnn.CoreGrid(x=7, y=4), overwrite_per_core_k=16)
                 if not use_interleaved:
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                         compute_with_storage_grid_size=(7, 10),
@@ -540,7 +541,12 @@ class TtQwenModelArgs(TtModelArgs):
             def w2_prg_config(seq_len):
                 if seq_len == 128:
                     return self.matmul_1d_config(
-                        128, 3584, 2048, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=14
+                        # 128, 3584, 2048, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=14
+                        128,
+                        3200,
+                        2048,
+                        grid=ttnn.CoreGrid(x=7, y=10),
+                        overwrite_per_core_k=14,
                     )
                 # For sequence lengths < 4096, we use this config as it performs better that what would be generated below
                 if seq_len < 4096:
@@ -960,7 +966,8 @@ class TtQwenModelArgs(TtModelArgs):
 
             # Use padded K and N
             self.model_config["W2_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
-                k=3584,
+                # k=3584,
+                k=3200,
                 n=self.dim_padded_24_cores // 4,
             )
 
@@ -975,7 +982,8 @@ class TtQwenModelArgs(TtModelArgs):
             self.model_config["FF2_TG_RING_PROGCFG"] = self.matmul_1d_ring_config(
                 1,
                 32,
-                3584,
+                # 3584,
+                3200,
                 self.dim_padded_24_cores // 4,  # Use padded N
                 RING_SIZE,
             )
@@ -1009,7 +1017,8 @@ class TtQwenModelArgs(TtModelArgs):
                 self.start_core, 28, self.sub_core_grids, row_wise=True
             )
             self.model_config["MUL_IN_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, 3584 // 28),  # Use padded K
+                # shape=(32, 3584 // 28),  # Use padded K
+                shape=(32, 3200 // 28),  # Use padded K
                 core_grid=mul_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,

@@ -160,6 +160,8 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
 
+        breakpoint()
+
         w2_in = self.tt_ccl.line_all_gather(
             ff1ff3,
             dim=3,
