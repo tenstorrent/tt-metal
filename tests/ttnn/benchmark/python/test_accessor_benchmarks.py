@@ -10,8 +10,8 @@ import pytest
 from loguru import logger
 from pathlib import Path
 
-from tt_metal.tools.profiler.process_device_log import import_log_run_stats
-import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
+from tracy.process_device_log import import_log_run_stats
+import tracy.device_post_proc_config as device_post_proc_config
 
 
 # Helper function to sort strings naturally

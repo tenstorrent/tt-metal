@@ -29,7 +29,7 @@ To run the demo for question answering using the Bloom model, follow these instr
 
   ```sh
 build_metal.sh --enable-profiler # need build to enable the profiler
-./tt_metal/tools/profiler/profile_this.py -n vit -c "pytest --disable-warnings  models/demos/grayskull/vit/demo/demo_vit_ttnn_inference_device_OPs.py"
+./tools/tracy/profile_this.py -n vit -c "pytest --disable-warnings  models/demos/grayskull/vit/demo/demo_vit_ttnn_inference_device_OPs.py"
   ```
 
 
