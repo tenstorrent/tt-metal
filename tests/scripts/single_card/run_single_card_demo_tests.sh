@@ -108,6 +108,10 @@ run_llama3_func() {
 
 }
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> 5ef470d930 (enable vgg_unet demo,eval in ci)
 run_ufld_v2_func() {
   #ufld_v2 demo
   pytest models/demos/ufld_v2/demo/demo.py
@@ -340,13 +344,12 @@ run_yolov6l_demo() {
 
 }
 
-# Commenting out VGG_Unet Demo since CIv2 does not support dataset download from Kaggle
-# Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
-# run_vgg_unet_demo() {
+run_vgg_unet_demo() {
+ # vgg_unet demo
+  pytest models/demos/vgg_unet/demo/demo.py
 
-#  pytest -n auto models/demos/vgg_unet/demo/demo.py --timeout 600
 
-# }
+}
 
 
 run_yolov12x_demo() {

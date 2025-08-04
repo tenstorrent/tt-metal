@@ -57,8 +57,7 @@ jobs:
                    { name: "vanilla_unet", runner-label: "N150", performance: false, cmd: run_vanilla_unet_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (keerthana-r-mcw)
                    { name: "yolov8x", runner-label: "N150", performance: false, cmd: run_yolov8x_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
                    { name: "yolov8s", runner-label: "N150", performance: false, cmd: run_yolov8s_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
-                    # this PR to enable demo with CIv2 dataset soon-( https://github.com/tenstorrent/tt-metal/pull/26236)
-                    # { name: "vgg_unet", runner-label: "N150", performance: false, cmd: run_vgg_unet_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (keerthana-r-mcw)
+                    { name: "vgg_unet", runner-label: "N150", performance: false, cmd: run_vgg_unet_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (keerthana-r-mcw)
                     { name: "yolov4", runner-label: "N150", performance: false, cmd: run_yolov4_perf, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (Sudhanshu Singhal)
                     { name: "resnet", runner-label: "N150", performance: true, cmd: run_resnet_stability, owner_id: U0837MYG788}, # Marko Radosavljevic
                     { name: "sdxl", runner-label: "N150", performance: false, cmd: run_sdxl_func, owner_id: U0837MYG788}, # Marko Radosavljevic
@@ -100,8 +99,7 @@ jobs:
                     { name: "yolov11", runner-label: "N300", performance: false, cmd: run_yolov11_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
                     { name: "yolov8s_world", runner-label: "N300", performance: false, cmd: run_yolov8s_world_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
                     { name: "vanilla_unet", runner-label: "N300", performance: false, cmd: run_vanilla_unet_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (keerthana-r-mcw)
-                    # this PR to enable demo with CIv2 dataset soon-( https://github.com/tenstorrent/tt-metal/pull/26236)
-                    # { name: "vgg_unet", runner-label: "N300", performance: false, cmd: run_vgg_unet_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (keerthana-r-mcw)
+                    { name: "vgg_unet", runner-label: "N300", performance: false, cmd: run_vgg_unet_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (keerthana-r-mcw)
                     { name: "yolov4", runner-label: "N300", performance: false, cmd: run_yolov4_perf, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (Sudhanshu Singhal)
                     { name: "yolov10x", runner-label: "N300", performance: false, cmd: run_yolov10x_demo, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
                     { name: "yolov7", runner-label: "N300", performance: false, cmd: run_yolov7_demo, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
