@@ -1,0 +1,20 @@
+add_executable(unit_tests_multiprocess)
+target_sources(
+    unit_tests_multiprocess
+    PRIVATE
+        main.cpp
+        test_all_gather.cpp
+)
+set_target_properties(
+    unit_tests_multiprocess
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/ttnn/multiprocess
+)
+target_link_libraries(
+    unit_tests_multiprocess
+    PRIVATE
+        test_common_libs
+        TTNN::CPP
+)
+target_include_directories(unit_tests_multiprocess PRIVATE ${PROJECT_SOURCE_DIR}/tests)
