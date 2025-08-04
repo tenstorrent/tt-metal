@@ -74,7 +74,7 @@ void kernel_main() {
        "fused_op_receiver_signal_semaphore_addr_ptr value: " <<  *reinterpret_cast<volatile tt_l1_ptr
        uint32_t*>(fused_op_receiver_signal_semaphore_addr_ptr[3]) << ENDL();
     */
-    noc_semaphore_wait_min(fused_op_receiver_signal_semaphore_addr_ptr, 2);
+    noc_semaphore_wait_min(fused_op_receiver_signal_semaphore_addr_ptr, 1);
     noc_semaphore_set(fused_op_receiver_signal_semaphore_addr_ptr, 0);
 
     return;
