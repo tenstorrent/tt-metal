@@ -53,7 +53,6 @@ class EfficientNetb0Conv2D:
             deallocate_activation=False,
             enable_act_double_buffer=False,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             output_layout=self.output_layout,
             reallocate_halo_output=False,
             reshard_if_not_optimal=False,
