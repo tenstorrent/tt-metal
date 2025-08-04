@@ -106,9 +106,7 @@ run_ufld_v2_func() {
   #ufld_v2
   pytest -n auto models/demos/ufld_v2/demo/demo.py --timeout 600
   #ufld_v2 eval
-  ## Commenting out UFLDv2 eval since CIv2 does not support dataset download from Kaggle
-  # Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
-  #pytest -n auto models/demos/ufld_v2/demo/dataset_evaluation.py --timeout 1500
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/ufld_v2/demo/dataset_evaluation.py --timeout 1500
 }
 run_vgg_func() {
 
