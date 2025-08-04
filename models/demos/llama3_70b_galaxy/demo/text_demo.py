@@ -791,6 +791,8 @@ def test_demo_text(
         # Start decoding
         iteration = 0
         users_decoding = True
+        is_cur_pos_sharded = True
+        is_page_table_sharded = False
 
         # Replace the prefill token with reference token if PCC check enabled
         out_tok = prefilled_token if not pcc_check else ref_tokens[max_encoded_prompt_len]
@@ -837,6 +839,8 @@ def test_demo_text(
                     sampling_params=device_sampling_params,
                     reset_inputs=iteration == 0,
                     tt_out_logits_saved=tt_out_logits_saved,
+                    is_cur_pos_sharded=is_cur_pos_sharded,
+                    is_page_table_sharded=is_page_table_sharded,
                 )
                 read_events.append(read_event)
                 tt_out_toks.append(tt_out_tok)

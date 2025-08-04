@@ -388,6 +388,10 @@ def copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):
     """
     Helper function which copies host tensors to device tensors.
     If no device_tensors are provided, it creates new device tensors and returns them.
+    If device tensors are provided, it should be of equal length to host tensors with following cases supported:
+    - 1. no host tensor is provided, then a device tensor is expected to be created
+    - 2. if host tensor is provided but no device tensor, it creaters new device tensors
+    - 3. if host tensor is provided as well as device tensor, it copies data to the device tensor already created
     """
     if device_tensors is None:
         assert mesh_device is not None, "mesh_device is required when device_tensors is None"
@@ -399,9 +403,12 @@ def copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):
     else:
         for i in range(len(host_tensors)):
             if host_tensors[i] is None:
-                assert device_tensors[i] is None
                 continue
-            ttnn.copy_host_to_device_tensor(host_tensors[i], device_tensors[i])
+            if host_tensors[i] and not device_tensors[i]:
+                on_device = ttnn.to_device(host_tensors[i], device=mesh_device)
+                device_tensors[i] = on_device
+            if host_tensors[i] and device_tensors[i]:
+                ttnn.copy_host_to_device_tensor(host_tensors[i], device_tensors[i])
         return device_tensors
 
 
