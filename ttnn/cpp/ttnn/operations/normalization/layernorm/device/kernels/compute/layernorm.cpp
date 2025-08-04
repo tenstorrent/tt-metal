@@ -27,7 +27,7 @@ void MAIN {
     constexpr uint32_t do_beta = get_compile_time_arg_val(3);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
     constexpr uint32_t W = get_compile_time_arg_val(5);
-    constexpr uint32_t start_N_stride = get_compile_time_arg_val(6);
+    constexpr uint32_t tile_width = get_compile_time_arg_val(6);
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
@@ -140,7 +140,7 @@ void MAIN {
             for (uint32_t j = 0; j < blk; j++) {
                 copy_tile(cb_x, j, dst0);
                 welford(dst0, dst1, dst2, start_N, W, wt + j == Wt);
-                start_N += start_N_stride;
+                start_N += tile_width;
             }
             // we don't pop cb_x until we compute Ex
         }
@@ -181,8 +181,7 @@ void MAIN {
 #endif
 
 #ifdef RMSNORM
-        /* x^2
-         */
+        /* x^2 */
         mul_tiles_init(cb_xmm, cb_xmm);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_xmm, wt + blk);  // cumulative wait
