@@ -49,35 +49,40 @@ std::string GetCommonOptions() {
 
 namespace lite_fabric {
 
-void CompileLiteFabric(
+int CompileLiteFabric(
     std::shared_ptr<tt::Cluster> cluster,
-    const std::string& root_dir,
-    const std::string& out_dir,
+    const std::filesystem::path& root_dir,
+    const std::filesystem::path& out_dir,
     const std::vector<std::string>& extra_defines) {
-    const std::string lite_fabric_src = fmt::format("{}/tests/tt_metal/tt_metal/tunneling/lite_fabric.cpp", root_dir);
+    const auto root_dir_str = root_dir.string();
+    const auto out_dir_str = out_dir.string();
+
+    const std::string lite_fabric_src =
+        fmt::format("{}/tests/tt_metal/tt_metal/tunneling/lite_fabric.cpp", root_dir_str);
 
     std::vector<std::string> includes = {
         ".",
         "..",
-        root_dir,
-        root_dir + "/ttnn",
-        root_dir + "/ttnn/cpp",
-        root_dir + "/tt_metal",
-        root_dir + "/tt_metal/include",
-        root_dir + "/tt_metal/hw/inc",
-        root_dir + "/tt_metal/hw/inc/ethernet",
-        root_dir + "/tt_metal/hostdevcommon/api",
-        root_dir + "/tt_metal/hw/inc/debug",
-        root_dir + "/tt_metal/hw/inc/blackhole",
-        root_dir + "/tt_metal/hw/inc/blackhole/blackhole_defines",
-        root_dir + "/tt_metal/hw/inc/blackhole/noc",
-        root_dir + "/tt_metal/hw/ckernels/blackhole/metal/common",
-        root_dir + "/tt_metal/hw/ckernels/blackhole/metal/llk_io",
-        root_dir + "/tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc",
-        root_dir + "/tt_metal/api/",
-        root_dir + "/tt_metal/api/tt-metalium/",
-        root_dir + "/tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib"};
+        root_dir_str,
+        root_dir_str + "/ttnn",
+        root_dir_str + "/ttnn/cpp",
+        root_dir_str + "/tt_metal",
+        root_dir_str + "/tt_metal/include",
+        root_dir_str + "/tt_metal/hw/inc",
+        root_dir_str + "/tt_metal/hw/inc/ethernet",
+        root_dir_str + "/tt_metal/hostdevcommon/api",
+        root_dir_str + "/tt_metal/hw/inc/debug",
+        root_dir_str + "/tt_metal/hw/inc/blackhole",
+        root_dir_str + "/tt_metal/hw/inc/blackhole/blackhole_defines",
+        root_dir_str + "/tt_metal/hw/inc/blackhole/noc",
+        root_dir_str + "/tt_metal/hw/ckernels/blackhole/metal/common",
+        root_dir_str + "/tt_metal/hw/ckernels/blackhole/metal/llk_io",
+        root_dir_str + "/tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc",
+        root_dir_str + "/tt_metal/api/",
+        root_dir_str + "/tt_metal/api/tt-metalium/",
+        root_dir_str + "/tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib"};
 
+    // TODO remove hardcoded defines
     std::vector<std::string> defines{
         "ARCH_BLACKHOLE",
         "IS_NOT_POW2_NUM_L1_BANKS=1",
@@ -91,10 +96,12 @@ void CompileLiteFabric(
         "FW_BUILD",
         "NOC_INDEX=0",
         "DISPATCH_MESSAGE_ADDR=0",
+        "COMPILE_FOR_LITE_FABRIC=1",
         // Fabric
-        fmt::format("ROUTING_MODE={}", ROUTING_MODE_1D),
+        fmt::format("ROUTING_MODE={}", ROUTING_MODE_1D | ROUTING_MODE_LOW_LATENCY),
     };
 
+    // This assumes both chips are the same
     auto soc_d = cluster->get_soc_desc(0);
     auto pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
     CoreCoord pcie_core = pcie_cores.empty() ? soc_d.grid_size : pcie_cores[0];
@@ -118,7 +125,7 @@ void CompileLiteFabric(
 
     oss << lite_fabric_src << " ";
 
-    oss << "-c -o lite_fabric/lite_fabric.o";
+    oss << "-c -o " << out_dir_str << "/lite_fabric.o";
 
     std::string compile_cmd = oss.str();
     log_info(tt::LogMetal, "Compile LiteFabric command:\n{}", compile_cmd);
@@ -127,25 +134,26 @@ void CompileLiteFabric(
     std::filesystem::create_directories(out_dir);
     log_info(tt::LogMetal, "Compile LiteFabric output directory: {}", out_dir);
 
-    system(compile_cmd.c_str());
+    return system(compile_cmd.c_str());
 }
 
-void LinkLiteFabric(const std::string& root_dir, const std::string& out_dir) {
+int LinkLiteFabric(
+    const std::filesystem::path& root_dir, const std::filesystem::path& out_dir, const std::filesystem::path& elf_out) {
     std::ostringstream oss;
     oss << "riscv32-tt-elf-g++ ";
     oss << GetCommonOptions() << " ";
     oss << "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
-    oss << fmt::format("-T{}/runtime/hw/toolchain/blackhole/firmware_aerisc.ld ", root_dir);
-    oss << fmt::format("-Wl,-Map={}/lite_fabric.map ", out_dir);
-    oss << fmt::format("-save-temps {}/lite_fabric.o ", out_dir);
-    oss << fmt::format("{}/runtime/hw/lib/blackhole/tmu-crt0.o ", root_dir);
-    oss << fmt::format("{}/runtime/hw/lib/blackhole/substitutes.o ", root_dir);
-    oss << fmt::format("-o {}/lite_fabric.elf ", out_dir);
+    oss << fmt::format("-T{}/runtime/hw/toolchain/blackhole/firmware_aerisc.ld ", root_dir.string());
+    oss << fmt::format("-Wl,-Map={}/lite_fabric.map ", out_dir.string());
+    oss << fmt::format("-save-temps {}/lite_fabric.o ", out_dir.string());
+    oss << fmt::format("{}/runtime/hw/lib/blackhole/tmu-crt0.o ", root_dir.string());
+    oss << fmt::format("{}/runtime/hw/lib/blackhole/substitutes.o ", root_dir.string());
+    oss << fmt::format("-o {}", elf_out.string());
 
     std::string link_cmd = oss.str();
     log_info(tt::LogMetal, "Link LiteFabric command:\n{}", link_cmd);
 
-    system(link_cmd.c_str());
+    return system(link_cmd.c_str());
 }
 
 }  // namespace lite_fabric
