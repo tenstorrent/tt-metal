@@ -358,7 +358,6 @@ def test_sdxl_conv(mesh_device, didt_workload_iterations, determinism_check_inte
         enable_act_double_buffer=test_config["enable_act_double_buffer"],
         enable_weights_double_buffer=test_config["enable_weights_double_buffer"],
         enable_split_reader=False,
-        enable_subblock_padding=False,
         reshard_if_not_optimal=True,
         act_block_w_div=1,
         act_block_h_override=test_config["act_block_h_override"],
