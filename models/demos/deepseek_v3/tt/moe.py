@@ -45,8 +45,12 @@ class MoE(AbstractModule):
     ) -> WeightConfig:
         weight_config = {}
 
-        weight_config["moe_gate"] = MoEGate.convert_weights(hf_config, state_dict, output_path, mesh_device, "gate.")
-        weight_config["moe_experts"] = MoEExperts.convert_weights(hf_config, state_dict, output_path, mesh_device)
+        # Create subdirectories for each submodule
+        moe_gate_path = output_path / "moe_gate"
+        moe_experts_path = output_path / "moe_experts"
+
+        weight_config["moe_gate"] = MoEGate.convert_weights(hf_config, state_dict, moe_gate_path, mesh_device, "gate.")
+        weight_config["moe_experts"] = MoEExperts.convert_weights(hf_config, state_dict, moe_experts_path, mesh_device)
 
         return weight_config
 

@@ -69,7 +69,6 @@ def test_forward_pass(
         model_config = MoE.decode_model_config(hf_config, mesh_device)
 
     # Create a new model state with CCL
-    ccl = CCL1D(hf_config, mesh_device)
     model_state = MoE.create_state(hf_config, mesh_device, ccl)
 
     # Create RunConfig using both weight_config and model_config
