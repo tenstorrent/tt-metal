@@ -2,13 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import copy
+import torch
 
 import ttnn
+
+from models.experimental.uniad.reference.utils import Instances
 
 
 from models.experimental.uniad.tt.ttnn_head import TtBEVFormerTrackHead
 from models.experimental.uniad.tt.ttnn_resnet import TtResNet
-from models.experimental.uniad.reference.fpn import FPN
+from models.experimental.uniad.tt.ttnn_fpn import TtFPN
 from models.experimental.uniad.reference.runtime_tracker_base import RuntimeTrackerBase
 from models.experimental.uniad.tt.ttnn_query_interaction import TtQueryInteractionModule
 from models.experimental.uniad.tt.ttnn_memory_bank import TtMemoryBank
@@ -83,6 +87,9 @@ class TtUniAD:
         # super().__init__()
         # ------mvx starting
 
+        self.parameters = parameters
+        self.device = device
+
         if pts_bbox_head:
             # pts_train_cfg = train_cfg.pts if train_cfg else None
             # pts_bbox_head.update(train_cfg=pts_train_cfg)
@@ -154,10 +161,13 @@ class TtUniAD:
                 init_cfg=None,
             )
         if img_neck is not None:
-            self.img_neck = FPN(
-                in_channels=[512, 1024, 2048],
-                out_channels=256,
-                num_outs=4,
+            self.img_neck = TtFPN(
+                conv_args=self.parameters.img_neck["model_args"],
+                conv_pth=self.parameters.img_neck,
+                device=device
+                # in_channels=[512, 1024, 2048],
+                # out_channels=256,
+                # num_outs=4,
             )
 
         self.train_cfg = train_cfg
@@ -180,7 +190,7 @@ class TtUniAD:
         # -------------- mvx complte
 
         # self.grid_mask = GridMask(True, True, rotate=1, offset=False, ratio=0.5, mode=1, prob=0.7)
-        self.use_grid_mask = use_grid_mask
+        self.use_grid_mask = False
         self.fp16_enabled = False
         self.embed_dims = embed_dims
         self.num_query = num_query
@@ -394,7 +404,7 @@ class TtUniAD:
         dummy_metas = None
         return self.forward_test(img=img, img_metas=[[dummy_metas]])
 
-    def forward(self, return_loss=True, **kwargs):
+    def __call__(self, return_loss=True, **kwargs):
         """Calls either forward_train or forward_test depending on whether
         return_loss=True.
         Note this setting will change the expected inputs. When
@@ -409,3 +419,506 @@ class TtUniAD:
             return self.forward_train(**kwargs)
         else:
             return self.forward_test(**kwargs)
+
+    def forward_test(
+        self,
+        img=None,
+        img_metas=None,
+        l2g_t=None,
+        l2g_r_mat=None,
+        timestamp=None,
+        gt_lane_labels=None,
+        gt_lane_masks=None,
+        rescale=False,
+        sdc_planning=None,
+        sdc_planning_mask=None,
+        command=None,
+        gt_segmentation=None,
+        gt_instance=None,
+        gt_occ_img_is_valid=None,
+        **kwargs,
+    ):
+        """Test function"""
+
+        for var, name in [(img_metas, "img_metas")]:
+            if not isinstance(var, list):
+                raise TypeError("{} must be a list, but got {}".format(name, type(var)))
+        img = [img] if img is None else img
+
+        if img_metas[0][0]["scene_token"] != self.prev_frame_info["scene_token"]:
+            # the first sample of each scene is truncated
+            self.prev_frame_info["prev_bev"] = None
+        # update idx
+        self.prev_frame_info["scene_token"] = img_metas[0][0]["scene_token"]
+
+        # do not use temporal information
+        if not self.video_test_mode:
+            self.prev_frame_info["prev_bev"] = None
+
+        # Get the delta of ego position and angle between two timestamps.
+        tmp_pos = copy.deepcopy(img_metas[0][0]["can_bus"][:3])
+        tmp_angle = copy.deepcopy(img_metas[0][0]["can_bus"][-1])
+        # first frame
+        if self.prev_frame_info["scene_token"] is None:
+            img_metas[0][0]["can_bus"][:3] = 0
+            img_metas[0][0]["can_bus"][-1] = 0
+        # following frames
+        else:
+            img_metas[0][0]["can_bus"][:3] -= self.prev_frame_info["prev_pos"]
+            img_metas[0][0]["can_bus"][-1] -= self.prev_frame_info["prev_angle"]
+        self.prev_frame_info["prev_pos"] = tmp_pos
+        self.prev_frame_info["prev_angle"] = tmp_angle
+
+        img = img[0]
+        img_metas = img_metas[0]
+        timestamp = timestamp[0] if timestamp is not None else None
+
+        result = [dict() for i in range(len(img_metas))]
+        result_track = self.simple_test_track(img, l2g_t, l2g_r_mat, img_metas, timestamp)
+
+        # Upsample bev for tiny model
+        result_track[0] = self.upsample_bev_if_tiny(result_track[0])
+
+        bev_embed = result_track[0]["bev_embed"]
+
+        if self.with_seg_head:
+            result_seg = self.seg_head.forward_test(bev_embed, gt_lane_labels, gt_lane_masks, img_metas, rescale)
+
+        if self.with_motion_head:
+            result_motion, outs_motion = self.motion_head.forward_test(
+                bev_embed, outs_track=result_track[0], outs_seg=result_seg[0]
+            )
+            outs_motion["bev_pos"] = result_track[0]["bev_pos"]
+
+        outs_occ = dict()
+        if self.with_occ_head:
+            occ_no_query = outs_motion["track_query"].shape[1] == 0
+            outs_occ = self.occ_head(
+                bev_embed,
+                outs_motion,
+                no_query=occ_no_query,
+                gt_segmentation=gt_segmentation,
+                gt_instance=gt_instance,
+                gt_img_is_valid=gt_occ_img_is_valid,
+            )
+            result[0]["occ"] = outs_occ
+
+        if self.with_planning_head:
+            planning_gt = dict(
+                segmentation=gt_segmentation,
+                sdc_planning=sdc_planning,
+                sdc_planning_mask=sdc_planning_mask,
+                command=command,
+            )
+            result_planning = self.planning_head.forward_test(bev_embed, outs_motion, outs_occ, command)
+            result[0]["planning"] = dict(
+                planning_gt=planning_gt,
+                result_planning=result_planning,
+            )
+
+        pop_track_list = ["prev_bev", "bev_pos", "bev_embed", "track_query_embeddings", "sdc_embedding"]
+        result_track[0] = pop_elem_in_result(result_track[0], pop_track_list)
+
+        if self.with_seg_head:
+            result_seg[0] = pop_elem_in_result(result_seg[0], pop_list=["pts_bbox", "args_tuple"])
+        if self.with_motion_head:
+            result_motion[0] = pop_elem_in_result(result_motion[0])
+        if self.with_occ_head:
+            result[0]["occ"] = pop_elem_in_result(
+                result[0]["occ"],
+                pop_list=[
+                    "seg_out_mask",
+                    "flow_out",
+                    "future_states_occ",
+                    "pred_ins_masks",
+                    "pred_raw_occ",
+                    "pred_ins_logits",
+                    "pred_ins_sigmoid",
+                ],
+            )
+
+        for i, res in enumerate(result):
+            res["token"] = img_metas[i]["sample_idx"]
+            res.update(result_track[i])
+            if self.with_motion_head:
+                res.update(result_motion[i])
+            if self.with_seg_head:
+                res.update(result_seg[i])
+
+        return result
+
+    def _generate_empty_tracks(self):
+        track_instances = Instances((1, 1))  # used as torch need ttnn support(will be replaced soon)
+        num_queries, dim = self.parameters["query_embedding"].weight.shape  # (300, 256 * 2)
+        # device = self.query_embedding.weight.device
+        query = ttnn.to_layout(self.parameters["query_embedding"].weight, layout=ttnn.TILE_LAYOUT)
+        track_instances.ref_pts = ttnn.to_torch(
+            self.reference_points(
+                query[..., : dim // 2],
+                self.parameters["reference_points"]["weight"],
+                bias=self.parameters["reference_points"]["bias"],
+            )
+        )
+
+        # init boxes: xy, wl, z, h, sin, cos, vx, vy, vz
+        pred_boxes_init = ttnn.zeros(
+            (len(track_instances), 10), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
+        )
+        track_instances.query = ttnn.to_torch(query)
+
+        track_instances.output_embedding = ttnn.to_torch(ttnn.zeros((num_queries, dim >> 1), device=self.device))
+
+        track_instances.obj_idxes = ttnn.to_torch(
+            ttnn.full((len(track_instances),), -1, dtype=ttnn.int32, device=self.device, layout=ttnn.TILE_LAYOUT)
+        )
+        track_instances.matched_gt_idxes = ttnn.to_torch(
+            ttnn.full((len(track_instances),), -1, dtype=ttnn.int32, device=self.device, layout=ttnn.TILE_LAYOUT)
+        )
+        track_instances.disappear_time = ttnn.to_torch(
+            ttnn.zeros((len(track_instances),), device=self.device, layout=ttnn.TILE_LAYOUT)
+        )
+
+        track_instances.iou = ttnn.to_torch(
+            ttnn.zeros((len(track_instances),), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
+        )
+        track_instances.scores = ttnn.to_torch(
+            ttnn.zeros((len(track_instances),), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
+        )
+        track_instances.track_scores = ttnn.to_torch(
+            ttnn.zeros((len(track_instances),), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
+        )
+        # xy, wl, z, h, sin, cos, vx, vy, vz
+        track_instances.pred_boxes = ttnn.to_torch(pred_boxes_init)
+
+        track_instances.pred_logits = ttnn.to_torch(
+            ttnn.zeros(
+                (len(track_instances), self.num_classes),
+                dtype=ttnn.bfloat16,
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+            )
+        )
+
+        mem_bank_len = self.mem_bank_len
+        track_instances.mem_bank = ttnn.to_torch(
+            ttnn.zeros(
+                (len(track_instances), mem_bank_len, dim // 2),
+                dtype=ttnn.bfloat16,
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+            )
+        )
+
+        track_instances.mem_padding_mask = ttnn.to_torch(
+            ttnn.ones(
+                (len(track_instances), mem_bank_len), dtype=ttnn.int32, device=self.device, layout=ttnn.TILE_LAYOUT
+            )
+        )
+        track_instances.save_period = ttnn.to_torch(
+            ttnn.zeros((len(track_instances),), dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT)
+        )
+
+        return track_instances
+
+    def simple_test_track(
+        self,
+        img=None,
+        l2g_t=None,
+        l2g_r_mat=None,
+        img_metas=None,
+        timestamp=None,
+    ):
+        """only support bs=1 and sequential input"""
+
+        bs = img.shape[0]
+        # img_metas = img_metas[0]
+
+        """ init track instances for first frame """
+        if self.test_track_instances is None or img_metas[0]["scene_token"] != self.scene_token:
+            self.timestamp = timestamp
+            self.scene_token = img_metas[0]["scene_token"]
+            self.prev_bev = None
+            track_instances = self._generate_empty_tracks()
+            time_delta, l2g_r1, l2g_t1, l2g_r2, l2g_t2 = None, None, None, None, None
+        else:
+            track_instances = self.test_track_instances
+            time_delta = timestamp - self.timestamp
+            l2g_r1 = self.l2g_r_mat
+            l2g_t1 = self.l2g_t
+            l2g_r2 = l2g_r_mat
+            l2g_t2 = l2g_t
+
+        """ get time_delta and l2g r/t infos """
+        """ update frame info for next frame"""
+        self.timestamp = timestamp
+        self.l2g_t = l2g_t
+        self.l2g_r_mat = l2g_r_mat
+
+        """ predict and update """
+        prev_bev = self.prev_bev
+        frame_res = self._forward_single_frame_inference(
+            img,
+            img_metas,
+            track_instances,
+            prev_bev,
+            l2g_r1,
+            l2g_t1,
+            l2g_r2,
+            l2g_t2,
+            time_delta,
+        )
+
+        self.prev_bev = frame_res["bev_embed"]
+        track_instances = frame_res["track_instances"]
+        track_instances_fordet = frame_res["track_instances_fordet"]
+
+        self.test_track_instances = track_instances
+        results = [dict()]
+        get_keys = [
+            "bev_embed",
+            "bev_pos",
+            "track_query_embeddings",
+            "track_bbox_results",
+            "boxes_3d",
+            "scores_3d",
+            "labels_3d",
+            "track_scores",
+            "track_ids",
+        ]
+        if self.with_motion_head:
+            get_keys += ["sdc_boxes_3d", "sdc_scores_3d", "sdc_track_scores", "sdc_track_bbox_results", "sdc_embedding"]
+        results[0].update({k: frame_res[k] for k in get_keys})
+        results = self._det_instances2results(track_instances_fordet, results, img_metas)
+        return results
+
+    def extract_img_feat(self, img, len_queue=None):
+        """Extract features of images."""
+        if img is None:
+            return None
+        assert len(img.shape) == 5
+        img = torch.randn(1, 6, 3, 640, 360)  # added by me
+        img = ttnn.from_torch(img, device=self.device, dtype=ttnn.bfloat16)  # added by me
+        B, N, C, H, W = img.shape
+        img = ttnn.reshape(img, (B * N, C, H, W))
+        if self.use_grid_mask:
+            img = self.grid_mask(img)
+        img = ttnn.permute(img, (0, 2, 3, 1))
+        img = img.reshape(
+            1,
+            1,
+            (img.shape[0] * img.shape[1] * img.shape[2]),
+            img.shape[3],
+        )
+        img_feats = self.img_backbone(img)
+        if isinstance(img_feats, dict):
+            img_feats = list(img_feats.values())
+        if True:  # self.with_img_neck:
+            img_feats = self.img_neck(img_feats)
+
+        img_feats = [
+            ttnn.sharded_to_interleaved(img_feats[0], memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.sharded_to_interleaved(img_feats[1], memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.sharded_to_interleaved(img_feats[2], memory_config=ttnn.DRAM_MEMORY_CONFIG),
+            ttnn.sharded_to_interleaved(img_feats[3], memory_config=ttnn.DRAM_MEMORY_CONFIG),
+        ]
+        img_feats = [
+            ttnn.reshape(img_feats[0], (6, 80, 45, 256)),
+            ttnn.reshape(img_feats[1], (6, 40, 23, 256)),
+            ttnn.reshape(img_feats[2], (6, 20, 12, 256)),
+            ttnn.reshape(img_feats[3], (6, 10, 6, 256)),
+        ]
+        img_feats = [
+            ttnn.permute(img_feats[0], (0, 3, 1, 2)),
+            ttnn.permute(img_feats[1], (0, 3, 1, 2)),
+            ttnn.permute(img_feats[2], (0, 3, 1, 2)),
+            ttnn.permute(img_feats[3], (0, 3, 1, 2)),
+        ]
+
+        img_feats_reshaped = []
+        for img_feat in img_feats:
+            _, c, h, w = img_feat.shape
+            if len_queue is not None:
+                img_feat_reshaped = ttnn.reshape(img_feat, (B // len_queue, len_queue, N, c, h, w))
+            else:
+                img_feat_reshaped = ttnn.reshape(img_feat, (B, N, c, h, w))
+            img_feats_reshaped.append(img_feat_reshaped)
+        return img_feats_reshaped
+
+    def _track_instances2results(self, track_instances, img_metas, with_mask=True):
+        bbox_dict = dict(
+            cls_scores=track_instances.pred_logits,
+            bbox_preds=track_instances.pred_boxes,
+            track_scores=track_instances.scores,
+            obj_idxes=track_instances.obj_idxes,
+        )
+        # bboxes_dict = self.bbox_coder.decode(bbox_dict, with_mask=with_mask)[0]
+        bboxes_dict = self.bbox_coder.decode(bbox_dict, with_mask=with_mask, img_metas=img_metas)[0]
+        bboxes = bboxes_dict["bboxes"]
+        # bboxes[:, 2] = bboxes[:, 2] - bboxes[:, 5] * 0.5
+        bboxes = img_metas[0]["box_type_3d"](bboxes, 9)
+        labels = bboxes_dict["labels"]
+        scores = bboxes_dict["scores"]
+        bbox_index = bboxes_dict["bbox_index"]
+
+        track_scores = bboxes_dict["track_scores"]
+        obj_idxes = bboxes_dict["obj_idxes"]
+        result_dict = dict(
+            boxes_3d=bboxes.to("cpu"),
+            scores_3d=scores.cpu(),
+            labels_3d=labels.cpu(),
+            track_scores=track_scores.cpu(),
+            bbox_index=bbox_index.cpu(),
+            track_ids=obj_idxes.cpu(),
+            mask=bboxes_dict["mask"].cpu(),
+            track_bbox_results=[
+                [bboxes.to("cpu"), scores.cpu(), labels.cpu(), bbox_index.cpu(), bboxes_dict["mask"].cpu()]
+            ],
+        )
+        return result_dict
+
+    def get_bevs(self, imgs, img_metas, prev_img=None, prev_img_metas=None, prev_bev=None):
+        if prev_img is not None and prev_img_metas is not None:
+            assert prev_bev is None
+            prev_bev = self.get_history_bev(prev_img, prev_img_metas)
+
+        img_feats = self.extract_img_feat(img=imgs)
+        if self.freeze_bev_encoder:
+            with torch.no_grad():
+                bev_embed, bev_pos = self.pts_bbox_head.get_bev_features(
+                    mlvl_feats=img_feats, img_metas=img_metas, prev_bev=prev_bev
+                )
+        else:
+            bev_embed, bev_pos = self.pts_bbox_head.get_bev_features(
+                mlvl_feats=img_feats, img_metas=img_metas, prev_bev=prev_bev
+            )
+
+        if bev_embed.shape[1] == self.bev_h * self.bev_w:
+            bev_embed = ttnn.permute(bev_embed, (1, 0, 2))
+
+        assert bev_embed.shape[0] == self.bev_h * self.bev_w
+        return bev_embed, bev_pos
+
+    def select_active_track_query(self, track_instances, active_index, img_metas, with_mask=True):
+        result_dict = self._track_instances2results(track_instances[active_index], img_metas, with_mask=with_mask)
+        result_dict["track_query_embeddings"] = track_instances.output_embedding[active_index][
+            result_dict["bbox_index"]
+        ][result_dict["mask"]]
+        result_dict["track_query_matched_idxes"] = track_instances.matched_gt_idxes[active_index][
+            result_dict["bbox_index"]
+        ][result_dict["mask"]]
+        return result_dict
+
+    def select_sdc_track_query(self, sdc_instance, img_metas):
+        out = dict()
+        result_dict = self._track_instances2results(sdc_instance, img_metas, with_mask=False)
+        out["sdc_boxes_3d"] = result_dict["boxes_3d"]
+        out["sdc_scores_3d"] = result_dict["scores_3d"]
+        out["sdc_track_scores"] = result_dict["track_scores"]
+        out["sdc_track_bbox_results"] = result_dict["track_bbox_results"]
+        out["sdc_embedding"] = sdc_instance.output_embedding[0]
+        return out
+
+    def _forward_single_frame_inference(
+        self,
+        img,
+        img_metas,
+        track_instances,
+        prev_bev=None,
+        l2g_r1=None,
+        l2g_t1=None,
+        l2g_r2=None,
+        l2g_t2=None,
+        time_delta=None,
+    ):
+        """
+        img: B, num_cam, C, H, W = img.shape
+        """
+
+        """ velo update """
+        active_inst = track_instances[track_instances.obj_idxes >= 0]
+        other_inst = track_instances[track_instances.obj_idxes < 0]
+
+        if l2g_r2 is not None and len(active_inst) > 0 and l2g_r1 is not None:
+            ref_pts = active_inst.ref_pts
+            velo = active_inst.pred_boxes[:, -2:]
+            ref_pts = self.velo_update(ref_pts, velo, l2g_r1, l2g_t1, l2g_r2, l2g_t2, time_delta=time_delta)
+            ref_pts = ref_pts.squeeze(0)
+            dim = active_inst.query.shape[-1]
+            active_inst.ref_pts = self.reference_points(active_inst.query[..., : dim // 2])
+            active_inst.ref_pts[..., :2] = ref_pts[..., :2]
+
+        track_instances = Instances.cat([other_inst, active_inst])
+
+        # NOTE: You can replace BEVFormer with other BEV encoder and provide bev_embed here
+        bev_embed, bev_pos = self.get_bevs(img, img_metas, prev_bev=prev_bev)
+        det_output = self.pts_bbox_head.get_detections(
+            bev_embed,
+            object_query_embeds=ttnn.from_torch(
+                track_instances.query, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+            ),
+            ref_points=ttnn.from_torch(
+                track_instances.ref_pts, device=self.device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+            ),
+            img_metas=img_metas,
+        )
+        output_classes = det_output["all_cls_scores"]
+        output_coords = det_output["all_bbox_preds"]
+        last_ref_pts = det_output["last_ref_points"]
+        query_feats = det_output["query_feats"]
+
+        out = {
+            "pred_logits": output_classes,
+            "pred_boxes": output_coords,
+            "ref_pts": last_ref_pts,
+            "bev_embed": bev_embed,
+            "query_embeddings": query_feats,
+            "all_past_traj_preds": det_output["all_past_traj_preds"],
+            "bev_pos": bev_pos,
+        }
+
+        """ update track instances with predict results """
+        track_scores = ttnn.to_torch(ttnn.sigmoid(output_classes[-1, 0, :])).max(dim=-1).values
+        # each track will be assigned an unique global id by the track base.
+        track_instances.scores = track_scores
+        # track_instances.track_scores = track_scores  # [300]
+        track_instances.pred_logits = ttnn.to_torch(output_classes[-1, 0])  # [300, num_cls]
+        track_instances.pred_boxes = ttnn.to_torch(output_coords[-1, 0])  # [300, box_dim]
+        track_instances.output_embedding = ttnn.to_torch(query_feats[-1][0])  # [300, feat_dim]
+        track_instances.ref_pts = ttnn.to_torch(last_ref_pts[0])
+        # hard_code: assume the 901 query is sdc query
+        track_instances.obj_idxes[900] = -2
+        """ update track base """
+        self.track_base.update(track_instances, None)
+
+        active_index = (track_instances.obj_idxes >= 0) & (
+            track_instances.scores >= self.track_base.filter_score_thresh
+        )  # filter out sleep objects
+        out.update(self.select_active_track_query(track_instances, active_index, img_metas))
+        out.update(self.select_sdc_track_query(track_instances[track_instances.obj_idxes == -2], img_metas))
+
+        # from models.experimental.uniad.tt.ttnn_utils import Instances as TtInstances
+        # tt_track_instances = TtInstances((1, 1))
+        # tt_track_instances.ref_pts = ttnn.from_torch(track_instances.ref_pts, device=self.device)
+        # tt_track_instances.query = ttnn.from_torch(track_instances.query, device=self.device, layout=ttnn.TILE_LAYOUT)
+        # tt_track_instances.output_embedding = ttnn.from_torch(track_instances.output_embedding, dtype=ttnn.bfloat16, device=self.device)
+        # tt_track_instances.obj_idxes = ttnn.from_torch(track_instances.obj_idxes, device=self.device)
+        # tt_track_instances.scores = ttnn.from_torch(track_instances.scores, device=self.device)
+        # tt_track_instances.save_period = ttnn.from_torch(track_instances.save_period, device=self.device, layout=ttnn.TILE_LAYOUT)
+        # tt_track_instances.mem_padding_mask = track_instances.mem_padding_mask
+        # print("track_instances.mem_padding_mask",track_instances.mem_padding_mask)
+        # print("tt_track_instances.mem_padding_mask",tt_track_instances.mem_padding_mask)
+        # tt_track_instances.mem_bank = ttnn.from_torch(track_instances.mem_bank, dtype=ttnn.bfloat16, device=self.device)
+
+        """ update with memory_bank """
+        if self.memory_bank is not None:
+            track_instances = self.memory_bank(track_instances)
+
+        """  Update track instances using matcher """
+        tmp = {}
+        tmp["init_track_instances"] = self._generate_empty_tracks()
+        tmp["track_instances"] = track_instances
+        out_track_instances = self.query_interact(tmp)
+        out["track_instances_fordet"] = track_instances
+        out["track_instances"] = out_track_instances
+        out["track_obj_idxes"] = track_instances.obj_idxes
+        return out

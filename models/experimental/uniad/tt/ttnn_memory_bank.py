@@ -140,7 +140,7 @@ class TtMemoryBank:
 
         return track_instances
 
-    def forward(self, track_instances: Instances, update_bank=True) -> Instances:
+    def __call__(self, track_instances: Instances, update_bank=True) -> Instances:
         track_instances = self._forward_temporal_attn(track_instances)
         if update_bank:
             self.update(track_instances, self.memory_bank_score_thresh)
