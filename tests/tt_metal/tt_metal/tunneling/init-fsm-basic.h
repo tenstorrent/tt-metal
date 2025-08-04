@@ -21,7 +21,7 @@
 #include "dataflow_api.h"
 #include "ethernet/tunneling.h"
 #include "risc_common.h"
-#include "fabric_lite.hpp"
+#include "lite_fabric.hpp"
 #include "blackhole/dev_mem_map.h"
 
 namespace lite_fabric {
@@ -101,21 +101,21 @@ void routing_init(volatile lite_fabric::LiteFabricConfig* config_struct) {
                     wait_val(handshake_addr, 1);
                     // Safe to modify config_struct now
                     config_struct->primary_local_handshake = 2;
-                    internal_::eth_send_packet(0, local_handshake_addr >> 4, handshake_addr >> 4, 1 << 4);
+                    internal_::eth_send_packet(0, local_handshake_addr >> 4, handshake_addr >> 4, 1);
 
                     // Wait for ack
                     wait_val(handshake_addr, 3);
                 } else {
                     // Send first signal to mmio to indicate we have started
                     config_struct->primary_local_handshake = 1;
-                    internal_::eth_send_packet(0, local_handshake_addr >> 4, handshake_addr >> 4, 1 << 4);
+                    internal_::eth_send_packet(0, local_handshake_addr >> 4, handshake_addr >> 4, 1);
 
                     // wait for signal from mmio
                     wait_val(handshake_addr, 2);
 
                     // send ack to mmio
                     config_struct->primary_local_handshake = 3;
-                    internal_::eth_send_packet(0, local_handshake_addr >> 4, handshake_addr >> 4, 1 << 4);
+                    internal_::eth_send_packet(0, local_handshake_addr >> 4, handshake_addr >> 4, 1);
                 }
                 config_struct->current_state = lite_fabric::InitState::READY;
                 break;
@@ -125,6 +125,7 @@ void routing_init(volatile lite_fabric::LiteFabricConfig* config_struct) {
                 ASSERT(is_mmio);
                 config_struct->is_primary = false;
                 config_struct->is_mmio = false;
+                config_struct->routing_enabled = 1;
                 config_struct->current_state = lite_fabric::InitState::ETH_HANDSHAKE_NEIGHBOUR;
                 config_struct->initial_state = lite_fabric::InitState::ETH_HANDSHAKE_NEIGHBOUR;
 
@@ -134,12 +135,13 @@ void routing_init(volatile lite_fabric::LiteFabricConfig* config_struct) {
 
                 break;
             }
-            case lite_fabric::InitState::READY: {
-                DPRINT << "Init complete" << ENDL();
-                return;
-            }
             case lite_fabric::InitState::ETH_HANDSHAKE_LOCAL: {
                 break;
+            }
+            default: {
+                ASSERT(false);
+                while (true) {
+                };
             }
         }
     }

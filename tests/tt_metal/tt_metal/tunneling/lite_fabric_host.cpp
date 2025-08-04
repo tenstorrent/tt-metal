@@ -2,27 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <utility>
-#include <memory>
-
-#include "host_api.hpp"
-#include "tt_metal.hpp"
-#include "fabric_lite.hpp"
-
-#include "kernel_types.hpp"
-#include "program.hpp"
-#include "rtoptions.hpp"
-#include "tt_cluster.hpp"
-#include "assert.hpp"
-#include "context/metal_context.hpp"
-#include "hal_types.hpp"
-#include "jit_build/build_env_manager.hpp"
-#include "impl/kernels/kernel_impl.hpp"
-#include "core_coord.hpp"
-#include "data_types.hpp"
 #include "lite_fabric_host.hpp"
-#include <umd/device/types/xy_pair.h>
-#include <tt-metalium/control_plane.hpp>
+#include <tt-logger/tt-logger.hpp>
 
 namespace {
 uint32_t GetStateAddress() {
@@ -35,8 +16,6 @@ uint32_t GetStateAddress() {
 }  // namespace
 
 namespace lite_fabric {
-
-using chip_id_t = tt::umd::chip_id_t;
 
 uint32_t GetEthChannelMask(chip_id_t device_id) {
     auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -174,6 +153,7 @@ std::unique_ptr<tt::tt_metal::Program> LaunchLiteFabricWithMetal(
     config.binary_addr = 0;
     config.binary_size = 0;
     config.eth_chans_mask = desc.enabled_eth_channels.at(0);
+    config.routing_enabled = true;
 
     // Compile kernels
     auto pgm = std::make_unique<tt::tt_metal::Program>();
@@ -202,8 +182,7 @@ std::unique_ptr<tt::tt_metal::Program> LaunchLiteFabricWithMetal(
 
     // Write configuration struct
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto config_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_LITE_CONFIG);
+    auto config_addr = lite_fabric::LiteFabricMemoryMap::get_address();
     for (auto tunnel_1x : desc.tunnels_from_mmio) {
         // These should be the same for all cores
         auto [bin, local_init] = lite_fabric::GetBinaryMetadata(devices[0]->build_id(), *pgm, tunnel_1x.mmio_kernel);
@@ -216,12 +195,13 @@ std::unique_ptr<tt::tt_metal::Program> LaunchLiteFabricWithMetal(
 
         log_info(
             tt::LogMetal,
-            "{} text={:#x}, size={:#x}, local_init={:#x}, config={:#x}",
+            "{} text={:#x}, size={:#x}, local_init={:#x}, config={:#x}, routing_enabled={}",
             tunnel_1x.mmio_core_logical,
             config.binary_addr,
             config.binary_size,
             local_init,
-            config_addr);
+            config_addr,
+            config.routing_enabled);
         cluster.write_core(
             (void*)&config, sizeof(lite_fabric::LiteFabricConfig), tunnel_1x.mmio_cxy_virtual(), config_addr);
     }
@@ -231,6 +211,12 @@ std::unique_ptr<tt::tt_metal::Program> LaunchLiteFabricWithMetal(
 
     for (auto tunnel_1x : desc.tunnels_from_mmio) {
         lite_fabric::wait_for_state(cluster, tunnel_1x.mmio_cxy_virtual(), lite_fabric::InitState::READY);
+        log_info(
+            tt::LogMetal,
+            "Lite Fabric {} {} (virtual={}) is ready",
+            tunnel_1x.mmio_core_logical,
+            tunnel_1x.mmio_core_virtual.y,
+            tunnel_1x.mmio_core_virtual.x);
     }
 
     return pgm;
