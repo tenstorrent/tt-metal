@@ -32,8 +32,8 @@ def main():
 
     with torch.no_grad():
         # Load the model with uninitialized weights
-        print("Loading uninitialized model")
-        model = load_model_uninitialized(args.local_model_path)
+        print("Loading uninitialized model from repo version")
+        model = load_model_uninitialized()
         model.eval()
         print("Model loaded successfully")
 

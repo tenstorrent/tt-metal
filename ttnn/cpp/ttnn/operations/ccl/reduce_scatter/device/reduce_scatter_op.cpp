@@ -219,11 +219,6 @@ std::vector<Tensor> reduce_scatter(
     ttnn::ccl::Topology topology,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel) {
-    std::vector<IDevice*> devices;
-    devices.reserve(input_tensors.size());
-    for (const auto& input_tensor : input_tensors) {
-        devices.push_back(input_tensor.device());
-    }
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (const auto& input_tensor : input_tensors) {
@@ -236,7 +231,7 @@ std::vector<Tensor> reduce_scatter(
             topology,
             user_defined_num_workers,
             user_defined_num_buffers_per_channel,
-            devices));
+            ttnn::ccl::get_active_physical_devices(input_tensors)));
     }
     return output_tensors;
 }

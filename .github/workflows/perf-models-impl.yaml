@@ -72,9 +72,6 @@ jobs:
               # e2e performant test is present in .../vit/demo folder only
               - models/demos/wormhole/vit/demo/
 
-          - name: tt_transformers
-            model-list:
-              - models/demos/qwen/tests
     name: "${{ matrix.model-group.name }} ${{ matrix.test-info.name }}"
     defaults:
       run:
@@ -116,11 +113,7 @@ jobs:
             -e GITHUB_ACTIONS=true
           install_wheel: true
           run_args: |
-            export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-            export WH_ARCH_YAML=$MAGIC_ENV
-
             if [[ "${{ matrix.model-group.name }}" == "other" ]]; then
-              unset WH_ARCH_YAML
               echo "No environment variable engineering needed for other models"
             elif [[ "${{ matrix.model-group.name }}" == "tt_transformers" ]]; then
               export QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct
