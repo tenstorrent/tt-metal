@@ -1145,19 +1145,21 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         (input_slice_width + params.padding_n4[2] + params.padding_n4[3]) * shard_shape[1] * 2;
     const float output_size_margin = 1.0f;
 
-    float float_shard_height = ((float)shard_shape[0]) / params.input_width;
-    uint32_t approx_halo_size =
-        (float_shard_height + (params.dilation[0] * params.kernel_size[0] / 2)) * input_size / float_shard_height;
-
-    log_info(
+    log_debug(
         tt::LogOp,
-        "For num_slices = {}, input_size = {}, approx_max_halo_size = {}, old_halo_size = {}, conv size = {}",
+        "Conv DRAM Auto slicing: num_slices = {}, input_size = {}, approx_max_halo_size = {}, conv size = {}",
         dram_slice_config.num_slices,
         input_size,
         approx_max_halo_size,
-        approx_halo_size,
         l1_usage);
     if (conv_config.in_place) {
+        if (params.stride[0] > params.kernel_size[0] || params.stride[1] > params.kernel_size[1]) {
+            log_warning(
+                tt::LogOp,
+                "conv_config has in-place halo enabled, but it may be disabled as the halo output is smaller than the "
+                "input. This may lead to OOM errors with auto-slicing. If so, please disable in-place halo in the "
+                "Conv2dConfig.");
+        }
         return output_size_margin *
                (approx_max_halo_size + l1_usage.tensor_allocation_size + l1_usage.CB_allocation_size);
     }
