@@ -90,7 +90,7 @@ Fused operation uses a different parallelization scheme internally depending on 
 
 
 #### 2.2.2 Decode mode specifics
-The cos/sin matrices, are generated in two slightly different ways, depending on the mode of operation. For *prefill* mode, the cos/sin matrices are computed once at intialization using the *prefill* sequence length, and then passed into the RoPE OP. However, in *decode* mode, since the position index of each user is updated from token-to-token, the cos/sin matrices must be updated across iterations. Here, we leverage our `RotarySetup` module, that can be used at each decode iteration to get the corresponding cos/sin matrices.
+The cos/sin matrices, are generated in two slightly different ways, depending on the mode of operation. For *prefill* mode, the cos/sin matrices are computed once at initialization using the *prefill* sequence length, and then passed into the RoPE OP. However, in *decode* mode, since the position index of each user is updated from token-to-token, the cos/sin matrices must be updated across iterations. Here, we leverage our `RotarySetup` module, that can be used at each decode iteration to get the corresponding cos/sin matrices.
 
 The following code sample shows how `RotarySetup` can be used in decode mode:
 ```py
