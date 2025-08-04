@@ -11,6 +11,7 @@ namespace ttnn {
 namespace operations::data_movement {
 
 struct ExecuteMoeExpertTokenRemap {
+    static constexpr auto REDUCTION_SIZE = MoeExpertTokenRemapDeviceOperation::REDUCTION_SIZE;
     static std::vector<ttnn::Tensor> invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor,
@@ -19,7 +20,7 @@ struct ExecuteMoeExpertTokenRemap {
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
         const std::optional<ttnn::Tensor>& optional_reduced_tensor = std::nullopt,
-        uint32_t reduction_size = MoeExpertTokenRemapDeviceOperation::REDUCTION_SIZE);
+        uint32_t reduction_size = REDUCTION_SIZE);
 };
 
 }  // namespace operations::data_movement

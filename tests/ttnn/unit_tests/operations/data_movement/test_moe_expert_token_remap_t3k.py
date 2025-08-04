@@ -15,7 +15,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_to_all_dispatch_t3000 import 
     get_expert_indices,
     get_metadata_tensor,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
 
 REDUCTION_SIZE = 16
 
@@ -188,8 +188,8 @@ def test_moe_expert_token_remaps(
         assert_with_pcc(mapping_test_torch, mapping_ref)
 
         reduced_test_torch = ttnn.to_torch(reduced_test, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-        assert_with_pcc(reduced_test_torch, reduced_ref)
-        
+        assert_equal(reduced_test_torch, reduced_ref)
+
 
 @pytest.mark.parametrize(
     "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
