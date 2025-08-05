@@ -80,7 +80,7 @@ public:
 
     // Returns distributed context for `mesh_id`.
     // Throws if `mesh_id` is unknown.
-    const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> get_distributed_context(
+    const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& get_distributed_context(
         MeshId mesh_id) const;
 
     // Returns the distributed context with only one host.

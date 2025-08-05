@@ -2145,7 +2145,7 @@ bool ControlPlane::is_local_mesh(MeshId mesh_id) const {
     return std::find(local_mesh_ids.begin(), local_mesh_ids.end(), mesh_id) != local_mesh_ids.end();
 }
 
-const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> ControlPlane::get_distributed_context(
+const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& ControlPlane::get_distributed_context(
     MeshId mesh_id) const {
     auto distributed_context = distributed_contexts_.find(mesh_id);
     TT_FATAL(distributed_context != distributed_contexts_.end(), "Unknown mesh id: {}", mesh_id);
