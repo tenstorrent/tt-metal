@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <stdlib.h>
 #include <string.h>
 #include <tt-metalium/allocator.hpp>
@@ -143,7 +143,7 @@ KernelHandle create_kernel(
                     .noc = NOC::NOC_0,
                     .compile_args = compile_args,
                 });
-        default: TT_THROW("Unsupported {} processor in test.", magic_enum::enum_name(processor_class));
+        default: TT_THROW("Unsupported {} processor in test.", enchantum::to_string(processor_class));
     }
 }
 

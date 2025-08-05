@@ -20,6 +20,7 @@
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
+#include <tt-metalium/maybe_remote.hpp>
 #include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -38,14 +39,27 @@ class SystemMeshDescriptor {
 private:
     MeshShape global_shape_;
     MeshShape local_shape_;
+    tt::tt_metal::distributed::MeshContainer<tt::tt_metal::distributed::MaybeRemote<int>> device_ids_;
 
 public:
     SystemMeshDescriptor() :
         global_shape_(tt::tt_metal::distributed::SystemMesh::instance().shape()),
-        local_shape_(tt::tt_metal::distributed::SystemMesh::instance().local_shape()) {}
+        local_shape_(tt::tt_metal::distributed::SystemMesh::instance().local_shape()),
+        device_ids_(
+            global_shape_,
+            tt::tt_metal::distributed::SystemMesh::instance().get_mapped_devices(global_shape_).device_ids) {}
 
     const MeshShape& shape() const { return global_shape_; }
     const MeshShape& local_shape() const { return local_shape_; }
+
+    int get_device_id(const MeshCoordinate& coord) const {
+        TT_FATAL(device_ids_.at(coord).is_local(), "Device at {} is remote.", coord);
+        return device_ids_.at(coord).value();
+    }
+
+    bool is_local_at(const MeshCoordinate& coord) const { return device_ids_.at(coord).is_local(); }
+
+    bool all_local() const { return global_shape_ == local_shape_; }
 };
 
 namespace py = pybind11;
@@ -178,38 +192,13 @@ void py_module(py::module& module) {
     static_cast<py::class_<SystemMeshDescriptor>>(module.attr("SystemMeshDescriptor"))
         .def(py::init([]() { return SystemMeshDescriptor(); }))
         .def("shape", &SystemMeshDescriptor::shape)
-        .def("local_shape", &SystemMeshDescriptor::local_shape);
+        .def("local_shape", &SystemMeshDescriptor::local_shape)
+        .def("get_device_id", &SystemMeshDescriptor::get_device_id)
+        .def("is_local_at", &SystemMeshDescriptor::is_local_at)
+        .def("all_local", &SystemMeshDescriptor::all_local);
 
     auto py_mesh_device = static_cast<py::class_<MeshDevice, std::shared_ptr<MeshDevice>>>(module.attr("MeshDevice"));
-    py_mesh_device
-        .def(
-            py::init([](const MeshShape& mesh_shape,
-                        size_t l1_small_size,
-                        size_t trace_region_size,
-                        size_t num_command_queues,
-                        const DispatchCoreConfig& dispatch_core_config,
-                        const std::optional<MeshCoordinate>& offset,
-                        const std::vector<chip_id_t>& physical_device_ids,
-                        size_t worker_l1_size) {
-                return MeshDevice::create(
-                    MeshDeviceConfig(mesh_shape, offset, physical_device_ids),
-                    l1_small_size,
-                    trace_region_size,
-                    num_command_queues,
-                    dispatch_core_config,
-                    {},
-                    worker_l1_size);
-            }),
-            py::kw_only(),
-            py::arg("mesh_shape"),
-            py::arg("l1_small_size"),
-            py::arg("trace_region_size"),
-            py::arg("num_command_queues"),
-            py::arg("dispatch_core_config"),
-            py::arg("offset"),
-            py::arg("physical_device_ids"),
-            py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE)
-        .def("get_num_devices", &MeshDevice::num_devices)
+    py_mesh_device.def("get_num_devices", &MeshDevice::num_devices)
         .def("id", &MeshDevice::id)
         .def("get_device_ids", &MeshDevice::get_device_ids)
         .def(
@@ -435,15 +424,23 @@ void py_module(py::module& module) {
 
     module.def(
         "open_mesh_device",
-        &open_mesh_device,
+        py::overload_cast<
+            size_t,
+            size_t,
+            size_t,
+            const tt::tt_metal::DispatchCoreConfig&,
+            const std::optional<MeshShape>&,
+            const std::optional<MeshCoordinate>&,
+            const std::vector<int>&,
+            size_t>(&open_mesh_device),
         py::kw_only(),
-        py::arg("mesh_shape"),
         py::arg("l1_small_size"),
         py::arg("trace_region_size"),
         py::arg("num_command_queues"),
-        py::arg("offset"),
-        py::arg("physical_device_ids"),
         py::arg("dispatch_core_config"),
+        py::arg("mesh_shape") = std::nullopt,
+        py::arg("offset") = std::nullopt,
+        py::arg("physical_device_ids") = std::vector<int>{},
         py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     module.def("close_mesh_device", &close_mesh_device, py::arg("mesh_device"), py::kw_only());
 

@@ -34,7 +34,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/fabric_host_interface.h>
+#include "hostdevcommon/fabric_common.h"
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
