@@ -59,6 +59,16 @@ struct PyFromTorchConversionInput {
     }
 };
 
+struct PyTensorHostConversionStrategy {
+    /// Data conversion has already been done on host, no extra type cast is necessary
+    bool host_side_conversion = false;
+    /// Use this layout to construct the initial tensor -- extra conversion might be done
+    /// after the tensor has been moved to device.
+    Layout construct_with_layout = Layout::TILE;
+    std::optional<DataType> construct_with_data_type = std::nullopt;
+    ttnn::tensor::py::object tensor;
+    std::optional<std::string> torch_convert_dtype = std::nullopt;
+};
 template <>
 struct std::hash<PyFromTorchConversionInput> {
     std::size_t operator()(const PyFromTorchConversionInput& input) const {
@@ -293,17 +303,6 @@ PreprocessedPyTensor parse_py_tensor(const py::handle& py_tensor, std::optional<
     }
 }
 
-struct PyTensorHostConversionStrategy {
-    /// Data conversion has already been done on host, no extra type cast is necessary
-    bool host_side_conversion = false;
-    /// Use this layout to construct the initial tensor -- extra conversion might be done
-    /// after the tensor has been moved to device.
-    Layout construct_with_layout = Layout::TILE;
-    std::optional<DataType> construct_with_data_type = std::nullopt;
-    py::object tensor;
-    std::optional<std::string> torch_convert_dtype = std::nullopt;
-};
-
 PyTensorHostConversionStrategy prepare_conversion_strategy(
     py::handle const& py_tensor,
     std::optional<DataType> const& dtype,
@@ -331,7 +330,7 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
     //    - bfloat16 to bfloat4b/bfloat8b conversions can zero half the tensor in some conditions.
     //      The test triggering this bug is test_matmul.py::test_tiny_tiles_bfloat
     //
-    // Based on the benchmark data, conversion pairings don't show any notable performance improvements
+    // Based on the benchmark data, not all conversion pairings have performance improvements
     // when done on host. Additionally, some types cannot be stored in ROW-MAJOR form, like bfloat8, meaning that
     // on-device conversion is mandatory.
     //
@@ -345,20 +344,24 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
 
     static std::unordered_map<PyFromTorchConversionInput, PyTensorHostConversionStrategy> conversion_map = {
         // clang-format off
-        {{.torch_dtype = "float16", .optional_data_type = DataType::INT32,     .optional_layout = Layout::TILE},      {.host_side_conversion = true,  .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = std::nullopt,     .torch_convert_dtype = std::nullopt }},
-        {{.torch_dtype = "float16", .optional_data_type = DataType::UINT32,    .optional_layout = Layout::TILE},      {.host_side_conversion = true,  .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::UINT32, .torch_convert_dtype = std::nullopt }},
-        {{.torch_dtype = "float32", .optional_data_type = DataType::INT32,     .optional_layout = Layout::TILE},      {.host_side_conversion = true,  .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = std::nullopt,     .torch_convert_dtype = std::nullopt }},
-        {{.torch_dtype = "float32", .optional_data_type = DataType::UINT32,    .optional_layout = Layout::TILE},      {.host_side_conversion = true,  .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::UINT32, .torch_convert_dtype = std::nullopt }},
+
+        // conversion must be done on host, but after that the tiling can be done on device. Caused by the float32 tiling on device might lose precision,
+        {{.torch_dtype = "float16", .optional_data_type = DataType::INT32,     .optional_layout = Layout::TILE},      {.host_side_conversion = true,  .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = std::nullopt,     .torch_convert_dtype = "int32" }},
+        {{.torch_dtype = "float16", .optional_data_type = DataType::UINT32,    .optional_layout = Layout::TILE},      {.host_side_conversion = true,  .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::UINT32, .torch_convert_dtype = "int32" }},
+        {{.torch_dtype = "float32", .optional_data_type = DataType::INT32,     .optional_layout = Layout::TILE},      {.host_side_conversion = true,  .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = std::nullopt,     .torch_convert_dtype = "int32" }},
+        {{.torch_dtype = "float32", .optional_data_type = DataType::UINT32,    .optional_layout = Layout::TILE},      {.host_side_conversion = true,  .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::UINT32, .torch_convert_dtype = "int32" }},
+
         {{.torch_dtype = "int32",   .optional_data_type = DataType::FLOAT32,   .optional_layout = Layout::TILE},      {.host_side_conversion = false, .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = std::nullopt,     .torch_convert_dtype = std::nullopt }},
         {{.torch_dtype = "int32",   .optional_data_type = DataType::BFLOAT16,  .optional_layout = Layout::TILE},      {.host_side_conversion = false, .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = std::nullopt,     .torch_convert_dtype = std::nullopt }},
         {{.torch_dtype = "int32",   .optional_data_type = DataType::BFLOAT8_B, .optional_layout = Layout::TILE},      {.host_side_conversion = false, .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = std::nullopt,     .torch_convert_dtype = std::nullopt }},
         {{.torch_dtype = "int32",   .optional_data_type = DataType::BFLOAT4_B, .optional_layout = Layout::TILE},      {.host_side_conversion = false, .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = std::nullopt,     .torch_convert_dtype = std::nullopt }},
         {{.torch_dtype = "int32",   .optional_data_type = DataType::UINT8,     .optional_layout = Layout::TILE},      {.host_side_conversion = false, .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = std::nullopt,     .torch_convert_dtype = std::nullopt }},
         {{.torch_dtype = "int32",   .optional_data_type = DataType::UINT32,    .optional_layout = Layout::TILE},      {.host_side_conversion = false, .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = std::nullopt,     .torch_convert_dtype = std::nullopt }},
-        {{.torch_dtype = "uint8",   .optional_data_type = DataType::INT32,     .optional_layout = Layout::TILE},      {.host_side_conversion = true,  .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = std::nullopt,     .torch_convert_dtype = std::nullopt }},
-        {{.torch_dtype = "uint8",   .optional_data_type = DataType::UINT32,    .optional_layout = Layout::TILE},      {.host_side_conversion = true,  .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::UINT32, .torch_convert_dtype = std::nullopt }},
+        {{.torch_dtype = "int32",   .optional_data_type = DataType::UINT32,    .optional_layout = Layout::ROW_MAJOR}, {.host_side_conversion = false, .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = std::nullopt,     .torch_convert_dtype = std::nullopt }},
         {{.torch_dtype = "int32",   .optional_data_type = DataType::BFLOAT16,  .optional_layout = Layout::ROW_MAJOR}, {.host_side_conversion = false, .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = std::nullopt,     .torch_convert_dtype = std::nullopt }},
-        {{.torch_dtype = "int32",   .optional_data_type = DataType::UINT32,    .optional_layout = Layout::ROW_MAJOR}, {.host_side_conversion = false, .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = std::nullopt,     .torch_convert_dtype = std::nullopt }}
+
+        {{.torch_dtype = "uint8",   .optional_data_type = DataType::INT32,     .optional_layout = Layout::TILE},      {.host_side_conversion = true,  .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = std::nullopt,     .torch_convert_dtype = "int32" }},
+        {{.torch_dtype = "uint8",   .optional_data_type = DataType::UINT32,    .optional_layout = Layout::TILE},      {.host_side_conversion = true,  .construct_with_layout = Layout::ROW_MAJOR, .construct_with_data_type = DataType::UINT32, .torch_convert_dtype = "int32" }},
         // clang-format on
     };
 
@@ -418,7 +421,12 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
         if (is_torch_missing_data_type(dtype)) {
             res.construct_with_data_type = dtype;
         }
-        res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
+        if (res.construct_with_data_type == DataType::BFLOAT8_B ||
+            res.construct_with_data_type == DataType::BFLOAT4_B) {
+            res.construct_with_layout = layout.value_or(Layout::TILE);
+        } else {
+            res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
+        }
     };
 
     if ((tensor.attr("numel")().cast<int>() == 0) || (tensor.attr("dim")().cast<int>() == 0)) {
@@ -430,7 +438,8 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
     } else if (
         optional_tile.has_value() && (((optional_tile->get_tile_shape()[0] % tt::constants::TILE_WIDTH) != 0) ||
                                       ((optional_tile->get_tile_shape()[1] % tt::constants::TILE_HEIGHT) != 0))) {
-        res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
+        // on-device tiling operation expects 32x32 row
+        do_host_conversion_through_fallback();
         res.construct_with_data_type = dtype;
     } else if (has_device && (is_torch_and_ttnn_type_identical(dtype, tensor) || dtype.has_value())) {
         DataType expected_dtype = DataType::INVALID;
@@ -440,7 +449,7 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
             expected_dtype = DataType::FLOAT32;
         } else if (tensor.attr("dtype").equal(torch.attr("bfloat16"))) {
             expected_dtype = DataType::BFLOAT16;
-        } else if (tensor.attr("dtype").equal(torch.attr("INT32"))) {
+        } else if (tensor.attr("dtype").equal(torch.attr("int32"))) {
             expected_dtype = DataType::INT32;
         } else if (tensor.attr("dtype").equal(torch.attr("uint8"))) {
             expected_dtype = DataType::UINT8;

@@ -101,7 +101,7 @@ def test_benchmark_from_torch(
 
         ttnn.synchronize_device(device)
 
-    benchmark.pedantic(from_torch, iterations=10, rounds=1, warmup_rounds=1)
+    benchmark.pedantic(from_torch, iterations=10, rounds=5, warmup_rounds=1)
 
 
 @pytest.mark.parametrize("use_device", [True, False])
