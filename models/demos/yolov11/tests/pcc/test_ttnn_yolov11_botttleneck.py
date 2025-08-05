@@ -6,6 +6,7 @@
 import pytest
 
 import ttnn
+from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE
 from models.demos.yolov11.reference.yolov11 import Bottleneck as torch_bottleneck
 from models.demos.yolov11.tt.model_preprocessing import create_yolov11_input_tensors, create_yolov11_model_parameters
 from models.demos.yolov11.tt.ttnn_yolov11_bottleneck import TtnnBottleneck as ttnn_bottleneck
@@ -25,7 +26,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ([64, 64], [64, 64], [3, 3], [1, 1], [1, 1], [1, 1], [1, 1], [1, 64, 7, 7]),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV11_L1_SMALL_SIZE}], indirect=True)
 def test_yolo_v11_bottleneck(
     device,
     reset_seeds,

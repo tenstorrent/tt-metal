@@ -5,7 +5,6 @@
 #include <functional>
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
-#include <magic_enum/magic_enum.hpp>
 #include "ttnn/operations/eltwise/ternary/where/where.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
@@ -24,7 +23,6 @@ enum class UnaryCompositeOpType {
     VAR_HW,
     STD_HW,
     NORMALIZE_HW,
-    HARDTANH,
     SELU,
     GLU,
     REGLU,
@@ -55,8 +53,6 @@ Tensor _std(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _std(const Tensor&, const Tensor&, Tensor&, const std::optional<MemoryConfig>&);
 Tensor _std_overload(const Tensor&, const std::optional<MemoryConfig>&);
 Tensor _normalize(const Tensor&, const std::optional<MemoryConfig>&);
-Tensor _hardtanh(
-    const Tensor&, float min = -1, float max = 1, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 Tensor _selu(
     const Tensor&,
     float scale = 1.0507,
@@ -143,13 +139,6 @@ template <>
 struct OpHandler<UnaryCompositeOpType::NORMALIZE_HW> {
     static Tensor handle(const Tensor& t1, const std::optional<MemoryConfig>& mem_cfg) {
         return _normalize(t1, mem_cfg);
-    }
-};
-
-template <>
-struct OpHandler<UnaryCompositeOpType::HARDTANH> {
-    static Tensor handle(const Tensor& t1, float low, float high, const std::optional<MemoryConfig>& mem_cfg) {
-        return _hardtanh(t1, low, high, mem_cfg);
     }
 };
 

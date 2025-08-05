@@ -122,15 +122,12 @@ def convert_layer_log_entry(
         return log
 
     # If the layer is an attention layer, we need to put the kv_cache back
+    output_kv_cache_length = kwargs.pop("kv_cache_length")
     output_tensor, _, output_cache = output
     layer_idx: int = module.layer_idx
-    _, outputs_length, _ = output_tensor.shape
-    _, _, output_history_length, _ = kwargs["attention_mask"].shape
-
-    kwargs["past_key_value"] = trim_kv_cache(
-        kwargs["past_key_value"], layer_idx, output_history_length - outputs_length
-    )
-    return (name, args, kwargs, (output_tensor, trim_kv_cache(output_cache, layer_idx, output_history_length)))
+    _, input_length, _ = kwargs["hidden_states"].shape
+    kwargs["past_key_value"] = trim_kv_cache(kwargs["past_key_value"], layer_idx, output_kv_cache_length - input_length)
+    return (name, args, kwargs, (output_tensor, trim_kv_cache(output_cache, layer_idx, output_kv_cache_length)))
 
 
 def save_io_logs(
@@ -164,8 +161,8 @@ def main():
     print("Tokenizer loaded successfully")
 
     # Load the model with uninitialized weights
-    print("Loading uninitialized model")
-    model = load_model_uninitialized(args.local_model_path)
+    print("Loading uninitialized model from repo version")
+    model = load_model_uninitialized()
     print("Model loaded successfully")
 
     # Load the model weights
@@ -200,6 +197,11 @@ def main():
         early_stop_layer: str | None = args.early_stop_layer,
         layer_groups_map: dict[str, str] = layer_groups_map,
     ):
+        module = dict(model.named_modules())[name]
+        if module.__class__.__name__ == "DeepseekV3Attention":
+            _, _, kwargs["kv_cache_length"], _ = kwargs["past_key_value"][module.layer_idx][
+                0
+            ].shape  # For restoring the cache length later to a proper size
         log_dict[layer_groups_map[name]].append((name, args, kwargs, output))
         if name == early_stop_layer:
             raise CaptureFinished()

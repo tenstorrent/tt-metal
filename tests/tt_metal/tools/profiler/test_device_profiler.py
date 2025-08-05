@@ -48,8 +48,9 @@ def set_env_vars(**kwargs):
         "doSync": "TT_METAL_PROFILER_SYNC=1 ",
         "doDispatchCores": "TT_METAL_DEVICE_PROFILER_DISPATCH=1 ",
         "slowDispatch": "TT_METAL_SLOW_DISPATCH_MODE=1 ",
-        "dispatchFromEth": "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ",
+        "dispatchFromWorker": "TT_TEST_USE_WORKER_DISPATCH=1 ",
         "enable_noc_tracing": "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1 ",
+        "dispatchFromEth": "TT_TEST_USE_ETH_DISPATCH=1 ",
     }
     envVarsStr = " "
     for arg, argVal in kwargs.items():
@@ -81,6 +82,7 @@ def run_device_profiler_test(
     slowDispatch=False,
     doSync=False,
     doDispatchCores=False,
+    dispatchFromWorker=False,
     dispatchFromEth=False,
 ):
     name = inspect.stack()[1].function
@@ -89,7 +91,11 @@ def run_device_profiler_test(
         testCommand = testName
     clear_profiler_runtime_artifacts()
     envVars = set_env_vars(
-        slowDispatch=slowDispatch, doSync=doSync, doDispatchCores=doDispatchCores, dispatchFromEth=dispatchFromEth
+        slowDispatch=slowDispatch,
+        doSync=doSync,
+        doDispatchCores=doDispatchCores,
+        dispatchFromWorker=dispatchFromWorker,
+        dispatchFromEth=dispatchFromEth,
     )
     testCommand = f"cd {TT_METAL_HOME} && {envVars} {testCommand}"
     print()
@@ -252,7 +258,7 @@ def test_dispatch_cores():
         assert len(statTypesSet) == 0
 
     verify_stats(
-        run_device_profiler_test(setupAutoExtract=True, doDispatchCores=True),
+        run_device_profiler_test(setupAutoExtract=True, doDispatchCores=True, dispatchFromWorker=True),
         statTypes=["Dispatch", "Prefetch"],
         allowedRange=150,
     )
@@ -262,6 +268,7 @@ def test_dispatch_cores():
             testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops",
             setupAutoExtract=True,
             doDispatchCores=True,
+            dispatchFromWorker=True,
         ),
         statTypes=["Dispatch", "Prefetch"],
         allowedRange=1000,
@@ -272,6 +279,7 @@ def test_dispatch_cores():
             testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices",
             setupAutoExtract=True,
             doDispatchCores=True,
+            dispatchFromWorker=True,
         ),
         statTypes=["Dispatch", "Prefetch"],
         allowedRange=1000,
@@ -282,6 +290,7 @@ def test_dispatch_cores():
             testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py",
             setupAutoExtract=False,
             doDispatchCores=True,
+            dispatchFromWorker=True,
         ),
         statTypes=["dispatch_total_cq_cmd_op_time", "dispatch_go_send_wait_time"],
         allowedRange=0,  # This test is basically counting ops and should be exact regardless of changes to dispatch code or harvesting.
@@ -605,5 +614,5 @@ def test_sub_device_profiler():
     )
     run_gtest_profiler_test(
         "./build/test/tt_metal/unit_tests_dispatch",
-        "CommandQueueSingleCardTraceFixture.TensixTestSubDeviceTraceBasicPrograms",
+        "UnitMeshCQSingleCardTraceFixture.TensixTestSubDeviceTraceBasicPrograms",
     )

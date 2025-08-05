@@ -114,10 +114,10 @@ void kernel_main() {
 #if !SRC_SHARDED || !SRC_SHARDED_B
                             noc_async_read_barrier();
 #endif
-#if SRC_BCAST  // no sharding support for row bcast yet
+#if SRC_BCAST && !BCAST_LLK  // no sharding support for row bcast yet
                             FILL_TILE_WITH_FIRST_ROW(cb_id_src);
 #endif
-#if SRC_BCAST_B  // no sharding support for row bcast yet
+#if SRC_BCAST_B && !BCAST_LLK  // no sharding support for row bcast yet
                             FILL_TILE_WITH_FIRST_ROW_B(cb_id_src_b);
 #endif
 #if !SRC_SHARDED
