@@ -14,7 +14,7 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "model_weights",
     [
-        "/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-3B-Instruct/",
+        "/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-3B-Instruct",
     ],
     ids=[
         "qwen25_vl-3B",
@@ -26,7 +26,7 @@ def test_ci_dispatch(model_weights):
         del os.environ["HF_MODEL"]
         del os.environ["TT_CACHE_PATH"]
     os.environ["HF_MODEL"] = model_weights
-    os.environ["TT_CACHE_PATH"] = "/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-VL-3B-Instruct"
+    os.environ["TT_CACHE_PATH"] = model_weights
 
     # Pass the exit code of pytest to proper keep track of failures during runtime
     exit_code = pytest.main(
