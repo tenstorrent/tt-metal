@@ -313,7 +313,7 @@ run_yolov8s_world_perf() {
   pytest -n auto --disable-warnings models/demos/yolov8s_world/demo/demo.py --timeout 600
 
   # yolov8s_world eval
-  pytest -n auto --disable-warnings models/experimental/yolo_eval/evaluate.py:: test_yolov8s_world--timeout 600
+  pytest -n auto --disable-warnings models/experimental/yolo_eval/evaluate.py::test_yolov8s_world --timeout 600
 
 }
 

@@ -171,12 +171,17 @@ def evaluation(
     num_iterations = 500
 
     if model_type == "torch_model":
-        if model_name == "YOLOv10":
+        if model_name in ["YOLOv10", "YOLOv11n"]:
             num_iterations = 105
         elif model_name in ["YOLOv9c", "YOLOv7", "YOLOv6l"]:
             num_iterations = 20
         elif model_name == "YOLOv12x":
             num_iterations = 14
+        elif model_name == "YOLOv8x":
+            num_iterations = 180
+        elif model_name == "YOLOv8s_World":
+            num_iterations = 50
+
     dataset_name = "coco-2017"
     dataset = fiftyone.zoo.load_zoo_dataset(
         dataset_name,
