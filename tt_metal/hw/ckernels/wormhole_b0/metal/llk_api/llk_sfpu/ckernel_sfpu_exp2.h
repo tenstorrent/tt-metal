@@ -15,6 +15,7 @@ namespace ckernel::sfpu {
  * More specifically, it is the implementation of the `exp_21f` algorithm described in Section 5
  **/
 
+template <bool is_fp32_dest_acc_en = false>
 sfpi_inline sfpi::vFloat _sfpu_exp2_21f_(sfpi::vFloat val) {
     sfpi::vFloat y = 0.0f;
     v_if(val > -127.f) {
@@ -32,17 +33,20 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_21f_(sfpi::vFloat val) {
             sfpi::setexp(sfpi::reinterpret<sfpi::vFloat>(zif), 127U + zii));  // restore exponent
 
         y = sfpi::reinterpret<sfpi::vFloat>(zii);
+        if constexpr (!is_fp32_dest_acc_en) {
+            y = sfpi::reinterpret<sfpi::vFloat>(sfpi::float_to_fp16b(y, 0));
+        }
     }
     v_endif;
     return y;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_exp2() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] = _sfpu_exp2_21f_(v);
+        sfpi::dst_reg[0] = _sfpu_exp2_21f_<is_fp32_dest_acc_en>(v);
         sfpi::dst_reg++;
     }
 }
