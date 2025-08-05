@@ -157,7 +157,7 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
     return {TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
-            dtype, PageConfig(output_layout), memory_config, output_shape, padded_output_shape))};
+            dtype, tt::tt_metal::PageConfig(output_layout), memory_config, output_shape, padded_output_shape))};
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
