@@ -1,8 +1,15 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//===----------------------------------------------------------------------===//
 //===- llvm/ADT/SmallVector.cpp - 'Normally small' vectors ----------------===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// Originally part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+// This file is a modified version of llvm/ADT/SmallVector.cpp.
+// Modifications were made by Tenstorrent Inc. in 2025 to integrate into internal codebase.
 //
 //===----------------------------------------------------------------------===//
 //
