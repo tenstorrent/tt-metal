@@ -151,7 +151,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     uint32_t num_downstream_edms = get_downstream_edm_count(topology);
     // Global
     size_t next_l1_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_telemetry()) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_telemetry() || tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+        // Avoid a bug on BH, always allocate the space for the telemetry buffer
         this->perf_telemetry_buffer_address = next_l1_addr;
         next_l1_addr += 32;
     }
