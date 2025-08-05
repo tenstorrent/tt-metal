@@ -7,28 +7,53 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/pack_untilize.h"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 template <uint32_t tiles_per_reduction, uint32_t unpA_face_r_dim>
 inline void reduce_h_fused(const uint32_t in_cb_id, const uint32_t in_scalar_cb_id, const uint32_t out_cb_id) {
-    cb_reserve_back(out_cb_id, tiles_per_reduction);
-    tile_regs_acquire();
-    cb_wait_front(in_cb_id, 4);
-    unpack_tilizeA_B_block<false, true, false, true>(
-        in_cb_id,
-        in_scalar_cb_id,
-        tiles_per_reduction,
-        0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
-        2 /* unpack 2 faces ) */,
-        unpA_face_r_dim);
-    for (uint32_t c_i = 0; c_i < tiles_per_reduction; ++c_i) {
-        reduce_tile_math(c_i, 2 /* reduce 2 faces */);
+    {
+        DeviceZoneScopedN("WaitOutCB");
+        cb_reserve_back(out_cb_id, tiles_per_reduction);
+    }
+    {
+        DeviceZoneScopedN("AcquireTileReg");
+        tile_regs_acquire();
+    }
+    {
+        DeviceZoneScopedN("WaitInCB");
+        cb_wait_front(in_cb_id, 4);
+    }
+    {
+        DeviceZoneScopedN("UnpackTilize");
+        unpack_tilizeA_B_block<false, true, false, true>(
+            in_cb_id,
+            in_scalar_cb_id,
+            tiles_per_reduction,
+            0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
+            2 /* unpack 2 faces ) */,
+            unpA_face_r_dim);
+    }
+    {
+        DeviceZoneScopedN("DoReduction");
+        for (uint32_t c_i = 0; c_i < tiles_per_reduction; ++c_i) {
+            reduce_tile_math(c_i, 2 /* reduce 2 faces */);
+        }
     }
     cb_pop_front(in_cb_id, 4);
 
-    tile_regs_wait();
-    tile_regs_commit();
-    pack_untilize_dest<tiles_per_reduction>(out_cb_id, 1, 0, 1, 2); /* pack 1 row (1x32) */
-    tile_regs_release();
+    {
+        DeviceZoneScopedN("TileRegsWaitCommit");
+        tile_regs_wait();
+        tile_regs_commit();
+    }
+    {
+        DeviceZoneScopedN("PackUntilize");
+        pack_untilize_dest<tiles_per_reduction>(out_cb_id, 1, 0, 1, 2); /* pack 1 row (1x32) */
+    }
+    {
+        DeviceZoneScopedN("TileRegsRelease");
+        tile_regs_release();
+    }
 
     cb_push_back(out_cb_id, tiles_per_reduction);
 }
