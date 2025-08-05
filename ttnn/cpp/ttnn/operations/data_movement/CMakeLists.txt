@@ -174,3 +174,22 @@ install(
 )
 
 install(TARGETS ttnn_op_data_movement LIBRARY COMPONENT tar)
+
+add_library(ttnn_op_data_movement_jit INTERFACE)
+target_sources(
+    ttnn_op_data_movement_jit
+    INTERFACE
+        FILE_SET ttnn_op_data_movement_jit
+        TYPE HEADERS
+        BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+        FILES tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp
+)
+
+install(
+    TARGETS
+        ttnn_op_data_movement_jit
+    FILE_SET
+    ttnn_op_data_movement_jit
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/data_movement
+        COMPONENT ttnn-runtime
+)
