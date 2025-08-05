@@ -6,21 +6,7 @@ import argparse
 from tracer_backend import trace_torch_model
 from generate_pytorch_unittest_graph import (
     PytorchLayerUnitTestGraph,
-    ConvolutionUnittest,
-    AddmUnittest,
-    Maxpool2dUnittest,
-    AddTensorUnittest,
-    MulTensorUnittest,
-    CatUnittest,
-    BmmUnittest,
-    AddmCombiner,
     PytorchLayerUnitTestGraphConfig,
-    ConvolutionCombiner,
-    Maxpool2dCombiner,
-    AddTensorCombiner,
-    MulTensorCombiner,
-    CatCombiner,
-    BmmCombiner,
 )
 from generate_pytorch_graph import PytorchGraph
 from generate_pytorch_excel_graph import PytorchExcelGraph
@@ -45,6 +31,7 @@ allowed_modes = [
     "ufld_v2",
     "segformer_classification",
     "vit_base_patch16_224",
+    "vit_so400m_patch14_siglip_224",
     "swin_transformer",
     "swin_transformer_v2",
 ]
@@ -174,6 +161,15 @@ def main(args_dict):
 
         # Use a pre-trained Swin Transformer V2 model
         torch_model = AutoModelForImageClassification.from_pretrained("microsoft/swinv2-base-patch4-window8-256")
+    elif args.model == "vit_so400m_patch14_siglip_224":
+        from timm.models import create_model
+
+        try:
+            torch_model = create_model("vit_so400m_patch14_siglip_224", pretrained=True)
+        except Exception as e:
+            raise RuntimeError(
+                "Failed to load vit_so400m_patch14_siglip_224 model. Ensure timm==0.9.10 is installed and the model is available."
+            )
 
     torch_model.eval()
     if not args.model == "sentence_bert" and not args.disable_torch_summary:
