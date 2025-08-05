@@ -9,9 +9,16 @@ from tqdm import tqdm
 from transformers import AutoImageProcessor
 
 import ttnn
-from models.demos.mobilenetv2.runner.performant_runner import MobileNetV2Trace2CQ
+from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
 from models.demos.mobilenetv2.tests.perf.mobilenetv2_common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
+from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
+from models.demos.mobilenetv2.tt.model_preprocessing import (
+    create_mobilenetv2_input_tensors,
+    create_mobilenetv2_model_parameters,
+    get_mesh_mappers,
+)
 from models.demos.ttnn_resnet.tests.demo_utils import get_batch, get_data_loader
+from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
 from models.utility_functions import profiler, run_for_wormhole_b0
 
 NUM_VALIDATION_IMAGES_IMAGENET = 49920
@@ -35,13 +42,58 @@ def run_mobilenetv2_imagenet_demo(
 
     profiler.clear()
     with torch.no_grad():
-        mobilenetv2_trace_2cq = MobileNetV2Trace2CQ()
+        num_devices = device.get_num_devices()
+        inputs_mesh_mapper, _, output_mesh_composer = get_mesh_mappers(device)
+
+        torch_model = Mobilenetv2()
+        torch_model.eval()
+        model_parameters = create_mobilenetv2_model_parameters(torch_model, device=device)
+
+        ttnn_model = ttnn_mobilenetv2.TtMobileNetV2(model_parameters, device, batchsize=batch_size_per_device)
+
+        _, host_input_tensor = create_mobilenetv2_input_tensors(
+            batch=batch_size, input_height=224, input_width=224, pad_channels=16, mesh_mapper=inputs_mesh_mapper
+        )
+
+        dram_cores = 10
+        assert host_input_tensor.shape[-2] % dram_cores == 0, "Expecting even sharding on DRAM input tensor"
+        dram_shard_spec = ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_cores - 1, 0))}),
+            [host_input_tensor.shape[-2] // dram_cores, host_input_tensor.shape[-1]],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        input_dram_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
+        )
+
+        input_l1_core_grid = ttnn.CoreGrid(x=8, y=8)
+        assert (
+            host_input_tensor.shape[-2] % input_l1_core_grid.num_cores == 0
+        ), "Expecting even sharding on L1 input tensor"
+        input_l1_mem_config = ttnn.create_sharded_memory_config(
+            shape=(host_input_tensor.shape[2] // input_l1_core_grid.num_cores, host_input_tensor.shape[-1]),
+            core_grid=input_l1_core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        config = PipelineConfig(use_trace=True, num_command_queues=2, separate_io_queue=False)
+        pipe = create_pipeline_from_config(
+            config,
+            ttnn_model,
+            device,
+            dram_input_memory_config=input_dram_mem_config,
+            l1_input_memory_config=input_l1_mem_config,
+            dram_output_memory_config=None,
+            output_shape=None,
+            output_dtype=None,
+        )
 
         profiler.start(f"compile")
-        mobilenetv2_trace_2cq.initialize_mobilenetv2_trace_2cqs_inference(
-            device, batch_size_per_device, act_dtype, weight_dtype, model_location_generator=model_location_generator
-        )
+        pipe.compile(host_input_tensor)
         profiler.end(f"compile")
+
         model_version = "microsoft/resnet-50"
         image_processor = AutoImageProcessor.from_pretrained(model_version)
         logger.info("ImageNet-1k validation Dataset")
@@ -52,7 +104,16 @@ def run_mobilenetv2_imagenet_demo(
         input_labels_all = []
         for iter in tqdm(range(iterations), desc="Preparing images"):
             inputs, labels = get_batch(data_loader, image_processor)
-            input_tensors_all.append(inputs)
+            ttnn_input = torch.permute(inputs, (0, 2, 3, 1))
+            ttnn_input = torch.nn.functional.pad(ttnn_input, (0, 16 - ttnn_input.shape[-1]), value=0)
+            ttnn_input = ttnn.from_torch(
+                ttnn_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=inputs_mesh_mapper
+            )
+            ttnn_input = ttnn.reshape(
+                ttnn_input,
+                (1, 1, ttnn_input.shape[0] * ttnn_input.shape[1] * ttnn_input.shape[2], ttnn_input.shape[3]),
+            )
+            input_tensors_all.append(ttnn_input)
             input_labels_all.append(labels)
         logger.info("Processed ImageNet-1k validation Dataset")
 
@@ -61,11 +122,12 @@ def run_mobilenetv2_imagenet_demo(
         total_inference_time = 0
         for iter in range(iterations):
             predictions = []
-            torch_input_tensor = input_tensors_all[iter]
+            ttnn_input_tensor = input_tensors_all[iter]
             labels = input_labels_all[iter]
             profiler.start(f"run")
-            output = mobilenetv2_trace_2cq.run(torch_input_tensor)
-            output = ttnn.to_torch(output, mesh_composer=mobilenetv2_trace_2cq.test_infra.output_mesh_composer)
+            outputs = pipe.enqueue([ttnn_input_tensor]).pop_all()
+            output = outputs[0]
+            output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
             prediction = output.argmax(dim=-1)
 
             profiler.end(f"run")
@@ -77,7 +139,7 @@ def run_mobilenetv2_imagenet_demo(
                 )
                 if imagenet_label_dict[labels[i]] == predictions[-1]:
                     correct += 1
-        mobilenetv2_trace_2cq.release_mobilenetv2_trace_2cqs_inference()
+        pipe.cleanup()
         accuracy = correct / (batch_size * iterations)
         logger.info(f"=============")
         logger.info(
