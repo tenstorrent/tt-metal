@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import os
 import re
 from enum import Enum
 from typing import Optional
@@ -217,8 +216,9 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
     return tokenizer.apply_chat_template(chat, tokenize=True, add_generation_prompt=True)
 
 
-def compute_llama3_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
-    """Llama-3.x specific scaling for rotary embeddings."""
+def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
+    # Values obtained from grid search
     low_freq_factor = 1
     high_freq_factor = 4
 
@@ -238,31 +238,7 @@ def compute_llama3_parameters(freqs: torch.Tensor, scale_factor: float, orig_con
     return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
 
 
-def compute_linear_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
-    """Linear scaling for rotary embeddings."""
-    freqs /= scale_factor
-    return freqs
-
-
-def compute_default_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
-    """Default scaling for rotary embeddings."""
-    return freqs
-
-
-def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int, rope_type="llama3"):
-    # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
-
-    if rope_type == "default":
-        freqs = compute_default_parameters(freqs, scale_factor, orig_context_len)
-    elif rope_type == "linear":
-        freqs = compute_linear_parameters(freqs, scale_factor, orig_context_len)
-    elif rope_type == "llama3":
-        freqs = compute_llama3_parameters(freqs, scale_factor, orig_context_len)
-
-    return freqs
-
-
-def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len, rope_type="llama3"):
+def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
     """
     Precompute the frequency tensor for sine and cosine values with given dimensions.
 
@@ -277,7 +253,7 @@ def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len, 
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end)
     if scale_factor is not None:
-        freqs = apply_scaling(freqs, scale_factor, orig_context_len, rope_type=rope_type)
+        freqs = apply_scaling(freqs, scale_factor, orig_context_len)
     freqs = torch.outer(t, freqs).float()
     return torch.cos(freqs), torch.sin(freqs)
 
@@ -609,11 +585,7 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
 ):
-    if "HF_MODEL" in os.environ and "gemma-3" in os.environ["HF_MODEL"].lower():
-        from models.experimental.gemma3_1b.tt.model import Gemma3Transformer as Transformer
-    else:
-        from models.tt_transformers.tt.model import Transformer
-
+    from models.tt_transformers.tt.model import Transformer
     from models.tt_transformers.tt.model_config import ModelArgs
 
     tt_model_args = ModelArgs(

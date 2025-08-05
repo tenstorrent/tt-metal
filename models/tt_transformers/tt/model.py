@@ -49,27 +49,23 @@ class Transformer(LightweightModule):
             dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
         )
 
-        self.rope_setup = RotarySetup(
-            mesh_device,
-            args.max_batch_size,
-            args.head_dim,
-            args.max_seq_len,
-            args.rope_theta,
-            args.rope_scaling_factor,
-            args.orig_context_len,
-            args.rope_type,
+        ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else RotarySetup
+        self.rope_setup = ActualRopeSetupClass(
+            device=mesh_device,
+            batch_size=args.max_batch_size,
+            head_dim=args.head_dim,
+            max_seq_len=args.max_seq_len,
+            rope_theta=args.rope_theta,
+            rope_scaling=args.rope_scaling,
         )
-
         if args.rope_local_theta is not None:
-            self.rope_setup_local = RotarySetup(
-                mesh_device,
-                args.max_batch_size,
-                args.head_dim,
-                args.max_seq_len,
-                args.rope_local_theta,
-                args.rope_scaling_factor,
-                args.orig_context_len,
-                "default",
+            self.rope_setup_local = ActualRopeSetupClass(
+                device=mesh_device,
+                batch_size=args.max_batch_size,
+                head_dim=args.head_dim,
+                max_seq_len=args.max_seq_len,
+                rope_theta=args.rope_local_theta,
+                rope_scaling=None,
             )
         else:
             self.rope_setup_local = None

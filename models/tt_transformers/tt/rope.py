@@ -300,7 +300,6 @@ class RotarySetup(LightweightModule):
         self.batch_size = batch_size
         self.head_dim = head_dim
         self.device = device
-        self.rope_type = rope_type
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
         if self.num_devices == 32:

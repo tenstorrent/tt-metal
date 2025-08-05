@@ -239,9 +239,9 @@ class ModelOptimizations:
                 # Attention
                 TensorGroup.WQKV: PrecisionSetting.BFP8,
                 TensorGroup.WO: PrecisionSetting.BFP8,
-                TensorGroup.KV_CACHE: PrecisionSetting.BF16,  # Upgraded from BFP8 to prevent accumulation errors
+                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
                 # Activation across whole model
-                TensorGroup.ACTIVATION: None,
+                TensorGroup.ACTIVATION: None,  # this signals that original dtype should be used
             },
             "OpFidelity": {
                 # MLP linear operators - BFP8 with FP16 accumulation to save L1
@@ -249,7 +249,7 @@ class ModelOptimizations:
                 OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
                 # Attention operators -- linear and scaled_dot_product_attention, in decode and prefill modes
                 OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
-                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,  # Upgraded from HIFI2 for better precision
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
                 OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
@@ -1503,14 +1503,7 @@ class ModelArgs:
         # RoPE params
         self.rope_theta = text_config.get("rope_theta")
         rope_scaling_params = text_config.get("rope_scaling", None)
-        if rope_scaling_params:
-            self.rope_scaling_factor = rope_scaling_params.get("factor", None)
-            self.orig_context_len = rope_scaling_params.get("original_max_position_embeddings", self.max_context_len)
-            self.rope_type = rope_scaling_params.get("rope_type", "llama3")
-        else:
-            self.rope_scaling_factor = None
-            self.orig_context_len = None
-            self.rope_type = "default"
+        self.rope_scaling = rope_scaling_model_factory(rope_scaling_params) if rope_scaling_params else None
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
 
@@ -2265,14 +2258,7 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            rotary_emb = model.model.rotary_emb
-
-            if "gemma-3" in self.model_name:
-                rotary_emb_local = model.model.rotary_emb_local
-                wrapper = HfGemmaDecoderWrapper(layer, self.head_dim, rotary_emb, rotary_emb_local)
-            else:
-                wrapper = HfDecoderWrapper(layer, self.head_dim, rotary_emb)
-
+            wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
             return wrapper
 
     def reference_attention(self):
