@@ -394,18 +394,6 @@ def run_llama3_demo(
     ttnn.synchronize_device(mesh_device)
 
     # Reset the decoding position for the proper run of the model
-    # current_pos_reset = ttnn.from_torch(
-    #     current_pos_sram if is_cur_pos_sharded else current_pos_dram,
-    #     device=mesh_device,
-    #     dtype=ttnn.int32,
-    #     mesh_mapper=ttnn.ShardTensor2dMesh(
-    #         mesh_device,
-    #         dims=(None, cur_pos_mesh_shard_dim) if (model_args.is_galaxy and batch_size > 1) else (None, None),
-    #         mesh_shape=model_args.cluster_shape,
-    #     ),
-    #     memory_config=cur_pos_memory_config if is_cur_pos_sharded else None
-    # )
-
     tt_out_tok_reset = ttnn.from_torch(
         encoded_prompts_tensor_whole_sequence[:, :1].reshape(1, 1, 1, batch_size),
         dtype=ttnn.uint32,
@@ -414,12 +402,6 @@ def run_llama3_demo(
     )
 
     # Reset the current position and output token tensors for the real decode run
-    # if is_cur_pos_sharded:
-    #     # ttnn.copy(current_pos_reset, current_pos_tensor)
-    #     # ttnn.deallocate(current_pos_reset)
-    # else:
-    #     ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
-
     ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
     rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos_dram, on_host=True)
     ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
