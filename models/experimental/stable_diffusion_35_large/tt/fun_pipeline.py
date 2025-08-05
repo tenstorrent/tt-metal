@@ -289,12 +289,6 @@ class TtStableDiffusion3Pipeline:
                 ttnn.MeshShape(*self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape)
             )
 
-        # HACK: reshape submesh device 0 from 1D to 2D
-        if original_vae_device_shape != tuple(encoder_parallel_manager.tensor_parallel.mesh_shape):
-            vae_parallel_manager.device.reshape(
-                ttnn.MeshShape(*self.parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape)
-            )
-
     def prepare(
         self,
         *,
@@ -573,7 +567,9 @@ class TtStableDiffusion3Pipeline:
                     device=self.vae_parallel_manager.device,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.vae_parallel_manager.device),
                 )
+                vae_decode_start_time = time.time()
                 decoded_output = sd_vae_decode(tt_latents, self._vae_parameters)
+                vae_decode_end_time = time.time()
                 decoded_output = ttnn.to_torch(ttnn.get_device_tensors(decoded_output)[0]).permute(0, 3, 1, 2)
                 # HACK: reshape submesh device 0 from 1D to 2D
                 if original_vae_device_shape != tuple(self.encoder_parallel_manager.tensor_parallel.mesh_shape):
@@ -587,6 +583,14 @@ class TtStableDiffusion3Pipeline:
                 assert isinstance(image, torch.Tensor)
 
                 output = self._image_processor.numpy_to_pil(self._image_processor.pt_to_numpy(image))
+
+                end_time = time.time()
+
+                logger.info(f"prompt encoding duration: {prompt_encoding_end_time - prompt_encoding_start_time}")
+                logger.info(f"denoising duration: {denoising_end_time - denoising_start_time}")
+                logger.info(f"vae decode duration: {vae_decode_end_time - vae_decode_start_time}")
+                logger.info(f"image decoding duration: {image_decoding_end_time - image_decoding_start_time}")
+                logger.info(f"total runtime: {end_time - start_time}")
 
         return output
 

@@ -42,13 +42,14 @@ class VAEParallelConfig:
         self.ping_pong_idx = 0
 
         # VAE Persistent buffers
+        self.buffer_count = 1  # Double buffer causing OOM
         vae_shapes = [
-            [1, 128, 128, 512],
-            [1, 256, 256, 512],
-            [1, 512, 512, 512],
-            [1, 512, 512, 256],
-            [1, 1024, 1024, 256],
-            [1, 1024, 1024, 128],
+            # [1, 128, 128, 512],
+            # [1, 256, 256, 512],
+            # [1, 512, 512, 512],
+            # [1, 512, 512, 256],
+            # [1, 1024, 1024, 256],
+            # [1, 1024, 1024, 128],
             # more optimal reahaped versions
             [1, 1, 128 * 128, 512],
             [1, 1, 256 * 256, 512],
@@ -69,20 +70,29 @@ class VAEParallelConfig:
                     dtype=ttnn.bfloat16,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
                 )
-                for _ in range(2)
+                for _ in range(self.buffer_count)
             ]  # double buffer
 
     def vae_all_gather(self, x: ttnn.Tensor) -> ttnn.Tensor:
         semaphores = self.new_gather_handles[self.ping_pong_idx * 2 : (self.ping_pong_idx + 1) * 2]
+
+        # reshape to b,1,h*w,c. This was tested to be faster. Need to verify overhead. TODO: Cleanup
+        b, h, w, c = x.shape
+        if h != 1:  # Check if its already in desired shape. E.g group norm already reshaped to 1,1,h*w,c
+            x = x.reshape(b, 1, h * w, c)
+
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)  # All gather requires tile layout
+
         gather_shape = list(x.shape)
         gather_shape[3] *= self.device.get_num_devices()
 
         x_g = ttnn.experimental.all_gather_async(
             input_tensor=x,
             dim=3,
-            persistent_output_buffer=self.vae_persistent_buffers[f"vae_all_gather_{gather_shape}"][self.ping_pong_idx],
+            persistent_output_buffer=self.vae_persistent_buffers[f"vae_all_gather_{gather_shape}"][
+                self.ping_pong_idx % self.buffer_count
+            ],
             multi_device_global_semaphore=semaphores,
             topology=ttnn.Topology.Linear,
             cluster_axis=1,
@@ -91,6 +101,10 @@ class VAEParallelConfig:
             chunks_per_sync=80,
             num_buffers_per_channel=4,
         )
+
+        # reshape back to original expected shape
+        if h != 1:
+            x_g = x_g.reshape(b, h, w, -1)
 
         self.ping_pong_idx = 1 - self.ping_pong_idx
         return x_g
