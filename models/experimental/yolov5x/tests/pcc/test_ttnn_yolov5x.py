@@ -10,10 +10,10 @@ from models.experimental.yolov5x.tt.model_preprocessing import (
     create_yolov5x_input_tensors,
     create_yolov5x_model_parameters,
 )
-from models.experimental.yolov5x.common import load_torch_model
+from models.experimental.yolov5x.common import load_torch_model, YOLOV5X_L1_SMALL_SIZE
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV5X_L1_SMALL_SIZE}], indirect=True)
 def test_yolov5x(device, reset_seeds, model_location_generator):
     torch_input, ttnn_input = create_yolov5x_input_tensors(device)
     n, c, h, w = torch_input.shape
