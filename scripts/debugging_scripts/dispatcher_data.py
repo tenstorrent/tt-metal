@@ -42,6 +42,7 @@ class DispatcherCoreData:
     kernel_name: str | None = combined_field()
     subdevice: int = triage_field("Subdevice")
     go_message: str = triage_field("Go Message")
+    preload: bool = triage_field("Preload")
 
 
 class DispatcherData:
@@ -153,13 +154,16 @@ class DispatcherData:
 
         def get_const_value(name):
             return mem_access(fw_elf, name, loc_mem_reader)[3]
-        go_message_states = {
-            get_const_value("RUN_MSG_INIT"): "INIT",
-            get_const_value("RUN_MSG_GO"): "GO",
-            get_const_value("RUN_MSG_DONE"): "DONE",
-            get_const_value("RUN_MSG_RESET_READ_PTR"): "RESET_READ_PTR",
-            get_const_value("RUN_MSG_RESET_READ_PTR_FROM_HOST"): "RESET_READ_PTR_FROM_HOST",
-        }
+
+        # Initialize go message states if not already initialized
+        if not hasattr(self, "_go_message_states"):
+            self._go_message_states = {
+                get_const_value("RUN_MSG_INIT"): "INIT",
+                get_const_value("RUN_MSG_GO"): "GO",
+                get_const_value("RUN_MSG_DONE"): "DONE",
+                get_const_value("RUN_MSG_RESET_READ_PTR"): "RESET_READ_PTR",
+                get_const_value("RUN_MSG_RESET_READ_PTR_FROM_HOST"): "RESET_READ_PTR_FROM_HOST",
+            }
 
         try:
             # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
@@ -189,6 +193,7 @@ class DispatcherData:
             kernel = self.inspector_data.kernels.get(watcher_kernel_id)
             go_message_index = mem_access(fw_elf, f"mailboxes->go_message_index", loc_mem_reader)[0][0]
             go_data = mem_access(fw_elf, f"mailboxes->go_messages[{go_message_index}]", loc_mem_reader)[0][0]
+            preload = mem_access(fw_elf, f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.preload", loc_mem_reader)[0][0]
         except:
             kernel_config_base = -1
             kernel_text_offset = -1
@@ -220,7 +225,7 @@ class DispatcherData:
         else:
             kernel_path = None
             kernel_offset = None
-        go_data_state = go_message_states.get(go_data & 0xff, str(go_data & 0xff))
+        go_data_state = self._go_message_states.get(go_data & 0xff, str(go_data & 0xff))
 
         return DispatcherCoreData(
             firmware_path=firmware_path,
@@ -233,6 +238,7 @@ class DispatcherData:
             watcher_kernel_id=watcher_kernel_id,
             subdevice=go_message_index,
             go_message=go_data_state,
+            preload=preload,
         )
 
     @staticmethod
