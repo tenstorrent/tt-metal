@@ -12,7 +12,6 @@
 #include <cstdint>
 #include <utility>
 
-#ifdef ARCH_WORMHOLE
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
 void scatter_write_and_advance_local_read_address_for_fabric(
     uint64_t first_noc0_dest_noc_addr,
@@ -33,7 +32,6 @@ void scatter_write_and_advance_local_read_address_for_fabric(
 
     l1_read_addr += first_payload_size_bytes + second_payload_size_bytes;
 }
-#endif
 
 template <uint8_t FABRIC_MUX_CHANNEL_NUM_BUFFERS = 0>
 void write_and_advance_local_read_address_for_fabric(
