@@ -177,8 +177,12 @@ def vae_group_norm(x, parameters: TtGroupNormParameters):
         num_out_blocks=num_out_blocks,
         output_layout=ttnn.TILE_LAYOUT,
     )
-    x = x.reshape([batch_size, height, width, channels])
+
+    # NOTE: We need to be careful with shapes here. If last 2 dims are < 32, data after gather op is padded and can lead to issues.
     if parameters.mesh_sharded_input and parameters.allow_sharded_compute:
         x = parameters.parallel_config.vae_all_gather(x)
+
+    # Reshape after all gather as shapes [1,1,h*w,c] was measured to be faster.  Fusing here prevents reshape overhead.
+    x = x.reshape([batch_size, height, width, x.shape[3]])
 
     return x
