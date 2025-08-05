@@ -340,9 +340,11 @@ run_yolov8x_perf() {
 
 }
 run_yolov4_perf() {
-## Removed coco dataset evaluation for now because CIv2 does not support downloading of the dataset.
+  #yolov4 demo
   pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4 --timeout 600
   pytest --disable-warnings models/demos/yolov4/demo.py::test_yolov4_dp --timeout 600
+  #yolov4 eval
+  pytest --disable-warnings models/experimental/yolo_eval/evaluate.py::test_run_yolov4_eval --timeout 1200
 }
 
 run_yolov10x_demo() {

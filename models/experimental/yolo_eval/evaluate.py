@@ -446,7 +446,7 @@ def test_run_yolov4_eval(
             act_dtype,
             weight_dtype,
             resolution=resolution,
-            model_location_generator=None,
+            model_location_generator=model_location_generator,
         )
 
     save_dir = "models/demos/yolov4/demo/runs"
