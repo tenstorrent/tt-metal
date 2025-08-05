@@ -306,7 +306,8 @@ def run_llama_all_gather_matmul_impl(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
     )
 
-    in1_tensor = torch.randn(in1_shape)
+    # in1_tensor = torch.randn(in1_shape)
+    in1_tensor = torch.ones(in1_shape) * 2
     tt_in1_tensor = ttnn.from_torch(
         in1_tensor,
         device=mesh_device,

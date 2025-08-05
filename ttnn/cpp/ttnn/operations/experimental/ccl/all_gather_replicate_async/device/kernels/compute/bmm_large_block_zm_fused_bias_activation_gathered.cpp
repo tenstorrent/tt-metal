@@ -220,7 +220,6 @@ void MAIN {
     // PACK( DPRINT << "unpadded_in0_shard_widths_in_tiles[2]: " << unpadded_in0_shard_widths_in_tiles[2] << ENDL() );
     // PACK( DPRINT << "unpadded_in0_shard_widths_in_tiles[3]: " << unpadded_in0_shard_widths_in_tiles[3] << ENDL() );
 
-    return;
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
@@ -268,8 +267,9 @@ void MAIN {
         }
 
         // Wait to receive in1
-        cb_wait_front(sync_cb2, 1);
-        cb_pop_front(sync_cb2, 1);
+        // currently no need to wait for in1 as in1 is in L1, will bring it back for global cb case
+        // cb_wait_front(sync_cb2, 1);
+        // cb_pop_front(sync_cb2, 1);
 
         for (uint32_t block = 0; block < num_blocks; block++) {
             const uint32_t curr_ring_idx = (ring_idx - block + ring_size) % ring_size;
@@ -293,10 +293,6 @@ void MAIN {
 #endif
 
             // Wait to receive in0 block
-            if (block == 0) {
-                cb_reserve_back(input0_cb_id, in0_block_num_tiles);
-                cb_push_back(input0_cb_id, in0_block_num_tiles);
-            }
             cb_wait_front(input0_cb_id, in0_block_num_tiles);
 
 #ifdef ENABLE_GLOBAL_CB
