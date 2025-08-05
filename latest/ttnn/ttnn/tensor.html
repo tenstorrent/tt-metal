@@ -148,6 +148,15 @@ And the padded dimensions match the actual dimensions. The tensor of this shape 
 <p><span class="caption-text">4x4 tensor with a row-major layout.</span><a class="headerlink" href="#id2" title="Permalink to this image"></a></p>
 </figcaption>
 </figure>
+<p>You can create row major layout tensors using any creation function (e.g. <a class="reference internal" href="api/ttnn.zeros.html#id1"><span class="std std-ref">ttnn.zeros</span></a>, <a class="reference internal" href="api/ttnn.ones.html#id1"><span class="std std-ref">ttnn.ones</span></a>,  <a class="reference internal" href="api/ttnn.from_torch.html#id1"><span class="std std-ref">ttnn.from_torch</span></a>, etc.) by passing <cite>layout=ttnn.ROW_MAJOR_LAYOUT</cite> as an argument.
+.. code-block:: python</p>
+<div class="doctest highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">t</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Shape</span><span class="p">([</span><span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">]),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+<span class="go">Layout.ROW_MAJOR</span>
+</pre></div>
+</div>
 <p id="ttnn-tile-layout"><strong>ttnn.TILE_LAYOUT</strong></p>
 <p>In tile layout, the elements themselves are placed within a 32x32 square called a tile.
 The tiles themselves are then still stored in a row-major order. In order to transition to TILE_LAYOUT, <a class="reference internal" href="api/ttnn.to_layout.html#id1"><span class="std std-ref">ttnn.to_layout</span></a> can be used.
@@ -155,9 +164,45 @@ When the height or width of the tensor are not divisible by 32, padding is autom
 <figure class="align-center" id="id3">
 <img alt="Tensor With Tile Layout" src="../_images/tensor_with_tile_layout.png">
 <figcaption>
-<p><span class="caption-text">4x4 tensor stored using 2x2 tiles. Note that ttnn Tensors can only have 32x32 tiles. This image is for illustrative purposes only.</span><a class="headerlink" href="#id3" title="Permalink to this image"></a></p>
+<p><span class="caption-text">4x4 tensor stored using 2x2 tiles. Note that ttnn Tensors by default have 32x32 tiles. This image is for illustrative purposes only.</span><a class="headerlink" href="#id3" title="Permalink to this image"></a></p>
 </figcaption>
 </figure>
+<p>You can create tile layout tensors using any creation function (e.g. <a class="reference internal" href="api/ttnn.full.html#id1"><span class="std std-ref">ttnn.full</span></a>, <a class="reference internal" href="api/ttnn.from_torch.html#id1"><span class="std std-ref">ttnn.from_torch</span></a>)  by passing <cite>layout=ttnn.TILE_LAYOUT</cite> as an argument. You can also convert a row-major tensor to tile layout with <a class="reference internal" href="api/ttnn.to_layout.html#id1"><span class="std std-ref">ttnn.to_layout</span></a>.</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">t</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Shape</span><span class="p">([</span><span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">]),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+<span class="go">Layout.TILE</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">t</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">full</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Shape</span><span class="p">([</span><span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">]),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">,</span> <span class="n">fill_value</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+<span class="go">Layout.ROW_MAJOR</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">t</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_layout</span><span class="p">(</span><span class="n">t</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+<span class="go">Layout.TILE</span>
+</pre></div>
+</div>
+<p>Data inside the tile isn’t contiguous. Each tile is split into faces (“sub-tiles”). By default, tile size is 32x32, and face size is 16x16 – 4 faces per tile and each tile lies one after another contiguously in memory in row-major fashion (i.e., face0-&gt;face1-&gt;face2-&gt;face3 on the picture below)</p>
+<figure class="align-center" id="id4">
+<img alt="Tile Faces" src="../_images/tile_faces.png">
+<figcaption>
+<p><span class="caption-text">A tile with 4 faces. Each face is 16x16 elements.</span><a class="headerlink" href="#id4" title="Permalink to this image"></a></p>
+</figcaption>
+</figure>
+<p>The reason for using faces is that the matrix engine natively multiplies 16x16 matrices, and tile multiplication is decomposed into multiple face multiplications.</p>
+<p>To create a tensor with a tile layout, you can pass layout=ttnn.TILE_LAYOUT in most tensor-creation functions, or change row-major tensor with <a class="reference internal" href="api/ttnn.to_layout.html#id1"><span class="std std-ref">ttnn.to_layout</span></a>.
+You can specify tile size and face orientation. If transpose_tile==true, then the faces’ order is transposed, i.e. they are placed in memory in col-major fashion (face0-&gt;face2-&gt;face1-&gt;face3 on the image above), and values inside faces are also transposed.</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">t</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">zeros</span><span class="p">(</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Shape</span><span class="p">([</span><span class="mi">4</span><span class="p">,</span> <span class="mi">4</span><span class="p">]),</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+<span class="go">Layout.TILE</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">t</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_t</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">tile</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">Tile</span><span class="p">((</span><span class="mi">16</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">transpose_tile</span><span class="o">=</span><span class="kc">True</span><span class="p">))</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">layout</span><span class="p">)</span>
+<span class="go">Layout.TILE</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="nb">print</span><span class="p">(</span><span class="n">t</span><span class="o">.</span><span class="n">tile</span><span class="p">)</span>
+<span class="go">Tile with shape: [16, 32]</span>
+</pre></div>
+</div>
 </section>
 <section id="data-type">
 <span id="ttnn-datatype"></span><h2>Data Type<a class="headerlink" href="#data-type" title="Permalink to this heading"></a>
@@ -174,9 +219,9 @@ When the height or width of the tensor are not divisible by 32, padding is autom
 <p class="admonition-title">Note</p>
 <p><code class="xref py py-class docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code> uses a minimum of 4 bytes to store a row of the tensor in <a class="reference internal" href="#ttnn-row-major-layout"><span class="std std-ref">ttnn.ROW_MAJOR_LAYOUT</span></a> on the device.
 That means that the width of a tensor on the device must be a multiple of <cite>4 / sizeof(dtype)</cite>. The exact numbers are shown below:</p>
-<table class="docutils align-default" id="id4">
+<table class="docutils align-default" id="id5">
 <caption>
-<span class="caption-text">Required Width Multiples for Data Types</span><a class="headerlink" href="#id4" title="Permalink to this table"></a>
+<span class="caption-text">Required Width Multiples for Data Types</span><a class="headerlink" href="#id5" title="Permalink to this table"></a>
 </caption>
 <colgroup>
 <col style="width: 50%">
@@ -269,10 +314,10 @@ Refer to the section about <a class="reference internal" href="#ttnn-layout"><sp
 <p>A sharded tensor’s tiles are organized in sharded order on the device which we will highlight with an example.
 A tensor is only sharded on device and on the host the tiles remain in row-major order.
 Below is an example of a tensor on the host, with each tile labelled.</p>
-<figure class="align-center" id="id5">
+<figure class="align-center" id="id6">
 <img alt="A tensor on the host before it is sharded" src="../_images/host_tensor.png">
 <figcaption>
-<p><span class="caption-text">A tensor in 4x4 tiles in row-major order. Each tile is 32x32 elements making this tensor 128x128 tensor.</span><a class="headerlink" href="#id5" title="Permalink to this image"></a></p>
+<p><span class="caption-text">A tensor in 4x4 tiles in row-major order. Each tile is 32x32 elements making this tensor 128x128 tensor.</span><a class="headerlink" href="#id6" title="Permalink to this image"></a></p>
 </figcaption>
 </figure>
 <p>There are a few key attributes that needs to be defined with respect to sharding (specifically in L1):</p>
@@ -287,10 +332,10 @@ Below is an example of a tensor on the host, with each tile labelled.</p>
 Lets shard this tensor.
 Using the <a class="reference internal" href="api/ttnn.to_memory_config.html#id1"><span class="std std-ref">ttnn.to_memory_config</span></a> we can take an unsharded host tensor and write it to a sharded device tensor.
 In the example below we have a 2x2 core grid, a shard shape of [64,64] ([2,2] in tiles), a sharding strategy of block sharding, and a sharded orientation of row-major.</p>
-<figure class="align-center" id="id6">
+<figure class="align-center" id="id7">
 <img alt="A tensor that is block sharded" src="../_images/sharded_tensor.png">
 <figcaption>
-<p><span class="caption-text">A 4x4 (in tiles) tensor sharded across 4 cores. The C(x,y) represents the coordinates (which are in row-major order due to shard orientation). The P&lt;number&gt; represents the tile in each core’s L1. The H&lt;number&gt; represents the equivalent row-major unsharded host tensors tiles.</span><a class="headerlink" href="#id6" title="Permalink to this image"></a></p>
+<p><span class="caption-text">A 4x4 (in tiles) tensor sharded across 4 cores. The C(x,y) represents the coordinates (which are in row-major order due to shard orientation). The P&lt;number&gt; represents the tile in each core’s L1. The H&lt;number&gt; represents the equivalent row-major unsharded host tensors tiles.</span><a class="headerlink" href="#id7" title="Permalink to this image"></a></p>
 </figcaption>
 </figure>
 </section>
