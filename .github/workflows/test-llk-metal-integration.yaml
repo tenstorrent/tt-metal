@@ -61,6 +61,7 @@ permissions:
 jobs:
   setup-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     outputs:
       branch-exists: ${{ steps.check-branch.outputs.branch-exists }}
       test-branch-name: ${{ steps.check-branch.outputs.test-branch-name }}
@@ -250,6 +251,7 @@ jobs:
     needs: setup-and-test
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Cleanup test branches
         if: needs.setup-and-test.outputs.branch-exists == 'true'
