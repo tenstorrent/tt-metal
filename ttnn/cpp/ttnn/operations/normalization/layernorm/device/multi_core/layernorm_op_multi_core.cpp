@@ -322,9 +322,6 @@ operation::ProgramWithCallbacks layernorm_multi_core(
                                   : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                     "reader_unary_interleaved_ln.cpp";
     const auto use_welford = std::getenv("TT_LAYERNORM_WELFORD") != nullptr;
-    if (use_welford) {
-        std::cout << "Hi" << std::endl;
-    }
     reader_kernel_path =
         large_tensor_needed
             ? (use_welford ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
