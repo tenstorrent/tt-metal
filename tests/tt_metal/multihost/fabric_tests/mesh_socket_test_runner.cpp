@@ -54,7 +54,7 @@ void MeshSocketTestRunner::initialize() {
     mesh_shape_ = control_plane_ptr_->get_physical_mesh_shape(
         control_plane_ptr_->get_user_physical_mesh_ids()[0], MeshScope::GLOBAL);
 
-    // Expand test configurations now that fabric is set up
+    // Expand test configurations now that mesh graph is set up
     expand_test_configurations();
 
     // Initialize MeshDevice
@@ -98,6 +98,13 @@ void MeshSocketTestRunner::cleanup() {
 std::shared_ptr<tt::tt_metal::distributed::MeshDevice> MeshSocketTestRunner::get_mesh_device() const {
     return mesh_device_;
 }
+
+const tt::tt_fabric::MeshGraph& MeshSocketTestRunner::get_mesh_graph() const {
+    TT_FATAL(control_plane_ptr_, "Control plane not initialized");
+    return control_plane_ptr_->get_mesh_graph();
+}
+
+const tt::tt_fabric::MeshId& MeshSocketTestRunner::get_local_mesh_id() const { return local_mesh_id_; }
 
 void MeshSocketTestRunner::initialize_and_validate_custom_physical_config(
     const PhysicalMeshConfig& physical_mesh_config) {
@@ -240,12 +247,9 @@ void MeshSocketTestRunner::setup_fabric_configuration() {
 void MeshSocketTestRunner::expand_test_configurations() {
     log_info(tt::LogTest, "Expanding test configurations...");
 
-    // Get the mesh graph from the control plane
-    const auto& mesh_graph = control_plane_ptr_->get_mesh_graph();
-
-    // Use the parser's expand_test_configs method
+    // Use the parser's expand_test_configs method, passing the test runner
     MeshSocketYamlParser parser;
-    expanded_tests_ = parser.expand_test_configs(config_.tests, mesh_graph);
+    expanded_tests_ = parser.expand_test_configs(config_.tests, *this);
 
     log_info(
         tt::LogTest, "Expanded {} tests into {} test configurations", config_.tests.size(), expanded_tests_.size());

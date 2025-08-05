@@ -81,6 +81,7 @@ struct TestSocketConfig {
 // sure.
 struct PatternExpansionConfig {
     PatternType type;  // "all_to_all" or "random_pairing"
+    CoreCoord core_coord;  // Core coordinate to use for connections
 };
 
 struct TestConfig {
@@ -89,7 +90,6 @@ struct TestConfig {
     MemoryConfig memory_config;
     std::optional<std::vector<TestSocketConfig>> sockets;
     std::optional<std::vector<PatternExpansionConfig>> pattern_expansions;
-    std::optional<uint32_t> num_ranks;
 };
 
 // Second pass expansion of patterns
@@ -120,6 +120,9 @@ private:
     const std::vector<std::string>& input_args_;
 };
 
+// Forward declaration
+class MeshSocketTestRunner;
+
 // Main YAML parser class
 class MeshSocketYamlParser {
 public:
@@ -132,7 +135,7 @@ public:
     // Two-stage parsing: YAML -> TestConfig -> ParsedTestConfig
     std::vector<TestConfig> parse_raw_test_configs(const YAML::Node& tests_node);
     std::vector<ParsedTestConfig> expand_test_configs(
-        const std::vector<TestConfig>& test_configs, const tt::tt_fabric::MeshGraph& mesh_graph);
+        const std::vector<TestConfig>& test_configs, const MeshSocketTestRunner& test_runner);
 
     // Validation methods
     static void validate_configuration(const MeshSocketTestConfiguration& config);
@@ -153,22 +156,20 @@ private:
 
     // Pattern expansion methods
     std::vector<ParsedTestConfig> expand_test_config(
-        const TestConfig& test_config, const tt::tt_fabric::MeshGraph& mesh_graph);
+        const TestConfig& test_config, const MeshSocketTestRunner& test_runner);
     std::vector<TestSocketConfig> expand_pattern(
-        const PatternExpansionConfig& pattern,
-        const TestConfig& test_config,
-        const tt::tt_fabric::MeshGraph& mesh_graph);
+        const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestRunner& test_runner);
     std::vector<TestSocketConfig> expand_all_to_all_pattern(
-        const PatternExpansionConfig& pattern,
-        const TestConfig& test_config,
-        const tt::tt_fabric::MeshGraph& mesh_graph);
+        const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestRunner& test_runner);
     std::vector<TestSocketConfig> expand_random_pairing_pattern(
-        const PatternExpansionConfig& pattern,
-        const TestConfig& test_config,
-        const tt::tt_fabric::MeshGraph& mesh_graph);
+        const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestRunner& test_runner);
 
     // Memory config expansion methods
     std::vector<ParsedMemoryConfig> expand_memory_config(const MemoryConfig& memory_config);
+
+    // Distributed communication helpers
+    std::unordered_map<Rank, tt::tt_fabric::MeshId> create_rank_to_mesh_mapping(
+        const MeshSocketTestRunner& test_runner);
 
     // Utility parsing methods
     MeshCoordinate parse_mesh_coordinate(const YAML::Node& node);
