@@ -1810,11 +1810,11 @@ bool RunPipelinedWorkersTest(
     auto programs = std::vector<Program>(1);
     Program& program = programs[0];
 
-    Fabric1DFixture test_fixture;
-    auto view = *(test_fixture.view_);
+    MeshFabric1DFixture test_fixture;
+    auto full_mesh_device = test_fixture.mesh_device_;
 
-    IDevice* device = view.get_device(MeshCoordinate(0, 0));
-    std::shared_ptr<distributed::MeshDevice> mesh_device = distributed::MeshDevice::create_unit_mesh(device->id());
+    IDevice* device = full_mesh_device->get_device(MeshCoordinate(0, 0));
+    std::shared_ptr<distributed::MeshDevice> mesh_device = full_mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
 
     // General setup is as follows:
     // Worker 1 reads input tensor as a sequence of slices - it forwards to an output tensor and after each slice, it
