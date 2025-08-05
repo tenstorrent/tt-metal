@@ -288,15 +288,6 @@ def test_sd35_performance(
         profiler_model_name = (
             f"sd35_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_cfg{cfg_factor}_sp{sp_factor}_tp{tp_factor}"
         )
-        # prep_perf_report(
-        #     model_name=profiler_model_name,
-        #     batch_size=1,
-        #     inference_and_compile_time=avg_total_time,
-        #     inference_time=avg_total_time,
-        #     expected_compile_time=expected_metrics["total_time"],
-        #     expected_inference_time=expected_metrics["total_time"],
-        #     comments=f"",
-        # )
         benchmark_data = BenchmarkData()
         benchmark_data.save_partial_run_json(
             profiler,
