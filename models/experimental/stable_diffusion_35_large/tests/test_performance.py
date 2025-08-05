@@ -7,7 +7,7 @@ from loguru import logger
 import ttnn
 from ..tt.fun_pipeline import TtStableDiffusion3Pipeline, TimingCollector
 from ..tt.parallel_config import StableDiffusionParallelManager, EncoderParallelManager, create_vae_parallel_config
-from models.perf.perf_utils import prep_perf_report
+from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 
 
 @pytest.mark.parametrize(
@@ -158,6 +158,7 @@ def test_sd35_performance(
     # Performance measurement runs
     print("Running performance measurement iterations...")
     all_timings = []
+    profiler = BenchmarkProfiler()
 
     for i in range(3):
         print(f"Performance run {i+1}/3...")
@@ -167,17 +168,18 @@ def test_sd35_performance(
         pipeline.timing_collector = timer
 
         # Run pipeline
-        images = pipeline(
-            prompt_1=[prompts[i + 1]],
-            prompt_2=[prompts[i + 1]],
-            prompt_3=[prompts[i + 1]],
-            negative_prompt_1=[negative_prompt],
-            negative_prompt_2=[negative_prompt],
-            negative_prompt_3=[negative_prompt],
-            num_inference_steps=num_inference_steps,
-            seed=0,
-            traced=True,
-        )
+        with profiler("run", iteration=i):
+            images = pipeline(
+                prompt_1=[prompts[i + 1]],
+                prompt_2=[prompts[i + 1]],
+                prompt_3=[prompts[i + 1]],
+                negative_prompt_1=[negative_prompt],
+                negative_prompt_2=[negative_prompt],
+                negative_prompt_3=[negative_prompt],
+                num_inference_steps=num_inference_steps,
+                seed=0,
+                traced=True,
+            )
         images[0].save(f"sd35_{image_w}_{image_h}_run{i}.png")
         # Collect timing data
         timing_data = timer.get_timing_data()
@@ -279,14 +281,23 @@ def test_sd35_performance(
 
     if is_ci_env:
         # In CI, dump a performance report
-        prep_perf_report(
-            model_name=f"sd35_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_cfg{cfg_factor}_sp{sp_factor}_tp{tp_factor}",
-            batch_size=1,
-            inference_and_compile_time=avg_total_time,
-            inference_time=avg_total_time,
-            expected_compile_time=expected_metrics["total_time"],
-            expected_inference_time=expected_metrics["total_time"],
-            comments=f"",
+        profiler_model_name = (
+            f"sd35_{'t3k' if tuple(mesh_device.shape) == (2, 4) else 'tg'}_cfg{cfg_factor}_sp{sp_factor}_tp{tp_factor}"
+        )
+        # prep_perf_report(
+        #     model_name=profiler_model_name,
+        #     batch_size=1,
+        #     inference_and_compile_time=avg_total_time,
+        #     inference_time=avg_total_time,
+        #     expected_compile_time=expected_metrics["total_time"],
+        #     expected_inference_time=expected_metrics["total_time"],
+        #     comments=f"",
+        # )
+        benchmark_data = BenchmarkData()
+        benchmark_data.save_partial_run_json(
+            profiler,
+            run_type="sd35_traced",
+            ml_model_name=profiler_model_name,
         )
 
     pass_perf_check = True
