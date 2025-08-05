@@ -705,37 +705,16 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
         reader_compile_time_args.push_back((std::uint32_t)(cb_data_format == tt::DataFormat::Float32));
         reader_compile_time_args.push_back((std::uint32_t)alignment);
     }
-<<<<<<< HEAD
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
-=======
->>>>>>> origin/main
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index};
     if (row_major) {
-        bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-        writer_compile_time_args.push_back((std::uint32_t)dst_is_dram);
         writer_compile_time_args.push_back((std::uint32_t)W * a.element_size());
 
         auto stick_size = W * a.element_size();
-<<<<<<< HEAD
         writer_compile_time_args.push_back(stick_size);
-        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-    } else {
-        bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-        writer_compile_time_args.push_back((std::uint32_t)dst_is_dram);
-=======
-        bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-        writer_compile_time_args.push_back((std::uint32_t)stick_size_is_power_of_two);
-        if (stick_size_is_power_of_two) {
-            uint32_t log2_stick_size = (std::uint32_t)std::log2(stick_size);
-            writer_compile_time_args.push_back((std::uint32_t)log2_stick_size);
-        } else {
-            writer_compile_time_args.push_back(stick_size);
-        }
-    } else {
-        tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
->>>>>>> origin/main
     }
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -1552,8 +1531,6 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
     if (row_major) {
-        bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-        writer_compile_time_args.push_back((std::uint32_t)dst_is_dram);
         writer_compile_time_args.push_back(ht);
         writer_compile_time_args.push_back(H);
         writer_compile_time_args.push_back(wt);
@@ -1564,25 +1541,9 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
         writer_compile_time_args.push_back(ht * output.element_size() * TILE_HEIGHT);
 
         auto stick_size = H * output.element_size();
-<<<<<<< HEAD
         writer_compile_time_args.push_back(stick_size);
-        TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-    } else {
-        bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-        writer_compile_time_args.push_back((std::uint32_t)dst_is_dram);
-=======
-        bool stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-        writer_compile_time_args.push_back((std::uint32_t)stick_size_is_power_of_two);
-        if (stick_size_is_power_of_two) {
-            uint32_t log2_stick_size = (std::uint32_t)std::log2(stick_size);
-            writer_compile_time_args.push_back((std::uint32_t)log2_stick_size);
-        } else {
-            writer_compile_time_args.push_back(stick_size);
-        }
-    } else {
-        tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
->>>>>>> origin/main
     }
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
