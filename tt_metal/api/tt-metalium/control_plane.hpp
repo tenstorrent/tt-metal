@@ -78,9 +78,13 @@ public:
     MeshShape get_physical_mesh_shape(MeshId mesh_id, MeshScope scope = MeshScope::GLOBAL) const;
     MeshCoordinateRange get_coord_range(MeshId mesh_id, MeshScope scope = MeshScope::GLOBAL) const;
 
-    // Returns distributed context for `mesh_id`, if it is distributed across multiple hosts.
-    // Returns `nullptr` if the mesh is a single-host mesh.
-    const tt::tt_metal::distributed::multihost::DistributedContext* get_distributed_context(MeshId mesh_id) const;
+    // Returns distributed context for `mesh_id`.
+    // Throws if `mesh_id` is unknown.
+    const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> get_distributed_context(
+        MeshId mesh_id) const;
+
+    // Returns the distributed context with only one host.
+    const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& get_host_local_context() const;
 
     // Return valid ethernet channels on the specificed routing plane
     std::vector<chan_id_t> get_valid_eth_chans_on_routing_plane(
@@ -288,6 +292,8 @@ private:
     // Distributed contexts for each multi-host mesh, that this host is part of - this is typically a single mesh.
     std::unordered_map<MeshId, std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>>
         distributed_contexts_;
+
+    std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> host_local_context_;
 };
 
 }  // namespace tt::tt_fabric

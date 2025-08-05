@@ -25,12 +25,12 @@ using ::tt::tt_fabric::MeshId;
 using ::tt::tt_fabric::MeshScope;
 
 TEST(BigMeshDualRankTest2x4, DistributedContext) {
-    auto& dctx = MetalContext::instance().get_distributed_context();
+    auto& dctx = MetalContext::instance().global_distributed_context();
     EXPECT_EQ(dctx.size(), multihost::Size(2));
 }
 
 TEST(BigMeshDualRankTest2x4, LocalRankBinding) {
-    auto& dctx = MetalContext::instance().get_distributed_context();
+    auto& dctx = MetalContext::instance().global_distributed_context();
     auto& control_plane = MetalContext::instance().get_control_plane();
 
     tt_fabric::HostRankId local_rank_binding = control_plane.get_local_host_rank_id_binding();
@@ -49,14 +49,14 @@ TEST(BigMeshDualRankTest2x4, LocalRankBinding) {
         EXPECT_EQ(control_plane.get_local_mesh_offset(), MeshCoordinate(0, 2));
     }
 
-    const auto* distributed_context = control_plane.get_distributed_context(MeshId(0));
+    const auto distributed_context = control_plane.get_distributed_context(MeshId(0));
     ASSERT_NE(distributed_context, nullptr);
     EXPECT_EQ(distributed_context->size(), multihost::Size(2));
     EXPECT_EQ(distributed_context->rank(), dctx.rank());
 
     // Note these are different pointers, as ControlPlane::get_distributed_context() returns a pointer to a sub-context,
     // to accommodate multi-mesh deployments.
-    EXPECT_NE(&MetalContext::instance().get_distributed_context(), distributed_context);
+    EXPECT_NE(&MetalContext::instance().global_distributed_context(), distributed_context.get());
 }
 
 TEST(BigMeshDualRankTest2x4, SystemMeshValidation) {

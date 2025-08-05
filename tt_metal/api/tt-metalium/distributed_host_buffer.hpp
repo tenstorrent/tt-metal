@@ -35,7 +35,8 @@ public:
     static DistributedHostBuffer create(
         const distributed::MeshShape& global_shape,
         const distributed::MeshShape& local_shape,
-        const distributed::MeshCoordinate& local_offset);
+        const distributed::MeshCoordinate& local_offset,
+        const std::shared_ptr<distributed::multihost::DistributedContext>& context);
 
     // Creates a multi-host distributed buffer that matches shape and multi-host distribution of the mesh device view.
     static DistributedHostBuffer create(const distributed::MeshDeviceView& mesh_device_view);
@@ -75,8 +76,7 @@ public:
     const std::set<distributed::MeshCoordinate>& shard_coords() const;
 
     // Returns the distributed context for the buffer.
-    // Returns `nullptr` if the buffer is not distributed across multiple hosts.
-    const distributed::multihost::DistributedContext* context() const;
+    const std::shared_ptr<distributed::multihost::DistributedContext>& context() const;
 
 private:
     // Converts a global coordinate to a local coordinate.
@@ -94,8 +94,8 @@ private:
     DistributedHostBuffer(
         distributed::DistributedMeshContainer<Shard> shards,
         std::set<distributed::MeshCoordinate> populated_shards,
-        const distributed::multihost::DistributedContext* context) :
-        shards_(std::move(shards)), shard_coords_(std::move(populated_shards)), context_(context) {}
+        std::shared_ptr<distributed::multihost::DistributedContext> context) :
+        shards_(std::move(shards)), shard_coords_(std::move(populated_shards)), context_(std::move(context)) {}
 
     // The shards of the buffer.
     // Remote shards are never materialized, but not all of the local shards are necessarily populated.
@@ -105,8 +105,7 @@ private:
     std::set<distributed::MeshCoordinate> shard_coords_;
 
     // The distributed context for the buffer.
-    // `nullptr` if the buffer is not distributed across multiple hosts.
-    const distributed::multihost::DistributedContext* context_ = nullptr;
+    std::shared_ptr<distributed::multihost::DistributedContext> context_;
 };
 
 }  // namespace tt::tt_metal

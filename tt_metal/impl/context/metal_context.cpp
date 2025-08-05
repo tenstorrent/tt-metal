@@ -244,7 +244,7 @@ MetalContext::MetalContext() {
     std::atexit([]() { MetalContext::instance().~MetalContext(); });
 }
 
-distributed::multihost::DistributedContext& MetalContext::get_distributed_context() {
+distributed::multihost::DistributedContext& MetalContext::global_distributed_context() {
     TT_FATAL(distributed_context_, "Distributed context not initialized.");
     return *distributed_context_;
 }
