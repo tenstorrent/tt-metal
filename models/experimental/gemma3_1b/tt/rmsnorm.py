@@ -77,6 +77,8 @@ class RMSNorm(LightweightModule):
         torch_weight = (
             state_dict[weight_name].unsqueeze(0).view(1, 1, dim).reshape([1, 1, dim // SHARD_HEIGHT, SHARD_HEIGHT])
         )
+        if add_unit_offset:
+            torch_weight = torch_weight + 1.0
 
         # # Add offset before caching
         cache_name = None if weight_cache_path is None else weight_cache_path / weight_name
@@ -93,9 +95,6 @@ class RMSNorm(LightweightModule):
             cache_file_name=cache_name,
             mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
         )
-        if add_unit_offset:
-            self.weight = ttnn.add(self.weight, 1.0)
-
         if self.is_distributed:
             self.weight_distributed = ttnn.as_tensor(
                 torch_weight,
@@ -108,9 +107,6 @@ class RMSNorm(LightweightModule):
                 if is_mesh_device
                 else None,
             )
-            if add_unit_offset:
-                self.weight_distributed = ttnn.add(self.weight_distributed, 1.0)  # Add offset to distributed weight
-
         self.sharded_output_config = sharded_output_config
         self.sharded_program_config = sharded_program_config
         self.output_mem_config = output_mem_config
