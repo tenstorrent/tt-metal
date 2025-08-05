@@ -307,24 +307,24 @@ jobs:
             **Test Configuration:**
             - Wormhole tests: ${{
                   needs.detect-changes.outputs.run-wormhole == 'true' &&
-                  '✅ Enabled' || '❌ Disabled' }}
+                  '🟢 Enabled' || '⚪ Disabled' }}
             - Blackhole tests: ${{
                   needs.detect-changes.outputs.run-blackhole == 'true' &&
-                  '✅ Enabled' || '❌ Disabled' }}
+                  '🟢 Enabled' || '⚪ Disabled' }}
 
             ${{
               needs.detect-changes.outputs.should-skip == 'true' &&
               '**Status:** ⏭️ **Skipped** - No relevant changes in LLK directories' ||
               format('**Status:** {0}',
                 needs.trigger-tt-metal-tests.result == 'success' &&
-                '✅ Tests succeeded' ||
+                '🎯 Tests succeeded' ||
                 needs.trigger-tt-metal-tests.result == 'skipped' &&
                 '⏭️ Skipped' ||
-                '❌ Tests failed')
+                '🛑 Tests failed')
             }}
 
             ## 🔗 Links
-            📊 **Post-commit tests:** [#${{ github.run_id }}](${{
+            📊 **Post-commit workflow:** [#${{ github.run_id }}](${{
               github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
 
             ${{
