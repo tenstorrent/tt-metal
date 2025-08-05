@@ -263,3 +263,21 @@ class RepeatConfig(OpConfigBase):
     """Common parameters for a ttnn.repeat op"""
 
     repeat_dims: ttnn.Shape
+
+
+@dataclass
+class TopKFallbackConfig(OpConfigBase):
+    """Common parameters for a ttnn.topk_fallback op"""
+
+    mesh_device: ttnn.Device
+    dtype: ttnn.DataType
+    memory_config: ttnn.MemoryConfig
+    use_bitonic_sort: bool = False
+
+
+@dataclass
+class LinearFallbackConfig(OpConfigBase):
+    """Common parameters for a ttnn.linear_fallback op"""
+
+    mesh_device: ttnn.Device
+    dtype: ttnn.DataType
