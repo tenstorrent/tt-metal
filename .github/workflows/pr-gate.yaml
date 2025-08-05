@@ -40,7 +40,13 @@ concurrency:
   # PRs: PR #
   # Merge Queue: A value unique to each PR (merge_group.head_ref)
   # All others: commit ID (read: never cancel other jobs)
-  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.event.pull_request.number || github.event.merge_group.head_ref || github.ref }}-${{ inputs.build-type || 'default' }}
+  group: >-
+    ${{ github.workflow }}-
+    ${{ github.ref_protected && github.run_id
+        || github.event.pull_request.number
+        || github.event.merge_group.head_ref
+        || github.ref }}-
+    ${{ inputs.build-type || 'default' }}
   cancel-in-progress: true
 
 permissions:
