@@ -48,8 +48,12 @@ def test_sd35_performance(
     num_links,
     model_location_generator,
     is_ci_env,
+    galaxy_type,
 ) -> None:
     """Performance test for SD35 pipeline with detailed timing analysis."""
+
+    if galaxy_type == "4U":
+        pytest.skip("4U is not supported for this test")
 
     # Setup parallel manager
     cfg_factor, cfg_axis = cfg
