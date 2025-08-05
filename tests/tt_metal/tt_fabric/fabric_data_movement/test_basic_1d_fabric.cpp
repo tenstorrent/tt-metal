@@ -1751,7 +1751,7 @@ TEST_F(Fabric1DFixture, DISABLED_TestEDMConnectionStressTestQuick) {
     }
 }
 
-void UnicastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type) {
+void FabricUnicastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type) {
     uint32_t num_hops = 1;
     RoutingDirection direction = RoutingDirection::E;  // East direction
     uint32_t num_packets = 10;
@@ -1901,7 +1901,7 @@ void UnicastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type) {
     EXPECT_EQ(sender_bytes, receiver_bytes);
 }
 
-void MulticastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type) {
+void FabricMulticastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type) {
     uint32_t start_distance = 1;
     uint32_t range = 3;
     RoutingDirection dir = RoutingDirection::E;  // East direction
@@ -2132,30 +2132,38 @@ void MulticastCommon(BaseFabricFixture* fixture, NocSendType noc_send_type) {
 }
 
 // 1D Linear Fabric API Tests
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocUnicastWrite1D) { UnicastCommon(this, NOC_UNICAST_WRITE); }
+TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocUnicastWrite1D) { FabricUnicastCommon(this, NOC_UNICAST_WRITE); }
 
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocAtomicInc1D) { UnicastCommon(this, NOC_UNICAST_ATOMIC_INC); }
+TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocAtomicInc1D) { FabricUnicastCommon(this, NOC_UNICAST_ATOMIC_INC); }
 
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocScatterWrite1D) { UnicastCommon(this, NOC_UNICAST_SCATTER_WRITE); }
+TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocScatterWrite1D) {
+    FabricUnicastCommon(this, NOC_UNICAST_SCATTER_WRITE);
+}
 
-TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocInlineWrite1D) { UnicastCommon(this, NOC_UNICAST_INLINE_WRITE); }
+TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocInlineWrite1D) {
+    FabricUnicastCommon(this, NOC_UNICAST_INLINE_WRITE);
+}
 
 TEST_F(Fabric1DFixture, TestLinearFabricUnicastNocFusedAtomicInc1D) {
-    UnicastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC);
+    FabricUnicastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC);
 }
 
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocUnicastWrite1D) { MulticastCommon(this, NOC_UNICAST_WRITE); }
+TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocUnicastWrite1D) { FabricMulticastCommon(this, NOC_UNICAST_WRITE); }
 
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocAtomicInc1D) { MulticastCommon(this, NOC_UNICAST_ATOMIC_INC); }
+TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocAtomicInc1D) {
+    FabricMulticastCommon(this, NOC_UNICAST_ATOMIC_INC);
+}
 
 TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocScatterWrite1D) {
-    MulticastCommon(this, NOC_UNICAST_SCATTER_WRITE);
+    FabricMulticastCommon(this, NOC_UNICAST_SCATTER_WRITE);
 }
 
-TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocInlineWrite1D) { MulticastCommon(this, NOC_UNICAST_INLINE_WRITE); }
+TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocInlineWrite1D) {
+    FabricMulticastCommon(this, NOC_UNICAST_INLINE_WRITE);
+}
 
 TEST_F(Fabric1DFixture, TestLinearFabricMulticastNocFusedAtomicInc1D) {
-    MulticastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC);
+    FabricMulticastCommon(this, NOC_FUSED_UNICAST_ATOMIC_INC);
 }
 
 }  // namespace fabric_router_tests
