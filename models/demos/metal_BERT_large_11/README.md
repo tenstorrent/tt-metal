@@ -13,11 +13,11 @@ BERT stands for Bidirectional Encoder Representations from Transformers. Unlike 
 ## How to Run
 ### Batch Support Chart
 Replace `BATCH_SIZE` with the appropriate size for your device according to this chart:
-| Batch size | Grayskull (E150)   | Wormhole (N150)    | Wormhole (N300)     |
-|------------|--------------------|--------------------|---------------------|
-| 7          | :white_check_mark: | :white_check_mark: | :white_check_mark:  |
-| 8          | :white_check_mark: | :white_check_mark: | :white_check_mark: *|
-| 12         | :white_check_mark: | :x:                | :x:                 |
+| Batch size | Grayskull (e150)   | Wormhole (n150)    | Wormhole (n300)    |
+|------------|--------------------|--------------------|--------------------|
+| 7          | :white_check_mark: | :white_check_mark: | :white_check_mark: |
+| 8          | :white_check_mark: | :white_check_mark: | :white_check_mark: |
+| 12         | :white_check_mark: | :x:                | :x:                |
 
 ### Run the Demo
 ```
