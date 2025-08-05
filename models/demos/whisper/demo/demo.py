@@ -49,19 +49,20 @@ def pad_input_32(tensor, value):
     return tensor
 
 
-def get_whisper_model_repo():
-    """Get whisper model repo based on environment variable"""
-    model_type = os.environ.get("WHISPER_MODEL_TYPE", "original")
+def get_whisper_model_repo(model_type="original"):
+    """
+    Get whisper model repo based on model type parameter
+    """
     if model_type == "distilled":
         return "distil-whisper/distil-large-v3"
     elif model_type == "original":
         return "openai/whisper-large-v3"
     else:
-        raise ValueError(f"Unknown WHISPER_MODEL_TYPE: {model_type}. Valid options are 'original' or 'distilled'")
+        raise ValueError(f"Unknown model_type: {model_type}. Valid options are 'original' or 'distilled'")
 
 
-def load_conditional_generation_ref_model():
-    model_repo = get_whisper_model_repo()
+def load_conditional_generation_ref_model(model_type="original"):
+    model_repo = get_whisper_model_repo(model_type)
     hf_ref_model = WhisperForConditionalGeneration.from_pretrained(model_repo).to(torch.bfloat16).eval()
     processor = AutoProcessor.from_pretrained(model_repo, language="English", task="transcribe")
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_repo)
@@ -241,14 +242,14 @@ def run_generate(
             return output
 
 
-def create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn_model, device):
+def create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn_model, device, model_type="original"):
     """
     Returns a callable with signature (data, sampling_rate, stream), where data is is a 1D numpy array
     and sampling_rate is an int representing the sampling rate used to acquire data, and stream turns
     signals the callable to return a generator if True, yielding the decoded tokens as they are processed, else
     the callable returns the full decoded output.
     """
-    hf_ref_model, config, processor, feature_extractor = load_conditional_generation_ref_model()
+    hf_ref_model, config, processor, feature_extractor = load_conditional_generation_ref_model(model_type)
     parameters, ttnn_linear_weight, kv_cache = init_conditional_generation_tt_model(
         hf_ref_model, config, ttnn_model, device
     )
@@ -382,11 +383,15 @@ def run_demo_whisper_for_audio_classification_dataset(ttnn_model, device):
     logger.info(predicted_label)
 
 
-def run_demo_whisper_for_conditional_generation_inference(input_path, ttnn_model, device, num_inputs):
+def run_demo_whisper_for_conditional_generation_inference(
+    input_path, ttnn_model, device, num_inputs, model_type="original"
+):
     torch.manual_seed(0)
 
     # instantiate model inference pipeline
-    model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn_model, device)
+    model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(
+        ttnn_model, device, model_type
+    )
 
     # load data
     input_data = load_input_paths(input_path)
@@ -415,11 +420,13 @@ def run_demo_whisper_for_conditional_generation_inference(input_path, ttnn_model
     return avg_ttft, avg_decode_throughput
 
 
-def run_demo_whisper_for_conditional_generation_dataset(ttnn_model, device):
+def run_demo_whisper_for_conditional_generation_dataset(ttnn_model, device, model_type="original"):
     torch.manual_seed(0)
 
     # instantiate model inference pipeline
-    model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn_model, device)
+    model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(
+        ttnn_model, device, model_type
+    )
 
     # load data
     ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
@@ -475,10 +482,14 @@ def test_demo_for_audio_classification_dataset(ttnn_model, device, is_ci_env):
     "num_inputs",
     (2,),
 )
+@pytest.mark.parametrize(
+    "model_type",
+    ("original", "distilled"),
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_demo_for_conditional_generation(input_path, ttnn_model, device, num_inputs, is_ci_env):
+def test_demo_for_conditional_generation(input_path, ttnn_model, device, num_inputs, model_type, is_ci_env):
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
-        input_path, ttnn_model, device, num_inputs
+        input_path, ttnn_model, device, num_inputs, model_type
     )
     if is_ci_env:
         if is_blackhole():
@@ -497,8 +508,12 @@ def test_demo_for_conditional_generation(input_path, ttnn_model, device, num_inp
     "ttnn_model",
     (ttnn_optimized_functional_whisper,),
 )
+@pytest.mark.parametrize(
+    "model_type",
+    ("original", "distilled"),
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_demo_for_conditional_generation_dataset(ttnn_model, device, is_ci_env):
+def test_demo_for_conditional_generation_dataset(ttnn_model, device, model_type, is_ci_env):
     if is_ci_env:
         pytest.skip("Skipping test in CI since it provides redundant testing")
-    return run_demo_whisper_for_conditional_generation_dataset(ttnn_model, device)
+    return run_demo_whisper_for_conditional_generation_dataset(ttnn_model, device, model_type)
