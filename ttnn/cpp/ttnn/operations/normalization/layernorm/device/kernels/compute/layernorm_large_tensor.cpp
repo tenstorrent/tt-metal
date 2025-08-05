@@ -121,7 +121,7 @@ void MAIN {
         cb_wait_front(cb_ex, onetile);
 #endif  // !RMS ifdef end
 
-        // Start of calculation x - E[x] (or sum(x^2)/n for RMS norm)
+        // Start of calculation x - E[x] (or (∑x^2)/n for RMS norm)
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             tile_regs_acquire();
             tile_regs_wait();
@@ -191,7 +191,7 @@ void MAIN {
 
         tile_regs_acquire();
         tile_regs_wait();
-        // End of calculation x - E[x] (or sum(x^2)/n for RMS norm)
+        // End of calculation x - E[x] (or (∑x^2)/n for RMS norm)
 
         // Start of
         // Calculation
