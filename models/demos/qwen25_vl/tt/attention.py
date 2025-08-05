@@ -19,6 +19,7 @@ class Attention(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         weight_cache_path,
         layer_num,
@@ -34,6 +35,7 @@ class Attention(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
         self.TG = self.num_devices == 32
         self.hidden_size = configuration.dim
@@ -426,6 +428,7 @@ class Attention(LightweightModule):
         xqkv_fused = tt_all_reduce(
             xqkv_fused_sharded,
             self.mesh_device,
+            self.tt_ccl,
             cluster_axis=1,
             num_reduce_scatter_links=self.num_reduce_scatter_links,
             num_all_gather_links=self.num_all_gather_links,
@@ -584,6 +587,7 @@ class Attention(LightweightModule):
             attn_output = tt_all_gather(
                 attn_output_cat,
                 self.mesh_device,
+                self.tt_ccl,
                 dim=2,
                 cluster_axis=1,
                 num_links=2,
@@ -626,6 +630,7 @@ class Attention(LightweightModule):
             dense_out_reduced = tt_all_reduce(
                 dense_out_sharded,
                 self.mesh_device,
+                self.tt_ccl,
                 cluster_axis=0,
                 num_reduce_scatter_links=self.num_reduce_scatter_links,
                 num_all_gather_links=self.num_all_gather_links,
@@ -692,6 +697,7 @@ class Attention(LightweightModule):
         xqkv_fused = tt_all_reduce(
             xqkv_fused,
             self.mesh_device,
+            self.tt_ccl,
             cluster_axis=1,
             num_reduce_scatter_links=self.num_reduce_scatter_links,
             num_all_gather_links=self.num_all_gather_links,
@@ -870,6 +876,20 @@ class Attention(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
+            attn_output_11SH = ttnn.experimental.all_gather_async(
+                attn_output_11SH,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=1,
+                topology=self.ccl_topology,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
+
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
@@ -891,6 +911,7 @@ class Attention(LightweightModule):
             output_11SH = tt_all_reduce(
                 output_11SH,
                 self.mesh_device,
+                self.tt_ccl,
                 cluster_axis=0,
                 dim=0 if self.TG else 3,
                 num_reduce_scatter_links=self.num_reduce_scatter_links,
