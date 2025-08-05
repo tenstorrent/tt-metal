@@ -1,13 +1,5 @@
 # Whisper Demo (Wormhole & Blackhole)
 
-## How to Run
-
-If running on Wormhole N300 (not required for N150 or Blackhole), the following environment variable needs to be set since Whisper requires at least 8x8 core grid size:
-
-```sh
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-```
-
 ### Conditional Generation
 
 To run the conditional generation demo with custom inputs:
