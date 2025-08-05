@@ -229,11 +229,20 @@ run_t3000_mixtral_tests() {
   fail=0
   start_time=$(date +%s)
 
-  echo "LOG_METAL: Running run_t3000_mixtral8x7b_tests"
+  echo "LOG_METAL: Running run_t3000_tt-transformer_mixtral8x7b_tests"
 
   # mixtral8x7b 8 chip demo test - 100 token generation with general weights (env flags set inside the test)
-  pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo.py --timeout=720 ; fail+=$?
-  pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo_with_prefill.py --timeout=720 ; fail+=$?
+  # pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo.py --timeout=720 ; fail+=$?
+  # pytest -n auto models/demos/t3000/mixtral8x7b/demo/demo_with_prefill.py --timeout=720 ; fail+=$?
+  pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_mlp.py::test_mixtral_mlp_inference[wormhole_b0-True-prefill] --timeout=720 ; fail+=$?
+  pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_rms_norm.py::test_rms_norm_inference[wormhole_b0-True-prefill-128-1-8] --timeout=720 ; fail+=$?
+  pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_decoder.py::test_mixtral_decoder_inference[wormhole_b0-True-decode-32] --timeout=720 ; fail+=$?
+  pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_moe.py::test_mixtral_moe_inference[wormhole_b0-True-decode] --timeout=720 ; fail+=$?
+  pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_moe.py::test_mixtral_moe_inference[wormhole_b0-True-prefill] --timeout=720 ; fail+=$?
+  pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_model.py::test_model_inference[wormhole_b0-8-performance-256-1-page_params0-paged_attention-quick] --timeout=720 ; fail+=$?
+  pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py::test_model_inference[wormhole_b0-1layer-performance-max128k-128-page_params0-paged_attention-8] --timeout=720 ; fail+=$?
+  pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_decoder_prefill.py::test_mixtral_decoder_inference[wormhole_b0-True-16] --timeout=720 ; fail+=$?
+  pytest -n auto models/tt_transformers/demo/simple_text_demo.py::test_demo_text[wormhole_b0-8-device_params0-performance-batch-1] --timeout=720 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
