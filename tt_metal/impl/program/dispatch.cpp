@@ -48,6 +48,7 @@
 #include "semaphore.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>
+#include <tt_stl/overloaded.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "tt_memory.h"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
@@ -1088,18 +1089,14 @@ public:
         const uint32_t max_paged_length_per_sub_cmd =
             max_length_per_sub_cmd / HostMemDeviceCommand::PROGRAM_PAGE_SIZE * HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
         for (const auto& [cores, num_mcast_dests, kg_transfer_info] : program_transfer_info.kernel_bins) {
-            bool write_linear;
-            uint32_t noc_encoding;
-            std::visit(
-                [&](auto&& cores) {
-                    using T = std::decay_t<decltype(cores)>;
-                    if constexpr (std::is_same_v<T, CoreRange>) {
-                        noc_encoding = device->get_noc_multicast_encoding(constants.noc_index, cores);
-                        write_linear = false;
-                    } else {
-                        noc_encoding = device->get_noc_unicast_encoding(constants.noc_index, cores);
-                        write_linear = true;
-                    }
+            const auto [noc_encoding, write_linear] = std::visit(
+                ttsl::overloaded{
+                    [&](const CoreRange& cores) {
+                        return std::make_pair(device->get_noc_multicast_encoding(constants.noc_index, cores), false);
+                    },
+                    [&](const CoreCoord& cores) {
+                        return std::make_pair(device->get_noc_unicast_encoding(constants.noc_index, cores), true);
+                    },
                 },
                 cores);
             for (uint32_t kernel_idx = 0; kernel_idx < kg_transfer_info.dst_base_addrs.size(); kernel_idx++) {
