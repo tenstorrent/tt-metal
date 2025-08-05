@@ -171,11 +171,9 @@ class TtLlamaMLP(LightweightModule):
         )
         ttnn.deallocate(ff1ff3)
 
-        breakpoint()
-
-        w2_out = ttnn.linear(
+        w2_out = ttnn.linear(  # This ends up being [1, 1, 1, 3200], but should be [1, 1, 32, 3200]
             w2_in,
-            self.w2,
+            self.w2,  # [1, 1, 3200, 1280]
             compute_kernel_config=self.args.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat8_b,
             program_config=pc_2,
@@ -185,14 +183,14 @@ class TtLlamaMLP(LightweightModule):
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
 
-        w2_out_reduced = self.tt_ccl.line_all_reduce(
+        w2_out_reduced = self.tt_ccl.line_all_reduce(  # This is [1, 1, 1, 1280] but should be [1, 1, 32, 1280]
             w2_out,
             cluster_axis=0,
             num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             use_optimal_ccl_for_llama=True,
         )
-
+        breakpoint()
         ttnn.deallocate(w2_out)
 
         return w2_out_reduced

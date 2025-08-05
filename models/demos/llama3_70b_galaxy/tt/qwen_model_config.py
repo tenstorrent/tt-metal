@@ -364,7 +364,7 @@ class TtQwenModelArgs(TtModelArgs):
                         1,
                         1,
                         32,
-                        self.dim_per_tp // num_cores_ln,
+                        self.dim_per_tp // 8,
                     ),  # (1, 1, 32, 2048 // num_cores_ln) originally
                     core_grid=ttnn.CoreRangeSet(
                         {
