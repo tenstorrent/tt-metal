@@ -36,31 +36,31 @@ run_python_model_tests_wormhole_b0() {
     pytest models/demos/wormhole/resnet50/tests/test_resnet50_functional.py -k "pretrained_weight_false"
 
     # Yolov4
-    pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py -k "pretrained_weight_false"
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov4/tests/pcc/test_ttnn_yolov4.py -k "pretrained_weight_false"
 
     # Yolov8
-    pytest models/demos/yolov8x/tests/pcc/test_yolov8x.py::test_yolov8x_640
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov8x/tests/pcc/test_yolov8x.py::test_yolov8x_640
 
     # Yolov8s
-    pytest models/demos/yolov8s/tests/pcc/test_yolov8s.py::test_yolov8s_640
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov8s/tests/pcc/test_yolov8s.py::test_yolov8s_640
 
     # Unet Shallow
-    pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
 
     # Mamba
-    pytest -svv models/demos/wormhole/mamba/tests/test_residual_block.py -k "pretrained_weight_false"
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/wormhole/mamba/tests/test_residual_block.py -k "pretrained_weight_false"
 
     # Mobilenetv2git
-    pytest -svv models/demos/mobilenetv2/tests/pcc/test_mobilenetv2.py
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/mobilenetv2/tests/pcc/test_mobilenetv2.py
 
     #Yolov10
-    pytest -svv models/demos/yolov10x/tests/pcc/test_ttnn_yolov10x.py::test_yolov10x
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/yolov10x/tests/pcc/test_ttnn_yolov10x.py::test_yolov10x
 
     #Yolov7
-    pytest -svv models/demos/yolov7/tests/pcc/test_ttnn_yolov7.py
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/yolov7/tests/pcc/test_ttnn_yolov7.py
 
     # ViT-base
-    pytest -svv models/demos/vit/tests/pcc/test_ttnn_optimized_sharded_vit_wh.py
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/demos/vit/tests/pcc/test_ttnn_optimized_sharded_vit_wh.py
 
 
     # Llama3.1-8B
@@ -74,13 +74,13 @@ run_python_model_tests_wormhole_b0() {
 
     # Run all Llama3 tests for 8B, 1B, and 3B weights - dummy weights with tight PCC check
     for llama_dir in  "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-        LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
+        LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
         echo "LOG_METAL: Llama3 tests for $llama_dir completed"
     done
 
     # Mistral-7B-v0.3
     mistral_weights=mistralai/Mistral-7B-Instruct-v0.3
-    HF_MODEL=$mistral_weights pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
+    HF_MODEL=$mistral_weights WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
 }
 
 run_python_model_tests_slow_runtime_mode_wormhole_b0() {
@@ -91,7 +91,7 @@ run_python_model_tests_slow_runtime_mode_wormhole_b0() {
         "comparison_mode_should_raise_exception": true,
         "comparison_mode_pcc": 0.998
     }'
-    pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
+    WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -svv models/experimental/functional_unet/tests/test_unet_model.py
 }
 
 run_python_model_tests_blackhole() {

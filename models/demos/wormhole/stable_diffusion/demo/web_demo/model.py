@@ -179,6 +179,12 @@ def warmup_model():
     # create device, these constants are specific to n150 & n300
     device_id = 0
     device_params = {"l1_small_size": 11 * 8192, "trace_region_size": 789835776}
+    dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
+    if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
+        dispatch_core_type = ttnn.device.DispatchCoreType.ETH
+    dispatch_core_axis = ttnn.DispatchCoreAxis.ROW
+    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
+    device_params["dispatch_core_config"] = dispatch_core_config
     device = ttnn.CreateDevice(device_id=device_id, **device_params)
     num_inference_steps = 50
     image_size = (512, 512)

@@ -257,6 +257,14 @@ def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected
     # Clear global profiler state before starting measurements
     profiler.clear()
 
+    # setup envvar if testing on N300
+    wh_arch_yaml_org = None
+    if device.core_grid.y == 7:
+        if ("WH_ARCH_YAML" not in os.environ) or (
+            os.environ["WH_ARCH_YAML"] != "wormhole_b0_80_arch_eth_dispatch.yaml"
+        ):
+            pytest.skip("SD unet2d only works for 8x8 grid size")
+
     # setup the configs
     ttnn.CONFIG.throw_exception_on_fallback = True
     in_channels = 4
@@ -415,6 +423,11 @@ def test_stable_diffusion_device_perf(expected_kernel_samples_per_second):
     expected_perf_cols = {inference_time_key: expected_kernel_samples_per_second}
 
     if is_wormhole_b0():
+        # back-up the value of WH_ARCH_YAML if exist
+        wh_arch_yaml_backup = None
+        if "WH_ARCH_YAML" in os.environ:
+            wh_arch_yaml_backup = os.environ["WH_ARCH_YAML"]
+        os.environ["WH_ARCH_YAML"] = "wormhole_b0_80_arch_eth_dispatch.yaml"
         os.environ["TT_MM_THROTTLE_PERF"] = "5"
 
     post_processed_results = run_device_perf(command, subdir, iterations, cols, batch, has_signposts=True)
@@ -426,3 +439,10 @@ def test_stable_diffusion_device_perf(expected_kernel_samples_per_second):
         expected_results=expected_results,
         comments="",
     )
+
+    if is_wormhole_b0():
+        # set WH_ARCH_YAML back to the original value
+        if wh_arch_yaml_backup is not None:
+            os.environ["WH_ARCH_YAML"] = wh_arch_yaml_backup
+        else:
+            del os.environ["WH_ARCH_YAML"]

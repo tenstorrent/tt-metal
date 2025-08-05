@@ -1,18 +1,22 @@
 # YOLOV10x
 Demo showcasing Yolov10x running on `Wormhole - N150, N300` using ttnn.
 
+### Note:
+
+- On N300, Make sure to use `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml` with the pytest.
+
+- Or, make sure to set the following environment variable in the terminal:
+  ```
+  export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+  ```
+- To obtain the perf reports through profiler, please build with following command:
+  ```
+  ./build_metal.sh -p
+  ```
 
 ## Introduction:
 
 YOLOv10x introduces a new approach to real-time object detection, addressing both the post-processing and model architecture deficiencies found in previous YOLO versions. By eliminating non-maximum suppression (NMS) and optimizing various model components, YOLOv10x achieves state-of-the-art performance with significantly reduced computational overhead. Extensive experiments demonstrate its superior accuracy-latency trade-offs across multiple model scales. We've used weights available [here](https://docs.ultralytics.com/models/yolov10x/#performance) under YOLOV10x
-
-
-## How to Run: (640x640 resolution)
-
-To obtain the perf reports through profiler, please build with following command:
-```
-./build_metal.sh -p
-```
 
 ### Details
 - The entry point to yolov10x model is YoloV10x in `models/demos/yolov10x/tt/ttnn_yolov10x.py`.
@@ -20,6 +24,7 @@ To obtain the perf reports through profiler, please build with following command
 - Supported Input Resolution : `(640, 640)` - (Height, Width).
 - Dataset used for evaluation : **COCO-2017**
 
+## How to Run:
 
 Use the following command to run the Yolov10x model :
 

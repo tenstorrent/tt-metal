@@ -1,5 +1,11 @@
 # Falcon7B Demo (T3000)
 
+Falcon7b prefill uses 8x8 core grid size, so the following environment variable needs to be set on a T3000 setup:
+
+```sh
+export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+```
+
 ## How to Run
 
 ### Token Generation (Default) Mode

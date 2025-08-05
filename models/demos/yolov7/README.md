@@ -3,12 +3,18 @@ Demo showcasing Yolov7 running on `Wormhole - N150, N300` using ttnn.
 
 ### Note:
 
-To obtain the perf reports through profiler, please build with following command:
-```
-./build_metal.sh -p
-```
+- On N300, Make sure to use `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml` with the pytest.
 
-# Introduction:
+- Or, make sure to set the following environment variable in the terminal:
+  ```
+  export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+  ```
+- To obtain the perf reports through profiler, please build with following command:
+  ```
+  ./build_metal.sh -p
+  ```
+
+## Introduction:
 
 YOLOv7 is a state-of-the-art real-time object detector that surpasses all known object detectors in both speed and accuracy. It builds on the YOLO family of detectors and introduces significant architectural improvements for enhanced speed and accuracy. YOLOv7 supports advanced features such as model reparameterization, extended model scaling, and multi-task capabilities including object detection, instance segmentation, and pose estimation. The model picks up weights available [here](https://github.com/WongKinYiu/yolov7?tab=readme-ov-file#performance) under YOLOv7
 
