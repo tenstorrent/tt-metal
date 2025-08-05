@@ -72,8 +72,8 @@ void AllGatherAsync::validate_with_output_tensors(
             output_tensor.value().memory_config().memory_layout());
 
         // check the output tensor size
-        auto output_shape = output_tensor.value().logical_shape();
-        auto input_shape = input_tensor.logical_shape();
+        auto output_shape = output_tensor.value().padded_shape();
+        auto input_shape = input_tensor.padded_shape();
         TT_FATAL(
             output_shape.size() == input_shape.size(),
             "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",

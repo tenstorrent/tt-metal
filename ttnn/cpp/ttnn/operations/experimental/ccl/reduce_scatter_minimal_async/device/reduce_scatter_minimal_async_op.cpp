@@ -30,7 +30,7 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
         "Operands to reduce_scatter_minimal_async need to be allocated in buffers on device!");
     TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
 
-    const auto& input_shape = input_tensor.logical_shape();
+    const auto& input_shape = input_tensor.padded_shape();
     TT_FATAL(
         (input_shape[this->dim] / tt::constants::TILE_WIDTH) % this->ring_size == 0,
         "Error, The number of tiles at input tensor dimension {} should be divisible by ring_size but the number of "
@@ -126,8 +126,8 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
                 output_tensor.memory_config());
 
             // check the output tensor size
-            auto output_shape = output_tensor.logical_shape();
-            auto input_shape = input_tensor.logical_shape();
+            auto output_shape = output_tensor.padded_shape();
+            auto input_shape = input_tensor.padded_shape();
             TT_FATAL(
                 output_shape.size() == input_shape.size(),
                 "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
