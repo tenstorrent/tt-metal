@@ -52,20 +52,20 @@ UPBLOCK_RESNET_CONV_CHANNEL_SPLIT_FACTORS = [
         ((1, 1), (1, 1)),  # upblock 1, resnet 2
     ],
     [
-        ((4, 2), (2, 2)),  # upblock 2, resnet 0
+        ((2, 1), (2, 2)),  # upblock 2, resnet 0
         ((1, 1), (1, 1)),  # upblock 2, resnet 1
         ((1, 1), (1, 1)),  # upblock 2, resnet 2
     ],
     [
-        ((8, 2), (4, 2)),  # upblock 3, resnet 0
-        ((4, 2), (4, 2)),  # upblock 3, resnet 1
-        ((4, 2), (4, 2)),  # upblock 3, resnet 2
+        ((4, 2), (4, 2)),  # upblock 3, resnet 0
+        ((2, 2), (4, 2)),  # upblock 3, resnet 1
+        ((2, 2), (4, 2)),  # upblock 3, resnet 2
     ],
 ]
 
 UPBLOCK_UPSAMPLE_CONV_CHANNEL_SPLIT_FACTORS = [
     (1, 1),  # upblock 0
-    (4, 2),  # upblock 1
+    (2, 2),  # upblock 1
     (4, 4),  # upblock 2
     (1, 1),  # upblock 3 (no upsample here)
 ]

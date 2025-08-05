@@ -2,9 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <stdint.h>
 #include "dataflow_api.h"
-
 #include "height_sharded_reader_common.hpp"
 
 #define ENABLE_DEBUG 0
@@ -78,6 +76,7 @@ void kernel_main() {
     const uint32_t act_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(17));
     constexpr uint32_t act_mcast_sender_size_bytes = get_compile_time_arg_val(18);
     constexpr bool transpose_mcast = get_compile_time_arg_val(19) == 1;
+    constexpr bool needs_act_block_zero_out = get_compile_time_arg_val(20) == 1;
     constexpr uint32_t cb_id_act = get_compile_time_arg_val(21);
     constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(22);
     constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(23);
@@ -91,6 +90,10 @@ void kernel_main() {
 
     if (noop) {
         return;
+    }
+
+    if constexpr (needs_act_block_zero_out) {
+        zero_out_tiles<cb_id_act_row_major_bfloat16>();
     }
 
     uint32_t act_mcast_dest_noc_start_x = get_arg_val<uint32_t>(i);
