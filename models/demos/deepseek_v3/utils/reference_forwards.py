@@ -133,7 +133,7 @@ def reference_forward_decode(
 
 
     Args:
-        reference_model (DeepseekV3Attention): The reference model to run.
+        reference_model (DeepseekV3DecoderLayer): The reference model to run.
         torch_input (torch.Tensor): The input tensor to the model.
         position_ids (torch.LongTensor): The position ids for the input.
         mode (str): The mode of operation, either "decode" or "prefill".
