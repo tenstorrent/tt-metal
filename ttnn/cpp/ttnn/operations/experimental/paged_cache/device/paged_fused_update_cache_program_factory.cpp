@@ -217,7 +217,7 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
         program, all_cores_bb, 0);  // used for share cache for signaling when the cache is ready to be read
 
     if (use_index_tensor) {
-        create_cb(cb_index_id, program, all_cores_bb, index_tensor_tile_size, 1, index_data_format, index_buffer_ptr);
+        create_cb(cb_index_id, program, all_cores_bb, index_stick_size, 1, index_data_format, index_buffer_ptr);
     }
 
     if (is_paged_cache) {
