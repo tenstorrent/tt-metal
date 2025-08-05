@@ -112,8 +112,8 @@ def test_clip_encoder(
 
     start_time = time.time()
     with torch.no_grad():
-        hf_output = hf_model(**hf_inputs)
-        sequence_output = hf_output.last_hidden_state
+        hf_output = hf_model(**hf_inputs, output_hidden_states=True)
+        sequence_output = hf_output.hidden_states[-2]
         pooled_output = hf_output.text_embeds
     logger.info(f"text encoder 1 CPU runtime: {time.time() - start_time}")
 
@@ -139,7 +139,7 @@ def test_clip_encoder(
     logger.info(f"text encoder TT-NN runtime: {time.time() - start_time}")
     logger.info("text encoder done...")
 
-    tt_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output)[0])
+    tt_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output.hidden_states[-2])[0])
     tt_projected_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_projected_output)[0])
 
     # debug

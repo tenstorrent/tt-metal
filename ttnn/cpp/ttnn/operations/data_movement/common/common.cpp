@@ -245,7 +245,8 @@ int common_tm_bw_model(
 
     const auto& input_shape = concat_op ? output_tensor.padded_shape() : input_tensor.padded_shape();
     auto element_size_bytes = input_tensor.element_size();
-    bool input_is_sharded = input_tensor.memory_config().is_sharded();
+    bool input_is_2d_sharded =
+        input_tensor.memory_config().is_sharded() && input_tensor.memory_config().shard_spec().has_value();
     bool input_is_dram = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool input_is_tiled = input_tensor.layout() == Layout::TILE;
     uint32_t input_size_bytes = input_shape.volume() * element_size_bytes;
@@ -270,7 +271,7 @@ int common_tm_bw_model(
     uint32_t input_transaction_size = input_is_tiled ? single_tile_size : input_shape[-1] * element_size_bytes;
     const uint32_t max_transaction_size = 2048u;  // size with highest bw
 
-    if (input_is_sharded) {
+    if (input_is_2d_sharded) {
         const auto& input_shard_shape = input_tensor.memory_config().shard_spec().value().shape;
         input_transaction_size = input_is_tiled ? single_tile_size : input_shard_shape[1] * element_size_bytes;
         // can increase transaction size for height-sharded tensors
@@ -286,7 +287,8 @@ int common_tm_bw_model(
 
     bool output_is_dram = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
     bool output_is_tiled = output_tensor.layout() == Layout::TILE;
-    bool output_is_sharded = output_tensor.memory_config().is_sharded();
+    bool output_2d_is_sharded =
+        output_tensor.memory_config().is_sharded() && output_tensor.memory_config().shard_spec().has_value();
 
     const auto& output_shape =
         split_op ? input_shape
@@ -296,7 +298,7 @@ int common_tm_bw_model(
 
     uint32_t output_transaction_size = output_is_tiled ? single_tile_size : output_shape[-1] * element_size_bytes;
 
-    if (output_is_sharded) {
+    if (output_2d_is_sharded) {
         const auto& output_shard_shape = output_tensor.memory_config().shard_spec().value().shape;
         output_transaction_size = output_is_tiled ? single_tile_size : output_shard_shape[1] * element_size_bytes;
         if (!output_is_tiled && !output_is_dram &&
@@ -343,7 +345,7 @@ int common_tm_bw_model(
         updated_output_transactions = std::ceil((float)num_write_transactions / (float)num_cores);
     }
     // local noc transactions for l1 sharded tensors
-    bool is_local = input_is_sharded && !input_is_dram && output_is_sharded && !output_is_dram &&
+    bool is_local = input_is_2d_sharded && !input_is_dram && output_2d_is_sharded && !output_is_dram &&
                     (output_tensor.memory_config().shard_spec().value().grid ==
                      input_tensor.memory_config().shard_spec().value().grid);
 
@@ -686,6 +688,15 @@ std::pair<uint32_t, std::array<uint32_t, 2>> tensor_coord_to_height_sharded_coor
 
     std::array<uint32_t, 2> shard_coord{h_in_shard, w_in_shard};
     return std::make_pair(which_shard, shard_coord);
+}
+
+uint32_t get_num_pages(const ttnn::Tensor& tensor) {
+    if (tensor.layout() == ttnn::ROW_MAJOR_LAYOUT) {
+        return tt::div_up(tensor.padded_shape().volume(), tensor.padded_shape()[-1]);
+    } else {
+        const auto& tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+        return tt::div_up(tensor.padded_shape().volume(), tile_shape[0] * tile_shape[1]);
+    }
 }
 
 }  // namespace data_movement
