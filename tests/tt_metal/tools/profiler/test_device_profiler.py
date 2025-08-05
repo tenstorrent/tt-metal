@@ -50,6 +50,7 @@ def set_env_vars(**kwargs):
         "slowDispatch": "TT_METAL_SLOW_DISPATCH_MODE=1 ",
         "dispatchFromWorker": "TT_TEST_USE_WORKER_DISPATCH=1 ",
         "enable_noc_tracing": "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1 ",
+        "dispatchFromEth": "TT_TEST_USE_ETH_DISPATCH=1 ",
     }
     envVarsStr = " "
     for arg, argVal in kwargs.items():
@@ -82,6 +83,7 @@ def run_device_profiler_test(
     doSync=False,
     doDispatchCores=False,
     dispatchFromWorker=False,
+    dispatchFromEth=False,
 ):
     name = inspect.stack()[1].function
     testCommand = f"build/{PROG_EXMP_DIR}/{name}"
@@ -89,7 +91,11 @@ def run_device_profiler_test(
         testCommand = testName
     clear_profiler_runtime_artifacts()
     envVars = set_env_vars(
-        slowDispatch=slowDispatch, doSync=doSync, doDispatchCores=doDispatchCores, dispatchFromWorker=dispatchFromWorker
+        slowDispatch=slowDispatch,
+        doSync=doSync,
+        doDispatchCores=doDispatchCores,
+        dispatchFromWorker=dispatchFromWorker,
+        dispatchFromEth=dispatchFromEth,
     )
     testCommand = f"cd {TT_METAL_HOME} && {envVars} {testCommand}"
     print()
@@ -300,6 +306,7 @@ def test_ethernet_dispatch_cores():
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops",
         setupAutoExtract=True,
         doDispatchCores=True,
+        dispatchFromEth=True,
     )
     for device, deviceData in devicesData["data"]["devices"].items():
         for ref, counts in REF_COUNT_DICT.items():
@@ -319,6 +326,7 @@ def test_ethernet_dispatch_cores():
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices",
         setupAutoExtract=True,
         doDispatchCores=True,
+        dispatchFromEth=True,
     )
     for device, deviceData in devicesData["data"]["devices"].items():
         for ref, counts in REF_COUNT_DICT.items():
