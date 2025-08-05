@@ -526,7 +526,7 @@ const std::vector<OverlayReg> OLP::registers = {
      {},
      {},
      {},
-     "// Debugging: Non-zero value indicates an invalid stream operation occured.\n// Sticky, write 1 to clear.\n"},
+     "// Debugging: Non-zero value indicates an invalid stream operation occurred.\n// Sticky, write 1 to clear.\n"},
     {"STREAM_NUM_MSGS_RECEIVED_IN_BUF_AND_MEM",
      47,
      {},
