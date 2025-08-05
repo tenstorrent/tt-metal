@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <stdlib.h>
 #include <string.h>
 #include <tt-metalium/allocator.hpp>
@@ -143,7 +143,7 @@ KernelHandle create_kernel(
                     .noc = NOC::NOC_0,
                     .compile_args = compile_args,
                 });
-        default: TT_THROW("Unsupported {} processor in test.", magic_enum::enum_name(processor_class));
+        default: TT_THROW("Unsupported {} processor in test.", enchantum::to_string(processor_class));
     }
 }
 
@@ -1747,20 +1747,16 @@ TEST_F(UnitMeshCQFixture, TestLogicalCoordinatesCompute) {
 
 // Ensure the data movement core can access their own logical coordinate. Same binary enqueued to multiple cores.
 TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesDataMovement) {
-    for (const auto& device : devices_) {
-        local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC);
-        local_test_functions::test_my_coordinates(device, tt::RISCV::BRISC, 1);
-        local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC);
-        local_test_functions::test_my_coordinates(device, tt::RISCV::NCRISC, 1);
-    }
+    local_test_functions::test_my_coordinates(device_, tt::RISCV::BRISC);
+    local_test_functions::test_my_coordinates(device_, tt::RISCV::BRISC, 1);
+    local_test_functions::test_my_coordinates(device_, tt::RISCV::NCRISC);
+    local_test_functions::test_my_coordinates(device_, tt::RISCV::NCRISC, 1);
 }
 
 // Ensure the compute core can access their own logical coordinate. Same binary enqueued to multiple cores.
 TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TestLogicalCoordinatesCompute) {
-    for (const auto& device : devices_) {
-        local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE);
-        local_test_functions::test_my_coordinates(device, tt::RISCV::COMPUTE, 1);
-    }
+    local_test_functions::test_my_coordinates(device_, tt::RISCV::COMPUTE);
+    local_test_functions::test_my_coordinates(device_, tt::RISCV::COMPUTE, 1);
 }
 
 }  // end namespace multicore_tests
@@ -1783,9 +1779,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
 
-    auto device = this->devices_.at(0);
-
-    CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+    CoreCoord worker_grid_size = device_->compute_with_storage_grid_size();
     CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     CoreRangeSet cr_set({cr});
 
@@ -1995,11 +1989,11 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
         }
     }
 
-    for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); ++cq_id) {
+    for (uint8_t cq_id = 0; cq_id < device_->num_hw_cqs(); ++cq_id) {
         log_info(tt::LogTest, "Running {} MeshWorkloads on cq {} for cache warmup.", workloads.size(), (uint32_t)cq_id);
         // This loop caches program and runs
         for (distributed::MeshWorkload& wl : workloads) {
-            distributed::EnqueueMeshWorkload(device->mesh_command_queue(), wl, false);
+            distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), wl, false);
         }
 
         // This loops assumes already cached
@@ -2025,12 +2019,12 @@ TEST_F(UnitMeshMultiCQSingleDeviceProgramFixture, TensixTestRandomizedProgram) {
                     NUM_ITERATIONS);
             }
             for (distributed::MeshWorkload& wl : workloads) {
-                EnqueueMeshWorkload(device->mesh_command_queue(), wl, false);
+                EnqueueMeshWorkload(device_->mesh_command_queue(), wl, false);
             }
         }
 
         log_info(tt::LogTest, "Calling Finish.");
-        Finish(device->mesh_command_queue(cq_id));
+        Finish(device_->mesh_command_queue(cq_id));
     }
 }
 

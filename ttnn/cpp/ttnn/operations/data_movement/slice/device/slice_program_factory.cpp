@@ -9,6 +9,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "slice_op.hpp"
 using namespace tt::constants;
@@ -901,8 +902,8 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
         static_cast<uint32_t>(num_dims),
         static_cast<uint32_t>(src0_is_dram),
     };
-    std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(src0_cb_index), static_cast<uint32_t>(dst_is_dram)};
+    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(src0_cb_index)};
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(

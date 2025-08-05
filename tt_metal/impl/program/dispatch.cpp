@@ -4,7 +4,6 @@
 
 #include "tt_metal/impl/program/dispatch.hpp"
 
-#include <magic_enum/magic_enum.hpp>
 #include <mesh_workload.hpp>
 #include <stddef.h>
 #include <string.h>

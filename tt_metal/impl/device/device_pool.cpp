@@ -25,7 +25,7 @@
 #include "env_lib.hpp"
 #include "erisc_datamover_builder.hpp"
 #include "fabric_edm_packet_header.hpp"
-#include "fabric_host_interface.h"
+#include "hostdevcommon/fabric_common.h"
 #include "fabric_types.hpp"
 #include "hal.hpp"
 #include "host_api.hpp"
@@ -817,7 +817,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
     // TODO(MO): Remove when legacy non-mesh device is removed
     for (const chip_id_t device_id : devices_to_close) {
         IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
-        detail::DumpDeviceProfileResults(device, ProfilerDumpState::LAST_FD_DUMP);
+        detail::ReadDeviceProfilerResults(device, ProfilerReadState::LAST_FD_READ);
     }
 
     dispatch_firmware_active_ = false;
@@ -869,7 +869,7 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
 
     for (const chip_id_t device_id : devices_to_close) {
         IDevice* device = tt::DevicePool::instance().get_active_device(device_id);
-        detail::DumpDeviceProfileResults(device, ProfilerDumpState::ONLY_DISPATCH_CORES);
+        detail::ReadDeviceProfilerResults(device, ProfilerReadState::ONLY_DISPATCH_CORES);
     }
 
     detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);

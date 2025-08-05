@@ -12,7 +12,7 @@
 #include <global_semaphore.hpp>
 #include <host_api.hpp>
 #include <kernel.hpp>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <sub_device_types.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
@@ -99,16 +99,16 @@ DataMovementConfigStatus CheckDataMovementConfig(
         int noc_value;
         switch (programmable_core) {
             case HalProgrammableCoreType::TENSIX:
-                noc_value = magic_enum::enum_integer(std::get<DataMovementConfig>(kernel->config()).noc);
+                noc_value = enchantum::to_underlying(std::get<DataMovementConfig>(kernel->config()).noc);
                 break;
             case HalProgrammableCoreType::ACTIVE_ETH:
             case HalProgrammableCoreType::IDLE_ETH:
-                noc_value = magic_enum::enum_integer(std::get<EthernetConfig>(kernel->config()).noc);
+                noc_value = enchantum::to_underlying(std::get<EthernetConfig>(kernel->config()).noc);
                 break;
             default:
                 TT_THROW(
                     "Checking NoC and DataMovementProcessor is unsupported for programmable core {}",
-                    magic_enum::enum_name(programmable_core));
+                    enchantum::to_string(programmable_core));
         }
         local_noc0_usage = noc_value == 0;
         local_noc1_usage = noc_value == 1;
@@ -770,11 +770,11 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         }
     }  // Profiler scope end
     if (wait_until_cores_done) {
-        detail::DumpDeviceProfileResults(device);
+        detail::ReadDeviceProfilerResults(device);
     }
 }
 
-void WaitProgramDone(IDevice* device, Program& program, bool dump_device_profile_results) {
+void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results) {
     auto device_id = device->id();
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
     std::unordered_set<CoreCoord> not_done_cores;
@@ -788,8 +788,8 @@ void WaitProgramDone(IDevice* device, Program& program, bool dump_device_profile
         }
     }
     llrt::internal_::wait_until_cores_done(device_id, RUN_MSG_GO, not_done_cores);
-    if (dump_device_profile_results) {
-        detail::DumpDeviceProfileResults(device);
+    if (read_device_profiler_results) {
+        detail::ReadDeviceProfilerResults(device);
     }
 }
 
@@ -1075,7 +1075,7 @@ KernelHandle CreateEthernetKernel(
         "processors. "
         "Update DataMovementProcessor in the config.",
         kernel->name(),
-        magic_enum::enum_name(config.processor),
+        enchantum::to_string(config.processor),
         MetalContext::instance().hal().get_processor_classes_count(eth_core_type));
     TT_FATAL(
         !(are_both_riscv_in_use),
@@ -1360,33 +1360,6 @@ RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kerne
     return detail::GetKernel(program, kernel_id)->common_runtime_args_data();
 }
 
-uint32_t BeginTraceCapture(IDevice* device, const uint8_t cq_id) {
-    const uint32_t tid = Trace::next_id();
-    device->begin_trace(cq_id, tid);
-    return tid;
-}
-
-void EndTraceCapture(IDevice* device, const uint8_t cq_id, const uint32_t tid) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    device->end_trace(cq_id, tid);
-    // When light metal tracing is enabled, TraceDescriptor will be serialized via end_trace() and this
-    // will serialize the LightMetalLoadTraceId call to be used during replay to load trace back to device.
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureLoadTrace, device, cq_id, tid);
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureReplayTrace, device, cq_id, tid, true);  // blocking=true
-}
-
-void ReplayTrace(IDevice* device, const uint8_t cq_id, const uint32_t tid, const bool blocking) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureReplayTrace, device, cq_id, tid, blocking);
-    device->replay_trace(cq_id, tid, blocking /* block_on_device */, blocking /* block_on_worker_thread */);
-}
-
-void ReleaseTrace(IDevice* device, const uint32_t tid) {
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureReleaseTrace, device, tid);
-    device->release_trace(tid);
-}
-
 // This is nop if compile time define not set.
 void LightMetalBeginCapture() {
 #if defined(TT_ENABLE_LIGHT_METAL_TRACE) && (TT_ENABLE_LIGHT_METAL_TRACE == 1)
@@ -1411,10 +1384,6 @@ LightMetalBinary LightMetalEndCapture() {
     log_warning(tt::LogMetalTrace, "TT_ENABLE_LIGHT_METAL_TRACE!=1, ignoring LightMetalEndCapture()");
     return {};
 #endif
-}
-
-void LoadTrace(IDevice* device, const uint8_t cq_id, const uint32_t trace_id, const TraceDescriptor& trace_desc) {
-    device->load_trace(cq_id, trace_id, trace_desc);
 }
 
 void Synchronize(IDevice* device, const std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids) {

@@ -58,7 +58,7 @@ def run_unet_model(batch, groups, device, iterations=1):
             memory_config=unet_shallow_ttnn.UNet.input_sharded_memory_config,
         )
         ttnn_model(ttnn_input, move_input_tensor_to_device=False, deallocate_input_activation=True).cpu()
-        ttnn.DumpDeviceProfiler(device)
+        ttnn.ReadDeviceProfiler(device)
 
 
 @pytest.mark.parametrize("batch", [1])

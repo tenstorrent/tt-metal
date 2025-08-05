@@ -617,7 +617,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event(
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
 
     MeshEvent event = this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/false, device_range);
-    for (const auto& sub_device_id : sub_device_ids) {
+    for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
         sub_device_entry.recorded_event(event.id(), event.mesh_cq_id());
     }
@@ -631,7 +631,7 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host_nolock(
         std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
     this->increment_num_entries_in_completion_queue();
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
-    for (const auto& sub_device_id : sub_device_ids) {
+    for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
         sub_device_entry.recorded_event(event.id(), event.mesh_cq_id());
     }
@@ -769,6 +769,9 @@ void FDMeshCommandQueue::read_l1_data_from_completion_queue(MeshCoreDataReadDesc
 
 void FDMeshCommandQueue::reset_worker_state(
     bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_aligned<uint32_t>& go_signal_noc_data) {
+    for (auto device : mesh_device_->get_devices()) {
+        TT_FATAL(!device->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
+    }
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
     in_use_ = true;

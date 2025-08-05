@@ -79,7 +79,6 @@ class TtYOLOv5xConv2D:
             deallocate_activation=self.deallocate_activation,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
-            enable_subblock_padding=False,
             output_layout=ttnn.TILE_LAYOUT,
             enable_act_double_buffer=self.enable_act_double_buffer,
         )

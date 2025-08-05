@@ -145,7 +145,6 @@ class ConvTranspose:
             shard_layout=self.shard_layout,
             reshard_if_not_optimal=self.reshard,
             deallocate_activation=self.deallocate,
-            enable_subblock_padding=False,
             output_layout=self.output_layout,
         )
         if self.act_block_h is not None:
