@@ -5,6 +5,8 @@
 #pragma once
 
 #include <span>
+#include <boost/core/span.hpp>
+#include <tt_stl/reflection.hpp>
 
 namespace ttsl {
 
@@ -40,3 +42,14 @@ namespace [[deprecated("Use ttsl namespace instead")]] stl {
 using namespace ::ttsl;
 }  // namespace stl
 }  // namespace tt
+
+template <typename T, std::size_t Extent>
+struct ttsl::json::to_json_t<ttsl::Span<T, Extent>> {
+    nlohmann::json operator()(const ttsl::Span<T, Extent>& span) const {
+        nlohmann::json json_array = nlohmann::json::array();
+        for (const auto& element : span) {
+            json_array.push_back(to_json(element));
+        }
+        return json_array;
+    }
+};
