@@ -185,6 +185,7 @@ target_sources(
         FILES
             tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp
             untilize/device/kernels/dataflow/reader_unary_start_id.cpp
+            untilize/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multi_core.cpp
 )
 
 install(

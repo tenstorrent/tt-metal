@@ -83,6 +83,7 @@ target_sources(
             send_recv_async/send_async/device/kernels/sender_writer.cpp
             send_recv_async/recv_async/device/kernels/receiver_inplace_writer.cpp
             send_recv_async/recv_async/device/kernels/receiver_writer.cpp
+            send_recv_async/recv_async/device/kernels/receiver_reader.cpp
 )
 
 install(
