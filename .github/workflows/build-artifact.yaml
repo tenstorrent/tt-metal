@@ -308,7 +308,8 @@ jobs:
       - name: Set build artifact name
         id: set_build_artifact_name
         run: |
-          BUILD_ARTIFACT_NAME="TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}${{ (inputs.distributed == false && '_no_distributed') || '' }}"
+          TOOLCHAIN_CLEANED=$(echo "${{ inputs.toolchain }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
+          BUILD_ARTIFACT_NAME="TTMetal_build_any_${{ inputs.version }}_${{ inputs.architecture }}_${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '_profiler') || '' }}${{ (inputs.distributed == false && '_no_distributed') || '' }}"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_ENV"
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
