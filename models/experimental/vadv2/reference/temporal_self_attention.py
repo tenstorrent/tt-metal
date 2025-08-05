@@ -73,42 +73,6 @@ class TemporalSelfAttention(nn.Module):
         flag="decoder",
         **kwargs,
     ):
-        """Forward Function of MultiScaleDeformAttention.
-
-        Args:
-            query (Tensor): Query of Transformer with shape
-                (num_query, bs, embed_dims).
-            key (Tensor): The key tensor with shape
-                `(num_key, bs, embed_dims)`.
-            value (Tensor): The value tensor with shape
-                `(num_key, bs, embed_dims)`.
-            identity (Tensor): The tensor used for addition, with the
-                same shape as `query`. Default None. If None,
-                `query` will be used.
-            query_pos (Tensor): The positional encoding for `query`.
-                Default: None.
-            key_pos (Tensor): The positional encoding for `key`. Default
-                None.
-            reference_points (Tensor):  The normalized reference
-                points with shape (bs, num_query, num_levels, 2),
-                all elements is range in [0, 1], top-left (0,0),
-                bottom-right (1, 1), including padding area.
-                or (N, Length_{query}, num_levels, 4), add
-                additional two dimensions is (w, h) to
-                form reference boxes.
-            key_padding_mask (Tensor): ByteTensor for `query`, with
-                shape [bs, num_key].
-            spatial_shapes (Tensor): Spatial shape of features in
-                different levels. With shape (num_levels, 2),
-                last dimension represents (h, w).
-            level_start_index (Tensor): The start index of each level.
-                A tensor has shape ``(num_levels, )`` and can be represented
-                as [0, h_0*w_0, h_0*w_0+h_1*w_1, ...].
-
-        Returns:
-             Tensor: forwarded results with shape [num_query, bs, embed_dims].
-        """
-
         if value is None:
             assert self.batch_first
             bs, len_bev, c = query.shape
@@ -119,7 +83,6 @@ class TemporalSelfAttention(nn.Module):
         if query_pos is not None:
             query = query + query_pos
         if not self.batch_first:
-            # change to (bs, num_query ,embed_dims)
             query = query.permute(1, 0, 2)
             value = value.permute(1, 0, 2)
         bs, num_query, embed_dims = query.shape
@@ -174,21 +137,6 @@ class TemporalSelfAttention(nn.Module):
                 f"Last dim of reference_points must be" f" 2 or 4, but get {reference_points.shape[-1]} instead."
             )
 
-        """
-        commenting out as we dont need cuda
-        if torch.cuda.is_available() and value.is_cuda:
-
-            # using fp16 deformable attention is unstable because it performs many sum operations
-            if value.dtype == torch.float16:
-                MultiScaleDeformableAttnFunction = MultiScaleDeformableAttnFunction_fp32
-            else:
-                MultiScaleDeformableAttnFunction = MultiScaleDeformableAttnFunction_fp32
-            output = MultiScaleDeformableAttnFunction.apply(
-                value, spatial_shapes, level_start_index, sampling_locations,
-                attention_weights, self.im2col_step)
-        else:
-
-        """
         output = multi_scale_deformable_attn_pytorch(value, spatial_shapes, sampling_locations, attention_weights)
 
         output = output.permute(1, 2, 0)

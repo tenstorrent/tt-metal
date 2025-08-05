@@ -6,6 +6,7 @@ import pytest
 import torch
 import copy
 import ttnn
+import os
 import numpy as np
 import torch.nn as nn
 from models.experimental.vadv2.reference import transformer
@@ -211,7 +212,9 @@ def test_vadv2_encoder(
     device,
     reset_seeds,
 ):
-    weights_path = "models/experimental/vadv2/tt/vadv2_weights_1.pth"
+    weights_path = "models/experimental/vadv2/vadv2_weights_1.pth"
+    if not os.path.exists(weights_path):
+        os.system("bash models/experimental/vadv2/weights_download.sh")
     torch_model = transformer.VADPerceptionTransformer(
         rotate_prev_bev=True, use_shift=True, use_can_bus=True, decoder=True, map_decoder=True, embed_dims=256
     )

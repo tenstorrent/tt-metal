@@ -31,7 +31,6 @@ class TtSpatialCrossAttention:
         self.deformable_attention = TtMSDeformableAttention3D(device=self.device, params=params, num_levels=1)
         self.embed_dims = embed_dims
         self.num_cams = num_cams
-        # self.output_proj = nn.Linear(embed_dims, embed_dims)
         self.batch_first = batch_first
 
     def __call__(
@@ -243,7 +242,6 @@ class TtMSDeformableAttention3D:
         attention_weights = ttnn.from_torch(
             attention_weights, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
         )
-        # attention_weights = ttnn.softmax(attention_weights, -1)
 
         attention_weights = ttnn.reshape(
             attention_weights, (bs, num_query, self.num_heads, self.num_levels, self.num_points)

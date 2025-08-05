@@ -86,8 +86,6 @@ class TtVAD:
             bev_w=100,
             fut_ts=6,
             fut_mode=6,
-            # loss_traj={'type': 'L1Loss', 'loss_weight': 0.2},
-            # loss_traj_cls={'type': 'FocalLoss', 'use_sigmoid': True, 'gamma': 2.0, 'alpha': 0.25, 'loss_weight': 0.2},
             map_bbox_coder={
                 "type": "MapNMSFreeCoder",
                 "post_center_range": [-20, -35, -20, -35, 20, 35, 20, 35],
@@ -128,7 +126,6 @@ class TtVAD:
         self.valid_fut_ts = self.pts_bbox_head.valid_fut_ts
 
     def extract_img_feat(self, img, img_metas, len_queue=None):
-        """Extract features of images."""
         B = img.shape[0]
 
         if img is not None:
@@ -169,7 +166,6 @@ class TtVAD:
         return img_feats_reshaped
 
     def extract_feat(self, img, img_metas=None, len_queue=None):
-        """Extract features from images and points."""
         img_feats = self.extract_img_feat(img, img_metas, len_queue=len_queue)
 
         return img_feats
@@ -248,7 +244,6 @@ class TtVAD:
         gt_attr_labels=None,
         **kwargs,
     ):
-        """Test function without augmentaiton."""
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
         bbox_list = [dict() for i in range(len(img_metas))]
         new_prev_bev, bbox_list = self.simple_test_pts(
@@ -317,7 +312,6 @@ class TtVAD:
             tensor = outs[key]
             torch.save(tensor, os.path.join(save_path, f"{key}.pt"))
 
-        # return outs
         bbox_results = self.post_process_with_metrics(
             outs,
             img_metas,
@@ -460,21 +454,6 @@ class TtVAD:
         mapped_class_names,
         match_dis_thresh=2.0,
     ):
-        """Compute EPA metric for one sample.
-        Args:
-            gt_bboxs (LiDARInstance3DBoxes): GT Bboxs.
-            gt_label (Tensor): GT labels for gt_bbox, [num_gt_bbox].
-            pred_bbox (dict): Predictions.
-                'boxes_3d': (LiDARInstance3DBoxes)
-                'scores_3d': (Tensor), [num_pred_bbox]
-                'labels_3d': (Tensor), [num_pred_bbox]
-                'trajs_3d': (Tensor), [fut_ts*2]
-            matched_bbox_result (np.array): assigned pred index for each gt box [num_gt_bbox].
-            match_dis_thresh (float): dis thresh for determine a positive sample for a gt bbox.
-
-        Returns:
-            EPA_dict (dict): EPA metric dict of each cared class.
-        """
         motion_cls_names = ["car", "pedestrian"]
         motion_metric_names = ["gt", "cnt_ade", "cnt_fde", "hit", "fp", "ADE", "FDE", "MR"]
 
@@ -535,7 +514,6 @@ class TtVAD:
     def compute_planner_metric_stp3(
         self, pred_ego_fut_trajs, gt_ego_fut_trajs, gt_agent_boxes, gt_agent_feats, fut_valid_flag
     ):
-        """Compute planner metric for one sample same as stp3."""
         metric_dict = {
             "plan_L2_1s": 0,
             "plan_L2_2s": 0,

@@ -150,13 +150,10 @@ class TtTemporalSelfAttention:
                     offset_normalizer_xy.shape[-1],
                 ),
             )
-            # sampling_offsets_reshaped = ttnn.to_memory_config(sampling_offsets_reshaped, ttnn.L1_MEMORY_CONFIG)
-            # offset_normalizer_xy = ttnn.to_memory_config(offset_normalizer_xy, ttnn.L1_MEMORY_CONFIG)
             sampling_locations = ttnn.div(sampling_offsets, offset_normalizer_xy)
             sampling_locations = ttnn.reshape(sampling_locations, sampling_offsets_shape)
-            sampling_locations = reference_points + sampling_locations  # reference_xy + sampling_locations_reshaped
+            sampling_locations = reference_points + sampling_locations
             ttnn.deallocate(offset_normalizer_xy)
-            # ttnn.deallocate(reference_xy)
             reference_points = ttnn.reshape(reference_points, reference_points_shape)
         elif reference_points.shape[-1] == 4:
             reference_points_reshape = ttnn.reshape(
@@ -170,11 +167,9 @@ class TtTemporalSelfAttention:
             raise ValueError(
                 f"Last dim of reference_points must be 2 or 4, but got {reference_points.shape[-1]} instead."
             )
-        # ttnn.deallocate(reference_points)
 
         output = multi_scale_deformable_attn(value, spatial_shapes, sampling_locations, attention_weights, self.device)
         ttnn.deallocate(attention_weights)
-        # ttnn.deallocate(reference_xy)
         ttnn.deallocate(sampling_locations)
         ttnn.deallocate(sampling_offsets)
         ttnn.deallocate(value)
@@ -182,9 +177,6 @@ class TtTemporalSelfAttention:
         output = ttnn.reshape(output, (num_query, embed_dims, bs, self.num_bev_queue))
         output = ttnn.to_layout(output, ttnn.TILE_LAYOUT)
         output = ttnn.mean(output, dim=-1)
-        # output_width  = output.shape[-1]
-        # output = ttnn.sum(output, dim=-1)
-        # output = ttnn.div(output, output_width)
         output = ttnn.permute(output, (2, 0, 1))
         output = ttnn.linear(output, params.output_proj.weight, bias=params.output_proj.bias)
         ttnn.deallocate(params.output_proj.weight)

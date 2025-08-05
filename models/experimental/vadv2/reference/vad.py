@@ -24,8 +24,6 @@ def bbox3d2result(bboxes, scores, labels, attrs=None):
 
 
 class VAD(nn.Module):
-    """VAD model."""
-
     def __init__(
         self,
         use_grid_mask=False,
@@ -142,15 +140,9 @@ class VAD(nn.Module):
         self.valid_fut_ts = self.pts_bbox_head.valid_fut_ts
 
     def extract_img_feat(self, img, img_metas, len_queue=None):
-        """Extract features of images."""
         B = img.size(0)
 
         if img is not None:
-            # input_shape = img.shape[-2:]
-            # # update real input shape of each single img
-            # for img_meta in img_metas:
-            #     img_meta.update(input_shape=input_shape)
-
             if img.dim() == 5 and img.size(0) == 1:
                 img.squeeze_()
             elif img.dim() == 5 and img.size(0) > 1:
@@ -158,9 +150,6 @@ class VAD(nn.Module):
                 img = img.reshape(B * N, C, H, W)
             if self.use_grid_mask:
                 img = self.grid_mask(img)
-            # from graph import generate_graph
-            # generate_graph(self.img_backbone,img)
-            # assert False
             img_feats = self.img_backbone(img)
 
             if isinstance(img_feats, dict):
@@ -168,9 +157,6 @@ class VAD(nn.Module):
         else:
             return None
         if self.with_img_neck:
-            # from graph import generate_graph
-            # generate_graph(self.img_neck,img_feats)
-            # assert False
             img_feats = self.img_neck(img_feats)
         img_feats_reshaped = []
         for img_feat in img_feats:
@@ -182,22 +168,11 @@ class VAD(nn.Module):
         return img_feats_reshaped
 
     def extract_feat(self, img, img_metas=None, len_queue=None):
-        """Extract features from images and points."""
         img_feats = self.extract_img_feat(img, img_metas, len_queue=len_queue)
 
         return img_feats
 
     def forward(self, return_loss=True, **kwargs):
-        """Calls either forward_train or forward_test depending on whether
-        return_loss=True.
-        Note this setting will change the expected inputs. When
-        `return_loss=True`, img and img_metas are single-nested (i.e.
-        torch.Tensor and list[dict]), and when `resturn_loss=False`, img and
-        img_metas should be double nested (i.e.  list[torch.Tensor],
-        list[list[dict]]), with the outer list indicating test time
-        augmentations.
-        """
-
         return self.forward_test(**kwargs)
 
     def forward_test(
@@ -275,7 +250,6 @@ class VAD(nn.Module):
         gt_attr_labels=None,
         **kwargs,
     ):
-        """Test function without augmentaiton."""
         img_feats = self.extract_feat(img=img, img_metas=img_metas)  # backbone and img neck
 
         bbox_list = [dict() for i in range(len(img_metas))]
@@ -294,10 +268,6 @@ class VAD(nn.Module):
             ego_lcf_feat=ego_lcf_feat,
             gt_attr_labels=gt_attr_labels,
         )
-
-        # for result_dict, pts_bbox in zip(bbox_list, bbox_pts):
-        #     result_dict['pts_bbox'] = pts_bbox
-        #     result_dict['metric_results'] = metric_dict
 
         return new_prev_bev, bbox_list
 
@@ -330,9 +300,6 @@ class VAD(nn.Module):
             "pedestrian",
             "traffic_cone",
         ]
-        # from graph import generate_graph
-        # generate_graph(self.pts_bbox_head,x,img_metas,prev_bev,ego_his_trajs,ego_lcf_feat)
-        # assert False
         outs = self.pts_bbox_head(
             x, img_metas, prev_bev=prev_bev, ego_his_trajs=ego_his_trajs, ego_lcf_feat=ego_lcf_feat
         )
@@ -456,23 +423,6 @@ class VAD(nn.Module):
         return bbox_list
 
     def map_pred2result(self, bboxes, scores, labels, pts, attrs=None):
-        """Convert detection results to a list of numpy arrays.
-
-        Args:
-            bboxes (torch.Tensor): Bounding boxes with shape of (n, 5).
-            labels (torch.Tensor): Labels with shape of (n, ).
-            scores (torch.Tensor): Scores with shape of (n, ).
-            attrs (torch.Tensor, optional): Attributes with shape of (n, ). \
-                Defaults to None.
-
-        Returns:
-            dict[str, torch.Tensor]: Bounding box results in cpu mode.
-
-                - boxes_3d (torch.Tensor): 3D boxes.
-                - scores (torch.Tensor): Prediction scores.
-                - labels_3d (torch.Tensor): Box labels.
-                - attrs_3d (torch.Tensor, optional): Box attributes.
-        """
         result_dict = dict(
             map_boxes_3d=bboxes.to("cpu"),
             map_scores_3d=scores.cpu(),
@@ -486,20 +436,6 @@ class VAD(nn.Module):
         return result_dict
 
     def assign_pred_to_gt_vip3d(self, bbox_result, gt_bbox, gt_label, match_dis_thresh=2.0):
-        """Assign pred boxs to gt boxs according to object center preds in lcf.
-        Args:
-            bbox_result (dict): Predictions.
-                'boxes_3d': (LiDARInstance3DBoxes)
-                'scores_3d': (Tensor), [num_pred_bbox]
-                'labels_3d': (Tensor), [num_pred_bbox]
-                'trajs_3d': (Tensor), [fut_ts*2]
-            gt_bboxs (LiDARInstance3DBoxes): GT Bboxs.
-            gt_label (Tensor): GT labels for gt_bbox, [num_gt_bbox].
-            match_dis_thresh (float): dis thresh for determine a positive sample for a gt bbox.
-
-        Returns:
-            matched_bbox_result (np.array): assigned pred index for each gt box [num_gt_bbox].
-        """
         dynamic_list = [0, 1, 3, 4, 6, 7, 8]
         matched_bbox_result = torch.ones((len(gt_bbox)), dtype=torch.long) * -1  # -1: not assigned
         gt_centers = gt_bbox.center[:, :2]
@@ -529,21 +465,6 @@ class VAD(nn.Module):
         mapped_class_names,
         match_dis_thresh=2.0,
     ):
-        """Compute EPA metric for one sample.
-        Args:
-            gt_bboxs (LiDARInstance3DBoxes): GT Bboxs.
-            gt_label (Tensor): GT labels for gt_bbox, [num_gt_bbox].
-            pred_bbox (dict): Predictions.
-                'boxes_3d': (LiDARInstance3DBoxes)
-                'scores_3d': (Tensor), [num_pred_bbox]
-                'labels_3d': (Tensor), [num_pred_bbox]
-                'trajs_3d': (Tensor), [fut_ts*2]
-            matched_bbox_result (np.array): assigned pred index for each gt box [num_gt_bbox].
-            match_dis_thresh (float): dis thresh for determine a positive sample for a gt bbox.
-
-        Returns:
-            EPA_dict (dict): EPA metric dict of each cared class.
-        """
         motion_cls_names = ["car", "pedestrian"]
         motion_metric_names = ["gt", "cnt_ade", "cnt_fde", "hit", "fp", "ADE", "FDE", "MR"]
 

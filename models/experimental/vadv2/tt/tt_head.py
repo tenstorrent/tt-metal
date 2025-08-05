@@ -167,7 +167,6 @@ class TtVADHead:
         if self.motion_decoder is not None:
             self.motion_decoder = TtCustomTransformerDecoder(self.params.head.motion_decoder, self.device, num_layers=1)
             self.motion_mode_query = self.params.head.motion_mode_query
-            # self.motion_mode_query.weight.requires_grad = True
             if self.use_pe:
                 self.pos_mlp_sa = ttnn.linear
         else:
@@ -281,7 +280,7 @@ class TtVADHead:
             map_hs,
             map_init_reference,
             map_inter_references,
-        ) = outputs  # 0.98, 0.9809251410225338,  0.99977, 0.9971477, 0.9833319, 0.999812,  0.997648
+        ) = outputs
 
         hs = ttnn.permute(hs, (0, 2, 1, 3))
         outputs_classes = []

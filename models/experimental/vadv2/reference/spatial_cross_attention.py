@@ -127,8 +127,6 @@ class MSDeformableAttention3D(nn.Module):
         self.output_proj = None
         self.fp16_enabled = False
 
-        # you'd better set dim_per_head to a power of 2
-        # which is more efficient in the CUDA implementation
         def _is_power_of_2(n):
             if (not isinstance(n, int)) or (n < 0):
                 raise ValueError("invalid input for _is_power_of_2: {} (type: {})".format(n, type(n)))
@@ -172,7 +170,6 @@ class MSDeformableAttention3D(nn.Module):
             query = query + query_pos
 
         if not self.batch_first:
-            # change to (bs, num_query ,embed_dims)
             query = query.permute(1, 0, 2)
             value = value.permute(1, 0, 2)
 
@@ -195,12 +192,6 @@ class MSDeformableAttention3D(nn.Module):
         attention_weights = attention_weights.view(bs, num_query, self.num_heads, self.num_levels, self.num_points)
 
         if reference_points.shape[-1] == 2:
-            """
-            For each BEV query, it owns `num_Z_anchors` in 3D space that having different heights.
-            After proejcting, each BEV query has `num_Z_anchors` reference points in each 2D image.
-            For each referent point, we sample `num_points` sampling points.
-            For `num_Z_anchors` reference points,  it has overall `num_points * num_Z_anchors` sampling points.
-            """
             offset_normalizer = torch.stack([spatial_shapes[..., 1], spatial_shapes[..., 0]], -1)
 
             bs, num_query, num_Z_anchors, xy = reference_points.shape

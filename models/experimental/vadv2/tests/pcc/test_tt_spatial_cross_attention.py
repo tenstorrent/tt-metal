@@ -5,6 +5,7 @@
 import pytest
 import torch
 import ttnn
+import os
 from loguru import logger
 from models.experimental.vadv2.reference import spatial_cross_attention
 from models.experimental.vadv2.tt import tt_spatial_cross_attention
@@ -87,7 +88,9 @@ def test_vadv2_sca(
     device,
     reset_seeds,
 ):
-    weights_path = "models/experimental/vadv2/tt/vadv2_weights_1.pth"
+    weights_path = "models/experimental/vadv2/vadv2_weights_1.pth"
+    if not os.path.exists(weights_path):
+        os.system("bash models/experimental/vadv2/weights_download.sh")
     point_cloud_range = [-15.0, -30.0, -2.0, 15.0, 30.0, 2.0]
     batch_first = True
     torch_model = spatial_cross_attention.SpatialCrossAttention(

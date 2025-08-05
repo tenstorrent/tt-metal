@@ -85,14 +85,6 @@ def bbox_xyxy_to_cxcywh(bbox):
 
 
 def bbox_cxcywh_to_xyxy(bbox):
-    """Convert bbox coordinates from (cx, cy, w, h) to (x1, y1, x2, y2).
-
-    Args:
-        bbox (Tensor): Shape (n, 4) for bboxes.
-
-    Returns:
-        Tensor: Converted bboxes.
-    """
     cx, cy, w, h = ttnn.split(bbox, (1, 1, 1, 1), dim=-1)
 
     bbox_new = [ttnn.mul((cx - 0.5), w), ttnn.mul((cy - 0.5), h), ttnn.mul((cx + 0.5), w), ttnn.mul((cy + 0.5), h)]

@@ -5,6 +5,7 @@
 import pytest
 import torch
 import ttnn
+import os
 from loguru import logger
 from models.experimental.vadv2.reference import temporal_self_attention
 from models.experimental.vadv2.tt import tt_temporal_self_attention
@@ -85,7 +86,9 @@ def test_vadv2_tsa(
     device,
     reset_seeds,
 ):
-    weights_path = "models/experimental/vadv2/tt/vadv2_weights_1.pth"
+    weights_path = "models/experimental/vadv2/vadv2_weights_1.pth"
+    if not os.path.exists(weights_path):
+        os.system("bash models/experimental/vadv2/weights_download.sh")
     torch_model = temporal_self_attention.TemporalSelfAttention(embed_dims=256, num_levels=1)
     torch_dict = torch.load(weights_path)
 

@@ -639,7 +639,6 @@ class BaseTransformerLayer(nn.Module):
             elif layer == "norm":
                 query = self.norms[norm_index](query)
                 norm_index += 1
-                # return query
 
             elif layer == "cross_attn":
                 query = self.attentions[attn_index](

@@ -138,7 +138,6 @@ class TtVADPerceptionTransformer:
                 prev_bev = ttnn.permute(prev_bev, (1, 0, 2))
             if self.rotate_prev_bev:
                 for i in range(bs):
-                    # num_prev_bev = prev_bev.size(1)
                     rotation_angle = kwargs["img_metas"][i]["can_bus"][-1]
                     tmp_prev_bev = prev_bev[:, i]
                     tmp_prev_bev = ttnn.reshape(tmp_prev_bev, (bev_h, bev_w, -1))

@@ -23,7 +23,6 @@ class TtLaneNet:
         x = pts_lane_feats
         for layer in self.layer_seq:
             if isinstance(layer, TtMLP):
-                # x [bs,max_lane_num,9,dim]
                 x = layer(x)
                 x_max = ttnn.max(x, -2)[0]
                 x_max = ttnn.unsqueeze(x_max, 0)

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import pytest
 import torch
+import os
 from loguru import logger
 
 import ttnn
@@ -80,7 +81,9 @@ def test_vadv2_backbone(
     device,
     reset_seeds,
 ):
-    weights_path = "models/experimental/vadv2/tt/vadv2_weights_1.pth"
+    weights_path = "models/experimental/vadv2/vadv2_weights_1.pth"
+    if not os.path.exists(weights_path):
+        os.system("bash models/experimental/vadv2/weights_download.sh")
     torch_model = backbone.ResNet(
         layers=[3, 4, 6, 3],
         out_indices=(3,),

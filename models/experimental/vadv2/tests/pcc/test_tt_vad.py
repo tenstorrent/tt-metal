@@ -5,6 +5,7 @@
 import pytest
 import torch
 import ttnn
+import os
 import numpy as np
 from loguru import logger
 from models.experimental.vadv2.reference import vad
@@ -21,7 +22,9 @@ def test_vadv2(
     device,
     reset_seeds,
 ):
-    weights_path = "models/experimental/vadv2/tt/vadv2_weights_1.pth"
+    weights_path = "models/experimental/vadv2/vadv2_weights_1.pth"
+    if not os.path.exists(weights_path):
+        os.system("bash models/experimental/vadv2/weights_download.sh")
     torch_model = vad.VAD(
         use_grid_mask=True,
         pts_voxel_layer=None,
@@ -694,13 +697,3 @@ def test_vadv2(
         b = torch.load(f"models/experimental/vadv2/tt/dumps/{key}.pt")
         _, msg = assert_with_pcc(a, b, 0.0)
         logger.info(f"{key}: {msg}")
-
-        # bev_embed: 0.9818184220692506
-        # all_cls_scores: 0.9516290838644588
-        # all_bbox_preds: 0.9974828001478624
-        # all_traj_preds: 0.9440515426352858
-        # all_traj_cls_scores: 0.9477967632539143
-        # map_all_cls_scores: 0.9629916159360085
-        # map_all_bbox_preds: 0.9953775500965026
-        # map_all_pts_preds: 0.9975575053019132
-        # ego_fut_preds: 0.9993697211842238

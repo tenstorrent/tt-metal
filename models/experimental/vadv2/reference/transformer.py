@@ -11,16 +11,6 @@ from models.experimental.vadv2.reference.decoder import DetectionTransformerDeco
 
 
 class VADPerceptionTransformer(nn.Module):
-    """Implements the Detr3D transformer.
-    Args:
-        as_two_stage (bool): Generate query from encoder features.
-            Default: False.
-        num_feature_levels (int): Number of feature maps from FPN:
-            Default: 4.
-        two_stage_num_proposals (int): Number of proposals when set
-            `as_two_stage` as True. Default: 300.
-    """
-
     def __init__(
         self,
         num_feature_levels=4,
@@ -84,7 +74,6 @@ class VADPerceptionTransformer(nn.Module):
         self.init_layers()
 
     def init_layers(self):
-        """Initialize layers of the Detr3DTransformer."""
         self.level_embeds = nn.Parameter(torch.Tensor(self.num_feature_levels, self.embed_dims))
         self.cams_embeds = nn.Parameter(torch.Tensor(self.num_cams, self.embed_dims))
         self.reference_points = nn.Linear(self.embed_dims, 3)
@@ -126,7 +115,6 @@ class VADPerceptionTransformer(nn.Module):
                 prev_bev = prev_bev.permute(1, 0, 2)
             if self.rotate_prev_bev:
                 for i in range(bs):
-                    # num_prev_bev = prev_bev.size(1)
                     rotation_angle = kwargs["img_metas"][i]["can_bus"][-1]
                     tmp_prev_bev = prev_bev[:, i].reshape(bev_h, bev_w, -1).permute(2, 0, 1)
                     tmp_prev_bev = rotate(tmp_prev_bev, rotation_angle, center=self.rotate_center)
@@ -184,9 +172,6 @@ class VADPerceptionTransformer(nn.Module):
     def get_bev_features(
         self, mlvl_feats, bev_queries, bev_h, bev_w, grid_length=[0.512, 0.512], bev_pos=None, prev_bev=None, **kwargs
     ):
-        """
-        obtain bev features.
-        """
         lidar_feat = None
 
         bev_embed = self.attn_bev_encode(
@@ -223,43 +208,6 @@ class VADPerceptionTransformer(nn.Module):
         prev_bev=None,
         **kwargs,
     ):
-        """Forward function for `Detr3DTransformer`.
-        Args:
-            mlvl_feats (list(Tensor)): Input queries from
-                different level. Each element has shape
-                [bs, num_cams, embed_dims, h, w].
-            bev_queries (Tensor): (bev_h*bev_w, c)
-            bev_pos (Tensor): (bs, embed_dims, bev_h, bev_w)
-            object_query_embed (Tensor): The query embedding for decoder,
-                with shape [num_query, c].
-            reg_branches (obj:`nn.ModuleList`): Regression heads for
-                feature maps from each decoder layer. Only would
-                be passed when `with_box_refine` is True. Default to None.
-        Returns:
-            tuple[Tensor]: results of decoder containing the following tensor.
-                - bev_embed: BEV features
-                - inter_states: Outputs from decoder. If
-                    return_intermediate_dec is True output has shape \
-                      (num_dec_layers, bs, num_query, embed_dims), else has \
-                      shape (1, bs, num_query, embed_dims).
-                - init_reference_out: The initial value of reference \
-                    points, has shape (bs, num_queries, 4).
-                - inter_references_out: The internal value of reference \
-                    points in decoder, has shape \
-                    (num_dec_layers, bs,num_query, embed_dims)
-                - enc_outputs_class: The classification score of \
-                    proposals generated from \
-                    encoder's feature maps, has shape \
-                    (batch, h*w, num_classes). \
-                    Only would be returned when `as_two_stage` is True, \
-                    otherwise None.
-                - enc_outputs_coord_unact: The regression results \
-                    generated from encoder's feature maps., has shape \
-                    (batch, h*w, 4). Only would \
-                    be returned when `as_two_stage` is True, \
-                    otherwise None.
-        """
-
         bev_embed = self.get_bev_features(
             mlvl_feats, bev_queries, bev_h, bev_w, grid_length=grid_length, bev_pos=bev_pos, prev_bev=prev_bev, **kwargs
         )  # bev_embed shape: bs, bev_h*bev_w, embed_dims

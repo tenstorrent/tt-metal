@@ -5,6 +5,7 @@
 import pytest
 import torch
 import ttnn
+import os
 import torch.nn as nn
 import numpy as np
 from models.experimental.vadv2.reference import head
@@ -346,7 +347,9 @@ def test_vadv2_head(
     device,
     reset_seeds,
 ):
-    weights_path = "models/experimental/vadv2/tt/vadv2_weights_1.pth"
+    weights_path = "models/experimental/vadv2/vadv2_weights_1.pth"
+    if not os.path.exists(weights_path):
+        os.system("bash models/experimental/vadv2/weights_download.sh")
     torch_model = head.VADHead(
         with_box_refine=True,
         as_two_stage=False,

@@ -181,12 +181,9 @@ class BEVFormerEncoder(nn.Module):
 
         reference_points_cam, bev_mask = self.point_sampling(ref_3d, self.pc_range, kwargs["img_metas"])
 
-        # bug: this code should be 'shift_ref_2d = ref_2d.clone()', we keep this bug for reproducing our results in paper.
-        # shift_ref_2d = ref_2d  # .clone()
         shift_ref_2d = ref_2d.clone()
         shift_ref_2d += shift[:, None, None, :]
 
-        # (num_query, bs, embed_dims) -> (bs, num_query, embed_dims)
         bev_query = bev_query.permute(1, 0, 2)
         bev_pos = bev_pos.permute(1, 0, 2)
         bs, len_bev, num_bev_level, _ = ref_2d.shape

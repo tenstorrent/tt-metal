@@ -40,19 +40,6 @@ class PlanningMetric:
         return dx, bx, nx
 
     def calculate_birds_eye_view_parameters(self, x_bounds, y_bounds, z_bounds):
-        """
-        Parameters
-        ----------
-            x_bounds: Forward direction in the ego-car.
-            y_bounds: Sides
-            z_bounds: Height
-
-        Returns
-        -------
-            bev_resolution: Bird's-eye view bev_resolution
-            bev_start_position Bird's-eye view first element
-            bev_dimension Bird's-eye view tensor spatial dimension
-        """
         bev_resolution = torch.tensor([row[2] for row in [x_bounds, y_bounds, z_bounds]])
         bev_start_position = torch.tensor([row[0] + row[2] / 2.0 for row in [x_bounds, y_bounds, z_bounds]])
         bev_dimension = torch.tensor(
@@ -69,15 +56,6 @@ class PlanningMetric:
         return segmentation, pedestrian
 
     def get_birds_eye_view_label(self, gt_agent_boxes, gt_agent_feats):
-        """
-        gt_agent_boxes (LiDARInstance3DBoxes): list of GT Bboxs.
-            dim 9 = (x,y,z)+(w,l,h)+yaw+(vx,vy)
-        gt_agent_feats: (B, A, 34)
-            dim 34 = fut_traj(6*2) + fut_mask(6) + goal(1) + lcf_feat(9) + fut_yaw(6)
-            lcf_feat (x, y, yaw, vx, vy, width, length, height, type)
-        ego_lcf_feats: (B, 9)
-            dim 8 = (vx, vy, ax, ay, w, length, width, vel, steer)
-        """
         T = 6
         segmentation = np.zeros((T, self.bev_dimension[0], self.bev_dimension[1]))
         pedestrian = np.zeros((T, self.bev_dimension[0], self.bev_dimension[1]))
@@ -88,7 +66,6 @@ class PlanningMetric:
 
         gt_agent_fut_trajs = gt_agent_feats[..., : T * 2].reshape(-1, 6, 2)
         gt_agent_fut_mask = gt_agent_feats[..., T * 2 : T * 3].reshape(-1, 6)
-        # gt_agent_lcf_feat = gt_agent_feats[..., T*3+1:T*3+10].reshape(-1, 9)
         gt_agent_fut_yaw = gt_agent_feats[..., T * 3 + 10 : T * 4 + 10].reshape(-1, 6, 1)
         gt_agent_fut_trajs = np.cumsum(gt_agent_fut_trajs, axis=1)
         gt_agent_fut_yaw = np.cumsum(gt_agent_fut_yaw, axis=1)
@@ -141,16 +118,6 @@ class PlanningMetric:
         return agent_corner_cv2
 
     def evaluate_single_coll(self, traj, segmentation, input_gt):
-        """
-        traj: torch.Tensor (n_future, 2)
-            自车lidar系为轨迹参考系
-                ^ y
-                |
-                |
-                0------->
-                        x
-        segmentation: torch.Tensor (n_future, 200, 200)
-        """
         pts = np.array(
             [
                 [-self.H / 2.0 + 0.5, self.W / 2.0],
@@ -166,11 +133,6 @@ class PlanningMetric:
 
         n_future, _ = traj.shape
         trajs = traj.view(n_future, 1, 2)
-        # 轨迹坐标系转换为:
-        #  ^ x
-        #  |
-        #  |
-        #  0-------> y
         trajs_ = copy.deepcopy(trajs)
         trajs_[:, :, [0, 1]] = trajs_[:, :, [1, 0]]  # can also change original tensor
         trajs_ = trajs_ / self.dx.to(trajs.device)
@@ -195,18 +157,6 @@ class PlanningMetric:
         return torch.from_numpy(collision).to(device=traj.device)
 
     def evaluate_coll(self, trajs, gt_trajs, segmentation):
-        """
-        trajs: torch.Tensor (B, n_future, 2)
-            自车lidar系为轨迹参考系
-            ^ y
-            |
-            |
-            0------->
-                    x
-        gt_trajs: torch.Tensor (B, n_future, 2)
-        segmentation: torch.Tensor (B, n_future, 200, 200)
-
-        """
         B, n_future, _ = trajs.shape
 
         obj_coll_sum = torch.zeros(n_future, device=segmentation.device)
@@ -216,7 +166,6 @@ class PlanningMetric:
             gt_box_coll = self.evaluate_single_coll(gt_trajs[i], segmentation[i], input_gt=True)
 
             xx, yy = trajs[i, :, 0], trajs[i, :, 1]
-            # lidar系下的轨迹转换到图片坐标系下
             xi = ((-self.bx[0] / 2 - yy) / self.dx[0]).long()
             yi = ((-self.bx[1] / 2 + xx) / self.dx[1]).long()
 
@@ -236,11 +185,6 @@ class PlanningMetric:
         return obj_coll_sum, obj_box_coll_sum
 
     def compute_L2(self, trajs, gt_trajs):
-        """
-        trajs: torch.Tensor (n_future, 2)
-        gt_trajs: torch.Tensor (n_future, 2)
-        """
-        # return torch.sqrt(((trajs[:, :, :2] - gt_trajs[:, :, :2]) ** 2).sum(dim=-1))
         pred_len = trajs.shape[0]
         ade = float(
             sum(

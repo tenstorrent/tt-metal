@@ -206,8 +206,7 @@ class VADHead(nn.Module):
             assert isinstance(map_class_weight, float), (
                 "Expected " "class_weight to have type float. Found " f"{type(map_class_weight)}."
             )
-            # NOTE following the official DETR rep0, bg_cls_weight means
-            # relative classification weight of the no-object class.
+
             map_bg_cls_weight = loss_map_cls.get("bg_cls_weight", map_class_weight)
             assert isinstance(map_bg_cls_weight, float), (
                 "Expected " "bg_cls_weight to have type float. Found " f"{type(map_bg_cls_weight)}."
@@ -229,7 +228,6 @@ class VADHead(nn.Module):
         self._init_layers()
 
     def _init_layers(self):
-        """Initialize classification branch and regression branch of head."""
         cls_branch = []
         for _ in range(self.num_reg_fcs):
             cls_branch.append(nn.Linear(self.embed_dims, self.embed_dims))
@@ -278,8 +276,6 @@ class VADHead(nn.Module):
         def _get_clones(module, N):
             return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
-        # last reg_branch is used to generate proposal from
-        # encode feature map when as_two_stage is True.
         num_decoder_layers = 1
         num_map_decoder_layers = 1
         if self.transformer.decoder is not None:
@@ -404,7 +400,7 @@ class VADHead(nn.Module):
         bev_mask = torch.zeros((bs, self.bev_h, self.bev_w), device=bev_queries.device).to(dtype)
         bev_pos = self.positional_encoding(bev_mask).to(dtype)
 
-        if only_bev:  # only use encoder to obtain BEV features, TODO: refine the workaround
+        if only_bev:
             return self.transformer.get_bev_features(
                 mlvl_feats,
                 bev_queries,
@@ -455,7 +451,6 @@ class VADHead(nn.Module):
             reference = inverse_sigmoid(reference)
             outputs_class = self.cls_branches[lvl](hs[lvl])
             tmp = self.reg_branches[lvl](hs[lvl])
-            # TODO: check the shape of reference
             assert reference.shape[-1] == 3
             tmp[..., 0:2] = tmp[..., 0:2] + reference[..., 0:2]
             tmp[..., 0:2] = tmp[..., 0:2].sigmoid()
@@ -466,7 +461,6 @@ class VADHead(nn.Module):
             tmp[..., 1:2] = tmp[..., 1:2] * (self.pc_range[4] - self.pc_range[1]) + self.pc_range[1]
             tmp[..., 4:5] = tmp[..., 4:5] * (self.pc_range[5] - self.pc_range[2]) + self.pc_range[2]
 
-            # TODO: check if using sigmoid
             outputs_coord = tmp
             outputs_classes.append(outputs_class)
             outputs_coords.append(outputs_coord)
@@ -480,7 +474,7 @@ class VADHead(nn.Module):
                 map_hs[lvl].view(bs, self.map_num_vec, self.map_num_pts_per_vec, -1).mean(2)
             )
             tmp = self.map_reg_branches[lvl](map_hs[lvl])
-            # TODO: check the shape of reference
+
             assert reference.shape[-1] == 2
             tmp[..., 0:2] += reference[..., 0:2]
             tmp = tmp.sigmoid()  # cx,cy,w,h
@@ -496,10 +490,7 @@ class VADHead(nn.Module):
             # motion_query
             motion_query = hs[-1].permute(1, 0, 2)  # [A, B, D]
             mode_query = self.motion_mode_query.weight  # [fut_mode, D]
-            # [M, B, D], M=A*fut_mode
-            motion_query = (motion_query[:, None, :, :] + mode_query[None, :, None, :]).flatten(
-                0, 1
-            )  # torch.Size([300, 6, 1, 256])
+            motion_query = (motion_query[:, None, :, :] + mode_query[None, :, None, :]).flatten(0, 1)
 
             if self.use_pe:
                 motion_coords = outputs_coords_bev[-1]  # [B, A, 2]
@@ -696,8 +687,6 @@ class VADHead(nn.Module):
         pts_y = pts_reshape[:, :, :, 0] if y_first else pts_reshape[:, :, :, 1]
         pts_x = pts_reshape[:, :, :, 1] if y_first else pts_reshape[:, :, :, 0]
         if self.map_transform_method == "minmax":
-            # import pdb;pdb.set_trace()
-
             xmin = pts_x.min(dim=2, keepdim=True)[0]
             xmax = pts_x.max(dim=2, keepdim=True)[0]
             ymin = pts_y.min(dim=2, keepdim=True)[0]
@@ -710,7 +699,6 @@ class VADHead(nn.Module):
 
     def get_bboxes(self, preds_dicts, img_metas, rescale=False):
         det_preds_dicts = self.bbox_coder.decode(preds_dicts)
-        # map_bboxes: xmin, ymin, xmax, ymax
         map_preds_dicts = self.map_bbox_coder.decode(preds_dicts)
 
         num_samples = len(det_preds_dicts)

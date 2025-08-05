@@ -6,28 +6,12 @@ import torch.nn.functional as F
 
 
 def bbox_cxcywh_to_xyxy(bbox):
-    """Convert bbox coordinates from (cx, cy, w, h) to (x1, y1, x2, y2).
-
-    Args:
-        bbox (Tensor): Shape (n, 4) for bboxes.
-
-    Returns:
-        Tensor: Converted bboxes.
-    """
     cx, cy, w, h = bbox.split((1, 1, 1, 1), dim=-1)
     bbox_new = [(cx - 0.5 * w), (cy - 0.5 * h), (cx + 0.5 * w), (cy + 0.5 * h)]
     return torch.cat(bbox_new, dim=-1)
 
 
 def bbox_xyxy_to_cxcywh(bbox):
-    """Convert bbox coordinates from (x1, y1, x2, y2) to (cx, cy, w, h).
-
-    Args:
-        bbox (Tensor): Shape (n, 4) for bboxes.
-
-    Returns:
-        Tensor: Converted bboxes.
-    """
     x1, y1, x2, y2 = bbox.split((1, 1, 1, 1), dim=-1)
     bbox_new = [(x1 + x2) / 2, (y1 + y2) / 2, (x2 - x1), (y2 - y1)]
     return torch.cat(bbox_new, dim=-1)
@@ -72,18 +56,6 @@ def denormalize_2d_pts(pts, pc_range):
 
 
 def inverse_sigmoid(x, eps=1e-5):
-    """Inverse function of sigmoid.
-
-    Args:
-        x (Tensor): The tensor to do the
-            inverse.
-        eps (float): EPS avoid numerical
-            overflow. Defaults 1e-5.
-    Returns:
-        Tensor: The x has passed the inverse
-            function of sigmoid, has same
-            shape with input.
-    """
     x = x.clamp(min=0, max=1)
     x1 = x.clamp(min=eps)
     x2 = (1 - x).clamp(min=eps)
