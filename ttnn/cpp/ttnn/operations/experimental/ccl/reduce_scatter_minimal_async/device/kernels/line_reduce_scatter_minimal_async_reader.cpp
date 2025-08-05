@@ -164,6 +164,16 @@ void kernel_main() {
     uint32_t fwd_sync_cnt = 0;
     uint32_t sem_target = 0;
 
+    // DEBUGGING
+    cb_reserve_back(cb_input_id, tile_granularity);
+    uint32_t l1_write_addr = get_write_ptr(cb_input_id);
+    for (volatile uint32_t x = 0; x < 5; ++x) {
+        noc_async_read_tile(0, input_tensor_addrgen, l1_write_addr);
+    }
+
+    return;
+    // DEBUGGING
+
     for (uint32_t b = 0; b < num_batches; b++) {
         if (fuse_op) {
             matmul_receiver.wait_for_matmul_batch(b);

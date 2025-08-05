@@ -19,6 +19,9 @@ void MAIN {
 
     uint32_t arg_idx = 0;
 
+    // DEBUGGING
+    return;
+    // DEBUGGING
     uint32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t tiles_read = start_tiles_read;
     uint32_t tiles_to_read = get_arg_val<uint32_t>(arg_idx++);

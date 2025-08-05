@@ -119,6 +119,35 @@ void kernel_main() {
     uint32_t chunk_count = 0;
     uint32_t sem_target = 0;
 
+    bool page_size_safe = input_tensor_page_size <= 4096;
+    ASSERT(page_size_safe);
+    constexpr uint32_t addr = 1001000;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr)[0] = 0x00001234;
+    if (!page_size_safe) {
+        for (size_t i = 0; i < 100; ++i) {
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr)[i] = 0xf33ddad;
+        }
+        WAYPOINT("STUK");
+        while (1) {
+        }
+    }
+
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr)[1] = input_tensor_page_size;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr)[2] = noc_mode;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr)[3] = noc_index;
+    // DEBUGGING
+    cb_reserve_back(cb_input_id, tile_granularity);
+    uint32_t l1_write_addr = get_write_ptr(cb_input_id);
+    uint64_t remote_src_noc_addr = input_tensor_addrgen.get_noc_addr(0, 0, noc_index);
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr)[4] = remote_src_noc_addr;
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr)[5] = remote_src_noc_addr >> 32;
+    for (uint32_t x = 0; x < 10000; ++x) {
+        noc_async_read_tile(0, input_tensor_addrgen, l1_write_addr);
+    }
+
+    return;
+    // DEBUGGING
+
     for (uint32_t b = 0; b < num_batches; b++) {
         if constexpr (fuse_op) {
             matmul_receiver.wait_for_matmul_batch(b);
