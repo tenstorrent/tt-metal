@@ -40,8 +40,8 @@ class DispatcherCoreData:
     firmware_path: str = combined_field("kernel_path", "Firmware / Kernel Path", collection_serializer("\n"))
     kernel_path: str | None = combined_field()
     kernel_name: str | None = combined_field()
-    go_message_index: int = triage_field("Go Message Index")
-    go_data: int = triage_field("Go Data", hex_serializer)
+    subdevice: int = triage_field("Subdevice")
+    go_message: str = triage_field("Go Message")
 
 
 class DispatcherData:
@@ -75,6 +75,13 @@ class DispatcherData:
         # Access the value of enumerator for supported blocks
         self._ProgrammableCoreTypes_TENSIX = self._brisc_elf.enumerators["ProgrammableCoreType::TENSIX"].value
         self._ProgrammableCoreTypes_IDLE_ETH = self._brisc_elf.enumerators["ProgrammableCoreType::IDLE_ETH"].value
+        self._go_message_states = {
+            self._brisc_elf.enumerators["go_message_state_t::RUN_MSG_INIT"].value: "INIT",
+            self._brisc_elf.enumerators["go_message_state_t::RUN_MSG_GO"].value: "GO",
+            self._brisc_elf.enumerators["go_message_state_t::RUN_MSG_DONE"].value: "DONE",
+            self._brisc_elf.enumerators["go_message_state_t::RUN_MSG_RESET_READ_PTR"].value: "RESET_READ_PTR",
+            self._brisc_elf.enumerators["go_message_state_t::RUN_MSG_RESET_READ_PTR_FROM_HOST"].value: "RESET_READ_PTR_FROM_HOST",
+        }
 
         # Enumerators for tensix block
         self._enum_values_tenisx = {
@@ -210,6 +217,7 @@ class DispatcherData:
         else:
             kernel_path = None
             kernel_offset = None
+        go_data_state = self._go_message_states.get(go_data & 0xff, str(go_data & 0xff))
 
         return DispatcherCoreData(
             firmware_path=firmware_path,
@@ -220,8 +228,8 @@ class DispatcherData:
             kernel_config_base=kernel_config_base,
             kernel_text_offset=kernel_text_offset,
             watcher_kernel_id=watcher_kernel_id,
-            go_message_index=go_message_index,
-            go_data=go_data,
+            subdevice=go_message_index,
+            go_message=go_data_state,
         )
 
     @staticmethod
