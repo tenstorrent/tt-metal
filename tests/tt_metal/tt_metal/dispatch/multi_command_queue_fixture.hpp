@@ -192,10 +192,8 @@ protected:
         const auto& dispatch_core_config =
             tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
         const chip_id_t mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
-
         std::vector<chip_id_t> chip_ids;
         auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
-
         if (enable_remote_chip or
             tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB or
             tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
