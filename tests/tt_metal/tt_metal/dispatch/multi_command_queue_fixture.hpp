@@ -205,7 +205,6 @@ protected:
         }
         auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
             chip_ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 2, dispatch_core_config);
-
         for (const auto& [id, device] : reserved_devices) {
             this->devices_.push_back(device);
         }
