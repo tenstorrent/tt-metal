@@ -5,7 +5,6 @@
 #include <cstdint>
 #include "accessor/tensor_accessor.h"
 #include "dataflow_api.h"
-#include "nd_reshard_common.hpp"
 
 // Kernel that:
 // if (is_reader) {
