@@ -8,13 +8,13 @@
 The following model is evaluated(mAPval 50-95) for 500 samples.:-
 -   YOLOv4(320x320 resolution) - **0.7562**
 -   YOLOv4(640x640 resolution) - **0.7535**
--   YOLOv8s_World(640x640 resolution) - **0.7338**
--   YOLOv8x(640x640 resolution) - **0.7254**
--   YOLOv10x(640x640 resolution) - **0.7675**
--   YOLOv9c(640x640 resolution) - **0.7837**
--   YOLOv8s(640x640 resolution) - **0.6099**
--   YOLOv11n(640x640 resolution) - **0.7329**
--   YOLOv7(640x640 resolution) - **0.3726**
+-   YOLOv8s_World(640x640 resolution) - **0.7499**
+-   YOLOv8x(640x640 resolution) - **0.7355**
+-   YOLOv10x(640x640 resolution) - **0.7631**
+-   YOLOv9c(640x640 resolution) - **0.7665**
+-   YOLOv8s(640x640 resolution) - **0.6069**
+-   YOLOv11n(640x640 resolution) - **0.7328**
+-   YOLOv7(640x640 resolution) - **0.3729**
 
 Currently, The number of samples is set to 500.
 
@@ -78,12 +78,12 @@ To run the test of ttnn vs ground truth, please follow the following commands:
 The following model is evaluated(mAPval 50-95) for 500 samples.:-
 -   YOLOv4(320x320 resolution) - **0.7610**
 -   YOLOv4(640x640 resolution) - **0.8029**
--   YOLOv8s_World(640x640 resolution) - **0.7102**
--   YOLOv8x(640x640 resolution) - **0.8116**
+-   YOLOv8s_World(640x640 resolution) - **0.5626** #Ran for 50 samples, since running 500 samples requires more memory
+-   YOLOv8x(640x640 resolution) - **0.7915**  #Ran for 180 samples, since running 500 samples requires more memory
 -   YOLOv10x(640x640 resolution) - **0.7800** #Ran for 105 samples, since running 500 samples requires more memory
 -   YOLOv9c(640x640 resolution) - **0.6702**#Ran for 20 samples, since running 500 samples requires more memory
--   YOLOv8s(640x640 resolution) - **0.7997**
--   YOLOv11n(640x640 resolution) - **0.7653**
+-   YOLOv8s(640x640 resolution) - **0.7964**
+-   YOLOv11n(640x640 resolution) - **0.6876** #Ran for 105 samples, since running 500 samples requires more memory
 -   YOLOv7(640x640 resolution) - **0.3188** #Ran for 20 samples, since running 500 samples requires more memory
 
 To run the test of ttnn vs ground truth, please follow the following commands:
