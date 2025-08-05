@@ -189,6 +189,7 @@ target_sources(
             untilize/device/kernels/compute/pack_untilize_variable_num_blocks.cpp
             tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_dims_split_rows_multicore.cpp
             tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp
+            untilize/device/kernels/compute/common.cpp
 )
 
 install(
