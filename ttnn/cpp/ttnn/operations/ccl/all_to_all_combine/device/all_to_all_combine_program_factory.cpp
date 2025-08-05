@@ -148,8 +148,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         num_links);
 
     // perform work-split across cores
-    uint32_t tokens_per_core = tt::div_up(batch_size * seq_size, num_links);
-    uint32_t num_cores = std::min(num_links, tt::div_up(batch_size * seq_size, tokens_per_core));
+    uint32_t tokens_per_device = batch_size * seq_size;
+    uint32_t tokens_per_core = tt::div_up(tokens_per_device, num_links);
+    uint32_t num_cores = std::min(num_links, tt::div_up(tokens_per_device, tokens_per_core));
     auto sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
         subdevice_cores.at(0), num_cores, subdevice_core_range_set, true);
     std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
@@ -255,31 +256,39 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         metadata_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
         input_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
         0,
-        batch_size * seq_size,
+        tokens_per_device,
     };
 
     uint32_t link_id = 0;
     uint32_t tokens_per_core_start = 0;
+    log_debug(tt::LogOp, "Runtime arguments are being calculated for MeshCoordinate {}", mesh_coordinate);
     for (uint32_t i = 0; i < sender_cores.size(); i++) {
         std::vector<uint32_t> writer_runtime_args = {
             output_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
-            operation_attributes.cross_device_semaphore.address(),
+            (uint32_t)operation_attributes.cross_device_semaphore->address(),
             0,
             0,
         };
         reader_runtime_args[3] = tokens_per_core_start;
-        reader_runtime_args[4] = std::min(tokens_per_core_start + tokens_per_core, batch_size * seq_size);
+        reader_runtime_args[4] = std::min(tokens_per_core_start + tokens_per_core, tokens_per_device);
         writer_runtime_args[2] = tokens_per_core_start;
         writer_runtime_args[3] = reader_runtime_args[4];
         tokens_per_core_start = reader_runtime_args[4];
+        log_debug(
+            tt::LogOp,
+            "Setting runtime args for core {}. It will operate on tokens {} to {}. Global semaphore address: {}",
+            sender_cores.at(i),
+            reader_runtime_args[3],
+            reader_runtime_args[4],
+            (uint32_t)operation_attributes.cross_device_semaphore->address());
 
         for (auto& neighbor_coordinate : neighbors) {
             const auto neighbor_fabric_id = mesh_device->get_fabric_node_id(neighbor_coordinate);
             append_fabric_connection_rt_args(
                 fabric_node_id, neighbor_fabric_id, link_id, program, sender_cores.at(i), writer_runtime_args);
         }
-        SetRuntimeArgs(program, ternary_reader_kernel_id, sender_cores.at(0), reader_runtime_args);
-        SetRuntimeArgs(program, unary_writer_kernel_id, sender_cores.at(0), writer_runtime_args);
+        SetRuntimeArgs(program, ternary_reader_kernel_id, sender_cores.at(i), reader_runtime_args);
+        SetRuntimeArgs(program, unary_writer_kernel_id, sender_cores.at(i), writer_runtime_args);
         link_id++;
     }
 
@@ -313,7 +322,7 @@ void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime
             reader_runtime_args.at(2) = tensor_args.input_tensor.mesh_buffer()->get_device_buffer(coord)->address();
 
             writer_runtime_args.at(0) = tensor_return_value.mesh_buffer()->get_device_buffer(coord)->address();
-            writer_runtime_args.at(1) = operation_attributes.cross_device_semaphore.address();
+            writer_runtime_args.at(1) = (uint32_t)operation_attributes.cross_device_semaphore->address();
         }
     }
 }

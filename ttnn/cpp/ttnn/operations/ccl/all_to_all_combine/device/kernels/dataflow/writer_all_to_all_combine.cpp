@@ -92,7 +92,6 @@ void kernel_main() {
 
     std::array<WorkerToFabricEdmSender, Num_Directions> fabric_connections;
     open_direction_connections(directions, fabric_connections, rt_arg_count);
-
     InterleavedAddrGen<output_is_dram> output_addrgen{
         .bank_base_address = output_base_addr, .page_size = data_size_bytes};
 
@@ -185,7 +184,7 @@ void kernel_main() {
         const auto & dest_chip_id = dest_chip_ids[device_idx];
 
         if (device_idx == linearized_mesh_coord) {
-            noc_semaphore_inc(get_noc_addr(global_semaphore_addr), 1);
+            noc_semaphore_inc(global_noc_semaphore_addr, 1);
             noc_async_atomic_barrier();
         } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, replicate_axis>(device_idx)) {
             const auto& dest_mesh_id = dest_mesh_ids[device_idx];
@@ -209,10 +208,8 @@ void kernel_main() {
             }
         }
     }
-
     close_direction_connections(directions, fabric_connections);
 
-    auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
-    noc_semaphore_wait(semaphore_ptr, replicate_group_devices);
-    noc_semaphore_set(semaphore_ptr, 0);
+    noc_semaphore_wait((uint32_t*)global_semaphore_addr, replicate_group_devices);
+    noc_semaphore_set((uint32_t*)global_semaphore_addr, 0);
 }

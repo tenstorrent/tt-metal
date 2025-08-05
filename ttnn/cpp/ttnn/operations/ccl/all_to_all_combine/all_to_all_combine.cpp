@@ -20,7 +20,7 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     const ttnn::Tensor& expert_metadata_tensor,
-    const GlobalSemaphore& global_semaphore,
+    const std::optional<GlobalSemaphore>& global_semaphore,
     const bool locally_reduced,
     const std::optional<uint32_t> num_links,
     const std::optional<tt::tt_fabric::Topology> topology,
