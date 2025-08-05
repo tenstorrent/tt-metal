@@ -357,7 +357,7 @@ class DeepseekV3MLP(nn.Module):
 
 
 class MoEGate(nn.Module):
-    def __init__(self, config):
+    def __init__(self, config, use_bitonic_sort=True):
         super().__init__()
         self.config = config
         self.top_k = config.num_experts_per_tok
@@ -377,7 +377,7 @@ class MoEGate(nn.Module):
             self.e_score_correction_bias = nn.Parameter(torch.empty((self.n_routed_experts)))
         self.reset_parameters()
         # initatialize whether to use bitonic topk or torch.topk
-        self.use_bitonic_sort = True
+        self.use_bitonic_sort = use_bitonic_sort
         self.topk_fn = torch.topk
         if self.use_bitonic_sort:
             self.topk_fn = topk_bitonic

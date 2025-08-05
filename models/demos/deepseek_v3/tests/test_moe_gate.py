@@ -13,15 +13,15 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as Refe
 from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_model_config, run_module_forward
-from models.utility_functions import comp_pcc
+from tests.ttnn.utils_for_testing import comp_pcc
 
 
 @pytest.fixture
-def reference_model(hf_config):
+def reference_model(hf_config, use_bitonic_sort):
     """Get the actual DeepSeek MLP model using local implementation."""
     torch.manual_seed(5)
     torch.use_deterministic_algorithms(True)
-    return ReferenceMoEGate(hf_config)
+    return ReferenceMoEGate(hf_config, use_bitonic_sort)
 
 
 @pytest.mark.parametrize(
@@ -31,11 +31,19 @@ def reference_model(hf_config):
         ("prefill", 2048),
     ],
 )
+@pytest.mark.parametrize(
+    "topk_fallback,use_bitonic_sort",
+    [
+        (True, True),
+    ],
+)
 def test_forward_pass(
     mode,
     seq_len,
     reference_model,
     hf_config,
+    topk_fallback,
+    use_bitonic_sort,
     tmp_path,
     mesh_device,
 ):
@@ -49,7 +57,9 @@ def test_forward_pass(
     weight_config = MoEGate.convert_weights(hf_config, hf_state_dict, tmp_path, mesh_device)
 
     # Generate appropriate config using utility function
-    model_config = get_model_config(MoEGate, mode, hf_config, mesh_device)
+    model_config = get_model_config(
+        MoEGate, mode, hf_config, mesh_device, topk_fallback=topk_fallback, use_bitonic_sort=use_bitonic_sort
+    )
 
     # Create a new model state
     model_state = MoEGate.create_state(hf_config, mesh_device=mesh_device)
@@ -118,12 +128,10 @@ def test_forward_pass(
     ), f"TopK experts weights output does not meet PCC requirement {topk_weights_pcc_required}: {pcc_message}"
 
     topk_indices_pcc_required = 1.0
-    passing, pcc_message = comp_pcc(reference_topk_indices, tt_topk_indices_torch, topk_indices_pcc_required)
-
-    logger.info(f"TopK experts indices PCC: {pcc_message}")
-    assert (
-        passing
-    ), f"TopK experts indices output does not meet PCC requirement {topk_indices_pcc_required}: {pcc_message}"
+    # stable sort both reference and ttnn indices to avoid random tie breaking for better comparison
+    reference_topk_indices = torch.sort(reference_topk_indices.to(torch.short), dim=-1, stable=True)[0]
+    tt_topk_indices_torch = torch.sort(tt_topk_indices_torch, dim=-1, stable=True)[0]
+    assert torch.allclose(reference_topk_indices, tt_topk_indices_torch), f"TopK experts indices output does not match"
 
 
 if __name__ == "__main__":
