@@ -155,7 +155,7 @@ class DispatcherData:
         def get_const_value(name):
             return mem_access(fw_elf, name, loc_mem_reader)[3]
 
-        # Initialize go message states if not already initialized
+        # Go message states are constant values in the firmware elf, so we cache them
         if not hasattr(self, "_go_message_states"):
             self._go_message_states = {
                 get_const_value("RUN_MSG_INIT"): "INIT",
