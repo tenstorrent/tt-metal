@@ -84,7 +84,7 @@ protected:
     uint8_t num_cqs_;
 };
 
-class UnitMeshMultiCQSingleDeviceFixture : public DispatchFixture {
+class UnitMeshMultiCQSingleDeviceFixture : public MeshDispatchFixture {
 protected:
     static void SetUpTestSuite() {}
     static void TearDownTestSuite() {}
@@ -175,7 +175,7 @@ protected:
         this->create_device(0 /* device_id */, trace_region_size);
     }
 };
-class UnitMeshMultiCQMultiDeviceFixture : public DispatchFixture {
+class UnitMeshMultiCQMultiDeviceFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
         this->slow_dispatch_ = false;
