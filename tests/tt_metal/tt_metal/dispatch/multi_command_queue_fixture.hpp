@@ -102,9 +102,7 @@ protected:
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
         const chip_id_t device_id =
-            (enable_remote_chip or
-             tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB or
-             tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster())
+            (enable_remote_chip or tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster())
                 ? *tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().begin()
                 : *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         this->create_device(device_id, DEFAULT_TRACE_REGION_SIZE);
@@ -142,7 +140,6 @@ protected:
 
         auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
             chip_id, DEFAULT_L1_SMALL_SIZE, trace_region_size, 2, dispatch_core_config);
-
         this->device_ = reserved_devices[device_id];
     }
 
@@ -208,10 +205,6 @@ protected:
 
         } else {
             chip_ids.push_back(mmio_device_id);
-        }
-
-        if (chip_ids.empty()) {
-            GTEST_SKIP() << "No valid chip IDs available for testing";
         }
 
         auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
