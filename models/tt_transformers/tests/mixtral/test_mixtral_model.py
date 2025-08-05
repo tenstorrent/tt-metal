@@ -15,7 +15,18 @@ from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision, ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
-#  pytest  /localdev/hzhou/tt-metal/models/tt_transformers/tests/mixtral/test_mixtral_model.py::test_model_inference[wormhole_b0-8-performance-256-1-page_params0-paged_attention-quick]
+# pytest models/tt_transformers/tests/mixtral/test_mixtral_model.py::test_model_inference[wormhole_b0-8-performance-256-1-page_params0-paged_attention-quick]
+
+
+def convert2ref(state_dict):
+    out = {}
+    for key, value in state_dict.items():
+        if "block_sparse_moe" in key:
+            new_key = key.replace("block_sparse_moe", "feed_forward")
+            out[new_key] = value
+        elif "feed_forward" not in key:  # ensure we don’t duplicate/overwrite
+            out[key] = value
+    return out
 
 
 @torch.no_grad()
@@ -79,7 +90,6 @@ def test_model_inference(
     page_params,
     optimizations,
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
     request,
@@ -215,7 +225,7 @@ def test_model_inference(
     reference_model = None
     if run_ref_pt:
         reference_model = refTransformer(args=model_args)
-        reference_model.load_state_dict(state_dict)
+        reference_model.load_state_dict(convert2ref(state_dict))
         reference_model.eval()
 
     # Embedding on host

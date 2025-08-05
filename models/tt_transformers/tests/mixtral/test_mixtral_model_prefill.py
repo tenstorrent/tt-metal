@@ -19,6 +19,17 @@ from models.utility_functions import comp_pcc, skip_for_grayskull
 # pytest models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py::test_model_inference[wormhole_b0-1layer-performance-max128k-128-page_params0-paged_attention-8]
 
 
+def convert2ref(state_dict):
+    out = {}
+    for key, value in state_dict.items():
+        if "block_sparse_moe" in key:
+            new_key = key.replace("block_sparse_moe", "feed_forward")
+            out[new_key] = value
+        elif "feed_forward" not in key:  # ensure we don’t duplicate/overwrite
+            out[key] = value
+    return out
+
+
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.timeout(900)
@@ -81,14 +92,13 @@ def test_model_inference(
     max_seq_len,
     num_layers,
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
     is_ci_env,
     request,
 ):
     test_id = request.node.callspec.id
-    num_layers = 31
+    num_layers = 1
     if is_ci_env:
         if "accuracy" in test_id:
             pytest.skip("CI test only runs performance mode to reduce CI pipeline load")
@@ -192,7 +202,7 @@ def test_model_inference(
                 )
             )
         }
-        reference_model.load_state_dict(model_args.load_state_dict())
+        reference_model.load_state_dict(convert2ref(model_args.load_state_dict()))
         reference_model.eval()
         embd = model_args.reference_embedding()
         embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})

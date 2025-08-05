@@ -13,12 +13,23 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.rope import RotarySetup
 from models.utility_functions import comp_allclose, comp_pcc
 
-# pytest /localdev/hzhou/tt-metal/models/tt_transformers/tests/mixtral/test_mixtral_decoder.py::test_mixtral_decoder_inference[wormhole_b0-True-decode-32]
+# pytest models/tt_transformers/tests/mixtral/test_mixtral_decoder.py::test_mixtral_decoder_inference[wormhole_b0-True-decode-32]
+
+
+def convert2ref(state_dict):
+    out = {}
+    for key, value in state_dict.items():
+        if "block_sparse_moe" in key:
+            new_key = key.replace("block_sparse_moe", "feed_forward")
+            out[new_key] = value
+        elif "feed_forward" not in key:  # ensure we don’t duplicate/overwrite
+            out[key] = value
+    return out
 
 
 @pytest.mark.parametrize(
     "batch",
-    (32,),
+    (32, 16),
 )
 @pytest.mark.parametrize("mode", ["decode"])
 def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch, mode):
@@ -44,7 +55,7 @@ def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch, mode):
     state_dict = model_args.load_state_dict()
     partial_state_dict = {k[9:]: v for k, v in state_dict.items() if (k.startswith("layers.0."))}
     reference_model = TransformerBlock(args=model_args)
-    reference_model.load_state_dict(partial_state_dict)
+    reference_model.load_state_dict(convert2ref(partial_state_dict))
 
     # Initialize TT model
     rope_setup = RotarySetup(
@@ -53,8 +64,7 @@ def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch, mode):
         model_args.head_dim,
         model_args.max_seq_len,
         model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
+        model_args.rope_scaling,
     )
     transformation_mats = rope_setup.get_both_trans_mats()
 

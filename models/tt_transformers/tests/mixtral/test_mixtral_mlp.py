@@ -9,11 +9,18 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc
 from ttnn import ConcatMeshToTensor
 
-# pytest -svv models/tt_transformers/tests/test_mixtral_mlp.py::test_mixtral_mlp_inference[wormhole_b0-True-prefill]
+# pytest -svv models/tt_transformers/tests/mixtral/test_mixtral_mlp.py::test_mixtral_mlp_inference[wormhole_b0-True-prefill]
+
+
+def convert2ref(state_dict):
+    out = {}
+    for key, value in state_dict.items():
+        out[key[4:]] = value
+    return out
 
 
 @pytest.mark.parametrize("mode", ["prefill", "decode"])
-def test_mixtral_mlp_inference(t3k_mesh_device, use_program_cache, reset_seeds, mode):
+def test_mixtral_mlp_inference(t3k_mesh_device, reset_seeds, mode):
     dtypes = {
         "w1": ttnn.bfloat4_b,
         "w2": ttnn.bfloat8_b,
@@ -35,7 +42,7 @@ def test_mixtral_mlp_inference(t3k_mesh_device, use_program_cache, reset_seeds, 
     partial_state_dict_ref = {k[32:]: v for k, v in partial_state_dict.items() if f"experts.{0}" in k}
 
     reference_model = FeedForward(model_args)
-    reference_model.load_state_dict(partial_state_dict_ref)
+    reference_model.load_state_dict(convert2ref(partial_state_dict_ref))
 
     rms_state_dict = {k[18:]: v for k, v in state_dict.items() if (k.startswith("layers.0.ffn_norm."))}
     rms = RMSNorm(dim=model_args.dim)

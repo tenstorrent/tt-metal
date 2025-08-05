@@ -23,7 +23,7 @@ class TtMoeLayer(LightweightModule):
         self.num_devices = args.num_devices
         assert self.num_devices == 8, "num devices must be 8 for Mixtral MoE"
 
-        gate_name = f"layers.{layer_num}.feed_forward.gate.weight"
+        gate_name = f"layers.{layer_num}.block_sparse_moe.gate.weight"
         if args.dummy_weights:
             cache_name = None
         else:

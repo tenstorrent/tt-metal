@@ -13,6 +13,18 @@ from models.utility_functions import comp_allclose, comp_pcc
 # pytest -svv models/tt_transformers/tests/mixtral/test_mixtral_moe.py::test_mixtral_moe_inference[wormhole_b0-True-decode]
 
 
+def convert2ref(state_dict):
+    out = {}
+    for key, value in state_dict.items():
+        if "moe.experts" in key:
+            new_key = key.replace("moe.experts", "experts")
+            out[new_key] = value
+        elif "moe.gate" in key:  # ensure we don’t duplicate/overwrite
+            new_key = key.replace("moe.gate", "gate")
+            out[new_key] = value
+    return out
+
+
 @pytest.mark.parametrize("mode", ["prefill", "decode"])
 def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode):
     pcc = 0.99
@@ -37,7 +49,7 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode):
         gate=torch.nn.Linear(model_args.dim, 8, bias=False),
         moe_args=model_args,
     )
-    reference_model.load_state_dict(partial_state_dict_ref)
+    reference_model.load_state_dict(convert2ref(partial_state_dict_ref))
 
     tt_model = TtMoeLayer(
         mesh_device=t3k_mesh_device,

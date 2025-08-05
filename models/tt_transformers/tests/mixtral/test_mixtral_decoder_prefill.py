@@ -9,6 +9,19 @@ from models.tt_transformers.tt.decoder import TransformerBlock as TtTransformerB
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc
 
+# pytest /models/tt_transformers/tests/mixtral/test_mixtral_decoder_prefill.py::test_mixtral_decoder_inference[wormhole_b0-True-16]
+
+
+def convert2ref(state_dict):
+    out = {}
+    for key, value in state_dict.items():
+        if "block_sparse_moe" in key:
+            new_key = key.replace("block_sparse_moe", "feed_forward")
+            out[new_key] = value
+        elif "feed_forward" not in key:  # ensure we don’t duplicate/overwrite
+            out[key] = value
+    return out
+
 
 @pytest.mark.parametrize(
     "batch",
@@ -41,7 +54,7 @@ def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch):
     }
 
     reference_model = TransformerBlock(args=model_args)
-    reference_model.load_state_dict(partial_state_dict)
+    reference_model.load_state_dict(convert2ref(partial_state_dict))
 
     # Initialize TT model
     rot_mats = get_prefill_rot_mat(
@@ -49,8 +62,8 @@ def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch):
         t3k_mesh_device,
         max_seq_len,
         model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
+        model_args.rope_scaling.factor if model_args.rope_scaling else None,
+        model_args.max_context_len,
     )
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
     transformation_mats_prefill = ttnn.as_tensor(

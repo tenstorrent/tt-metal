@@ -14,7 +14,7 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
-# pytest /localdev/hzhou/tt-metal/models/tt_transformers/tests/test_mixtral_rms_norm.py::test_rms_norm_inference[wormhole_b0-True-prefill-128-1-8]
+# pytest models/tt_transformers/tests/mixtral/test_mixtral_rms_norm.py::test_rms_norm_inference[wormhole_b0-True-prefill-128-1-8]
 
 
 @torch.no_grad()
@@ -42,7 +42,6 @@ def test_rms_norm_inference(
     batch_size,
     mode,
     t3k_mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
 ):
@@ -53,7 +52,6 @@ def test_rms_norm_inference(
     state_dict = model_args.load_state_dict()
     state_dict_prefix = model_args.get_state_dict_prefix("", 0)
     first_layer_prefix = state_dict_prefix + "ffn_norm."
-    breakpoint()
     partial_state_dict = {k[-6:]: v for k, v in state_dict.items() if (k.startswith("layers.0.ffn_norm."))}
     reference_model = RefRMSNorm(dim=model_args.dim)
     reference_model.load_state_dict(partial_state_dict)
