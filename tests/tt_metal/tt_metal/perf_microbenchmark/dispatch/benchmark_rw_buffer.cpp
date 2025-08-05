@@ -39,7 +39,7 @@ using namespace tt::tt_metal::distributed;
 // Read & Write
 // Page Size (Bytes): 32, 64, 128, 256, 512, 1024, 2048
 // Transfer Size: 64 MB
-// Buffer Type: DRAM, L1 (currently only DRAM)
+// Buffer Type: DRAM, L1
 // Device: 0 (local), 1 (remote) (when possible)
 //
 ////////////////////////////////////////////////////////////////////////////////
