@@ -77,6 +77,20 @@ public:
      */
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> get_mesh_device() const;
 
+    /**
+     * @brief Get the mesh graph
+     *
+     * @return const tt::tt_fabric::MeshGraph&
+     */
+    const tt::tt_fabric::MeshGraph& get_mesh_graph() const;
+
+    /**
+     * @brief Get the local mesh ID
+     *
+     * @return const tt::tt_fabric::MeshId&
+     */
+    const tt::tt_fabric::MeshId& get_local_mesh_id() const;
+
 private:
     void initialize_and_validate_custom_physical_config(const PhysicalMeshConfig& physical_mesh_config);
 

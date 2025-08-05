@@ -7,6 +7,7 @@
 #include <sstream>
 #include <algorithm>
 #include <random>
+#include "tests/tt_metal/multihost/fabric_tests/mesh_socket_test_runner.hpp"
 
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
@@ -107,11 +108,11 @@ std::vector<TestConfig> MeshSocketYamlParser::parse_raw_test_configs(const YAML:
 }
 
 std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_configs(
-    const std::vector<TestConfig>& test_configs, const tt::tt_fabric::MeshGraph& mesh_graph) {
+    const std::vector<TestConfig>& test_configs, const MeshSocketTestRunner& test_runner) {
     std::vector<ParsedTestConfig> parsed_configs;
 
     for (const auto& test_config : test_configs) {
-        auto expanded_configs = expand_test_config(test_config, mesh_graph);
+        auto expanded_configs = expand_test_config(test_config, test_runner);
         parsed_configs.insert(parsed_configs.end(), expanded_configs.begin(), expanded_configs.end());
     }
 
@@ -119,7 +120,7 @@ std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_configs(
 }
 
 std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_config(
-    const TestConfig& test_config, const tt::tt_fabric::MeshGraph& mesh_graph) {
+    const TestConfig& test_config, const MeshSocketTestRunner& test_runner) {
     std::vector<ParsedTestConfig> parsed_configs;
 
     // Validate that we have either explicit sockets or pattern expansions, but not both
@@ -155,7 +156,7 @@ std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_config(
         } else if (test_config.pattern_expansions
                        .has_value()) {  // Expand patterns and add to sockets, cannot have both
             for (const auto& pattern : test_config.pattern_expansions.value()) {
-                auto expanded_sockets = expand_pattern(pattern, test_config, mesh_graph);
+                auto expanded_sockets = expand_pattern(pattern, test_config, test_runner);
                 parsed_configs.emplace_back(ParsedTestConfig{
                     .name = test_name,
                     .num_iterations = test_config.num_iterations,
@@ -174,10 +175,10 @@ std::vector<ParsedTestConfig> MeshSocketYamlParser::expand_test_config(
 }
 
 std::vector<TestSocketConfig> MeshSocketYamlParser::expand_pattern(
-    const PatternExpansionConfig& pattern, const TestConfig& test_config, const tt::tt_fabric::MeshGraph& mesh_graph) {
+    const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestRunner& test_runner) {
     switch (pattern.type) {
-        case PatternType::AllToAll: return expand_all_to_all_pattern(pattern, test_config, mesh_graph);
-        case PatternType::RandomPairing: return expand_random_pairing_pattern(pattern, test_config, mesh_graph);
+        case PatternType::AllToAll: return expand_all_to_all_pattern(pattern, test_config, test_runner);
+        case PatternType::RandomPairing: return expand_random_pairing_pattern(pattern, test_config, test_runner);
         default: TT_THROW("Unknown pattern type");
     }
 }
@@ -185,53 +186,38 @@ std::vector<TestSocketConfig> MeshSocketYamlParser::expand_pattern(
 // Parametrize on fifo size, page size, and data size
 
 std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_to_all_pattern(
-    const PatternExpansionConfig& pattern, const TestConfig& test_config, const tt::tt_fabric::MeshGraph& mesh_graph) {
+    const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestRunner& test_runner) {
     std::vector<TestSocketConfig> sockets;
 
-    // Get all mesh IDs from the mesh graph
-    auto mesh_ids = mesh_graph.get_mesh_ids();
+    // Get mesh graph from test runner
+    const auto& mesh_graph = test_runner.get_mesh_graph();
 
-    // Ensure we have the required num_ranks parameter
-    TT_FATAL(test_config.num_ranks.has_value(), "All-to-all pattern requires num_ranks to be specified");
-    uint32_t num_ranks = test_config.num_ranks.value();
+    // Create rank to mesh mapping using distributed allgather
+    auto rank_to_mesh_id = create_rank_to_mesh_mapping(test_runner);
 
-    log_info(tt::LogTest, "Expanding all-to-all pattern for {} ranks across {} meshes", num_ranks, mesh_ids.size());
-
+    // Use core coordinate from pattern configuration
+    const CoreCoord& core_coord = pattern.core_coord;
     // Create all-to-all connections between ranks
-    // TODO: create  a rank to mesh_id mappings
-    for (uint32_t sender_rank = 0; sender_rank < num_ranks; ++sender_rank) {
-        for (uint32_t receiver_rank = 0; receiver_rank < num_ranks; ++receiver_rank) {
+    for (const auto& [sender_rank, sender_mesh_id] : rank_to_mesh_id) {
+        for (const auto& [receiver_rank, recv_mesh_id] : rank_to_mesh_id) {
             if (sender_rank == receiver_rank) {
                 continue;  // Skip self-connections
             }
 
-            std::vector<SocketConnectionConfig> connections;
-
-            // this makes literally no sense lmao
-            for (const auto& sender_mesh_id : mesh_ids) {
-                for (const auto& recv_mesh_id : mesh_ids) {
-                    auto sender_coord_range = mesh_graph.get_coord_range(sender_mesh_id);
-                    auto recv_coord_range = mesh_graph.get_coord_range(recv_mesh_id);
-                    // Create connections for each coordinate in the mesh
-                    for (const auto& sender_coord : sender_coord_range) {
-                        for (const auto& recv_coord : recv_coord_range) {
-                            // TODO pass in a coreCoord
-                            // Use core coordinate (0,0) for simplicity - can be parameterized later
-                            CoreCoord core_coord(0, 0);
-
-                            connections.push_back(SocketConnectionConfig{
-                                .sender = EndpointConfig(sender_coord, core_coord),
-                                .receiver = EndpointConfig(recv_coord, core_coord)});
-                        }
-                    }
+            auto sender_coord_range = mesh_graph.get_coord_range(sender_mesh_id);
+            auto recv_coord_range = mesh_graph.get_coord_range(recv_mesh_id);
+            // Create connections for each coordinate in the mesh
+            for (const auto& sender_coord : sender_coord_range) {
+                for (const auto& recv_coord : recv_coord_range) {
+                    std::vector<SocketConnectionConfig> connections;
+                    connections.push_back(SocketConnectionConfig{
+                        .sender = EndpointConfig(sender_coord, core_coord),
+                        .receiver = EndpointConfig(recv_coord, core_coord)});
+                    sockets.push_back(TestSocketConfig{
+                        .connections = connections,
+                        .sender_rank = Rank{*sender_rank},
+                        .receiver_rank = Rank{*receiver_rank}});
                 }
-            }
-
-            if (!connections.empty()) {
-                sockets.push_back(TestSocketConfig{
-                    .connections = connections,
-                    .sender_rank = Rank{sender_rank},
-                    .receiver_rank = Rank{receiver_rank}});
             }
         }
     }
@@ -241,7 +227,7 @@ std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_to_all_pattern(
 }
 
 std::vector<TestSocketConfig> MeshSocketYamlParser::expand_random_pairing_pattern(
-    const PatternExpansionConfig& pattern, const TestConfig& test_config, const tt::tt_fabric::MeshGraph& mesh_graph) {
+    const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestRunner& test_runner) {
     std::vector<TestSocketConfig> sockets;
 
     // TODO: Implement actual random pairing expansion
@@ -271,6 +257,40 @@ std::vector<ParsedMemoryConfig> MeshSocketYamlParser::expand_memory_config(const
     }
 
     return expanded_configs;
+}
+
+std::unordered_map<Rank, tt::tt_fabric::MeshId> MeshSocketYamlParser::create_rank_to_mesh_mapping(
+    const MeshSocketTestRunner& test_runner) {
+    const auto& local_mesh_id = test_runner.get_local_mesh_id();
+
+    // Use distributed context allgather to share mesh_ids across ranks
+    // Since rank to mesh is 1-to-1, each rank sends its mesh_id and we receive all mesh_ids
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().get_distributed_context();
+    auto world_size = *distributed_context.size();
+
+    // Send this rank's mesh_id
+    uint32_t local_mesh_id_val = *local_mesh_id;
+    std::vector<std::byte> send_buffer(sizeof(uint32_t));
+    std::memcpy(send_buffer.data(), &local_mesh_id_val, sizeof(uint32_t));
+
+    // Receive all ranks' mesh_ids
+    std::vector<std::byte> recv_buffer(sizeof(uint32_t) * world_size);
+    distributed_context.all_gather(tt::stl::Span<std::byte>(send_buffer), tt::stl::Span<std::byte>(recv_buffer));
+
+    // Build rank_to_mesh_id mapping (rank i has mesh_id at position i)
+    std::unordered_map<Rank, tt::tt_fabric::MeshId> rank_to_mesh_id;
+    for (uint32_t rank = 0; rank < world_size; ++rank) {
+        uint32_t mesh_id_val;
+        std::memcpy(&mesh_id_val, recv_buffer.data() + rank * sizeof(uint32_t), sizeof(uint32_t));
+        rank_to_mesh_id[Rank{rank}] = tt::tt_fabric::MeshId{mesh_id_val};
+    }
+
+    // Log the mapping for debugging
+    for (const auto& [rank, mesh_id] : rank_to_mesh_id) {
+        log_info(tt::LogTest, "Rank {} is in mesh {}", *rank, *mesh_id);
+    }
+
+    return rank_to_mesh_id;
 }
 
 PhysicalMeshConfig MeshSocketYamlParser::parse_physical_mesh(const YAML::Node& node) {
@@ -331,17 +351,6 @@ TestConfig MeshSocketYamlParser::parse_test_config(const YAML::Node& node) {
 
     TT_FATAL(node["memory_config"], "Test configuration missing required 'memory_config' field");
     test.memory_config = parse_memory_config(node["memory_config"]);
-
-    // Parse num_ranks (required only when pattern expansions are present)
-    if (node["pattern_expansions"]) {
-        TT_FATAL(node["num_ranks"], "Test configuration with 'pattern_expansions' missing required 'num_ranks' field");
-        test.num_ranks = node["num_ranks"].as<uint32_t>();
-    } else if (node["num_ranks"]) {
-        log_warning(
-            tt::LogTest,
-            "Test '{}' has 'num_ranks' but no 'pattern_expansions' - num_ranks will be ignored",
-            test.name);
-    }
 
     // Parse explicit sockets (optional)
     if (node["sockets"]) {
@@ -463,6 +472,10 @@ PatternExpansionConfig MeshSocketYamlParser::parse_pattern_expansion(const YAML:
 
     std::string type_str = node["type"].as<std::string>();
     pattern.type = parse_pattern_type(type_str);
+
+    // Parse core_coord field (required)
+    TT_FATAL(node["core_coord"], "Pattern expansion missing required 'core_coord' field");
+    pattern.core_coord = parse_core_coordinate(node["core_coord"]);
 
     return pattern;
 }
@@ -618,8 +631,9 @@ void MeshSocketYamlParser::validate_endpoint_config(const EndpointConfig& endpoi
 
 void MeshSocketYamlParser::validate_pattern_expansion_config(const PatternExpansionConfig& pattern) {
     // Pattern type is validated during parsing via enum
-    // Additional validation could be added here for specific pattern requirements
-    (void)pattern;  // Suppress unused parameter warning
+    // Core coordinate validation could be added here if needed
+    // (For now, we trust that valid core coordinates are provided in YAML)
+    (void)pattern;  // pattern is used in other functions, but validation can be added here in the future
 }
 
 void MeshSocketYamlParser::validate_fabric_config(const FabricConfig& fabric_config) {
@@ -712,6 +726,17 @@ void MeshSocketYamlParser::print_test_configuration(const MeshSocketTestConfigur
         // Print pattern expansions if present
         if (test.pattern_expansions.has_value()) {
             log_info(tt::LogTest, "  Pattern Expansions: {} defined", test.pattern_expansions.value().size());
+            for (size_t pattern_idx = 0; pattern_idx < test.pattern_expansions.value().size(); ++pattern_idx) {
+                const auto& pattern = test.pattern_expansions.value()[pattern_idx];
+                std::string pattern_type = (pattern.type == PatternType::AllToAll) ? "all_to_all" : "random_pairing";
+                log_info(
+                    tt::LogTest,
+                    "    Pattern {}: type={}, core_coord=({}, {})",
+                    pattern_idx + 1,
+                    pattern_type,
+                    pattern.core_coord.x,
+                    pattern.core_coord.y);
+            }
         }
     }
 
