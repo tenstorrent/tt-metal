@@ -15,6 +15,18 @@ from tests.ttnn.unit_tests.operations.test_utils import (
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
 
+torch.manual_seed(0)
+
+
+def random_torch_tensor(dtype, shape):
+    if dtype == ttnn.uint16:
+        return torch.randint(0, 100, shape).to(torch.int16)
+    if dtype == ttnn.int32:
+        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
+    if dtype == ttnn.uint32:
+        return torch.randint(0, 2**31, shape, dtype=torch.int32)
+    return torch.rand(shape).bfloat16().float()
+
 
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [3])
@@ -28,33 +40,34 @@ import ttnn
         (((0, 1), (3, 25), (4, 7)), (4, 7, 3, 25, 0, 1)),  # Odd padding widths (5 and 7)
     ],
 )
-@pytest.mark.parametrize("value", [0])
-def test_pad_rm(device, n, c, h, w, padding, torch_padding, value):
+@pytest.mark.parametrize("value", [0, 1])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_pad_rm(device, n, c, h, w, padding, torch_padding, value, dtype):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_input_tensor = random_torch_tensor(dtype, (n, c, h, w))
     torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=dtype)
     output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.equal(torch_output_tensor, output_tensor)
 
 
-def run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value):
+def run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value, dtype):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_input_tensor = random_torch_tensor(dtype, (n, c, h, w))
     torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=dtype)
     output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("n", [16])
@@ -62,10 +75,11 @@ def run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, va
 @pytest.mark.parametrize("h", [224])
 @pytest.mark.parametrize("w", [224])
 @pytest.mark.parametrize("padding,torch_padding", [(((0, 1), (0, 32), (0, 32)), (0, 32, 0, 32, 0, 1))])
-@pytest.mark.parametrize("value", [0])
-def test_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value):
+@pytest.mark.parametrize("value", [0, 1])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value, dtype):
     for _ in range(2):
-        run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value)
+        run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value, dtype)
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
@@ -79,15 +93,15 @@ def test_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, v
     assert device.num_program_cache_entries() == 1
 
 
-def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient):
+def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, dtype):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_input_tensor = random_torch_tensor(dtype, (n, c, h, w))
     torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
 
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor,
-        dtype=ttnn.DataType.BFLOAT16,
+        dtype=dtype,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -133,7 +147,7 @@ def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
     assert tt_output_tensor.shape == torch_output_tensor.shape
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
+    assert torch.equal(torch_output_tensor, tt_output_tensor)
 
 
 def to_torch_padding(padspec):
@@ -215,8 +229,9 @@ def to_torch_padding(padspec):
         ],
     ],
 )
+@pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.float32])
 def test_pad_rm_sharded_stickwise(
-    device, input_shape, pad_to_shape, input_tensor_start, pad_value, input_sharded_memory_config_args
+    device, input_shape, pad_to_shape, input_tensor_start, pad_value, input_sharded_memory_config_args, dtype
 ):
     core_grid_x_ok = device.core_grid.x >= input_sharded_memory_config_args["core_grid"].x
     core_grid_y_ok = device.core_grid.y >= input_sharded_memory_config_args["core_grid"].y
@@ -227,9 +242,7 @@ def test_pad_rm_sharded_stickwise(
     input_shard_memory_config = ttnn.create_sharded_memory_config(input_shape, **input_sharded_memory_config_args)
 
     torch_input_tensor = torch.ones(input_shape, dtype=torch.float32)
-    ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
-    )
+    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     # Still relay on keep_l1_aligned = True to make it work with the current implementation
     ttnn_sharded_input_tensor = ttnn.interleaved_to_sharded(
         ttnn_input_tensor, input_shard_memory_config, keep_l1_aligned=True
@@ -260,17 +273,18 @@ def test_pad_rm_sharded_stickwise(
 @pytest.mark.parametrize("padding,torch_padding", [(((1, 1), (2, 32), (0, 0)), (0, 0, 2, 32, 1, 1))])
 @pytest.mark.parametrize("value", [8])
 @pytest.mark.parametrize("shard_orient", [ttnn.ShardOrientation.COL_MAJOR, ttnn.ShardOrientation.ROW_MAJOR])
-def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient):
+@pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.bfloat16])
+def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, dtype):
     if device.core_grid.y < 8:
         pytest.skip("n300 does not have 8x8 grid")
     for _ in range(2):
-        run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient)
+        run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, dtype)
         # dummy tensor to change tensor alloc
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttnn.from_torch(
             py_dummy_tensor,
-            dtype=ttnn.DataType.BFLOAT16,
+            dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
@@ -294,7 +308,7 @@ def test_pad(device, h, w, padding, torch_padding, value):
     output_tensor = ttnn.to_torch(output_tensor)
     assert output_tensor.shape == torch_output_tensor.shape
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -350,7 +364,7 @@ def test_pad(device, h, w, padding, torch_padding, value):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.skip(reason="ttnn.pad does not support row_major tensors because the kernel currently causes a PCC error")
@@ -377,7 +391,7 @@ def test_pad_back_to_back(device, h, w, padding, torch_padding, value):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.skip(reason="ttnn.pad requires pad to start at 0")
@@ -413,7 +427,7 @@ def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert torch.equal(torch_output_tensor, output_tensor)
 
 
 @skip_for_blackhole("Fails on Blackhole. Issue #20698")
@@ -437,15 +451,15 @@ def test_pad_conv2d_sweep(device, dtype, use_multicore, shape, padded_shape):
     out_torch = out_ttnn.cpu().to_torch().float()
 
     out_torch = out_torch[: shape[0], : shape[1], : shape[2], : shape[3]]
-    assert_with_pcc(in_torch, out_torch, 0.9999)
+    assert torch.equal(in_torch, out_torch)
 
 
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32])
 @pytest.mark.parametrize("shape", [[1, 1, 18, 13]])
 @pytest.mark.parametrize("padshape", [[1, 1, TILE_HEIGHT, TILE_WIDTH]])
 @pytest.mark.parametrize("use_multicore", [False, True])
 def test_pad_op(device, in_dtype, shape, padshape, use_multicore):
-    torch_input = torch.randn(shape, dtype=torch.bfloat16).bfloat16()
+    torch_input = random_torch_tensor(in_dtype, shape)
 
     ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
     output_tt = ttnn.pad(ttnn_input, padshape, [0, 0, 0, 0], value=0, use_multicore=use_multicore)
@@ -454,7 +468,7 @@ def test_pad_op(device, in_dtype, shape, padshape, use_multicore):
 
     shape_diff = list(map(lambda x, y: x - y, padshape, shape))
     output_torch = torch.nn.functional.pad(torch_input, [0, shape_diff[-1], 0, shape_diff[-2]], value=0)
-    assert_with_pcc(output_tt, output_torch, 0.9999)
+    assert torch.equal(output_tt, output_torch)
 
 
 def _unsqueeze(smaller, larger, fill):
@@ -469,7 +483,8 @@ def _unsqueeze(smaller, larger, fill):
 @pytest.mark.parametrize(
     "padding", [[25, 1], [5, 4], [64], [32, 32], [1, 0, 0, 0], [1, 0, 0], [32, 32, 32, 64], [0, 64], [0, 0, 0, 64]]
 )
-def test_pad_tile(shape, padding, device):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_pad_tile(shape, padding, dtype, device):
     if (shape, padding) in [([5, 4, 3, 2, 1], [1, 0, 0, 0]), ([5, 4, 3, 2, 1], [32, 32, 32, 64])]:
         pytest.xfail("Can't pad upper dims with rank>4")
 
@@ -479,7 +494,7 @@ def test_pad_tile(shape, padding, device):
         padding = _unsqueeze(padding, shape, 0)
 
     input = torch.ones(prod(shape), dtype=torch.bfloat16).reshape(shape)
-    input_tensor = ttnn.from_torch(input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    input_tensor = ttnn.from_torch(input, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
 
     torch_padding = sum([[0, p] for p in reversed(padding)], [])
     torch_output = torch.nn.functional.pad(input, torch_padding, value=5)
@@ -488,4 +503,4 @@ def test_pad_tile(shape, padding, device):
 
     out_tt = ttnn.to_torch(output)
 
-    assert_with_pcc(out_tt, torch_output, 0.9999)
+    assert torch.equal(out_tt, torch_output)
