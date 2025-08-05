@@ -642,7 +642,7 @@ class TT_CCL:
             breakpoint()
 
             output_tensor_mesh = ttnn.experimental.all_reduce_async(
-                input_tensor_mesh,
+                input_tensor_mesh,  # [1, 1, 1, 1280]
                 persistent_buffer,
                 cluster_axis=cluster_axis,
                 mesh_device=self.mesh_device,
