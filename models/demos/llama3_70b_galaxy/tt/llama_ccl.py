@@ -960,7 +960,7 @@ class TT_CCL:
         use_optimal_ccl_for_llama=False,
     ):
         topology = ttnn.Topology.Linear
-        breakpoint()
+
         if self.mode == "prefill":
             persistent_buffer = None
             if self.use_ring_ag_prefill and buffer_key is not None:
