@@ -21,7 +21,7 @@ constexpr bool use_dram_dst = get_compile_time_arg_val(3);
 
 void kernel_main() {
     //DPRINT << "=== RX KERNEL START ===" << ENDL();
-    
+
     uint32_t rt_args_idx = 0;
     int32_t dest_bank_id = 0;
     uint32_t dest_dram_addr = 0;
@@ -97,7 +97,7 @@ void kernel_main() {
         }
         WAYPOINT("FPD");
         //DPRINT << "RX DRAM MODE: Notification received! Starting DRAM read..." << ENDL();
-        
+
         // Read all DRAM data in one go
         uint32_t total_data_size_bytes = num_packets * packet_payload_size_bytes;
         uint64_t dram_noc_addr = get_noc_addr_from_bank_id<true>(dest_bank_id, dest_dram_addr);
@@ -139,6 +139,6 @@ void kernel_main() {
 
     test_results[TT_FABRIC_WORD_CNT_INDEX] = (uint32_t)bytes_received;
     test_results[TT_FABRIC_WORD_CNT_INDEX + 1] = bytes_received >> 32;
-    
+
     //DPRINT << "=== RX KERNEL COMPLETE ===" << ENDL();
 }

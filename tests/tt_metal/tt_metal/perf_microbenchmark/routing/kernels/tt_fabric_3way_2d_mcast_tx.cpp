@@ -133,10 +133,10 @@ void kernel_main() {
     //printf("Building EDM connections...\n");
     //DPRINT << "Building EDM connections..." << ENDL();
 
-    tt::tt_fabric::WorkerToFabricEdmSender left_connection = 
+    tt::tt_fabric::WorkerToFabricEdmSender left_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
-    
-    tt::tt_fabric::WorkerToFabricEdmSender right_connection = 
+
+    tt::tt_fabric::WorkerToFabricEdmSender right_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
     //printf("EDM connections built successfully\n");
@@ -172,9 +172,9 @@ void kernel_main() {
             left_connection, left_packet_header, noc_dest_addr, packet_payload_size_bytes);
         //printf("LEFT connection setup completed\n");
         //DPRINT << "LEFT connection setup completed" << ENDL();
-    } 
+    }
 
-    // Setup right (east) direct connection  
+    // Setup right (east) direct connection
     if (right_hops > 0) {
         //printf("Setting up RIGHT (east) connection with %d hops\n", right_hops);
         //DPRINT << "Setting up RIGHT (east) connection with " << right_hops << " hops" << ENDL();
@@ -190,7 +190,6 @@ void kernel_main() {
         //DPRINT << "RIGHT connection setup completed" << ENDL();
     }
 
-        
     //printf("Setting up trunk connections...\n");
     //DPRINT << "Setting up trunk connections..." << ENDL();
     if constexpr (mcast_mode & 0x1) {
@@ -268,7 +267,7 @@ void kernel_main() {
                 time_seed,
                 south_trunk_connection);
         }
-        
+
         if (left_hops > 0) {
             send_packet(
                 left_packet_header,
@@ -305,7 +304,7 @@ void kernel_main() {
         //DPRINT << "Tearing down SOUTH trunk" << ENDL();
         teardown_connection(south_trunk_connection);
     }
-    
+
     if (left_hops > 0) {
         //DPRINT << "Tearing down LEFT connection" << ENDL();
         teardown_connection(left_connection);
@@ -329,6 +328,6 @@ void kernel_main() {
     test_results[TT_FABRIC_CYCLES_INDEX + 1] = cycles_elapsed >> 32;
     test_results[TT_FABRIC_WORD_CNT_INDEX] = (uint32_t)bytes_sent;
     test_results[TT_FABRIC_WORD_CNT_INDEX + 1] = bytes_sent >> 32;
-    
+
     //DPRINT << "=== 3WAY KERNEL COMPLETE === bytes_sent=" << bytes_sent << ENDL();
 }

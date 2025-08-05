@@ -482,8 +482,8 @@ void fabric_set_unicast_route(
 
 void fabric_set_mcast_route(
     volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header,
-    uint16_t dst_dev_id,   
-    uint16_t dst_mesh_id,  
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id,
     uint16_t e_num_hops,
     uint16_t w_num_hops,
     uint16_t n_num_hops,
