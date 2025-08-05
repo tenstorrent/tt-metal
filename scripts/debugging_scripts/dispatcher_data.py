@@ -193,7 +193,7 @@ class DispatcherData:
             kernel = self.inspector_data.kernels.get(watcher_kernel_id)
             go_message_index = mem_access(fw_elf, f"mailboxes->go_message_index", loc_mem_reader)[0][0]
             go_data = mem_access(fw_elf, f"mailboxes->go_messages[{go_message_index}]", loc_mem_reader)[0][0]
-            preload = mem_access(fw_elf, f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.preload", loc_mem_reader)[0][0]
+            preload = mem_access(fw_elf, f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.preload", loc_mem_reader)[0][0] != 0
         except:
             kernel_config_base = -1
             kernel_text_offset = -1
@@ -225,7 +225,8 @@ class DispatcherData:
         else:
             kernel_path = None
             kernel_offset = None
-        go_data_state = self._go_message_states.get(go_data & 0xff, str(go_data & 0xff))
+        go_state = (go_data >> 24) & 0xff
+        go_data_state = self._go_message_states.get(go_state, str(go_state))
 
         return DispatcherCoreData(
             firmware_path=firmware_path,
