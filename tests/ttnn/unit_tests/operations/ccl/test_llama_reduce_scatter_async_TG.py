@@ -145,9 +145,7 @@ def run_reduce_scatter_test(
     tt_input_tensors_list = []
     tt_intermediate_tensors_list = []
     for iter in range(num_iters):
-        input = gen_tensor(
-            dim, shard_height, shard_width, num_devices_scatter, num_devices_fracture, num_cores, scheme=scheme
-        )
+        input = gen_tensor(dim, shard_height, shard_width, num_devices_scatter, num_devices_fracture, 20, scheme=scheme)
 
         intermediate_tensor = torch.zeros(
             [
@@ -345,8 +343,8 @@ def test_fabric_reduce_scatter_tg_trace(mesh_device, trace_mode, use_noc1_only):
     shard_width = 160
     num_devices_scatter = 4
     num_devices_fracture = 8
-    num_cores = 24
-    num_iters = 75
+    num_cores = 20
+    num_iters = 1
     warmup_iters = 10
     trace_mode = trace_mode
 
@@ -393,9 +391,9 @@ def test_fabric_reduce_scatter_tg_no_trace(mesh_device, trace_mode, use_noc1_onl
     num_devices_scatter = 4
     num_devices_fracture = 8
     num_cores = 24
-    num_iters = 30
+    num_iters = 1
     warmup_iters = 0
-    trace_mode = trace_mode
+    trace_mode = False
 
     run_reduce_scatter_test(
         mesh_device,

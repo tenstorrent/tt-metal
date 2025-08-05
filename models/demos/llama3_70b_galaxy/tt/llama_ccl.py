@@ -374,6 +374,7 @@ class TT_CCL:
         buffer_mem_cfg = self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"]
         for _ in range(self.num_cbs):
             tt_buffer = (
+                # 512 = 4 devices * 4 pages per packet * 32 tile_width
                 ttnn.from_torch(
                     torch.zeros((*cluster_shape, 32, 512 * buffer_mem_cfg.shard_spec.num_cores())),
                     device=self.mesh_device,
@@ -382,17 +383,7 @@ class TT_CCL:
                     memory_config=buffer_mem_cfg,
                     mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
                 )
-                if not self.use_qwen_mlp
-                else ttnn.from_torch(
-                    torch.zeros((*cluster_shape, 32, 320 * buffer_mem_cfg.shard_spec.num_cores())),
-                    device=self.mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    dtype=ttnn.bfloat8_b,
-                    memory_config=buffer_mem_cfg,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
-                )
             )
-
             persistent_buffers[cluster_axis].append(tt_buffer)
 
         return persistent_buffers
