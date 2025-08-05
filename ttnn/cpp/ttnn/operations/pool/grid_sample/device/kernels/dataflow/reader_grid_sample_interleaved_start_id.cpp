@@ -8,6 +8,9 @@
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
 #include "debug/dprint.h"
 
+// #pragma GCC optimize("fast-math")
+// #pragma GCC optimize("O3")
+
 #define ALWI inline __attribute__((always_inline))
 
 ALWI void fill_four_val(uint32_t begin_addr, uint16_t val, uint16_t val1, uint16_t val2, uint16_t val3) {
@@ -47,30 +50,40 @@ void kernel_main() {
 
     const uint32_t end_id = start_page_id + num_pages;
 
-    auto read_input_stick = [&](uint32_t curr_batch, uint32_t h_coord, uint32_t w_coord) {
-        cb_reserve_back(input_cb_index, 1);
+    constexpr float input_height_f = float(input_height);
+    constexpr float input_width_f = float(input_width);
+
+    constexpr float height_scale = input_height_f * 0.5f;
+    constexpr float height_offset = height_scale - 0.5f;
+
+    constexpr float width_scale = input_width_f * 0.5f;
+    constexpr float width_offset = width_scale - 0.5f;
+
+    auto read_input_stick = [&](uint32_t curr_batch, int32_t h_coord, int32_t w_coord) {
+        // cb_reserve_back(input_cb_index, 1);
         uint32_t l1_write_addr = get_write_ptr(input_cb_index);
 
-        if (h_coord <= 0) {
+        if (h_coord < 0) {
             h_coord = 0;
         }
-        if (h_coord >= input_height - 1) {
+        if (h_coord >= static_cast<int32_t>(input_height)) {
             h_coord = input_height - 1;
         }
-        if (w_coord <= 0) {
+        if (w_coord < 0) {
             w_coord = 0;
         }
-        if (h_coord >= input_width + 1) {
-            w_coord = input_width + 1;
+        if (w_coord >= static_cast<int32_t>(input_width)) {
+            w_coord = input_width - 1;
         }
 
-        uint32_t read_index = curr_batch * input_width * input_height + h_coord * input_width + w_coord;
+        uint32_t read_index = curr_batch * input_width * input_height + static_cast<uint32_t>(h_coord) * input_width +
+                              static_cast<uint32_t>(w_coord);
         uint32_t input_noc_addr = get_noc_addr(read_index, s1);
         noc_async_read(input_noc_addr, l1_write_addr, input_stick_nbytes);
 
         noc_async_read_barrier();
 
-        cb_push_back(input_cb_index, 1);
+        // cb_push_back(input_cb_index, 1);
     };
 
     // auto compute_weight_low  = [&] (float coord_f, uint32_t coord_int){
@@ -111,19 +124,17 @@ void kernel_main() {
         DPRINT << h_coord_rel << " " << w_coord_rel << "\n";
 
         float h_coord_image, w_coord_image;
-        uint32_t h0, h1, w0, w1;
-
-        float input_height_f = float(input_height);
-        float input_width_f = float(input_width);
+        int32_t h0, h1, w0, w1;
 
         {
             DeviceZoneScopedN("Logi1");
-            h_coord_image = (h_coord_rel + 1) * input_height_f / 0.5 - 0.5;
-            w_coord_image = (w_coord_rel + 1) * input_width_f / 0.5 - 0.5;
+            h_coord_image = h_coord_rel * height_scale + height_offset;
+            w_coord_image = w_coord_rel * width_scale + width_offset;
 
-            h0 = int(h_coord_image);
+            // Use explicit type casts for better optimization
+            h0 = static_cast<int32_t>(h_coord_image);
             h1 = h0 + 1;
-            w0 = int(w_coord_image);
+            w0 = static_cast<int32_t>(w_coord_image);
             w1 = w0 + 1;
         }
         DPRINT << h_coord_image << " " << w_coord_image << "\n";
@@ -131,41 +142,39 @@ void kernel_main() {
 
         // read the input sticks
 
-        // read_input_stick(0, h0, w0);
-        // read_input_stick(0, h0, w1);
-        // read_input_stick(0, h1, w0);
-        // read_input_stick(0, h1, w1);
+        read_input_stick(0, h0, w0);
+        read_input_stick(0, h0, w1);
+        read_input_stick(0, h1, w0);
+        read_input_stick(0, h1, w1);
 
         // compute scalars
 
         float weight_h0, weight_h1, weight_w0, weight_w1;
 
-        // petak u 6 racunanje weightova, mnogo scuffed ali dobro, za sad zelim da radi
+        // Optimized weight calculation with cached conversions
         {
             DeviceZoneScopedN("Logi2");
-            if (h0 < 0 || h0 >= input_height_f) {
-                weight_h0 = 0;
-            } else {
-                weight_h0 = 1 - (h_coord_image - h0);
-            }
+            // Cache integer-to-float conversions once
+            float h0_f = static_cast<float>(h0);
+            float w0_f = static_cast<float>(w0);
 
-            if (h1 < 0 || h1 >= input_height_f) {
-                weight_h1 = 0;
-            } else {
-                weight_h1 = h_coord_image - h0;
-            }
+            // Precompute fractions and their inverses
+            float h_frac = h_coord_image - h0_f;
+            float w_frac = w_coord_image - w0_f;
+            float h_frac_inv = 1.0f - h_frac;
+            float w_frac_inv = 1.0f - w_frac;
 
-            if (w0 < 0 || w0 >= input_width_f) {
-                weight_w0 = 0;
-            } else {
-                weight_w0 = 1 - (w_coord_image - w0);
-            }
+            // Efficient boundary checks - now meaningful with signed integers
+            bool h0_valid = (h0 >= 0) && (h0 < static_cast<int32_t>(input_height));
+            bool h1_valid = (h1 >= 0) && (h1 < static_cast<int32_t>(input_height));
+            bool w0_valid = (w0 >= 0) && (w0 < static_cast<int32_t>(input_width));
+            bool w1_valid = (w1 >= 0) && (w1 < static_cast<int32_t>(input_width));
 
-            if (w1 < 0 || w1 >= input_width_f) {
-                weight_w1 = 0;
-            } else {
-                weight_w1 = w_coord_image - w0;
-            }
+            // Assign weights using precomputed values
+            weight_h0 = h0_valid ? h_frac_inv : 0.0f;
+            weight_h1 = h1_valid ? h_frac : 0.0f;
+            weight_w0 = w0_valid ? w_frac_inv : 0.0f;
+            weight_w1 = w1_valid ? w_frac : 0.0f;
         }
 
         DPRINT << "L2\n";
@@ -186,10 +195,6 @@ void kernel_main() {
             wei4 = weight_h1 * weight_w1;
             fill_four_val(
                 get_write_ptr(scalar_cb_index),
-                // float_to_bfloat16(wei1),
-                // float_to_bfloat16(wei2),
-                // float_to_bfloat16(wei3),
-                // float_to_bfloat16(wei4)
                 float_to_bfloat16(wei1),
                 float_to_bfloat16(wei2),
                 float_to_bfloat16(wei3),
