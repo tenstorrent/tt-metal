@@ -130,8 +130,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_single_core(
         block_row_size,
         block_row_leftover_size};
 
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_is_dram};
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
     bool out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     uint32_t stick_size = unpadded_stick_size;
@@ -348,11 +348,13 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
         third_dim = log_shape[-3] * log_shape[-4];
     }
 
+    std::vector<uint32_t> reader_compile_time_args = {num_tiles_2d, third_dim, total_tiles_per_row};
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_wh_multicore.cpp",
         all_cores,
-        ReaderDataMovementConfig({src0_is_dram, num_tiles_2d, third_dim, total_tiles_per_row}));
+        ReaderDataMovementConfig(reader_compile_time_args));
 
     // writer
 
@@ -572,11 +574,13 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
         third_dim = log_shape[-3] * log_shape[-4];
     }
 
+    std::vector<uint32_t> reader_compile_time_args = {num_tiles_2d, third_dim, nblocks_per_core};
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_col_multicore.cpp",
         all_cores,
-        ReaderDataMovementConfig({src0_is_dram, num_tiles_2d, third_dim, nblocks_per_core}));
+        ReaderDataMovementConfig(reader_compile_time_args));
 
     // writer
 
@@ -749,13 +753,13 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     /** reader
      */
 
-    uint32_t src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp",
         all_cores,
-        ReaderDataMovementConfig({src0_is_dram}));
+        ReaderDataMovementConfig(reader_compile_time_args));
 
     /** writer
      */

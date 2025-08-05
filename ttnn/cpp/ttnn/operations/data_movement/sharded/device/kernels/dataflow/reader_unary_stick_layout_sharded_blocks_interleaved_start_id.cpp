@@ -8,7 +8,6 @@
 void kernel_main() {
 
     const uint32_t src_addr                 = get_arg_val<uint32_t>(0);
-    const uint32_t stick_size               = get_arg_val<uint32_t>(1);
     const uint32_t block_height             = get_arg_val<uint32_t>(2);
     const uint32_t block_width_bytes        = get_arg_val<uint32_t>(3);
     const uint32_t padded_block_width_bytes = get_arg_val<uint32_t>(4);
@@ -20,13 +19,10 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(1);
+    constexpr uint32_t stick_size = get_compile_time_arg_val(2);
+    constexpr auto src_args = TensorAccessorArgs<3>();
 
-    constexpr bool src0_is_dram          = get_compile_time_arg_val(2) == 1;
-    constexpr bool src_stick_size_is_pow2 = get_compile_time_arg_val(3) == 1;
-    constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(4);
-
-    const auto s0 = get_interleaved_addr_gen<src0_is_dram, src_stick_size_is_pow2>(
-        src_addr + aligned_input_width_offset_bytes, stick_size, src_log_base_2_of_page_size);
+    const auto s0 = TensorAccessor(src_args, src_addr + aligned_input_width_offset_bytes, stick_size);
 
     uint32_t stick_id = start_id;
     cb_reserve_back(cb_id_in0, block_height);
