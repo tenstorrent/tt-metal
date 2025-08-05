@@ -321,15 +321,14 @@ operation::ProgramWithCallbacks layernorm_multi_core(
                                     "reader_unary_interleaved_ln_rm_gb.cpp"
                                   : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                     "reader_unary_interleaved_ln.cpp";
-    reader_kernel_path = large_tensor_needed
-#ifdef LAYERNORM_WELFORD
-                             ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                               "reader_unary_interleaved_ln_large_tensor.cpp"
-#else
-                             ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow_legacy/"
-                               "reader_unary_interleaved_ln_large_tensor.cpp"
-#endif
-                             : reader_kernel_path;
+    const auto use_welford = std::getenv("LAYERNORM_WELFORD") != nullptr;
+    reader_kernel_path =
+        large_tensor_needed
+            ? (use_welford ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
+                             "reader_unary_interleaved_ln_large_tensor.cpp"
+                           : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow_legacy/"
+                             "reader_unary_interleaved_ln_large_tensor.cpp")
+            : reader_kernel_path;
 
     auto reader_kernels_id = CreateKernel(
         program,
@@ -344,24 +343,22 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-#ifdef LAYERNORM_WELFORD
-    std::vector<uint32_t> compute_args = {
-        Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en, W, ttnn::types::TILE_SIZE};
-#else
     std::vector<uint32_t> compute_args = {Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
-#endif
+    if (use_welford) {
+        compute_args.push_back(W);
+        compute_args.push_back(ttnn::types::TILE_SIZE);
+    }
 
     auto compute_kernels_id = CreateKernel(
         program,
         large_tensor_needed and !use_row_major_kernel and !rms_norm
-            ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_large_tensor.cpp"
-#ifdef LAYERNORM_WELFORD
-            ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_large_tensor.cpp"
-            : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp",
-#else
-            ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute_legacy/layernorm_large_tensor.cpp"
-            : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute_legacy/layernorm.cpp",
-#endif
+            ? (use_welford ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/"
+                             "layernorm_large_tensor.cpp"
+                           : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute_legacy/"
+                             "layernorm_large_tensor.cpp")
+            : (use_welford
+                   ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp"
+                   : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute_legacy/layernorm.cpp"),
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -403,12 +400,12 @@ operation::ProgramWithCallbacks layernorm_multi_core(
                 .set_page_size(tt::CBIndex::c_24, single_tile_size);
         CreateCircularBuffer(program, all_cores, cb_intermed0_config);
     }
-#ifdef RMSNORM
-    CircularBufferConfig c_intermed3_config =
-        CircularBufferConfig(im3_t * single_tile_size, {{tt::CBIndex::c_20, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_20, single_tile_size);
-    CreateCircularBuffer(program, all_cores, c_intermed3_config);
-#endif
+    if (rms_norm) {
+        CircularBufferConfig c_intermed3_config =
+            CircularBufferConfig(im3_t * single_tile_size, {{tt::CBIndex::c_20, cb_data_format}})
+                .set_page_size(tt::CBIndex::c_20, single_tile_size);
+        CreateCircularBuffer(program, all_cores, c_intermed3_config);
+    }
     CircularBufferConfig c_intermed4_config =
         CircularBufferConfig(im4_t * single_tile_size, {{tt::CBIndex::c_21, cb_data_format}})
             .set_page_size(tt::CBIndex::c_21, single_tile_size);
