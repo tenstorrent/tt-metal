@@ -157,7 +157,7 @@ in `fabric_edm_packet_header.hpp`.
 
 ## Channel structure
 
-Each EDM channel is built from one or more buffers. Each buffer is the same size and can hold atmost one packet.
+Each EDM channel is built from one or more buffers. Each buffer is the same size and can hold at most one packet.
 Neighbouring packets occupy nehighouring buffers - with the exception of the last buffer index. The next packet after a
 write into the last buffer index will wrap around to the first buffer index. Even if packets do not occupy the full
 buffer, subsequent packets will always be written into the next logical buffer. A gap will exist in memory but the EDM
@@ -785,7 +785,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     if (packet_start->mcast_params[eth_chan_directions::EAST]) {
                         // decrement east hop count
                         cached_routing_fields.value = packet_start->mcast_params[eth_chan_directions::EAST] - 1;
-                        // north/south hop counts will be cleared when making trunk->branch trun.
+                        // north/south hop counts will be cleared when making turnk->branch turn.
                         forward_payload_to_downstream_edm<enable_ring_support, false, false>(
                             packet_start,
                             payload_size_bytes,
@@ -796,7 +796,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     if (packet_start->mcast_params[eth_chan_directions::WEST]) {
                         // decrement west hop count
                         cached_routing_fields.value = (packet_start->mcast_params[eth_chan_directions::WEST] - 1) << 16;
-                        // north/south hop counts will be cleared when making trunk->branch trun.
+                        // north/south hop counts will be cleared when making turnk->branch turn.
                         forward_payload_to_downstream_edm<enable_ring_support, false, false>(
                             packet_start,
                             payload_size_bytes,
@@ -2216,11 +2216,11 @@ void kernel_main() {
     auto remote_receiver_channels = tt::tt_fabric::EthChannelBuffers<REMOTE_RECEIVER_NUM_BUFFERS_ARRAY>::make(
         std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
 
-    // create the local receiver channnel buffers with input array of number of buffers
+    // create the local receiver channel buffers with input array of number of buffers
     auto local_receiver_channels = tt::tt_fabric::EthChannelBuffers<RECEIVER_NUM_BUFFERS_ARRAY>::make(
         std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
 
-    // create the sender channnel buffers with input array of number of buffers
+    // create the sender channel buffers with input array of number of buffers
     auto local_sender_channels = tt::tt_fabric::EthChannelBuffers<SENDER_NUM_BUFFERS_ARRAY>::make(
         std::make_index_sequence<NUM_SENDER_CHANNELS>{});
 
@@ -2254,7 +2254,7 @@ void kernel_main() {
             local_sender_connection_info_addresses[i]);
         connection_worker_info_ptr->edm_read_counter = 0;
     }
-    // create the sender channnel worker interfaces with input array of number of buffers
+    // create the sender channel worker interfaces with input array of number of buffers
     auto local_sender_channel_worker_interfaces =
         tt::tt_fabric::EdmChannelWorkerInterfaces<SENDER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_SENDER_CHANNELS>{});

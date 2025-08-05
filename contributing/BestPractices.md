@@ -360,13 +360,13 @@ void doSomething(...) {
 Avoid using `static` variables with non-trivial destructors. When applicable, use `tt::stl::Indestructible<T>` to create static objects with disabled destructor.
 
 ### Explanation
-Objects with static storage duration (globals, static class members, or function-local statics) live from initialization until program termination.
+Objects with static storage duration (globals, static class members, or function-local statistics) live from initialization until program termination.
 
 A non-trivial destructor (i.e., one that is user-defined or virtual) may depend on the state of other objects, which might have already been destroyed by the time it is invoked. This can lead to undefined behavior or subtle bugs, especially in the multi-threaded environments.
 
 An object is considered trivially destructible if it has no custom or virtual destructor and all its bases and non-static members are also trivially destructible. Examples include: fundamental types (pointers, int, float, etc.), arrays of trivially destructible types, variables marked with `constexpr`.
 
-To ensure safe and predictable program termination, static objects should meet these criteria. If dynamic initialization is required, consider using function-local statics with `tt::stl::Indestructible<T>` that disables destruction.
+To ensure safe and predictable program termination, static objects should meet these criteria. If dynamic initialization is required, consider using function-local statistics with `tt::stl::Indestructible<T>` that disables destruction.
 
 ### Motivation
 - **Safety:** Prevents accessing objects after they have been destroyed.
@@ -393,7 +393,7 @@ constexpr uint32_t kMaxNumberOfCommandQueues = 2;
 // Using array of trivially destructible types is OK.
 constexpr std::array<int, 3> kDeviceIds = {1, 2, 8};
 
-// Option 2: If dynamic initialization is required, use function-local statics with `Indestructible`.
+// Option 2: If dynamic initialization is required, use function-local statistics with `Indestructible`.
 const auto& get_device_configs() {
     static tt::stl::Indestructible<std::map<int, std::string_view>> configs{
         std::map<int, std::string_view>{
