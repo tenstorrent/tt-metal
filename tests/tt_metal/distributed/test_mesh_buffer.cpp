@@ -474,7 +474,7 @@ TEST_F(MeshBufferTestSuite, DistributedHostBufferReadWriteWithFloat32ToBfloat16C
     }
 }
 
-TEST_F(MeshBufferTestSuite, ShardingTestithFloat32ToBfloat16Conversion) {
+TEST_F(MeshBufferTestSuite, ShardingTestWithFloat32ToBfloat16Conversion) {
     std::array<uint32_t, 2> num_pages_per_core = {1, 1};
     std::array<uint32_t, 2> page_shape = {1, 1024};
     auto shard_strategy = TensorMemoryLayout::HEIGHT_SHARDED;

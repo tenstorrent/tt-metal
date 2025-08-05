@@ -455,7 +455,7 @@ InterleavedBufferWriteDispatchParamsVariant initialize_interleaved_buf_dispatch_
 // Copy with conversion between data formats.
 static void copy_with_conversion(
     const void* src,
-    size_t src_offset,  // Offset in destination data format bytes.
+    size_t src_offset,  // Offset in units of destination data format bytes.
     tt::DataFormat src_data_format,
     void* dst,
     tt::DataFormat data_format,
@@ -464,8 +464,10 @@ static void copy_with_conversion(
         std::memcpy(dst, (const char*)src + src_offset, dst_bytes);
     } else {
         if (src_data_format == tt::DataFormat::Float32 && data_format == tt::DataFormat::Float16_b) {
-            TT_ASSERT(src_offset % 2 == 0, "src_offset must be even");
-            const float* src_float = (const float*)((const char*)src + src_offset * 2);
+            constexpr uint32_t src_dst_ratio = sizeof(float) / sizeof(uint16_t);
+            TT_ASSERT(src_offset % sizeof(uint16_t) == 0, "src_offset must be a multiple of sizeof(uint16_t)");
+
+            const float* src_float = reinterpret_cast<const float*>(reinterpret_cast<const char*>(src) + src_offset * src_dst_ratio);
             uint16_t* dst_uint16 = (uint16_t*)dst;
             for (size_t i = 0; i < dst_bytes / 2; i++) {
                 dst_uint16[i] = bfloat16(src_float[i]).to_packed();
