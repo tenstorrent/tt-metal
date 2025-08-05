@@ -517,7 +517,7 @@
 #define DISABLE_DEST_READY_TABLE (DEBUG_STATUS_STREAM_ID_SEL + DEBUG_STATUS_STREAM_ID_SEL_WIDTH)
 #define DISABLE_DEST_READY_TABLE_WIDTH 1
 
-// Debugging: Non-zero value indicates an invalid stream operation occured.
+// Debugging: Non-zero value indicates an invalid stream operation occurred.
 // Sticky, write 1 to clear.
 #define STREAM_DEBUG_ASSERTIONS_REG_INDEX 46
 

@@ -872,7 +872,7 @@ extern "C" {
 #define DISABLE_GLOBAL_OFFSET_TABLE (DISABLE_DEST_READY_TABLE + DISABLE_DEST_READY_TABLE_WIDTH)
 #define DISABLE_GLOBAL_OFFSET_TABLE_WIDTH 1
 
-// Debugging: Non-zero value indicates an invalid stream operation occured.
+// Debugging: Non-zero value indicates an invalid stream operation occurred.
 // Sticky, write 1 to clear.
 #define STREAM_DEBUG_ASSERTIONS_REG_INDEX 500
 

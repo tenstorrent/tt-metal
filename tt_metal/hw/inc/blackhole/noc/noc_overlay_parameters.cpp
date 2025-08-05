@@ -1258,7 +1258,7 @@ const std::vector<OverlayReg> OLP::registers = {
      {std::unordered_map<std::string, std::uint32_t>()},
      {std::unordered_map<std::uint32_t, std::uint32_t>()},
      {std::vector<OverlayField>()},
-     "// Debugging: Non-zero value indicates an invalid stream operation occured.\n// Sticky, write 1 to clear.\n"},
+     "// Debugging: Non-zero value indicates an invalid stream operation occurred.\n// Sticky, write 1 to clear.\n"},
     {"STREAM_DEBUG_STATUS",
      501,
      {std::unordered_map<std::string, std::uint32_t>()},
