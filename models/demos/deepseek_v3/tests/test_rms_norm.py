@@ -65,7 +65,6 @@ def test_forward_pass(
 
     # Get the reference inputs and outputs
     if reference_layernorm_path is None:
-        torch.set_default_dtype(torch.bfloat16)
         reference_model = DeepseekV3RMSNorm(
             hidden_size=hidden_size,
             eps=hf_config.rms_norm_eps,
@@ -95,7 +94,7 @@ def test_forward_pass(
         shard_core_grid = ttnn.CoreGrid(x=4, y=7)
         memory_config = ttnn.create_sharded_memory_config(
             shape=(
-                ttnn.core.roundup(even_int_div(seq_len, num_module_layers), ttnn.TILE_SIZE),
+                ttnn.core.roundup(seq_len, ttnn.TILE_SIZE),
                 ttnn.core.roundup(
                     even_int_div(hidden_size, shard_core_grid.num_cores * mesh_device.shape[1]),
                     ttnn.TILE_SIZE,

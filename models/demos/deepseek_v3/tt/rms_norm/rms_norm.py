@@ -31,7 +31,7 @@ class RMSNorm(RMSNormBase):
     ) -> WeightConfig:
         assert mesh_device.shape[0] > 0, "RMSNorm does not support 0D devices"
 
-        torch_metaweight = get_state_dicts(state_dicts, "weight", dtype=torch.bfloat16)
+        torch_metaweight = get_state_dicts(state_dicts, "weight", dtype=torch.float32)
         num_shards = torch_metaweight.shape[0]
         assert num_shards == mesh_device.shape[0], "Number of state dicts does not match the number of rows."
 
