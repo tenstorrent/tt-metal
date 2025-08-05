@@ -960,21 +960,21 @@ class TtQwenModelArgs(TtModelArgs):
 
             # Use padded K and N
             self.model_config["W1W3_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
-                k=self.dim // 4,
-                n=3840,
+                k=1280,
+                n=3200,
             )
 
             # Use padded K and N
             self.model_config["W2_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
                 # k=3584,
                 k=3200,
-                n=self.dim_padded_24_cores // 4,
+                n=6144 // 4,
             )
 
             self.model_config["FF1_3_TG_RING_PROGCFG"] = self.matmul_1d_ring_config(
                 1,
                 32,
-                self.dim // 4,
+                5120 // 4,
                 3840,  # Use padded N
                 RING_SIZE,
             )
@@ -984,12 +984,12 @@ class TtQwenModelArgs(TtModelArgs):
                 32,
                 # 3584,
                 3200,
-                self.dim_padded_24_cores // 4,  # Use padded N
+                6144 // 4,  # Use padded N
                 RING_SIZE,
             )
 
             self.model_config["SHARDED_FF12_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, self.dim_padded_24_cores // 4 // RING_SIZE),  # Use padded N
+                shape=(32, 6144 // 4 // RING_SIZE),  # Use padded N
                 core_grid=ring_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1034,7 +1034,7 @@ class TtQwenModelArgs(TtModelArgs):
             )
 
             self.model_config["FF2_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, self.dim_padded_24_cores // 4 // RING_SIZE),  # Use padded N
+                shape=(32, 6144 // 4 // RING_SIZE),  # Use padded N
                 core_grid=pf_mm_out_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1294,7 +1294,8 @@ class TtQwenModelArgs(TtModelArgs):
                 ]
             )
             self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"] = ttnn.create_sharded_memory_config(
-                shape=(32, 512),
+                # shape=(32, 512),
+                shape=(32, 320),
                 core_grid=PACKET_WORKER_CRS,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,

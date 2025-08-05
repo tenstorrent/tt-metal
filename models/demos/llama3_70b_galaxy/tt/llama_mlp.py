@@ -6,6 +6,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
+from loguru import logger
 
 
 def pad_to_next_multiple(tensor):
@@ -120,6 +121,10 @@ class TtLlamaMLP(LightweightModule):
         pc_1_3 = self.model_config["FF1_3_TG_RING_PROGCFG"]
         pc_2 = self.model_config["FF2_TG_RING_PROGCFG"]
 
+        logger.info(f"x: {x}")
+        logger.info(f"w1: {self.w1}")
+        logger.info(f"w3: {self.w3}")
+
         w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
             x,
             self.w1,
@@ -138,6 +143,10 @@ class TtLlamaMLP(LightweightModule):
             use_noc1_only=False,
         )
         ttnn.deallocate(x)
+
+        logger.info(f"w1_out_reduced: {w1_out_reduced}")
+        logger.info(f"w3_out: {w3_out}")
+
         w3_out_reduced = self.tt_ccl.line_reduce_scatter(
             w3_out,
             cluster_axis=1,
@@ -146,7 +155,7 @@ class TtLlamaMLP(LightweightModule):
             use_noc1_only=False,
         )
         ttnn.deallocate(w3_out)
-
+        logger.info(f"w3_out_reduced: {w3_out_reduced}")
         ff1ff3 = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
@@ -154,6 +163,8 @@ class TtLlamaMLP(LightweightModule):
             dtype=ttnn.bfloat8_b,
             memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
         )
+
+        logger.info(f"ff1ff3: {ff1ff3}")
 
         # print("eltwise mul", w2_in)
 
@@ -169,9 +180,11 @@ class TtLlamaMLP(LightweightModule):
             buffer_key="BINARY_MUL",
             use_optimal_ccl_for_llama=False if mode == "prefill" else True,
         )
+
+        logger.info(f"w2_in: {w2_in}")
         ttnn.deallocate(ff1ff3)
 
-        w2_out = ttnn.linear(  # This ends up being [1, 1, 1, 3200], but should be [1, 1, 32, 3200]
+        w2_out = ttnn.linear(
             w2_in,
             self.w2,  # [1, 1, 3200, 1280]
             compute_kernel_config=self.args.compute_kernel_config_hifi2,
@@ -183,14 +196,16 @@ class TtLlamaMLP(LightweightModule):
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
 
-        w2_out_reduced = self.tt_ccl.line_all_reduce(  # This is [1, 1, 1, 1280] but should be [1, 1, 32, 1280]
+        logger.info(f"w2_out: {w2_out}")
+
+        w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,
             cluster_axis=0,
             num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             use_optimal_ccl_for_llama=True,
         )
-        breakpoint()
+        logger.info(f"w2_out_reduced: {w2_out_reduced}")
         ttnn.deallocate(w2_out)
 
         return w2_out_reduced
@@ -271,6 +286,7 @@ class TtLlamaMLP(LightweightModule):
             w2_out, cluster_axis=0, num_links=3, memory_config=ttnn.DRAM_MEMORY_CONFIG, buffer_key="FF2"
         )
         ttnn.deallocate(w2_out)
+
         if 1024 <= seq_len < 4096:
             original_shape = w2_out_reduced.shape
             w2_out_reduced = ttnn.reshape(
