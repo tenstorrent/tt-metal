@@ -17,7 +17,12 @@ using namespace ttnn::operations::ccl::common;
 
 namespace detail {
 
-template <uint32_t SourceChipId, uint32_t TokensPerDevice, uint32_t MeshRows, uint32_t MeshCols, ReplicateGroup Axis>
+template <
+    uint32_t LinearizedMeshCoord,
+    uint32_t TokensPerDevice,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    ReplicateGroup Axis>
 inline uint32_t get_device_idx_from_global_token_idx(const uint32_t t) {
     constexpr uint32_t Replicate_Group = (Axis == ReplicateGroup::NONE)   ? MeshRows * MeshCols
                                          : (Axis == ReplicateGroup::COLS) ? MeshRows
@@ -27,9 +32,9 @@ inline uint32_t get_device_idx_from_global_token_idx(const uint32_t t) {
     if constexpr (Axis == ReplicateGroup::NONE) {
         return device_in_group;
     } else if (Axis == ReplicateGroup::ROWS) {
-        return (SourceChipId / MeshCols) * MeshCols + device_in_group;
+        return (LinearizedMeshCoord / MeshCols) * MeshCols + device_in_group;
     } else {
-        return device_in_group * MeshCols + SourceChipId % MeshCols;
+        return device_in_group * MeshCols + LinearizedMeshCoord % MeshCols;
     }
 }
 
