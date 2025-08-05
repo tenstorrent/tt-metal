@@ -149,6 +149,7 @@ def run_all_gather_impl(
         [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)] for _ in range(num_iters)
     ]
 
+    logger.info(f"num_devices: {num_devices}")
     logger.info(f"Output shape: {output_shape}")
     logger.info(f"dim: {dim}")
     logger.info(f"input_shard_shape: {input_shard_shape}")
@@ -313,7 +314,7 @@ def run_all_gather_impl(
         # (4, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
-        (4, 1, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
+        (8, 1, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
@@ -344,6 +345,8 @@ def test_all_gather(
     num_iters,
     function_level_defaults,
 ):
+    ttnn.visualize_mesh_device(t3k_mesh_device)
+
     run_all_gather_impl(
         t3k_mesh_device,
         num_devices,
