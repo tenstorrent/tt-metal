@@ -104,6 +104,7 @@ enum class UnaryOpType {
     MINIMUM,
     TANHSHRINK,
     HARDSHRINK,
+    HARDTANH,
     HARDSIGMOID,
     HARDSWISH,
     WHERE_TSS,
