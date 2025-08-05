@@ -360,7 +360,7 @@ void doSomething(...) {
 Avoid using `static` variables with non-trivial destructors. When applicable, use `tt::stl::Indestructible<T>` to create static objects with disabled destructor.
 
 ### Explanation
-Objects with static storage duration (globals, static class members, or function-local statistics) live from initialization until program termination.
+Objects with static storage duration (globals, static class members, or function-local statics) live from initialization until program termination.
 
 A non-trivial destructor (i.e., one that is user-defined or virtual) may depend on the state of other objects, which might have already been destroyed by the time it is invoked. This can lead to undefined behavior or subtle bugs, especially in the multi-threaded environments.
 
