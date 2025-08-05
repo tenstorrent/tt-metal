@@ -126,7 +126,7 @@ void kernel_main() {
 
                 // figure out which device to send data to and routing
                 const auto dest_device_idx = detail::get_device_idx_from_global_token_idx<
-                    src_chip_id,
+                    linearized_mesh_coord,
                     tokens_per_device,
                     mesh_rows,
                     mesh_cols,

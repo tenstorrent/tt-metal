@@ -181,7 +181,8 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         input_is_dram,
         mapping_is_dram,
         metadata_is_dram,
-        operation_attributes.locally_reduced};
+        operation_attributes.locally_reduced,
+        common::get_linearized_index(mesh_coordinate, mesh_view)};
 
     const DataMovementConfig reader_config{
         .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1, .compile_args = reader_compile_time_args};
