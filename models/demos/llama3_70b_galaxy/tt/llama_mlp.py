@@ -160,8 +160,6 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
 
-        breakpoint()
-
         w2_in = self.tt_ccl.line_all_gather(
             ff1ff3,
             dim=3,
@@ -172,6 +170,8 @@ class TtLlamaMLP(LightweightModule):
             use_optimal_ccl_for_llama=False if mode == "prefill" else True,
         )
         ttnn.deallocate(ff1ff3)
+
+        breakpoint()
 
         w2_out = ttnn.linear(
             w2_in,
