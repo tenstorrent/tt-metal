@@ -63,5 +63,3 @@ RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
 RUN mkdir -p /etc && \
     echo "[global]\nextra-index-url = https://download.pytorch.org/whl/cpu" > /etc/pip.conf
 
-COPY ./build/default/tt-nn_*.deb .
-COPY ./build/default/tt-nn-validation_*.deb
