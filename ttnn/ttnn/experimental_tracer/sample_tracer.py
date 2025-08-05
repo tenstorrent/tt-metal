@@ -9,10 +9,18 @@ from generate_pytorch_unittest_graph import (
     ConvolutionUnittest,
     AddmUnittest,
     Maxpool2dUnittest,
+    AddTensorUnittest,
+    MulTensorUnittest,
+    CatUnittest,
+    BmmUnittest,
     AddmCombiner,
     PytorchLayerUnitTestGraphConfig,
     ConvolutionCombiner,
     Maxpool2dCombiner,
+    AddTensorCombiner,
+    MulTensorCombiner,
+    CatCombiner,
+    BmmCombiner,
 )
 from generate_pytorch_graph import PytorchGraph
 from generate_pytorch_excel_graph import PytorchExcelGraph

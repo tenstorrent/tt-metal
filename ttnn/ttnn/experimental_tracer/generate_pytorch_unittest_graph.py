@@ -4,7 +4,17 @@
 
 import networkx as nx
 from tracer_backend import OperationGraph, Operation
-from tracer_backend_utils import ConvAttrs, PoolAttrs, AtenConvolution, AtenAddm, AtenMaxPool2dWithIndices
+from tracer_backend_utils import (
+    ConvAttrs,
+    PoolAttrs,
+    AtenConvolution,
+    AtenAddm,
+    AtenMaxPool2dWithIndices,
+    AtenAddTensor,
+    AtenMulTensor,
+    AtenCat,
+    AtenBmm,
+)
 from typing import List, Optional, Type, Dict, Any
 from dataclasses import dataclass
 from pytorch_graph_utils import format_file_with_black
@@ -84,6 +94,81 @@ class Maxpool2dUnittest(UnitTestOperation):
     def generate_code(self, indent="") -> str:
         """Generate the code for this convolution unit test operation."""
         group_unit_test = Maxpool2dGroupUnittest([self.attrs])
+        return group_unit_test.generate_code()
+
+
+class AddTensorUnittest(UnitTestOperation):
+    def __init__(self, input_shapes: Optional[Dict[int, Any]]):
+        self.input_shapes = input_shapes
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["AddTensorUnittest"]:
+        if operation.function_call_name == "torch.ops.aten.add.Tensor":
+            add_tensor = operation.to_operation(AtenAddTensor)
+            return AddTensorUnittest(add_tensor.input_shapes)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this add tensor unit test operation."""
+        group_unit_test = AddTensorGroupUnittest([self.input_shapes])
+        return group_unit_test.generate_code()
+
+
+class MulTensorUnittest(UnitTestOperation):
+    def __init__(self, input_shapes: Optional[Dict[int, Any]]):
+        self.input_shapes = input_shapes
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["MulTensorUnittest"]:
+        if operation.function_call_name == "torch.ops.aten.mul.Tensor":
+            mul_tensor = operation.to_operation(AtenMulTensor)
+            return MulTensorUnittest(mul_tensor.input_shapes)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this mul tensor unit test operation."""
+        group_unit_test = MulTensorGroupUnittest([self.input_shapes])
+        return group_unit_test.generate_code()
+
+
+class CatUnittest(UnitTestOperation):
+    def __init__(self, input_shapes: Optional[Dict[int, Any]], dim: Optional[int] = None):
+        self.input_shapes = input_shapes
+        self.dim = dim
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["CatUnittest"]:
+        if operation.function_call_name == "torch.ops.aten.cat":
+            cat_op = operation.to_operation(AtenCat)
+            # Extract dimension from args if available
+            dim = cat_op.args[1] if len(cat_op.args) > 1 else None
+            return CatUnittest(cat_op.input_shapes, dim)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this cat unit test operation."""
+        group_unit_test = CatGroupUnittest([{"input_shapes": self.input_shapes, "dim": self.dim}])
+        return group_unit_test.generate_code()
+
+
+class BmmUnittest(UnitTestOperation):
+    def __init__(self, input_shapes: Optional[Dict[int, Any]]):
+        self.input_shapes = input_shapes
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    @staticmethod
+    def parse_from_operation(operation: Operation) -> Optional["BmmUnittest"]:
+        if operation.function_call_name == "torch.ops.aten.bmm":
+            bmm_op = operation.to_operation(AtenBmm)
+            return BmmUnittest(bmm_op.input_shapes)
+        return None
+
+    def generate_code(self, indent="") -> str:
+        """Generate the code for this bmm unit test operation."""
+        group_unit_test = BmmGroupUnittest([self.input_shapes])
         return group_unit_test.generate_code()
 
 
@@ -292,6 +377,213 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
 """
 
 
+class AddTensorGroupUnittest(UnitTestOperation):
+    def __init__(self, input_shapes_list: List[Optional[Dict[int, Any]]]):
+        self.input_shape_list = [shapes for shapes in input_shapes_list if shapes is not None]
+        self.input_shape_list = [shapes for shapes in self.input_shape_list if len(shapes) >= 2]
+        self.input_shape_list = [
+            {k: list(v) for k, v in shapes.items() if isinstance(v, torch.Size)} for shapes in self.input_shape_list
+        ]
+        # Normalize shapes to ensure they have at least 4 dimensions for consistency
+        for shape in self.input_shape_list:
+            for key in [0, 1]:  # Process both input tensors
+                if key in shape:
+                    if len(shape[key]) == 1:
+                        shape[key] = [1, 1, 1] + shape[key]
+                    elif len(shape[key]) == 2:
+                        shape[key] = [1, 1] + shape[key]
+                    elif len(shape[key]) == 3:
+                        shape[key] = [1] + shape[key]
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this add tensor unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize(
+    "input_shape_a, input_shape_b",
+    (
+{''.join(f'        ({shape[0]}, {shape[1]}),' for shape in self.input_shape_list if 0 in shape and 1 in shape)}
+    )
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_add_tensor(device, input_shape_a, input_shape_b, dtype, layout):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
+
+    torch_input_tensor_a = torch.randn(input_shape_a, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn(input_shape_b, dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=layout, device=device, dtype=dtype)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=layout, device=device, dtype=dtype)
+    pcc = 0.94 if dtype == ttnn.bfloat8_b else 0.98
+
+    output_tensor = ttnn.add(input_tensor_a, input_tensor_b)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+"""
+
+
+class MulTensorGroupUnittest(UnitTestOperation):
+    def __init__(self, input_shapes_list: List[Optional[Dict[int, Any]]]):
+        self.input_shape_list = [shapes for shapes in input_shapes_list if shapes is not None]
+        self.input_shape_list = [shapes for shapes in self.input_shape_list if len(shapes) >= 2]
+        self.input_shape_list = [
+            {k: list(v) for k, v in shapes.items() if isinstance(v, torch.Size)} for shapes in self.input_shape_list
+        ]
+        # Normalize shapes to ensure they have at least 4 dimensions for consistency
+        for shape in self.input_shape_list:
+            for key in [0, 1]:  # Process both input tensors
+                if key in shape:
+                    if len(shape[key]) == 1:
+                        shape[key] = [1, 1, 1] + shape[key]
+                    elif len(shape[key]) == 2:
+                        shape[key] = [1, 1] + shape[key]
+                    elif len(shape[key]) == 3:
+                        shape[key] = [1] + shape[key]
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this mul tensor unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize(
+    "input_shape_a, input_shape_b",
+    (
+{''.join(f'        ({shape[0]}, {shape[1]}),' for shape in self.input_shape_list if 0 in shape and 1 in shape)}
+    )
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_mul_tensor(device, input_shape_a, input_shape_b, dtype, layout):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
+
+    torch_input_tensor_a = torch.randn(input_shape_a, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn(input_shape_b, dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor_a * torch_input_tensor_b
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=layout, device=device, dtype=dtype)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=layout, device=device, dtype=dtype)
+    pcc = 0.94 if dtype == ttnn.bfloat8_b else 0.98
+
+    output_tensor = ttnn.multiply(input_tensor_a, input_tensor_b)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+"""
+
+
+class CatGroupUnittest(UnitTestOperation):
+    def __init__(self, cat_ops_list: List[Dict[str, Any]]):
+        self.cat_ops_list = [op for op in cat_ops_list if op is not None and "input_shapes" in op]
+        # Process input shapes for cat operations
+        processed_ops = []
+        for op in self.cat_ops_list:
+            input_shapes = op["input_shapes"]
+            if input_shapes and len(input_shapes) >= 2:
+                # Convert torch.Size to list for all inputs
+                processed_shapes = {}
+                for k, v in input_shapes.items():
+                    if isinstance(v, torch.Size):
+                        processed_shapes[k] = list(v)
+                        # Normalize to 4D
+                        if len(processed_shapes[k]) == 1:
+                            processed_shapes[k] = [1, 1, 1] + processed_shapes[k]
+                        elif len(processed_shapes[k]) == 2:
+                            processed_shapes[k] = [1, 1] + processed_shapes[k]
+                        elif len(processed_shapes[k]) == 3:
+                            processed_shapes[k] = [1] + processed_shapes[k]
+                processed_ops.append({"input_shapes": processed_shapes, "dim": op.get("dim", -1)})
+        self.cat_ops_list = processed_ops
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this cat unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize(
+    "tensor_shapes, cat_dim",
+    (
+{''.join(f'        ([{op["input_shapes"][0]}, {op["input_shapes"][1]}], {op["dim"]}),' for op in self.cat_ops_list if 0 in op["input_shapes"] and 1 in op["input_shapes"])}
+    )
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
+def test_cat(device, tensor_shapes, cat_dim, dtype, layout):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
+
+    torch_input_tensors = [torch.randn(shape, dtype=torch.bfloat16) for shape in tensor_shapes]
+    torch_output_tensor = torch.cat(torch_input_tensors, dim=cat_dim)
+
+    input_tensors = [
+        ttnn.from_torch(torch_tensor, layout=layout, device=device, dtype=dtype)
+        for torch_tensor in torch_input_tensors
+    ]
+
+    output_tensor = ttnn.concat(input_tensors, dim=cat_dim)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    pcc = 0.94 if dtype == ttnn.bfloat8_b else 0.98
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+"""
+
+
+class BmmGroupUnittest(UnitTestOperation):
+    def __init__(self, input_shapes_list: List[Optional[Dict[int, Any]]]):
+        self.input_shape_list = [shapes for shapes in input_shapes_list if shapes is not None]
+        self.input_shape_list = [shapes for shapes in self.input_shape_list if len(shapes) >= 2]
+        self.input_shape_list = [
+            {k: list(v) for k, v in shapes.items() if isinstance(v, torch.Size)} for shapes in self.input_shape_list
+        ]
+        # Ensure shapes are 3D for BMM (batch matrix multiplication)
+        for shape in self.input_shape_list:
+            for key in [0, 1]:
+                if key in shape:
+                    if len(shape[key]) == 2:
+                        shape[key] = [1] + shape[key]  # Add batch dimension
+                    elif len(shape[key]) > 3:
+                        shape[key] = shape[key][-3:]  # Take last 3 dimensions
+        HEADER_IMPORTS.add("from tests.ttnn.utils_for_testing import assert_with_pcc")
+
+    def generate_code(self) -> str:
+        """Generate the code for this bmm unit test operation."""
+        return f"""
+
+@pytest.mark.parametrize(
+    "input_shape_a, input_shape_b",
+    (
+{''.join(f'        ({shape[0]}, {shape[1]}),' for shape in self.input_shape_list if 0 in shape and 1 in shape)}
+    )
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
+def test_bmm(device, input_shape_a, input_shape_b, dtype):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip("Issue #6984: Compute Grid size too small")
+
+    torch_input_tensor_a = torch.randn(input_shape_a, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn(input_shape_b, dtype=torch.bfloat16)
+    torch_output_tensor = torch.bmm(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
+
+    output_tensor = ttnn.matmul(input_tensor_a, input_tensor_b)
+
+    output_tensor = ttnn.to_torch(output_tensor)
+    pcc = 0.94 if dtype == ttnn.bfloat8_b else 0.98
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+"""
+
+
 class UnitTestOperationCombiner:
     @staticmethod
     def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
@@ -333,6 +625,58 @@ class Maxpool2dCombiner(UnitTestOperationCombiner):
         # Assuming all operations are ConvolutionUnittest
         combined_attrs = [pool.attrs for pool in operations if isinstance(pool, Maxpool2dUnittest)]
         return Maxpool2dGroupUnittest(combined_attrs)
+
+
+class AddTensorCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple add tensor operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_shapes = [
+            add_tensor.input_shapes for add_tensor in operations if isinstance(add_tensor, AddTensorUnittest)
+        ]
+        return AddTensorGroupUnittest(combined_shapes)
+
+
+class MulTensorCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple mul tensor operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_shapes = [
+            mul_tensor.input_shapes for mul_tensor in operations if isinstance(mul_tensor, MulTensorUnittest)
+        ]
+        return MulTensorGroupUnittest(combined_shapes)
+
+
+class CatCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple cat operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_ops = [
+            {"input_shapes": cat_op.input_shapes, "dim": cat_op.dim}
+            for cat_op in operations
+            if isinstance(cat_op, CatUnittest)
+        ]
+        return CatGroupUnittest(combined_ops)
+
+
+class BmmCombiner(UnitTestOperationCombiner):
+    @staticmethod
+    def combine(operations: List[UnitTestOperation]) -> UnitTestOperation:
+        """Combine multiple bmm operations into a single one."""
+        if not operations:
+            raise ValueError("No operations to combine.")
+
+        combined_shapes = [bmm_op.input_shapes for bmm_op in operations if isinstance(bmm_op, BmmUnittest)]
+        return BmmGroupUnittest(combined_shapes)
 
 
 class UnitTestCombiner:
@@ -378,12 +722,24 @@ class PytorchLayerUnitTestGraphConfig:
 
     def __post_init__(self):
         if self.register_unit_test_operations is None:
-            self.register_unit_test_operations = [ConvolutionUnittest, AddmUnittest, Maxpool2dUnittest]
+            self.register_unit_test_operations = [
+                ConvolutionUnittest,
+                AddmUnittest,
+                Maxpool2dUnittest,
+                AddTensorUnittest,
+                MulTensorUnittest,
+                CatUnittest,
+                BmmUnittest,
+            ]
         if self.group_unit_test_operations is None:
             self.group_unit_test_operations = {
                 ConvolutionUnittest: ConvolutionCombiner,
                 AddmUnittest: AddmCombiner,
                 Maxpool2dUnittest: Maxpool2dCombiner,
+                AddTensorUnittest: AddTensorCombiner,
+                MulTensorUnittest: MulTensorCombiner,
+                CatUnittest: CatCombiner,
+                BmmUnittest: BmmCombiner,
             }
 
 
