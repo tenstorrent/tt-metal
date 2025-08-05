@@ -204,7 +204,7 @@ def run_all_gather_impl(
             else:
                 tt_all_gather_out_tensor = ttnn.experimental.all_gather_async(
                     input_tensor_mesh_list[i],
-                    persistent_output_buffer=persistent_output_buffers[i],
+                    persistent_output_buffer=None if use_barrier else persistent_output_buffers[i],
                     dim=dim,
                     multi_device_global_semaphore=ccl_semaphore_handles[i],
                     num_links=num_links,
@@ -242,7 +242,7 @@ def run_all_gather_impl(
                 tt_all_gather_out_tensor, tt_matmul_out_tensor = ttnn.experimental.all_gather_matmul_async(
                     input_tensor_mesh_list[i],
                     weight_tt,
-                    persistent_output_buffer=persistent_output_buffers[i],
+                    persistent_output_buffer=None if use_barrier else persistent_output_buffers[i],
                     dim=dim,
                     multi_device_global_semaphore=ccl_semaphore_handles[i],
                     all_gather_core_grid_offset=(0, 6),
