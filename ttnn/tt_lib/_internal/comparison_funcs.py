@@ -71,7 +71,7 @@ def get_atol_rtol_pcc(golden, calculated):
             if golden.numel() == 1:
                 return float(torch.equal(golden, calculated))
 
-            # If both tensors are contant
+            # If both tensors are constant
             if torch.max(golden) == torch.min(golden) and torch.max(calculated) == torch.min(calculated):
                 return torch.isclose(torch.max(golden), torch.max(calculated)).item()
 

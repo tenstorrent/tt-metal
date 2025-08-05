@@ -65,7 +65,7 @@ run_sentencebert_func() {
   pytest --disable-warnings models/demos/sentence_bert/demo/demo.py --timeout 600; fail+=$?
 
   #SentenceBERT eval
-  # comment out SentenceBERT eval from CI tests for now unitl dataset_evaluation test is available in CIv2 (issue: #25866)
+  # comment out SentenceBERT eval from CI tests for now until dataset_evaluation test is available in CIv2 (issue: #25866)
 
   #pytest --disable-warnings models/demos/sentence_bert/demo/dataset_evaluation.py--timeout 600; fail+=$?
 
@@ -101,7 +101,7 @@ run_llama3_func() {
 
 }
 
-## comment out ufld_v2 from CI tests for now unitl dataset_evaluation test failure is debugged.
+## comment out ufld_v2 from CI tests for now until dataset_evaluation test failure is debugged.
 run_ufld_v2_func() {
   #ufld_v2
   pytest -n auto models/demos/ufld_v2/demo/demo.py --timeout 600
@@ -292,7 +292,6 @@ run_yolov8s_world_perf() {
   pytest -n auto --disable-warnings models/demos/yolov8s_world/demo/demo.py --timeout 600
 
 }
-
 
 run_vanilla_unet_demo() {
  # vanilla_unet demo
