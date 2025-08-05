@@ -545,8 +545,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
     uint32_t last_ktile_w = input_tensor_a.logical_shape()[-1] % tt::constants::TILE_WIDTH;
     const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {src0_is_dram, src1_is_dram, last_ktile_w};
 
-    uint32_t dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    const KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(uint32_t)output_cb_index, dst_is_dram};
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(uint32_t)output_cb_index};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     log_info(tt::LogTest, "num_cores: {}, num_core_x: {}, num_core_y: {}", num_cores, num_cores_x, num_cores_y);
     KernelDescriptor::RuntimeArgs reader_rt_args_per_core(
