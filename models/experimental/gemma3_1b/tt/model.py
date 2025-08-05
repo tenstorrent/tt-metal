@@ -35,6 +35,7 @@ class Gemma3Transformer(LightweightModule):
         weight_cache_path,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        rope_setup_class=None,
     ):
         super().__init__()
         self.args = args
@@ -54,25 +55,23 @@ class Gemma3Transformer(LightweightModule):
             state_dict=state_dict,
             dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
         )
-
-        self.rope_setup = RotarySetup(
-            mesh_device,
-            args.max_batch_size,
-            args.head_dim,
-            args.max_seq_len,
-            args.rope_theta,
-            args.rope_scaling_factor,
-            args.orig_context_len,
+        ActualRopeSetupClass = rope_setup_class if rope_setup_class is not None else RotarySetup
+        self.rope_setup = ActualRopeSetupClass(
+            device=mesh_device,
+            batch_size=args.max_batch_size,
+            head_dim=args.head_dim,
+            max_seq_len=args.max_seq_len,
+            rope_theta=args.rope_theta,
+            rope_scaling=args.rope_scaling,
         )
 
-        self.rope_setup_local = RotarySetup(
-            mesh_device,
-            args.max_batch_size,
-            args.head_dim,
-            args.max_seq_len,
-            10000,  # Rope theta local
-            None,  # Rope Scaling Factor
-            args.orig_context_len,
+        self.rope_setup_local = ActualRopeSetupClass(
+            device=mesh_device,
+            batch_size=args.max_batch_size,
+            head_dim=args.head_dim,
+            max_seq_len=args.max_seq_len,
+            rope_theta=10000,  # Rope theta local
+            rope_scaling=None,  # Rope Scaling Factor
         )
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
@@ -139,9 +138,7 @@ class Gemma3Transformer(LightweightModule):
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         tokens_embd = self.embd(tokens)
-        tokens_embd = ttnn.multiply(
-            tokens_embd, self.embed_scale
-        )  # TODO In UT, Without Multiply we got passing with better PCC, Lets debug this in pipeline
+        tokens_embd = ttnn.multiply(tokens_embd, self.embed_scale)
 
         tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
