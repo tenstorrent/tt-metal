@@ -174,7 +174,7 @@ public:
     virtual void configure_fabric() = 0;
     virtual void init_fabric() = 0;
     // Puts device into reset
-    virtual bool close() = 0;
+    virtual void close() = 0;
 
     // Program cache interface. Syncrhonize with worker worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops

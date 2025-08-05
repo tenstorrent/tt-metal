@@ -467,11 +467,9 @@ bool Device::initialize(
     return true;
 }
 
-bool Device::close() {
+void Device::close() {
     log_trace(tt::LogMetal, "Closing device {}", this->id_);
-    if (not this->initialized_) {
-        TT_THROW("Cannot close device {} that has not been initialized!", this->id_);
-    }
+    TT_FATAL(this->initialized_, "Cannot close device {} that has not been initialized!", this->id_);
 
     this->disable_and_clear_program_cache();
     this->set_program_cache_misses_allowed(true);
@@ -485,8 +483,6 @@ bool Device::close() {
     this->command_queues_.clear();
     this->sysmem_manager_.reset();
     this->initialized_ = false;
-
-    return true;
 }
 
 Device::~Device() {

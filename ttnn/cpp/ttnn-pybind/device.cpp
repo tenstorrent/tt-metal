@@ -46,7 +46,7 @@ void ttnn_device(py::module& module) {
         py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE,
         py::return_value_policy::reference,
         R"doc(
-            Open a device with the given device_id. If the device is already open, return the existing device.
+            Open a device with the given device_id. If the device is already open, throws an exception.
 
             Keyword Args:
                 device_id (int): The device ID to open.

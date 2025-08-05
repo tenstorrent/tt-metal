@@ -998,7 +998,8 @@ IDevice* CreateDeviceMinimal(
 bool CloseDevice(IDevice* device) {
     ZoneScoped;
     auto device_id = device->id();
-    return tt::DevicePool::instance().close_device(device_id);
+    tt::DevicePool::instance().close_device(device_id);
+    return true;
 }
 
 Program CreateProgram() { return Program(); }
