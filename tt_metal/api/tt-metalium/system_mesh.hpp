@@ -40,8 +40,8 @@ public:
     // Returns the local shape of the system mesh; this is the local mesh shape in distributed context
     const MeshShape& local_shape() const;
 
-    // Wrapper structure with device IDs and fabric node IDs ordered in row-major order according to the requested
-    // `shape`.
+    // Wrapper structure with device IDs, fabric node IDs, and mesh shape ordered in row-major order according to the
+    // requested `shape`.
     struct MappedDevices {
         // Device ID is set for host-local devices only.
         std::vector<MaybeRemote<int>> device_ids;

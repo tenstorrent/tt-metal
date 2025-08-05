@@ -407,7 +407,7 @@ void py_module(py::module& module) {
 
     module.def(
         "open_mesh_device",
-        static_cast<std::shared_ptr<MeshDevice> (*)(
+        py::overload_cast<
             size_t,
             size_t,
             size_t,
@@ -415,7 +415,7 @@ void py_module(py::module& module) {
             const std::optional<MeshShape>&,
             const std::optional<MeshCoordinate>&,
             const std::vector<int>&,
-            size_t)>(&open_mesh_device),
+            size_t>(&open_mesh_device),
         py::kw_only(),
         py::arg("l1_small_size"),
         py::arg("trace_region_size"),
