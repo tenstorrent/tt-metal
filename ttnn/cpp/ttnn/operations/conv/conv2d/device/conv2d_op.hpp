@@ -380,15 +380,3 @@ conv_op_l1_usage calculate_L1_usage(
 }  // namespace operations::conv
 
 }  // namespace ttnn
-
-namespace optimized_conv_op_utils {
-using namespace tt;
-using namespace tt::tt_metal;
-
-std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(
-    const ttnn::Shape& conv_activation_shape,
-    const ttnn::operations::sliding_window::SlidingWindowConfig& sliding_window_config,
-    uint32_t num_cores_nhw,
-    uint32_t act_block_h_ntiles);
-
-}  // namespace optimized_conv_op_utils

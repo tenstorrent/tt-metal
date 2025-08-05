@@ -135,7 +135,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("queue_id") = DefaultQueueId});
     module.def(
         "prepare_conv_weights",
-        prepare_conv_weights<ttnn::MeshDevice>,
+        prepare_conv_weights,
         py::kw_only(),
         py::arg("weight_tensor"),
         py::arg("input_memory_config"),
@@ -161,7 +161,7 @@ void py_bind_conv2d(py::module& module) {
 
     module.def(
         "prepare_conv_bias",
-        prepare_conv_bias<ttnn::MeshDevice>,
+        prepare_conv_bias,
         py::kw_only(),
         py::arg("bias_tensor"),
         py::arg("input_memory_config"),
@@ -213,6 +213,7 @@ void py_bind_conv2d(py::module& module) {
            uint32_t output_height,
            uint32_t output_width,
            uint32_t output_channels,
+           uint32_t input_channels_alignment,
            const CoreCoord& compute_grid_size,
            tt::tt_metal::ShardOrientation block_shard_orientation,
            bool enable_channels_padding,
@@ -225,6 +226,7 @@ void py_bind_conv2d(py::module& module) {
                 output_height,
                 output_width,
                 output_channels,
+                input_channels_alignment,
                 compute_grid_size,
                 block_shard_orientation,
                 enable_channels_padding,
@@ -237,6 +239,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("output_height"),
         py::arg("output_width"),
         py::arg("output_channels"),
+        py::arg("input_channels_alignment"),
         py::arg("compute_grid_size"),
         py::arg("block_shard_orientation"),
         py::arg("enable_channels_padding"),
