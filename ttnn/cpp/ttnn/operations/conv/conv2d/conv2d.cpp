@@ -399,6 +399,8 @@ Result conv2d_DRAM(
                 output_dtype,
                 std::make_optional(input_tensor_on_device.memory_config()),
                 kernel_size,
+                dilation,
+                padding_n4,
                 groups,
                 bias_tensor.has_value(),
                 compute_config);
@@ -422,7 +424,7 @@ Result conv2d_DRAM(
                 ttnn::Shape({batch_size, input_slice_height, input_slice_width, in_channels}),
                 ttnn::Shape({batch_size, output_slice_height, output_slice_width, out_channels}),
                 mm_conv,
-                device,
+                compute_grid_size,
                 // Setting layout to TILE forces input_channels_alignment to 32.
                 //  The padded_slice op needs aligned reads from L1.
                 Layout::TILE));
@@ -587,6 +589,8 @@ Result conv2d_L1(
             tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
                                                          : std::nullopt,
             kernel_size,
+            dilation,
+            padding_n4,
             groups,
             bias_tensor.has_value(),
             compute_config);
