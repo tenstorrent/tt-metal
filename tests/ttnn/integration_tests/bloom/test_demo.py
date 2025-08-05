@@ -77,7 +77,7 @@ def test_demo_batch_7_qa(input_path, ttnn_model, model_location_generator, devic
         2: "The early 20th century.",
         3: "Yes. He was a",
         4: "Beyoncé is a family",
-        5: "The archbishop of Can't",
+        5: "The archbishop of Cant",
         6: "The city of the Holy",
     }
     NUM_RUNS = 5
