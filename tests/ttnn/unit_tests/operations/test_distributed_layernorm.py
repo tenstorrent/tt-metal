@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 
-from models.utility_functions import tt2torch_tensor, get_devices_for_t3000, skip_for_grayskull
+from models.utility_functions import tt2torch_tensor, skip_for_grayskull
 
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_allclose, comp_pcc
