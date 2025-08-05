@@ -72,7 +72,7 @@ TEST_F(DispatchFixture, TensixFailOnDuplicateKernelCreationCompute) {
                         .opt_level = KernelBuildOptLevel::O3});
                 auto test_kernel2 = tt_metal::CreateKernel(
                     program,
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/matmul.cpp",
+                    "tests/tt_metal/tt_metal/test_kernels/compute/matmul.cpp",
                     CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid.x, compute_grid.y)),
                     ComputeConfig{
                         .math_fidelity = MathFidelity::HiFi4,
@@ -103,7 +103,7 @@ TEST_F(DispatchFixture, TensixPassOnNormalKernelCreation) {
                     .opt_level = KernelBuildOptLevel::O3});
             auto test_kernel2 = tt_metal::CreateKernel(
                 program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/matmul.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/compute/matmul.cpp",
                 CoreCoord(0, 0),
                 ComputeConfig{
                     .math_fidelity = MathFidelity::HiFi4,
@@ -129,7 +129,7 @@ TEST_F(DispatchFixture, TensixPassOnMixedOverlapKernelCreation) {
                     .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
             auto test_kernel2 = tt_metal::CreateKernel(
                 program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/matmul.cpp",
+                "tests/tt_metal/tt_metal/test_kernels/compute/matmul.cpp",
                 CoreRange(CoreCoord(0, 0), CoreCoord(compute_grid.x, compute_grid.y)),
                 ComputeConfig{
                     .math_fidelity = MathFidelity::HiFi4,

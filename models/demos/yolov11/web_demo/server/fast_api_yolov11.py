@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import logging
-import os
 import time
 from io import BytesIO
 
@@ -12,7 +11,6 @@ from fastapi import FastAPI, File, UploadFile
 from PIL import Image
 
 import ttnn
-from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE
 from models.demos.yolov11.runner.performant_runner import YOLOv11PerformantRunner
 from models.experimental.yolo_common.yolo_web_demo.yolo_evaluation_utils import postprocess
 
@@ -34,39 +32,13 @@ logging.basicConfig(
 )
 
 
-def get_dispatch_core_config():
-    # TODO: 11059 move dispatch_core_type to device_params when all tests are updated to not use WH_ARCH_YAML env flag
-    dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
-    if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
-        dispatch_core_type = ttnn.device.DispatchCoreType.ETH
-    dispatch_core_axis = ttnn.DispatchCoreAxis.ROW
-    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
-
-    return dispatch_core_config
-
-
 @app.on_event("startup")
 async def startup():
     global model
-    if ("WH_ARCH_YAML" in os.environ) and os.environ["WH_ARCH_YAML"] == "wormhole_b0_80_arch_eth_dispatch.yaml":
-        print("WH_ARCH_YAML:", os.environ.get("WH_ARCH_YAML"))
-        device_id = 0
-        device = ttnn.CreateDevice(
-            device_id,
-            dispatch_core_config=get_dispatch_core_config(),
-            l1_small_size=YOLOV11_L1_SMALL_SIZE,
-            trace_region_size=6434816,
-            num_command_queues=2,
-        )
-        device.enable_program_cache()
-        model = YOLOv11PerformantRunner(device)
-    else:
-        device_id = 0
-        device = ttnn.CreateDevice(
-            device_id, l1_small_size=YOLOV11_L1_SMALL_SIZE, trace_region_size=3211264, num_command_queues=2
-        )
-        device.enable_program_cache()
-        model = YOLOv11PerformantRunner(device)
+    device_id = 0
+    device = ttnn.CreateDevice(device_id, l1_small_size=24576, trace_region_size=3211264, num_command_queues=2)
+    device.enable_program_cache()
+    model = YOLOv11PerformantRunner(device)
     model._capture_yolov11_trace_2cqs()
 
 

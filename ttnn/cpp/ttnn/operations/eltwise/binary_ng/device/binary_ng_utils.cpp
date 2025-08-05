@@ -4,6 +4,7 @@
 
 #include "binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/assert.hpp>
 
 #include <fmt/core.h>
@@ -136,6 +137,9 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
             return fmt::format(compute, root, is_sfpu ? "eltwise_binary_sfpu.cpp" : "eltwise_binary.cpp");
         case KernelName::ComputeScalar:
             return fmt::format(compute, root, is_sfpu ? "eltwise_binary_sfpu_scalar.cpp" : "eltwise_binary_scalar.cpp");
+        case KernelName::ComputeRowBcastNg:
+            return fmt::format(
+                compute, root_ng, is_sfpu ? "eltwise_binary_sfpu_row_bcast.cpp" : "eltwise_binary_row_bcast.cpp");
         default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
     }
 }
@@ -516,6 +520,12 @@ uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const
     }
     if (dtype == DataType::UINT32) {
         return std::bit_cast<uint32_t>(scalar);
+    }
+    // +-inf and nan, value must be truncated to make sure it's still special value in device code
+    if (scalar == tt::tt_metal::hal::get_inf() || scalar == -tt::tt_metal::hal::get_inf() ||
+        scalar == tt::tt_metal::hal::get_nan()) {
+        uint16_t bf16_bits = (*reinterpret_cast<const uint32_t*>(&scalar)) >> 16;
+        return pack_two_bfloat16_into_uint32({bf16_bits, bf16_bits});
     }
     return pack_two_bfloat16_into_uint32({scalar, scalar});
 }
