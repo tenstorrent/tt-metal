@@ -259,14 +259,6 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // reader
-
-    uint32_t src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    uint32_t stick_size = row_size_bytes;
-    uint32_t stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
-
-    // log2(TILE_WIDTH * data_format_size_in_bytes)
-
     uint32_t num_tiles_2d = output.padded_shape()[-1] * output.padded_shape()[-2] / TILE_HW;
 
     auto log_shape = output.logical_shape();
@@ -285,15 +277,15 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
         total_num_rows = output.padded_shape()[-2];
     }
 
-    std::map<std::string, std::string> reader_defines = {
-        {"STICK_SIZE_IS_POW2", std::to_string((uint32_t)(stick_size_is_power_of_two))}};
+    std::vector<uint32_t> reader_compile_time_args = {
+        total_num_rows, third_dim, tile_height, a.element_size(), row_size_bytes};
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
         "reader_unary_pad_multicore_both_dims.cpp",
         all_cores,
-        ReaderDataMovementConfig(
-            {src0_is_dram, log2_stick_size, total_num_rows, third_dim, tile_height, a.element_size()}, reader_defines));
+        ReaderDataMovementConfig(reader_compile_time_args));
 
     // writer
     uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
@@ -371,7 +363,6 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
         //  reader runtime args
         std::vector<uint32_t> reader_rt_args = {
             src0_buffer->address(),
-            row_size_bytes,
             0,
             TILE_WIDTH * a.element_size() * single_block_size_row_arg,
             start_row_id,
