@@ -40,7 +40,14 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const InterleavedCo
     IDevice* device = mesh_device->get_device(0);
 
     // Program
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     const size_t total_size_bytes = test_config.num_pages * test_config.page_size_bytes;
 
@@ -97,7 +104,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const InterleavedCo
         CircularBufferConfig l1_cb_config =
             CircularBufferConfig(total_size_bytes, {{l1_cb_index, test_config.l1_data_format}})
                 .set_page_size(l1_cb_index, test_config.page_size_bytes);
-        CreateCircularBuffer(program, test_config.cores, l1_cb_config);
+        CreateCircularBuffer(program_, test_config.cores, l1_cb_config);
     }
 
     uint32_t l1_addr = get_l1_address_and_size(mesh_device, corerange_to_cores(test_config.cores)[0]).base_address;
@@ -114,7 +121,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const InterleavedCo
     // Kernels
     if (test_config.read_kernel) {
         auto reader_kernel = CreateKernel(
-            program,
+            program_,
             "tests/tt_metal/tt_metal/data_movement/interleaved/kernels/interleaved_page_read.cpp",
             test_config.cores,
             DataMovementConfig{
@@ -123,12 +130,12 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const InterleavedCo
                 .compile_args = reader_compile_args});
 
         std::vector<uint32_t> reader_run_time_args = {input_buffer_address, l1_addr};
-        tt::tt_metal::SetRuntimeArgs(program, reader_kernel, test_config.cores, reader_run_time_args);
+        tt::tt_metal::SetRuntimeArgs(program_, reader_kernel, test_config.cores, reader_run_time_args);
     }
 
     if (test_config.write_kernel) {
         auto writer_kernel = CreateKernel(
-            program,
+            program_,
             "tests/tt_metal/tt_metal/data_movement/interleaved/kernels/interleaved_page_write.cpp",
             test_config.cores,
             DataMovementConfig{
@@ -137,7 +144,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const InterleavedCo
                 .compile_args = writer_compile_args});
 
         std::vector<uint32_t> writer_run_time_args = {output_buffer_address, l1_addr};
-        tt::tt_metal::SetRuntimeArgs(program, writer_kernel, test_config.cores, writer_run_time_args);
+        tt::tt_metal::SetRuntimeArgs(program_, writer_kernel, test_config.cores, writer_run_time_args);
     }
 
     // log_info(tt::LogTest, "Input buffer addr: {}, Output buffer addr: {}", input_buffer_address,
@@ -145,11 +152,10 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const InterleavedCo
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
-    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+    program_.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Launch program and record outputs
     vector<uint32_t> packed_output;
-
     if (test_config.read_kernel) {
         detail::WriteToBuffer(input_buffer, packed_input);
         if (test_config.is_dram) {
