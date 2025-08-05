@@ -5,6 +5,7 @@
 #include "where_device_operation.hpp"
 #include "where_utils.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include <cmath>
 
@@ -313,11 +314,13 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         program, get_kernel_file_path(kernel_config.reader_kernel), all_device_cores, reader_config);
 
     // WRITER KERNEL - Use kernel path from utils
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_tensor_cb};
+    tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         get_kernel_file_path(kernel_config.writer_kernel),
         all_device_cores,
-        tt_metal::WriterDataMovementConfig({output_tensor_cb, output_is_dram}));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     // COMPUTE KERNEL - Use kernel path from utils
     bool fp32_dest_acc_en = output_data_format == tt::DataFormat::UInt32 ||

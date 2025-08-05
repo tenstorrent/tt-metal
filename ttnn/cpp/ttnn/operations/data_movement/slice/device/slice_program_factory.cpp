@@ -891,11 +891,10 @@ operation::ProgramWithCallbacks slice_tile_multi_core(
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, num_dims};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-    std::vector<uint32_t> writer_compile_time_args = {
-        static_cast<uint32_t>(src0_cb_index), static_cast<uint32_t>(dst_is_dram)};
+    std::vector<uint32_t> writer_compile_time_args = {src0_cb_index};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
