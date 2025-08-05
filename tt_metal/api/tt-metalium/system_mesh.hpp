@@ -54,6 +54,8 @@ public:
     };
 
     // Returns devices that should be mapped to a MeshDevice according to the shape and offset.
+    // If `shape` is not provided, the system mesh global shape is used.
+    // If `offset` is not provided, an N-dimensional zero-coordinate is used (based on system mesh dims).
     MappedDevices get_mapped_devices(
         const std::optional<MeshShape>& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
 };
