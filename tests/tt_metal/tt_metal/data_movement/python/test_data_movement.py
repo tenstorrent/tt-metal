@@ -84,7 +84,7 @@ def profile_dm_tests(verbose=False, gtest_filter=None):
 
     os.system(cmd)
 
-    
+
 def test_data_movement(
     no_profile: bool,
     verbose_log: bool,
