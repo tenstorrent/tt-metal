@@ -40,7 +40,10 @@ Tensor convert_conv_weight_tensor_to_tiled_layout(
 // Converts convolution weights to tilized 2d matrix layout for block sharded conv. Adds zero padding between weight
 // blocks based on output shard width padding. Returns a new tensor with layout=Tile
 Tensor convert_conv_weight_tensor_to_tiled_layout_block_sharded(
-    const Tensor& conv_weight_tensor, uint32_t num_channel_shards, std::optional<DataType> output_dtype = std::nullopt);
+    const Tensor& conv_weight_tensor,
+    uint32_t num_channel_shards,
+    bool full_inner_dim,
+    std::optional<DataType> output_dtype = std::nullopt);
 
 // Converts convolution bias to tilized layout for block sharded conv. Adds zero padding between bias blocks based on
 // output shard width padding. Returns a new tensor with layout=Tile
@@ -122,6 +125,7 @@ struct Conv2dWeightsBiasPrepConfig {
         bool has_bias_ = false,
         bool parameters_on_device_ = true,
         bool enable_kernel_stride_folding_ = false,
+        bool full_inner_dim_ = false,
         std::array<uint32_t, 2> kernel_size_ = {1, 1},
         std::array<uint32_t, 2> stride_ = {1, 1},
         std::array<uint32_t, 4> padding_n4_ = {0, 0, 0, 0}) :
@@ -137,6 +141,7 @@ struct Conv2dWeightsBiasPrepConfig {
         has_bias(has_bias_),
         parameters_on_device(parameters_on_device_),
         enable_kernel_stride_folding(enable_kernel_stride_folding_),
+        full_inner_dim(full_inner_dim_),
         kernel_size(kernel_size_),
         stride(stride_),
         padding_n4(padding_n4_) {}
@@ -156,6 +161,7 @@ struct Conv2dWeightsBiasPrepConfig {
 
     // Kernel stride folding parameters
     const bool enable_kernel_stride_folding;
+    const bool full_inner_dim;
     const std::array<uint32_t, 2> kernel_size;
     const std::array<uint32_t, 2> stride;
     const std::array<uint32_t, 4> padding_n4;

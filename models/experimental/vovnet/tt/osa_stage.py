@@ -61,6 +61,7 @@ class TtOsaStage:
                 output_height=out_h,
                 output_width=out_w,
                 output_channels=C,
+                input_channels_alignment=32,
                 compute_grid_size=self.device.compute_with_storage_grid_size(),
                 block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 enable_channels_padding=False,
