@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::ccl::common {
 
-std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbors(
+std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>> get_neighbors(
     const ttnn::distributed::MeshDeviceView& mesh_view,
     const ttnn::distributed::MeshCoordinate& mesh_coordinate,
     tt::tt_fabric::Topology topology,
