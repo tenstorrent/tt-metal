@@ -30,7 +30,7 @@ void kernel_main() {
             for (uint32_t i = 0; i < num_of_transactions; i++) {
                 // Cycle through virtual channels 0 to (num_virtual_channels - 1)
                 uint32_t current_virtual_channel = i % num_virtual_channels;
-                noc_async_read(src_noc_addr, l1_local_addr, transaction_size_bytes, current_virtual_channel);
+                noc_async_read(src_noc_addr, l1_local_addr, transaction_size_bytes, noc_index, current_virtual_channel);
             }
         }
         noc_async_read_barrier();

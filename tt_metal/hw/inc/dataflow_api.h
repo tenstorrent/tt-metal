@@ -475,8 +475,8 @@ void noc_async_read_one_packet(
     uint64_t src_noc_addr,
     uint32_t dst_local_l1_addr,
     uint32_t size,
-    uint32_t read_req_vc = 1,
-    uint8_t noc = noc_index) {
+    uint8_t noc = noc_index,
+    uint32_t read_req_vc = 1) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -516,8 +516,8 @@ inline void noc_async_read(
     uint64_t src_noc_addr,
     uint32_t dst_local_l1_addr,
     uint32_t size,
-    uint32_t read_req_vc = 1,
-    uint8_t noc = noc_index) {
+    uint8_t noc = noc_index,
+    uint32_t read_req_vc = 1) {
     /*
         Read requests - use static VC
         Read responses - assigned VCs dynamically
@@ -525,7 +525,7 @@ inline void noc_async_read(
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::READ, src_noc_addr, size, -1);
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_read_one_packet(src_noc_addr, dst_local_l1_addr, size, read_req_vc, noc);
+        noc_async_read_one_packet(src_noc_addr, dst_local_l1_addr, size, noc, read_req_vc);
     } else {
         WAYPOINT("NARW");
         DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, src_noc_addr, dst_local_l1_addr, size);
@@ -692,8 +692,8 @@ void noc_async_write_one_packet(
     std::uint32_t src_local_l1_addr,
     std::uint64_t dst_noc_addr,
     std::uint32_t size,
-    uint32_t virtual_channel = 0,
-    uint8_t noc = noc_index) {
+    uint8_t noc = noc_index,
+    uint32_t virtual_channel = 0) {
     WAYPOINT("NWPW");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
@@ -736,11 +736,11 @@ void noc_async_write_one_packet(
 // clang-format on
 template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
 inline void noc_async_write(
-    uint32_t src_local_l1_addr, uint64_t dst_noc_addr, uint32_t size, uint32_t vc = 0, uint8_t noc = noc_index) {
+    uint32_t src_local_l1_addr, uint64_t dst_noc_addr, uint32_t size, uint8_t noc = noc_index, uint32_t vc = 0) {
     RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_, dst_noc_addr, size, NOC_UNICAST_WRITE_VC);
 
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
-        noc_async_write_one_packet(src_local_l1_addr, dst_noc_addr, size, vc, noc);
+        noc_async_write_one_packet(src_local_l1_addr, dst_noc_addr, size, noc, vc);
     } else {
         WAYPOINT("NAWW");
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);

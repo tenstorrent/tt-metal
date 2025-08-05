@@ -44,6 +44,7 @@ void kernel_main() {
                     subordinate_l1_noc_address,
                     master_l1_local_address,
                     bytes_per_transaction_per_subordinate,
+                    noc_index,
                     current_virtual_channel);
             }
         }
