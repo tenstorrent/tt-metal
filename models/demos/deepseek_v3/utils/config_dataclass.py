@@ -105,28 +105,28 @@ class AllReduceConfig(OpConfigBase):
 class AllGatherAsyncConfig(OpConfigBase):
     """Common parameters for a ttnn.experimental.all_gather_async op"""
 
-    mesh_device: ConfigDevice
-    cluster_axis: int
-    dim: int
+    mesh_device: ConfigDevice | None = None
+    cluster_axis: int | None = None
+    dim: int | None = None
     multi_device_global_semaphore: object | None = None
     num_links: int | None = None
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
-    topology: ttnn.Topology = ttnn.Topology.Linear
+    memory_config: ttnn.MemoryConfig | None = None
+    topology: ttnn.Topology | None = None
 
 
 @dataclass
 class ReduceScatterAsyncConfig(OpConfigBase):
     """Common parameters for a ttnn.experimental.reduce_scatter_async op"""
 
-    mesh_device: ConfigDevice
-    cluster_axis: int
-    dim: int
-    math_op: ttnn.ReduceType
+    mesh_device: ConfigDevice | None = None
+    cluster_axis: int | None = None
+    dim: int | None = None
     from_remote_multi_device_global_semaphore: object | None = None
     to_remote_multi_device_global_semaphore: object | None = None
+    math_op: ttnn.ReduceType | None = None
     num_links: int | None = None
-    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG
-    topology: ttnn.Topology = ttnn.Topology.Linear
+    memory_config: ttnn.MemoryConfig | None = None
+    topology: ttnn.Topology | None = None
 
 
 @dataclass
@@ -240,9 +240,9 @@ class AllToAllDispatchConfig(OpConfigBase):
     """Common parameters for a ttnn.all_to_all_dispatch op"""
 
     cluster_axis: int
-    num_links: int
     memory_config: ttnn.MemoryConfig
-    global_semaphore: object
+    num_links: int | None = None
+    global_semaphore: object | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
     subdevice_id: int | None = None
 
@@ -251,10 +251,10 @@ class AllToAllDispatchConfig(OpConfigBase):
 class AllToAllCombineConfig(OpConfigBase):
     """Common parameters for a ttnn.all_to_all_combine op"""
 
-    num_links: int
-    memory_config: ttnn.MemoryConfig
     axis: int
-    global_semaphore: object
+    memory_config: ttnn.MemoryConfig
+    num_links: int | None = None
+    global_semaphore: object | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
 
 

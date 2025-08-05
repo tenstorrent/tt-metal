@@ -29,6 +29,9 @@ namespace detail {
 // most ops just return a tensor
 inline Tensor extract_output_tensor(const Tensor& result) { return result; }
 
+// multi-output ops like sort
+inline Tensor extract_output_tensor(const std::vector<Tensor>& result) { return result[0]; }
+
 // conv2d output
 template <typename... Args1, typename... Args2>
 Tensor extract_output_tensor(const std::variant<

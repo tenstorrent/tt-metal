@@ -6,6 +6,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 using namespace tt;
@@ -97,8 +98,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)src0_is_dram, (uint32_t)src1_is_dram, (uint32_t)last_ktile_w};
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     auto reader_id = tt_metal::CreateKernel(
         program,
