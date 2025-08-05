@@ -192,10 +192,20 @@ def run_all_gather_impl(
     [
         (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [8, 1, 512, 512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 48, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=[
         "sd35_spatial",
         "sd35_prompt",
+        "gather_dim_0",
+        "gather_dim_1",
+        "gather_dim_2",
+        "gather_dim_2_padded_dim_3",
+        "gather_dim_3_padded_dim_2",
     ],
 )
 @pytest.mark.parametrize(
