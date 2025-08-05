@@ -175,9 +175,9 @@ def test_gather_long_tensor(input_shape, index_shape, dim, device):
 @pytest.mark.parametrize(
     "input_shape, index_shape, dim, runs",
     [
-        ([1, 1, 512, 64], [1, 1, 512, 32], -1, 3),
+        ([64, 64], [64, 32], -1, 10),
         ([1, 1, 32, 2048 * TILE_HEIGHT], [1, 1, 32, 2048 * TILE_HEIGHT], -1, 2),
-        ([1, 32, 1, 128], [1, 32, 1, 128], -1, 2),
+        ([32, 128], [32, 128], -1, 5),
     ],
 )
 def test_gather_cache_run(input_shape, index_shape, dim, runs, device):
