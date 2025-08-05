@@ -92,6 +92,7 @@ void kernel_main() {
 
     std::array<WorkerToFabricEdmSender, Num_Directions> fabric_connections;
     open_direction_connections(directions, fabric_connections, rt_arg_count);
+
     InterleavedAddrGen<output_is_dram> output_addrgen{
         .bank_base_address = output_base_addr, .page_size = data_size_bytes};
 
@@ -208,8 +209,10 @@ void kernel_main() {
             }
         }
     }
+
     close_direction_connections(directions, fabric_connections);
 
-    noc_semaphore_wait((uint32_t*)global_semaphore_addr, replicate_group_devices);
-    noc_semaphore_set((uint32_t*)global_semaphore_addr, 0);
+    auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
+    noc_semaphore_wait(semaphore_ptr, replicate_group_devices);
+    noc_semaphore_set(semaphore_ptr, 0);
 }
