@@ -19,7 +19,7 @@
 #include <cstdlib>
 #include <stdexcept>
 
-namespace ttsl::details::llvm {
+namespace ttsl::detail::llvm {
 
 inline void* safe_malloc(size_t Sz) {
     void* Result = std::malloc(Sz);
@@ -83,5 +83,5 @@ void* allocate_buffer(size_t Size, size_t Alignment);
 /// most likely using the above helper.
 void deallocate_buffer(void* Ptr, size_t Size, size_t Alignment);
 
-}  // namespace ttsl::details::llvm
+}  // namespace ttsl::detail::llvm
 #endif

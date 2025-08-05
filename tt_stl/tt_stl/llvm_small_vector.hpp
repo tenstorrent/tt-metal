@@ -28,7 +28,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace ttsl::details::llvm {
+namespace ttsl::detail::llvm {
 
 template <typename T>
 class ArrayRef;
@@ -258,7 +258,6 @@ public:
     iterator end() { return begin() + size(); }
     const_iterator end() const { return begin() + size(); }
 
-    // TODO: I recently added, need to test, probably we need to add real iterator
     const_iterator cbegin() const { return (const_iterator)this->BeginX; }
     const_iterator cend() const { return cbegin() + size(); }
 
@@ -268,7 +267,6 @@ public:
     reverse_iterator rend() { return reverse_iterator(begin()); }
     const_reverse_iterator rend() const { return const_reverse_iterator(begin()); }
 
-    // TODO: I recently added, need to test
     const_reverse_iterator crbegin() const { return const_reverse_iterator(cend()); }
     const_reverse_iterator crend() const { return const_reverse_iterator(cbegin()); }
 
@@ -518,9 +516,9 @@ protected:
 
     /// Reserve enough space to add one element, and return the updated element
     /// pointer in case it was a reference to the storage.
-    // const T* reserveForParamAndGetAddress(const T& Elt, size_t N = 1) {
-    //     return this->reserveForParamAndGetAddressImpl(this, Elt, N);
-    // }
+    const T* reserveForParamAndGetAddress(const T& Elt, size_t N = 1) {
+        return this->reserveForParamAndGetAddressImpl(this, Elt, N);
+    }
 
     /// Reserve enough space to add one element, and return the updated element
     /// pointer in case it was a reference to the storage.
@@ -1314,19 +1312,19 @@ extern template class llvm::SmallVectorBase<uint32_t>;
 extern template class llvm::SmallVectorBase<uint64_t>;
 #endif
 
-}  // namespace ttsl::details::llvm
+}  // namespace ttsl::detail::llvm
 
 namespace std {
 
 /// Implement std::swap in terms of SmallVector swap.
 template <typename T>
-inline void swap(ttsl::details::llvm::SmallVectorImpl<T>& LHS, ttsl::details::llvm::SmallVectorImpl<T>& RHS) {
+inline void swap(ttsl::detail::llvm::SmallVectorImpl<T>& LHS, ttsl::detail::llvm::SmallVectorImpl<T>& RHS) {
     LHS.swap(RHS);
 }
 
 /// Implement std::swap in terms of SmallVector swap.
 template <typename T, unsigned N>
-inline void swap(ttsl::details::llvm::SmallVector<T, N>& LHS, ttsl::details::llvm::SmallVector<T, N>& RHS) {
+inline void swap(ttsl::detail::llvm::SmallVector<T, N>& LHS, ttsl::detail::llvm::SmallVector<T, N>& RHS) {
     LHS.swap(RHS);
 }
 

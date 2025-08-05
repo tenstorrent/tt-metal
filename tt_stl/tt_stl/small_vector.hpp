@@ -13,8 +13,8 @@ namespace ttsl {
 static constexpr size_t SMALL_VECTOR_SIZE = 8;
 
 template <typename T, std::size_t PREALLOCATED_SIZE = SMALL_VECTOR_SIZE>
-struct SmallVector : public ttsl::details::llvm::SmallVector<T, PREALLOCATED_SIZE> {
-    using ttsl::details::llvm::SmallVector<T, PREALLOCATED_SIZE>::SmallVector;
+struct SmallVector : public ttsl::detail::llvm::SmallVector<T, PREALLOCATED_SIZE> {
+    using ttsl::detail::llvm::SmallVector<T, PREALLOCATED_SIZE>::SmallVector;
 };
 
 template <typename Stream, typename T, std::size_t PREALLOCATED_SIZE>

@@ -16,7 +16,7 @@
 #include <cstdint>
 #include <stdexcept>
 
-using namespace ttsl::details::llvm;
+using namespace ttsl::detail::llvm;
 
 // Check that no bytes are wasted and everything is well-aligned.
 namespace {
@@ -148,14 +148,14 @@ void SmallVectorBase<Size_T>::grow_pod(void* FirstEl, size_t MinSize, size_t TSi
     this->set_allocation_range(NewElts, NewCapacity);
 }
 
-template class ttsl::details::llvm::SmallVectorBase<uint32_t>;
+template class ttsl::detail::llvm::SmallVectorBase<uint32_t>;
 
 // Disable the uint64_t instantiation for 32-bit builds.
 // Both uint32_t and uint64_t instantiations are needed for 64-bit builds.
 // This instantiation will never be used in 32-bit builds, and will cause
 // warnings when sizeof(Size_T) > sizeof(size_t).
 #if SIZE_MAX > UINT32_MAX
-template class ttsl::details::llvm::SmallVectorBase<uint64_t>;
+template class ttsl::detail::llvm::SmallVectorBase<uint64_t>;
 
 // Assertions to ensure this #if stays in sync with SmallVectorSizeType.
 static_assert(
