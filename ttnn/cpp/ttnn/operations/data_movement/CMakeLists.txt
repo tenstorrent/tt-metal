@@ -127,7 +127,6 @@ target_sources(
         split/split.cpp
         squeeze/squeeze.cpp
         stack/stack.cpp
-        tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp
         tilize/device/tilize_op.cpp
         tilize/device/tilize_program_factory.cpp
         tilize/tilize.cpp
