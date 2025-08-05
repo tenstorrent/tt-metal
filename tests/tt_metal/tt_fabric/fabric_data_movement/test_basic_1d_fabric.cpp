@@ -1506,48 +1506,48 @@ void RunTest2DMCastEWConnAPI(
     //     log_info(tt::LogTest, "  Direction {}: {} nodes found", direction, fabric_nodes.size());
     //     for (size_t i = 0; i < fabric_nodes.size(); i++) {
     //         auto phys_id = control_plane.get_physical_chip_id_from_fabric_node_id(fabric_nodes[i]);
-    //         log_info(tt::LogTest, "    [{}] Fabric: MeshId {} ChipId {} -> Physical: {}", 
+    //         log_info(tt::LogTest, "    [{}] Fabric: MeshId {} ChipId {} -> Physical: {}",
     //                 i, fabric_nodes[i].mesh_id, fabric_nodes[i].chip_id, phys_id);
     //     }
     // }
 
     // log_info(tt::LogTest, "=== BRANCH CALCULATIONS ===");
     // log_info(tt::LogTest, "Mesh Info:");
-    // log_info(tt::LogTest, "  mesh_shape: {}x{} (total {} chips)", mesh_shape[0], mesh_shape[1], mesh_shape[0] * mesh_shape[1]);
-    // log_info(tt::LogTest, "  ew_dim: {}", ew_dim);
-    // log_info(tt::LogTest, "  device_offset: {} (trunk_dir {} is {})", device_offset, trunk_dir, 
+    // log_info(tt::LogTest, "  mesh_shape: {}x{} (total {} chips)", mesh_shape[0], mesh_shape[1], mesh_shape[0] *
+    // mesh_shape[1]); log_info(tt::LogTest, "  ew_dim: {}", ew_dim); log_info(tt::LogTest, "  device_offset: {}
+    // (trunk_dir {} is {})", device_offset, trunk_dir,
     //         trunk_dir == RoutingDirection::N ? "North" : "South");
 
     // log_info(tt::LogTest, "Branch Endpoint Calculations:");
     // if (branch_east_hops > 0) {
     //     auto original_east = end_fabric_node_ids_by_dir[RoutingDirection::E][branch_east_hops - 1];
-    //     log_info(tt::LogTest, "  Original East [{}]: MeshId {} ChipId {}", 
+    //     log_info(tt::LogTest, "  Original East [{}]: MeshId {} ChipId {}",
     //             branch_east_hops - 1, original_east.mesh_id, original_east.chip_id);
-    //     log_info(tt::LogTest, "  Modified East: MeshId {} ChipId {} (added {} * {} = {})", 
-    //             east_fabric_node_id.mesh_id, east_fabric_node_id.chip_id, 
+    //     log_info(tt::LogTest, "  Modified East: MeshId {} ChipId {} (added {} * {} = {})",
+    //             east_fabric_node_id.mesh_id, east_fabric_node_id.chip_id,
     //             device_offset, ew_dim, device_offset * ew_dim);
     //     log_info(tt::LogTest, "  left_recv_phys_chip_id: {}", left_recv_phys_chip_id);
     // }
 
     // if (branch_west_hops > 0) {
     //     auto original_west = end_fabric_node_ids_by_dir[RoutingDirection::W][branch_west_hops - 1];
-    //     log_info(tt::LogTest, "  Original West [{}]: MeshId {} ChipId {}", 
+    //     log_info(tt::LogTest, "  Original West [{}]: MeshId {} ChipId {}",
     //             branch_west_hops - 1, original_west.mesh_id, original_west.chip_id);
-    //     log_info(tt::LogTest, "  Modified West: MeshId {} ChipId {} (added {} * {} = {})", 
-    //             west_fabric_node_id.mesh_id, west_fabric_node_id.chip_id, 
+    //     log_info(tt::LogTest, "  Modified West: MeshId {} ChipId {} (added {} * {} = {})",
+    //             west_fabric_node_id.mesh_id, west_fabric_node_id.chip_id,
     //             device_offset, ew_dim, device_offset * ew_dim);
     //     log_info(tt::LogTest, "  right_recv_phys_chip_id: {}", right_recv_phys_chip_id);
     // }
 
     // log_info(tt::LogTest, "=== DIRECT CONNECTIONS ===");
     // if (direct_right_hops > 0) {
-    //     log_info(tt::LogTest, "Direct East [{}]: MeshId {} ChipId {} -> Physical {}", 
+    //     log_info(tt::LogTest, "Direct East [{}]: MeshId {} ChipId {} -> Physical {}",
     //             direct_right_hops - 1, left_fabric_node_id.mesh_id, left_fabric_node_id.chip_id,
     //             control_plane.get_physical_chip_id_from_fabric_node_id(left_fabric_node_id));
     // }
 
     // if (direct_left_hops > 0) {
-    //     log_info(tt::LogTest, "Direct West [{}]: MeshId {} ChipId {} -> Physical {}", 
+    //     log_info(tt::LogTest, "Direct West [{}]: MeshId {} ChipId {} -> Physical {}",
     //             direct_left_hops - 1, right_fabric_node_id.mesh_id, right_fabric_node_id.chip_id,
     //             control_plane.get_physical_chip_id_from_fabric_node_id(right_fabric_node_id));
     // }
@@ -1556,18 +1556,20 @@ void RunTest2DMCastEWConnAPI(
     // log_info(tt::LogTest, "Building rx_physical_device_ids list...");
 
     // log_info(tt::LogTest, "Direct East receivers (first {} hops):", direct_right_hops);
-    // for(size_t i = 0; i < std::min((size_t)direct_right_hops, end_fabric_node_ids_by_dir[RoutingDirection::E].size()); i++){
+    // for(size_t i = 0; i < std::min((size_t)direct_right_hops,
+    // end_fabric_node_ids_by_dir[RoutingDirection::E].size()); i++){
     //     auto east_node = end_fabric_node_ids_by_dir[RoutingDirection::E][i];
     //     auto phys_id = control_plane.get_physical_chip_id_from_fabric_node_id(east_node);
-    //     log_info(tt::LogTest, "  [{}] Fabric: MeshId {} ChipId {} -> Physical: {}", 
+    //     log_info(tt::LogTest, "  [{}] Fabric: MeshId {} ChipId {} -> Physical: {}",
     //             i, east_node.mesh_id, east_node.chip_id, phys_id);
     // }
 
     // log_info(tt::LogTest, "Direct West receivers (first {} hops):", direct_left_hops);
-    // for(size_t i = 0; i < std::min((size_t)direct_left_hops, end_fabric_node_ids_by_dir[RoutingDirection::W].size()); i++){
+    // for(size_t i = 0; i < std::min((size_t)direct_left_hops, end_fabric_node_ids_by_dir[RoutingDirection::W].size());
+    // i++){
     //     auto west_node = end_fabric_node_ids_by_dir[RoutingDirection::W][i];
     //     auto phys_id = control_plane.get_physical_chip_id_from_fabric_node_id(west_node);
-    //     log_info(tt::LogTest, "  [{}] Fabric: MeshId {} ChipId {} -> Physical: {}", 
+    //     log_info(tt::LogTest, "  [{}] Fabric: MeshId {} ChipId {} -> Physical: {}",
     //             i, west_node.mesh_id, west_node.chip_id, phys_id);
     // }
 
@@ -1575,28 +1577,32 @@ void RunTest2DMCastEWConnAPI(
     // uint32_t trunk_hop_debug = 1;
     // for (auto trunk_node : end_fabric_node_ids_by_dir[trunk_dir]) {
     //     auto trunk_phys_id = control_plane.get_physical_chip_id_from_fabric_node_id(trunk_node);
-    //     log_info(tt::LogTest, "  Trunk hop {}: MeshId {} ChipId {} -> Physical: {}", 
+    //     log_info(tt::LogTest, "  Trunk hop {}: MeshId {} ChipId {} -> Physical: {}",
     //             trunk_hop_debug, trunk_node.mesh_id, trunk_node.chip_id, trunk_phys_id);
-        
-    //     log_info(tt::LogTest, "    East branches for trunk hop {} (first {} hops):", trunk_hop_debug, branch_east_hops);
-    //     for(size_t i = 0; i < std::min((size_t)branch_east_hops, end_fabric_node_ids_by_dir[RoutingDirection::E].size()); i++) {
+
+    //     log_info(tt::LogTest, "    East branches for trunk hop {} (first {} hops):", trunk_hop_debug,
+    //     branch_east_hops); for(size_t i = 0; i < std::min((size_t)branch_east_hops,
+    //     end_fabric_node_ids_by_dir[RoutingDirection::E].size()); i++) {
     //         auto east_node = end_fabric_node_ids_by_dir[RoutingDirection::E][i];
     //         auto original_chip_id = east_node.chip_id;
     //         east_node.chip_id += device_offset * trunk_hop_debug * ew_dim;
     //         auto phys_id = control_plane.get_physical_chip_id_from_fabric_node_id(east_node);
-    //         log_info(tt::LogTest, "      [{}] Original ChipId {} -> Modified ChipId {} (added {} * {} * {} = {}) -> Physical: {}", 
-    //                 i, original_chip_id, east_node.chip_id, 
+    //         log_info(tt::LogTest, "      [{}] Original ChipId {} -> Modified ChipId {} (added {} * {} * {} = {}) ->
+    //         Physical: {}",
+    //                 i, original_chip_id, east_node.chip_id,
     //                 device_offset, trunk_hop_debug, ew_dim, device_offset * trunk_hop_debug * ew_dim, phys_id);
     //     }
-        
-    //     log_info(tt::LogTest, "    West branches for trunk hop {} (first {} hops):", trunk_hop_debug, branch_west_hops);
-    //     for(size_t i = 0; i < std::min((size_t)branch_west_hops, end_fabric_node_ids_by_dir[RoutingDirection::W].size()); i++) {
+
+    //     log_info(tt::LogTest, "    West branches for trunk hop {} (first {} hops):", trunk_hop_debug,
+    //     branch_west_hops); for(size_t i = 0; i < std::min((size_t)branch_west_hops,
+    //     end_fabric_node_ids_by_dir[RoutingDirection::W].size()); i++) {
     //         auto west_node = end_fabric_node_ids_by_dir[RoutingDirection::W][i];
     //         auto original_chip_id = west_node.chip_id;
     //         west_node.chip_id += device_offset * trunk_hop_debug * ew_dim;
     //         auto phys_id = control_plane.get_physical_chip_id_from_fabric_node_id(west_node);
-    //         log_info(tt::LogTest, "      [{}] Original ChipId {} -> Modified ChipId {} (added {} * {} * {} = {}) -> Physical: {}", 
-    //                 i, original_chip_id, west_node.chip_id, 
+    //         log_info(tt::LogTest, "      [{}] Original ChipId {} -> Modified ChipId {} (added {} * {} * {} = {}) ->
+    //         Physical: {}",
+    //                 i, original_chip_id, west_node.chip_id,
     //                 device_offset, trunk_hop_debug, ew_dim, device_offset * trunk_hop_debug * ew_dim, phys_id);
     //     }
     //     trunk_hop_debug++;
@@ -1680,7 +1686,7 @@ void RunTest2DMCastEWConnAPI(
     link_idx = get_forwarding_link_indices(src_fabric_node_id, west_fabric_node_id)[0];
     append_fabric_connection_rt_args(
         src_fabric_node_id, west_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args); //south trunk connection
-    
+
     sender_runtime_args.push_back(left_fabric_node_id.chip_id);
     sender_runtime_args.push_back(right_fabric_node_id.chip_id);
     sender_runtime_args.push_back((direct_left_hops << 16) | direct_right_hops);
@@ -1688,7 +1694,7 @@ void RunTest2DMCastEWConnAPI(
     link_idx = get_forwarding_link_indices(src_fabric_node_id, left_fabric_node_id)[0];
     append_fabric_connection_rt_args(
         src_fabric_node_id, left_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
-    
+
     link_idx = get_forwarding_link_indices(src_fabric_node_id, right_fabric_node_id)[0];
     append_fabric_connection_rt_args(
         src_fabric_node_id, right_fabric_node_id, link_idx, sender_program, {sender_logical_core}, sender_runtime_args);
