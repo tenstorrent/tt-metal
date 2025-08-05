@@ -10,19 +10,8 @@ import time
 from ...reference.vae_decoder import VaeDecoder
 from ...tt.fun_vae_decoder.fun_vae_decoder import sd_vae_decode, TtVaeDecoderParameters
 from ...tt.utils import assert_quality, to_torch
-from models.utility_functions import comp_pcc
 from ...tt.parallel_config import StableDiffusionParallelManager, create_vae_parallel_config
 import tracy
-
-
-def print_stats(label, data: torch.Tensor, device=None):
-    if isinstance(data, torch.Tensor):
-        data_ = data
-    else:
-        data_ = ttnn.to_torch(
-            data, mesh_composer=ttnn.ConcatMesh2dToTensor(device, mesh_shape=tuple(device.shape), dims=(0, 1))
-        )
-    return f"{label}: mean:{data_.mean()} , std:{data_.std()} , range:[{data_.min()}, {data_.max()}, shape:{data_.shape},stats in shape: {data.shape}]"
 
 
 @pytest.mark.parametrize(
@@ -55,10 +44,8 @@ def print_stats(label, data: torch.Tensor, device=None):
     ),
     [
         (1, 16, 3, 2, 128, 128, 32, (128, 256, 512, 512)),  # slice 128, output blocks 32. Need to parametize
-        # (1, 16, 3, 2, 128, 128, 32, (128, 256, 512, 512)),  # slice 128, output blocks 32. Need to parametize
     ],
 )
-# @pytest.mark.usefixtures("use_program_cache")
 def test_vae_decoder(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -92,8 +79,7 @@ def test_vae_decoder(
         tp_axis=tp_axis,
         num_links=num_links,
     )
-    # mesh_device = device
-    # torch_dtype = torch.float32
+
     torch_dtype = torch.bfloat16
     ttnn_dtype = ttnn.bfloat16
     torch.manual_seed(0)
@@ -140,13 +126,6 @@ def test_vae_decoder(
         mesh_mapper=ttnn.ReplicateTensorToMesh(vae_device),
     )
 
-    # ttnn.visualize_mesh_device(mesh_device, tensor=tt_inp)
-    # breakpoint(0)
-
-    logger.info(print_stats("torch_input", inp))
-    logger.info(print_stats("tt_input", tt_inp, device=vae_device))
-
-    # tt_inp = allocate_tensor_on_device_like(tt_inp_host, device=mesh_device)
     logger.info(f" input shape TT: {tt_inp.shape}, Torch: {inp.shape}")
     with torch.no_grad():
         out = torch_model(inp)
@@ -160,14 +139,11 @@ def test_vae_decoder(
     for i in range(num_itr):
         start_time = time.time()
         tt_out = sd_vae_decode(tt_inp, parameters)
-        ttnn.synchronize_device(vae_device)
+        # ttnn.synchronize_device(vae_device)
         end_time = time.time()
         duration += end_time - start_time
         logger.info(f"vae_decode {i} time: {end_time-start_time}")
-
         tt_out_torch = to_torch(tt_out).permute(0, 3, 1, 2)
-
         assert_quality(out, tt_out_torch, pcc=0.99, ccc=0.99)
-        result, output = comp_pcc(out, tt_out_torch)
 
     logger.info(f"vae_decode Ave time  : {duration/num_itr}, num_itr: {num_itr}")

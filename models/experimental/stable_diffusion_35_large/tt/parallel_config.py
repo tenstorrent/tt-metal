@@ -32,7 +32,6 @@ class VAEParallelConfig:
         reduce_from_semaphore: ttnn._ttnn.global_semaphore.global_sempahore,
         reduce_to_semaphore: ttnn._ttnn.global_semaphore.global_sempahore,
         num_links: int,
-        # barrier_semaphore: list[ttnn._ttnn.global_semaphore.global_sempahore],
     ):
         self.device = device
         self.new_gather_handles = new_gather_handles
@@ -50,8 +49,16 @@ class VAEParallelConfig:
             [1, 512, 512, 256],
             [1, 1024, 1024, 256],
             [1, 1024, 1024, 128],
+            # more optimal reahaped versions
+            [1, 1, 128 * 128, 512],
+            [1, 1, 256 * 256, 512],
+            [1, 1, 512 * 512, 512],
+            [1, 1, 512 * 512, 256],
+            [1, 1, 1024 * 1024, 256],
+            [1, 1, 1024 * 1024, 128],
         ]
 
+        # We only need to create buffers for what is used
         self.vae_persistent_buffers = {}
         for buffer_shape in vae_shapes:
             self.vae_persistent_buffers[f"vae_all_gather_{buffer_shape}"] = [
@@ -71,16 +78,15 @@ class VAEParallelConfig:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)  # All gather requires tile layout
         gather_shape = list(x.shape)
         gather_shape[3] *= self.device.get_num_devices()
+
         x_g = ttnn.experimental.all_gather_async(
             input_tensor=x,
             dim=3,
             persistent_output_buffer=self.vae_persistent_buffers[f"vae_all_gather_{gather_shape}"][self.ping_pong_idx],
             multi_device_global_semaphore=semaphores,
             topology=ttnn.Topology.Linear,
-            # mesh_device=self.device,
             cluster_axis=1,
             num_links=self.num_links,
-            # barrier_semaphore=self.barrier_semaphore[self.ping_pong_idx],
             num_workers_per_link=4,
             chunks_per_sync=80,
             num_buffers_per_channel=4,
@@ -98,10 +104,7 @@ def create_vae_parallel_config(
         device=vae_device,
         new_gather_handles=[
             ttnn.create_global_semaphore(vae_device, parallel_manager.ccl_cores, 0) for _ in range(2 * 2)
-        ],  # Ping pong
-        # barrier_semaphore=[
-        #    ttnn.create_global_semaphore(vae_device, parallel_manager.ccl_cores, 0) for _ in range(2)
-        # ],  # Barrier
+        ],
         reduce_from_semaphore=ttnn.create_global_semaphore(vae_device, parallel_manager.ccl_cores, 0),
         reduce_to_semaphore=ttnn.create_global_semaphore(vae_device, parallel_manager.ccl_cores, 0),
         num_links=parallel_manager.num_links,
