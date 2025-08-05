@@ -527,8 +527,8 @@ class TtStableDiffusion3Pipeline:
                         spatial_sequence_length=4096,
                         traced=traced,
                     )
-
-            logger.info("decoding image...")
+            if not self.quiet:
+                logger.info("decoding image...")
 
             with timer.time_section("vae_decoding") if timer else nullcontext():
                 concat_dims = [None, None]
