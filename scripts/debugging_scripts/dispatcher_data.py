@@ -40,6 +40,8 @@ class DispatcherCoreData:
     firmware_path: str = combined_field("kernel_path", "Firmware / Kernel Path", collection_serializer("\n"))
     kernel_path: str | None = combined_field()
     kernel_name: str | None = combined_field()
+    go_message_index: int = triage_field("Go Message Index")
+    go_data: int = triage_field("Go Data", hex_serializer)
 
 
 class DispatcherData:
@@ -175,11 +177,15 @@ class DispatcherData:
             )
 
             kernel = self.inspector_data.kernels.get(watcher_kernel_id)
+            go_message_index = mem_access(fw_elf, f"mailboxes->go_message_index", loc_mem_reader)[0][0]
+            go_data = mem_access(fw_elf, f"mailboxes->go_messages[{go_message_index}]", loc_mem_reader)[0][0]
         except:
             kernel_config_base = -1
             kernel_text_offset = -1
             watcher_kernel_id = -1
             kernel = None
+            go_message_index = -1
+            go_data = -1
 
         if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
             firmware_path = self._a_kernel_path + "../../../firmware/idle_erisc/idle_erisc.elf"
@@ -214,6 +220,8 @@ class DispatcherData:
             kernel_config_base=kernel_config_base,
             kernel_text_offset=kernel_text_offset,
             watcher_kernel_id=watcher_kernel_id,
+            go_message_index=go_message_index,
+            go_data=go_data,
         )
 
     @staticmethod
