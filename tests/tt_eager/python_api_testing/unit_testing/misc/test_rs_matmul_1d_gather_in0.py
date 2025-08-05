@@ -19,7 +19,8 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
-from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
+
+# from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 import random
 import math
@@ -227,7 +228,7 @@ def run_multi_core_matmul_1d(
 
     dim = 3
     shard_height = 32
-    shard_width = 160
+    shard_width = 64
     num_devices_scatter = 4
     num_devices_fracture = 8
     num_cores = 24
@@ -606,8 +607,8 @@ def run_multi_core_matmul_1d(
         (
             1,
             32,
-            2048,
-            3584,
+            1280,
+            3200,
             ttnn.bfloat16,
             ttnn.bfloat4_b,
             ttnn.bfloat8_b,
