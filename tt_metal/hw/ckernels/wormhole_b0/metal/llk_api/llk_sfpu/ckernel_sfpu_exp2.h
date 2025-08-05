@@ -24,8 +24,8 @@ sfpi_inline sfpi::vFloat _sfpu_exp2_21f_(sfpi::vFloat val) {
         sfpi::vInt zif = sfpi::exman9(sfpi::reinterpret<sfpi::vFloat>(z));  // Extract mantissa
 
         sfpi::vFloat d1 = sfpi::vFloat(sfpi::vConstFloatPrgm0);
-        sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vInt(sfpi::vConstIntPrgm1) + zif, 0);
-        sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vInt(sfpi::vConstIntPrgm2) + zif, 0);
+        sfpi::vFloat d2 = sfpi::int32_to_float(sfpi::vConstIntPrgm1 + zif, 0);
+        sfpi::vFloat d3 = sfpi::int32_to_float(sfpi::vConstIntPrgm2 + zif, 0);
         d2 = d1 * d2;
         zif = sfpu::_float_to_int32_(d2 * d3);
 
