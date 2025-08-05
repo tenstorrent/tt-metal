@@ -247,12 +247,9 @@ operation::ProgramWithCallbacks pad_tile(
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
-                                                      (std::uint32_t)src0_is_dram};
-    std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
-                                                      (std::uint32_t)src0_cb_index,
-                                                      (std::uint32_t)src1_cb_index};
+    std::vector<uint32_t> reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    std::vector<uint32_t> writer_compile_time_args = {src0_cb_index, src1_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(

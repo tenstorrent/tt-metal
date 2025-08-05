@@ -9,6 +9,7 @@
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"
 
 #include <cstdint>
@@ -142,8 +143,8 @@ operation::ProgramWithCallbacks transpose_cn_multi_core(const Tensor& a, Tensor&
 
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index, (std::uint32_t)src0_is_dram};
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index};
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -712,9 +713,10 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
         reader_compile_time_args.push_back((std::uint32_t)(cb_data_format == tt::DataFormat::Float32));
         reader_compile_time_args.push_back((std::uint32_t)alignment);
     }
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index};
     if (row_major) {
+        bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+        writer_compile_time_args.push_back((std::uint32_t)dst_is_dram);
         writer_compile_time_args.push_back((std::uint32_t)W * a.element_size());
 
         auto stick_size = W * a.element_size();
@@ -726,6 +728,8 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
         } else {
             writer_compile_time_args.push_back(stick_size);
         }
+    } else {
+        tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     }
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -1550,9 +1554,10 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
         }
     }
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
     if (row_major) {
+        bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+        writer_compile_time_args.push_back((std::uint32_t)dst_is_dram);
         writer_compile_time_args.push_back(ht);
         writer_compile_time_args.push_back(H);
         writer_compile_time_args.push_back(wt);
@@ -1571,6 +1576,8 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
         } else {
             writer_compile_time_args.push_back(stick_size);
         }
+    } else {
+        tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     }
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(

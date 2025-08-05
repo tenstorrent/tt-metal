@@ -180,11 +180,13 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
     if (output_sharded) {
         writer_defines["OUT_SHARDED"] = "1";
     }
+    std::vector<uint32_t> writer_compile_time_args = {cb_output};
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_device_cores,
-        tt_metal::WriterDataMovementConfig({cb_output, dst_is_dram}, writer_defines));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_defines));
 
     auto bcast_kernel_id = tt_metal::CreateKernel(
         program,
