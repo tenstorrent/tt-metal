@@ -321,7 +321,10 @@ operation::ProgramWithCallbacks layernorm_multi_core(
                                     "reader_unary_interleaved_ln_rm_gb.cpp"
                                   : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                     "reader_unary_interleaved_ln.cpp";
-    const auto use_welford = std::getenv("LAYERNORM_WELFORD") != nullptr;
+    const auto use_welford = std::getenv("TT_LAYERNORM_WELFORD") != nullptr;
+    if (use_welford) {
+        std::cout << "Hi" << std::endl;
+    }
     reader_kernel_path =
         large_tensor_needed
             ? (use_welford ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
@@ -400,7 +403,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
                 .set_page_size(tt::CBIndex::c_24, single_tile_size);
         CreateCircularBuffer(program, all_cores, cb_intermed0_config);
     }
-    if (rms_norm) {
+    if (!use_welford || (use_welford && rms_norm)) {
         CircularBufferConfig c_intermed3_config =
             CircularBufferConfig(im3_t * single_tile_size, {{tt::CBIndex::c_20, cb_data_format}})
                 .set_page_size(tt::CBIndex::c_20, single_tile_size);
