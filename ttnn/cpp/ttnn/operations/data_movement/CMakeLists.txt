@@ -182,7 +182,9 @@ target_sources(
         FILE_SET ttnn_op_data_movement_jit
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
-        FILES tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp
+        FILES
+            tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp
+            untilize/device/kernels/dataflow/reader_unary_start_id.cpp
 )
 
 install(
