@@ -14,7 +14,6 @@ from transformers import DynamicCache
 
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention
-from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.run_config import create_run_config
@@ -180,6 +179,7 @@ def test_forward_pass(
     hf_config_short,
     tmp_path,
     mesh_device,
+    ccl,
 ):
     # Hang workaround for large shapes
     if seq_len > 1024:
@@ -205,7 +205,6 @@ def test_forward_pass(
     weight_config = MLA1D.convert_weights(hf_config, state_dicts, tmp_path, mesh_device)
 
     # Generate appropriate configs
-    ccl = CCL1D(mesh_device)
     if mode == "prefill":
         model_config = MLA1D.prefill_model_config(hf_config, mesh_device)
     else:
