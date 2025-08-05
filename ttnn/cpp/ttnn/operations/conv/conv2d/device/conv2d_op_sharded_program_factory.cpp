@@ -782,8 +782,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         act_num_subblocks,
         act_block_num_tiles,
         act_subblock_num_tiles,
-        enable_split_reader ? 1 : act_subblock_h_ntiles,
-
+        enable_split_reader ? act_block_h_ntiles : act_subblock_h_ntiles * act_num_subblocks,  // reader_num_h_subblocks
         weight_num_subblocks,
         weight_block_num_tiles,
         weight_block_w_ntiles,
@@ -812,9 +811,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         get_cb_info_by_name(cb_info, Conv2dCb::OUT).index,
         get_cb_info_by_name(cb_info, Conv2dCb::TEMP_SUM).index,
         partials_cb_uses_output,
-        conv_act_c_blocks,
-        enable_split_reader ? block_config.act_block_h_ntiles : act_num_subblocks,
-    };
+        conv_act_c_blocks};
 
     const tt::tt_metal::NOC writer_mcast_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
     const tt::tt_metal::NOC reader_noc =
