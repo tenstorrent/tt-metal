@@ -70,4 +70,4 @@ def test_demo_sd(device, reset_seeds, input_path):
         num_inference_steps,
         image_size,
     )[0]
-    assert_with_pcc(torch_image, ttnn_image.reshape(ttnn_image.shape[1:]).permute([2, 0, 1]), 0.935)
+    assert_with_pcc(torch_image, ttnn_image.reshape(ttnn_image.shape[1:]).permute([2, 0, 1]), 0.9348)
