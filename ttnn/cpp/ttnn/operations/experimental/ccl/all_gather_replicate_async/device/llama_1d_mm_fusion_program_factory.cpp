@@ -1987,7 +1987,7 @@ process_gather_in0_program_and_create_override_variables(
         (std::uint32_t)sync_cb_index,
         (std::uint32_t)sync_cb2_index,
         (std::uint32_t)remote_cb_index,
-        (std::uint32_t)fused_op_signaler.has_value(),
+        (std::uint32_t)0,  // no need to signaler for the fused op
     };
 
     /* compute kernel args */
