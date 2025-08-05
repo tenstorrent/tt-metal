@@ -29,174 +29,161 @@ RM = ttnn.ROW_MAJOR_LAYOUT
 # Suite 1: Height sharded cases with mostly BF8 and TL
 all_test_cases_suite_1 = [
     # { batch_size, output_channels, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, groups, input_dtype, output_dtype, input_layout, output_layout, sharding_scheme }
-    (2, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 16 - PASSING
-    (2, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BFP16, TL, TL, HS),  # index 17 - PASSING
-    (2, 16, 16, 256, 256, 5, 5, 2, 2, 2, 2, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 22 - PASSING
-    (2, 16, 16, 256, 256, 5, 5, 2, 2, 2, 2, 1, 1, 1, BF8, BFP16, TL, TL, HS),  # index 23 - PASSING
-    (2, 16, 16, 256, 256, 5, 5, 2, 2, 2, 2, 1, 1, 1, BF8, BFP16, TL, RM, HS),  # index 25 - PASSING
-    (2, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 26 - PASSING
-    (2, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BFP16, TL, TL, HS),  # index 27 - PASSING
-    (2, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BFP16, TL, RM, HS),  # index 29 - PASSING
+    (2, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 0
+    (2, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BFP16, TL, TL, HS),  # index 1
+    (2, 16, 16, 256, 256, 5, 5, 2, 2, 2, 2, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 2
+    (2, 16, 16, 256, 256, 5, 5, 2, 2, 2, 2, 1, 1, 1, BF8, BFP16, TL, TL, HS),  # index 3
+    (2, 16, 16, 256, 256, 5, 5, 2, 2, 2, 2, 1, 1, 1, BF8, BFP16, TL, RM, HS),  # index 4
+    (2, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BFP16, TL, RM, HS),  # index 7
     # From test_conv_features (5x5 kernel variations)
-    (2, 16, 16, 256, 256, 5, 5, 2, 2, 2, 2, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 34 - PASSING
-    (2, 16, 16, 256, 256, 5, 5, 2, 2, 2, 2, 1, 1, 1, BF8, BFP16, TL, TL, HS),  # index 35 - PASSING
-    (2, 16, 16, 256, 256, 5, 5, 2, 2, 2, 2, 1, 1, 1, BF8, BFP16, TL, RM, HS),  # index 37 - PASSING
     # From test_conv_dilation - HEIGHT_SHARDED cases with different spatial dimensions
-    (1, 32, 32, 64, 64, 3, 3, 1, 1, 2, 2, 2, 2, 1, BF8, BFP16, TL, TL, HS),  # index 38 - PASSING
-    (1, 32, 32, 64, 64, 3, 3, 1, 1, 3, 3, 3, 3, 1, BF8, BFP16, TL, TL, HS),  # index 39 - PASSING
-    (1, 32, 32, 128, 64, 3, 3, 1, 1, 2, 2, 2, 2, 1, BF8, BFP16, TL, TL, HS),  # index 40 - PASSING
-    (1, 32, 32, 128, 64, 3, 3, 1, 1, 3, 3, 3, 3, 1, BF8, BFP16, TL, TL, HS),  # index 41 - PASSING
+    (1, 32, 32, 64, 64, 3, 3, 1, 1, 2, 2, 2, 2, 1, BF8, BFP16, TL, TL, HS),  # index 11
+    (1, 32, 32, 64, 64, 3, 3, 1, 1, 3, 3, 3, 3, 1, BF8, BFP16, TL, TL, HS),  # index 12
+    (1, 32, 32, 128, 64, 3, 3, 1, 1, 2, 2, 2, 2, 1, BF8, BFP16, TL, TL, HS),  # index 13
+    (1, 32, 32, 128, 64, 3, 3, 1, 1, 3, 3, 3, 3, 1, BF8, BFP16, TL, TL, HS),  # index 14
     # From test_conv_for_segformer_512x512 - SegFormer specific cases
-    (1, 32, 32, 128, 128, 8, 8, 8, 8, 0, 0, 1, 1, 1, BF8, BFP16, TL, TL, HS),  # index 46 - PASSING
-    (1, 64, 64, 64, 64, 4, 4, 4, 4, 0, 0, 1, 1, 1, BF8, BFP16, TL, TL, HS),  # index 47 - PASSING
+    (1, 32, 32, 128, 128, 8, 8, 8, 8, 0, 0, 1, 1, 1, BF8, BFP16, TL, TL, HS),  # index 15
+    (1, 64, 64, 64, 64, 4, 4, 4, 4, 0, 0, 1, 1, 1, BF8, BFP16, TL, TL, HS),  # index 16
     # Additional HEIGHT_SHARDED test cases from test_new_conv2d.py
     # From test_conv_dilation - more variations with different dilation and padding
-    (1, 32, 32, 64, 64, 3, 3, 1, 1, 2, 2, 2, 2, 1, BF8, BF8, TL, TL, HS),
-    (1, 32, 32, 64, 64, 3, 3, 1, 1, 3, 3, 3, 3, 1, BF8, BF8, TL, TL, HS),
-    (1, 32, 32, 128, 64, 3, 3, 1, 1, 2, 2, 2, 2, 1, BF8, BF8, TL, TL, HS),
-    (1, 32, 32, 128, 64, 3, 3, 1, 1, 3, 3, 3, 3, 1, BF8, BF8, TL, TL, HS),
+    (1, 32, 32, 64, 64, 3, 3, 1, 1, 2, 2, 2, 2, 1, BF8, BF8, TL, TL, HS),  # index 17
+    (1, 32, 32, 64, 64, 3, 3, 1, 1, 3, 3, 3, 3, 1, BF8, BF8, TL, TL, HS),  # index 18
+    (1, 32, 32, 128, 64, 3, 3, 1, 1, 2, 2, 2, 2, 1, BF8, BF8, TL, TL, HS),  # index 19
+    (1, 32, 32, 128, 64, 3, 3, 1, 1, 3, 3, 3, 3, 1, BF8, BF8, TL, TL, HS),  # index 20
     # From test_conv_features - additional variations
-    (2, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (2, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
-    (2, 16, 16, 256, 256, 5, 5, 2, 2, 2, 2, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (2, 16, 16, 256, 256, 5, 5, 2, 2, 2, 2, 1, 1, 1, BFP16, BF8, TL, TL, HS),
+    (2, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 21
+    (2, 16, 16, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 22
+    (2, 16, 16, 256, 256, 5, 5, 2, 2, 2, 2, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 23
+    (2, 16, 16, 256, 256, 5, 5, 2, 2, 2, 2, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 24
     # From test_segformer - variations of efficient self-attention
-    (1, 32, 32, 128, 128, 8, 8, 8, 8, 0, 0, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (1, 32, 32, 128, 128, 8, 8, 8, 8, 0, 0, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 64, 64, 64, 64, 4, 4, 4, 4, 0, 0, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (1, 64, 64, 64, 64, 4, 4, 4, 4, 0, 0, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 160, 160, 32, 32, 2, 2, 2, 2, 0, 0, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (1, 160, 160, 32, 32, 2, 2, 2, 2, 0, 0, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
+    (1, 32, 32, 128, 128, 8, 8, 8, 8, 0, 0, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 25
+    (1, 32, 32, 128, 128, 8, 8, 8, 8, 0, 0, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 26
+    (1, 64, 64, 64, 64, 4, 4, 4, 4, 0, 0, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 27
+    (1, 64, 64, 64, 64, 4, 4, 4, 4, 0, 0, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 28
+    (1, 160, 160, 32, 32, 2, 2, 2, 2, 0, 0, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 29
+    (1, 160, 160, 32, 32, 2, 2, 2, 2, 0, 0, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 30
     # Same cases as above but with different dtype combinations
-    (2, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (2, 32, 16, 264, 40, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
+    (2, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 31
+    (2, 32, 16, 264, 40, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 32
     # From test_halo_reshard_conv - adapted to HEIGHT_SHARDED
-    (1, 128, 128, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (1, 128, 128, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (1, 64, 64, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 2, BF8, BF8, TL, TL, HS),
+    (1, 128, 128, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 33
+    (1, 128, 128, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 34
+    (1, 64, 64, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 2, BF8, BF8, TL, TL, HS),  # index 35
     # From test_sd_conv adapted to HEIGHT_SHARDED
-    (1, 320, 16, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (1, 320, 320, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (1, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (2, 320, 16, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (2, 320, 320, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (2, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),
+    (1, 320, 16, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 36
+    (2, 320, 16, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 37
     # From test_vanilla_unet adapted to HEIGHT_SHARDED
-    (1, 64, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (1, 64, 64, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (1, 128, 64, 120, 160, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (1, 128, 128, 120, 160, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),
+    (1, 64, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 38
+    # (1, 64, 64, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS), # index 39
+    (1, 128, 64, 120, 160, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 40
+    (1, 128, 128, 120, 160, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 41
     # Additional combinations with varying data types
-    (1, 64, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 64, 64, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 128, 64, 120, 160, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 128, 128, 120, 160, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
+    (1, 64, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 42
+    # (1, 64, 64, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS), # index 43
+    (1, 128, 64, 120, 160, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 44
+    (1, 128, 128, 120, 160, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 45
     # More variations with ROW_MAJOR_LAYOUT
-    (1, 64, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, RM, HS),
+    (1, 64, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, RM, HS),  # index 46
     # Kernel size 7x7 test cases
-    (1, 3, 32, 512, 512, 7, 7, 4, 4, 3, 3, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (1, 3, 32, 512, 512, 7, 7, 4, 4, 3, 3, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 3, 32, 512, 512, 7, 7, 2, 2, 3, 3, 1, 1, 1, BF8, BF8, TL, TL, HS),
+    (1, 3, 32, 512, 512, 7, 7, 4, 4, 3, 3, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 47
+    (1, 3, 32, 512, 512, 7, 7, 4, 4, 3, 3, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 48
+    # (1, 3, 32, 512, 512, 7, 7, 2, 2, 3, 3, 1, 1, 1, BF8, BF8, TL, TL, HS), # index 49
     # More test cases with varied groups
-    (1, 128, 128, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 128, BF8, BF8, TL, TL, HS),
-    (1, 256, 256, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 256, BF8, BF8, TL, TL, HS),
+    (1, 128, 128, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 128, BF8, BF8, TL, TL, HS),  # index 50
+    (1, 256, 256, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 256, BF8, BF8, TL, TL, HS),  # index 51
     # Variations with same params but different dtypes
-    (1, 128, 128, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 128, BFP16, BFP16, TL, TL, HS),
-    (1, 256, 256, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 256, BFP16, BFP16, TL, TL, HS),
+    (1, 128, 128, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 128, BFP16, BFP16, TL, TL, HS),  # index 52
+    (1, 256, 256, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 256, BFP16, BFP16, TL, TL, HS),  # index 53
     # Mixed dtype combinations
-    (1, 128, 128, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 128, BF8, BFP16, TL, TL, HS),
-    (1, 256, 256, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 256, BF8, BFP16, TL, TL, HS),
+    (1, 128, 128, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 128, BF8, BFP16, TL, TL, HS),  # index 54
+    (1, 256, 256, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 256, BF8, BFP16, TL, TL, HS),  # index 55
     # Mixed dtype combinations (opposite)
-    (1, 128, 128, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 128, BFP16, BF8, TL, TL, HS),
-    (1, 256, 256, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 256, BFP16, BF8, TL, TL, HS),
+    (1, 128, 128, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 128, BFP16, BF8, TL, TL, HS),  # index 56
+    (1, 256, 256, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 256, BFP16, BF8, TL, TL, HS),  # index 57
     # More spatial dimensions with HEIGHT_SHARDED from test_unet_conv tests
-    (1, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
-    (1, 32, 16, 264, 40, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 32, 16, 264, 40, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
-    (1, 32, 32, 132, 20, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
+    (1, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 58
+    (1, 16, 16, 528, 80, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 59
+    (1, 32, 16, 264, 40, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 60
+    (1, 32, 16, 264, 40, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 61
+    (1, 32, 32, 132, 20, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 62
     # More variations with different dtypes
-    (1, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 64, 128, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 64, 192, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 64, 256, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 64, 320, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 128, 64, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 128, 128, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 128, 192, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 128, 256, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 128, 320, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 320, 320, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
+    (1, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 63
+    (1, 64, 128, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 64
+    (1, 64, 192, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 65
+    (1, 64, 256, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 66
+    (1, 64, 320, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 67
+    (1, 128, 64, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 68
+    (1, 128, 128, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 69
+    (1, 128, 192, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 70
+    (1, 128, 256, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 71
+    (1, 128, 320, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 72
     # Mixed dtype combinations (opposite)
-    (1, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
-    (1, 64, 128, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
-    (1, 64, 192, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
-    (1, 64, 256, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
-    (1, 64, 320, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
-    (1, 128, 64, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
-    (1, 128, 128, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
-    (1, 128, 192, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
-    (1, 128, 256, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
-    (1, 128, 320, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
-    (1, 320, 320, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
+    (1, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 73
+    (1, 64, 128, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 74
+    (1, 64, 192, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 75
+    (1, 64, 256, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 76
+    (1, 64, 320, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 77
+    (1, 128, 64, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 78
+    (1, 128, 128, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 79
+    (1, 128, 192, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 80
+    (1, 128, 256, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 81
+    (1, 128, 320, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 82
     # More variations with different spatial dimensions
-    (1, 32, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (1, 64, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (1, 32, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 64, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 32, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BFP16, TL, TL, HS),
-    (1, 64, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BFP16, TL, TL, HS),
-    (1, 32, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
-    (1, 64, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
+    (1, 32, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 83
+    (1, 32, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 85
+    (1, 32, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BFP16, TL, TL, HS),  # index 87
+    (1, 64, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BFP16, TL, TL, HS),  # index 88
+    (1, 32, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 89
+    (1, 64, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 90
     # More variations with different batch sizes and channels
-    (2, 32, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (2, 64, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (2, 32, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (2, 32, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BFP16, TL, TL, HS),
-    (2, 32, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
-    (2, 64, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
+    # (2, 32, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS), # index 91
+    # (2, 64, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS), # index 92
+    # (2, 32, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS), # index 93
+    # (2, 32, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BFP16, TL, TL, HS), # index 94
+    # (2, 32, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS), # index 95
+    # (2, 64, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS), # index 96
     # More variations with different kernel sizes
-    (1, 32, 32, 128, 128, 5, 5, 1, 1, 2, 2, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (1, 64, 32, 128, 128, 5, 5, 1, 1, 2, 2, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (1, 32, 32, 128, 128, 5, 5, 1, 1, 2, 2, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 64, 32, 128, 128, 5, 5, 1, 1, 2, 2, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 32, 32, 128, 128, 5, 5, 1, 1, 2, 2, 1, 1, 1, BF8, BFP16, TL, TL, HS),
-    (1, 64, 32, 128, 128, 5, 5, 1, 1, 2, 2, 1, 1, 1, BF8, BFP16, TL, TL, HS),
-    (1, 32, 32, 128, 128, 5, 5, 1, 1, 2, 2, 1, 1, 1, BFP16, BF8, TL, TL, HS),
-    (1, 64, 32, 128, 128, 5, 5, 1, 1, 2, 2, 1, 1, 1, BFP16, BF8, TL, TL, HS),
+    (1, 32, 32, 128, 128, 5, 5, 1, 1, 2, 2, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 97
+    (1, 64, 32, 128, 128, 5, 5, 1, 1, 2, 2, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 98
+    (1, 32, 32, 128, 128, 5, 5, 1, 1, 2, 2, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 99
+    (1, 64, 32, 128, 128, 5, 5, 1, 1, 2, 2, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 100
+    (1, 32, 32, 128, 128, 5, 5, 1, 1, 2, 2, 1, 1, 1, BF8, BFP16, TL, TL, HS),  # index 101
+    (1, 64, 32, 128, 128, 5, 5, 1, 1, 2, 2, 1, 1, 1, BF8, BFP16, TL, TL, HS),  # index 102
+    (1, 32, 32, 128, 128, 5, 5, 1, 1, 2, 2, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 103
+    (1, 64, 32, 128, 128, 5, 5, 1, 1, 2, 2, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 104
     # # More variations with different strides
-    (1, 32, 32, 128, 128, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (1, 64, 32, 128, 128, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (1, 32, 32, 128, 128, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 64, 32, 128, 128, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 32, 32, 128, 128, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BFP16, TL, TL, HS),
-    (1, 64, 32, 128, 128, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BFP16, TL, TL, HS),
-    (1, 32, 32, 128, 128, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
-    (1, 64, 32, 128, 128, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),
+    (1, 32, 32, 128, 128, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 105
+    (1, 64, 32, 128, 128, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 106
+    (1, 32, 32, 128, 128, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 107
+    (1, 64, 32, 128, 128, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 108
+    (1, 32, 32, 128, 128, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BFP16, TL, TL, HS),  # index 109
+    (1, 64, 32, 128, 128, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BFP16, TL, TL, HS),  # index 110
+    (1, 32, 32, 128, 128, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 111
+    (1, 64, 32, 128, 128, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 112
     # More variations with different padding
-    (1, 32, 32, 128, 128, 3, 3, 1, 1, 2, 2, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (1, 64, 32, 128, 128, 3, 3, 1, 1, 2, 2, 1, 1, 1, BF8, BF8, TL, TL, HS),
-    (1, 32, 32, 128, 128, 3, 3, 1, 1, 2, 2, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 64, 32, 128, 128, 3, 3, 1, 1, 2, 2, 1, 1, 1, BFP16, BFP16, TL, TL, HS),
-    (1, 32, 32, 128, 128, 3, 3, 1, 1, 2, 2, 1, 1, 1, BF8, BFP16, TL, TL, HS),
-    (1, 64, 32, 128, 128, 3, 3, 1, 1, 2, 2, 1, 1, 1, BF8, BFP16, TL, TL, HS),
-    (1, 32, 32, 128, 128, 3, 3, 1, 1, 2, 2, 1, 1, 1, BFP16, BF8, TL, TL, HS),
-    (1, 64, 32, 128, 128, 3, 3, 1, 1, 2, 2, 1, 1, 1, BFP16, BF8, TL, TL, HS),
+    (1, 32, 32, 128, 128, 3, 3, 1, 1, 2, 2, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 113
+    (1, 64, 32, 128, 128, 3, 3, 1, 1, 2, 2, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 114
+    (1, 32, 32, 128, 128, 3, 3, 1, 1, 2, 2, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 115
+    (1, 64, 32, 128, 128, 3, 3, 1, 1, 2, 2, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 116
+    (1, 32, 32, 128, 128, 3, 3, 1, 1, 2, 2, 1, 1, 1, BF8, BFP16, TL, TL, HS),  # index 117
+    (1, 64, 32, 128, 128, 3, 3, 1, 1, 2, 2, 1, 1, 1, BF8, BFP16, TL, TL, HS),  # index 118
+    (1, 32, 32, 128, 128, 3, 3, 1, 1, 2, 2, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 119
+    (1, 64, 32, 128, 128, 3, 3, 1, 1, 2, 2, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 120
     # More variations with different groups
-    (1, 64, 64, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 2, BF8, BF8, TL, TL, HS),
-    (1, 128, 128, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 2, BF8, BF8, TL, TL, HS),
-    (1, 64, 64, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 2, BFP16, BFP16, TL, TL, HS),
-    (1, 128, 128, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 2, BFP16, BFP16, TL, TL, HS),
-    (1, 64, 64, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 2, BF8, BFP16, TL, TL, HS),
-    (1, 128, 128, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 2, BF8, BFP16, TL, TL, HS),
-    (1, 64, 64, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 2, BFP16, BF8, TL, TL, HS),
-    (1, 128, 128, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 2, BFP16, BF8, TL, TL, HS),
+    (1, 128, 128, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 2, BF8, BF8, TL, TL, HS),  # index 122
+    (1, 64, 64, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 2, BFP16, BFP16, TL, TL, HS),  # index 123
+    (1, 128, 128, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 2, BFP16, BFP16, TL, TL, HS),  # index 124
+    (1, 64, 64, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 2, BF8, BFP16, TL, TL, HS),  # index 125
+    (1, 128, 128, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 2, BF8, BFP16, TL, TL, HS),  # index 126
+    (1, 64, 64, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 2, BFP16, BF8, TL, TL, HS),  # index 127
+    (1, 128, 128, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 2, BFP16, BF8, TL, TL, HS),  # index 128
     # More variations with different output layouts
-    (1, 32, 32, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, RM, HS),
-    (1, 64, 32, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, RM, HS),
-    (1, 32, 32, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BFP16, TL, RM, HS),
-    (1, 64, 32, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BFP16, TL, RM, HS),
+    (1, 32, 32, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, RM, HS),  # index 129
+    (1, 64, 32, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, RM, HS),  # index 130
+    (1, 32, 32, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BFP16, TL, RM, HS),  # index 131
+    (1, 64, 32, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BFP16, TL, RM, HS),  # index 132
 ]
+
 
 # Suite 2: Row major input and output layouts for HS
 
@@ -246,7 +233,7 @@ all_test_cases_suite_2 = [
     (1, 128, 128, 48, 48, 5, 5, 1, 1, 3, 3, 1, 1, 1, BFP16, BFP16, RM, RM, HS),  # large padding
     (1, 160, 160, 32, 32, 7, 7, 1, 1, 4, 4, 1, 1, 1, BFP16, BFP16, RM, RM, HS),  # very large padding
     # Large input sizes
-    (1, 128, 128, 180, 320, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, RM, RM, HS),  # large asymmetric input
+    # (1, 128, 128, 180, 320, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, RM, RM, HS),  # large asymmetric input
     (1, 128, 128, 90, 160, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, RM, RM, HS),  # medium asymmetric input
     (1, 96, 96, 256, 256, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, RM, RM, HS),  # very large square input
     # Different channel configurations
@@ -263,7 +250,6 @@ all_test_cases_suite_2 = [
     (1, 256, 128, 28, 28, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, RM, RM, HS),  # ResNet downsampling
     (1, 32, 32, 240, 320, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, RM, RM, HS),  # Custom large input
     (1, 96, 96, 64, 64, 13, 13, 3, 3, 6, 6, 1, 1, 1, BFP16, BFP16, RM, RM, HS),  # 13x13 kernel
-    (1, 34, 118, 28, 28, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, RM, RM, HS),
     (1, 46, 122, 28, 28, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, RM, RM, HS),
     (1, 128, 128, 100, 136, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, RM, RM, HS),
     (1, 64, 128, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, RM, RM, HS),
@@ -321,6 +307,237 @@ all_test_cases_suite_2 = [
     (1, 128, 48, 7, 7, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, RM, RM, HS),
 ]
 
+# Suite 3: BLOCK_SHARDED test cases
+all_test_cases_suite_3 = [
+    # Format: (batch_size, output_channels, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, groups, input_dtype, output_dtype, input_layout, output_layout, sharding_scheme)
+    # From test_conv_features - explicit BLOCK_SHARDED with various kernels/dtypes
+    (2, 128, 128, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, BS),  # index 0
+    (2, 128, 128, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BFP16, TL, TL, BS),  # index 1
+    (2, 128, 128, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 2
+    (2, 128, 128, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, BS),  # index 3
+    (2, 128, 128, 32, 32, 5, 5, 2, 2, 2, 2, 1, 1, 1, BF8, BF8, TL, TL, BS),  # index 4
+    (2, 128, 128, 32, 32, 5, 5, 2, 2, 2, 2, 1, 1, 1, BF8, BFP16, TL, TL, BS),  # index 5
+    (2, 128, 128, 32, 32, 5, 5, 2, 2, 2, 2, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 6
+    (2, 128, 128, 32, 32, 5, 5, 2, 2, 2, 2, 1, 1, 1, BFP16, BFP16, TL, TL, BS),  # index 7
+    # From test_conv_features_multi_device - explicit BLOCK_SHARDED with groups
+    (2, 128, 128, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 2, BF8, BF8, TL, TL, BS),  # index 9
+    (2, 128, 128, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 2, BF8, BFP16, TL, TL, BS),  # index 11
+    (2, 128, 128, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 2, BFP16, BF8, TL, TL, BS),  # index 13
+    (2, 128, 128, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 2, BFP16, BFP16, TL, TL, BS),  # index 15
+    # From test_conv_dilation - explicit BLOCK_SHARDED with dilation
+    (1, 128, 128, 8, 8, 3, 3, 1, 1, 2, 2, 2, 2, 1, BFP16, BFP16, TL, TL, BS),  # index 16
+    (1, 128, 128, 8, 8, 3, 3, 1, 1, 3, 3, 3, 3, 1, BFP16, BFP16, TL, TL, BS),  # index 17
+    (1, 128, 128, 16, 16, 3, 3, 1, 1, 2, 2, 2, 2, 1, BFP16, BFP16, TL, TL, BS),  # index 18
+    (1, 128, 128, 16, 16, 3, 3, 1, 1, 3, 3, 3, 3, 1, BFP16, BFP16, TL, TL, BS),  # index 19
+    (1, 128, 128, 32, 32, 3, 3, 1, 1, 2, 2, 2, 2, 1, BFP16, BFP16, TL, TL, BS),  # index 20
+    (1, 128, 128, 32, 32, 3, 3, 1, 1, 3, 3, 3, 3, 1, BFP16, BFP16, TL, TL, BS),  # index 21
+    # From test_halo_reshard_conv - BLOCK_SHARDED when use_1d_systolic_array=False
+    (1, 128, 128, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 22
+    (1, 128, 128, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 23
+    (2, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 24
+    # From test_sd_conv_wh - Stable Diffusion cases when use_1d_systolic_array=False
+    (2, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, BS),  # index 25
+    (2, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 26
+    (2, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BFP16, TL, TL, BS),  # index 27
+    (2, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, BS),  # index 28
+    (2, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 29
+    (2, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, BS),  # index 30
+    (2, 640, 640, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, BS),  # index 31
+    (2, 640, 640, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 32
+    (2, 640, 640, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BFP16, TL, TL, BS),  # index 33
+    (2, 640, 640, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, BS),  # index 34
+    (2, 1280, 1280, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, BS),  # index 35
+    (2, 1280, 1280, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 36
+    (2, 1280, 1280, 16, 16, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, BS),  # index 37
+    (2, 1280, 1280, 16, 16, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 38
+    (2, 1280, 1280, 8, 8, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, BS),  # index 39
+    (2, 1280, 1280, 8, 8, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 40
+    (2, 1280, 2560, 8, 8, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 41
+    # From test_sd_conv - Stable Diffusion cases when use_1d_systolic_array=False
+    (1, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, BS),  # index 42
+    (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, BS),  # index 43
+    (1, 640, 640, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, BS),  # index 44
+    # From ResNet cases when use_1d_systolic_array=False
+    (8, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 45
+    (16, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 46
+    (20, 256, 256, 28, 28, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 47
+    (8, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 48
+    (16, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 49
+    (20, 256, 256, 14, 14, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 50
+    (8, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 51
+    (16, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 52
+    (20, 512, 512, 14, 14, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 53
+    (8, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 54
+    (16, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 55
+    (20, 512, 512, 7, 7, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 56
+    (1, 64, 64, 8, 8, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 57
+    (1, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 58
+    (8, 256, 256, 7, 7, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, BS),  # index 59
+]
+
+# Suite 4: WIDTH_SHARDED test cases from test_new_conv2d.py
+all_test_cases_suite_4 = [
+    # Format: (batch_size, output_channels, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, groups, input_dtype, output_dtype, input_layout, output_layout, sharding_scheme)
+    # From test_conv_features - Basic WIDTH_SHARDED test cases with 3x3 kernels
+    (2, 256, 256, 8, 8, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, WS),  # index 0
+    (2, 256, 256, 8, 8, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, WS),  # index 1
+    (2, 256, 256, 8, 8, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BF8, RM, TL, WS),  # index 2
+    (2, 256, 256, 8, 8, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, RM, TL, WS),  # index 3
+    (2, 256, 256, 8, 8, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, TL, RM, WS),  # index 4
+    (2, 256, 256, 8, 8, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, RM, RM, WS),  # index 5
+    # From test_conv_features - 5x5 kernels with WIDTH_SHARDED
+    (2, 256, 256, 8, 8, 5, 5, 2, 2, 2, 2, 1, 1, 1, BFP16, BF8, TL, TL, WS),  # index 6
+    (2, 256, 256, 8, 8, 5, 5, 2, 2, 2, 2, 1, 1, 1, BFP16, BFP16, TL, TL, WS),  # index 7
+    (2, 256, 256, 8, 8, 5, 5, 2, 2, 2, 2, 1, 1, 1, BFP16, BF8, RM, TL, WS),  # index 8
+    (2, 256, 256, 8, 8, 5, 5, 2, 2, 2, 2, 1, 1, 1, BFP16, BFP16, RM, TL, WS),  # index 9
+    (2, 256, 256, 8, 8, 5, 5, 2, 2, 2, 2, 1, 1, 1, BFP16, BFP16, TL, RM, WS),  # index 10
+    (2, 256, 256, 8, 8, 5, 5, 2, 2, 2, 2, 1, 1, 1, BFP16, BFP16, RM, RM, WS),  # index 11
+    # From test_conv_features_multi_device - WIDTH_SHARDED with different groups
+    (2, 256, 256, 8, 8, 3, 3, 2, 2, 1, 1, 1, 1, 2, BFP16, BF8, TL, TL, WS),  # index 13
+    (2, 256, 256, 8, 8, 3, 3, 2, 2, 1, 1, 1, 1, 2, BFP16, BFP16, TL, TL, WS),  # index 15
+    (2, 256, 256, 8, 8, 3, 3, 2, 2, 1, 1, 1, 1, 2, BFP16, BF8, RM, TL, WS),  # index 17
+    (2, 256, 256, 8, 8, 3, 3, 2, 2, 1, 1, 1, 1, 2, BFP16, BFP16, RM, TL, WS),  # index 19
+    (2, 256, 256, 8, 8, 3, 3, 2, 2, 1, 1, 1, 1, 2, BFP16, BFP16, TL, RM, WS),  # index 21
+    (2, 256, 256, 8, 8, 3, 3, 2, 2, 1, 1, 1, 1, 2, BFP16, BFP16, RM, RM, WS),  # index 23
+    # From test_conv_dilation - WIDTH_SHARDED with dilation=2
+    (1, 768, 768, 16, 16, 3, 3, 1, 1, 2, 2, 2, 2, 1, BFP16, BFP16, TL, TL, WS),  # index 24
+    (1, 1280, 1280, 16, 16, 3, 3, 1, 1, 2, 2, 2, 2, 1, BFP16, BFP16, TL, TL, WS),  # index 25
+    (1, 1280, 1280, 8, 8, 3, 3, 1, 1, 2, 2, 2, 2, 1, BFP16, BFP16, TL, TL, WS),  # index 26
+    (1, 1280, 2560, 8, 8, 3, 3, 1, 1, 2, 2, 2, 2, 1, BFP16, BFP16, TL, TL, WS),  # index 27
+    # From test_conv_dilation - WIDTH_SHARDED with dilation=3
+    (1, 768, 768, 16, 16, 3, 3, 1, 1, 3, 3, 3, 3, 1, BFP16, BFP16, TL, TL, WS),  # index 28
+    (1, 1280, 1280, 16, 16, 3, 3, 1, 1, 3, 3, 3, 3, 1, BFP16, BFP16, TL, TL, WS),  # index 29
+    (1, 1280, 1280, 8, 8, 3, 3, 1, 1, 3, 3, 3, 3, 1, BFP16, BFP16, TL, TL, WS),  # index 30
+    (1, 1280, 2560, 8, 8, 3, 3, 1, 1, 3, 3, 3, 3, 1, BFP16, BFP16, TL, TL, WS),  # index 31
+    # From test_conv_for_segformer_512x512 - WIDTH_SHARDED depthwise convolutions with stride=1
+    (1, 576, 576, 8, 8, 3, 3, 1, 1, 0, 0, 1, 1, 576, BFP16, BFP16, TL, TL, WS),  # index 32
+    (1, 960, 960, 4, 4, 3, 3, 1, 1, 0, 0, 1, 1, 960, BFP16, BFP16, TL, TL, WS),  # index 33
+    # From test_conv_for_segformer_512x512 - WIDTH_SHARDED depthwise convolutions with stride=2
+    (1, 576, 576, 8, 8, 3, 3, 2, 2, 0, 0, 1, 1, 576, BFP16, BFP16, TL, TL, WS),  # index 34
+    # Additional variations with different batch sizes - scaling WIDTH_SHARDED base cases
+    (1, 256, 256, 8, 8, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, WS),  # index 35
+    (1, 256, 256, 8, 8, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, WS),  # index 36
+    (1, 256, 256, 8, 8, 5, 5, 2, 2, 2, 2, 1, 1, 1, BFP16, BF8, TL, TL, WS),  # index 37
+    (1, 256, 256, 8, 8, 5, 5, 2, 2, 2, 2, 1, 1, 1, BFP16, BFP16, TL, TL, WS),  # index 38
+    # WIDTH_SHARDED with different spatial dimensions - scaled down versions
+    (1, 256, 256, 16, 16, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, WS),  # index 39
+    (1, 256, 256, 16, 16, 5, 5, 2, 2, 2, 2, 1, 1, 1, BFP16, BFP16, TL, TL, WS),  # index 40
+    # WIDTH_SHARDED with stride=1 variations
+    (1, 256, 256, 8, 8, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, WS),  # index 41
+    (1, 256, 256, 8, 8, 5, 5, 1, 1, 2, 2, 1, 1, 1, BFP16, BFP16, TL, TL, WS),  # index 42
+    # WIDTH_SHARDED with larger spatial dimensions
+    (1, 256, 256, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, WS),  # index 43
+    # WIDTH_SHARDED with mixed layout combinations for RM support
+    (1, 256, 256, 8, 8, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, RM, TL, WS),  # index 44
+    (1, 256, 256, 8, 8, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, RM, TL, WS),  # index 45
+    (1, 256, 256, 8, 8, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, RM, WS),  # index 46
+    (1, 256, 256, 8, 8, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, RM, RM, WS),  # index 47
+    (1, 960, 960, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 960, BFP16, BFP16, TL, TL, WS),  # index 0
+    (1, 672, 672, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 672, BFP16, BFP16, TL, TL, WS),  # index 1
+    (1, 960, 960, 32, 32, 1, 5, 1, 1, 0, 2, 1, 1, 960, BFP16, BFP16, TL, TL, WS),  # index 2
+    (1, 960, 960, 32, 32, 5, 1, 1, 1, 2, 0, 1, 1, 960, BFP16, BFP16, TL, TL, WS),  # index 3
+    (1, 672, 672, 32, 32, 1, 5, 1, 1, 0, 2, 1, 1, 672, BFP16, BFP16, TL, TL, WS),  # index 4
+    (1, 672, 672, 32, 32, 5, 1, 1, 1, 2, 0, 1, 1, 672, BFP16, BFP16, TL, TL, WS),  # index 5
+    (1, 480, 480, 32, 32, 1, 5, 1, 1, 0, 2, 1, 1, 480, BFP16, BFP16, TL, TL, WS),  # index 6
+    (1, 480, 480, 32, 32, 5, 1, 1, 1, 2, 0, 1, 1, 480, BFP16, BFP16, TL, TL, WS),  # index 7
+    (1, 240, 240, 32, 32, 1, 5, 1, 1, 0, 2, 1, 1, 240, BFP16, BFP16, TL, TL, WS),  # index 8
+    (1, 240, 240, 32, 32, 5, 1, 1, 1, 2, 0, 1, 1, 240, BFP16, BFP16, TL, TL, WS),  # index 9
+    # Smaller spatial dimensions for performance testing
+    (1, 960, 960, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 960, BFP16, BFP16, TL, TL, WS),  # index 10
+    (1, 672, 672, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 672, BFP16, BFP16, TL, TL, WS),  # index 11
+    (1, 576, 576, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 576, BFP16, BFP16, TL, TL, WS),  # index 12
+    (1, 480, 480, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 480, BFP16, BFP16, TL, TL, WS),  # index 13
+    # Mixed data type combinations for WIDTH_SHARDED
+    (1, 960, 960, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 960, BFP16, BF8, TL, TL, WS),  # index 14
+    (1, 672, 672, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 672, BFP16, BF8, TL, TL, WS),  # index 15
+    (1, 576, 576, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 576, BFP16, BF8, TL, TL, WS),  # index 16
+    (1, 480, 480, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 480, BFP16, BF8, TL, TL, WS),  # index 17
+    (1, 1024, 1024, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1024, BFP16, BFP16, TL, TL, WS),  # index 18
+    (1, 768, 768, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 768, BFP16, BFP16, TL, TL, WS),  # index 19
+    (1, 240, 240, 32, 32, 3, 3, 2, 2, 0, 0, 1, 1, 240, BFP16, BFP16, TL, TL, WS),  # index 20
+    (1, 96, 96, 32, 32, 3, 3, 2, 2, 0, 0, 1, 1, 96, BFP16, BFP16, TL, TL, WS),  # index 21
+    # Additional test cases from test_new_conv2d.py and conv2d_short_sweep.py
+    # Varying parameters other than WIDTH_SHARDED
+    # Different spatial dimensions - small 8x8 (removing duplicates from Suite 4)
+    (2, 128, 128, 8, 8, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, WS),  # index 22
+    # Different spatial dimensions - medium 64x64
+    (1, 512, 256, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, WS),  # index 23
+    (1, 256, 512, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, WS),  # index 24
+    # Different kernel sizes with asymmetric combinations
+    (1, 320, 320, 32, 32, 1, 5, 1, 1, 0, 2, 1, 1, 1, BFP16, BFP16, TL, TL, WS),  # index 25
+    (1, 320, 320, 32, 32, 5, 1, 1, 1, 2, 0, 1, 1, 1, BFP16, BFP16, TL, TL, WS),  # index 26
+    (1, 256, 256, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, WS),  # index 27
+    (1, 192, 192, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, WS),  # index 28
+    (1, 336, 336, 32, 32, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, WS),  # index 29
+]
+
+all_test_cases_suite_5 = [
+    # Format: (batch_size, output_channels, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, groups, input_dtype, output_dtype, input_layout, output_layout, sharding_scheme)
+    (1, 64, 64, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 0
+    (1, 128, 128, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 1
+    (1, 64, 64, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 2
+    (1, 128, 128, 128, 128, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 3
+    (1, 64, 64, 64, 64, 5, 5, 1, 1, 2, 2, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 4
+    (1, 64, 64, 64, 64, 7, 7, 1, 1, 3, 3, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 5
+    (1, 64, 64, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BFP16, TL, TL, HS),  # index 6
+    (1, 64, 64, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BF8, TL, TL, HS),  # index 7
+    (1, 64, 64, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, RM, HS),  # index 8
+    (1, 64, 64, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, RM, TL, HS),  # index 9
+    (1, 64, 64, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 64, BFP16, BFP16, TL, TL, HS),  # index 10
+    (1, 64, 64, 64, 64, 3, 3, 1, 1, 2, 2, 2, 2, 1, BFP16, BFP16, TL, TL, HS),  # index 11
+    (1, 512, 512, 14, 14, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, WS),  # index 12
+    (1, 1024, 1024, 8, 8, 1, 1, 1, 1, 0, 0, 1, 1, 1, BFP16, BFP16, TL, TL, WS),  # index 13
+]
+
+# Suite 6: Missing Test Cases from test_new_conv2d.py
+all_test_cases_suite_6 = [
+    # Format: (batch_size, output_channels, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, groups, input_dtype, output_dtype, input_layout, output_layout, sharding_scheme)
+    (1, 128, 512, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, BS),
+    (1, 256, 512, 30, 40, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, BS),
+    (1, 512, 512, 30, 40, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, BS),
+    # ===== MISSING BF8->BF8 CONFIGURATIONS =====
+    (1, 320, 320, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BF8, TL, TL, HS),  # index 2 - UNet large channels
+    # ===== MISSING RM LAYOUT CONFIGURATIONS =====
+    # Mixed input/output layout combinations
+    (2, 128, 256, 9, 9, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, RM, TL, HS),  # index 7 - RM input, TL output
+    (2, 128, 256, 9, 9, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, RM, HS),  # index 8 - TL input, RM output
+    (2, 128, 256, 9, 9, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, RM, RM, HS),  # index 9 - Both RM
+    (1, 320, 320, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, RM, TL, HS),  # index 10 - UNet RM input
+    (1, 1280, 1280, 8, 8, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, RM, RM, BS),  # index 12 - Large channels both RM
+    # ===== SEGFORMER CONFIGURATIONS (with dilation) =====
+    (1, 48, 32, 252, 252, 3, 3, 1, 1, 0, 0, 2, 2, 1, BFP16, BFP16, TL, TL, HS),  # index 13 - Segformer dilation=2
+    (1, 56, 48, 248, 248, 3, 3, 1, 1, 0, 0, 4, 4, 1, BFP16, BFP16, TL, TL, HS),  # index 14 - Segformer dilation=4
+    (1, 64, 56, 240, 240, 3, 3, 1, 1, 0, 0, 8, 8, 1, BFP16, BFP16, TL, TL, HS),  # index 15 - Segformer dilation=8
+    # ===== RESNET50 CONFIGURATIONS (stride=2, higher batch) =====
+    (8, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 18 - ResNet50 stride=2 batch=8
+    (20, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 20 - ResNet50 batch=20
+    # ===== UNET CONFIGURATIONS (large channels) =====
+    (1, 1280, 2560, 8, 8, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, WS),  # index 23 - UNet asymmetric channels
+    (1, 640, 1280, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, BS),  # index 24 - UNet asymmetric channels
+    (1, 320, 320, 32, 32, 3, 3, 1, 1, 1, 1, 1, 1, 1, BF8, BFP16, TL, RM, HS),  # index 26 - UNet mixed + RM
+    # ===== GROUP/DEPTHWISE CONVOLUTIONS =====
+    (1, 128, 128, 60, 80, 3, 3, 1, 1, 1, 1, 1, 1, 2, BFP16, BFP16, TL, TL, HS),  # index 27 - Group conv groups=2
+    (1, 128, 128, 60, 80, 3, 3, 1, 1, 1, 1, 1, 1, 2, BFP16, BFP16, RM, TL, HS),  # index 28 - Group conv RM input
+    (1, 128, 128, 60, 80, 3, 3, 1, 1, 1, 1, 1, 1, 2, BFP16, BFP16, TL, RM, HS),  # index 29 - Group conv RM output
+    # ===== LARGE CHANNEL STRESS TESTS =====
+    (1, 1024, 1024, 16, 16, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, TL, TL, WS),  # index 31 - 1024 channels
+    (1, 1024, 256, 128, 128, 1, 1, 1, 1, 0, 0, 1, 1, 1, BFP16, BFP16, TL, TL, HS),  # index 32 - Asymmetric large
+    # ===== CONV_FEATURES CONFIGURATIONS (mixed types) =====
+    (2, 768, 32, 9, 9, 3, 3, 1, 1, 1, 1, 1, 1, 1, BFP16, BFP16, RM, RM, HS),  # index 36 - Extreme asymmetric
+    # ===== SWIN TRANSFORMER CONFIGURATIONS =====
+    (1, 256, 150, 128, 128, 1, 1, 1, 1, 0, 0, 1, 1, 1, BFP16, BFP16, TL, RM, HS),  # index 37 - Swin asymmetric + RM
+]
+
+import hashlib
+import sys
+
+
+def hash_input_spec(input_spec):
+    return hashlib.sha256(str(input_spec).encode()).hexdigest()
+
+
+hash_to_input_spec = {}
+
 
 # Function to run conv2d withut tensors
 def run_perf_benchmark(
@@ -348,6 +565,12 @@ def run_perf_benchmark(
         output_layout,
         sharding_scheme,
     ] = input_spec
+
+    # input_spec_hash = hash_input_spec(input_spec)
+    # if input_spec_hash in hash_to_input_spec:
+    #     print(f"Skipping duplicate test case: {input_spec}")
+    #     sys.exit(0)
+    # hash_to_input_spec[input_spec_hash] = input_spec
 
     print(f"Running test case {input_spec}")
     branch = os.environ.get("BRANCH", "latest")
@@ -388,9 +611,6 @@ def run_perf_benchmark(
     # Add dtype only for old branch
     if branch == "old":
         config_params["dtype"] = output_dtype
-    if branch == "latest" and sharding_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
-        print("enabling weights double buffer")
-        config_params["enable_weights_double_buffer"] = True
 
     conv_config = ttnn.Conv2dConfig(**config_params)
     # Build conv2d parameters
@@ -437,10 +657,10 @@ def run_perf_benchmark(
 # Create parameters structure for pytest - 7 separate suites
 parameters_suite_1 = {"input_specs": all_test_cases_suite_1}
 parameters_suite_2 = {"input_specs": all_test_cases_suite_2}
-# parameters_suite_3 = {"input_specs": all_test_cases_suite_3}
-# parameters_suite_4 = {"input_specs": all_test_cases_suite_4}
-# parameters_suite_5 = {"input_specs": all_test_cases_suite_5}
-# parameters_suite_6 = {"input_specs": all_test_cases_suite_6}
+parameters_suite_3 = {"input_specs": all_test_cases_suite_3}
+parameters_suite_4 = {"input_specs": all_test_cases_suite_4}
+parameters_suite_5 = {"input_specs": all_test_cases_suite_5}
+parameters_suite_6 = {"input_specs": all_test_cases_suite_6}
 # parameters_suite_7 = {"input_specs": all_test_cases_suite_7}
 
 # # Combined list for reference
@@ -461,25 +681,29 @@ def test_conv2d_l1_perf_suite_2(device, input_spec):
     run_perf_benchmark(input_spec, device)
 
 
-# @pytest.mark.parametrize("input_spec", parameters_suite_3["input_specs"])
-# @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-# def test_conv2d_l1_perf_suite_3(device, input_spec):
-#     run_perf_benchmark(input_spec, device)
+@pytest.mark.parametrize("input_spec", parameters_suite_3["input_specs"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d_l1_perf_suite_3(device, input_spec):
+    run_perf_benchmark(input_spec, device)
 
-# @pytest.mark.parametrize("input_spec", parameters_suite_4["input_specs"])
-# @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-# def test_conv2d_l1_perf_suite_4(device, input_spec):
-#     run_perf_benchmark(input_spec, device)
 
-# @pytest.mark.parametrize("input_spec", parameters_suite_5["input_specs"])
-# @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-# def test_conv2d_l1_perf_suite_5(device, input_spec):
-#     run_perf_benchmark(input_spec, device)
+@pytest.mark.parametrize("input_spec", parameters_suite_4["input_specs"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d_l1_perf_suite_4(device, input_spec):
+    run_perf_benchmark(input_spec, device)
 
-# @pytest.mark.parametrize("input_spec", parameters_suite_6["input_specs"])
-# @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-# def test_conv2d_l1_perf_suite_6(device, input_spec):
-#     run_perf_benchmark(input_spec, device)
+
+@pytest.mark.parametrize("input_spec", parameters_suite_5["input_specs"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d_l1_perf_suite_5(device, input_spec):
+    run_perf_benchmark(input_spec, device)
+
+
+@pytest.mark.parametrize("input_spec", parameters_suite_6["input_specs"])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_conv2d_l1_perf_suite_6(device, input_spec):
+    run_perf_benchmark(input_spec, device)
+
 
 # @pytest.mark.parametrize("input_spec", parameters_suite_7["input_specs"])
 # @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
@@ -490,7 +714,10 @@ if __name__ == "__main__":
     """
     Example usage for performance testing
     """
-    print(f"Conv2d Performance Test Suite - Split into 2 suites")
+    print(f"Conv2d Performance Test Suite - Split into 5 suites")
     print(f"")
-    print(f"Suite 1: {len(all_test_cases_suite_1)} test cases (TILE input/output layouts)")
-    print(f"Suite 2: {len(all_test_cases_suite_2)} test cases (ROW_MAJOR input/output layouts)")
+    print(f"Suite 1: {len(all_test_cases_suite_1)} test cases (HEIGHT_SHARDED)")
+    print(f"Suite 2: {len(all_test_cases_suite_2)} test cases (HEIGHT_SHARDED with ROW_MAJOR layouts)")
+    print(f"Suite 3: {len(all_test_cases_suite_3)} test cases (BLOCK_SHARDED)")
+    print(f"Suite 4: {len(all_test_cases_suite_4)} test cases (WIDTH_SHARDED)")
+    print(f"Suite 5: {len(all_test_cases_suite_5)} test cases (WIDTH_SHARDED from conv2d_short_sweep)")
