@@ -20,6 +20,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_pcc,
 )
 from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
+from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 import random
 import math
 from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
@@ -213,7 +214,7 @@ def run_multi_core_matmul_1d(
 ):
     num_links = 4 if is_6u_device else 3
     profiler = (BenchmarkProfiler(),)
-    model_args = TtModelArgs(
+    model_args = TtQwenModelArgs(
         mesh_device,
         instruct=True,
         max_batch_size=32,
@@ -243,7 +244,7 @@ def run_multi_core_matmul_1d(
         ]
     )
     packet_workers_persistent_mem_config = ttnn.create_sharded_memory_config(
-        shape=(32, 512),
+        shape=(32, 320),
         core_grid=PACKET_WORKER_CRS,
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,

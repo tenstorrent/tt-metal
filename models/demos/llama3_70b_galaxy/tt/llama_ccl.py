@@ -373,14 +373,26 @@ class TT_CCL:
         cluster_axis = 1
         buffer_mem_cfg = self.model_config["REDUCE_SCATTER_INTERIM_MEMCFG"]
         for _ in range(self.num_cbs):
-            tt_buffer = ttnn.from_torch(
-                torch.zeros((*cluster_shape, 32, 512 * buffer_mem_cfg.shard_spec.num_cores())),
-                device=self.mesh_device,
-                layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat8_b,
-                memory_config=buffer_mem_cfg,
-                mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+            tt_buffer = (
+                ttnn.from_torch(
+                    torch.zeros((*cluster_shape, 32, 512 * buffer_mem_cfg.shard_spec.num_cores())),
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=buffer_mem_cfg,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+                )
+                if not self.use_qwen_mlp
+                else ttnn.from_torch(
+                    torch.zeros((*cluster_shape, 32, 320 * buffer_mem_cfg.shard_spec.num_cores())),
+                    device=self.mesh_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=buffer_mem_cfg,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+                )
             )
+
             persistent_buffers[cluster_axis].append(tt_buffer)
 
         return persistent_buffers
@@ -597,7 +609,7 @@ class TT_CCL:
                 persistent_buffer = self.persistent_buffers[cluster_axis]
 
             output_tensor_mesh = ttnn.experimental.all_reduce_async(
-                input_tensor_mesh,  # [1, 1, 1, 1280]
+                input_tensor_mesh,
                 persistent_buffer,
                 cluster_axis=cluster_axis,
                 mesh_device=self.mesh_device,
@@ -723,6 +735,7 @@ class TT_CCL:
         persistent_interim_buffer = self.reduce_scatter_buffers[cluster_axis][
             self.reduce_scatter_buffer_idx[cluster_axis]
         ]
+        breakpoint()
         w1_out, w3_out, ttnn_tensor_out = ttnn.experimental.llama_rs_matmul(
             matmul_input,
             matmul_weightA,
