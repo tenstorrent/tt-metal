@@ -36,7 +36,7 @@ def test_exp2_arange_masking(device):
 
     tt_result = ttnn.exp2(tt_in)
     result = ttnn.to_torch(tt_result)
-    assert_with_ulp(golden, result, 2)
+    assert_with_ulp(golden, result, 1)
 
 
 @pytest.mark.parametrize(
@@ -62,7 +62,7 @@ def test_exp2_arange(low, high, step, device):
 
     tt_result = ttnn.exp2(tt_in)
     result = ttnn.to_torch(tt_result)
-    assert_with_ulp(golden, result, 2)
+    assert_with_ulp(golden, result, 1)
 
 
 @pytest.mark.parametrize(
@@ -91,7 +91,7 @@ def test_exp2_ULP(low, high, device):
 
     tt_result = ttnn.exp2(tt_in)
     result = ttnn.to_torch(tt_result)
-    assert_with_ulp(golden, result, 2)
+    assert_with_ulp(golden, result, 1)
 
 
 @pytest.mark.parametrize(
@@ -133,7 +133,7 @@ def test_exp2_optional(input_shapes, device):
 
     ttnn.exp2(tt_in, output_tensor=tt_out, queue_id=cq_id)
     result = ttnn.to_torch(tt_out)
-    assert_with_ulp(golden, result, 2)
+    assert_with_ulp(golden, result, 1)
 
 
 @pytest.mark.parametrize(

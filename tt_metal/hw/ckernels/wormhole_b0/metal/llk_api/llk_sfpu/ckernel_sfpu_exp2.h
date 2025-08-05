@@ -51,7 +51,7 @@ template <bool APPROXIMATION_MODE>
 inline void exp2_init() {
     sfpi::vConstFloatPrgm0 = 0.40196114e-7f;
     sfpi::vConstIntPrgm1 = 0xf94ee7;
-    sfpi::vConstIntPrgm2 = 0x560;
+    sfpi::vConstIntPrgm2 = 0x560e;
 }
 
 }  // namespace ckernel::sfpu
