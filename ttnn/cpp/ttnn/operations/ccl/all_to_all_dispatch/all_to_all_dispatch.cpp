@@ -23,8 +23,8 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
     const ttnn::Tensor& expert_mapping_tensor,
     std::optional<uint32_t> axis,
     const std::optional<std::array<ttnn::Tensor, 2>>& optional_output_tensors,
-    const std::optional<uint32_t> num_links,
-    const std::optional<tt::tt_fabric::Topology> topology,
+    std::optional<uint32_t> num_links,
+    std::optional<tt::tt_fabric::Topology> topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<GlobalSemaphore>& global_semaphore) {
