@@ -141,7 +141,6 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
         (1, 256, 159 , 159, 16, 3, 4, 4, 0, 1, 1),
         (1, 512, 159, 159, 16, 3, 4, 4, 0, 1, 1),
         # (1,  64, 192, 640, 16, 10, 4, 4, 64, 0, 0), #pcc drop AssertionError: 0.3961253683080487
-        # (1,  64,  96, 320, 16, 3, 4, 4, 64, 0, 0), #pcc drop AssertionError: 0.4576525468259213
     ],
 )
 def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, cp, hp, wp):

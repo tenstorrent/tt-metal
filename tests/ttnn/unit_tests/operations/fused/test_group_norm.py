@@ -579,15 +579,16 @@ def test_group_norm_compute_config(device, N, C, H, W, num_groups):
     # Verify that the higher-accuracy config is closer to torch
     assert pcc_high > pcc_low, "High-accuracy config should have higher PCC than low-accuracy config"
 
-@pytest.mark.parametrize("N, C, H, W, num_groups", 
+@pytest.mark.parametrize("N, C, H, W, num_groups, shard", 
                         [
-                            (1, 256,  12,  40, 16),
-                            (1, 256,  24,  80, 16),
-                            (1, 256,  48, 160, 16),
-                            (1, 512,  12,  40, 16),
+                            (1, 256,  12,  40, 16, 'BS'),
+                            (1, 256,  24,  80, 16, 'HS'),
+                            (1, 256,  48, 160, 16, 'HS'),
+                            (1, 512,  12,  40, 16, 'BS'),
+                            # (1,  64,  96, 320, 16, 'HS'), #PCC AssertionError: 0.5680849100099751
                         ])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-def test_group_norm_oft(device, N, C, H, W, num_groups):
+def test_group_norm_oft(device, N, C, H, W, num_groups, shard):
     assert C % num_groups == 0, "Number of channels must be divisible by number of groups"
 
     compute_grid = device.compute_with_storage_grid_size()
@@ -595,6 +596,7 @@ def test_group_norm_oft(device, N, C, H, W, num_groups):
         pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
     grid_size = ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x)
     # Generate torch tensor
+    torch.manual_seed(0)
     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
     torch_weight = torch.rand((C,), dtype=torch.bfloat16)
     torch_bias = torch.rand((C,), dtype=torch.bfloat16)
@@ -641,11 +643,18 @@ def test_group_norm_oft(device, N, C, H, W, num_groups):
     # Generate shard config
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-    shard_shape = (H * W) // grid_size.x , C // grid_size.y
-    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
-    sharded_mem_config = ttnn.MemoryConfig(
-        ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
-    )
+    if shard == 'HS':
+        shard_shape = (H * W) // grid_size.x//grid_size.y, C
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+        )
+    elif shard == 'BS':
+        shard_shape = (H * W) // grid_size.x, C // grid_size.y
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.COL_MAJOR)
+        sharded_mem_config = ttnn.MemoryConfig(
+            ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
+        )
     input_tensor = ttnn.to_memory_config(
         input_tensor, memory_config=sharded_mem_config)
     
