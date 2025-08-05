@@ -190,6 +190,6 @@ install(
         ttnn_op_data_movement_jit
     FILE_SET
     ttnn_op_data_movement_jit
-        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/data_movement
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/data_movement/
         COMPONENT ttnn-runtime
 )
