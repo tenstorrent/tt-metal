@@ -44,7 +44,7 @@ concurrency:
     ${{ github.workflow }}-
     ${{ (github.ref_protected && github.run_id)
         || github.event.pull_request.number
-        || (github.event_name == 'merge_group' && join(slice(split(github.event.merge_group.head_ref, '-'), 0, -1), '-'))
+        # || (github.event_name == 'merge_group' && join(slice(split(github.event.merge_group.head_ref, '-'), 0, -1), '-'))
         || github.ref }}-
     ${{ inputs.build-type || 'default' }}
   cancel-in-progress: true
@@ -71,6 +71,7 @@ jobs:
           echo "github.workflow: ${{ github.workflow }}"
           echo "github.event_name: ${{ github.event_name }}"
           echo "github.event.pull_request.draft: ${{ github.event.pull_request.draft }}"
+          echo "github context: ${{ toJSON(github) }}"
 
   asan-build:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
