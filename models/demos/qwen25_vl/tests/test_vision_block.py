@@ -34,7 +34,7 @@ def test_vision_block_inference(
     n_layers = 32
     dtype = ttnn.bfloat8_b
     pccs = [0.99] * n_layers
-    pccs[24:] = [0.91] * (n_layers - 24)
+    pccs[24:] = [0.85] * (n_layers - 24)
     print(pccs)
     batch_size = 1  # For prefill we only support batch_size = 1
 

@@ -1,1 +1,0 @@
-../../../../models/demos/qwen25_vl/tests/test_wrapped_model.py
