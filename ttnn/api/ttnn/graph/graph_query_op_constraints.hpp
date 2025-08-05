@@ -105,6 +105,11 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
             auto capture_inner = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
             output = detail::extract_output_tensor(std::apply(op, transformed_args));
             op_trace = capture_inner.end_graph_capture();
+            const char* env_var = std::getenv("TTNN_TRACE_FILE");
+            std::ofstream trace_file(env_var ? env_var : "trace.json");
+            trace_file << op_trace.dump(4);
+            trace_file.close();
+            log_info(tt::LogOp, "Graph trace saved to {}", env_var ? env_var : "trace.json");
         }  // end of inner graph capture
         catch (const std::exception& e) {
             log_debug(tt::LogOp, "Error during graph capture: {}", e.what());
