@@ -232,10 +232,8 @@ def evaluation(
             im = img.clone()
             img = torch.autograd.Variable(img)
             n, c, h, w = input_shape
-            input_tensor = torch.permute(img, (0, 2, 3, 1))
-            input_tensor = input_tensor.reshape(1, 1, h * w * n, c)
-            ttnn_im = ttnn.from_torch(input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-            ttnn_im = ttnn.pad(ttnn_im, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
+            ttnn_im = ttnn.from_torch(img, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+
         elif model_name in ["YOLOv8s", "YOLOv8s_World", "YOLOv8x", "YOLOv11n", "YOLOv9c", "YOLOv7"]:
             ttnn_im = im.clone()
         else:
@@ -430,7 +428,7 @@ def test_run_yolov4_eval(
             act_dtype,
             weight_dtype,
             resolution=resolution,
-            model_location_generator=None,
+            model_location_generator=model_location_generator,
         )
 
     save_dir = "models/demos/yolov4/demo/runs"
