@@ -596,6 +596,7 @@ Result conv2d_L1(
         bias_tensor.has_value(),
         true,  // parameters_on_device
         conv_config.enable_kernel_stride_folding,
+        conv_config.full_inner_dim,
         kernel_size,
         orig_stride,
         padding_n4);
