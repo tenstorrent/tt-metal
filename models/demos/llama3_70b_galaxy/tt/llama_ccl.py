@@ -286,7 +286,11 @@ class TT_CCL:
 
         # Create persistent buffers for cluster axis 0
         cluster_axis = 0
-        N_per_shard = 2048 // 16 * cluster_shape[cluster_axis]  # FF2/DO
+        N_per_shard = (
+            2048 // 16 * cluster_shape[cluster_axis]
+            if not self.use_qwen_mlp
+            else 1280 // 8 * cluster_shape[cluster_axis]
+        )  # FF2/DO
         buffer_mem_cfg = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
@@ -593,7 +597,7 @@ class TT_CCL:
                 persistent_buffer = self.persistent_buffers[cluster_axis]
 
             output_tensor_mesh = ttnn.experimental.all_reduce_async(
-                input_tensor_mesh,
+                input_tensor_mesh,  # [1, 1, 1, 1280]
                 persistent_buffer,
                 cluster_axis=cluster_axis,
                 mesh_device=self.mesh_device,
