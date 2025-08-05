@@ -209,7 +209,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
         device->reset_sub_device_stall_group();
     }
     Synchronize(device);
-    detail::DumpDeviceProfileResults(device);
+    detail::ReadDeviceProfilerResults(device);
 }
 
 TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
@@ -250,7 +250,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
         device->reset_sub_device_stall_group();
     }
     Synchronize(device);
-    detail::DumpDeviceProfileResults(device);
+    detail::ReadDeviceProfilerResults(device);
 }
 
 TEST_F(CommandQueueSingleCardFixture, TensixActiveEthTestSubDeviceBasicEthPrograms) {
@@ -279,7 +279,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixActiveEthTestSubDeviceBasicEthProgra
         device->reset_sub_device_stall_group();
     }
     Synchronize(device);
-    detail::DumpDeviceProfileResults(device);
+    detail::ReadDeviceProfilerResults(device);
 }
 
 // Ensure each core in the sub device aware of their own logical coordinate. Same binary used in multiple sub devices.

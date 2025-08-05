@@ -406,8 +406,8 @@ def test_matmul_2d_host_perf(
                     )
 
                 if calc_device_utilization:
-                    # Clear profiler log and dump profiler data after warmup iterations
-                    ttnn.DumpDeviceProfiler(device)
+                    # Clear profiler log and read profiler data after warmup iterations
+                    ttnn.ReadDeviceProfiler(device)
                     rm(profiler_log_path)
 
                 # Synchronize device to ensure all warmup iterations are completed and device is in clean state
@@ -447,8 +447,8 @@ def test_matmul_2d_host_perf(
                     profiler.end(f"run")
 
                 if calc_device_utilization:
-                    # Dump and read profiler log data
-                    ttnn.DumpDeviceProfiler(device)
+                    # Read profiler log data
+                    ttnn.ReadDeviceProfiler(device)
                     profiler_data = get_profiler_data()
                     trisc1_kernel_duration = profiler_data["trisc1_kernel_duration"]
 
@@ -655,8 +655,8 @@ def test_matmul_2d_host_perf_out_of_box(
                     output_t = in0_t @ in1_t
 
                 if calc_device_utilization:
-                    # Clear profiler log and dump profiler data after warmup iterations
-                    ttnn.DumpDeviceProfiler(device)
+                    # Clear profiler log and read profiler data after warmup iterations
+                    ttnn.ReadDeviceProfiler(device)
                     rm(profiler_log_path)
 
                 # Synchronize device to ensure all warmup iterations are completed and device is in clean state
@@ -680,8 +680,8 @@ def test_matmul_2d_host_perf_out_of_box(
                     profiler.end(f"run")
 
                 if calc_device_utilization:
-                    # Dump and read profiler log data
-                    ttnn.DumpDeviceProfiler(device)
+                    # Read profiler log data
+                    ttnn.ReadDeviceProfiler(device)
                     profiler_data = get_profiler_data()
                     trisc1_kernel_duration = profiler_data["trisc1_kernel_duration"]
 

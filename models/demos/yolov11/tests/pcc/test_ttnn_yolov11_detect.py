@@ -5,6 +5,7 @@
 import pytest
 
 import ttnn
+from models.demos.yolov11.common import YOLOV11_L1_SMALL_SIZE
 from models.demos.yolov11.reference.yolov11 import Detect as torch_detect
 from models.demos.yolov11.tt.model_preprocessing import (
     create_yolov11_input_tensors,
@@ -29,7 +30,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV11_L1_SMALL_SIZE}], indirect=True)
 def test_yolo_v11_detect(
     device,
     reset_seeds,

@@ -189,6 +189,7 @@ from ttnn.types import (
     StorageType,
     DEVICE_STORAGE_TYPE,
     CoreGrid,
+    CoreType,
     CoreRange,
     Shape,
     TensorSpec,
@@ -215,6 +216,7 @@ from ttnn.types import (
     KernelDescriptor,
     SemaphoreDescriptor,
     ProgramDescriptor,
+    TensorAccessorArgs,
 )
 
 from ttnn.device import (
@@ -236,7 +238,7 @@ from ttnn.device import (
     CreateDevices,
     CloseDevice,
     CloseDevices,
-    DumpDeviceProfiler,
+    ReadDeviceProfiler,
     SetDefaultDevice,
     GetDefaultDevice,
     format_input_tensor,

@@ -12,6 +12,7 @@ from transformers import CLIPTextModelWithProjection, CLIPTokenizer
 
 from ..tt.clip_encoder import TtCLIPTextTransformer, TtCLIPTextTransformerParameters, TtCLIPConfig
 from ..tt.utils import assert_quality
+from ..tt.parallel_config import EncoderParallelManager
 
 
 @pytest.mark.parametrize(
@@ -20,218 +21,139 @@ from ..tt.utils import assert_quality
         "large",
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
-@pytest.mark.parametrize(("use_program_cache"), [False, True])
-def test_clip_encoder(*, device: ttnn.Device, use_program_cache: bool, model_name: str) -> None:
-    if use_program_cache:
-        device.enable_program_cache()
-
+@pytest.mark.parametrize(
+    "clip_path, tokenizer_path, expected_pcc",
+    [
+        ("text_encoder", "tokenizer", 0.99),
+        ("text_encoder_2", "tokenizer_2", 0.985),
+    ],
+    ids=["encoder_1", "encoder_2"],
+)
+@pytest.mark.parametrize("mesh_device", [(2, 4), (8, 4)], ids=["t3k", "tg"], indirect=True)
+@pytest.mark.parametrize("submesh_shape", [(1, 4), (2, 2), (4, 4)], ids=["1x4", "2x2", "4x4"])
+@pytest.mark.parametrize(
+    "device_params, topology",
+    [[{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear]],
+    indirect=["device_params"],
+)
+def test_clip_encoder(
+    *,
+    mesh_device: ttnn.Device,
+    submesh_shape: ttnn.MeshShape,
+    model_name: str,
+    clip_path: str,
+    tokenizer_path: str,
+    expected_pcc: float,
+    topology: ttnn.Topology,
+) -> None:
+    parent_mesh_shape = tuple(mesh_device.shape)
+    if any(x[0] < x[1] for x in zip(parent_mesh_shape, submesh_shape)):
+        pytest.skip("submesh shape is larger than parent mesh shape, skipping")
+    encoder_submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    print(f"Running on submesh {encoder_submesh.shape} of parent mesh {mesh_device.shape}")
+    parallel_manager = EncoderParallelManager(encoder_submesh, topology, mesh_axis=1, num_links=1)
     model_name_checkpoint = f"stabilityai/stable-diffusion-3.5-{model_name}"
 
-    hf_model_1 = CLIPTextModelWithProjection.from_pretrained(
-        model_name_checkpoint, subfolder="text_encoder", local_files_only=True
+    hf_model = CLIPTextModelWithProjection.from_pretrained(
+        model_name_checkpoint, subfolder=clip_path, local_files_only=True
     )
-    hf_model_2 = CLIPTextModelWithProjection.from_pretrained(
-        model_name_checkpoint, subfolder="text_encoder_2", local_files_only=True
-    )
-    tokenizer_1 = CLIPTokenizer.from_pretrained(model_name_checkpoint, subfolder="tokenizer", local_files_only=True)
-    tokenizer_2 = CLIPTokenizer.from_pretrained(model_name_checkpoint, subfolder="tokenizer_2", local_files_only=True)
+    tokenizer = CLIPTokenizer.from_pretrained(model_name_checkpoint, subfolder=tokenizer_path, local_files_only=True)
 
-    # extract pooled output from last_hidden_state exactly like HF does internally
-    def pooled_from_hidden(last_hidden, input_ids, eos_token_id):
-        if eos_token_id == 2:
-            # "argmax" strategy used by older checkpoints
-            idx = input_ids.argmax(dim=-1)
-        else:
-            # search for the first true EOS token
-            idx = (input_ids == eos_token_id).int().argmax(dim=-1)
-        b = torch.arange(last_hidden.size(0), device=last_hidden.device)
-        return last_hidden[b, idx]  # shape [B, hidden]
-
-    hf_model_1.eval()
-    hf_model_2.eval()
+    hf_model.eval()
 
     # debug
-    # logger.info("=== HuggingFace Model 1 Config ===")
-    # logger.info(f"vocab_size: {hf_model_1.config.vocab_size}")
-    # logger.info(f"hidden_size: {hf_model_1.config.hidden_size}")
-    # logger.info(f"intermediate_size: {hf_model_1.config.intermediate_size}")
-    # logger.info(f"num_attention_heads: {hf_model_1.config.num_attention_heads}")
-    # logger.info(f"num_hidden_layers: {hf_model_1.config.num_hidden_layers}")
-    # logger.info(f"layer_norm_eps: {hf_model_1.config.layer_norm_eps}")
-    # logger.info(f"attention_dropout: {hf_model_1.config.attention_dropout}")
-    # logger.info(f"hidden_act: {hf_model_1.config.hidden_act}")
-    # logger.info(f"Full config: {hf_model_1.config}")
-
-    # logger.info("=== HuggingFace Model 2 Config ===")
-    # logger.info(f"vocab_size: {hf_model_2.config.vocab_size}")
-    # logger.info(f"hidden_size: {hf_model_2.config.hidden_size}")
-    # logger.info(f"intermediate_size: {hf_model_2.config.intermediate_size}")
-    # logger.info(f"num_attention_heads: {hf_model_2.config.num_attention_heads}")
-    # logger.info(f"num_hidden_layers: {hf_model_2.config.num_hidden_layers}")
-    # logger.info(f"layer_norm_eps: {hf_model_2.config.layer_norm_eps}")
-    # logger.info(f"attention_dropout: {hf_model_2.config.attention_dropout}")
-    # logger.info(f"hidden_act: {hf_model_2.config.hidden_act}")
-    # logger.info(f"Full config: {hf_model_2.config}")
+    logger.info("=== HuggingFace Model 1 Config ===")
+    logger.info(f"vocab_size: {hf_model.config.vocab_size}")
+    logger.info(f"hidden_size: {hf_model.config.hidden_size}")
+    logger.info(f"intermediate_size: {hf_model.config.intermediate_size}")
+    logger.info(f"num_attention_heads: {hf_model.config.num_attention_heads}")
+    logger.info(f"num_hidden_layers: {hf_model.config.num_hidden_layers}")
+    logger.info(f"layer_norm_eps: {hf_model.config.layer_norm_eps}")
+    logger.info(f"attention_dropout: {hf_model.config.attention_dropout}")
+    logger.info(f"hidden_act: {hf_model.config.hidden_act}")
+    logger.info(f"Full config: {hf_model.config}")
 
     # test text encoder 1
     logger.info("testing text encoder 1...")
     start_time = time.time()
-    parameters_1 = TtCLIPTextTransformerParameters.from_torch(
-        hf_model_1.state_dict(), device=device, dtype=ttnn.bfloat16
+    parameters = TtCLIPTextTransformerParameters.from_torch(
+        hf_model.state_dict(),
+        device=encoder_submesh,
+        dtype=ttnn.bfloat16,
+        parallel_manager=parallel_manager,
     )
 
-    config_1 = TtCLIPConfig(
-        vocab_size=hf_model_1.config.vocab_size,
-        d_model=hf_model_1.config.hidden_size,
-        d_ff=hf_model_1.config.intermediate_size,
-        num_heads=hf_model_1.config.num_attention_heads,
-        num_layers=hf_model_1.config.num_hidden_layers,
+    config = TtCLIPConfig(
+        vocab_size=hf_model.config.vocab_size,
+        d_model=hf_model.config.hidden_size,
+        d_ff=hf_model.config.intermediate_size,
+        num_heads=hf_model.config.num_attention_heads,
+        num_layers=hf_model.config.num_hidden_layers,
         max_position_embeddings=77,
-        layer_norm_eps=hf_model_1.config.layer_norm_eps,
-        attention_dropout=hf_model_1.config.attention_dropout,
-        hidden_act=hf_model_1.config.hidden_act,
+        layer_norm_eps=hf_model.config.layer_norm_eps,
+        attention_dropout=hf_model.config.attention_dropout,
+        hidden_act=hf_model.config.hidden_act,
     )
-    logger.info("=== TtCLIPConfig 1 ===")
-    logger.info(f"vocab_size: {config_1.vocab_size}")
-    logger.info(f"d_model: {config_1.d_model}")
-    logger.info(f"d_ff: {config_1.d_ff}")
-    logger.info(f"num_heads: {config_1.num_heads}")
-    logger.info(f"num_layers: {config_1.num_layers}")
-    logger.info(f"max_position_embeddings: {config_1.max_position_embeddings}")
-    logger.info(f"layer_norm_eps: {config_1.layer_norm_eps}")
-    logger.info(f"attention_dropout: {config_1.attention_dropout}")
 
-    tt_model_1 = TtCLIPTextTransformer(parameters_1, config_1)
-    logger.info(f"text encoder 1 creation time: {time.time() - start_time}")
+    tt_model = TtCLIPTextTransformer(parameters, config)
+    logger.info(f"text encoder creation time: {time.time() - start_time}")
 
     # cannot use randn tensor, since HF tokenizer appends a specific eos token syntax
     test_text = "A coffee shop on Main Street that serves excellent pastries and opens at 7 AM on weekdays"
 
-    hf_inputs_1 = tokenizer_1(test_text, padding=True, truncation=True, max_length=77, return_tensors="pt")
-    tt_tokens_1 = ttnn.from_torch(hf_inputs_1.input_ids, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
+    hf_inputs = tokenizer(test_text, padding=True, truncation=True, max_length=77, return_tensors="pt")
+    tt_tokens = ttnn.from_torch(
+        hf_inputs.input_ids,
+        dtype=ttnn.uint32,
+        layout=ttnn.TILE_LAYOUT,
+        device=encoder_submesh,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh),
+    )
 
     start_time = time.time()
     with torch.no_grad():
-        hf_output_1 = hf_model_1(**hf_inputs_1)
-        sequence_output_1 = hf_output_1.last_hidden_state
-
-        pooled_output_1 = pooled_from_hidden(sequence_output_1, hf_inputs_1.input_ids, hf_model_1.config.eos_token_id)
-    # logger.info(f"text encoder 1 CPU runtime: {time.time() - start_time}")
-
-    # debug
-    # logger.info(f"HF text encoder 1 sequence output shape: {sequence_output_1.shape}")
-    # logger.info(f"HF text encoder 1 pooled output shape: {pooled_output_1.shape}")
-    # logger.info(
-    #     f"HF text encoder 1 sequence output mean: {sequence_output_1.mean():.6f}, std: {sequence_output_1.std():.6f}"
-    # )
-    # logger.info(f"HF text encoder 1 pooled output mean: {pooled_output_1.mean():.6f}, std: {pooled_output_1.std():.6f}")
-
-    logger.info("compiling text encoder 1...")
-    tt_model_1(tt_tokens_1, device)
-
-    logger.info("executing text encoder 1...")
-    start_time = time.time()
-    eos_token_id_1 = hf_model_1.config.eos_token_id
-    tt_sequence_output_1, tt_pooled_output_1 = tt_model_1(tt_tokens_1, device, eos_token_id_1)
-
-    logger.info(f"text encoder 1 TT-NN runtime: {time.time() - start_time}")
-    logger.info("text encoder 1 done...")
-
-    tt_sequence_output_torch_1 = ttnn.to_torch(tt_sequence_output_1)
-    tt_pooled_output_torch_1 = ttnn.to_torch(tt_pooled_output_1)
+        hf_output = hf_model(**hf_inputs, output_hidden_states=True)
+        sequence_output = hf_output.hidden_states[-2]
+        pooled_output = hf_output.text_embeds
+    logger.info(f"text encoder 1 CPU runtime: {time.time() - start_time}")
 
     # debug
-    logger.info(f"TT text encoder 1 sequence output shape: {tt_sequence_output_torch_1.shape}")
-    logger.info(f"TT text encoder 1 pooled output shape: {tt_pooled_output_torch_1.shape}")
+    logger.info(f"HF text encoder 1 sequence output shape: {sequence_output.shape}")
+    logger.info(f"HF text encoder 1 pooled output shape: {pooled_output.shape}")
     logger.info(
-        f"TT text encoder 1 sequence output mean: {tt_sequence_output_torch_1.mean():.6f}, std: {tt_sequence_output_torch_1.std():.6f}"
+        f"HF text encoder 1 sequence output mean: {sequence_output.mean():.6f}, std: {sequence_output.std():.6f}"
     )
-    logger.info(
-        f"TT text encoder 1 pooled output mean: {tt_pooled_output_torch_1.mean():.6f}, std: {tt_pooled_output_torch_1.std():.6f}"
-    )
+    logger.info(f"HF text encoder 1 pooled output mean: {pooled_output.mean():.6f}, std: {pooled_output.std():.6f}")
 
-    assert sequence_output_1.shape == tt_sequence_output_torch_1.shape
-    assert pooled_output_1.shape == tt_pooled_output_torch_1.shape
+    logger.info("compiling text encoder...")
+    tt_model(tt_tokens, encoder_submesh, parallel_manager=parallel_manager)
 
-    assert_quality(sequence_output_1, tt_sequence_output_torch_1, pcc=0.99)
-    assert_quality(pooled_output_1, tt_pooled_output_torch_1, pcc=0.99)
-
-    # test text encoder 2
-    logger.info("testing text encoder 2...")
+    logger.info("executing text encoder...")
     start_time = time.time()
-    parameters_2 = TtCLIPTextTransformerParameters.from_torch(
-        hf_model_2.state_dict(), device=device, dtype=ttnn.bfloat16
+    eos_token_id = hf_model.config.eos_token_id
+
+    tt_sequence_output, tt_projected_output = tt_model(
+        tt_tokens, encoder_submesh, eos_token_id, parallel_manager=parallel_manager
     )
 
-    config_2 = TtCLIPConfig(
-        vocab_size=hf_model_2.config.vocab_size,
-        d_model=hf_model_2.config.hidden_size,
-        d_ff=hf_model_2.config.intermediate_size,
-        num_heads=hf_model_2.config.num_attention_heads,
-        num_layers=hf_model_2.config.num_hidden_layers,
-        max_position_embeddings=77,
-        layer_norm_eps=hf_model_2.config.layer_norm_eps,
-        attention_dropout=hf_model_2.config.attention_dropout,
-        hidden_act=hf_model_2.config.hidden_act,
-    )
-    logger.info("=== TtCLIPConfig 2 ===")
-    logger.info(f"vocab_size: {config_2.vocab_size}")
-    logger.info(f"d_model: {config_2.d_model}")
-    logger.info(f"d_ff: {config_2.d_ff}")
-    logger.info(f"num_heads: {config_2.num_heads}")
-    logger.info(f"num_layers: {config_2.num_layers}")
-    logger.info(f"max_position_embeddings: {config_2.max_position_embeddings}")
-    logger.info(f"layer_norm_eps: {config_2.layer_norm_eps}")
-    logger.info(f"attention_dropout: {config_2.attention_dropout}")
+    logger.info(f"text encoder TT-NN runtime: {time.time() - start_time}")
+    logger.info("text encoder done...")
 
-    tt_model_2 = TtCLIPTextTransformer(parameters_2, config_2)
-    logger.info(f"text encoder 2 creation time: {time.time() - start_time}")
-
-    hf_inputs_2 = tokenizer_2(test_text, padding=True, truncation=True, max_length=77, return_tensors="pt")
-    tt_tokens_2 = ttnn.from_torch(hf_inputs_2.input_ids, dtype=ttnn.uint32, layout=ttnn.TILE_LAYOUT, device=device)
-
-    start_time = time.time()
-    with torch.no_grad():
-        hf_output_2 = hf_model_2(**hf_inputs_2)
-        sequence_output_2 = hf_output_2.last_hidden_state
-
-        pooled_output_2 = pooled_from_hidden(sequence_output_2, hf_inputs_2.input_ids, hf_model_2.config.eos_token_id)
-    logger.info(f"text encoder 2 CPU runtime: {time.time() - start_time}")
+    tt_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output.hidden_states[-2])[0])
+    tt_projected_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_projected_output)[0])
 
     # debug
-    # logger.info(f"HF text encoder 2 sequence output shape: {sequence_output_2.shape}")
-    # logger.info(f"HF text encoder 2 pooled output shape: {pooled_output_2.shape}")
-    # logger.info(
-    #     f"HF text encoder 2 sequence output mean: {sequence_output_2.mean():.6f}, std: {sequence_output_2.std():.6f}"
-    # )
-    # logger.info(f"HF text encoder 2 pooled output mean: {pooled_output_2.mean():.6f}, std: {pooled_output_2.std():.6f}")
-
-    logger.info("compiling text encoder 2...")
-    tt_model_2(tt_tokens_2, device)
-
-    logger.info("executing text encoder 2...")
-    start_time = time.time()
-    eos_token_id_2 = hf_model_2.config.eos_token_id
-    tt_sequence_output_2, tt_pooled_output_2 = tt_model_2(tt_tokens_2, device, eos_token_id_2)
-    logger.info(f"text encoder 2 TT-NN runtime: {time.time() - start_time}")
-    logger.info("text encoder 2 done...")
-
-    tt_sequence_output_torch_2 = ttnn.to_torch(tt_sequence_output_2)
-    tt_pooled_output_torch_2 = ttnn.to_torch(tt_pooled_output_2)
-
-    # debug
-    logger.info(f"TT text encoder 2 sequence output shape: {tt_sequence_output_torch_2.shape}")
-    logger.info(f"TT text encoder 2 pooled output shape: {tt_pooled_output_torch_2.shape}")
+    logger.info(f"TT text encoder sequence output shape: {tt_sequence_output_torch.shape}")
+    logger.info(f"TT text encoder pooled output shape: {tt_projected_output_torch.shape}")
     logger.info(
-        f"TT text encoder 2 sequence output mean: {tt_sequence_output_torch_2.mean():.6f}, std: {tt_sequence_output_torch_2.std():.6f}"
+        f"TT text encoder sequence output mean: {tt_sequence_output_torch.mean():.6f}, std: {tt_sequence_output_torch.std():.6f}"
     )
     logger.info(
-        f"TT text encoder 2 pooled output mean: {tt_pooled_output_torch_2.mean():.6f}, std: {tt_pooled_output_torch_2.std():.6f}"
+        f"TT text encoder pooled output mean: {tt_projected_output_torch.mean():.6f}, std: {tt_projected_output_torch.std():.6f}"
     )
 
-    assert sequence_output_2.shape == tt_sequence_output_torch_2.shape
-    assert pooled_output_2.shape == tt_pooled_output_torch_2.shape
+    assert sequence_output.shape == tt_sequence_output_torch.shape
+    assert pooled_output.shape == tt_projected_output_torch.shape
 
-    assert_quality(sequence_output_2, tt_sequence_output_torch_2, pcc=0.98)
-    assert_quality(pooled_output_2, tt_pooled_output_torch_2, pcc=0.98)
+    assert_quality(sequence_output, tt_sequence_output_torch, pcc=expected_pcc)
+    assert_quality(pooled_output, tt_projected_output_torch, pcc=expected_pcc)

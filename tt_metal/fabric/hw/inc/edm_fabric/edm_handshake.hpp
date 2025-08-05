@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include "ethernet/dataflow_api.h"
-#include <fabric_host_interface.h>
+#include "hostdevcommon/fabric_common.h"
 
 namespace erisc {
 namespace datamover {
