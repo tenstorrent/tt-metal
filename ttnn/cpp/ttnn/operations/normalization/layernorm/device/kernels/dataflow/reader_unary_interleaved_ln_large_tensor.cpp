@@ -81,7 +81,7 @@ void kernel_main() {
 #endif
 #endif
 
-        // Data for x - E[x] (or sum(x^2)/n for RMS norm)
+        // Data for x - E[x] (or (∑x^2)/n for RMS norm)
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
 #ifdef FUSE_PRE_ADD
