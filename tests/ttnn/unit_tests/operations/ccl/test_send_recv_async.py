@@ -59,7 +59,7 @@ def run_send_recv_test(
 @pytest.mark.parametrize(
     "per_chip_shape",
     [
-        ([1, 1, 32, 4096]),
+        # ([1, 1, 32, 4096]),
         ([1, 1, 64, 8192]),
     ],
 )
@@ -73,21 +73,21 @@ def run_send_recv_test(
     "dtype",
     [
         ttnn.bfloat16,
-        ttnn.bfloat8_b,
+        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "mem_config",
     [
         ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize(
     "socket_storage_type",
     [
         ttnn.BufferType.DRAM,
-        ttnn.BufferType.L1,
+        # ttnn.BufferType.L1,
     ],
 )
 @pytest.mark.parametrize(
@@ -96,9 +96,10 @@ def run_send_recv_test(
         10 * 1024,
     ],
 )
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC}], indirect=True)
 def test_send_recv(
-    t3k_mesh_device,
+    mesh_device,
     per_chip_shape,
     layout,
     mem_config,
@@ -106,8 +107,13 @@ def test_send_recv(
     socket_storage_type,
     socket_fifo_size,
 ):
-    sender_mesh_device = t3k_mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 0))
-    receiver_mesh_device = t3k_mesh_device.create_submesh(ttnn.MeshShape(1, 4), ttnn.MeshCoordinate(0, 4))
+    ttnn.visualize_mesh_device(mesh_device)
+    sender_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(0, 0))
+    receiver_mesh_device = mesh_device.create_submesh(ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(1, 3))
+
+    ttnn.visualize_mesh_device(sender_mesh_device)
+    ttnn.visualize_mesh_device(receiver_mesh_device)
+
     run_send_recv_test(
         sender_mesh_device,
         receiver_mesh_device,

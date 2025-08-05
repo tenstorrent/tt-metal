@@ -41,9 +41,27 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     tt::tt_metal::IDevice* device = input.device();
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto cores =
+        CoreRangeSet(CoreRange({1, 0}, {compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1}));
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+        tt::tt_metal::split_work_to_cores(cores, num_tiles, true);
+    // tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+
+    log_info(
+        LogType::LogOp,
+        "compute_with_storage_grid_size: {}, num_cores_y: {}, num_tiles: {}, num_cores: {}, all_cores: {}, "
+        "core_group_1: {}, core_group_2: {}, num_tiles_per_core_group_1: {}, num_tiles_per_core_group_2: {}",
+        compute_with_storage_grid_size,
+        num_cores_y,
+        num_tiles,
+        num_cores,
+        all_cores,
+        core_group_1,
+        core_group_2,
+        num_tiles_per_core_group_1,
+        num_tiles_per_core_group_2);
+
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t num_input_tiles = 2;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
@@ -155,7 +173,8 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
     const auto packed_scalar2 = utils::pack_scalar_runtime_arg(value2, input.dtype());
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        // CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        CoreCoord core = {(i + num_cores_y) / num_cores_y, (i + num_cores_y) % num_cores_y};
         uint32_t num_tiles_per_core = 0;
         auto kernel_id = eltwise_unary_kernel_group_1_id;
         if (core_group_1.contains(core)) {
@@ -198,7 +217,8 @@ void UnaryProgramFactory::override_runtime_arguments(
     auto dst_buffer = output.buffer();
 
     for (uint32_t i = 0; i < num_cores; i++) {
-        CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        // CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        CoreCoord core = {(i + num_cores_y) / num_cores_y, (i + num_cores_y) % num_cores_y};
 
         {
             auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);

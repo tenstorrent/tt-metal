@@ -50,6 +50,12 @@ def run_all_reduce_test(
     debug = False
 
     logger.info(f"Per chip output shape: {per_chip_output_shape}, devices: {num_devices}")
+
+    input_mem_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)
+    output_mem_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+
+    logger.info(f"Input memory config: {input_mem_config}, Output memory config: {output_mem_config}")
+
     # Generate input tensors
 
     canonical_input_tensors = []
@@ -72,7 +78,7 @@ def run_all_reduce_test(
         dtype=input_dtype,
         layout=layout,
         device=mesh_device,
-        memory_config=mem_config,
+        memory_config=input_mem_config,
         mesh_mapper=ttnn.create_mesh_mapper(
             mesh_device,
             ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementShard(0)], ttnn.MeshShape(1, num_devices)),
@@ -87,7 +93,7 @@ def run_all_reduce_test(
             gather_multi_device_global_semaphore=gather_semaphore_handles,
             math_op=math_op,
             num_links=num_links,
-            memory_config=mem_config,
+            memory_config=output_mem_config,
             topology=topology,
             subdevice_id=worker_sub_device_id,
         )

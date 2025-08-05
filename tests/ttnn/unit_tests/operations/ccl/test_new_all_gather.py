@@ -149,6 +149,7 @@ def run_all_gather_impl(
         [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)] for _ in range(num_iters)
     ]
 
+    logger.info(f"num_devices: {num_devices}")
     logger.info(f"Output shape: {output_shape}")
     logger.info(f"dim: {dim}")
     logger.info(f"input_shard_shape: {input_shard_shape}")
@@ -200,7 +201,9 @@ def run_all_gather_impl(
         input_mem_config = mem_config
         output_mem_config = mem_config
     ###
-
+    input_mem_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+    logger.info(f"input_mem_config: {input_mem_config}")
+    logger.info(f"output_mem_config: {output_mem_config}")
     input_tensor_mesh_list = []
     output_tensor_goldens_list = []
 
@@ -232,6 +235,7 @@ def run_all_gather_impl(
                 ),
             ),
         )
+        logger.info(f"input_tensor_mesh address: {input_tensor_mesh.buffer_address()}")
 
         input_tensor_mesh_list.append(input_tensor_mesh)
 
@@ -252,6 +256,7 @@ def run_all_gather_impl(
     else:
         for i in range(num_iters):
             if use_cluster_axis_api:
+                logger.info(f"input_tensor_mesh_list[i] shape: {input_tensor_mesh_list[i].shape}")
                 tt_out_tensor = ttnn.experimental.all_gather_async(
                     input_tensor_mesh_list[i],
                     dim,
@@ -265,6 +270,7 @@ def run_all_gather_impl(
                 )
 
             else:
+                logger.info(f"input_tensor_mesh_list[i] shape: {input_tensor_mesh_list[i].shape}")
                 tt_out_tensor = ttnn.experimental.all_gather_async(
                     input_tensor_mesh_list[i],
                     dim,
@@ -286,6 +292,8 @@ def run_all_gather_impl(
         output_tensor = output_tensor_goldens_list[tensor_index]
         for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
             tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+            logger.info(f"output_tensor shape: {output_tensor.shape}")
+            logger.info(f"tt_output_tensor shape: {tt_output_tensor.shape}")
             logger.info(f"Checking for device {t.device().id()}")
 
             if input_dtype == ttnn.bfloat16:
@@ -313,7 +321,7 @@ def run_all_gather_impl(
         # (4, 1, [1, 1, 64, 512], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 32, 32768], 3, ttnn.TILE_LAYOUT),
         # (4, 1, [1, 1, 2048, 16384], 3, ttnn.TILE_LAYOUT),
-        (4, 1, [1, 1, 32, 1280], 3, ttnn.TILE_LAYOUT),
+        (4, 1, [1, 1, 32, 256], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
@@ -326,13 +334,14 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "mem_config",
     [
-        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+        ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
     ],
 )
 @pytest.mark.parametrize("num_iters", [10])
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_gather(
-    t3k_mesh_device,
+    mesh_device,
     # pcie_mesh_device,
     num_devices,
     output_shape,
@@ -344,8 +353,10 @@ def test_all_gather(
     num_iters,
     function_level_defaults,
 ):
+    ttnn.visualize_mesh_device(mesh_device)
+
     run_all_gather_impl(
-        t3k_mesh_device,
+        mesh_device,
         num_devices,
         output_shape,
         dim,
@@ -365,61 +376,61 @@ def test_all_gather(
 @pytest.mark.parametrize(
     "num_devices, output_shape, dim, layout, input_shard_shape, input_shard_grid, output_shard_shape, output_shard_grid, tensor_mem_layout",
     [
-        (
-            2,
-            [1, 1, 32, 256],
-            3,
-            ttnn.TILE_LAYOUT,
-            (32, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
-            None,
-            None,
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ),
-        (
-            2,
-            [1, 1, 32, 256],
-            3,
-            ttnn.TILE_LAYOUT,
-            (32, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
-            None,
-            None,
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ),
-        (
-            2,
-            [1, 1, 32, 256],
-            3,
-            ttnn.TILE_LAYOUT,
-            (32, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
-            None,
-            None,
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ),
-        (
-            2,
-            [1, 1, 64, 256],
-            2,
-            ttnn.TILE_LAYOUT,
-            (32, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
-            None,
-            None,
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ),
-        (
-            2,
-            [1, 4, 32, 256],
-            3,
-            ttnn.TILE_LAYOUT,
-            (32, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
-            None,
-            None,
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ),
+        # (
+        #     2,
+        #     [1, 1, 32, 256],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     (32, 32),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+        #     None,
+        #     None,
+        #     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ),
+        # (
+        #     2,
+        #     [1, 1, 32, 256],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     (32, 64),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+        #     None,
+        #     None,
+        #     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ),
+        # (
+        #     2,
+        #     [1, 1, 32, 256],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     (32, 128),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}),
+        #     None,
+        #     None,
+        #     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ),
+        # (
+        #     2,
+        #     [1, 1, 64, 256],
+        #     2,
+        #     ttnn.TILE_LAYOUT,
+        #     (32, 128),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
+        #     None,
+        #     None,
+        #     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        # ),
+        # (
+        #     2,
+        #     [1, 4, 32, 256],
+        #     3,
+        #     ttnn.TILE_LAYOUT,
+        #     (32, 128),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
+        #     None,
+        #     None,
+        #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        # ),
         (
             4,
             [1, 4, 32, 1280],

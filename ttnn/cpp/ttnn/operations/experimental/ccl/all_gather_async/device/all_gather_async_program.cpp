@@ -83,9 +83,11 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     const size_t num_workers_preferred = num_workers_per_link * num_links;
-    const auto available_cores = device->worker_cores(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+    auto core_grid = device->compute_with_storage_grid_size();
+    const auto available_cores = CoreRangeSet(CoreRange({0, 0}, {0, core_grid.y - 1}));
+    // const auto available_cores = device->worker_cores(
+    //     tt::tt_metal::HalProgrammableCoreType::TENSIX,
+    //     sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
     if (available_cores.num_cores() < num_workers_preferred) {
         log_warning(
             tt::LogOp,
@@ -142,8 +144,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
         mesh_device = input_tensor.device();
     }
     const bool enable_async_output_tensor = false;
-    const bool lower_command_stream_to_noc_commands =
-        ttnn::ccl::worker_detail::can_command_stream_be_lowered_to_noc_commands(input_tensor);
+    const bool lower_command_stream_to_noc_commands = false;
+    // ttnn::ccl::worker_detail::can_command_stream_be_lowered_to_noc_commands(input_tensor);
 
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
@@ -163,6 +165,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_w
     uint32_t num_workers_per_link = 1;
     const auto [sender_worker_core_range, sender_worker_cores] =
         choose_worker_cores(num_links, num_workers_per_link, mesh_device, sub_device_id);
+
+    log_info(
+        tt::LogOp,
+        "DEBUG: sender_worker_core_range: {}, sender_worker_cores: {}",
+        sender_worker_core_range,
+        sender_worker_cores);
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();

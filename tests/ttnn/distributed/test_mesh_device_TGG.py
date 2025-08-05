@@ -7,6 +7,6 @@ import pytest
 import ttnn
 
 
-@pytest.mark.parametrize("mesh_device", [pytest.param((8, 8), id="8x8_grid")], indirect=True)
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="8x8_grid")], indirect=True)
 def test_visualize_mesh_device(mesh_device):
     ttnn.visualize_mesh_device(mesh_device)

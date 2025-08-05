@@ -348,6 +348,7 @@ std::tuple<uint32_t, CoreRangeSet, CoreRangeSet, CoreRangeSet, uint32_t, uint32_
         target_num_cores = units_to_divide;
         all_cores = num_cores_to_corerangeset_in_subcoregrids(start_core, target_num_cores, core_grid, row_wise);
     }
+    log_info(LogType::LogOp, "core_grid.num_cores: {}, target_num_cores: {}", core_grid.num_cores(), target_num_cores);
 
     CoreRangeSet core_group_1;
     CoreRangeSet core_group_2;

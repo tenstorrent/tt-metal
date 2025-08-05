@@ -36,6 +36,7 @@
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/distributed.hpp>
 
 #include "gtest/gtest.h"
 
@@ -44,6 +45,7 @@ namespace ttnn::distributed::test {
 using namespace tt;
 using namespace tt_metal;
 
+using tt::tt_metal::distributed::MeshBuffer;
 using tt::tt_metal::distributed::MeshCoordinate;
 using tt::tt_metal::distributed::MeshDevice;
 using tt::tt_metal::distributed::MeshDeviceConfig;
@@ -255,11 +257,27 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
         test_expected_num_devices,
         num_devices);
 
+    auto core_grid = single_meshes[0]->compute_with_storage_grid_size();
+    SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({1, 0}, {core_grid.x - 1, core_grid.y - 1}))});
+    SubDevice sub_device_2(std::array{CoreRangeSet(CoreRange({0, 0}, {0, core_grid.y - 1}))});
+
+    for (auto& single_mesh : single_meshes) {
+        auto sub_device_manager = single_mesh->create_sub_device_manager({sub_device_1, sub_device_2}, 0);
+        single_mesh->load_sub_device_manager(sub_device_manager);
+    }
+
+    for (auto& single_mesh : single_meshes) {
+        for (auto& sub_device_id : single_mesh->get_sub_device_ids()) {
+            auto core = single_mesh->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+            log_info(tt::LogTest, "Device {} SubDeviceId {} has cores: {}", single_mesh->id(), sub_device_id, core);
+        }
+    }
+
     log_info(LogTest, "Creating Global Semaphore for Ccl Ops");
 
     auto multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore_with_same_address(
         devices,
-        devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+        devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{1}),
         0,                             // initial value
         tt::tt_metal::BufferType::L1,  // buffer type
         10                             // attempts
@@ -298,9 +316,17 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
                 }
 
                 auto& single_mesh = single_meshes[dev_idx];
+                std::vector<std::shared_ptr<MeshBuffer>> dummy_buffers;
+                int rand_count = rand() % 10 + 1;
+                for (int i = 0; i < rand_count; ++i) {
+                    auto dummy_buffer =
+                        tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(single_mesh.get(), tensor_spec);
+                    dummy_buffers.push_back(dummy_buffer);
+                }
+
                 auto input_buffer = tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(single_mesh.get(), tensor_spec);
                 auto input_storage = tt::tt_metal::DeviceStorage{input_buffer, {MeshCoordinate(0, 0)}};
-
+                log_info(LogTest, "input_buffer->address(): {}", input_buffer->address());
                 // TODO (#25340): Switch to use create_device_tensor? (TensorTopology logic should mirror
                 // create_device_tensor)
                 Tensor input_tensor = Tensor(input_storage, tensor_spec, ReplicateTensor{}, TensorTopology{});
@@ -333,6 +359,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
         // It does not support command queue ID as a parameter and internally uses command queue 0.
         std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
             multi_device_global_semaphore};
+
         const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_async(
             device_tensors,
             0,
@@ -340,7 +367,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
             1,
             operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             ttnn::ccl::Topology::Linear,
-            SubDeviceId(0));
+            SubDeviceId(1));
 
         log_info(LogTest, "Enqueue dummy ops");
         for (size_t dev_idx = 0; dev_idx < devices.size(); dev_idx++) {
@@ -348,8 +375,9 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
             futures.push_back(promise->get_future());
             boost::asio::post(pool, [&, dev_idx, promise]() mutable {
                 auto& single_mesh = single_meshes[dev_idx];
-                // Wait for the CCL operation to finish before enqueueing the dummy ops, because ownership of the workers needs to be transferred between CQs.
-                ttnn::queue_synchronize(single_mesh->mesh_command_queue(ccl_cq_id));
+                // Wait for the CCL operation to finish before enqueueing the dummy ops, because ownership of the
+                // workers needs to be transferred between CQs.
+                // ttnn::queue_synchronize(single_mesh->mesh_command_queue(ccl_cq_id));
 
                 auto dummy_data = std::shared_ptr<bfloat16[]>(new bfloat16[num_elems]);
                 for (int j = 0; j < num_elems; j++) {
@@ -358,8 +386,11 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
                 auto dummy_buffer = tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(single_mesh.get(), tensor_spec);
                 auto dummy_storage = tt::tt_metal::DeviceStorage{dummy_buffer, {MeshCoordinate(0, 0)}};
                 Tensor dummy_tensor = Tensor(dummy_storage, tensor_spec, ReplicateTensor{}, TensorTopology{});
+                log_info(LogTest, "Enqueue writeBuffer on device {}", dev_idx);
                 ttnn::write_buffer(ttnn::QueueId(op_cq_id), dummy_tensor, {dummy_data});
+                log_info(LogTest, "Enqueue dummy ops on device {}", dev_idx);
                 ttnn::test_utils::dispatch_ops_to_device(dummy_tensor, ttnn::QueueId(op_cq_id));
+                log_info(LogTest, "Enqueued dummy ops on device {}", dev_idx);
                 promise->set_value();
             });
             futures.back().wait();

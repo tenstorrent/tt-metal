@@ -111,6 +111,26 @@ std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
     return distributed::MeshBuffer::create(replicated_buffer_config, device_local_buffer_config, mesh_device);
 }
 
+std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
+    distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec, SubDeviceId sub_device_id) {
+    const auto& memory_config = tensor_spec.tensor_layout().get_memory_config();
+
+    distributed::DeviceLocalBufferConfig device_local_buffer_config{
+        .page_size = tensor_spec.compute_page_size_bytes(),
+        .buffer_type = memory_config.buffer_type(),
+        .sharding_args = tensor_spec.compute_buffer_sharding_args(),
+        .sub_device_id = sub_device_id,
+    };
+
+    // Use replicated buffer, which supports both working with individual shards and replicating data across all shards.
+    // This is required for the time being, as TTNN has rich multi-device sharding implementation.
+    const distributed::ReplicatedBufferConfig replicated_buffer_config{
+        .size = tensor_spec.compute_packed_buffer_size_bytes(),
+    };
+
+    return distributed::MeshBuffer::create(replicated_buffer_config, device_local_buffer_config, mesh_device);
+}
+
 Tensor pad_bfloat8_b(
     const Tensor& tensor,
     const ttnn::Shape& output_padded_shape,

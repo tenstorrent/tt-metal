@@ -424,6 +424,67 @@ def mesh_device(request, silicon_arch_name, device_params):
 
 
 @pytest.fixture(scope="function")
+def mesh_device2(request, silicon_arch_name, device_params):
+    """
+    Pytest fixture to set up a device mesh for tests.
+
+    If `request.param` is an integer, it specifies the number of devices to use (up to available devices).
+    If `request.param` is a tuple, it defines the 2D grid dimensions (rows, columns) for TG, e.g., (8, 4) creates
+    a devish mesh grid of 8 rows and 4 columns, totaling 32 devices. The total number of devices should not exceed available devices.
+
+    Args:
+        request: Pytest request object.
+        silicon_arch_name: Name of the silicon architecture.
+        device_params: Additional device configuration parameters.
+
+    Yields:
+        mesh_device: Initialized device mesh object.
+    """
+    import ttnn
+
+    device_ids = ttnn.get_device_ids()
+    print(f"device ids: {device_ids}")
+
+    try:
+        param = request.param
+    except (ValueError, AttributeError):
+        param = len(device_ids)  # Default to using all available devices
+
+    if isinstance(param, tuple):
+        grid_dims = param
+        assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
+        num_devices_requested = grid_dims[0] * grid_dims[1]
+        if num_devices_requested > len(device_ids):
+            pytest.skip("Requested more devices than available. Test not applicable for machine")
+        mesh_shape = ttnn.MeshShape(*grid_dims)
+        assert num_devices_requested <= len(device_ids), "Requested more devices than available."
+    else:
+        num_devices_requested = min(param, len(device_ids))
+        mesh_shape = ttnn.MeshShape(1, num_devices_requested)
+
+    request.node.pci_ids = [ttnn.GetPCIeDeviceID(i) for i in device_ids[:num_devices_requested]]
+    print(f"device ids: {request.node.pci_ids}")
+
+    updated_device_params = get_updated_device_params(device_params)
+    fabric_config = updated_device_params.pop("fabric_config", None)
+    reliability_mode = updated_device_params.pop("reliability_mode", None)
+    set_fabric(fabric_config)
+    mesh_device = ttnn.open_mesh_device(
+        mesh_shape=mesh_shape, physical_device_ids=[4, 0, 1, 5], **updated_device_params
+    )
+
+    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
+    yield mesh_device
+
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
+
+    ttnn.close_mesh_device(mesh_device)
+    reset_fabric(fabric_config)
+    del mesh_device
+
+
+@pytest.fixture(scope="function")
 def t3k_single_board_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     import ttnn
 
