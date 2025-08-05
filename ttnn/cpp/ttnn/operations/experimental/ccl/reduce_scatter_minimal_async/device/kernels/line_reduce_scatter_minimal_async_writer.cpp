@@ -278,7 +278,6 @@ void kernel_main() {
                             tt::tt_fabric::NocUnicastCommandHeader{remote_noc0_dest_noc_addr}, payload_size_bytes);
                         tt::tt_fabric::fabric_async_write(
                             *mux_connection_handle, pkt_hdr, l1_read_addr, payload_size_bytes);
-#ifdef ARCH_WORMHOLE
                     } else if (num_pages_to_write == 2) {
                         uint32_t second_tile_id = input_tile_id_start + row_offset + pages_read_in_row;
                         uint64_t second_remote_noc0_dest_noc_addr =
@@ -299,7 +298,6 @@ void kernel_main() {
 
                         tt::tt_fabric::fabric_async_write(
                             *mux_connection_handle, pkt_hdr, l1_read_addr, payload_size_bytes);
-#endif
                     } else {
                         ASSERT(false);
                     }
