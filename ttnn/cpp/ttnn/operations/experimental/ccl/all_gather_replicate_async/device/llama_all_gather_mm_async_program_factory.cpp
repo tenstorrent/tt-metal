@@ -131,6 +131,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_mm_async_sharded(
     log_info(tt::LogOp, "LLONG FUSION: output_tensor_cores: {}", output_tensor_cores);
     log_info(
         tt::LogOp, "sub_device_core_range_set: {}", corerange_to_cores(sub_device_core_range_set, std::nullopt, true));
+    log_info(tt::LogOp, "LLONG FUSION: ring_index: {}", ring_index);
     auto intermediate_tensor_cores = intermediate_tensor.memory_config().shard_spec()->grid;
     auto available_cores = sub_device_core_range_set.subtract(intermediate_tensor_cores);
     available_cores = available_cores.subtract(output_tensor_cores);

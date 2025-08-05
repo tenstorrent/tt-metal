@@ -1684,6 +1684,7 @@ process_gather_in0_program_and_create_override_variables(
     const uint32_t ring_size =
         fused_op_signaler->ring_size;  // use ccl ring size instead of num_cores = local core ring size for fused op
     const uint32_t ring_index = fused_op_signaler->start_ring_index;
+    log_info(tt::LogOp, "LLONG FUSION: ring_index: {}", ring_index);
 
     for (uint32_t idx = 0; idx < ring_size; idx++) {
         log_info(
@@ -2246,7 +2247,7 @@ process_gather_in0_program_and_create_override_variables(
         /* compute */
         std::vector<uint32_t> mm_kernel_compute_args = {
             (std::uint32_t)core_type,
-            i,  // core_idx (not ring_idx anymore)
+            ring_index,  // core_idx (not ring_idx anymore)
         };
         // No need for unpadded widths since all steps process uniform 1/4 chunks
 

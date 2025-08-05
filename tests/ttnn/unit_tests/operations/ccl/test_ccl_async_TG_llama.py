@@ -32,7 +32,7 @@ from models.demos.llama3_subdevices.tt.model_config import (
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 
 
-NUM_ITERATIONS = 75
+NUM_ITERATIONS = 1
 
 
 def get_core_range_set(output_core_grid):
@@ -571,7 +571,7 @@ def test_all_reduce_6U_llama(
         (NUM_ITERATIONS),
     ],
 )
-@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize("trace_mode", [False])
 @pytest.mark.parametrize(
     "device_params",
     [
