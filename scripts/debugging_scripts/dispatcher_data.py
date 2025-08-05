@@ -75,13 +75,6 @@ class DispatcherData:
         # Access the value of enumerator for supported blocks
         self._ProgrammableCoreTypes_TENSIX = self._brisc_elf.enumerators["ProgrammableCoreType::TENSIX"].value
         self._ProgrammableCoreTypes_IDLE_ETH = self._brisc_elf.enumerators["ProgrammableCoreType::IDLE_ETH"].value
-        self._go_message_states = {
-            self._brisc_elf.enumerators["go_message_state_t::RUN_MSG_INIT"].value: "INIT",
-            self._brisc_elf.enumerators["go_message_state_t::RUN_MSG_GO"].value: "GO",
-            self._brisc_elf.enumerators["go_message_state_t::RUN_MSG_DONE"].value: "DONE",
-            self._brisc_elf.enumerators["go_message_state_t::RUN_MSG_RESET_READ_PTR"].value: "RESET_READ_PTR",
-            self._brisc_elf.enumerators["go_message_state_t::RUN_MSG_RESET_READ_PTR_FROM_HOST"].value: "RESET_READ_PTR_FROM_HOST",
-        }
 
         # Enumerators for tensix block
         self._enum_values_tenisx = {
@@ -158,6 +151,16 @@ class DispatcherData:
         # Refer to tt_metal/api/tt-metalium/dev_msgs.h for struct kernel_config_msg_t
         launch_msg_rd_ptr = mem_access(fw_elf, "mailboxes->launch_msg_rd_ptr", loc_mem_reader)[0][0]
 
+        def get_const_value(name):
+            return mem_access(fw_elf, name, loc_mem_reader)[3]
+        go_message_states = {
+            get_const_value("RUN_MSG_INIT"): "INIT",
+            get_const_value("RUN_MSG_GO"): "GO",
+            get_const_value("RUN_MSG_DONE"): "DONE",
+            get_const_value("RUN_MSG_RESET_READ_PTR"): "RESET_READ_PTR",
+            get_const_value("RUN_MSG_RESET_READ_PTR_FROM_HOST"): "RESET_READ_PTR_FROM_HOST",
+        }
+
         try:
             # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
             kernel_config_base = mem_access(
@@ -217,7 +220,7 @@ class DispatcherData:
         else:
             kernel_path = None
             kernel_offset = None
-        go_data_state = self._go_message_states.get(go_data & 0xff, str(go_data & 0xff))
+        go_data_state = go_message_states.get(go_data & 0xff, str(go_data & 0xff))
 
         return DispatcherCoreData(
             firmware_path=firmware_path,
