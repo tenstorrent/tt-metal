@@ -27,11 +27,10 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_shards; ++i) {
         uint32_t shard_id = first_shard_id + i * num_cores;
-        auto src_it = tensor_accessor_src.shard_pages_begin(shard_id);
-        auto src_end = tensor_accessor_src.shard_pages_end(shard_id);
-        auto dst_it = tensor_accessor_dst.shard_pages_begin(shard_id);
-        for (; src_it != src_end; ++src_it, ++dst_it) {
-            noc_async_write(*src_it, *dst_it, page_size);
+        auto shard_pages_begin = tensor_accessor_src.shard_pages_begin(shard_id);
+        auto shard_pages_end = tensor_accessor_src.shard_pages_end(shard_id);
+        for (auto it = shard_pages_begin; it != shard_pages_end; ++it) {
+            noc_async_write_page(it.page_id(), tensor_accessor_dst, *it);
             noc_async_writes_flushed();
         }
     }
