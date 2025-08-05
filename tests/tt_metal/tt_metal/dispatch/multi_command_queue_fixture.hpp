@@ -212,20 +212,8 @@ protected:
         auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
             chip_ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 2, dispatch_core_config);
 
-        if (enable_remote_chip or tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-            const auto tunnels =
-                tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
-
-            for (const auto& tunnel : tunnels) {
-                for (const auto chip_id : tunnel) {
-                    if (reserved_devices.find(chip_id) != reserved_devices.end()) {
-                        devices_.push_back(reserved_devices.at(chip_id));
-                    }
-                }
-                break;
-            }
-        } else {
-            devices_.push_back(reserved_devices.at(mmio_device_id));
+        for (const auto& [id, device] : reserved_devices) {
+            this->devices_.push_back(device);
         }
     }
 
