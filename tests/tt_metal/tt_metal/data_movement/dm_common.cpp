@@ -32,6 +32,22 @@ L1AddressInfo get_l1_address_and_size(const IDevice* device, const CoreCoord& co
     // return {HARDCODED_L1_MEMORY_BASE_ADDRESS, HARDCODED_L1_MEMORY_SIZE_BYTES};
 }
 
+L1AddressInfo get_l1_address_and_size(
+    const std::shared_ptr<distributed::MeshDevice> mesh_device, const CoreCoord& core_coord) {
+    // Obtaining L1 address and size for a specific core //
+
+    CoreCoord physical_core = mesh_device->worker_core_from_logical_core(core_coord);
+
+    uint64_t core_l1_base_address = mesh_device->get_dev_addr(physical_core, HalL1MemAddrType::DEFAULT_UNRESERVED);
+    uint64_t core_l1_size = mesh_device->get_dev_size(physical_core, HalL1MemAddrType::DEFAULT_UNRESERVED);
+
+    return {core_l1_base_address, core_l1_size};
+
+    // Obtaining hardcoded values for L1 address and size //
+
+    // return {HARDCODED_L1_MEMORY_BASE_ADDRESS, HARDCODED_L1_MEMORY_SIZE_BYTES};
+}
+
 DramAddressInfo get_dram_address_and_size(const IDevice* device) {
     // Obtaining DRAM address and size //
 
@@ -49,4 +65,12 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(const tt::
     return {bytes_per_page, static_cast<uint32_t>(max_transmittable_bytes), max_transmittable_pages};
 }
 
+std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(
+    const tt::ARCH arch, const std::shared_ptr<distributed::MeshDevice> mesh_device) {
+    auto [_, max_transmittable_bytes] = get_l1_address_and_size(mesh_device);
+    uint32_t bytes_per_page = obtain_page_size_bytes(arch);
+    uint32_t max_transmittable_pages = max_transmittable_bytes / bytes_per_page;
+
+    return {bytes_per_page, static_cast<uint32_t>(max_transmittable_bytes), max_transmittable_pages};
+}
 }  // namespace tt::tt_metal::unit_tests::dm
