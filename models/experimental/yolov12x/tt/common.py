@@ -62,7 +62,6 @@ class TtYOLOv12xConv2D:
             deallocate_activation=self.deallocate_activation,
             enable_act_double_buffer=False,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
         )

@@ -7,6 +7,7 @@
 #include <tt-metalium/util.hpp>
 #include "nlp_create_qkv_heads_falcon7b_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -65,12 +66,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_fa
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool out_is_dram = q_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)in0_is_dram,
-    };
+    std::vector<uint32_t> reader_compile_time_args;
+    tt_metal::TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)out_is_dram,

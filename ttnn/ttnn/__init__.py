@@ -190,6 +190,7 @@ from ttnn.types import (
     StorageType,
     DEVICE_STORAGE_TYPE,
     CoreGrid,
+    CoreType,
     CoreRange,
     Shape,
     TensorSpec,

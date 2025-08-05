@@ -22,6 +22,8 @@ YOLOV4_BOXES_PCC = 0.99
 YOLOV4_CONFS_PCC = 0.9
 YOLOV4_BOXES_PCC_BLACKHOLE = 0.96
 
+YOLOV4_L1_SMALL_SIZE = 10960
+
 
 def load_image(image_path, resolution):
     image = cv2.imread(image_path)

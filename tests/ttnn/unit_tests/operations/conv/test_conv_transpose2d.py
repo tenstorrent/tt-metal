@@ -96,7 +96,6 @@ def run_conv_transpose2d(
         deallocate_activation=deallocate_activation,
         enable_act_double_buffer=enable_act_double_buffer,
         enable_split_reader=enable_split_reader,
-        enable_subblock_padding=False,
         output_layout=output_layout,
     )
     compute_config = ttnn.init_device_compute_kernel_config(

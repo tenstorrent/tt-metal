@@ -80,7 +80,7 @@ target_sources(
         FILES
             api/tt-metalium/buffer_types.hpp
             api/tt-metalium/circular_buffer_constants.h
-            api/tt-metalium/fabric_host_interface.h
+            api/tt-metalium/constants.hpp
             api/tt-metalium/fabric_edm_packet_header.hpp
             api/tt-metalium/fabric_edm_types.hpp
             api/tt-metalium/edm_fabric_counters.hpp
@@ -128,7 +128,7 @@ target_link_libraries(
     tt_metal
     PUBLIC
         umd::device
-        magic_enum::magic_enum
+        enchantum::enchantum
         fmt::fmt-header-only
         TracyClient
         nlohmann_json::nlohmann_json
@@ -230,7 +230,7 @@ if(TT_INSTALL)
     install(
         TARGETS
             reflect
-            magic_enum
+            enchantum
             TracyClient
             small_vector
             tt-logger
