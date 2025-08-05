@@ -202,7 +202,7 @@ def create_tt_model(
             128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 1.0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
@@ -219,7 +219,7 @@ def create_tt_model(
             128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 1.0, "top_p": 0.05},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
@@ -270,7 +270,7 @@ def create_tt_model(
             128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            {"temperature": 1.0, "top_p": 0.04},  # sampling_params (argmax)
             True,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
@@ -776,7 +776,9 @@ def test_demo_text(
         # Keeps track when a user reaches EoD token
         user_done = [False] * batch_size
 
-        device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
+        device_sampling_params = SamplingParams(
+            temperature=sampling_params["temperature"], top_k=32, top_p=sampling_params["top_p"]
+        )
 
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])

@@ -36,7 +36,7 @@ TSU_PERF_DROP_LIMIT_PERCENT = 10
 TSU_THRESHOLDS = {
     "4U": {1: {"min": 390, "max": 448}, 10: {"min": 230, "max": 253}, 80: {"min": 52, "max": 56}},
     # TODO: Update thresholds for 6U 10L and 80L based on actual perf when 6U are available and added into CI
-    "6U": {1: {"min": 480, "max": 550}, 10: {"min": 230, "max": 250}, 80: {"min": 65, "max": 70}},
+    "6U": {1: {"min": 480, "max": 550}, 10: {"min": 230, "max": 250}, 80: {"min": 68, "max": 73}},
 }
 
 
@@ -135,13 +135,13 @@ def run_llama3_demo(
 
     top_k = sampling_params["top_k"]
     if isinstance(top_k, int):
-        top_k = [top_k] * batch_size
+        top_k = torch.tensor([top_k] * batch_size)
     top_p = sampling_params["top_p"]
     if isinstance(top_p, float):
-        top_p = [top_p] * batch_size
+        top_p = torch.tensor([top_p] * batch_size)
     temperature = sampling_params["temperature"]
     if isinstance(temperature, float):
-        temperature = [temperature] * batch_size
+        temperature = torch.tensor([temperature] * batch_size)
     seed = sampling_params["seed"]
 
     dummy_weights = weights == "random"
@@ -247,8 +247,10 @@ def run_llama3_demo(
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
-        temperature=temperature,
         tt_ccl=tt_model.tt_ccl,
+        k=top_k,
+        p=top_p,
+        temp=temperature,
     )
     profiler.end("loading_weights_to_device")
     logger.info("Finished loading weights to device.")
@@ -331,7 +333,7 @@ def run_llama3_demo(
         )
 
         # Sampling
-        _ = tt_sampling(tt_out[0], top_k, top_p, seed, tt_out_tok=tt_out_tok)  # Compile once with setting the seed
+        _ = tt_sampling(tt_out[0], seed, tt_out_tok=tt_out_tok)  # Compile once with setting the seed
         logger.info(f"Sampling done")
 
     if not stress_test:
@@ -345,7 +347,7 @@ def run_llama3_demo(
         )
 
     _ = tt_sampling(
-        tt_out[0], top_k, top_p, tt_out_tok=tt_out_tok
+        tt_out[0], tt_out_tok=tt_out_tok
     )  # Compile again without seed to obtain random sampling; at this position to simplify test_decoder_device_perf.py
 
     # Capture Trace
@@ -368,7 +370,7 @@ def run_llama3_demo(
     )
 
     # Sampling
-    _ = tt_sampling(tt_out[0], top_k, top_p, tt_out_tok=tt_out_tok)
+    _ = tt_sampling(tt_out[0], tt_out_tok=tt_out_tok)
 
     if not stress_test:
         ttnn.plus_one(

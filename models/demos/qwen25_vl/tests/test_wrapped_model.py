@@ -30,7 +30,6 @@ from models.utility_functions import comp_allclose, comp_pcc
 )
 def test_wrapped_vision_model_inference(
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
     num_layers,
