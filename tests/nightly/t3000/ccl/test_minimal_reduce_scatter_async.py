@@ -303,9 +303,6 @@ def test_reduce_scatter_async(
     use_barrier,
     rs_topology,
 ):
-    if t3k_mesh_device.get_num_devices() != 8:
-        pytest.skip("Not T3K!")
-
     run_reduce_scatter_impl(
         t3k_mesh_device,
         num_devices,
@@ -432,9 +429,6 @@ def test_reduce_scatter_async_sharded_to_sharded(
     use_barrier,
     rs_topology,
 ):
-    if t3k_mesh_device.get_num_devices() != 8:
-        pytest.skip("Not T3K!")
-
     adjusted_intermediate_shard_shape = intermediate_shard_shape[:]
     if rs_topology == ttnn.Topology.Linear:
         adjusted_intermediate_shard_shape[0] *= 2
@@ -568,9 +562,6 @@ def test_reduce_scatter_async_interleaved_to_sharded(
     use_barrier,
     rs_topology,
 ):
-    if t3k_mesh_device.get_num_devices() != 8:
-        pytest.skip("Not T3K!")
-
     adjusted_intermediate_shard_shape = intermediate_shard_shape[:]
     if rs_topology == ttnn.Topology.Linear:
         adjusted_intermediate_shard_shape[0] *= 2
@@ -688,9 +679,6 @@ def test_reduce_scatter_async_sharded_to_interleaved(
     use_barrier,
     rs_topology,
 ):
-    if t3k_mesh_device.get_num_devices() != 8:
-        pytest.skip("Not T3K!")
-
     input_shard_spec = ttnn.ShardSpec(
         input_shard_grid,
         input_shard_shape,
