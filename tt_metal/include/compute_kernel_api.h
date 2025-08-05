@@ -281,8 +281,6 @@ ALWI void sign_tile_init() { MATH((llk_math_eltwise_unary_sfpu_sign_init<APPROX>
  // clang-format on
 ALWI void square_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_square<APPROX>(idst))); }
 
-ALWI void square_int32_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_square_int32<APPROX>(idst))); }
-
 /**
  * Please refer to documentation for any_init.
  */
