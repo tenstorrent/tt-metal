@@ -33,17 +33,6 @@ run_tg_llama_70b_model_perf_tests() {
   fi
 }
 
-
-run_tg_sentence_bert_tests() {
-
-  echo "LOG_METAL: Running run_tg_sentence_bert_tests"
-
-  env pytest -n auto models/demos/tg/sentence_bert/tests/test_sentence_bert_e2e_performant.py -m "model_perf_tg" ; fail+=$?
-
-  if [[ $fail -ne 0 ]]; then
-    echo "LOG_METAL: run_tg_sentence_bert_tests failed"
-}
-
 run_tg_llama_70b_prefill_model_perf_tests() {
 
   # Llama3.3-70B
