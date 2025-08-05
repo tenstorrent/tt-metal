@@ -197,7 +197,9 @@ protected:
         auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
 
         auto all_user_exposed_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
-        if (enable_remote_chip or tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+        if (enable_remote_chip or
+            tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB or
+            tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
             // Use all user exposed chip IDs without filtering
             for (chip_id_t id : all_user_exposed_chip_ids) {
                 chip_ids.push_back(id);
