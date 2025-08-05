@@ -191,7 +191,7 @@ class ConvolutionGroupUnittest(UnitTestOperation):
 @pytest.mark.parametrize(
     "input_batch, input_depth, hidden_units, input_height, input_width, kernel, stride, padding, dilation",
     (
-{''.join(f'        ({attr.input_batch}, {attr.input_depth}, {attr.hidden_units}, {attr.input_height}, {attr.input_width}, {attr.kernel}, {attr.stride}, {attr.padding}, {attr.dilation}),' for attr in self.attrs)}
+{''.join(set(f'        ({attr.input_batch}, {attr.input_depth}, {attr.hidden_units}, {attr.input_height}, {attr.input_width}, {attr.kernel}, {attr.stride}, {attr.padding}, {attr.dilation}),' for attr in self.attrs))}
     )
 )
 @pytest.mark.parametrize(
@@ -274,7 +274,7 @@ class Maxpool2dGroupUnittest(UnitTestOperation):
 @pytest.mark.parametrize(
     "input_batch, input_depth, input_height, input_width, kernel, stride, padding, dilation",
     (
-{''.join(f'        ({attr.input_batch}, {attr.input_depth}, {attr.input_height}, {attr.input_width}, {attr.kernel}, {attr.stride}, {attr.padding}, {attr.dilation}),' for attr in self.attrs)}
+{''.join(set(f'        ({attr.input_batch}, {attr.input_depth}, {attr.input_height}, {attr.input_width}, {attr.kernel}, {attr.stride}, {attr.padding}, {attr.dilation}),' for attr in self.attrs))}
     )
 )
 def test_maxpool2d(
@@ -349,7 +349,7 @@ class AddmGroupUnittest(UnitTestOperation):
 @pytest.mark.parametrize(
     "batch_size, channel_a, channel_b, m_size, k_size, n_size",
     (
-{''.join(f'        ({shapes[1][-4]}, {shapes[1][-3]}, {shapes[2][-3]}, {shapes[1][-2]}, {shapes[1][-1]}, {shapes[2][-1]}),' for shapes in self.input_shape_list)}
+{''.join(set(f'        ({shapes[1][-4]}, {shapes[1][-3]}, {shapes[2][-3]}, {shapes[1][-2]}, {shapes[1][-1]}, {shapes[2][-1]}),' for shapes in self.input_shape_list))}
     )
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
@@ -403,7 +403,7 @@ class AddTensorGroupUnittest(UnitTestOperation):
 @pytest.mark.parametrize(
     "input_shape_a, input_shape_b",
     (
-{''.join(f'        ({shape[0]}, {shape[1]}),' for shape in self.input_shape_list if 0 in shape and 1 in shape)}
+{''.join(set(f'        ({shape[0]}, {shape[1]}),' for shape in self.input_shape_list if 0 in shape and 1 in shape))}
     )
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
@@ -454,7 +454,7 @@ class MulTensorGroupUnittest(UnitTestOperation):
 @pytest.mark.parametrize(
     "input_shape_a, input_shape_b",
     (
-{''.join(f'        ({shape[0]}, {shape[1]}),' for shape in self.input_shape_list if 0 in shape and 1 in shape)}
+{''.join(set(f'        ({shape[0]}, {shape[1]}),' for shape in self.input_shape_list if 0 in shape and 1 in shape))}
     )
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
@@ -510,7 +510,7 @@ class CatGroupUnittest(UnitTestOperation):
 @pytest.mark.parametrize(
     "tensor_shapes, cat_dim",
     (
-{''.join(f'        ([{op["input_shapes"][0]}, {op["input_shapes"][1]}], {op["dim"]}),' for op in self.cat_ops_list if 0 in op["input_shapes"] and 1 in op["input_shapes"])}
+{''.join(set(f'        ([{op["input_shapes"][0]}, {op["input_shapes"][1]}], {op["dim"]}),' for op in self.cat_ops_list if 0 in op["input_shapes"] and 1 in op["input_shapes"]))}
     )
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
@@ -560,7 +560,7 @@ class BmmGroupUnittest(UnitTestOperation):
 @pytest.mark.parametrize(
     "input_shape_a, input_shape_b",
     (
-{''.join(f'        ({shape[0]}, {shape[1]}),' for shape in self.input_shape_list if 0 in shape and 1 in shape)}
+{''.join(set(f'        ({shape[0]}, {shape[1]}),' for shape in self.input_shape_list if 0 in shape and 1 in shape))}
     )
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16])
