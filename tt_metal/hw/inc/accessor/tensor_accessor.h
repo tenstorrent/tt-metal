@@ -41,9 +41,9 @@ uint64_t get_dram_bank_base_offset(uint32_t bank_id, uint8_t noc) {
  *
  * @tparam DSpec        DistributionSpec type.
  */
-template <typename DSpec__>
+template <typename _DSpec>
 struct TensorAccessor {
-    using DSpec = DSpec__;
+    using DSpec = _DSpec;
 
 private:
     // DSpec can be static or dynamic, so we use a conditional instance
@@ -204,6 +204,7 @@ public:
     // Shard iterator
     const ShardPagesAddressIterator<TensorAccessor> shard_pages_address_iterator(
         uint32_t shard_id, uint32_t start_page_offset = 0, uint8_t noc = noc_index) const {
+        static_assert(DSpec::has_static_rank, "ShardPagesAddressIterator is only supported for static rank");
         return ShardPagesAddressIterator<TensorAccessor>(*this, shard_id, start_page_offset, noc);
     }
 

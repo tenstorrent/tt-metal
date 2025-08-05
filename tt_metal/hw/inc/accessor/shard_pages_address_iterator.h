@@ -8,18 +8,13 @@
 #include <cstddef>
 #include <iterator>
 
-#if defined(KERNEL_BUILD) || defined(FW_BUILD)
-#include "dataflow_api_common.h"
-#include "debug/assert.h"
-#endif
-
 template <typename Accessor>
 class ShardPagesAddressIterator {
 public:
     using ArrayU32 = std::array<uint32_t, Accessor::DSpec::rank_ct>;
     using PageMapping = typename Accessor::PageMapping;
 
-    using iterator_category = std::random_access_iterator_tag;
+    using iterator_category = std::forward_iterator_tag;
     using value_type = const uint64_t;
     using difference_type = std::ptrdiff_t;
     using reference = const uint64_t&;
@@ -38,19 +33,17 @@ public:
         ASSERT(current_page_id_in_shard <= accessor.dspec().shard_volume());
     }
 
-    // Get NOC address for current position with optional offset
-    uint32_t get_page_id() const {
+    // Getters
+    uint32_t page_id() const {
         uint32_t page_id = 0;
         for (uint32_t i = 0; i < accessor.dspec().rank(); ++i) {
             page_id += global_page_coord[i] * accessor.dspec().tensor_strides()[i];
         }
         return page_id;
     }
-    uint64_t get_noc_addr(const uint32_t offset = 0) const { return current_noc_addr + offset; }
-
     reference operator*() const { return current_noc_addr; }
 
-    // Operator ++/--
+    // Arithmetic operators
     ShardPagesAddressIterator& operator++() {
         if (current_page_id_in_shard >= accessor.dspec().shard_volume()) {
             return *this;  // End iterator
@@ -60,10 +53,10 @@ public:
             current_noc_addr += accessor.page_size;
             current_page_id_in_shard++;
             if (current_page_id_in_shard >= accessor.dspec().shard_volume()) {
+                current_page_id_in_shard = accessor.dspec().shard_volume();
                 break;
             }
         } while (!update_local_global_page_coord());
-        ASSERT(current_page_id_in_shard <= accessor.dspec().shard_volume());
         return *this;
     }
 
@@ -73,15 +66,8 @@ public:
         return tmp;
     }
 
-    ShardPagesAddressIterator& operator--() { return *this += -1; }
-
-    ShardPagesAddressIterator operator--(int) {
-        ShardPagesAddressIterator tmp = *this;
-        --(*this);
-        return tmp;
-    }
-
     ShardPagesAddressIterator& operator+=(difference_type steps) {
+        ASSERT(steps >= 0);
         if (current_page_id_in_shard >= accessor.dspec().shard_volume()) {
             return *this;  // End iterator
         }
@@ -90,10 +76,10 @@ public:
             current_noc_addr += steps * accessor.page_size;
             current_page_id_in_shard += steps;
             if (current_page_id_in_shard >= accessor.dspec().shard_volume()) {
+                current_page_id_in_shard = accessor.dspec().shard_volume();
                 break;
             }
         } while (!update_local_global_page_coord(steps));
-        ASSERT(current_page_id_in_shard <= accessor.dspec().shard_volume());
         return *this;
     }
 
@@ -103,27 +89,24 @@ public:
         return tmp;
     }
 
-    ShardPagesAddressIterator& operator-=(difference_type steps) { return *this += -steps; }
-
-    ShardPagesAddressIterator operator-(difference_type steps) const { return *this + (-steps); }
-
-    difference_type operator-(const ShardPagesAddressIterator& other) const {
-        return current_page_id_in_shard - other.current_page_id_in_shard;
-    }
-
     const uint64_t& operator[](difference_type n) const {
         auto temp = *this;
         temp += n;
         return *temp;
     }
 
-    // Equality comparison
-    bool operator==(const ShardPagesAddressIterator& other) const { return current_noc_addr == other.current_noc_addr; }
+    // Comparison operators
+    bool operator==(const ShardPagesAddressIterator& other) const {
+        return (current_shard_id == other.current_shard_id) &&
+               (current_page_id_in_shard == other.current_page_id_in_shard);
+    }
 
-    // Inequality comparison
     bool operator!=(const ShardPagesAddressIterator& other) const { return !(*this == other); }
 
-    bool operator<(const ShardPagesAddressIterator& other) const { return get_page_id() < other.get_page_id(); }
+    bool operator<(const ShardPagesAddressIterator& other) const {
+        return (current_shard_id == other.current_shard_id) &&
+               (current_page_id_in_shard < other.current_page_id_in_shard);
+    }
 
     bool operator>(const ShardPagesAddressIterator& other) const { return other < *this; }
 

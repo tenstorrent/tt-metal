@@ -39,14 +39,14 @@ void kernel_main() {
             auto shard_pages_begin = accessor_src.shard_pages_begin(shard_id);
             auto shard_pages_end = accessor_src.shard_pages_end(shard_id);
             for (auto it = shard_pages_begin; it != shard_pages_end; ++it) {
-                noc_async_write_page(it.get_page_id(), accessor_dst, *it);
+                noc_async_write_page(it.page_id(), accessor_dst, *it);
                 noc_async_writes_flushed();
             }
         } else {
             auto shard_pages_begin = accessor_dst.shard_pages_begin(shard_id);
             auto shard_pages_end = accessor_dst.shard_pages_end(shard_id);
             for (auto it = shard_pages_begin; it != shard_pages_end; ++it) {
-                noc_async_read_page(it.get_page_id(), accessor_src, *it);
+                noc_async_read_page(it.page_id(), accessor_src, *it);
             }
         }
     }
