@@ -6,6 +6,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
+from loguru import logger
 
 
 def pad_to_next_multiple(tensor):
@@ -120,6 +121,10 @@ class TtLlamaMLP(LightweightModule):
         pc_1_3 = self.model_config["FF1_3_TG_RING_PROGCFG"]
         pc_2 = self.model_config["FF2_TG_RING_PROGCFG"]
 
+        logger.info(f"x: {x}")
+        logger.info(f"w1: {self.w1}")
+        logger.info(f"w3: {self.w3}")
+
         w1_out_reduced, w3_out = self.tt_ccl.double_matmul_line_reduce_scatter(
             x,
             self.w1,
@@ -140,6 +145,9 @@ class TtLlamaMLP(LightweightModule):
 
         ttnn.deallocate(x)
 
+        logger.info(f"w1_out_reduced: {w1_out_reduced}")
+        logger.info(f"w3_out: {w3_out}")
+
         w3_out_reduced = self.tt_ccl.line_reduce_scatter(
             w3_out,
             cluster_axis=1,
@@ -148,7 +156,7 @@ class TtLlamaMLP(LightweightModule):
             use_noc1_only=False,
         )
         ttnn.deallocate(w3_out)
-
+        logger.info(f"w3_out_reduced: {w3_out_reduced}")
         ff1ff3 = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
@@ -156,6 +164,10 @@ class TtLlamaMLP(LightweightModule):
             dtype=ttnn.bfloat8_b,
             memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
         )
+
+        logger.info(f"ff1ff3: {ff1ff3}")
+
+        # print("eltwise mul", w2_in)
 
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
@@ -172,6 +184,7 @@ class TtLlamaMLP(LightweightModule):
             use_optimal_ccl_for_llama=False if mode == "prefill" else True,
         )
 
+        logger.info(f"w2_in: {w2_in}")
         ttnn.deallocate(ff1ff3)
 
         w2_out = ttnn.linear(
@@ -185,6 +198,9 @@ class TtLlamaMLP(LightweightModule):
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
+
+        logger.info(f"w2_out: {w2_out}")
+
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,
             cluster_axis=0,
@@ -192,6 +208,7 @@ class TtLlamaMLP(LightweightModule):
             memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             use_optimal_ccl_for_llama=True,
         )
+        logger.info(f"w2_out_reduced: {w2_out_reduced}")
         ttnn.deallocate(w2_out)
 
         return w2_out_reduced

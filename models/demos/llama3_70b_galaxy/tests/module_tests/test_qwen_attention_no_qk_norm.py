@@ -12,7 +12,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
     precompute_freqs,
     PagedAttentionConfig,
 )
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -75,21 +75,27 @@ def test_qwen_attention_inference(
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 
-    model_args = TtQwenModelArgs(mesh_device, dummy_weights=False, max_batch_size=batch_size, max_seq_len=max_seq_len)
-    model_args.n_layers = 1  # For the unit test, just run a single layer
+    # Note that the Llama3 tests use a reference Llama model, here we call Attention from tt_transformers
+    model_args_ref = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
+    model_args_ref.n_layers = 1  # For the unit test, just run a single layer
 
-    state_dict = model_args.load_state_dict()
+    state_dict_ref = model_args_ref.load_state_dict()
 
-    first_layer_prefix = model_args.get_state_dict_prefix("TtLlamaAttention", 0) + "."
+    first_layer_prefix = model_args_ref.get_state_dict_prefix("Attention", 0) + "."
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    partial_state_dict = {
-        k[len(first_layer_prefix) :]: v
-        for k, v in state_dict.items()
-        if k.startswith(first_layer_prefix) and "q_norm" not in k and "k_norm" not in k
+    partial_state_dict_ref = {
+        k[len(first_layer_prefix) :]: v for k, v in state_dict_ref.items() if (k.startswith(first_layer_prefix))
     }
 
-    reference_model = Attention(args=model_args, llama3=False)
-    reference_model.load_state_dict(partial_state_dict)
+    reference_model = model_args_ref.reference_attention()
+    reference_model.load_state_dict(partial_state_dict_ref)
+    logger.info(f"Reference Model Loaded")
+
+    model_args = TtQwenModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args.n_layers = 1  # For the unit test, just run a sigle layer
+
+    state_dict = model_args.load_state_dict()
+    logger.info(f"Qwen3 Model Loaded")
 
     seq_len = 1
 
@@ -148,7 +154,7 @@ def test_qwen_attention_inference(
         [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
     )
 
-    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, use_qwen_mlp=True)
+    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id)
 
     tt_model = TtLlamaAttention(
         mesh_device,
@@ -271,27 +277,29 @@ def test_qwen_attention_inference(
                             ),
                         )
                         .reshape(
-                            4,
+                            model_args.num_device_groups,
                             paged_attention_config.max_num_blocks,
-                            8,
+                            model_args.n_kv_heads,
                             paged_attention_config.block_size,
-                            128,
+                            model_args.head_dim,
                         )[
-                            : 1 if batch_size == 1 else 4,
+                            : 1 if batch_size == 1 else model_args.num_device_groups,
                             reverse_permutation,
-                            :8,
+                            : model_args.n_kv_heads,
                             :,
-                            :128,
+                            : model_args.head_dim,
                         ]
                         .reshape(
-                            32,
-                            paged_attention_config.max_num_blocks // 8,
-                            8,
+                            model_args.max_batch_size,
+                            paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
+                            model_args.n_kv_heads,
                             paged_attention_config.block_size,
-                            128,
+                            model_args.head_dim,
                         )
                         .transpose(1, 2)
-                        .reshape(32, 8, -1, 128)[:batch_size, ...]
+                        .reshape(model_args.max_batch_size, model_args.n_kv_heads, -1, model_args.head_dim)[
+                            :batch_size, ...
+                        ]
                     )
                     for cache in tt_model.layer_past
                 ]
