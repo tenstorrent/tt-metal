@@ -31,11 +31,7 @@ pytest models/experimental/stable_diffusion_35_large/tests
 
 1. Visit [HuggingFace](https://huggingface.co/stabilityai/stable-diffusion-3.5-large) to grant access to the model weights
 2. Login with the HuggingFace token: `huggingface-cli login`
-3. N300 and LoudBox / QuietBox you should also set:
-    ```
-    export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-    ```
-4. Select whether to run on N300
+3. Select whether to run on N300
     ```
     export MESH_DEVICE=N300
     ```
@@ -43,8 +39,8 @@ pytest models/experimental/stable_diffusion_35_large/tests
     ```
     export MESH_DEVICE=T3K
     ```
-5.  The demo is run using the following command:
+4.  The demo is run using the following command:
 
     ```sh
-    pytest models/experimental/stable_diffusion_35_large/demo.py
+    pytest models/experimental/stable_diffusion_35_large/fun_demo.py
     ```

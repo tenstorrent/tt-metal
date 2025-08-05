@@ -8,7 +8,7 @@
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
-#include <tt-metalium/fabric_host_interface.h>
+#include "hostdevcommon/fabric_common.h"
 #include <array>
 #include <cstddef>
 #include <map>
@@ -511,7 +511,7 @@ void RunTestUnicastRaw(
     fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
 
     if (enable_fabric_tracing) {
-        tt_metal::detail::DumpDeviceProfileResults(sender_device);
+        tt_metal::detail::ReadDeviceProfilerResults(sender_device);
     }
 
     // Validate the status and packets processed by sender and receiver
@@ -1498,7 +1498,7 @@ void RunTestChipMCast1D(
     log_info(tt::LogTest, "All Receivers Finished");
 
     if (enable_fabric_tracing) {
-        tt_metal::detail::DumpDeviceProfileResults(sender_device);
+        tt_metal::detail::ReadDeviceProfilerResults(sender_device);
     }
 
     // Validate the status and packets processed by sender and receiver

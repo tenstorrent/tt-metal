@@ -2,10 +2,6 @@
 
 Falcon40b prefill uses 8x8 core grid size, so the following environment variable needs to be set on a T3000 setup:
 
-```sh
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-```
-
 ## How to Run
 
 - To run the model for a single prompt, you can use the command line input:

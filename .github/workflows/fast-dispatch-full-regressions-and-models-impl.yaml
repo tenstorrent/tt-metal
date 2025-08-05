@@ -24,7 +24,7 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [common_models, functional_unet, ttt-llama3.2-1B, qwen, resnet50, whisper, openpdn_mnist, vit, sentence_bert, yolov7, swin_s, yolov6l, swin_v2, mobilenetv2, segformer, vgg_unet, yolov10x, yolov11, yolov8s, yolov8s_world, yolov8x, yolov9c, vanilla_unet]
+        model: [common_models, functional_unet, ttt-llama3.2-1B, resnet50, whisper, openpdn_mnist, vit, sentence_bert, yolov7, swin_s, yolov6l, swin_v2, mobilenetv2, segformer, vgg_unet, yolov10x, yolov11, yolov8s, yolov8s_world, yolov8x, yolov9c, vanilla_unet, yolov5x, efficientnetb0, vovnet]
         # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
         # ttt-mistral-7B-v0.3 issue #25861: https://github.com/tenstorrent/tt-metal/issues/25861
         include:
@@ -70,7 +70,6 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
-            -e WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
             ${{ matrix.model == 'stable_diffusion_xl_base' && '-e HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home' || '' }}
           # TT-Transformer models have a single ci-dispatch test that contains all tests.
           # Due to host OOM issues in CI vm, we currently only run llama-1B (on TT-Transformers) in the model matrix.
@@ -94,7 +93,7 @@ jobs:
       matrix:
         test-config:
           - model: "stable_diffusion"
-            cmd: SLOW_MATMULS=1 pytest --timeout 1000 -n auto tests/nightly/single_card/stable_diffusion
+            cmd: TT_MM_THROTTLE_PERF=5 pytest --timeout 1000 -n auto tests/nightly/single_card/stable_diffusion
               # Skipping due to issue #15932
               # - model: "mamba 1"
               # cmd: pytest --timeout 900 -n auto tests/nightly/single_card/mamba --splits 6 --group 1
@@ -145,7 +144,6 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
-            -e WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
           run_args: ${{ matrix.test-config.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10

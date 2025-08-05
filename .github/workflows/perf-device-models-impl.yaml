@@ -67,8 +67,8 @@ jobs:
           commands: |
             pytest models/demos/convnet_mnist/tests/ -m models_device_performance_bare_metal
             pytest models/demos/mnist/tests -m models_device_performance_bare_metal
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/falcon7b_common/tests -m models_device_performance_bare_metal
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/segformer/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/falcon7b_common/tests -m models_device_performance_bare_metal
+            pytest models/demos/segformer/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && !matrix.test-info.civ2-compatible }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -77,7 +77,7 @@ jobs:
         with:
           model_name: "yolov11"
           commands: |
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov11/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/yolov11/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -86,7 +86,7 @@ jobs:
         with:
           model_name: "yolov10x"
           commands: |
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov10x/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/yolov10x/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1}}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -96,7 +96,7 @@ jobs:
           model_name: "stable_diffusion"
           commands: |
             pytest models/demos/wormhole/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
+            pytest models/experimental/stable_diffusion_xl_base/tests/test_sdxl_perf.py -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -106,7 +106,7 @@ jobs:
           model_name: "distilbert"
           commands: |
             pytest models/demos/distilbert/tests -m models_device_performance_bare_metal
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/distilbert/tests -m models_device_performance_bare_metal
+            pytest models/demos/wormhole/distilbert/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -116,7 +116,7 @@ jobs:
           model_name: "vgg"
           commands: |
             pytest models/demos/vgg/tests/ -m models_device_performance_bare_metal
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/vgg_unet/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/vgg_unet/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -126,7 +126,7 @@ jobs:
           model_name: "bert_tiny"
           commands: |
             pytest models/demos/bert_tiny/tests/ -m models_device_performance_bare_metal
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/bert_tiny/tests -m models_device_performance_bare_metal
+            pytest models/demos/wormhole/bert_tiny/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -153,7 +153,7 @@ jobs:
         with:
           model_name: "resnet50"
           commands: |
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/resnet50/tests -m models_device_performance_bare_metal
+            pytest models/demos/wormhole/resnet50/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -162,7 +162,7 @@ jobs:
         with:
           model_name: "ufld_v2"
           commands: |
-            # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/ufld_v2/tests -m models_device_performance_bare_metal
+            # pytest models/demos/ufld_v2/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -171,7 +171,7 @@ jobs:
         with:
           model_name: "sentence_bert"
           commands: |
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/sentence_bert/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/sentence_bert/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -180,7 +180,7 @@ jobs:
         with:
           model_name: "functional_unet"
           commands: |
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/functional_unet/tests/test_unet_perf.py -m models_device_performance_bare_metal
+            pytest models/experimental/functional_unet/tests/test_unet_perf.py -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -189,7 +189,7 @@ jobs:
         with:
           model_name: "mamba"
           commands: |
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/mamba/tests -m models_device_performance_bare_metal
+            pytest models/demos/wormhole/mamba/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -198,7 +198,7 @@ jobs:
         with:
           model_name: "metal_BERT_large_11"
           commands: |
-            # WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/metal_BERT_large_11/tests -m models_device_performance_bare_metal
+            # pytest models/demos/metal_BERT_large_11/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -207,7 +207,7 @@ jobs:
         with:
           model_name: "yolov4"
           commands: |
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov4/tests -m models_device_performance_bare_metal
+            pytest models/demos/yolov4/tests -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -216,7 +216,7 @@ jobs:
         with:
           model_name: "mobilenetv2"
           commands: |
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/mobilenetv2/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/mobilenetv2/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -225,9 +225,9 @@ jobs:
         with:
           model_name: "yolov8"
           commands: |
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov8x/tests/perf -m models_device_performance_bare_metal
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov8s/tests/perf -m models_device_performance_bare_metal
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov8s_world/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/yolov8x/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/yolov8s/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/yolov8s_world/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -236,7 +236,7 @@ jobs:
         with:
           model_name: "yolov7"
           commands: |
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov7/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/yolov7/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -245,7 +245,7 @@ jobs:
         with:
           model_name: "vit"
           commands: |
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/vit/demo/ -m models_device_performance_bare_metal
+            pytest models/demos/wormhole/vit/demo/ -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -254,7 +254,7 @@ jobs:
         with:
           model_name: "yolov6l"
           commands: |
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/yolov6l/tests/perf -m models_device_performance_bare_metal
+            pytest models/experimental/yolov6l/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -263,7 +263,7 @@ jobs:
         with:
           model_name: "yolov9c"
           commands: |
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/yolov9c/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/yolov9c/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -272,7 +272,7 @@ jobs:
         with:
           model_name: "vanilla_unet"
           commands: |
-            WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/vanilla_unet/tests/perf -m models_device_performance_bare_metal
+            pytest models/experimental/vanilla_unet/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -284,7 +284,9 @@ jobs:
         run: |
           CLEAN_NAME=$(echo "${{ matrix.test-info.name }}" | tr ' ' '-')
           export DEVICE_PERF_REPORT_FILENAME=Models_Device_Perf_${{ matrix.test-info.test-type }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
-          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME
+          cat Models_Device_Perf_$(date +%Y_%m_%d).csv > Models_Device_Perf_${{ matrix.test-info.test-type }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+          cat Models_Device_Perf_${{ matrix.test-info.test-type }}_${CLEAN_NAME}_$(date +%Y_%m_%d).csv
+          python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME CHECK
           echo "device_perf_report_filename=$DEVICE_PERF_REPORT_FILENAME" >> "$GITHUB_OUTPUT"
 
       - name: Check device perf report exists

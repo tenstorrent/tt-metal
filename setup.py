@@ -293,7 +293,6 @@ class CMakeBuild(build_ext):
             "api/tt-metalium/circular_buffer_constants.h",
             "api/tt-metalium/constants.hpp",
             "api/tt-metalium/dev_msgs.h",
-            "api/tt-metalium/fabric_host_interface.h",
             "api/tt-metalium/fabric_edm_types.hpp",
             "api/tt-metalium/fabric_edm_packet_header.hpp",
             "api/tt-metalium/edm_fabric_counters.hpp",

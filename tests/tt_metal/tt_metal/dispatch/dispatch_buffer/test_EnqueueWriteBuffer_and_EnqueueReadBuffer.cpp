@@ -4,7 +4,7 @@
 
 #include <chrono>
 #include <fmt/base.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <stdlib.h>
 #include <sys/types.h>
 #include <tt-metalium/allocator.hpp>
@@ -1415,7 +1415,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceBufferFixture, TestIssueMultipleReadWriteComman
 }
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToDramBank0) {
-    auto mesh_device = this->devices_[0];
+    auto mesh_device = this->device_;
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::DRAM};
     distributed::MeshCommandQueue& a = mesh_device->mesh_command_queue(0);
     distributed::MeshCommandQueue& b = mesh_device->mesh_command_queue(1);
@@ -1425,7 +1425,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToDramBank0) {
 }
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToAllDramBanks) {
-    auto mesh_device = this->devices_[0];
+    auto mesh_device = this->device_;
     auto device = mesh_device->get_devices()[0];
     TestBufferConfig config = {
         .num_pages = uint32_t(device->allocator()->get_num_banks(BufferType::DRAM)),
@@ -1440,7 +1440,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToAllDramBanks) {
 }
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileAcrossAllDramBanksTwiceRoundRobin) {
-    auto mesh_device = this->devices_[0];
+    auto mesh_device = this->device_;
     auto device = mesh_device->get_devices()[0];
     constexpr uint32_t num_round_robins = 2;
     TestBufferConfig config = {
@@ -1456,7 +1456,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileAcrossAllDramBanksT
 }
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, Sending131072Pages) {
-    auto mesh_device = this->devices_[0];
+    auto mesh_device = this->device_;
     // Was a failing case where we used to accidentally program cb num pages to be total
     // pages instead of cb num pages.
     TestBufferConfig config = {.num_pages = 131072, .page_size = 128, .buftype = BufferType::DRAM};
@@ -1469,7 +1469,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, Sending131072Pages) {
 }
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForDram) {
-    auto mesh_device = this->devices_[0];
+    auto mesh_device = this->device_;
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::DRAM};
 
     distributed::MeshCommandQueue& a = mesh_device->mesh_command_queue(0);
@@ -1480,7 +1480,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForDra
 }
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForDram2) {
-    auto mesh_device = this->devices_[0];
+    auto mesh_device = this->device_;
     // From stable diffusion read buffer
     TestBufferConfig config = {.num_pages = 8 * 1024, .page_size = 80, .buftype = BufferType::DRAM};
 
@@ -1492,7 +1492,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForDra
 }
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestIssueMultipleReadWriteCommandsForOneBuffer) {
-    auto mesh_device = this->devices_[0];
+    auto mesh_device = this->device_;
     auto device = mesh_device->get_devices()[0];
     uint32_t page_size = 2048;
     uint16_t channel = tt::tt_metal::MetalContext::instance().get_cluster().get_assigned_channel_for_device(device->id());
@@ -1552,8 +1552,8 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestReadWriteShardedSubBufferForL1) {
                 config.page_shape.width(),
                 config.tensor2d_shape_in_pages.height(),
                 config.tensor2d_shape_in_pages.width(),
-                magic_enum::enum_name(config.layout).data(),
-                magic_enum::enum_name(config.orientation).data(),
+                enchantum::to_string(config.layout).data(),
+                enchantum::to_string(config.orientation).data(),
                 config.cores.str());
 
             ShardSpecBuffer shard_spec = ShardSpecBuffer(
@@ -1994,7 +1994,7 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestLargeBuffer4096BPageSize) {
 }
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToL1Bank0) {
-    auto mesh_device = this->devices_[0];
+    auto mesh_device = this->device_;
     TestBufferConfig config = {.num_pages = 1, .page_size = 2048, .buftype = BufferType::L1};
     distributed::MeshCommandQueue& a = mesh_device->mesh_command_queue(0);
     distributed::MeshCommandQueue& b = mesh_device->mesh_command_queue(1);
@@ -2004,7 +2004,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToL1Bank0) {
 }
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToAllL1Banks) {
-    auto mesh_device = this->devices_[0];
+    auto mesh_device = this->device_;
     auto compute_with_storage_grid = mesh_device->compute_with_storage_grid_size();
     TestBufferConfig config = {
         .num_pages = uint32_t(compute_with_storage_grid.x * compute_with_storage_grid.y),
@@ -2019,7 +2019,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToAllL1Banks) {
 }
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToAllL1BanksTwiceRoundRobin) {
-    auto mesh_device = this->devices_[0];
+    auto mesh_device = this->device_;
     auto compute_with_storage_grid = mesh_device->compute_with_storage_grid_size();
     TestBufferConfig config = {
         .num_pages = 2 * uint32_t(compute_with_storage_grid.x * compute_with_storage_grid.y),
@@ -2034,7 +2034,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, WriteOneTileToAllL1BanksTwiceRo
 }
 
 TEST_F(UnitMeshMultiCQSingleDeviceBufferFixture, TestNon32BAlignedPageSizeForL1) {
-    auto mesh_device = this->devices_[0];
+    auto mesh_device = this->device_;
     TestBufferConfig config = {.num_pages = 1250, .page_size = 200, .buftype = BufferType::L1};
 
     distributed::MeshCommandQueue& a = mesh_device->mesh_command_queue(0);
@@ -2230,7 +2230,7 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, ShardedBufferL1ReadWrites) {
                                 num_pages[1],
                                 page_shape[0],
                                 page_shape[1],
-                                magic_enum::enum_name(shard_strategy).data(),
+                                enchantum::to_string(shard_strategy).data(),
                                 num_iterations);
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                                 mesh_device, mesh_device->mesh_command_queue(), config, BufferType::L1, false);
@@ -2290,7 +2290,7 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, ShardedBufferDRAMReadWrites) {
                                 num_pages[1],
                                 page_shape[0],
                                 page_shape[1],
-                                magic_enum::enum_name(shard_strategy).data(),
+                                enchantum::to_string(shard_strategy).data(),
                                 num_iterations);
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                                 mesh_device, mesh_device->mesh_command_queue(), config, BufferType::DRAM, false);
@@ -2342,7 +2342,7 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, ShardedBufferLargeL1ReadWrites) {
                                 num_pages[1],
                                 page_shape[0],
                                 page_shape[1],
-                                magic_enum::enum_name(shard_strategy).data(),
+                                enchantum::to_string(shard_strategy).data(),
                                 num_iterations);
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                                 mesh_device, mesh_device->mesh_command_queue(), config, BufferType::L1, true);
@@ -2394,7 +2394,7 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, ShardedBufferLargeDRAMReadWrites) {
                                 num_pages[1],
                                 page_shape[0],
                                 page_shape[1],
-                                magic_enum::enum_name(shard_strategy).data(),
+                                enchantum::to_string(shard_strategy).data(),
                                 num_iterations);
                             local_test_functions::stress_test_EnqueueWriteBuffer_and_EnqueueReadBuffer_sharded(
                                 mesh_device, mesh_device->mesh_command_queue(), config, BufferType::DRAM, true);
