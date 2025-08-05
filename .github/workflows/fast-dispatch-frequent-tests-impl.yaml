@@ -37,7 +37,7 @@ jobs:
               ./build/test/tt_metal/perf_microbenchmark/dispatch/benchmark_rw_buffer --benchmark_out_format=json --benchmark_out=buffer_bench.json
               # We shouldn't fail the job for now as this benchmark is not yet stable
               ./tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/compare_benchmark_rw_buffer.py buffer_bench.json || true
-            timeout: 60
+            timeout: 15
     name: ${{ matrix.test-group.name }}
     env:
       LOGURU_LEVEL: INFO
