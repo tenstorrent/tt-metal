@@ -55,9 +55,7 @@ void kernel_main() {
                         packet_payload_size_bytes,
                         tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(noc_x_start, noc_y_start, target_address)},
                         start_distance,
-                        range,
-                        0  // route_id
-                    );
+                        range);
                 } break;
                 case NOC_UNICAST_INLINE_WRITE: {
                     fabric_multicast_noc_unicast_inline_write(
@@ -66,9 +64,7 @@ void kernel_main() {
                         tt::tt_fabric::NocUnicastInlineWriteCommandHeader{
                             get_noc_addr(noc_x_start, noc_y_start, target_address), 0xDEADBEEF},
                         start_distance,
-                        range,
-                        0  // route_id
-                    );
+                        range);
                 } break;
                 case NOC_UNICAST_SCATTER_WRITE: {
                     uint16_t first_chunk_size = packet_payload_size_bytes / 2;
@@ -82,9 +78,7 @@ void kernel_main() {
                              get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size)},
                             first_chunk_size},
                         start_distance,
-                        range,
-                        0  // route_id
-                    );
+                        range);
                 } break;
                 default: {
                     ASSERT(false);
@@ -99,9 +93,7 @@ void kernel_main() {
                         source_l1_buffer_address,
                         packet_payload_size_bytes,
                         tt::tt_fabric::NocUnicastCommandHeader{get_noc_addr(noc_x_start, noc_y_start, target_address)},
-                        1,
-                        0  // route_id
-                    );
+                        1);
                 } break;
                 case NOC_UNICAST_INLINE_WRITE: {
                     fabric_unicast_noc_unicast_inline_write(
@@ -109,10 +101,7 @@ void kernel_main() {
                         packet_header,
                         tt::tt_fabric::NocUnicastInlineWriteCommandHeader{
                             get_noc_addr(noc_x_start, noc_y_start, target_address), 0xDEADBEEF},
-                        1,
-                        0  // route_id
-                    );
-
+                        1);
                 } break;
                 case NOC_UNICAST_SCATTER_WRITE: {
                     uint16_t first_chunk_size = packet_payload_size_bytes / 2;
@@ -125,9 +114,7 @@ void kernel_main() {
                             {get_noc_addr(noc_x_start, noc_y_start, target_address),
                              get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size)},
                             first_chunk_size},
-                        1,
-                        0  // route_id
-                    );
+                        1);
                 } break;
                 default: {
                     ASSERT(false);

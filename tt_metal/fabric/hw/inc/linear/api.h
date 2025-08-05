@@ -18,8 +18,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
-    uint8_t num_hops,
-    uint32_t route_id = 0) {
+    uint8_t num_hops) {
     packet_header->to_chip_unicast(num_hops);
     packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
     client_interface->wait_for_empty_write_slot();
@@ -31,8 +30,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc(
     tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header,
-    uint8_t num_hops,
-    uint32_t route_id = 0) {
+    uint8_t num_hops) {
     packet_header->to_chip_unicast(num_hops);
     packet_header->to_noc_unicast_atomic_inc(noc_unicast_atomic_inc_command_header);
     client_interface->wait_for_empty_write_slot();
@@ -45,8 +43,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header,
-    uint8_t num_hops,
-    uint32_t route_id = 0) {
+    uint8_t num_hops) {
     packet_header->to_chip_unicast(num_hops);
     packet_header->to_noc_unicast_scatter_write(noc_unicast_scatter_command_header, size);
     client_interface->wait_for_empty_write_slot();
@@ -58,8 +55,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write(
     tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header,
-    uint8_t num_hops,
-    uint32_t route_id = 0) {
+    uint8_t num_hops) {
     packet_header->to_chip_unicast(num_hops);
     packet_header->to_noc_unicast_inline_write(noc_unicast_inline_write_command_header);
     client_interface->wait_for_empty_write_slot();
@@ -72,8 +68,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header,
-    uint8_t num_hops,
-    uint32_t route_id = 0) {
+    uint8_t num_hops) {
     packet_header->to_chip_unicast(num_hops);
     packet_header->to_noc_fused_unicast_write_atomic_inc(noc_fused_unicast_atomic_inc_command_header, size);
     client_interface->wait_for_empty_write_slot();
@@ -88,8 +83,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header,
     uint8_t start_distance,
-    uint8_t range,
-    uint32_t route_id = 0) {
+    uint8_t range) {
     packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
     packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
     client_interface->wait_for_empty_write_slot();
@@ -102,8 +96,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
     volatile PACKET_HEADER_TYPE* packet_header,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header,
     uint8_t start_distance,
-    uint8_t range,
-    uint32_t route_id = 0) {
+    uint8_t range) {
     packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
     packet_header->to_noc_unicast_atomic_inc(noc_unicast_atomic_inc_command_header);
     client_interface->wait_for_empty_write_slot();
@@ -117,8 +110,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header,
     uint8_t start_distance,
-    uint8_t range,
-    uint32_t route_id = 0) {
+    uint8_t range) {
     packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
     packet_header->to_noc_unicast_scatter_write(noc_unicast_scatter_command_header, size);
     client_interface->wait_for_empty_write_slot();
@@ -131,8 +123,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
     volatile PACKET_HEADER_TYPE* packet_header,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header,
     uint8_t start_distance,
-    uint8_t range,
-    uint32_t route_id = 0) {
+    uint8_t range) {
     packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
     packet_header->to_noc_unicast_inline_write(noc_unicast_inline_write_command_header);
     client_interface->wait_for_empty_write_slot();
@@ -146,8 +137,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header,
     uint8_t start_distance,
-    uint8_t range,
-    uint32_t route_id = 0) {
+    uint8_t range) {
     packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
     packet_header->to_noc_fused_unicast_write_atomic_inc(noc_fused_unicast_atomic_inc_command_header, size);
     client_interface->wait_for_empty_write_slot();

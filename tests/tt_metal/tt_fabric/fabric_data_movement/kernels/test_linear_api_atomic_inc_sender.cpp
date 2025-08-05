@@ -53,9 +53,7 @@ void kernel_main() {
                             std::numeric_limits<uint16_t>::max(),
                             true},
                         start_distance,
-                        range,
-                        0  // route_id
-                    );
+                        range);
                 } break;
                 case NOC_FUSED_UNICAST_ATOMIC_INC: {
                     fabric_multicast_noc_fused_unicast_with_atomic_inc(
@@ -70,9 +68,7 @@ void kernel_main() {
                             std::numeric_limits<uint16_t>::max(),
                             true},
                         start_distance,
-                        range,
-                        0  // route_id
-                    );
+                        range);
                 } break;
                 default: {
                     ASSERT(false);
@@ -89,9 +85,7 @@ void kernel_main() {
                             1,
                             std::numeric_limits<uint16_t>::max(),
                             true},
-                        1,
-                        0  // route_id
-                    );
+                        1);
                 } break;
                 case NOC_FUSED_UNICAST_ATOMIC_INC: {
                     fabric_unicast_noc_fused_unicast_with_atomic_inc(
@@ -105,9 +99,7 @@ void kernel_main() {
                             1,
                             std::numeric_limits<uint16_t>::max(),
                             true},
-                        1,
-                        0  // route_id
-                    );
+                        1);
                 } break;
                 default: {
                     ASSERT(false);
