@@ -9,7 +9,6 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3RMSNorm
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm import RMSNorm
-from models.demos.deepseek_v3.utils.config_helpers import even_int_div
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -92,19 +91,7 @@ def test_forward_pass(
         memory_config = ttnn.DRAM_MEMORY_CONFIG
     else:
         shard_core_grid = ttnn.CoreGrid(x=4, y=7)
-        memory_config = ttnn.create_sharded_memory_config(
-            shape=(
-                ttnn.core.roundup(seq_len, ttnn.TILE_SIZE),
-                ttnn.core.roundup(
-                    even_int_div(hidden_size, shard_core_grid.num_cores * mesh_device.shape[1]),
-                    ttnn.TILE_SIZE,
-                ),
-            ),
-            core_grid=shard_core_grid,
-            strategy=ttnn.ShardStrategy.WIDTH,
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            use_height_and_width_as_shard_shape=True,
-        )
+        memory_config = run_config["input_reshard_decode"]["memory_config"]
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
