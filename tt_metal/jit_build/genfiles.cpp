@@ -51,61 +51,9 @@ static void gen_kernel_cpp(const string& src, const string& dst_name) {
     gen_kernel_cpp(src, dst_name, empty_prolog);
 }
 
-static fs::path get_file_path_relative_to_dir(const string& dir, const fs::path& file_path) {
-    const string& path_relative_to_dir = dir + file_path.string();
-    fs::path file_path_relative_to_dir(path_relative_to_dir);
-
-    if (!fs::exists(file_path_relative_to_dir)) {
-        file_path_relative_to_dir.clear();
-    }
-
-    return file_path_relative_to_dir;
-}
-
-static fs::path get_relative_file_path_from_config(const fs::path& file_path) {
-    fs::path file_path_relative_to_dir;
-
-    const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
-    if (rtoptions.is_root_dir_specified()) {
-        file_path_relative_to_dir = get_file_path_relative_to_dir(rtoptions.get_root_dir(), file_path);
-    }
-
-    if (!fs::exists(file_path_relative_to_dir) && rtoptions.is_kernel_dir_specified()) {
-        file_path_relative_to_dir = get_file_path_relative_to_dir(rtoptions.get_kernel_dir(), file_path);
-    }
-
-    if (!fs::exists(file_path_relative_to_dir)) {
-        file_path_relative_to_dir = get_file_path_relative_to_dir(rtoptions.get_system_kernel_dir(), file_path);
-    }
-
-    return file_path_relative_to_dir;
-}
-
-static fs::path get_file_path_relative_to_src(const fs::path& file_path) {
-    fs::path file_path_relative_to_src;
-    if (fs::exists(file_path)) {
-        file_path_relative_to_src = file_path;
-    } else {
-        // If the path doesn't exist as a absolute/relative path, then it must be relative to
-        // TT_METAL_HOME/TT_METAL_KERNEL_PATH.
-        file_path_relative_to_src = get_relative_file_path_from_config(file_path);
-    }
-    return file_path_relative_to_src;
-}
-
-static string get_absolute_path(const string& file_path_string) {
-    const fs::path& file_path = get_file_path_relative_to_src(file_path_string);
-
-    const bool does_file_exist = fs::exists(file_path);
-    TT_FATAL(does_file_exist, "Kernel file {} doesn't exist!", file_path_string);
-
-    const fs::path& absolute_file_path = fs::absolute(file_path);
-    return absolute_file_path.string();
-}
-
 static string get_kernel_source_to_include(const KernelSource& kernel_src) {
     switch (kernel_src.source_type_) {
-        case KernelSource::FILE_PATH: return "#include \"" + get_absolute_path(kernel_src.source_) + "\"\n";
+        case KernelSource::FILE_PATH: return "#include \"" + fs::absolute(kernel_src.path_).string() + "\"\n";
         case KernelSource::SOURCE_CODE: return kernel_src.source_;
         default: {
             TT_THROW("Unsupported kernel source type!");

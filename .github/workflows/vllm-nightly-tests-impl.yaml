@@ -32,7 +32,6 @@ jobs:
             runner-label: config-t3000,
             mesh-device: T3K,
             tt-llama-text-ver: tt_transformers,
-            wh-arch-yaml: wormhole_b0_80_arch_eth_dispatch.yaml,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
@@ -43,7 +42,7 @@ jobs:
             benchmark-timeout: 10,
             runner-label: config-tg,
             mesh-device: TG,
-            tt-llama-text-ver: llama3_subdevices,
+            tt-llama-text-ver: llama3_70b_galaxy,
             override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D\", \"worker_l1_size\": 1344544, \"trace_region_size\": 95693824}",
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
@@ -115,10 +114,6 @@ jobs:
       - name: 🚀 Run server
         timeout-minutes: 1
         run: |
-          if [ -n "${{ matrix.test-group.wh-arch-yaml }}" ]; then
-            export WH_ARCH_YAML=${{ matrix.test-group.wh-arch-yaml }}
-          fi
-
           if [ -n "${{ matrix.test-group.override-tt-config }}" ]; then
             export OVERRIDE_TT_CONFIG=(--override-tt-config "$(printf "%s" '${{ matrix.test-group.override-tt-config }}')")
           else

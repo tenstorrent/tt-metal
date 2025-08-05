@@ -48,7 +48,7 @@ def set_env_vars(**kwargs):
         "doSync": "TT_METAL_PROFILER_SYNC=1 ",
         "doDispatchCores": "TT_METAL_DEVICE_PROFILER_DISPATCH=1 ",
         "slowDispatch": "TT_METAL_SLOW_DISPATCH_MODE=1 ",
-        "dispatchFromEth": "WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml ",
+        "dispatchFromWorker": "TT_TEST_USE_WORKER_DISPATCH=1 ",
         "enable_noc_tracing": "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1 ",
     }
     envVarsStr = " "
@@ -81,7 +81,7 @@ def run_device_profiler_test(
     slowDispatch=False,
     doSync=False,
     doDispatchCores=False,
-    dispatchFromEth=False,
+    dispatchFromWorker=False,
 ):
     name = inspect.stack()[1].function
     testCommand = f"build/{PROG_EXMP_DIR}/{name}"
@@ -89,7 +89,7 @@ def run_device_profiler_test(
         testCommand = testName
     clear_profiler_runtime_artifacts()
     envVars = set_env_vars(
-        slowDispatch=slowDispatch, doSync=doSync, doDispatchCores=doDispatchCores, dispatchFromEth=dispatchFromEth
+        slowDispatch=slowDispatch, doSync=doSync, doDispatchCores=doDispatchCores, dispatchFromWorker=dispatchFromWorker
     )
     testCommand = f"cd {TT_METAL_HOME} && {envVars} {testCommand}"
     print()
@@ -252,7 +252,7 @@ def test_dispatch_cores():
         assert len(statTypesSet) == 0
 
     verify_stats(
-        run_device_profiler_test(setupAutoExtract=True, doDispatchCores=True),
+        run_device_profiler_test(setupAutoExtract=True, doDispatchCores=True, dispatchFromWorker=True),
         statTypes=["Dispatch", "Prefetch"],
         allowedRange=150,
     )
@@ -262,6 +262,7 @@ def test_dispatch_cores():
             testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops",
             setupAutoExtract=True,
             doDispatchCores=True,
+            dispatchFromWorker=True,
         ),
         statTypes=["Dispatch", "Prefetch"],
         allowedRange=1000,
@@ -272,6 +273,7 @@ def test_dispatch_cores():
             testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices",
             setupAutoExtract=True,
             doDispatchCores=True,
+            dispatchFromWorker=True,
         ),
         statTypes=["Dispatch", "Prefetch"],
         allowedRange=1000,
@@ -282,6 +284,7 @@ def test_dispatch_cores():
             testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py",
             setupAutoExtract=False,
             doDispatchCores=True,
+            dispatchFromWorker=True,
         ),
         statTypes=["dispatch_total_cq_cmd_op_time", "dispatch_go_send_wait_time"],
         allowedRange=0,  # This test is basically counting ops and should be exact regardless of changes to dispatch code or harvesting.
@@ -297,7 +300,6 @@ def test_ethernet_dispatch_cores():
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_with_ops",
         setupAutoExtract=True,
         doDispatchCores=True,
-        dispatchFromEth=True,
     )
     for device, deviceData in devicesData["data"]["devices"].items():
         for ref, counts in REF_COUNT_DICT.items():
@@ -317,7 +319,6 @@ def test_ethernet_dispatch_cores():
         testName=f"pytest {TRACY_TESTS_DIR}/test_dispatch_profiler.py::test_all_devices",
         setupAutoExtract=True,
         doDispatchCores=True,
-        dispatchFromEth=True,
     )
     for device, deviceData in devicesData["data"]["devices"].items():
         for ref, counts in REF_COUNT_DICT.items():
@@ -437,7 +438,7 @@ def test_noc_event_profiler_linked_multicast_hang():
     testCommand = "build/test/tt_metal/perf_microbenchmark/dispatch/test_bw_and_latency"
     # note: this runs a long series repeated multicasts from worker {1,1} to grid {2,2},{3,3}
     # note: -m6 is multicast test mode, -link activates linked multicast
-    testCommandArgs = "-tx 3 -ty 3 -sx 2 -sy 2 -rx 1 -ry 1 -m 6 -link -profdump"
+    testCommandArgs = "-tx 3 -ty 3 -sx 2 -sy 2 -rx 1 -ry 1 -m 6 -link -profread"
     clear_profiler_runtime_artifacts()
     nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
     profilerRun = os.system(f"cd {TT_METAL_HOME} && {nocEventProfilerEnv} {testCommand} {testCommandArgs}")
@@ -456,11 +457,12 @@ def test_noc_event_profiler():
 
     testCommand = f"build/{PROG_EXMP_DIR}/test_noc_event_profiler"
     clear_profiler_runtime_artifacts()
+    nocEventsRptPathEnv = f"TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH={PROFILER_ARTIFACTS_DIR}/noc_events_rpt"
     nocEventProfilerEnv = "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1"
-    profilerRun = os.system(f"cd {TT_METAL_HOME} && {nocEventProfilerEnv} {testCommand}")
+    profilerRun = os.system(f"cd {TT_METAL_HOME} && {nocEventsRptPathEnv} {nocEventProfilerEnv} {testCommand}")
     assert profilerRun == 0
 
-    expected_trace_file = f"{PROFILER_LOGS_DIR}/noc_trace_dev0_ID0.json"
+    expected_trace_file = f"{PROFILER_ARTIFACTS_DIR}/noc_events_rpt/noc_trace_dev0_ID0.json"
     assert os.path.isfile(expected_trace_file)
 
     with open(expected_trace_file, "r") as nocTraceJson:
@@ -604,5 +606,5 @@ def test_sub_device_profiler():
     )
     run_gtest_profiler_test(
         "./build/test/tt_metal/unit_tests_dispatch",
-        "CommandQueueSingleCardTraceFixture.TensixTestSubDeviceTraceBasicPrograms",
+        "UnitMeshCQSingleCardTraceFixture.TensixTestSubDeviceTraceBasicPrograms",
     )

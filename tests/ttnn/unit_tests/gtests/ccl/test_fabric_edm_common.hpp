@@ -2710,6 +2710,211 @@ tt::tt_fabric::FabricRouterBufferConfig get_edm_buffer_config_helper(FabricTestM
     }
 }
 
+// Reads back and report the bandwidth telemetry data from active Ethernet core L1.
+void read_fabric_telemetry_data(MeshDeviceView* mesh_device) {
+    constexpr size_t telemetry_struct_size_bytes = 24;
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto telemetry_buffer_address = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+
+    // Convert raw data to telemetry struct
+    struct RiscTimestamp {
+        union {
+            uint64_t full;
+            struct {
+                uint32_t lo;
+                uint32_t hi;
+            };
+        };
+    };
+    struct LowResolutionBandwidthTelemetry {
+        RiscTimestamp timestamp_start;
+        RiscTimestamp timestamp_end;
+        uint32_t num_words_sent;
+        uint32_t num_packets_sent;
+    };
+    // host copy buffer to hold the readback telemetry data
+    std::vector<uint32_t> telemetry_raw_data(telemetry_struct_size_bytes / sizeof(uint32_t));
+
+    // Clear the telemetry data on the fabric core
+    std::vector<uint32_t> clearing_data_vec(telemetry_struct_size_bytes / sizeof(uint32_t), 0);
+
+    // Store telemetry data for CSV generation
+    struct TelemetryEntry {
+        ttnn::MeshCoordinate mesh_coord;
+        uint32_t eth_channel;
+        double bandwidth_gbps;
+        double packets_per_second;
+        ttnn::MeshCoordinate connected_mesh_coord;
+        uint32_t connected_eth_channel;
+    };
+    std::vector<TelemetryEntry> telemetry_entries;
+
+    for (const auto& device : mesh_device->get_devices()) {
+        log_info(tt::LogMetal, "Reading telemetry data for device {}", device->id());
+        auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+        auto device_mesh_coord = mesh_device->find_device(device->id());
+
+        for (const auto& eth_logical_core : control_plane.get_active_ethernet_cores(device->id())) {
+            // for (const auto& eth_logical_core : device->get_active_ethernet_cores(true)) {
+            log_info(
+                tt::LogMetal, "Reading telemetry data for device {}, ethernet core {}", device->id(), eth_logical_core);
+            // Read the telemetry struct from L1
+            tt::tt_metal::detail::ReadFromDeviceL1(
+                device,
+                eth_logical_core,
+                telemetry_buffer_address,
+                telemetry_struct_size_bytes,
+                telemetry_raw_data,
+                CoreType::ETH);
+
+            LowResolutionBandwidthTelemetry telemetry_data;
+            std::memcpy(&telemetry_data, telemetry_raw_data.data(), telemetry_struct_size_bytes);
+
+            // Calculate bandwidth
+            uint32_t total_eth_words = telemetry_data.num_words_sent;
+            uint32_t total_bytes = total_eth_words << 4;
+
+            uint32_t total_packets = telemetry_data.num_packets_sent;
+            // I stored the cycles elapsed directly from device side since for much of the time, the fabric could just
+            // be idle, and that shouldn't count towards the bandwidth.
+            uint64_t total_cycles = telemetry_data.timestamp_start.full;
+
+            if (total_eth_words == 0 || total_packets == 0 || total_cycles == 0) {
+                log_warning(
+                    tt::LogTest,
+                    "Invalid telemetry data for device {}, ethernet channel {}",
+                    device->id(),
+                    eth_logical_core);
+                continue;
+            }
+            if (telemetry_data.timestamp_end.full != 0) {
+                log_warning(
+                    tt::LogMetal,
+                    "Telemetry data for device {}, ethernet channel {} is corrupted. Ignoring data",
+                    device->id(),
+                    eth_logical_core);
+                continue;
+            }
+
+            tt::tt_metal::detail::WriteToDeviceL1(
+                device, eth_logical_core, telemetry_buffer_address, clearing_data_vec, CoreType::ETH);
+
+            double bandwidth_gbps = 0.0;
+            double packets_per_second = 0.0;
+
+            TT_FATAL(total_cycles > 0, "Total cycles is 0");
+
+            // Convert cycles to seconds (assuming 1GHz clock)
+            double total_nanoseconds = static_cast<double>(total_cycles);
+            // Convert words to bytes (4 bytes per word)
+            double total_bytes_double = static_cast<double>(total_bytes);
+            bandwidth_gbps = total_bytes_double / total_nanoseconds;
+            packets_per_second = static_cast<double>(total_packets) / (total_nanoseconds / 1e9);
+
+            log_info(
+                tt::LogMetal,
+                "Fabric Telemetry - Device: {}, Ethernet Channel: {}, "
+                "Total Words: {}, Total Packets: {}, Total Cycles: {}, Bandwidth: {:.2f} GB/s, Packets/s: {:.2f}",
+                device->id(),
+                eth_logical_core,
+                total_eth_words,
+                total_packets,
+                total_cycles,
+                bandwidth_gbps,
+                packets_per_second);
+
+            // Store telemetry data for CSV generation
+            // Find ethernet channel for this core
+            uint32_t eth_channel = 0;
+            if (soc_desc.logical_eth_core_to_chan_map.find(eth_logical_core) !=
+                soc_desc.logical_eth_core_to_chan_map.end()) {
+                eth_channel = soc_desc.logical_eth_core_to_chan_map.at(eth_logical_core);
+            }
+
+            // Get connectivity info
+            auto [connected_chip_id, connected_eth_core] = device->get_connected_ethernet_core(eth_logical_core);
+            auto connected_mesh_coord = mesh_device->find_device(connected_chip_id);
+
+            auto connected_soc_desc =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(connected_chip_id);
+            uint32_t connected_eth_channel = 0;
+            if (connected_soc_desc.logical_eth_core_to_chan_map.find(connected_eth_core) !=
+                connected_soc_desc.logical_eth_core_to_chan_map.end()) {
+                connected_eth_channel = connected_soc_desc.logical_eth_core_to_chan_map.at(connected_eth_core);
+            }
+
+            telemetry_entries.push_back(
+                {device_mesh_coord,
+                 eth_channel,
+                 bandwidth_gbps,
+                 packets_per_second,
+                 connected_mesh_coord,
+                 connected_eth_channel});
+        }
+    }
+
+    // Generate CSV tables from stored telemetry data
+    const size_t num_rows = mesh_device->num_rows();
+    const size_t num_cols = mesh_device->num_cols();
+
+    // Build CSV tables as single strings
+    std::string connectivity_table = "=== CHIP CONNECTIVITY TABLE (CSV) ===\n";
+    connectivity_table += "MeshRow,MeshCol,ConnectedMeshRow,ConnectedMeshCol,EthernetChannel\n";
+
+    std::string bandwidth_table = "=== BANDWIDTH TABLE (CSV) ===\n";
+    bandwidth_table += "MeshRow,MeshCol,EthernetChannel,BandwidthGB_s,PacketsPerSecond\n";
+
+    // Enumerate all ethernet connections from mesh device
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    for (size_t row = 0; row < num_rows; row++) {
+        for (size_t col = 0; col < num_cols; col++) {
+            ttnn::MeshCoordinate current_coord(row, col);
+
+            // Get the physical chip ID for this mesh coordinate
+            IDevice* device = mesh_device->get_device(current_coord);
+            chip_id_t chip_id = device->id();
+
+            // Get all ethernet connections for this chip
+            const auto& connected_chips_and_cores = cluster.get_ethernet_cores_grouped_by_connected_chips(chip_id);
+            const auto& soc_desc = cluster.get_soc_desc(chip_id);
+
+            // Add entry for each ethernet connection
+            for (const auto& [connected_chip_id, local_eth_cores] : connected_chips_and_cores) {
+                // Find the mesh coordinate of the connected chip
+                ttnn::MeshCoordinate connected_coord = mesh_device->find_device(connected_chip_id);
+
+                for (const auto& eth_core : local_eth_cores) {
+                    // Get the ethernet channel for this core
+                    auto eth_channel_iter = soc_desc.logical_eth_core_to_chan_map.find(eth_core);
+                    TT_FATAL(
+                        eth_channel_iter != soc_desc.logical_eth_core_to_chan_map.end(),
+                        "Ethernet channel not found for core {}",
+                        eth_core);
+                    uint32_t eth_channel = eth_channel_iter->second;
+                    connectivity_table +=
+                        fmt::format("{},{},{},{},{}\n", row, col, connected_coord[0], connected_coord[1], eth_channel);
+                }
+            }
+        }
+    }
+
+    // Add entries for each telemetry data point
+    for (const auto& entry : telemetry_entries) {
+        bandwidth_table += fmt::format(
+            "{},{},{},{:.2f},{:.2f}\n",
+            entry.mesh_coord[0],
+            entry.mesh_coord[1],
+            entry.eth_channel,
+            entry.bandwidth_gbps,
+            entry.packets_per_second);
+    }
+
+    // Output complete tables as single log messages
+    log_info(tt::LogMetal, "");
+    log_info(tt::LogMetal, "{}", connectivity_table);
+    log_info(tt::LogMetal, "{}", bandwidth_table);
+}
+
 template <typename FABRIC_DEVICE_FIXTURE = Fabric1DFixture>
 void Run1DFabricPacketSendTest(
     std::unique_ptr<Fabric1DFixture>& test_fixture,
@@ -3144,9 +3349,16 @@ void Run1DFabricPacketSendTest(
     for (size_t fabric_index = 0; fabric_index < fabrics_under_test_devices.size(); fabric_index++) {
         auto& devices = fabric_under_test_worker_devices[fabric_index];
         for (IDevice* d : devices) {
-            tt_metal::detail::DumpDeviceProfileResults(d);
+            tt_metal::detail::ReadDeviceProfilerResults(d);
         }
     }
+
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_telemetry()) {
+        log_info(tt::LogMetal, "Reading fabric telemetry data");
+        log_info(tt::LogMetal, "--------------------------------");
+        read_fabric_telemetry_data(test_fixture->view_.get());
+    }
+
     log_trace(tt::LogTest, "Finished");
 }
 
@@ -3321,7 +3533,7 @@ void launch_kernels_and_wait_for_completion(
         tt_metal::Synchronize(device, *ttnn::DefaultQueueId);
     }
     for (const auto& [device, program] : device_programs) {
-        tt_metal::detail::DumpDeviceProfileResults(device);
+        tt_metal::detail::ReadDeviceProfilerResults(device);
     }
 }
 
@@ -3714,6 +3926,12 @@ void Run1DFullMeshFabricPacketSendTest(
         device_programs,
         worker_cores_vec_per_axis_per_device,
         global_semaphore_addrs_per_axis);
+
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_telemetry()) {
+        log_info(tt::LogMetal, "Reading fabric telemetry data");
+        log_info(tt::LogMetal, "--------------------------------");
+        read_fabric_telemetry_data(test_fixture_->view_.get());
+    }
 }
 
 void RunWriteThroughputStabilityTestWithPersistentFabric(

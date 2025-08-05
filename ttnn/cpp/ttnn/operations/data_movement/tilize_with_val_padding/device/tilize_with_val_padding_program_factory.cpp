@@ -14,6 +14,7 @@
 #include <tt-metalium/allocator.hpp>
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding_common.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -185,12 +186,13 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
     // Tilized writer
-    uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         core,
-        tt::tt_metal::WriterDataMovementConfig({output_cb_index, out_is_dram}));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     std::vector<uint32_t> compute_kernel_args = {
         uint32_t(num_tiles / num_tiles_per_block), uint32_t(num_tiles_per_block)};
@@ -379,11 +381,13 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
     // writer
     uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
+    std::vector<uint32_t> writer_compile_time_args = {tt::CBIndex::c_16, num_tiles_2d, third_dim, total_tiles_per_row};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id_wh.cpp",
         all_cores,
-        WriterDataMovementConfig({tt::CBIndex::c_16, out_is_dram, num_tiles_2d, third_dim, total_tiles_per_row}));
+        WriterDataMovementConfig(writer_compile_time_args));
 
     // compute
 
@@ -589,13 +593,13 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
 
     /** writer
      */
-    uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-
+    std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
-        WriterDataMovementConfig({output_cb_index, out_is_dram}));
+        WriterDataMovementConfig(writer_compile_time_args));
 
     /** compute
      */

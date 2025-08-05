@@ -6,7 +6,7 @@
 
 #include <core_coord.hpp>
 #include <kernel.hpp>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <algorithm>
 #include <array>
 #include <cstdlib>
@@ -188,7 +188,7 @@ std::string DispatchClassToString(enum dispatch_core_processor_classes proc_clas
             } else {
                 return "";
             }
-        default: TT_THROW("Incompatible core type: {}", magic_enum::enum_name(core_type));
+        default: TT_THROW("Incompatible core type: {}", enchantum::to_string(core_type));
     }
     return "";
 }

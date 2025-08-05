@@ -39,8 +39,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     Tensor& output,
     DeviceComputeKernelConfig compute_kernel_config,
     bool enable_act_double_buffer,
-    bool enable_weights_double_buffer,
-    bool enable_subblock_padding) {
+    bool enable_weights_double_buffer) {
     tt::tt_metal::IDevice* device = a.device();
     TT_FATAL(a.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
@@ -56,35 +55,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
-
-    // it is bad for compute, pad act_block_h_ntiles
-    uint32_t out_subblock_h_ntiles_padded = out_subblock_h_ntiles;
-    if (enable_subblock_padding) {
-        uint32_t max_num_subblock = fp32_dest_acc_en ? 4 : 8;
-        uint32_t max_subblock_h = fp32_dest_acc_en ? 4 : 8;
-        TT_FATAL(
-            act_block_h_ntiles == out_block_h_ntiles, "to pad subblock, the number of blocks on height dim must be 1");
-
-        if ((out_subblock_w_ntiles * out_subblock_h_ntiles <= max_num_subblock / 2) and
-            (out_subblock_w_ntiles == weight_block_w_ntiles) and (act_block_h_ntiles == out_block_h_ntiles)) {
-            uint32_t num_subblock_h = act_block_h_ntiles / out_subblock_h_ntiles;
-            uint32_t num_iter = max_subblock_h - out_subblock_h_ntiles;
-            uint32_t new_out_subblock_h = out_subblock_h_ntiles;
-            uint32_t preferred_out_subblock_h = out_subblock_h_ntiles;
-
-            for (uint32_t i = 0; i < num_iter; ++i) {
-                new_out_subblock_h += 1;
-                uint32_t new_num_subblock_h = (act_block_h_ntiles + new_out_subblock_h - 1) / new_out_subblock_h;
-
-                if (new_num_subblock_h < num_subblock_h and
-                    (out_subblock_w_ntiles * new_out_subblock_h <= max_num_subblock)) {
-                    num_subblock_h = new_num_subblock_h;
-                    preferred_out_subblock_h = new_out_subblock_h;
-                }
-            }
-            out_subblock_h_ntiles_padded = preferred_out_subblock_h;
-        }
-    }
 
     TT_FATAL(
         out_block_h_ntiles >= act_block_h_ntiles,
@@ -342,12 +312,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     std::map<std::string, std::string> writer_mcast_sender_defines;
     std::map<std::string, std::string> compute_defines;
 
-    if (output_num_cores == 1) {
-        writer_mcast_sender_defines["SKIP_MCAST"] = "1";
-    }
-    bool skip_mcast = is_singlecore_skip_mcast(p_config, a.memory_config().memory_layout());
-    if (skip_mcast) {
+    const SkipMcast skip_mcast = conv_skip_mcast(parallelization_config, a.memory_config().memory_layout());
+    const bool skip_activation_mcast = skip_mcast.skip_activation_mcast;
+    const bool skip_weights_mcast = skip_mcast.skip_weights_mcast;
+    if (skip_activation_mcast) {
         reader_defines["SKIP_MCAST"] = "1";
+    }
+    if (skip_weights_mcast) {
+        writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
     if (has_bias) {
         writer_defines["FUSE_BIAS"] = "1";
@@ -395,7 +367,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         a.memory_config().shard_spec().value().shape,
         has_bias,
         false,
-        skip_mcast);
+        skip_activation_mcast);
 
     std::vector<std::vector<uint16_t>> conv_sharded_input_top_left_indices =
         ttnn::operations::sliding_window::generate_sliding_window_op_config(
@@ -433,18 +405,16 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         num_blocks_act_w,              // in0_num_blocks_w,
         num_blocks_weight_w_per_core,  // in1_num_blocks_w
 
-        out_subblock_h_ntiles_padded,  // out_sublock_h
-        out_subblock_w_ntiles,         // out_sublock_w
-        out_subblock_num_tiles,        // out_sublock_num_tiles
+        out_subblock_h_ntiles,   // out_sublock_h
+        out_subblock_w_ntiles,   // out_sublock_w
+        out_subblock_num_tiles,  // out_sublock_num_tiles
 
         tilize_in0,    // tilize_in0
         untilize_out,  // untilize_out
 
         bias_ntiles,
         get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
-
-        skip_mcast ? get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index
-                   : get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
+        get_cb_info_by_name(cb_info, Conv2dCb::ACT).index,
         get_cb_info_by_name(cb_info, Conv2dCb::WEIGHTS).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_SECOND_READER).index,

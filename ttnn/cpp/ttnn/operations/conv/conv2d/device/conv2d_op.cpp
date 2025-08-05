@@ -72,8 +72,7 @@ Tensor optimized_conv_new(
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
     bool full_inner_dim,
-    bool enable_split_reader,
-    bool enable_subblock_padding) {
+    bool enable_split_reader) {
     TT_FATAL(b.layout() == Layout::TILE,
              "Weights should be in TILE layout.");  // Weights should already be formatted
     const auto& ashape = input_tensor_shape;
@@ -103,8 +102,7 @@ Tensor optimized_conv_new(
         enable_act_double_buffer,
         enable_weights_double_buffer,
         full_inner_dim,
-        enable_split_reader,
-        enable_subblock_padding);
+        enable_split_reader);
     IDevice* device = a.device();
 
     optimized_conv_op.pre_op_l1_allocation_size_bytes =
@@ -216,26 +214,84 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
     if (!activation.empty()) {
         fused_activation = unary::utils::string_to_unary_with_param(activation);
     }
-    auto program_with_cbs = multi_core_optimized_conv_sharded_v2_new(
-        input_tensor_a,
-        input_tensor_b,
-        input_tensor_bias,
-        sliding_window_config,
-        output_channels,
-        groups,
-        untilize_out,
-        fused_activation,
-        parallelization_config,
-        block_config,
-        dtype,
-        input_tensor_shape,
-        compute_kernel_config,
-        output_tensor,
-        enable_act_double_buffer,
-        enable_weights_double_buffer,
-        enable_split_reader,
-        enable_subblock_padding,
-        full_inner_dim);
+
+    // Factory selection logic - choose the appropriate implementation based on memory layout
+    operation::ProgramWithCallbacks program_with_cbs;
+
+    if (input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
+        // Use width sharded implementation
+        tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+
+        ttnn::operations::sliding_window::ParallelConfig parallel_config{
+            .grid = input_tensor_a.shard_spec().value().grid,
+            .shard_scheme = input_tensor_a.memory_config().memory_layout(),
+            .shard_orientation = input_tensor_a.shard_spec().value().orientation};
+
+        std::vector<uint32_t> op_trace_metadata =
+            ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
+        std::vector<sliding_window::ShardBoundary> shard_boundaries =
+            ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
+
+        program_with_cbs = multi_core_optimized_conv_width_sharded_v2_impl(
+            program,
+            input_tensor_a,
+            input_tensor_b,
+            ttnn::Shape(input_tensor_shape),
+            input_tensor_bias,
+            sliding_window_config,
+            parallel_config,
+            op_trace_metadata,
+            shard_boundaries,
+            output_channels,
+            groups,
+            untilize_out,
+            has_bias,
+            fused_activation,
+            parallelization_config,
+            block_config,
+            output_tensor,
+            compute_kernel_config,
+            enable_act_double_buffer,
+            enable_weights_double_buffer);
+    } else {
+        // Use regular sharded implementation
+        tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+
+        ttnn::operations::sliding_window::ParallelConfig parallel_config{
+            .grid = input_tensor_a.shard_spec().value().grid,
+            .shard_scheme = input_tensor_a.memory_config().memory_layout(),
+            .shard_orientation = input_tensor_a.shard_spec().value().orientation};
+
+        std::vector<uint32_t> op_trace_metadata =
+            ttnn::operations::sliding_window::generate_op_trace_metadata(sliding_window_config);
+        std::vector<sliding_window::ShardBoundary> shard_boundaries =
+            ttnn::operations::sliding_window::generate_shard_boundaries(sliding_window_config, op_trace_metadata);
+
+        program_with_cbs = multi_core_optimized_conv_sharded_v2_impl(
+            program,
+            input_tensor_a,
+            input_tensor_b,
+            ttnn::Shape(input_tensor_shape),
+            input_tensor_bias,
+            sliding_window_config,
+            parallel_config,
+            op_trace_metadata,
+            shard_boundaries,
+            output_channels,
+            groups,
+            untilize_out,
+            has_bias,
+            fused_activation,
+            parallelization_config,
+            block_config,
+            input_tensor_a.shard_spec().value().orientation == ShardOrientation::COL_MAJOR,
+            output_tensor,
+            compute_kernel_config,
+            enable_act_double_buffer,
+            enable_weights_double_buffer,
+            enable_split_reader,
+            full_inner_dim);
+    }
 
     const uint32_t post_op_l1_allocation_size =
         device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
@@ -243,6 +299,8 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
 
     auto kernel_dims =
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second});
+
+    const SkipMcast skip_mcast = conv_skip_mcast(parallelization_config, memory_config.memory_layout());
     conv_op_l1_usage l1_usage = calculate_L1_usage(
         compute_kernel_config,
         block_config,
@@ -266,7 +324,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             kernel_dims[1],
             sliding_window_config.get_output_shape()[2],
             has_bias),
-        is_singlecore_skip_mcast(parallelization_config, input_tensor_a.memory_config().memory_layout()));
+        skip_mcast.skip_activation_mcast);
 
     TT_FATAL(
         actual_cb_size == l1_usage.CB_allocation_size,
