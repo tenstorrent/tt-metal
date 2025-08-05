@@ -22,13 +22,15 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
         page_size % input_tensors[0].buffer()->alignment() == 0,
         "reduce_scatter_minimal_async currently requires aligned pages");
 
+    TT_FATAL(this->dim == 3, "reduce_scatter_minimal_async currently only supports reducing on dim 3");
+
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(
         input_tensor.buffer() != nullptr,
         "Operands to reduce_scatter_minimal_async need to be allocated in buffers on device!");
     TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
 
-    const auto& input_shape = input_tensor.padded_shape();
+    const auto& input_shape = input_tensor.logical_shape();
     TT_FATAL(
         (input_shape[this->dim] / tt::constants::TILE_WIDTH) % this->ring_size == 0,
         "Error, The number of tiles at input tensor dimension {} should be divisible by ring_size but the number of "
@@ -124,8 +126,8 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
                 output_tensor.memory_config());
 
             // check the output tensor size
-            auto output_shape = output_tensor.padded_shape();
-            auto input_shape = input_tensor.padded_shape();
+            auto output_shape = output_tensor.logical_shape();
+            auto input_shape = input_tensor.logical_shape();
             TT_FATAL(
                 output_shape.size() == input_shape.size(),
                 "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
@@ -176,13 +178,13 @@ std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsync::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     // TODO: FIXME!
     const auto& input_tensor = input_tensors[0];
-    auto inter_shape = input_tensor.padded_shape();
+    auto inter_shape = input_tensor.logical_shape();
 
     if (this->topology == ccl::Topology::Linear) {
         inter_shape[0] *= 2;
     }
 
-    auto output_shape = input_tensor.padded_shape();
+    auto output_shape = input_tensor.logical_shape();
     output_shape[this->dim] /= this->ring_size;
     return {
         TensorSpec(

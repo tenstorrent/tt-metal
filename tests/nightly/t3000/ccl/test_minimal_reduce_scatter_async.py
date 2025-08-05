@@ -149,7 +149,9 @@ def run_reduce_scatter_impl(
     def run_op(i):
         tt_reduce_scatter_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
             tt_input_tensor_mesh_list[i],
-            persistent_output_buffers=[persistent_intermediate_buffers[i], persistent_output_buffers[i]],
+            persistent_output_buffers=None
+            if use_barrier
+            else [persistent_intermediate_buffers[i], persistent_output_buffers[i]],
             dim=dim,
             multi_device_global_semaphore=ccl_semaphore_handles[i],
             barrier_semaphore=barrier_semaphore_handles[i] if use_barrier else None,
@@ -223,6 +225,8 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
     [
+        (8, [1, 1, 13, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
+        (8, [3, 1, 41, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (8, [8, 1, 512, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (8, [4, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
         (8, [1, 1, 1024, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fused
@@ -231,6 +235,8 @@ def run_reduce_scatter_impl(
         (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),  # use batching when fusedd
     ],
     ids=[
+        "padded_dim_2_test_one",
+        "padded_dim_2_test_two",
         "batch_8",
         "batch_4",
         "batch_1_sd35_spatial",
