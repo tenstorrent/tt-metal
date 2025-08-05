@@ -166,12 +166,12 @@ AllToAllDispatchDeviceOperation::invoke(
     uint32_t num_links,
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
-    tt::tt_metal::SubDeviceId subdevice_id,
+    const CoreRangeSet& worker_core_range_set,
     const std::optional<GlobalSemaphore>& global_semaphore,
     AllToAllTransferType impl) {
     return {
         operation_attributes_t{
-            .subdevice_id = std::move(subdevice_id),
+            .worker_core_range_set = worker_core_range_set,
             .output_mem_config = memory_config,
             .axis = axis,
             .num_links = num_links,
