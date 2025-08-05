@@ -132,3 +132,87 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize(
+    "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, cp, hp, wp",
+    [
+        ### oft
+        (1, 256, 159 , 159, 16, 3, 4, 4, 0, 1, 1),
+        (1, 512, 159, 159, 16, 3, 4, 4, 0, 1, 1),
+        # (1,  64, 192, 640, 16, 10, 4, 4, 64, 0, 0), #pcc drop AssertionError: 0.3961253683080487
+        # (1,  64,  96, 320, 16, 3, 4, 4, 64, 0, 0), #pcc drop AssertionError: 0.4576525468259213
+    ],
+)
+def test_group_norm_DRAM_oft(device, N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x, cp, hp, wp):
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x != 5 or compute_grid.y != 4:
+        pytest.skip(f"Test requires compute grid size of 5x4, but got {compute_grid.x}x{compute_grid.y}")
+    
+    torch.manual_seed(0)
+    grid_size = ttnn.CoreGrid(y=cores_y, x=cores_x)
+    # torch input tensor
+    torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.group_norm(
+        torch_input_tensor, num_groups, weight=torch_weight, bias=torch_bias
+    )
+    torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    
+    # input tensor
+    input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    input_tensor = torch.nn.functional.pad(input_tensor, (0, cp, 0, wp*H + hp*W + hp*wp, 0, 0, 0, 0), "constant", 0.0)
+    input_tensor_row_major = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, grid_size.y)
+    input_mask_tensor = ttnn.from_torch(
+        input_mask_tensor,
+        dtype=ttnn.DataType.BFLOAT8_B,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    # gamma/beta
+    gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, grid_size.y)
+    beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, grid_size.y)
+    gamma_t = ttnn.from_torch(
+        gamma,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    beta_t = ttnn.from_torch(
+        beta,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    # groupnorm
+    output_tensor = ttnn.group_norm(
+        input_tensor_tilized,
+        num_groups=num_groups,
+        input_mask=input_mask_tensor,
+        weight=gamma_t,
+        bias=beta_t,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        output_layout=ttnn.TILE_LAYOUT,
+        core_grid=grid_size,
+        inplace=False,
+        num_out_blocks=num_out_blocks,
+        epsilon=1e-5,
+    )
+
+    ttnn.synchronize_device(device)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor[:,:,:H*W,:C], 0.9995)
