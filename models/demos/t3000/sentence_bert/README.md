@@ -4,13 +4,6 @@
 
 LoudBox/QuietBox T3K
 
-**Note:** On T3K, make sure to use `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml` with the pytest.
-
-Or, make sure to set the following environment variable in the terminal:
-```
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-```
-
 To obtain the perf reports through profiler, please build with following command:
 ```
 ./build_metal.sh -p
@@ -33,7 +26,7 @@ Resource link - [source](https://huggingface.co/emrecan/bert-base-turkish-cased-
 Use the following command to run the model :
 
 ```
-pytest --disable-warnings tests/ttnn/integration_tests/sentence_bert/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model
+pytest --disable-warnings models/demos/sentence_bert/tests/pcc/test_ttnn_sentencebert_model.py::test_ttnn_sentence_bert_model
 ```
 
 ###  Performant Model with Trace+2CQ

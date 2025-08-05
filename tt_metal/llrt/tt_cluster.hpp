@@ -4,9 +4,10 @@
 
 #pragma once
 
-#include <tt-metalium/fabric_host_interface.h>
+#include "hostdevcommon/fabric_common.h"
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
+#include <tt-metalium/cluster.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -31,7 +32,6 @@
 #include <umd/device/tt_soc_descriptor.h>
 #include <umd/device/tt_xy_pair.h>
 #include <umd/device/types/cluster_descriptor_types.h>
-#include <umd/device/types/cluster_types.h>
 #include <umd/device/types/harvesting.h>
 
 namespace tt {
@@ -49,6 +49,10 @@ class Hal;
 }  // namespace tt
 struct tt_device_params;
 
+static constexpr std::uint32_t SW_VERSION = 0x00020000;
+
+using tt_target_dram = std::tuple<int, int, int>;
+
 namespace tt {
 
 /**
@@ -60,45 +64,17 @@ enum class TargetDevice : std::uint8_t {
     Invalid = 0xFF,
 };
 
-enum class ClusterType : std::uint8_t {
-    INVALID = 0,
-    N150 = 1,                    // Production N150
-    N300 = 2,                    // Production N300
-    T3K = 3,                     // Production T3K, built with 4 N300s
-    GALAXY = 4,                  // Production Galaxy, all chips with mmio
-    TG = 5,                      // Will be deprecated
-    P100 = 6,                    // Blackhole single card, ethernet disabled
-    P150 = 7,                    // Blackhole single card, ethernet enabled
-    P150_X2 = 8,                 // 2 Blackhole single card, ethernet connected
-    P150_X4 = 9,                 // 4 Blackhole single card, ethernet connected
-    SIMULATOR_WORMHOLE_B0 = 10,  // Simulator Wormhole B0
-    SIMULATOR_BLACKHOLE = 11,    // Simulator Blackhole
-    N300_2x2 = 12,               // 2 N300 cards, ethernet connected to form 2x2
-};
-
 enum class EthRouterMode : uint32_t {
     IDLE = 0,
-    BI_DIR_TUNNELING = 1,
-    FABRIC_ROUTER = 2,
-};
-
-struct FirmwareVersion {
-    uint16_t major = 0xffff;
-    uint8_t minor = 0xff;
-    uint8_t patch = 0xff;
-
-    friend std::ostream& operator<<(std::ostream& os, const FirmwareVersion& fw) {
-        os << "FW:" << (uint32_t)fw.major << "." << (uint32_t)fw.minor << "." << (uint32_t)fw.patch;
-        return os;
-    }
+    FABRIC_ROUTER = 1,
 };
 
 class Cluster {
 public:
     // TODO: #21245: Remove these workaround APIs and instead refactor UMD component out of Cluster
-    static ClusterType get_cluster_type_from_cluster_desc(
+    static tt::tt_metal::ClusterType get_cluster_type_from_cluster_desc(
         const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc = nullptr);
-    static bool is_base_routing_fw_enabled(ClusterType cluster_type);
+    static bool is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type);
     Cluster& operator=(const Cluster&) = delete;
     Cluster& operator=(Cluster&& other) noexcept = delete;
     Cluster(const Cluster&) = delete;
@@ -158,7 +134,8 @@ public:
         return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
     }
 
-    FirmwareVersion get_ethernet_fw_version() const;
+    //! device driver and misc apis
+    void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
 
     void deassert_risc_reset_at_core(
         const tt_cxy_pair& physical_chip_coord,
@@ -244,19 +221,6 @@ public:
     // Returns virtual eth coord from channel
     CoreCoord get_virtual_eth_core_from_channel(chip_id_t chip_id, int channel) const;
 
-    // Bookkeeping for mmio device tunnels
-    uint32_t get_mmio_device_max_tunnel_depth(chip_id_t mmio_device) const;
-    uint32_t get_mmio_device_tunnel_count(chip_id_t mmio_device) const;
-    uint32_t get_device_tunnel_depth(chip_id_t chip_id) const;
-
-    // Dispatch core is managed by device, so this is an api for device to get the each eth core used in FD tunneling.
-    // Returns logical eth core that communicates with specified dispatch core
-    tt_cxy_pair get_eth_core_for_dispatch_core(
-        tt_cxy_pair logical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const;
-
-    std::tuple<tt_cxy_pair, tt_cxy_pair> get_eth_tunnel_core(
-        chip_id_t upstream_chip_id, chip_id_t downstream_chip_id, EthRouterMode mode) const;
-
     // Internal routing for SD and FD enables launching user ethernet kernels and FD tunneling for all devices in the
     // cluster. When using multiple devices in a cluster, this should be the flow:
     //       CreateDevice(0)
@@ -322,7 +286,7 @@ public:
     // Returns Wormhole chip board type.
     BoardType get_board_type(chip_id_t chip_id) const;
 
-    ClusterType get_cluster_type() const;
+    tt::tt_metal::ClusterType get_cluster_type() const;
 
     bool is_base_routing_fw_enabled() const;
 
@@ -372,7 +336,7 @@ private:
     void generate_virtual_to_profiler_flat_id_mapping();
 
     // Reserves ethernet cores in cluster for tunneling
-    void reserve_ethernet_cores_for_tunneling();
+    void initialize_ethernet_cores_router_mode();
 
     void initialize_ethernet_sockets();
 
@@ -384,9 +348,6 @@ private:
     void set_tunnels_from_mmio_device();
 
     bool supports_dma_operations(chip_id_t chip_id, uint32_t sz_in_bytes) const;
-
-    // Verify system has required firmware versions for Metal
-    void assert_fw_versions();
 
     ARCH arch_;
     TargetDevice target_type_;
@@ -414,7 +375,7 @@ private:
     std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> frequent_retrain_cores_;
     // Flag to tell whether we are on a TG type of system.
     // If any device has to board type of GALAXY, we are on a TG cluster.
-    ClusterType cluster_type_ = ClusterType::INVALID;
+    tt::tt_metal::ClusterType cluster_type_ = tt::tt_metal::ClusterType::INVALID;
 
     // Reserves specified number of ethernet cores for fabric routers
     void reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_planes);
@@ -451,12 +412,4 @@ private:
 
 }  // namespace tt
 
-template <>
-struct fmt::formatter<tt::FirmwareVersion> {
-    constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
-
-    template <typename Context>
-    constexpr auto format(const tt::FirmwareVersion& version, Context& ctx) const {
-        return format_to(ctx.out(), "FW:{}.{}.{}", version.major, version.minor, version.patch);
-    }
-};
+std::ostream& operator<<(std::ostream& os, const tt_target_dram& dram);

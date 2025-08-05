@@ -56,9 +56,9 @@ class Yolov6l_Conv2D:
             weights_dtype=weights_dtype,
             shard_layout=shard_layout if not auto_shard else None,
             deallocate_activation=self.deallocate_activation,
-            enable_act_double_buffer=False,
-            enable_split_reader=False,
-            enable_subblock_padding=False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True if shard_layout == BS else False,
+            enable_split_reader=True,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
         )
@@ -181,7 +181,6 @@ class Yolov6x_Conv_T_2D:
             deallocate_activation=False,
             enable_act_double_buffer=False,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             output_layout=ttnn.TILE_LAYOUT,
         )
         self.compute_config = ttnn.init_device_compute_kernel_config(

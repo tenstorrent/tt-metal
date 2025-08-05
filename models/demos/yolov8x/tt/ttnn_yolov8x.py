@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -99,7 +99,6 @@ class TtConv:
             deallocate_activation=False,
             enable_act_double_buffer=self.enable_act_double_buffer,
             enable_split_reader=self.enable_split_reader,
-            enable_subblock_padding=False,
             output_layout=self.output_layout,
             reallocate_halo_output=False,
             reshard_if_not_optimal=self.reshard_if_not_optimal,
@@ -116,6 +115,8 @@ class TtConv:
 
         if self.block_shard:
             conv_config.shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            conv_config.enable_act_double_buffer = True
+            conv_config.enable_weights_double_buffer = True
 
         if self.width_shard:
             conv_config.shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED

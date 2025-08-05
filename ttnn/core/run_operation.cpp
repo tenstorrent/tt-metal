@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/run_operation.hpp"
+#include <tt-metalium/mesh_device.hpp>
 
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>
@@ -23,7 +24,7 @@ namespace tt::tt_metal::operation {
 
 namespace detail {
 
-IDevice* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) {
+distributed::MeshDevice* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors) {
     for (auto& input_tensor : input_tensors) {
         if (input_tensor.storage_type() == StorageType::DEVICE) {
             return input_tensor.device_storage().get_device();
@@ -105,7 +106,7 @@ OutputTensors run_without_autoformat(
     QueueId cq_id) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
-    IDevice* device = detail::get_device(input_tensors, optional_input_tensors);
+    distributed::MeshDevice* device = detail::get_device(input_tensors, optional_input_tensors);
     Tensors input_tensors_on_dev;
     input_tensors_on_dev.reserve(input_tensors.size());
     for (auto& input_tensor : input_tensors) {
@@ -169,7 +170,7 @@ Tensors run_with_autoformat(
     QueueId cq_id) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
-    IDevice* device = detail::get_device(input_tensors, optional_input_tensors);
+    distributed::MeshDevice* device = detail::get_device(input_tensors, optional_input_tensors);
 
     Tensors formatted_input_tensors;
     formatted_input_tensors.reserve(input_tensors.size());
@@ -241,7 +242,7 @@ Tensors run_with_autoformat(
     ttnn::QueueId cq_id) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
-    IDevice* device = detail::get_device(input_tensors, optional_input_tensors);
+    distributed::MeshDevice* device = detail::get_device(input_tensors, optional_input_tensors);
 
     TT_ASSERT(input_tensors.size() == input_formatting.size());
     TT_ASSERT(optional_input_tensors.size() == optional_input_formatting.size());

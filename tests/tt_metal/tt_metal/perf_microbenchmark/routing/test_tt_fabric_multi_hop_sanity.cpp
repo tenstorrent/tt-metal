@@ -28,7 +28,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/fabric_host_interface.h>
+#include "hostdevcommon/fabric_common.h"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -39,7 +39,6 @@
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
 #include "test_common.hpp"
-// #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>

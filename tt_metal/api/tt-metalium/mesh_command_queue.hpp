@@ -56,6 +56,7 @@ struct MeshCoreDataReadDescriptor;
 using MeshCompletionReaderVariant =
     std::variant<MeshBufferReadDescriptor, MeshReadEventDescriptor, MeshCoreDataReadDescriptor>;
 
+// THREAD SAFETY: All methods are thread safe.
 class MeshCommandQueue {
     // Main interface to dispatch data and workloads to a MeshDevice
     // Currently only supports dispatching workloads and relies on the
@@ -75,6 +76,7 @@ public:
 
     MeshDevice* device() const { return mesh_device_; }
     uint32_t id() const { return id_; }
+    virtual std::optional<MeshTraceId> trace_id() const = 0;
     virtual WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) = 0;
     virtual void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) = 0;
 

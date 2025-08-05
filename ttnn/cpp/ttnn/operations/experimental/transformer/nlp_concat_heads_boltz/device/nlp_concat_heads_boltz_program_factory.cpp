@@ -7,6 +7,7 @@
 #include <tt-metalium/util.hpp>
 #include "nlp_concat_heads_boltz_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -16,8 +17,6 @@ using namespace tt;
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_boltz(
     const Tensor& a, Tensor& output, CoreCoord compute_with_storage_grid_size) {
     const auto& ashape = a.padded_shape();
-
-    tt_metal::IDevice* device = a.device();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
@@ -63,7 +62,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_boltz(
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
     }
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
@@ -111,11 +109,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads_boltz(
             (std::uint32_t)in0_c,
             (std::uint32_t)in0_HtWt,
         };
-        std::vector<uint32_t> writer_compile_time_args = {
-            // interleaved accessor args
-            (std::uint32_t)src0_cb_index,
-            (std::uint32_t)out_is_dram,
-        };
+        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index};
+        tt_metal::TensorAccessorArgs(*out_buffer).append_to(writer_compile_time_args);
         reader_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_boltz/device/kernels/dataflow/"

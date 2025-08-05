@@ -9,6 +9,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.yolov4.common import YOLOV4_L1_SMALL_SIZE
 from models.demos.yolov4.runner.performant_runner import YOLOv4PerformantRunner
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
@@ -18,7 +19,9 @@ from models.utility_functions import run_for_wormhole_b0
 @run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 40960, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": YOLOV4_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype",
@@ -77,7 +80,7 @@ def test_perf_e2e_yolov4(device, batch_size, act_dtype, weight_dtype, resolution
 @pytest.mark.parametrize(
     "batch_size, model_name, expected_perf",
     [
-        (1, "yolov4", 93.6),
+        (1, "yolov4", 96.5),
     ],
 )
 @pytest.mark.models_device_performance_bare_metal

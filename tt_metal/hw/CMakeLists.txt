@@ -12,7 +12,6 @@ set(PROCS
     trisc=1
     trisc=2
     aerisc
-    subordinate_aerisc
 )
 set(TYPES
     firmware
@@ -143,7 +142,15 @@ if(NOT EXISTS "${GPP_CMD}")
     message(FATAL_ERROR "GPP_CMD path '${GPP_CMD}' does not exist. Please check your configuration.")
 endif()
 
-message(STATUS "Using SFPI compiler: ${GPP_CMD}")
+execute_process(
+    COMMAND
+        ${GPP_CMD} --version
+    COMMAND
+        head -1
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    OUTPUT_VARIABLE GPP_VERSION
+)
+message(STATUS "Using SFPI compiler: ${GPP_CMD}, ${GPP_VERSION}")
 
 set(GPP_DEFINES -DTENSIX_FIRMWARE)
 
@@ -177,8 +184,8 @@ foreach(ARCH IN LISTS ARCHS)
     set(HW_OBJ_SRC_PAIRS
         "tmu-crt0.o:tt_metal/hw/toolchain/tmu-crt0.S"
         "substitutes.o:tt_metal/hw/toolchain/substitutes.cpp"
-        "tdma_xmov.o:tt_metal/hw/firmware/src/tdma_xmov.c"
-        "noc.o:tt_metal/hw/firmware/src/${ARCH}/noc.c"
+        "tdma_xmov.o:tt_metal/hw/firmware/src/tt-1xx/tdma_xmov.c"
+        "noc.o:tt_metal/hw/firmware/src/tt-1xx/${ARCH}/noc.c"
     )
     set(ARCH_ALIAS ${ARCH})
 
@@ -212,7 +219,7 @@ foreach(ARCH IN LISTS ARCHS)
         -I${PROJECT_SOURCE_DIR}/tt_metal/include
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/debug
-        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src
+        -I${PROJECT_SOURCE_DIR}/tt_metal/hw/firmware/src/tt-1xx
     )
 
     # Architecture specific include paths
@@ -300,7 +307,6 @@ target_sources(
             inc/blackhole/cfg_defines.h
             inc/blackhole/core_config.h
             inc/blackhole/dev_mem_map.h
-            inc/blackhole/eth_fw_api.h
             inc/blackhole/eth_chan_noc_mapping.h
             inc/blackhole/eth_l1_address_map.h
             inc/blackhole/noc/noc.h
@@ -345,6 +351,8 @@ target_sources(
             inc/risc_common.h
             inc/tensix_functions.h
             inc/utils/bfloat16.h
+            inc/utils/float32.h
+            inc/utils/int32.h
             inc/utils/utils.h
             inc/vptr_uint.h
             inc/wormhole/c_tensix_core.h
@@ -370,6 +378,10 @@ target_sources(
             toolchain/erisc-b0-app-sections.ld
             toolchain/erisc-b0-memory.ld
             toolchain/erisc-b0-kernel.ld
+        FILE_SET toolchain
+        TYPE HEADERS
+        BASE_DIRS ${PROJECT_SOURCE_DIR}
+        FILES ${LD_FILES} ${OBJ_FILES}
 )
 
 target_link_libraries(hw INTERFACE TT::Metalium::HostDevCommon)
@@ -383,5 +395,9 @@ install(
     jit_api
         DESTINATION
             ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/hw # FIXME: fix the include paths for jit_build
+        COMPONENT metalium-runtime
+    FILE_SET
+    toolchain
+        DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium
         COMPONENT metalium-runtime
 )

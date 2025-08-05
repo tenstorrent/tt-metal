@@ -35,14 +35,18 @@ on:
       - main # Builds on main will populate the shared ccache to speed up builds on branches
 
 concurrency:
-  # Use github.run_id on main branch (or any protected branch)
-  # This ensure that no runs get cancelled on main
-  # Use github.event.pull_request.number on pull requests, so it's unique per pull request
-  # and will cancel obsolete runs
-  # Use github.ref on other branches, so it's unique per branch
-  # Possibly PRs can also just use `github.ref`, but for now just copy/pasting from
-  # https://www.meziantou.net/how-to-cancel-github-workflows-when-pushing-new-commits-on-a-branch.htm
-  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.event.pull_request.number || github.ref }}-${{ inputs.build-type || 'default' }}
+  # Groups to control cancelling of obsolete runs.
+  # main (or any protected branch): run_id (read: never cancel other jobs)
+  # PRs: PR #
+  # Merge Queue: A value unique to each PR (merge_group.head_ref)
+  # All others: commit ID (read: never cancel other jobs)
+  group: >-
+    ${{ github.workflow }}-
+    ${{ github.ref_protected && github.run_id
+        || github.event.pull_request.number
+        || github.event.merge_group.head_ref
+        || github.ref }}-
+    ${{ inputs.build-type || 'default' }}
   cancel-in-progress: true
 
 permissions:
@@ -89,7 +93,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N300-viommu",
+          "N150-viommu",
           "P150b-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
@@ -111,7 +115,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N300-viommu",
+          "N150-viommu",
           "P150b-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
@@ -149,7 +153,7 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N300-viommu",
+          "N150-viommu",
         ]
     uses: ./.github/workflows/sdk-examples.yaml
     with:

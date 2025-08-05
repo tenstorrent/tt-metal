@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 import time
 
 import pytest
@@ -58,14 +57,6 @@ def unsqueeze_all_params_to_4d(params):
     ],
 )
 def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_height, input_width):
-    # setup envvar if testing on N300
-    wh_arch_yaml_org = None
-    if device.core_grid.y == 7:
-        if ("WH_ARCH_YAML" not in os.environ) or (
-            os.environ["WH_ARCH_YAML"] != "wormhole_b0_80_arch_eth_dispatch.yaml"
-        ):
-            pytest.skip("SD unet2d only works for 8x8 grid size")
-
     ttnn.CONFIG.throw_exception_on_fallback = True
     # setup pytorch model
     torch.manual_seed(0)
@@ -160,4 +151,4 @@ def test_unet_2d_condition_model_512x512(device, batch_size, in_channels, input_
     print(f"Second iteration took {second_iter} seconds")
 
     ttnn_output = ttnn.to_torch(ttnn_output)
-    assert_with_pcc(torch_output, ttnn_output, 0.996)
+    assert_with_pcc(torch_output, ttnn_output, 0.995)

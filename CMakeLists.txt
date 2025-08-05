@@ -159,7 +159,7 @@ target_link_libraries(
 )
 
 add_compile_options(
-    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-mavx2>"
+    "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=x86-64-v3>"
     -fPIC
     -fvisibility-inlines-hidden
     -Wall
@@ -299,8 +299,8 @@ install(
 # FIXME(17578): figure out what bits we actually need to ship and omit the rest
 install(
     DIRECTORY
-        runtime
-    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium
+        runtime/sfpi
+    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/runtime
     USE_SOURCE_PERMISSIONS
     COMPONENT jit-build
 )

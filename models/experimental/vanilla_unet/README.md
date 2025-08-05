@@ -2,12 +2,7 @@
 
 ## Platforms:
     WH N150/N300
-**Note:** On N300 ,Make sure to use `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml` with the pytest.
 
-Or, make sure to set the following environment variable in the terminal:
-```
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-```
 To obtain the perf reports through profiler, please build with following command:
 ```
 ./build_metal.sh -p
@@ -24,14 +19,14 @@ To obtain the perf reports through profiler, please build with following command
 Command to run the inference pipeline with random tensor:
 
 ```sh
-pytest tests/ttnn/integration_tests/vanilla_unet/test_ttnn_unet.py
+pytest models/experimental/vanilla_unet/tests/pcc/test_ttnn_unet.py
 ```
 
 ### Model performant running with Trace+2CQ
 Use the following command to run the e2e perf:
 - end-2-end perf is 42 FPS
 ```sh
-pytest models/experimental/vanilla_unet/test/test_e2e_performant.py::test_e2e_performant
+pytest models/experimental/vanilla_unet/tests/perf/test_e2e_performant.py::test_e2e_performant
 ```
 
 ## How to run demo

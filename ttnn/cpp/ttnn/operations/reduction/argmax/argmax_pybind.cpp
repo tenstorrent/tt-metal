@@ -20,9 +20,9 @@ void bind_reduction_argmax_operation(py::module& module) {
             If no ``dim`` is provided, it will return the indices of maximum value of all elements in given ``input``
             If no ``keepdim`` is provided, it will default to `False`.
 
-            Currenly this op only support dimension-specific reduction on last dimension.
+            Currently this op only support dimension-specific reduction on last dimension.
 
-            Input tensor must have BFLOAT16 data type and ROW_MAJOR layout.
+            Input tensor support bfloat16, float32, uint32, int32, uint16 data types and ROW_MAJOR layout.
 
             Output tensor will have UINT32 data type.
 

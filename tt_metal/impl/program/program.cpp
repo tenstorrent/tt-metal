@@ -7,7 +7,7 @@
 #include <circular_buffer_config.hpp>
 #include <device.hpp>
 #include <graph_tracking.hpp>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <memory_reporter.hpp>
 #include <persistent_kernel_cache.hpp>
 #include <semaphore.hpp>
@@ -379,11 +379,10 @@ KernelHandle detail::ProgramImpl::add_kernel(
             TT_FATAL(
                 !(check_kernel_logical_cores.find(coreCoord) != check_kernel_logical_cores.end() &&
                   new_kernel_type == check_kernel_type),
-                "Core Overlap Between (\"{}\") and new kernel (\"{}\") at {} processor {}",
+                "Core Overlap Between (\"{}\") and new kernel (\"{}\") at {}",
                 check_kernel->name(),
                 kernel->name(),
-                coreCoord.str(),
-                new_kernel_type);
+                coreCoord.str());
         }
     }
 
@@ -570,7 +569,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
             for (auto core : kernel->logical_cores()) {
                 int core_index = core.y * grid_extent_[programmable_core_type_index].x + core.x;
                 grid[core_index].valid = true;
-                grid[core_index].update(magic_enum::enum_cast<dispatch_core_processor_classes>(kernel->dispatch_class()).value(), id);
+                grid[core_index].update(enchantum::cast<dispatch_core_processor_classes>(kernel->dispatch_class()).value(), id);
             }
         }
 
@@ -1180,8 +1179,8 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
         for (const auto& kernel_group : this->get_kernel_groups(index)) {
-            if (hal.get_supports_receiving_multicasts(index)) {
-                // Below assumes core has a kernel config buffer
+            // TODO: add a bit in the hal that says if this core type is unicast/multicast
+            if (core_type == CoreType::WORKER) {
                 std::vector<multicast_transfer_info> dst_noc_multicast_info =
                     extract_dst_noc_multicast_info(device, kernel_group->core_ranges.ranges(), core_type);
                 std::vector<KernelHandle> kernel_ids;
@@ -1206,30 +1205,14 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                     }
                 }
             } else {
-                // Below assumes ethernet dispatch class
                 TT_ASSERT(core_type == CoreType::ETH);
                 std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_unicast_info =
                     extract_dst_noc_unicast_info(kernel_group->core_ranges.ranges(), core_type);
 
-                // No checks for max dispatch class
-                // Validated during CreateKernel if the requested processor is supported
-                constexpr auto k_SupportedDispatchClasses = std::array{DISPATCH_CLASS_ETH_DM0, DISPATCH_CLASS_ETH_DM1};
                 std::vector<KernelHandle> kernel_ids;
-                for (auto dispatch_class : k_SupportedDispatchClasses) {
-                    if (kernel_group->kernel_ids[dispatch_class].has_value()) {
-                        KernelHandle device_local_kernel_id = program_dispatch::get_device_local_kernel_handle(
-                            kernel_group->kernel_ids[dispatch_class].value());
-                        kernel_ids.push_back(device_local_kernel_id);
-
-                        // Update destination address by kernel config offset
-                        if (hal.get_core_has_kernel_config_buffer(hal.get_programmable_core_type(index))) {
-                            int proc_sub_class = 0;
-                            for (uint32_t& dst_addr : kernel_transfer_info.at(device_local_kernel_id).dst_base_addrs) {
-                                dst_addr = kernel_group->kernel_text_offsets[dispatch_class + proc_sub_class];
-                                proc_sub_class++;
-                            }
-                        }
-                    }
+                if (kernel_group->kernel_ids[DISPATCH_CLASS_ETH_DM0]) {
+                    KernelHandle device_local_kernel_id = program_dispatch::get_device_local_kernel_handle(kernel_group->kernel_ids[DISPATCH_CLASS_ETH_DM0].value());
+                    kernel_ids.push_back(device_local_kernel_id);
                 }
 
                 for (const auto &[cores, num_mcast_dsts] : dst_noc_unicast_info) {
@@ -1309,7 +1292,7 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
                 }
                 TT_FATAL(num_intersections == num_cores,
                          "Kernel group cores do not match sub device cores for programmable core type {}",
-                         magic_enum::enum_name(core_type));
+                         enchantum::to_string(core_type));
             };
             find_sub_device_ids(HalProgrammableCoreType::TENSIX);
             find_sub_device_ids(HalProgrammableCoreType::ACTIVE_ETH);
@@ -1809,7 +1792,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             "Program size ({}) too large for kernel config buffer ({}) on {}",
             state.offset,
             max_size,
-            magic_enum::enum_name(programmable_core_type));
+            enchantum::to_string(programmable_core_type));
 
         for (auto& program : programs) {
             program->set_program_offsets_and_sizes(index, state);

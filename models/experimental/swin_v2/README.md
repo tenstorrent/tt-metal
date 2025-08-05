@@ -2,13 +2,6 @@
 # Platforms:
 Wormhole N150, N300
 
-Note: On N300, make sure to use WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml with the pytest.
-
-Or, make sure to set the following environment variable in the terminal:
-
-```
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-```
 To obtain the perf reports through profiler, please build with following command:
 
 ```
@@ -30,5 +23,5 @@ To run the inference, make sure to build the project, activate the environment, 
 Command to run the inference pipeline with random weights and random tensor:
 
 ```
-pytest models/experimental/swin_v2/tests/test_ttnn_swin_v2_s.py
+pytest models/experimental/swin_v2/tests/pcc/test_ttnn_swin_v2_s.py
 ```

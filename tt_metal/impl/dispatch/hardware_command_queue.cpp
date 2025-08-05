@@ -42,6 +42,7 @@
 #include "data_collection.hpp"
 #include "ringbuffer_cache.hpp"
 #include "program/dispatch.hpp"
+#include <tt-metalium/graph_tracking.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -588,53 +589,6 @@ void HWCommandQueue::enqueue_wait_for_event(const std::shared_ptr<Event>& sync_e
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto& sub_device : sub_device_cq_owner) {
         sub_device.waited_for_event(sync_event->event_id, sync_event->cq_id, this->id_);
-    }
-}
-
-void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
-    ZoneScopedN("HWCommandQueue_enqueue_trace");
-
-    auto trace_inst = this->device_->get_trace(trace_id);
-    auto descriptor = trace_inst->desc;
-    auto buffer = trace_inst->buffer;
-    uint32_t num_sub_devices = descriptor->sub_device_ids.size();
-
-    auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
-    for (auto sub_device_id : descriptor->sub_device_ids) {
-        auto& sub_device = sub_device_cq_owner[*sub_device_id];
-        sub_device.take_ownership(sub_device_id, this->id_);
-    }
-
-    auto cmd_sequence_sizeB = trace_dispatch::compute_trace_cmd_size(num_sub_devices);
-
-    trace_dispatch::TraceDispatchMetadata dispatch_md(
-        cmd_sequence_sizeB,
-        descriptor->descriptors,
-        descriptor->sub_device_ids,
-        buffer->page_size(),
-        buffer->num_pages(),
-        buffer->address());
-
-    trace_dispatch::issue_trace_commands(
-        device_,
-        device_->sysmem_manager(),
-        dispatch_md,
-        id_,
-        this->expected_num_workers_completed_,
-        virtual_enqueue_program_dispatch_core_);
-
-    // Reset the prefetcher cache manager, since trace capture modifies the state on host for subsequent non-trace
-    // programs
-    this->reset_prefetcher_cache_manager();
-
-    trace_dispatch::update_worker_state_post_trace_execution(
-        trace_inst->desc->descriptors,
-        this->cq_shared_state_->worker_launch_message_buffer_state,
-        this->config_buffer_mgr_,
-        this->expected_num_workers_completed_);
-
-    if (blocking) {
-        this->finish(trace_inst->desc->sub_device_ids);
     }
 }
 

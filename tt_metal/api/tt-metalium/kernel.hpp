@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <magic_enum/magic_enum.hpp>
+#include <filesystem>
 #include <stdint.h>
 #include <tt_stl/span.hpp>
 #include <cstddef>
@@ -43,7 +43,10 @@ class IDevice;
 enum class DataMovementProcessor;
 class KernelImpl;
 
-constexpr uint32_t max_runtime_args = 256;
+// 341 = (4096/(3 * sizeof(uint32_t)), where
+// - 4096 - packet size in dispatch
+// - 3 - number of kernels per tensix
+constexpr uint32_t max_runtime_args = 341;
 
 using Config = std::variant<DataMovementConfig, EthernetConfig, ComputeConfig>;
 struct KernelSource {
@@ -51,9 +54,10 @@ struct KernelSource {
 
     std::string source_;
     SourceType source_type_;
+    // if source_type_ is FILE_PATH, file pointed by path_ exists at time of construction
+    std::filesystem::path path_;
 
-    KernelSource(const std::string &source, const SourceType &source_type) :
-        source_(source), source_type_(source_type) {}
+    KernelSource(const std::string& source, const SourceType& source_type);
 
     std::string name() const {
         std::string name;
@@ -70,7 +74,7 @@ struct KernelSource {
 
 class Kernel {
 public:
-    virtual ~Kernel() {}
+    virtual ~Kernel() = default;
 
     std::string name() const;
 

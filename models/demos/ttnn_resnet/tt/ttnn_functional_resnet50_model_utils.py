@@ -61,6 +61,7 @@ def get_conv_input_memory_config(
         output_height=output_height,
         output_width=output_width,
         output_channels=output_channels,
+        input_channels_alignment=input_channels_alignment,
         compute_grid_size=compute_grid,
         block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
         enable_channels_padding=True,

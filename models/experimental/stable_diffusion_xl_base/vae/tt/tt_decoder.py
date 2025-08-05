@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import torch
 import torch.nn as nn
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_midblock2d import TtUNetMidBlock2D
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_upblock2d import TtUpDecoderBlock2D
@@ -66,34 +65,28 @@ class TtDecoder(nn.Module):
             self.device, norm_out_weights.shape[0], self.norm_groups, self.norm_core_grid.y
         )
 
+        self.compute_in_config = model_config.get_conv_compute_config(module_path="decoder.conv_in")
         (
-            self.compute_in_config,
             self.tt_conv_in_weights,
             self.tt_conv_in_bias,
             self.conv_in_params,
         ) = prepare_conv_params(
-            device,
             conv_in_weights,
             conv_in_bias,
             model_config.conv_w_dtype,
-            fp32_dest_acc_en=True,
-            math_fidelity=ttnn.MathFidelity.LoFi,
         )
         self.conv_in_slice_config = get_DRAM_conv_config(None, 1)
         self.conv_in_config = model_config.get_conv_config(conv_path="decoder.conv_in")
 
+        self.compute_out_config = model_config.get_conv_compute_config(module_path="decoder.conv_out")
         (
-            self.compute_out_config,
             self.tt_conv_out_weights,
             self.tt_conv_out_bias,
             self.conv_out_params,
         ) = prepare_conv_params(
-            device,
             conv_out_weights,
             conv_out_bias,
             model_config.conv_w_dtype,
-            fp32_dest_acc_en=True,
-            math_fidelity=ttnn.MathFidelity.LoFi,
         )
         self.conv_out_slice_config = get_DRAM_conv_config(None, 2)
         self.conv_out_config = model_config.get_conv_config(conv_path="decoder.conv_out")
@@ -177,9 +170,4 @@ class TtDecoder(nn.Module):
         )
         C = self.conv_out_params["output_channels"]
 
-        # Convert to torch
-        hidden_states = ttnn.to_torch(hidden_states, mesh_composer=ttnn.ConcatMeshToTensor(self.device, dim=0)).float()
-        hidden_states = hidden_states.reshape(self.batch_size * B, H, W, C)
-        hidden_states = torch.permute(hidden_states, (0, 3, 1, 2))
-
-        return hidden_states
+        return hidden_states, [C, H, W]

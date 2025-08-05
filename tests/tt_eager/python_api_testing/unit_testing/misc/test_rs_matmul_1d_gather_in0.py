@@ -13,19 +13,19 @@ import os
 
 from conftest import is_6u
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
-from models.demos.llama3_subdevices.tt.model_config import LlamaOptimizations
+from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
 
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
-from models.demos.llama3_subdevices.tt.model_config import TtModelArgs
+from models.demos.llama3_70b_galaxy.tt.model_config import TtModelArgs
 import random
 import math
 from models.utility_functions import is_wormhole_b0, is_grayskull, is_wormhole_b0, is_blackhole
 from tracy import signpost
 
-from models.demos.llama3_subdevices.tt.model_config import (
+from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
 
@@ -518,10 +518,9 @@ def run_multi_core_matmul_1d(
     worker_sub_device_id = ttnn.SubDeviceId(0)
     signpost("start")
     logger.info("Compiling model")
-    rs_out, matmul_out = ttnn.experimental.llama_rs_matmul(
+    rs_out_val, matmul_out_val = ttnn.experimental.llama_rs_matmul(
         in0_t,
         in1_t,
-        tt_input,
         tt_intermediate,
         dim,
         ccl_semaphore_handle,
@@ -529,6 +528,7 @@ def run_multi_core_matmul_1d(
         mesh_device,
         num_links,
         worker_sub_device_id,
+        rs_tensor=tt_input,
         program_config=program_config,
         memory_config_mm=output_sharded_mem_config,
         compute_kernel_config=compute_kernel_config,
@@ -543,7 +543,6 @@ def run_multi_core_matmul_1d(
         rs_out, matmul_out = ttnn.experimental.llama_rs_matmul(
             in0_t,
             in1_t,
-            tt_input,
             tt_intermediate,
             dim,
             ccl_semaphore_handle,
@@ -551,6 +550,7 @@ def run_multi_core_matmul_1d(
             mesh_device,
             num_links,
             worker_sub_device_id,
+            rs_tensor=tt_input,
             program_config=program_config,
             memory_config_mm=output_sharded_mem_config,
             compute_kernel_config=compute_kernel_config,
@@ -567,7 +567,6 @@ def run_multi_core_matmul_1d(
         rs_out, matmul_out = ttnn.experimental.llama_rs_matmul(
             in0_t,
             in1_t,
-            tt_input,
             tt_intermediate,
             dim,
             ccl_semaphore_handle,
@@ -575,6 +574,7 @@ def run_multi_core_matmul_1d(
             mesh_device,
             num_links,
             worker_sub_device_id,
+            rs_tensor=tt_input,
             program_config=program_config,
             memory_config_mm=output_sharded_mem_config,
             compute_kernel_config=compute_kernel_config,

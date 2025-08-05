@@ -24,6 +24,27 @@ ttnn::Shape unsqueeze_shape_to_4D(const ttnn::Shape& shape);
 ttnn::Shape unsqueeze_shape_to_nd(const ttnn::Shape& shape, uint32_t n);
 
 ttnn::Shape squeeze_or_unsqueeze_shape_to_ND(const ttnn::Shape& shape, uint32_t n);
+std::vector<uint32_t> get_cycles_for_transaction_size(
+    uint32_t transaction_size,
+    bool is_dram,
+    bool is_local,
+    uint32_t num_transactions,
+    uint32_t num_cores,
+    int index,
+    bool is_read,
+    std::map<uint32_t, std::array<float, 2>> l1_local_bw,
+    std::map<uint32_t, std::array<float, 2>> l1_read_bw,
+    std::map<uint32_t, std::array<float, 2>> l1_write_bw,
+    std::map<uint32_t, std::array<float, 2>> dram_bw);
+int common_tm_bw_model(
+    const Tensor& input_tensor,
+    const Tensor& output_tensor,
+    bool output_only = false,
+    int compute_cycles = 0,
+    bool per_faceline = false,
+    bool split_op = false,
+    bool bcast_local = false,
+    bool concat_op = false);
 
 uint32_t get_estimated_size_of_cbs(
     const Tensor& input_tensor_a,
@@ -198,6 +219,8 @@ std::pair<uint32_t, std::array<uint32_t, 2>> tensor_coord_to_height_sharded_coor
     const std::span<const uint32_t>& tensor_shape,
     const std::span<const uint32_t>& shard_shape,
     const std::span<const uint32_t>& tensor_coord);
+
+uint32_t get_num_pages(const ttnn::Tensor& tensor);
 
 }  // namespace data_movement
 }  // namespace operations
