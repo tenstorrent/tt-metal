@@ -49,18 +49,17 @@ def pad_input_32(tensor, value):
     return tensor
 
 
-
 def load_conditional_generation_ref_model(model_repo):
     """
     Load Whisper model for conditional generation.
-    
+
     Args:
         model_repo: HuggingFace model repository ID. Must be one of the supported models.
     """
     allowed_models = ["distil-whisper/distil-large-v3", "openai/whisper-large-v3"]
     if model_repo not in allowed_models:
         raise ValueError(f"Unknown model_repo: {model_repo}. Valid options are {allowed_models}")
-    
+
     hf_ref_model = WhisperForConditionalGeneration.from_pretrained(model_repo).to(torch.bfloat16).eval()
     processor = AutoProcessor.from_pretrained(model_repo, language="English", task="transcribe")
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_repo)
@@ -240,13 +239,15 @@ def run_generate(
             return output
 
 
-def create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn_model, device, model_repo="openai/whisper-large-v3"):
+def create_functional_whisper_for_conditional_generation_inference_pipeline(
+    ttnn_model, device, model_repo="openai/whisper-large-v3"
+):
     """
     Returns a callable with signature (data, sampling_rate, stream), where data is is a 1D numpy array
     and sampling_rate is an int representing the sampling rate used to acquire data, and stream turns
     signals the callable to return a generator if True, yielding the decoded tokens as they are processed, else
     the callable returns the full decoded output.
-    
+
     Args:
         ttnn_model: The compiled TTNN model
         device: The target device
