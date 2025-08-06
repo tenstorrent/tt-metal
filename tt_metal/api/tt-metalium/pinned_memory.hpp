@@ -28,7 +28,7 @@ using chip_id_t = int;
 
 /**
  * @brief PinnedMemory manages system memory buffers across multiple devices.
- * 
+ *
  * This class provides a convenient wrapper around UMD SysmemBuffers, managing
  * one buffer per device in a mesh or set of devices. It handles allocation,
  * mapping, and access to pinned system memory that can be accessed by the devices.
@@ -41,7 +41,7 @@ public:
     PinnedMemory(PinnedMemory&& other) noexcept;
     PinnedMemory& operator=(PinnedMemory&& other) noexcept;
 
-    // Delete copy semantics  
+    // Delete copy semantics
     PinnedMemory(const PinnedMemory&) = delete;
     PinnedMemory& operator=(const PinnedMemory&) = delete;
 
@@ -110,13 +110,9 @@ private:
      * @param buffer_size Size of buffer to map
      * @param map_to_noc Whether to map the buffer to the NOC
      */
-    PinnedMemory(
-        const std::vector<IDevice*>& devices,
-        void* host_buffer,
-        size_t buffer_size,
-        bool map_to_noc = false);
+    PinnedMemory(const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc = false);
 
     std::unique_ptr<PinnedMemoryImpl> pImpl;
 };
 
-}  // namespace tt::tt_metal 
+}  // namespace tt::tt_metal
