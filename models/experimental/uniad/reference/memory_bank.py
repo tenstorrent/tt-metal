@@ -82,7 +82,6 @@ class MemoryBank(nn.Module):
             )[0][0]
 
             out = embed + embed2
-            torch.save(embed2, "torch_embed.pt")
             embed = self.temporal_norm1(out)
             embed2 = self.temporal_fc2(F.relu(self.temporal_fc1(embed)))  ##
             embed = self.temporal_norm2(embed + embed2)
