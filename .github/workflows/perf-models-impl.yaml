@@ -72,6 +72,7 @@ jobs:
               - models/demos/yolov8x/tests/perf/
               # e2e performant test is present in .../vit/demo folder only
               - models/demos/wormhole/vit/demo/
+              - models/experimental/swin_v2/tests/perf/
               - models/experimental/swin_s/tests/perf/
               - models/experimental/yolov5x/tests/perf/
               - models/experimental/vovnet/tests/perf/
