@@ -25,7 +25,8 @@
 
 | Release | Release Date |
 |---------|--------------|
-| 0.61.0  | ETA Aug 13, 2025 |
+| 0.62.0  | ETA Aug 13, 2025 |
+| 0.61.0  | Skipped |
 | [0.60.1](https://github.com/tenstorrent/tt-metal/releases/tag/v0.60.1) | Jul 22, 2025 |
 | [0.59.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.59.0) | Jun 18, 2025 |
 | [0.58.0](https://github.com/tenstorrent/tt-metal/releases/tag/v0.58.0) | May 13, 2025 |
