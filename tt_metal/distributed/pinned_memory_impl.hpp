@@ -7,8 +7,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace tt::umd {
@@ -61,6 +63,9 @@ public:
 
     // Device address access method
     uint64_t get_device_addr(chip_id_t device_id) const;
+
+    // NOC address access method
+    std::optional<std::pair<uint64_t, chip_id_t>> get_noc_addr(chip_id_t device_id) const;
 
     // Utility methods
     size_t get_buffer_size() const { return buffer_size_; }

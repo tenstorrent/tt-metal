@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <utility>
 #include <vector>
 
 namespace tt::umd {
@@ -64,6 +66,13 @@ public:
      * @return Device address of the buffer
      */
     uint64_t get_device_addr(chip_id_t device_id) const;
+
+    /**
+     * @brief Get NOC address and the chip where it's usable from
+     * @param device_id The device ID to get the NOC address for
+     * @return Optional pair of (NOC address, MMIO chip ID) if buffer is mapped to NOC, nullopt otherwise
+     */
+    std::optional<std::pair<uint64_t, chip_id_t>> get_noc_addr(chip_id_t device_id) const;
 
     /**
      * @brief Get the buffer size per device
