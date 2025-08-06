@@ -23,6 +23,7 @@ target_sources(
             tt_stl/reflection.hpp
             tt_stl/slotmap.hpp
             tt_stl/small_vector.hpp
+            tt_stl/llvm_small_vector.hpp
             tt_stl/span.hpp
             tt_stl/strong_type.hpp
             tt_stl/type_name.hpp
