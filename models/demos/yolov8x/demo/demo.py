@@ -11,11 +11,10 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.utils.common_demo_utils import LoadImages, load_coco_class_names
 from models.demos.yolov8x.common import YOLOV8X_L1_SMALL_SIZE, load_torch_model
 from models.demos.yolov8x.demo.demo_utils import (
-    LoadImages,
     get_mesh_mappers,
-    load_coco_class_names,
     postprocess,
     preprocess,
     save_yolo_predictions_by_model,
