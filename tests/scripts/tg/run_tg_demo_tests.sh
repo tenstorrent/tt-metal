@@ -116,12 +116,12 @@ run_tg_llama3_perplexity_tests() {
 
   for MESH_DEVICE in TG; do
     for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR  pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --max_generated_tokens 175 --timeout=3600 ; fail+=$?
+      FAKE_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR  pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --max_generated_tokens 175 --timeout=3600 ; fail+=$?
     done
 
     # 70B and 90B tests has the same configuration between `-k "attention-accuracy"` and `-k "attention-performance"` so we only run one of them
     for LLAMA_DIR in "$llama70b" "$llama90b"; do
-      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --max_generated_tokens 175 --timeout=3600 ; fail+=$?
+      FAKE_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --max_generated_tokens 175 --timeout=3600 ; fail+=$?
     done
   done
 

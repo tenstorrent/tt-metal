@@ -178,7 +178,7 @@ run_t3000_qwen25_perplexity_tests() {
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   qwen72b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2.5-72B-Instruct
 
-  HF_MODEL=$qwen72b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py ci-token-matching --max_generated_tokens 175 --timeout 3600; fail+=$?
+  HF_MODEL=$qwen72b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --max_generated_tokens 175 --timeout 3600; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -202,7 +202,7 @@ run_t3000_qwen3_perplexity_tests() {
   wh_arch_yaml=wormhole_b0_80_arch_eth_dispatch.yaml
   qwen32b=/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-32B
 
-  HF_MODEL=$qwen32b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py ci-token-matching --max_generated_tokens 175 --timeout 3600; fail+=$?
+  HF_MODEL=$qwen32b WH_ARCH_YAML=$wh_arch_yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --max_generated_tokens 175 --timeout 3600; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

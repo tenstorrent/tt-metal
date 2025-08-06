@@ -492,6 +492,7 @@ def prepare_generator_args(
             True,  # ci_only
             1,  # data_parallel
             True,  # token_accuracy
+            False,  # stress_test
         ),
     ],
     ids=[
