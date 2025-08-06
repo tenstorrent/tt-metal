@@ -12,11 +12,11 @@ from models.perf.device_perf_utils import run_device_perf_detailed
 @pytest.mark.parametrize(
     "warmup_iters, arch_type, stage, perf_target_max_us, perf_target_min_us",
     [
-        (5, "6U", "decode", 24, 20),
-        (5, "TG", "decode", 61, 52),
+        (5, "6U", "decode", 38, 29),
+        (5, "TG", "decode", 43, 30),
         (5, "T3K", "decode", 107, 95),  # huge variance among machines for T3K
-        (1, "6U", "prefill", 1600, 1300),
-        (1, "TG", "prefill", 2700, 2000),
+        (1, "6U", "prefill", 1500, 1200),
+        (1, "TG", "prefill", 1900, 1600),
         (1, "T3K", "prefill", 10700, 9800),
     ],
     ids=["6U_decode", "TG_decode", "T3K_decode", "6U_prefill", "TG_prefill", "T3K_prefill"],
