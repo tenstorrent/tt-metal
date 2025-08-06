@@ -364,9 +364,8 @@ void run_mcast_sender_step(
 
     std::vector<uint32_t> mcast_header_rtas(4, 0);
     for (const auto& routing_info : mcast_routing_info) {
-        // Increment hop count to account for the mcast start node
-        mcast_header_rtas[static_cast<uint32_t>(control_plane.routing_direction_to_eth_direction(
-            routing_info.mcast_dir))] = routing_info.num_mcast_hops + 1;
+        mcast_header_rtas[static_cast<uint32_t>(
+            control_plane.routing_direction_to_eth_direction(routing_info.mcast_dir))] = routing_info.num_mcast_hops;
     }
 
     sender_runtime_args.insert(sender_runtime_args.end(), mcast_header_rtas.begin(), mcast_header_rtas.end());
