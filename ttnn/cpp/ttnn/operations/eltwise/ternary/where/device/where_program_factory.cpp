@@ -499,6 +499,43 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         num_tiles_per_cb,
         output_data_format);  // output
 
+    auto predicate_is_dram =
+        static_cast<uint32_t>(predicate_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+
+    // Handle DRAM flags based on variant and tensor availability
+    uint32_t value_true_is_dram = 0, value_false_is_dram = 0;
+    if (variant == WhereVariant::TTS) {
+        value_true_is_dram =
+            static_cast<uint32_t>(value_true_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+    } else if (variant == WhereVariant::TST) {
+        value_false_is_dram =
+            static_cast<uint32_t>(value_false_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+    } else {
+        value_true_is_dram =
+            static_cast<uint32_t>(value_true_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+        value_false_is_dram =
+            static_cast<uint32_t>(value_false_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+    }
+
+    auto output_is_dram = static_cast<uint32_t>(output.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+
+    // BROADCAST DETECTION - Common for both reader and compute kernels
+    bool pred_is_bcast = false, true_is_bcast = false, false_is_bcast = false;
+    if (broadcast_type == WhereBroadcastType::COL_BCAST) {
+        // Determine which tensor is actually broadcast based on logical shapes (not padded)
+        auto pred_shape = predicate_tensor.logical_shape();
+        auto true_shape = value_true_tensor.value().logical_shape();
+        auto false_shape = value_false_tensor.value().logical_shape();
+
+        auto pred_w = pred_shape[pred_shape.rank() - 1];
+        auto true_w = true_shape[true_shape.rank() - 1];
+        auto false_w = false_shape[false_shape.rank() - 1];
+
+        pred_is_bcast = (pred_w == 1 && (true_w > 1 || false_w > 1));
+        true_is_bcast = (true_w == 1 && (pred_w > 1 || false_w > 1));
+        false_is_bcast = (false_w == 1 && (pred_w > 1 || true_w > 1));
+    }
+
     // READER KERNEL - Use kernel path from utils
     // Create dataflow defines for column broadcast kernels like binary_ng
     std::map<std::string, std::string> reader_defines;
@@ -515,10 +552,10 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         reader_defines["SRC_SHARDED_TRUE"] = value_true_sharded ? "1" : "0";
         reader_defines["SRC_SHARDED_FALSE"] = value_false_sharded ? "1" : "0";
 
-        // Add column broadcast specific defines (similar to binary_ng COL_B case)
-        reader_defines["SRC_BCAST_PREDICATE"] = "0";  // predicate is not broadcast
-        reader_defines["SRC_BCAST_TRUE"] = "1";       // value_true is broadcast (column)
-        reader_defines["SRC_BCAST_FALSE"] = "1";      // value_false is broadcast (same as value_true for now)
+        // Set broadcast defines based on actual detection
+        reader_defines["SRC_BCAST_PREDICATE"] = pred_is_bcast ? "1" : "0";
+        reader_defines["SRC_BCAST_TRUE"] = true_is_bcast ? "1" : "0";
+        reader_defines["SRC_BCAST_FALSE"] = false_is_bcast ? "1" : "0";
 
         // Add BCAST_LLK define (set to 0 for now, can be optimized later)
         reader_defines["BCAST_LLK"] = "0";
@@ -662,8 +699,25 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         kernel_defines["PROCESS_RHS_ACTIVATIONS(i)"] = "";   // No RHS activations for value_true
         kernel_defines["PROCESS_POST_ACTIVATIONS(i)"] = "";  // No post activations
 
-        // Broadcast input configuration (like binary_ng) - use numeric value
-        kernel_defines["BCAST_INPUT"] = "1";  // value_true (input 1) is broadcast
+        // 3-tensor broadcast configuration - each tensor has specific defines
+        if (true_is_bcast) {
+            kernel_defines["BCAST_TRUE"] = "1";
+            kernel_defines["BCAST_PRED"] = "0";
+            kernel_defines["BCAST_FALSE"] = "0";
+        } else if (pred_is_bcast) {
+            kernel_defines["BCAST_TRUE"] = "0";
+            kernel_defines["BCAST_PRED"] = "1";
+            kernel_defines["BCAST_FALSE"] = "0";
+        } else if (false_is_bcast) {
+            kernel_defines["BCAST_TRUE"] = "0";
+            kernel_defines["BCAST_PRED"] = "0";
+            kernel_defines["BCAST_FALSE"] = "1";
+        } else {
+            // No broadcast case - shouldn't happen in COL_BCAST but handle gracefully
+            kernel_defines["BCAST_TRUE"] = "0";
+            kernel_defines["BCAST_PRED"] = "0";
+            kernel_defines["BCAST_FALSE"] = "0";
+        }
 
         // Where-specific LLK functions (override binary operation with where logic)
         kernel_defines["WHERE_LLK"] = "where_tile";

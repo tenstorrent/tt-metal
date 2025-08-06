@@ -142,7 +142,33 @@ TensorSpec WhereDeviceOperation::compute_output_specs(
         output_layout = tensor_args.predicate.layout();
     }
 
-    const auto output_shape = tensor_args.predicate.logical_shape();
+    // Determine output shape based on broadcast pattern
+    auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
+        tensor_args.predicate.logical_shape(),
+        tensor_args.value_true.value().logical_shape(),
+        tensor_args.value_false.value().logical_shape());
+
+    const auto output_shape = [&]() {
+        if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::COL_BCAST) {
+            // For column broadcast, output shape should be the larger shape (non-broadcasted dimensions)
+            auto pred_shape = tensor_args.predicate.logical_shape();
+            auto true_shape = tensor_args.value_true.value().logical_shape();
+            auto false_shape = tensor_args.value_false.value().logical_shape();
+
+            // Find the shape with the largest width (non-broadcasted)
+            if (pred_shape[-1] > true_shape[-1] && pred_shape[-1] > false_shape[-1]) {
+                return pred_shape;  // predicate has largest width
+            } else if (true_shape[-1] > false_shape[-1]) {
+                return true_shape;  // true tensor has largest width
+            } else {
+                return false_shape;  // false tensor has largest width
+            }
+        } else {
+            // Default to predicate shape for non-broadcast cases
+            return tensor_args.predicate.logical_shape();
+        }
+    }();
+
     return TensorSpec(output_shape, tt::tt_metal::TensorLayout(args.dtype.value(), output_layout, args.memory_config));
 }
 
