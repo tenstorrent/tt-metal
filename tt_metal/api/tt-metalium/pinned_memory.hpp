@@ -163,8 +163,11 @@ private:
     bool owns_host_memory_;
     void* host_memory_base_;
     
-    // Map from device ID to SysmemBuffer
+    // Map from device ID to SysmemBuffer (keyed by MMIO device ID)
     std::unordered_map<chip_id_t, std::unique_ptr<tt::umd::SysmemBuffer>> device_buffers_;
+    
+    // Map from logical device ID to its associated MMIO device ID
+    std::unordered_map<chip_id_t, chip_id_t> device_to_mmio_map_;
 };
 
 }  // namespace tt::tt_metal 
