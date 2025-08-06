@@ -18,17 +18,17 @@ class TorchRMSNorm(torch.nn.Module):
         super().__init__()
         self.norm_eps = norm_eps
         self.norm_elementwise_affine = norm_elementwise_affine
-        self.bias = bias
-        self.gamma = torch.nn.Parameter(torch.randn(embedding_dim))
+        self.use_bias = bias
+        self.weight = torch.nn.Parameter(torch.randn(embedding_dim))
         if bias:
-            self.beta = torch.nn.Parameter(torch.randn(embedding_dim))
+            self.bias = torch.nn.Parameter(torch.randn(embedding_dim))
 
     def forward(self, x):
         x = x / torch.sqrt(torch.mean(x**2, dim=-1, keepdim=True) + self.norm_eps)
         if self.norm_elementwise_affine:
-            x = x * self.gamma
-            if self.bias:
-                x = x + self.beta
+            x = x * self.weight
+            if self.use_bias:
+                x = x + self.bias
         return x
 
 
@@ -37,19 +37,19 @@ class TorchLayerNorm(torch.nn.Module):
         super().__init__()
         self.norm_eps = norm_eps
         self.norm_elementwise_affine = norm_elementwise_affine
-        self.bias = bias
-        self.gamma = torch.nn.Parameter(torch.randn(embedding_dim))
+        self.use_bias = bias
+        self.weight = torch.nn.Parameter(torch.randn(embedding_dim))
         if bias:
-            self.beta = torch.nn.Parameter(torch.randn(embedding_dim))
+            self.bias = torch.nn.Parameter(torch.randn(embedding_dim))
 
     def forward(self, x):
         mean = torch.mean(x, dim=-1, keepdim=True)
         variance = torch.var(x, dim=-1, keepdim=True, unbiased=False)
         x = (x - mean) / torch.sqrt(variance + self.norm_eps)
         if self.norm_elementwise_affine:
-            x = x * self.gamma
-            if self.bias:
-                x = x + self.beta
+            x = x * self.weight
+            if self.use_bias:
+                x = x + self.bias
         return x
 
 
