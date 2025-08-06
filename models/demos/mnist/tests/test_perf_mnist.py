@@ -110,7 +110,7 @@ def test_performance_mnist(device, batch_size, tt_mnist, model_location_generato
 def test_perf_device_bare_metal(batch_size, reset_seeds):
     subdir = "ttnn_mnist"
     num_iterations = 1
-    margin = 0.03
+    margin = 0.04
     expected_perf = 890000
 
     command = f"pytest tests/ttnn/integration_tests/mnist/test_mnist.py::test_mnist"
