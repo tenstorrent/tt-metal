@@ -92,21 +92,6 @@ def visualize_mesh_device(mesh_device: "ttnn.MeshDevice", tensor: "ttnn.Tensor" 
     Console().print(mesh_table)
 
 
-# def group_devices_by_tensor_shards(tensor: "ttnn.Tensor"):
-#     """
-#     Map tensor shards to devices that the shards are replicated on.
-#     """
-#     mesh_device = tensor.device()
-#     shards = ttnn.get_device_tensors(tensor)
-#     topology = tensor.get_tensor_topology()
-#     coords = topology.mesh_coords()
-#     shard_to_device = {}
-
-#     for coord in coords:
-#         dev_id = mesh_device.get_device_id(coord)
-#         shard = shards[dev_id]
-
-
 def visualize_tensor(tensor: "ttnn.Tensor"):
     """
     Visualize tensor distribution across the mesh.
