@@ -75,9 +75,10 @@ void kernel_main() {
                 tt::data_movement::common::tt_memmove<false, false, false, datum_size_bytes>(
                     output_l1_element_addr, topk_l1_addr, datum_size_bytes);
             }
-            const uint64_t output_noc_addr = get_noc_addr(bs, output_addrgen);
-            noc_async_write(output_l1_addr, output_noc_addr, output_page_size_bytes);
         }
+        const uint64_t output_noc_addr = get_noc_addr(bs, output_addrgen);
+        noc_async_write(output_l1_addr, output_noc_addr, output_page_size_bytes);
+
         if (found) {
             cb_pop_front(data_cb_id, 1);
             found = false;

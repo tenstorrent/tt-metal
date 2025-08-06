@@ -164,8 +164,6 @@ def test_moe_expert_token_remaps(
 
     for ref, test in zip(output_tensor_goldens_list, out_tensor_list):
         test_torch = ttnn.to_torch(test, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-        print(f"{test_torch=}")
-        print(f"{ref=}")
         assert_with_pcc(test_torch, ref)
 
 
