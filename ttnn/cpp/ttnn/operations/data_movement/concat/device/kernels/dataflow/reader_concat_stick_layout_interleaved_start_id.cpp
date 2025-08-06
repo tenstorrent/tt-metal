@@ -51,6 +51,7 @@ void kernel_main() {
         for (uint32_t j = 0; j < num_tensors; ++j) {
             auto read_addr = abstract_tensor_accessors[curr_tensor].get_addr(page_id_per_tensor[curr_tensor]);
             noc_async_read(read_addr, l1_write_addr, page_size_per_tensor[curr_tensor]);
+            l1_write_addr += page_size_per_tensor[curr_tensor];
             page_id_per_tensor[curr_tensor]++;
             curr_tensor++;
         }
