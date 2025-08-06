@@ -8,6 +8,11 @@ on:
           required: false
           type: string
           default: 'BH-LLMBox'
+      extra-tag:
+        description: 'Optional extra tag, default: pipeline-perf'
+        required: false
+        type: string
+        default: "pipeline-perf"
   workflow_call:
     inputs:
       runner-label:
@@ -15,6 +20,11 @@ on:
           required: false
           type: string
           default: 'BH-LLMBox'
+      extra-tag:
+        description: 'Optional extra tag, default: pipeline-perf'
+        required: false
+        type: string
+        default: "pipeline-perf"
 
 jobs:
   build-artifact:
@@ -34,3 +44,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      extra-tag: ${{ inputs.extra-tag || 'pipeline-perf' }}
