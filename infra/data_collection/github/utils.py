@@ -217,6 +217,11 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations, workfl
         if len(parts) >= 2 and parts[-2] == "runner":
             host_name = "-".join(parts[:-1])
 
+    # Cleanup GitHub-hosted runner names because we're sending the whole thing, which is unnecessary
+    # and clogs up the data with 1000s of hosts
+    if host_name and location == "github":
+        host_name = "GitHub Actions"
+
     os = ubuntu_version
 
     name = github_job["name"]
