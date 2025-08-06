@@ -342,12 +342,11 @@ class Generator:
         enable_trace=True,
         read_from_device=True,
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
-        reset_inputs=False,
+        update_on_device=True,
         tt_out_logits_saved=None,
     ):
-        if self.prev_page_table is None:
-            self.prev_page_table = page_table
-        if torch.any(self.prev_page_table != page_table).item():
+        reset_inputs = not update_on_device
+        if update_on_device and (self.prev_page_table is None or torch.any(self.prev_page_table != page_table).item()):
             reset_inputs = True
             self.prev_page_table = page_table
 
