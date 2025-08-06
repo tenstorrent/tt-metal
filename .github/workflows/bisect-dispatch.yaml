@@ -86,7 +86,6 @@ jobs:
           name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       - name: Extract files
         run: tar -xvf ttm_any.tar
-      - uses: ./.github/actions/install-python-deps
       - name: Run Git Bisect
         shell: bash
         env:
