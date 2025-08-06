@@ -4,12 +4,11 @@
 Stable Diffusion is a latent text-to-image diffusion model capable of generating photo-realistic images given any text input. These instructions pertain to running Stable Diffusion with an interactive web interface.
 
 ## How to Run
-
+> [!NOTE]
 > In order to post the generated image from the SD model to your local computer, make sure to ssh into the port 8501:
 > ```
 > ssh -L8501:localhost:8501 username@IP_ADDRESS
 > ```
-
 
 To run the demo, make sure to build the project, activate the environment, and set the appropriate environment variables.
 For more information, refer [installation and build guide](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md).
