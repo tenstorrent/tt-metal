@@ -1,7 +1,7 @@
 training_config:
   project_name: "tt_train_nano_gpt"
   model_type: "gpt2"
-  model_path: "data/gpt2s_exported.msgpack"
+  #model_path: "data/gpt2s_exported.msgpack"
   seed: 5489
   model_save_interval: 500
   batch_size: 4
@@ -11,7 +11,7 @@ training_config:
   weight_decay: 0.1
   use_moreh_adamw: true
   use_kahan_summation: false
-  gradient_accumulation_steps: 8
+  gradient_accumulation_steps: 1
   tokenizer_type: bpe
   tokenizer_path: "data/gpt2-tokenizer.json"
 
@@ -25,3 +25,7 @@ training_config:
     max_sequence_length: 1024
     experimental:
       use_composite_layernorm: false
+
+device_config:
+    enable_ddp: false
+    mesh_shape: [1,1]
