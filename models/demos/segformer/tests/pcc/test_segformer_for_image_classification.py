@@ -12,21 +12,25 @@ import ttnn
 from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_for_image_classification import SegformerForImageClassificationReference
 from models.demos.segformer.tests.pcc.test_segformer_model import (
-    create_custom_preprocessor as custom_preprocessor_main_model,
+    create_custom_mesh_preprocessor as custom_preprocessor_main_model,
 )
 from models.demos.segformer.tests.pcc.test_segformer_model import move_to_device
+from models.demos.segformer.tt.common import get_mesh_mappers
 from models.demos.segformer.tt.ttnn_segformer_for_image_classification import TtSegformerForImageClassification
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def create_custom_preprocessor(device):
-    def custom_preprocessor(model, name, ttnn_module_args):
+def create_custom_mesh_preprocessor(mesh_mapper=None, device=None):
+    def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
+        return custom_preprocessor(model, name, mesh_mapper, device)
+
+    def custom_preprocessor(model, name, mesh_mapper=None, device=None):
         parameters = {}
         if isinstance(model, SegformerForImageClassificationReference):
             parameters["segformer"] = {}
-            custom_preprocessor_main_model_obj = custom_preprocessor_main_model(device)
+            custom_preprocessor_main_model_obj = custom_preprocessor_main_model(mesh_mapper)
             parameters["segformer"] = custom_preprocessor_main_model_obj(
-                model.segformer, name=name, ttnn_module_args=ttnn_module_args
+                model.segformer, name=None, ttnn_module_args=None, convert_to_ttnn=None
             )
             parameters["classifier"] = {}
             parameters["classifier"]["weight"] = ttnn.from_torch(
@@ -34,23 +38,25 @@ def create_custom_preprocessor(device):
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
+                mesh_mapper=mesh_mapper,
             )
             parameters["classifier"]["bias"] = ttnn.from_torch(
                 model.classifier.bias.reshape(1, 1, 1, model.classifier.bias.shape[-1]),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
+                mesh_mapper=mesh_mapper,
             )
         return parameters
 
-    return custom_preprocessor
+    return custom_mesh_preprocessor
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_segformer_image_classificaton(device, model_location_generator):
     dataset = load_dataset("huggingface/cats-image")
     image = dataset["train"]["image"][0]
-
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     image_processor = AutoImageProcessor.from_pretrained("nvidia/mit-b0")
     inputs = image_processor(image, return_tensors="pt")
     torch_input_tensor = inputs.pixel_values
@@ -88,7 +94,9 @@ def test_segformer_image_classificaton(device, model_location_generator):
     )
 
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device), device=None
+        initialize_model=lambda: reference_model,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper, device),
+        device=None,
     )
     parameters = move_to_device(parameters, device)
     torch_output = reference_model(torch_input_tensor)

@@ -17,7 +17,7 @@ from models.experimental.swin_s.tests.pcc.test_ttnn_shifted_window_attention imp
 from models.experimental.swin_s.tests.pcc.test_ttnn_mlp import (
     create_custom_preprocessor as create_custom_preprocessor_mlp,
 )
-from models.experimental.swin_s.common import load_torch_model
+from models.experimental.swin_s.common import load_torch_model, SWIN_S_L1_SMALL_SIZE
 
 
 def preprocess_attn_mask(input_shape, patch_size, window_size, shift_size, device):
@@ -89,7 +89,7 @@ def create_custom_preprocessor(device):
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SWIN_S_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size",
     [
