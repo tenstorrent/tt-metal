@@ -90,14 +90,6 @@ ttnn::Shape SlidingWindowConfig::get_output_shape() const {
         output_h = std::ceil(output_h_float) + 1;
         output_w = std::ceil(output_w_float) + 1;
         // adjust the output shape if the last kernel position is in the padding region
-        // note there is a bug in PyTorch's adjustment for maxpool where they use
-        // > instead of >= for this condition resulting in one padding position being
-        // included in the output.  For instance, using:
-        // [n,  c, h, w, k_h, k_w, s_h, s_w, p_h, p_w, d_h, d_w, ceil_mode] =
-        // [1, 32, 7, 7,   4,   4,   3,   3,   2,   2,   1,   1,      True]
-        // torch get's an output shape of [1, 32, 4, 4] rather than the expected [1, 32, 3, 3]
-        // so they have 1 row/column of padding values in the output.  This is not an issue
-        // for average pool
         if (((output_h - 1) * stride_hw.first) >= (input_hw.first + padding[0])) {
             output_h--;
         }
