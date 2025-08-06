@@ -172,24 +172,6 @@ bool PinnedMemoryImpl::has_device(chip_id_t device_id) const {
     return device_to_mmio_map_.find(device_id) != device_to_mmio_map_.end();
 }
 
-void PinnedMemoryImpl::write_to_device(chip_id_t device_id, const void* src, size_t size, size_t offset) {
-    if (offset + size > buffer_size_) {
-        throw std::invalid_argument("Write operation exceeds buffer size");
-    }
-    
-    void* dest_ptr = static_cast<char*>(get_host_ptr(device_id)) + offset;
-    std::memcpy(dest_ptr, src, size);
-}
-
-void PinnedMemoryImpl::read_from_device(chip_id_t device_id, void* dest, size_t size, size_t offset) {
-    if (offset + size > buffer_size_) {
-        throw std::invalid_argument("Read operation exceeds buffer size");
-    }
-    
-    const void* src_ptr = static_cast<const char*>(get_host_ptr(device_id)) + offset;
-    std::memcpy(dest, src_ptr, size);
-}
-
 // PinnedMemory pimpl wrapper implementation
 PinnedMemory::PinnedMemory(
     const std::vector<IDevice*>& devices,
@@ -228,24 +210,12 @@ size_t PinnedMemory::get_buffer_size() const {
     return pImpl->get_buffer_size();
 }
 
-size_t PinnedMemory::get_num_devices() const {
-    return pImpl->get_num_devices();
-}
-
 std::vector<chip_id_t> PinnedMemory::get_device_ids() const {
     return pImpl->get_device_ids();
 }
 
 bool PinnedMemory::has_device(chip_id_t device_id) const {
     return pImpl->has_device(device_id);
-}
-
-void PinnedMemory::write_to_device(chip_id_t device_id, const void* src, size_t size, size_t offset) {
-    pImpl->write_to_device(device_id, src, size, offset);
-}
-
-void PinnedMemory::read_from_device(chip_id_t device_id, void* dest, size_t size, size_t offset) {
-    pImpl->read_from_device(device_id, dest, size, offset);
 }
 
 }  // namespace tt::tt_metal 

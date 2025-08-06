@@ -64,13 +64,8 @@ public:
 
     // Utility methods
     size_t get_buffer_size() const { return buffer_size_; }
-    size_t get_num_devices() const { return device_to_mmio_map_.size(); }
     std::vector<chip_id_t> get_device_ids() const;
     bool has_device(chip_id_t device_id) const;
-
-    // Data transfer methods
-    void write_to_device(chip_id_t device_id, const void* src, size_t size, size_t offset = 0);
-    void read_from_device(chip_id_t device_id, void* dest, size_t size, size_t offset = 0);
 
 private:
     void initialize_from_devices(
