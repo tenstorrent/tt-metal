@@ -99,8 +99,11 @@ protected:
             log_info(tt::LogTest, "This suite must be run with TT_METAL_GTEST_NUM_HW_CQS=2");
             GTEST_SKIP();
         }
+
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
+
+        // Check to deal with TG systems
         const chip_id_t device_id =
             (enable_remote_chip or tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster())
                 ? *tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids().begin()
@@ -194,6 +197,8 @@ protected:
         const chip_id_t mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
         std::vector<chip_id_t> chip_ids;
         auto enable_remote_chip = getenv("TT_METAL_ENABLE_REMOTE_CHIP");
+
+        // Check to deal with TG systems
         if (enable_remote_chip or
             tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == BoardType::UBB or
             tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
