@@ -447,7 +447,7 @@ class Instances:
           confident_detections = instances[instances.scores > 0.9]
     """
 
-    def __init__(self, image_size: Tuple[int, int], **kwargs: Any):
+    def __init__(self, image_size: Tuple[int, int], ttnn_device=None, **kwargs: Any):
         print("image_size in init", image_size)
         """
         Args:
@@ -458,6 +458,7 @@ class Instances:
         self._fields: Dict[str, Any] = {}
         for k, v in kwargs.items():
             self.set(k, v)
+        self.device = ttnn_device
 
     @property
     def image_size(self) -> Tuple[int, int]:
@@ -467,8 +468,8 @@ class Instances:
         """
         return self._image_size
 
-    def __setattr__(self, name: str, val: Any) -> None:
-        if name.startswith("_"):
+    def __setattr__(self, name, val):
+        if name.startswith("_") or name in {"device", "device_id", "dtype"}:
             super().__setattr__(name, val)
         else:
             self.set(name, val)
@@ -560,7 +561,15 @@ class Instances:
                 ret.set(k, ret_list)
 
             else:
-                ret.set(k, v)
+                if isinstance(v, ttnn.Tensor):
+                    v = ttnn.to_torch(v)
+                    if isinstance(item, ttnn.Tensor):
+                        item = ttnn.to_torch(item).bool()
+                    v = v[item]
+                    v = ttnn.from_torch(v, device=self.device, layout=ttnn.TILE_LAYOUT)
+                    ret.set(k, v)
+                else:
+                    ret.set(k, v)
         return ret
 
     def __len__(self) -> int:
@@ -604,22 +613,10 @@ class Instances:
                 print("Here 3")
                 # values = type(v0).cat(values)
             else:
-                print("values for ttnn concat", len(values), values[0].shape, values[1].shape)
-                if len(values[0].shape) == 1:
-                    values[0] = ttnn.add(values[0], 0, dtype=ttnn.bfloat16)
-                    values[1] = ttnn.add(values[1], 0, dtype=ttnn.bfloat16)
-                    values[0] = ttnn.unsqueeze(values[0], 0)
-                    values[1] = ttnn.unsqueeze(values[1], 0)
-                    print(
-                        values[0].shape,
-                        values[1].shape,
-                        values[0].get_dtype(),
-                        values[1].get_dtype(),
-                    )
+                if values[1].shape[0] > 0:
                     values = ttnn.concat(values, dim=1)
                 else:
-                    values = ttnn.concat(values, dim=0)
-                print("After concat ttnn", values.shape)
+                    values = values[0]
 
             ret.set(k, values)
         return ret
