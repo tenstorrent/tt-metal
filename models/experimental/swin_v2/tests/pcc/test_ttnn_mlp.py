@@ -16,7 +16,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.swin_v2.reference.mlp import MLP
 from models.experimental.swin_v2.tt.tt_mlp import TtMLP
 import ttnn
-from models.experimental.swin_v2.common import load_torch_model
+from models.experimental.swin_v2.common import load_torch_model, SWIN_V2_L1_SMALL_SIZE
 
 
 def create_custom_preprocessor(device):
@@ -39,7 +39,7 @@ def create_custom_preprocessor(device):
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SWIN_V2_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "in_channels,hidden_channels,seq_len,i,j",
     [

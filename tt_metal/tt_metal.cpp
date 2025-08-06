@@ -56,6 +56,7 @@
 #include "utils.hpp"
 #include "fabric/hw/inc/fabric_routing_mode.h"
 #include <tt-metalium/graph_tracking.hpp>
+#include <tt_stl/overloaded.hpp>
 
 namespace tt {
 
@@ -69,15 +70,10 @@ namespace {
 CoreRangeSet GetCoreRangeSet(const std::variant<CoreCoord, CoreRange, CoreRangeSet>& specified_core_spec) {
     ZoneScoped;
     return std::visit(
-        [](auto&& core_spec) -> CoreRangeSet {
-            using T = std::decay_t<decltype(core_spec)>;
-            if constexpr (std::is_same_v<T, CoreCoord>) {
-                return CoreRangeSet(CoreRange(core_spec, core_spec));
-            } else if constexpr (std::is_same_v<T, CoreRange>) {
-                return CoreRangeSet(core_spec);
-            } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
-                return core_spec;
-            }
+        ttsl::overloaded{
+            [](const CoreCoord& core_spec) { return CoreRangeSet(CoreRange(core_spec, core_spec)); },
+            [](const CoreRange& core_spec) { return CoreRangeSet(core_spec); },
+            [](const CoreRangeSet& core_spec) { return core_spec; },
         },
         specified_core_spec);
 }
@@ -259,16 +255,13 @@ void SetRuntimeArgsImpl(
     resolved_runtime_args.reserve(runtime_args_ptr->size());
 
     for (const auto& arg : *(runtime_args_ptr)) {
-        std::visit(
-            [&resolved_runtime_args](auto&& a) {
-                using T = std::decay_t<decltype(a)>;
-                if constexpr (std::is_same_v<T, Buffer*>) {
-                    resolved_runtime_args.push_back(a->address());
-                } else {
-                    resolved_runtime_args.push_back(a);
-                }
+        const auto resolved = std::visit(
+            ttsl::overloaded{
+                [](Buffer* buffer) { return buffer->address(); },
+                [](uint32_t address) { return address; },
             },
             arg);
+        resolved_runtime_args.push_back(resolved);
     }
     kernel->set_runtime_args(core_coord, resolved_runtime_args);
 }
@@ -280,17 +273,16 @@ inline void SetRuntimeArgsImpl(
     bool blocking) {
     // SetRuntimeArgs API for Async CQ Mode
     std::visit(
-        [&](auto&& core_spec) {
-            using T = std::decay_t<decltype(core_spec)>;
-            if constexpr (std::is_same_v<T, CoreCoord>) {
-                SetRuntimeArgsImpl(kernel, core_spec, runtime_args, blocking);
-            } else if constexpr (std::is_same_v<T, CoreRange>) {
+        ttsl::overloaded{
+            [&](const CoreCoord& core_spec) { SetRuntimeArgsImpl(kernel, core_spec, runtime_args, blocking); },
+            [&](const CoreRange& core_spec) {
                 for (auto x = core_spec.start_coord.x; x <= core_spec.end_coord.x; x++) {
                     for (auto y = core_spec.start_coord.y; y <= core_spec.end_coord.y; y++) {
                         SetRuntimeArgsImpl(kernel, CoreCoord(x, y), runtime_args, blocking);
                     }
                 }
-            } else if constexpr (std::is_same_v<T, CoreRangeSet>) {
+            },
+            [&](const CoreRangeSet& core_spec) {
                 for (const auto& core_range : core_spec.ranges()) {
                     for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                         for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
@@ -298,7 +290,7 @@ inline void SetRuntimeArgsImpl(
                         }
                     }
                 }
-            }
+            },
         },
         core_spec);
 }
@@ -1097,18 +1089,15 @@ KernelHandle CreateKernel(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
     KernelHandle kernel = std::visit(
-        [&](auto&& cfg) -> KernelHandle {
-            CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
-            KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
-            using T = std::decay_t<decltype(cfg)>;
-            if constexpr (std::is_same_v<T, DataMovementConfig>) {
+        ttsl::overloaded{
+            [&](const DataMovementConfig& cfg) {
                 return CreateDataMovementKernel(program, kernel_src, core_ranges, cfg);
-            } else if constexpr (std::is_same_v<T, ComputeConfig>) {
-                return CreateComputeKernel(program, kernel_src, core_ranges, cfg);
-            } else if constexpr (std::is_same_v<T, EthernetConfig>) {
-                return CreateEthernetKernel(program, kernel_src, core_ranges, cfg);
-            }
+            },
+            [&](const ComputeConfig& cfg) { return CreateComputeKernel(program, kernel_src, core_ranges, cfg); },
+            [&](const EthernetConfig& cfg) { return CreateEthernetKernel(program, kernel_src, core_ranges, cfg); },
         },
         config);
 
@@ -1121,18 +1110,15 @@ KernelHandle CreateKernelFromString(
     const std::string& kernel_src_code,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
+    CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
+    KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
     return std::visit(
-        [&](auto&& cfg) -> KernelHandle {
-            CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
-            KernelSource kernel_src(kernel_src_code, KernelSource::SOURCE_CODE);
-            using T = std::decay_t<decltype(cfg)>;
-            if constexpr (std::is_same_v<T, DataMovementConfig>) {
+        ttsl::overloaded{
+            [&](const DataMovementConfig& cfg) {
                 return CreateDataMovementKernel(program, kernel_src, core_ranges, cfg);
-            } else if constexpr (std::is_same_v<T, ComputeConfig>) {
-                return CreateComputeKernel(program, kernel_src, core_ranges, cfg);
-            } else if constexpr (std::is_same_v<T, EthernetConfig>) {
-                return CreateEthernetKernel(program, kernel_src, core_ranges, cfg);
-            }
+            },
+            [&](const ComputeConfig& cfg) { return CreateComputeKernel(program, kernel_src, core_ranges, cfg); },
+            [&](const EthernetConfig& cfg) { return CreateEthernetKernel(program, kernel_src, core_ranges, cfg); },
         },
         config);
 }
@@ -1183,33 +1169,30 @@ uint32_t CreateSemaphore(
     const std::variant<CoreRange, CoreRangeSet>& core_spec,
     uint32_t initial_value,
     CoreType core_type) {
-    return std::visit(
-        [&](auto&& c) -> uint32_t {
-            using T = std::decay_t<decltype(c)>;
-            CoreRangeSet crs;
-            if constexpr (std::is_same_v<T, CoreRange>) {
-                crs = CoreRangeSet(c);
-            } else {
+    CoreRangeSet crs = std::visit(
+        ttsl::overloaded{
+            [](const CoreRange& c) { return CoreRangeSet(c); },
+            [](const CoreRangeSet& c) {
                 // Merge ranges to reduce the number of multicasts needed to initialize semaphores.
-                crs = c.merge_ranges();
-            }
-            std::optional<uint32_t> semaphore_id;
-            TT_FATAL(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
-            for (const auto& core_range : crs.ranges()) {
-                std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range, core_type);
-                if (!semaphore_id.has_value()) {
-                    semaphore_id = semaphore_id_candidate;
-                } else {
-                    semaphore_id = std::max(semaphore_id.value(), semaphore_id_candidate.value());
-                }
-            }
-            TT_FATAL(semaphore_id.has_value(), "Unable to initialize Semaphore!");
-
-            program.add_semaphore(crs, semaphore_id.value(), initial_value, core_type);
-
-            return semaphore_id.value();
+                return c.merge_ranges();
+            },
         },
         core_spec);
+    std::optional<uint32_t> semaphore_id;
+    TT_FATAL(crs.ranges().size() > 0, "Expecting a non-empty CoreRangeSet!");
+    for (const auto& core_range : crs.ranges()) {
+        std::optional<uint32_t> semaphore_id_candidate = get_semaphore_id(program, core_range, core_type);
+        if (!semaphore_id.has_value()) {
+            semaphore_id = semaphore_id_candidate;
+        } else {
+            semaphore_id = std::max(semaphore_id.value(), semaphore_id_candidate.value());
+        }
+    }
+    TT_FATAL(semaphore_id.has_value(), "Unable to initialize Semaphore!");
+
+    program.add_semaphore(crs, semaphore_id.value(), initial_value, core_type);
+
+    return semaphore_id.value();
 }
 
 GlobalSemaphore CreateGlobalSemaphore(
