@@ -11,8 +11,8 @@ name: PR Gate
 # - Individual test cases must be less than 1s.
 
 run-name: >-
-  ${{ github.event_name == 'merge_group' && github.event.action == 'destroyed' && format('Merge Queue ({0} {1})', github.event.merge_group.reason, github.sha) ||
-      github.event_name == 'merge_group' && format('Merge Queue Queued {0} by {1}', github.sha, github.actor) ||
+  ${{ github.event_name == 'merge_group' && github.event.action == 'destroyed' && format('[Merge Queue] {0} {1}', github.event.reason, github.sha) ||
+      github.event_name == 'merge_group' && format('[Merge Queue] {0} by {1}', github.sha, github.actor) ||
       '' }}
 
 on:
