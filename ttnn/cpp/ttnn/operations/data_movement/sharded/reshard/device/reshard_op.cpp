@@ -185,32 +185,34 @@ operation::ProgramWithCallbacks ReshardDeviceOperation::create_program(
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     std::unordered_map<CoreCoord, std::vector<uint32_t>> empty_data;
-    auto output_grid = output_tensor.shard_spec().value().grid;
-    auto output_cores = corerange_to_cores(output_grid);
+    Tensor local_rt_args_config_0, local_rt_args_config_1;
+    if (output_tensor.shard_spec().has_value()) {
+        auto output_grid = output_tensor.shard_spec().value().grid;
+        auto output_cores = corerange_to_cores(output_grid);
 
-    // Estimate number of RT args: Each page stride range needs:
-    // 1. Header (4 values): input_addr, num_output_pages, num_ranges, output_page_offset
-    // 2. Each range has around 9 values
-    uint32_t header_size = 4;
-    uint32_t values_per_range = 9;
+        // Estimate number of RT args: Each page stride range needs:
+        // 1. Header (4 values): input_addr, num_output_pages, num_ranges, output_page_offset
+        // 2. Each range has around 9 values
+        uint32_t header_size = 4;
+        uint32_t values_per_range = 9;
 
-    uint32_t num_cores = output_cores.size();
-    uint32_t pages_per_shard =
-        output_tensor.shard_spec().value().shape[0] * output_tensor.shard_spec().value().shape[1];
-    uint32_t estimated_ranges = pages_per_shard / output_tensor.buffer()->page_size();
+        uint32_t num_cores = output_cores.size();
+        uint32_t pages_per_shard =
+            output_tensor.shard_spec().value().shape[0] * output_tensor.shard_spec().value().shape[1];
+        uint32_t estimated_ranges = pages_per_shard / output_tensor.buffer()->page_size();
 
-    uint32_t estimated_args = header_size + (estimated_ranges * values_per_range);
-    uint32_t MAX_RT_ARGS_WIDTH = ((estimated_args + 31) / 32) * 32;
+        uint32_t estimated_args = header_size + (estimated_ranges * values_per_range);
+        uint32_t MAX_RT_ARGS_WIDTH = ((estimated_args + 31) / 32) * 32;
 
-    for (auto core : output_cores) {
-        empty_data[core].resize(MAX_RT_ARGS_WIDTH, 0);
+        for (auto core : output_cores) {
+            empty_data[core].resize(MAX_RT_ARGS_WIDTH, 0);
+        }
+        auto rt_args_host_0 = construct_per_core_host_tensor(empty_data, MAX_RT_ARGS_WIDTH);
+        auto rt_args_host_1 = construct_per_core_host_tensor(empty_data, MAX_RT_ARGS_WIDTH);
+
+        local_rt_args_config_0 = move_per_core_config_to_device(rt_args_host_0, output_grid, output_tensor.device());
+        local_rt_args_config_1 = move_per_core_config_to_device(rt_args_host_1, output_grid, output_tensor.device());
     }
-    auto rt_args_host_0 = construct_per_core_host_tensor(empty_data, MAX_RT_ARGS_WIDTH);
-    auto rt_args_host_1 = construct_per_core_host_tensor(empty_data, MAX_RT_ARGS_WIDTH);
-
-    auto local_rt_args_config_0 = move_per_core_config_to_device(rt_args_host_0, output_grid, output_tensor.device());
-    auto local_rt_args_config_1 = move_per_core_config_to_device(rt_args_host_1, output_grid, output_tensor.device());
-
     if (CMAKE_UNIQUE_NAMESPACE::is_valid_for_legacy_reshard(input_tensor, output_tensor.memory_config())) {
         return detail::reshard_multi_core(input_tensor, output_tensor, local_rt_args_config_0, local_rt_args_config_1);
     } else {
