@@ -12,8 +12,9 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.utils.common_demo_utils import LoadImages, load_coco_class_names
 from models.demos.yolov7.common import YOLOV7_L1_SMALL_SIZE, load_torch_model
-from models.demos.yolov7.demo.demo_utils import LoadImages, load_coco_class_names, postprocess, preprocess
+from models.demos.yolov7.demo.demo_utils import postprocess, preprocess
 from models.demos.yolov7.reference import yolov7_model, yolov7_utils
 from models.demos.yolov7.runner.performant_runner import YOLOv7PerformantRunner
 from models.demos.yolov7.tt.common import get_mesh_mappers
