@@ -49,7 +49,7 @@ void set_or_update_runtime_arguments(
     // Reader args count depends on variant and broadcast type
     size_t num_reader_args = 5;  // Default for no broadcast
     if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
-        num_reader_args = 21;  // Column broadcast needs more args for stride calculations
+        num_reader_args = 27;  // Column broadcast needs args for all 3 tensors (predicate + true + false)
     }
     uint32_t dummy_arg = 0;
 
@@ -63,8 +63,8 @@ void set_or_update_runtime_arguments(
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
             // Handle cores with zero tiles - need to create appropriate zero arrays based on arg count
-            if (num_reader_args == 21) {
-                std::array<uint32_t, 21> zero_reader_args{};
+            if (num_reader_args == 27) {
+                std::array<uint32_t, 27> zero_reader_args{};
                 handle_args(program, reader_kernel_id, core, zero_reader_args);
             } else {
                 std::array<uint32_t, 5> zero_reader_args{};
@@ -168,9 +168,9 @@ void set_or_update_runtime_arguments(
                 c_start_id = start_tile_id;
             }
 
-            // Use exact binary_ng reader_runtime_args format
-            // Note: For TTT col_bcast, we need to handle value_false separately since binary_ng only supports 2 tensors
-            std::array<uint32_t, 21> reader_runtime_args = {
+            // Use extended reader_runtime_args format for 3 tensors
+            // Note: Added complete false tensor args (addr + strides + num_tiles) as args 21-26
+            std::array<uint32_t, 27> reader_runtime_args = {
                 predicate_tensor.buffer()->address(),           // 0: a.buffer()->address()
                 c_start_id,                                     // 1: c_start_id
                 a_num_tiles,                                    // 2: a_num_tiles
@@ -186,12 +186,18 @@ void set_or_update_runtime_arguments(
                 cHt,                                            // 12
                 cWt,                                            // 13
                 cND,                                            // 14
-                value_true_tensor.value().buffer()->address(),  // 15: b.buffer()->address()
-                bHt * bWt * bC * bN * bD * (bND > 1),           // 16: b stride calculations
+                value_true_tensor.value().buffer()->address(),  // 15: true_addr
+                bHt * bWt * bC * bN * bD * (bND > 1),           // 16: true stride calculations
                 bHt * bWt * bC * bN * (bD > 1),                 // 17
                 bHt * bWt * bC * (bN > 1),                      // 18
                 bHt * bWt * (bC > 1),                           // 19
-                b_num_tiles,                                    // 20
+                b_num_tiles,                                    // 20: true_num_tiles
+                value_true_tensor.value().buffer()->address(),  // 21: false_addr (using same as true for now)
+                bHt * bWt * bC * bN * bD * (bND > 1),           // 22: false stride calculations (same as true for now)
+                bHt * bWt * bC * bN * (bD > 1),                 // 23
+                bHt * bWt * bC * (bN > 1),                      // 24
+                bHt * bWt * (bC > 1),                           // 25
+                b_num_tiles,                                    // 26: false_num_tiles (same as true for now)
             };
 
             // DEBUG: Print WHERE reader args
@@ -489,12 +495,15 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         // Add binary_ng style sharding defines
         bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
         bool value_true_sharded = value_true_tensor.value().memory_config().is_sharded();
+        bool value_false_sharded = value_true_sharded;  // Using same as value_true for now
         reader_defines["SRC_SHARDED_PREDICATE"] = predicate_sharded ? "1" : "0";
         reader_defines["SRC_SHARDED_TRUE"] = value_true_sharded ? "1" : "0";
+        reader_defines["SRC_SHARDED_FALSE"] = value_false_sharded ? "1" : "0";
 
         // Add column broadcast specific defines (similar to binary_ng COL_B case)
         reader_defines["SRC_BCAST_PREDICATE"] = "0";  // predicate is not broadcast
         reader_defines["SRC_BCAST_TRUE"] = "1";       // value_true is broadcast (column)
+        reader_defines["SRC_BCAST_FALSE"] = "1";      // value_false is broadcast (same as value_true for now)
 
         // Add BCAST_LLK define (set to 0 for now, can be optimized later)
         reader_defines["BCAST_LLK"] = "0";

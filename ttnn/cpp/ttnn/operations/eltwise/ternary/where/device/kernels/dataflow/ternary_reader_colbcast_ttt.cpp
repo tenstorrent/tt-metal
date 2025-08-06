@@ -37,9 +37,16 @@ void kernel_main() {
     const uint32_t true_n_stride = get_arg_val<uint32_t>(18);
     const uint32_t true_c_stride = get_arg_val<uint32_t>(19);
     const uint32_t true_num_tiles = get_arg_val<uint32_t>(20);
+    const uint32_t false_addr = get_arg_val<uint32_t>(21);
+    const uint32_t false_nD_stride = get_arg_val<uint32_t>(22);
+    const uint32_t false_d_stride = get_arg_val<uint32_t>(23);
+    const uint32_t false_n_stride = get_arg_val<uint32_t>(24);
+    const uint32_t false_c_stride = get_arg_val<uint32_t>(25);
+    const uint32_t false_num_tiles = get_arg_val<uint32_t>(26);
 
     constexpr auto predicate_cb = tt::CBIndex::c_0;
     constexpr auto true_cb = tt::CBIndex::c_1;
+    constexpr auto false_cb = tt::CBIndex::c_2;
 #if !SRC_SHARDED_PREDICATE
     constexpr bool predicate_is_dram = get_compile_time_arg_val(0) == 1;
     const uint32_t predicate_tile_bytes = get_tile_size(predicate_cb);
@@ -53,6 +60,15 @@ void kernel_main() {
     const DataFormat true_data_format = get_dataformat(true_cb);
     const InterleavedAddrGenFast<true_is_dram> true_addr_gen = {
         .bank_base_address = true_addr, .page_size = true_tile_bytes, .data_format = true_data_format};
+#endif
+
+    // False tensor address generator (same as true tensor for now)
+#if !SRC_SHARDED_FALSE
+    constexpr bool false_is_dram = get_compile_time_arg_val(2) == 1;  // Using same DRAM flag as true for now
+    const uint32_t false_tile_bytes = get_tile_size(false_cb);
+    const DataFormat false_data_format = get_dataformat(false_cb);
+    const InterleavedAddrGenFast<false_is_dram> false_addr_gen = {
+        .bank_base_address = false_addr, .page_size = false_tile_bytes, .data_format = false_data_format};
 #endif
     constexpr uint32_t onetile = 1;
     constexpr bool has_sharding = get_compile_time_arg_val(1) == 1;
@@ -93,6 +109,17 @@ void kernel_main() {
     uint32_t true_next_d_shift = true_d_stride - true_n_stride * N;
     uint32_t true_next_nd_shift = true_nD_stride - true_d_stride * D;
 
+    // False tensor offset calculation (same as true tensor for now)
+    uint32_t false_tile_offset =
+        start_nd * false_nD_stride + start_d * false_d_stride + start_n * false_n_stride + start_c * false_c_stride;
+#if !SRC_BCAST_FALSE
+    false_tile_offset += start_th * Wt;
+#endif
+    uint32_t false_next_c_shift = false_c_stride - HtWt;
+    uint32_t false_next_n_shift = false_n_stride - false_c_stride * C;
+    uint32_t false_next_d_shift = false_d_stride - false_n_stride * N;
+    uint32_t false_next_nd_shift = false_nD_stride - false_d_stride * D;
+
     // DEBUG: Print main loop info
     DPRINT << "Starting main tile read loop, dst_num_tiles = " << dst_num_tiles << ENDL();
     DPRINT << "Ht = " << Ht << ", Wt = " << Wt << ", C = " << C << ", N = " << N << ", D = " << D << ENDL();
@@ -123,6 +150,18 @@ void kernel_main() {
                         FILL_TILE_WITH_FIRST_COLUMN_B(true_cb);
                         cb_push_back(true_cb, onetile);
 #endif
+
+                        // False tensor broadcast (same as true tensor)
+#if SRC_BCAST_FALSE
+                        cb_reserve_back(false_cb, onetile);
+#if !SRC_SHARDED_FALSE
+                        uint32_t l1_write_addr_false = get_write_ptr(false_cb);
+                        noc_async_read_tile(false_tile_offset + th, false_addr_gen, l1_write_addr_false);
+                        noc_async_read_barrier();
+#endif
+                        FILL_TILE_WITH_FIRST_COLUMN_C(false_cb);
+                        cb_push_back(false_cb, onetile);
+#endif
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {
 #if !SRC_BCAST_PREDICATE
@@ -145,6 +184,17 @@ void kernel_main() {
                             cb_push_back(true_cb, onetile);
 #endif
 #endif
+
+                            // False tensor non-broadcast (same as true tensor)
+#if !SRC_BCAST_FALSE
+                            cb_reserve_back(false_cb, onetile);
+#if !SRC_SHARDED_FALSE
+                            uint32_t l1_write_addr_false = get_write_ptr(false_cb);
+                            noc_async_read_tile(false_tile_offset + tw, false_addr_gen, l1_write_addr_false);
+                            noc_async_read_barrier();
+#endif
+                            cb_push_back(false_cb, onetile);
+#endif
                         }
                         if constexpr (!has_sharding) {
                             // next row of tiles should start at the first column
@@ -155,6 +205,9 @@ void kernel_main() {
 #endif
 #if !SRC_BCAST_TRUE && !SRC_SHARDED_TRUE
                         true_tile_offset += Wt;
+#endif
+#if !SRC_BCAST_FALSE && !SRC_SHARDED_FALSE
+                        false_tile_offset += Wt;
 #endif
                     }
 #if !SRC_SHARDED_PREDICATE
@@ -174,12 +227,22 @@ void kernel_main() {
                     true_tile_offset += true_next_c_shift;
 #endif
 #endif
+#if !SRC_SHARDED_FALSE
+#if SRC_BCAST_FALSE
+                    false_tile_offset += false_c_stride;
+#else
+                    false_tile_offset += false_next_c_shift;
+#endif
+#endif
                 }
 #if !SRC_SHARDED_PREDICATE
                 tile_offset += next_n_shift;
 #endif
 #if !SRC_SHARDED_TRUE
                 true_tile_offset += true_next_n_shift;
+#endif
+#if !SRC_SHARDED_FALSE
+                false_tile_offset += false_next_n_shift;
 #endif
             }
 #if !SRC_SHARDED_PREDICATE
@@ -188,12 +251,18 @@ void kernel_main() {
 #if !SRC_SHARDED_TRUE
             true_tile_offset += true_next_d_shift;
 #endif
+#if !SRC_SHARDED_FALSE
+            false_tile_offset += false_next_d_shift;
+#endif
         }
 #if !SRC_SHARDED_PREDICATE
         tile_offset += next_nd_shift;
 #endif
 #if !SRC_SHARDED_TRUE
         true_tile_offset += true_next_nd_shift;
+#endif
+#if !SRC_SHARDED_FALSE
+        false_tile_offset += false_next_nd_shift;
 #endif
     }
 }
