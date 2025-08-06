@@ -104,8 +104,9 @@ class TransformerBlock(LightweightModule):
                 args,
                 TG=args.is_galaxy,
             )
+            self.pre_ffn_norm = None
 
-        if self.args.use_pre_ffn:
+        elif self.args.use_pre_ffn:
             self.ff_norm = DistributedNorm(
                 RMSNorm(
                     device=mesh_device,
@@ -145,8 +146,6 @@ class TransformerBlock(LightweightModule):
                 args,
                 TG=args.is_galaxy,
             )
-        else:
-            self.pre_ffn_norm = None
 
         if self.args.use_post_ffn:
             self.post_ffn_norm = DistributedNorm(
