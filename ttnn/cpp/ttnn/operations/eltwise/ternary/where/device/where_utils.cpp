@@ -162,6 +162,30 @@ std::map<std::string, std::string> make_dataflow_defines(const DataType dtype, c
         defines["FILL_TILE_WITH_FIRST_ELEMENT_B"] = "fill_tile_with_first_element_bfloat16";
         defines["FILL_WITH_VALUE_B"] = "fill_with_val_bfloat16";
     }
+
+    // Add defines for third tensor (false tensor) - using same data type as b_dtype for now
+    if (b_dtype == DataType::FLOAT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element<float>";
+        defines["FILL_WITH_VALUE_FLOAT_C"] = "fill_with_val<1024, float>";
+    } else if (b_dtype == DataType::INT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element<int32_t>";
+        defines["FILL_WITH_VALUE_C"] = "fill_with_val<1024, int32_t>";
+    } else if (b_dtype == DataType::UINT32) {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column";
+        defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element<uint32_t>";
+        defines["FILL_WITH_VALUE_C"] = "fill_with_val<1024, uint32_t>";
+    } else {
+        defines["FILL_TILE_WITH_FIRST_COLUMN_C"] = "fill_tile_with_first_column_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ROW_C"] = "fill_tile_with_first_row_bfloat16";
+        defines["FILL_TILE_WITH_FIRST_ELEMENT_C"] = "fill_tile_with_first_element_bfloat16";
+        defines["FILL_WITH_VALUE_C"] = "fill_with_val_bfloat16";
+    }
+
     return defines;
 }
 
