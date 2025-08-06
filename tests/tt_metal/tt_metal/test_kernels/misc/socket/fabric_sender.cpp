@@ -58,6 +58,7 @@ void kernel_main() {
     uint64_t receiver_noc_coord_addr = get_noc_addr(sender_socket.downstream_noc_x, sender_socket.downstream_noc_y, 0);
 
     uint32_t outstanding_data_size = data_size;
+
     // Sends 1 page at a time and does handshake with receiver, can be optimized
     // to notify receiver after writing larger chunks
     while (outstanding_data_size) {
