@@ -24,6 +24,8 @@ class TT_CCL:
             }
         )
 
+        self.is_galaxy = ttnn.GetNumAvailableDevices() == 32
+
         self.barrier_semaphore_idx = 0
         self.barrier_semaphore_handles = []
 
@@ -75,9 +77,8 @@ def tt_all_reduce(
     sharded=False,
     dtype=ttnn.bfloat16,
     use_composite=False,
-    is_galaxy=False,
 ):
-    rs_topology = ttnn.Topology.Linear if is_galaxy else topology
+    rs_topology = ttnn.Topology.Linear if tt_ccl.is_galaxy else topology
 
     # N150
     if list(mesh_device.shape) == [1, 1] or (cluster_axis == 1 and 1 in list(mesh_device.shape)):

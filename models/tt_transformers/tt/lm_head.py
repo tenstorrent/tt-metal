@@ -159,7 +159,6 @@ class LMHead(LightweightModule):
             dtype=self.args.ccl_dtype,
             sharded=False,
             use_composite=True,
-            is_galaxy=self.args.is_galaxy,
         )
 
         return output
