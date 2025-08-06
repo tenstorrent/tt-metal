@@ -258,7 +258,11 @@ void DevicePool::initialize(
 
     // Record IDs that the user requested to be opened.
     for (auto dev_id : device_ids) {
-        TT_FATAL(!_inst->user_requested_devices_[dev_id], "Device {} already opened", dev_id);
+        // Device can be active but not user requested if it was opened by DevicePool automatically.
+        TT_FATAL(
+            !_inst->is_device_active(dev_id) || !_inst->user_requested_devices_[dev_id],
+            "Device {} already opened",
+            dev_id);
         _inst->user_requested_devices_[dev_id] = true;
     }
 
