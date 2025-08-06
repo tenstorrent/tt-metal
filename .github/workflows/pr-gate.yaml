@@ -166,7 +166,7 @@ jobs:
       product: tt-metalium
 
   docker-image:
-    if: github.event.action != 'destroyed' && (github.event_name == 'pull_request' || !github.event.pull_request.draft)
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
@@ -179,7 +179,7 @@ jobs:
   # A proper scan is run in Merge Gate to ensure only clean code lands.
   clang-tidy-light:
     needs: [docker-image]
-    if: github.event_name == 'pull_request' || !github.event.pull_request.draft
+    if: github.event_name == 'pull_request' && !github.event.pull_request.draft
     runs-on: ubuntu-latest
     container: ${{ needs.docker-image.outputs.ci-build-tag }}
     permissions:
