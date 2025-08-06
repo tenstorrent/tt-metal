@@ -187,21 +187,35 @@ struct HostToLiteFabricInterface {
         // TODO: This can only process 1 item at a time right now
         do {
             update_host_interface(virtual_core_sender);
-        } while (d2h.fabric_sender_channel_index != h2d.sender_host_write_index);
+        } while ((h2d.sender_host_write_index + 1) % NUM_BUFFERS == d2h.fabric_sender_channel_index);
     }
 
     void wait_for_read_event(tt_cxy_pair virtual_core_sender, uint32_t read_event_addr) {
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        tt_driver_atomics::mfence();
 
         volatile tt::tt_fabric::LowLatencyPacketHeader header;
         header.command_fields.read.event = 0;
-        do {
+        const auto expectedOrderId = HostToLiteFabricReadEvent::get();
+        log_info(
+            tt::LogMetal,
+            "Waiting for read event {} from {} {:#x}",
+            expectedOrderId,
+            virtual_core_sender.str(),
+            read_event_addr);
+        while (true) {
             tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                 const_cast<void*>(static_cast<volatile void*>(&header)),
                 sizeof(tt::tt_fabric::LowLatencyPacketHeader),
                 virtual_core_sender,
                 read_event_addr);
-        } while (header.command_fields.read.event != HostToLiteFabricReadEvent::get());
+            if (header.command_fields.read.event == expectedOrderId) {
+                break;
+            } else if (
+                header.command_fields.read.event != 0xdeadbeef && header.command_fields.read.event > expectedOrderId) {
+                TT_THROW("Read event out of order: {} > {}", header.command_fields.read.event, expectedOrderId);
+            }
+        };
 
         HostToLiteFabricReadEvent::increment();
     }
@@ -256,7 +270,7 @@ struct HostToLiteFabricInterface {
     void flush_h2d(tt_cxy_pair virtual_core_sender) {
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
-        tt_driver_atomics::sfence();
+        tt_driver_atomics::mfence();
 
         cluster.write_core(
             (void*)(reinterpret_cast<uintptr_t>(this) + offsetof(HostToLiteFabricInterface, h2d)),
@@ -288,7 +302,7 @@ struct HostToLiteFabricInterface {
                 reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(mem_ptr) + i * get_max_payload_data_size_bytes()),
                 get_max_payload_data_size_bytes(),
                 sender_core,
-                dst_noc_addr);
+                dst_noc_addr + i * get_max_payload_data_size_bytes());
         }
         // Remaining bytes
         size_t remaining_bytes = size % get_max_payload_data_size_bytes();
@@ -298,8 +312,31 @@ struct HostToLiteFabricInterface {
                     reinterpret_cast<uintptr_t>(mem_ptr) + num_pages * get_max_payload_data_size_bytes()),
                 remaining_bytes,
                 sender_core,
-                dst_noc_addr);
+                dst_noc_addr + num_pages * get_max_payload_data_size_bytes());
         }
+    }
+
+    void read(void* mem_ptr, size_t size, tt_cxy_pair receiver_core, uint64_t src_noc_addr) {
+        tt::tt_fabric::LowLatencyPacketHeader header;
+        header.to_chip_unicast(1);
+        header.to_noc_read(tt::tt_fabric::NocReadCommandHeader{src_noc_addr, HostToLiteFabricReadEvent::get()}, size);
+
+        uint32_t receiver_header_address = get_next_receiver_buffer_slot_address(receiver_channel_base);
+        uint32_t receiver_data_address = receiver_header_address + sizeof(tt::tt_fabric::LowLatencyPacketHeader);
+
+        wait_for_empty_write_slot(receiver_core);
+        send_payload_flush_non_blocking_from_address(header, receiver_core, sender_channel_base);
+
+        wait_for_read_event(receiver_core, receiver_header_address);
+
+        log_info(tt::LogMetal, "Reading data from {}", receiver_core.str());
+        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            mem_ptr, size, receiver_core, receiver_data_address);
+
+        // Ack to device we read
+        h2d.receiver_host_read_index =
+            lite_fabric::wrap_increment<RECEIVER_NUM_BUFFERS_ARRAY[0]>(h2d.receiver_host_read_index);
+        flush_h2d(receiver_core);
     }
 
 #endif
