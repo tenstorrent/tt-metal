@@ -128,7 +128,6 @@ struct DistributionSpec {
         return *this;
     }
 
-public:
     template <
         typename TensorShape = Shape,
         typename ShardShape = Shape,
