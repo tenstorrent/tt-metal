@@ -107,3 +107,30 @@ INSTANTIATE_TEST_SUITE_P(
         BinaryOpTraceRuntime::m_interleaved_1_3_1024_1024_tiled)));
 
 }  // namespace ttnn::operations::binary::test
+
+/* namespace ttnn::operations::unary::test {
+
+// ============================================================================
+// Unary Eltwise Op tests
+// ============================================================================
+
+class UnaryOpTraceRuntime : public ttnn::operations::binary::test::TTNNFixtureWithTraceEnabledDevice,
+                            public testing::WithParamInterface<ttnn::TensorSpec> {};
+
+TEST_P(UnaryOpTraceRuntime, Exp) {
+    const auto& input_spec = GetParam();
+
+    auto device = device_;
+    auto query = ttnn::graph::query_op_runtime(ttnn::exp, device, input_spec, std::nullopt);
+
+    EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
+    log_info(tt::LogTest, "Trace runtime: {} ns", query.runtime);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    QueryOpRuntimeUnary,
+    UnaryOpTraceRuntime,
+    ::testing::Values(
+        ttnn::operations::binary::test::TTNNFixtureWithTraceEnabledDevice::m_interleaved_1_3_1024_1024_tiled));
+
+}  // namespace ttnn::operations::unary::test */

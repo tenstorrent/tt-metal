@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <iostream>
 
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/trace.hpp"
@@ -16,7 +17,7 @@
 #ifdef BUILD_MLP_OP_PERF
 #include "interface.hpp"
 #include "tt_stl/tt_stl/small_vector.hpp"
-#include "tt_metal/third_party/mlp-op-perf/interface/include/interface.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #endif
 
 namespace ttnn::graph {
@@ -48,12 +49,12 @@ template <typename Op, typename... Args>
 auto capture_op_trace(Op op, MeshDevice* device, Args&&... args) {
     device->enable_program_cache();
     {  // warm up the program cache - required for trace capture
-        std::apply(op, args);
+        std::apply(op, std::make_tuple(std::forward<Args>(args)...));
     }
 
     auto trace_id = ttnn::operations::trace::begin_trace_capture(device, ttnn::DefaultQueueId);
     try {
-        std::apply(op, transformed_args);
+        std::apply(op, std::make_tuple(std::forward<Args>(args)...));
     } catch (const std::exception& e) {
         // Ensure trace capture is stopped and released before returning to avoid a memory leak
         ttnn::operations::trace::end_trace_capture(device, trace_id, ttnn::DefaultQueueId);
@@ -135,25 +136,38 @@ auto query_op_runtime(Op op, MeshDevice* device, Args&&... args) {
             return std::forward<decltype(arg)>(arg);
         }
     };
+    auto transformed_args = std::make_tuple(transform_arg(std::forward<Args>(args))...);
 
 #ifdef BUILD_MLP_OP_PERF
+    std::cout << "in ifdef" << std::endl;
 
     // helper lambda to make nlohmann::json objects from args
     auto transform_to_json = [](auto&& arg) {
-        return tt::stl::json::to_json(arg);  // will either return a json obj or a string saying it is unsupported
+        using ArgType = std::decay_t<decltype(arg)>;
+        if constexpr (std::is_same_v<ArgType, nlohmann::json>) {
+            return arg;
+        } else {
+            auto json_arg = ttsl::json::to_json(arg);
+            std::cout << "arg is " << json_arg.dump(5) << std::endl;
+            return json_arg;
+        }
     };
 
-    auto transformed_args = std::make_tuple(transform_arg(std::forward<Args>(args))...);
-    auto json_args = transform_to_json(std::forward<Args>(transformed_args))...;
+    auto json_args_tuple = std::apply(
+        [&](auto&&... unpacked_args) { return std::make_tuple(transform_to_json(unpacked_args)...); },
+        transformed_args);
 
     std::string op_name;
-    if constexpr (std::is_same_v<Op, ttnn::exp>) {
+    if constexpr (std::is_same_v<Op, std::decay_t<decltype(ttnn::exp)>>) {
         op_name = "ttnn::exp";
+        std::cout << "here!" << std::endl;
     } else {
         op_name = "unknown";
+        std::cout << "unknown" << std::endl;
     }
 
-    uint64_t runtime = op_perf::get_runtime_from_model(op_name, json_args...);
+    uint64_t runtime = std::apply(
+        [&](auto&&... json_args) { return op_perf::get_runtime_from_model(op_name, json_args...); }, json_args_tuple);
     if (runtime != 0) {
         return RuntimeQueryResponse{ExecutionStatus::Success, runtime, ""};
     }
@@ -161,7 +175,12 @@ auto query_op_runtime(Op op, MeshDevice* device, Args&&... args) {
 #endif
 
     try {
-        auto trace_id = capture_op_trace(op, device, std::forward<Args>(args)...);
+        std::cout << "in online models" << std::endl;
+        auto trace_id = std::apply(
+            [&](auto&&... unpacked_args) {
+                return capture_op_trace(op, device, std::forward<decltype(unpacked_args)>(unpacked_args)...);
+            },
+            transformed_args);
         auto runtime = execute_time_and_release_trace(trace_id, device);
         return RuntimeQueryResponse{ExecutionStatus::Success, runtime};
 
