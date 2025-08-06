@@ -56,8 +56,8 @@ public:
     const tt::umd::SysmemBuffer& get_buffer(chip_id_t device_id) const;
 
     // Host pointer access methods
-    void* get_host_ptr(chip_id_t device_id);
-    const void* get_host_ptr(chip_id_t device_id) const;
+    void* get_host_ptr();
+    const void* get_host_ptr() const;
 
     // Device address access method
     uint64_t get_device_addr(chip_id_t device_id) const;
