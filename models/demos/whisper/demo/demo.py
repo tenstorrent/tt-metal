@@ -494,7 +494,7 @@ def test_demo_for_conditional_generation(input_path, ttnn_model, device, num_inp
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
         input_path, ttnn_model, device, num_inputs, model_repo
     )
-    if is_ci_env:
+    if is_ci_env and model_repo == "distil-whisper/distil-large-v3":
         if is_blackhole():
             if device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
                 expected_perf_metrics = {"prefill_t/s": 7.85, "decode_t/s/u": 87.0}
