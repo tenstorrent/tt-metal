@@ -7,6 +7,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
+#include <ttnn/operations/data_movement/sharded/reshard/reshard.hpp>
 
 namespace ttnn::operations::data_movement {
 

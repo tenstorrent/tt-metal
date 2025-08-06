@@ -10,17 +10,6 @@
 
 namespace ttnn::operations::data_movement::detail {
 
-// start is inclusive, end is exclusive
-struct PageRange {
-    uint32_t start;
-    uint32_t end;
-};
-
-struct CorePageRange {
-    CoreCoord core;
-    PageRange range;
-};
-
 tt::tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_multi_core(
     const std::vector<Tensor>& input_tensors, uint32_t dim, Tensor& output, unsigned int groups = 1);
 
