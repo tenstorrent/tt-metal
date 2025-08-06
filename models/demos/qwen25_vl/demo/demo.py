@@ -375,6 +375,7 @@ def test_demo(
     num_image_tokens = []
 
     text_outputs = []
+    text_outputs_all_users = []
     logger.info("Starting inference...")
     for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
         logger.info(f"Processing batch {batch_idx}")
@@ -578,6 +579,9 @@ def test_demo(
                         logger.info(
                             f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
                         )
+                    if batch_idx == 0:
+                        text_outputs_all_users.append(text_after_prompt)
+
                 profiler.end(f"log_saving_file", iteration=batch_idx)
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
@@ -608,12 +612,11 @@ def test_demo(
         assert all_match, "text_outputs should be the same for all batches"
 
     if is_ci_env and "bleu-score" in test_id and mesh_device.get_num_devices() > 2:
-        with open("models/demos/qwen25_vl/demo/sample_prompts/expected_text.txt", "r") as f:
-            expected_output = f.read()
+        expected_output = load_expected_text(model_args.base_model_name)
         from nltk.tokenize import word_tokenize
         from nltk.translate.bleu_score import sentence_bleu
 
-        for i, output_text in enumerate(text_outputs):
+        for i, output_text in enumerate(text_outputs_all_users):
             reference = [word_tokenize(expected_output.lower())]
             candidate = word_tokenize(output_text.lower())
             bleu_score = sentence_bleu(reference, candidate)
@@ -782,3 +785,17 @@ def load_inputs(input_file, batch_size):
         )
         user_input = user_input * batch_size
     return user_input
+
+
+def load_expected_text(model_name):
+    if "Qwen2.5-VL-72B" in model_name:
+        input_file = "models/demos/qwen25_vl/demo/sample_prompts/expected_text_72B.txt"
+    elif "Qwen2.5-VL-32B" in model_name:
+        input_file = "models/demos/qwen25_vl/demo/sample_prompts/expected_text_32B.txt"
+    else:
+        raise ValueError(f"Model {model_name} not supported")
+
+    with open(input_file, "r") as f:
+        expected_text = f.read()
+
+    return expected_text
