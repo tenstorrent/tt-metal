@@ -12,7 +12,7 @@ from models.experimental.uniad.tt.model_preprocessing_uniad import create_uniad_
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
 def test_uniad_reference(device, reset_seeds):
-    weights_path = "models/experimental/uniad/uniad_base_e2e.pth"
+    weights_path = "models/experimental/uniad/model_state_dict.pth"
     reference_model = UniAD(
         True,
         True,
@@ -163,15 +163,12 @@ def test_uniad_reference(device, reset_seeds):
     )
 
     weights = torch.load(weights_path, map_location=torch.device("cpu"))
-    # prefix = "motion_head"
-    # filtered = OrderedDict(
-    #     (
-    #         (k[len(prefix) + 1 :], v)  # Remove the prefix from the key
-    #         for k, v in weights["state_dict"].items()
-    #         if k.startswith(prefix)
-    #     )
-    # )
-    # reference_model.load_state_dict(weights["state_dict"])
+    if "criterion.code_weights" in weights:
+        del weights["criterion.code_weights"]
+    else:
+        print("Not Found")
+
+    reference_model.load_state_dict(weights)
     reference_model.eval()
 
     rescale = True
@@ -562,3 +559,6 @@ def test_uniad_reference(device, reset_seeds):
         sdc_planning_mask=ttnn_sdc_planning_mask,
         command=ttnn_command,
     )
+
+    print("reference_output", reference_output)
+    print("ttnn_output", ttnn_output)

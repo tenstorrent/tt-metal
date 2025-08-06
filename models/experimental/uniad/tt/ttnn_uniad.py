@@ -26,6 +26,8 @@ from models.experimental.uniad.reference.pan_segformer_head import PansegformerH
 from models.experimental.uniad.tt.ttnn_motion_head import TtMotionHead
 from models.experimental.uniad.tt.ttnn_occ_head import TtOccHead
 
+from models.experimental.uniad.tt import ttnn_utils
+
 
 class TtUniAD:
     """
@@ -495,109 +497,161 @@ class TtUniAD:
             )
 
         if self.with_motion_head:
-            #         result_track[0]["track_query_embeddings"]=ttnn.from_torch(
-            #     result_track[0]["track_query_embeddings"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            # )
-            #         print("result_track[0]",result_track[0]["track_bbox_results"])
-            #         result_track[0]["track_bbox_results"] = [
-            #     [
-            #         ttnn_utils.TtLiDARInstance3DBoxes(
-            #             ttnn.from_torch(
-            #                 result_track[0]["track_bbox_results"][0][0].tensor,
-            #                 dtype=ttnn.bfloat16,
-            #                 device=self.device,
-            #                 layout=ttnn.TILE_LAYOUT,
-            #             ),
-            #             box_dim=9,
-            #         ),
-            #         ttnn.from_torch(
-            #             result_track[0]["track_bbox_results"][0][1], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            #         ),
-            #         ttnn.from_torch(
-            #             result_track[0]["track_bbox_results"][0][2], device=self.device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT
-            #         ),
-            #         ttnn.from_torch(
-            #             result_track[0]["track_bbox_results"][0][3], device=self.device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT
-            #         ),
-            #         ttnn.from_torch(
-            #             result_track[0]["track_bbox_results"][0][4], device=self.device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT
-            #         ),
-            #     ]
-            # ]
-            #         result_track[0]["boxes_3d"] = ttnn_utils.TtLiDARInstance3DBoxes(
-            #             ttnn.from_torch(result_track[0]["boxes_3d"].tensor, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT),
-            #             box_dim=9,
-            #         )
-            #         result_track[0]["scores_3d"] = ttnn.from_torch(
-            #             result_track[0]["scores_3d"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            #         )
-            #         result_track[0]["labels_3d"] = ttnn.from_torch(
-            #             result_track[0]["labels_3d"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            #         )
-            #         result_track[0]["track_scores"] = ttnn.from_torch(
-            #             result_track[0]["track_scores"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            #         )
-            #         result_track[0]["track_ids"] = ttnn.from_torch(
-            #             result_track[0]["track_ids"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            #         )
-            #         result_track[0]["sdc_boxes_3d"] = ttnn_utils.TtLiDARInstance3DBoxes(
-            #             ttnn.from_torch(result_track[0]["sdc_boxes_3d"].tensor, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT),
-            #             box_dim=9,
-            #         )
-            #         result_track[0]["sdc_scores_3d"] = ttnn.from_torch(
-            #             result_track[0]["sdc_scores_3d"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            #         )
-            #         result_track[0]["sdc_track_scores"] = ttnn.from_torch(
-            #             result_track[0]["sdc_track_scores"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            #         )
-            #         result_track[0]["sdc_track_bbox_results"] = [
-            #             [
-            #                 ttnn_utils.TtLiDARInstance3DBoxes(
-            #                     ttnn.from_torch(
-            #                         result_track[0]["sdc_track_bbox_results"][0][0].tensor,
-            #                         dtype=ttnn.bfloat16,
-            #                         device=self.device,
-            #                         layout=ttnn.TILE_LAYOUT,
-            #                     ),
-            #                     box_dim=9,
-            #                 ),
-            #                 ttnn.from_torch(
-            #                     result_track[0]["sdc_track_bbox_results"][0][1], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            #                 ),
-            #                 ttnn.from_torch(
-            #                     result_track[0]["sdc_track_bbox_results"][0][2], device=self.device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT
-            #                 ),
-            #                 ttnn.from_torch(
-            #                     result_track[0]["sdc_track_bbox_results"][0][3], device=self.device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT
-            #                 ),
-            #                 ttnn.from_torch(
-            #                     result_track[0]["sdc_track_bbox_results"][0][4], device=self.device, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT
-            #                 ),
-            #             ]
-            #         ]
-            #         result_track[0]["sdc_embedding"] = ttnn.from_torch(
-            #             result_track[0]["sdc_embedding"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            #         )
-            #         result_track[0]["boxes_3d_det"] = ttnn_utils.TtLiDARInstance3DBoxes(
-            #             ttnn.from_torch(result_track[0]["boxes_3d_det"].tensor, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT),
-            #             box_dim=9,
-            #         )
-            #         result_track[0]["scores_3d_det"] = ttnn.from_torch(
-            #             result_track[0]["scores_3d_det"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            #         )
-            #         result_track[0]["labels_3d_det"] = ttnn.from_torch(
-            #             result_track[0]["labels_3d_det"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
-            #         )
+            result_track[0]["track_query_embeddings"] = ttnn.from_torch(
+                result_track[0]["track_query_embeddings"],
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
+            result_track[0]["track_bbox_results"] = [
+                [
+                    ttnn_utils.TtLiDARInstance3DBoxes(
+                        ttnn.from_torch(
+                            result_track[0]["track_bbox_results"][0][0].tensor,
+                            dtype=ttnn.bfloat16,
+                            device=self.device,
+                            layout=ttnn.TILE_LAYOUT,
+                        ),
+                        box_dim=9,
+                    ),
+                    ttnn.from_torch(
+                        result_track[0]["track_bbox_results"][0][1],
+                        device=self.device,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                    ),
+                    ttnn.from_torch(
+                        result_track[0]["track_bbox_results"][0][2],
+                        device=self.device,
+                        dtype=ttnn.int32,
+                        layout=ttnn.TILE_LAYOUT,
+                    ),
+                    ttnn.from_torch(
+                        result_track[0]["track_bbox_results"][0][3],
+                        device=self.device,
+                        dtype=ttnn.int32,
+                        layout=ttnn.TILE_LAYOUT,
+                    ),
+                    ttnn.from_torch(
+                        result_track[0]["track_bbox_results"][0][4],
+                        device=self.device,
+                        dtype=ttnn.int32,
+                        layout=ttnn.TILE_LAYOUT,
+                    ),
+                ]
+            ]
+            result_track[0]["boxes_3d"] = ttnn_utils.TtLiDARInstance3DBoxes(
+                ttnn.from_torch(
+                    result_track[0]["boxes_3d"].tensor, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.TILE_LAYOUT
+                ),
+                box_dim=9,
+            )
+            result_track[0]["scores_3d"] = ttnn.from_torch(
+                result_track[0]["scores_3d"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+            result_track[0]["labels_3d"] = ttnn.from_torch(
+                result_track[0]["labels_3d"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+            result_track[0]["track_scores"] = ttnn.from_torch(
+                result_track[0]["track_scores"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+            result_track[0]["track_ids"] = ttnn.from_torch(
+                result_track[0]["track_ids"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+            result_track[0]["sdc_boxes_3d"] = ttnn_utils.TtLiDARInstance3DBoxes(
+                ttnn.from_torch(
+                    result_track[0]["sdc_boxes_3d"].tensor,
+                    dtype=ttnn.bfloat16,
+                    device=self.device,
+                    layout=ttnn.TILE_LAYOUT,
+                ),
+                box_dim=9,
+            )
+            result_track[0]["sdc_scores_3d"] = ttnn.from_torch(
+                result_track[0]["sdc_scores_3d"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+            result_track[0]["sdc_track_scores"] = ttnn.from_torch(
+                result_track[0]["sdc_track_scores"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+            result_track[0]["sdc_track_bbox_results"] = [
+                [
+                    ttnn_utils.TtLiDARInstance3DBoxes(
+                        ttnn.from_torch(
+                            result_track[0]["sdc_track_bbox_results"][0][0].tensor,
+                            dtype=ttnn.bfloat16,
+                            device=self.device,
+                            layout=ttnn.TILE_LAYOUT,
+                        ),
+                        box_dim=9,
+                    ),
+                    ttnn.from_torch(
+                        result_track[0]["sdc_track_bbox_results"][0][1],
+                        device=self.device,
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                    ),
+                    ttnn.from_torch(
+                        result_track[0]["sdc_track_bbox_results"][0][2],
+                        device=self.device,
+                        dtype=ttnn.int32,
+                        layout=ttnn.TILE_LAYOUT,
+                    ),
+                    ttnn.from_torch(
+                        result_track[0]["sdc_track_bbox_results"][0][3],
+                        device=self.device,
+                        dtype=ttnn.int32,
+                        layout=ttnn.TILE_LAYOUT,
+                    ),
+                    ttnn.from_torch(
+                        result_track[0]["sdc_track_bbox_results"][0][4],
+                        device=self.device,
+                        dtype=ttnn.int32,
+                        layout=ttnn.TILE_LAYOUT,
+                    ),
+                ]
+            ]
+            result_track[0]["sdc_embedding"] = ttnn.from_torch(
+                result_track[0]["sdc_embedding"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+            result_track[0]["boxes_3d_det"] = ttnn_utils.TtLiDARInstance3DBoxes(
+                ttnn.from_torch(
+                    result_track[0]["boxes_3d_det"].tensor,
+                    dtype=ttnn.bfloat16,
+                    device=self.device,
+                    layout=ttnn.TILE_LAYOUT,
+                ),
+                box_dim=9,
+            )
+            result_track[0]["scores_3d_det"] = ttnn.from_torch(
+                result_track[0]["scores_3d_det"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
+            result_track[0]["labels_3d_det"] = ttnn.from_torch(
+                result_track[0]["labels_3d_det"], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            )
 
-            #         result_seg[0]["args_tuple"] = [
-            #         ttnn.from_torch(result_seg[0]["args_tuple"][0], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
-            #         ttnn.from_torch(result_seg[0]["args_tuple"][1], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
-            #         ttnn.from_torch(result_seg[0]["args_tuple"][2], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
-            #         ttnn.from_torch(result_seg[0]["args_tuple"][3], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
-            #         None,
-            #         ttnn.from_torch(result_seg[0]["args_tuple"][5], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
-            #         [ttnn.from_torch(torch.zeros(50, 50), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)],
-            #     ]
+            result_seg[0]["args_tuple"] = [
+                ttnn.from_torch(
+                    result_seg[0]["args_tuple"][0], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+                ),
+                ttnn.from_torch(
+                    result_seg[0]["args_tuple"][1], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+                ),
+                ttnn.from_torch(
+                    result_seg[0]["args_tuple"][2], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+                ),
+                ttnn.from_torch(
+                    result_seg[0]["args_tuple"][3], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+                ),
+                None,
+                ttnn.from_torch(
+                    result_seg[0]["args_tuple"][5], device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+                ),
+                [
+                    ttnn.from_torch(
+                        torch.zeros(50, 50), device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+                    )
+                ],
+            ]
 
             result_motion, outs_motion = self.motion_head.forward_test(
                 bev_embed, outs_track=result_track[0], outs_seg=result_seg[0]
@@ -1121,3 +1175,15 @@ class TtUniAD:
             bev_pos = nn.Upsample(scale_factor=2)(bev_pos)  # [1, 256, 200, 200]
             outs_track["bev_pos"] = bev_pos
         return outs_track
+
+
+def pop_elem_in_result(task_result: dict, pop_list: list = None):
+    all_keys = list(task_result.keys())
+    for k in all_keys:
+        if k.endswith("query") or k.endswith("query_pos") or k.endswith("embedding"):
+            task_result.pop(k)
+
+    if pop_list is not None:
+        for pop_k in pop_list:
+            task_result.pop(pop_k, None)
+    return task_result
