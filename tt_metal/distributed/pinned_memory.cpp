@@ -30,7 +30,6 @@ PinnedMemoryImpl::PinnedMemoryImpl(
 }
 
 PinnedMemoryImpl::~PinnedMemoryImpl() {
-    // SysmemBuffers will be automatically cleaned up by their destructors
     device_buffers_.clear();
 }
 
@@ -40,23 +39,19 @@ PinnedMemoryImpl::PinnedMemoryImpl(PinnedMemoryImpl&& other) noexcept
     , device_buffers_(std::move(other.device_buffers_))
     , device_to_mmio_map_(std::move(other.device_to_mmio_map_)) {
     
-    // Reset the other object
     other.buffer_size_ = 0;
     other.map_to_noc_ = false;
 }
 
 PinnedMemoryImpl& PinnedMemoryImpl::operator=(PinnedMemoryImpl&& other) noexcept {
     if (this != &other) {
-        // Clean up current resources
         device_buffers_.clear();
         
-        // Move from other
         buffer_size_ = other.buffer_size_;
         map_to_noc_ = other.map_to_noc_;
         device_buffers_ = std::move(other.device_buffers_);
         device_to_mmio_map_ = std::move(other.device_to_mmio_map_);
         
-        // Reset the other object
         other.buffer_size_ = 0;
         other.map_to_noc_ = false;
     }
@@ -81,7 +76,6 @@ void PinnedMemoryImpl::initialize_from_devices(
         throw std::invalid_argument("PinnedMemory only supports mapping existing host memory. Use constructor with host_buffer parameter.");
     }
     
-    // Get the cluster to access SysmemManagers
     auto& cluster = MetalContext::instance().get_cluster();
     
     // Collect all devices and their associated MMIO devices, deduplicating MMIO devices
@@ -99,7 +93,6 @@ void PinnedMemoryImpl::initialize_from_devices(
     std::unordered_map<chip_id_t, std::unique_ptr<tt::umd::SysmemBuffer>> mmio_buffers;
     
     for (chip_id_t mmio_device_id : unique_mmio_devices) {
-        // Map the same host memory for each MMIO device
         auto buffer = cluster.map_sysmem_buffer(mmio_device_id, host_buffer, buffer_size, map_to_noc);
         
         if (!buffer) {
@@ -109,13 +102,11 @@ void PinnedMemoryImpl::initialize_from_devices(
         mmio_buffers[mmio_device_id] = std::move(buffer);
     }
     
-    // Store the MMIO buffers and device mappings
     device_buffers_ = std::move(mmio_buffers);
     device_to_mmio_map_ = std::move(device_to_mmio_map);
 }
 
 tt::umd::SysmemBuffer& PinnedMemoryImpl::get_buffer(chip_id_t device_id) {
-    // Find the MMIO device for this logical device
     auto mmio_it = device_to_mmio_map_.find(device_id);
     if (mmio_it == device_to_mmio_map_.end()) {
         throw std::invalid_argument("Device " + std::to_string(device_id) + " not found in PinnedMemory");
@@ -130,7 +121,6 @@ tt::umd::SysmemBuffer& PinnedMemoryImpl::get_buffer(chip_id_t device_id) {
 }
 
 const tt::umd::SysmemBuffer& PinnedMemoryImpl::get_buffer(chip_id_t device_id) const {
-    // Find the MMIO device for this logical device
     auto mmio_it = device_to_mmio_map_.find(device_id);
     if (mmio_it == device_to_mmio_map_.end()) {
         throw std::invalid_argument("Device " + std::to_string(device_id) + " not found in PinnedMemory");
@@ -165,22 +155,20 @@ uint64_t PinnedMemoryImpl::get_device_addr(chip_id_t device_id) const {
 }
 
 std::optional<std::pair<uint64_t, chip_id_t>> PinnedMemoryImpl::get_noc_addr(chip_id_t device_id) const {
-    // Find the MMIO device for this logical device
     auto mmio_it = device_to_mmio_map_.find(device_id);
     if (mmio_it == device_to_mmio_map_.end()) {
-        return std::nullopt;  // Device not found
+        return std::nullopt;
     }
     
     chip_id_t mmio_device_id = mmio_it->second;
     auto buffer_it = device_buffers_.find(mmio_device_id);
     if (buffer_it == device_buffers_.end()) {
-        return std::nullopt;  // Buffer not found
+        return std::nullopt;
     }
     
-    // Get NOC address from the SysmemBuffer
     auto noc_addr_opt = buffer_it->second->get_noc_addr();
     if (!noc_addr_opt.has_value()) {
-        return std::nullopt;  // No NOC address available
+        return std::nullopt;
     }
     
     // Return NOC address and the MMIO device ID where it's usable from
@@ -207,7 +195,7 @@ bool PinnedMemoryImpl::usable_from_noc(chip_id_t device_id) const {
     // Check if mapped to NOC and device is its own MMIO device (i.e., MMIO-capable)
     auto mmio_it = device_to_mmio_map_.find(device_id);
     if (mmio_it == device_to_mmio_map_.end()) {
-        return false;  // Device not found
+        return false;
     }
     
     return map_to_noc_ && (mmio_it->second == device_id);
