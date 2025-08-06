@@ -301,12 +301,12 @@ auto make_tensor_accessor_tuple(
         std::make_integer_sequence<uint32_t, sizeof...(Args)>());
 }
 
-class AbstractTensorAccessor {
+class AbstractTensorAccessorWrapper {
 public:
-    AbstractTensorAccessor() = default;
+    AbstractTensorAccessorWrapper() = default;
 
     template <typename Accessor>
-    AbstractTensorAccessor(const Accessor& accessor) : accessor_ptr(&accessor) {
+    AbstractTensorAccessorWrapper(const Accessor& accessor) : accessor_ptr(&accessor) {
         get_noc_addr_fn = [](const void* accessor, uint32_t page_idx) {
             return static_cast<const Accessor*>(accessor)->get_noc_addr(page_idx);
         };
@@ -323,15 +323,15 @@ private:
 
 namespace tensor_accessor::detail {
 template <typename... Accessors, uint32_t... Indexes>
-auto make_abstract_tensor_accessors(
+auto make_abstract_tensor_accessor_wrappers(
     const std::tuple<Accessors...>& accessors, std::integer_sequence<uint32_t, Indexes...>)
-    -> std::array<AbstractTensorAccessor, sizeof...(Accessors)> {
-    return {AbstractTensorAccessor(std::get<Indexes>(accessors))...};
+    -> std::array<AbstractTensorAccessorWrapper, sizeof...(Accessors)> {
+    return {AbstractTensorAccessorWrapper(std::get<Indexes>(accessors))...};
 }
 }  // namespace tensor_accessor::detail
 
 template <typename... Accessors>
-auto make_abstract_tensor_accessors(const std::tuple<Accessors...>& accessors) {
-    return tensor_accessor::detail::make_abstract_tensor_accessors(
+auto make_abstract_tensor_accessor_wrappers(const std::tuple<Accessors...>& accessors) {
+    return tensor_accessor::detail::make_abstract_tensor_accessor_wrappers(
         accessors, std::make_integer_sequence<uint32_t, sizeof...(Accessors)>());
 }

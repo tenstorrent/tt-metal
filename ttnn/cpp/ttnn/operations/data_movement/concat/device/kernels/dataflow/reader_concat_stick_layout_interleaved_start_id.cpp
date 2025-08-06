@@ -16,7 +16,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t num_tensors = get_compile_time_arg_val(1);
     constexpr uint32_t page_size_base_idx = 2;
-    constexpr auto tensor_accessor_args = make_tensor_accessor_args_tuple<num_tensors, 2 + num_tensors>();
+    constexpr auto tensor_accessor_args =
+        make_tensor_accessor_args_tuple<num_tensors, page_size_base_idx + num_tensors>();
 
     // ublocks size defined in pages
     constexpr uint32_t ublock_size_pages = 1;
@@ -29,7 +30,7 @@ void kernel_main() {
 
     auto tensor_accessors_tuple =
         make_tensor_accessor_tuple(tensor_accessor_args, src_addr_base_idx, page_size_base_idx);
-    auto abstract_tensor_accessors = make_abstract_tensor_accessors(tensor_accessors_tuple);
+    auto abstract_tensor_accessor_wrappers = make_abstract_tensor_accessor_wrappers(tensor_accessors_tuple);
 
     tt_l1_ptr uint32_t* arg_ptr = (tt_l1_ptr uint32_t*)get_arg_addr(src_addr_base_idx);
     for (uint32_t i = 0; i < num_tensors; ++i) {
@@ -47,7 +48,8 @@ void kernel_main() {
         // For width concat we know we start at curr_tensor=0
         // num_pages_per_block[curr_tensor] is always one for width concat
         for (uint32_t j = 0; j < num_tensors; ++j) {
-            auto read_addr = abstract_tensor_accessors[curr_tensor].get_noc_addr(page_id_per_tensor[curr_tensor]);
+            auto read_addr =
+                abstract_tensor_accessor_wrappers[curr_tensor].get_noc_addr(page_id_per_tensor[curr_tensor]);
             auto page_size = kernel_compile_time_args[page_size_base_idx + curr_tensor];
             noc_async_read(read_addr, l1_write_addr, page_size);
             l1_write_addr += page_size;
@@ -56,7 +58,7 @@ void kernel_main() {
         }
         curr_tensor = 0;
 #else
-        auto read_addr = abstract_tensor_accessors[curr_tensor].get_noc_addr(page_id_per_tensor[curr_tensor]);
+        auto read_addr = abstract_tensor_accessor_wrappers[curr_tensor].get_noc_addr(page_id_per_tensor[curr_tensor]);
         auto page_size = kernel_compile_time_args[page_size_base_idx + curr_tensor];
         noc_async_read(read_addr, l1_write_addr, page_size);
 

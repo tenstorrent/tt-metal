@@ -586,7 +586,7 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
     }
 
     std::vector<uint32_t> reader_compile_time_args = {num_input_tensors};
-    std::vector<uint32_t> writer_compile_time_args = {num_input_tensors};
+    std::vector<uint32_t> writer_compile_time_args = {num_input_tensors, input_unit_size};
     TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     tt_metal::KernelHandle unary_reader_kernel_id = tt_metal::CreateKernel(
@@ -621,7 +621,6 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
             output.buffer()->address(),
             core_id,
             curr_num_output_rows,
-            input_unit_size,
             num_input_tensors * input_shard_spec.shape[0],
             input_shard_spec.shape[0]};
         for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
