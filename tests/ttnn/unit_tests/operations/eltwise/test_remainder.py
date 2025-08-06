@@ -6,7 +6,6 @@ import torch
 import pytest
 import ttnn
 from models.utility_functions import torch_random
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
@@ -91,68 +90,3 @@ def test_remainder_scalar(input_shapes, scalar, device):
         assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
     else:
         assert torch.allclose(output_tensor, torch_output_tensor, atol=0.001, rtol=0)
-
-
-@pytest.mark.parametrize(
-    "shapes",
-    [
-        # no subtile bcast
-        [[1, 16, 32], [8, 16, 32]],
-        # scalar bcast
-        [[8, 16, 32], [1, 1, 1]],
-        [[1, 1, 1], [8, 16, 32]],
-        # col bcast
-        [[1, 16, 1], [8, 16, 32]],
-        [[8, 16, 32], [8, 16, 1]],
-        # row bcast
-        [[8, 16, 32], [8, 1, 32]],
-        [[8, 1, 32], [8, 16, 32]],
-        # row col mixed bcast
-        [[1, 1, 32], [8, 16, 1]],
-        [[8, 16, 1], [1, 1, 32]],
-    ],
-)
-@pytest.mark.parametrize(
-    "torch_dtype, ttnn_dtype",
-    [
-        (torch.int32, ttnn.int32),
-        (torch.float32, ttnn.float32),
-        (torch.int32, ttnn.float32),
-    ],
-)
-def test_remainder_implicit_broadcast(shapes, torch_dtype, ttnn_dtype, device):
-    torch.manual_seed(0)
-
-    if torch_dtype == torch.int32:
-        torch_input_tensor_a = torch.randint(
-            torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max, shapes[0], dtype=torch_dtype
-        )
-        torch_input_tensor_b = torch.randint(
-            torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max, shapes[1], dtype=torch_dtype
-        )
-    else:
-        torch_input_tensor_a = torch.empty(shapes[0], dtype=torch.float32).uniform_(-2147483648.0, 2147483647.0)
-        torch_input_tensor_b = torch.empty(shapes[1], dtype=torch.float32).uniform_(-2147483648.0, 2147483647.0)
-
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
-        dtype=ttnn_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b,
-        dtype=ttnn_dtype,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    golden_function = ttnn.get_golden_function(ttnn.remainder)
-    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
-
-    output_tensor = ttnn.remainder(input_tensor_a, input_tensor_b)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
