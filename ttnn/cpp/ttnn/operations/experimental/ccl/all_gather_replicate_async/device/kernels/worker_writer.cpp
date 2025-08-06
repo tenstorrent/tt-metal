@@ -17,6 +17,7 @@ FORCE_INLINE void advance_local_read_address_for_fabric_write(
     uint64_t noc0_dest_noc_addr,
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
+    uint32_t num_targets_backward_direction,
     FabricConnectionManager& fabric_connection,
     size_t& l1_read_addr,
     uint32_t payload_size_bytes) {
@@ -38,7 +39,7 @@ FORCE_INLINE void advance_local_read_address_for_fabric_write(
             (uint32_t)pkt_hdr_forward, sizeof(PACKET_HEADER_TYPE));
     }
 
-    if (fabric_connection.has_backward_connection()) {
+    if (num_targets_backward_direction > 0 && fabric_connection.has_backward_connection()) {
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
         RECORD_FABRIC_HEADER(pkt_hdr_backward);
         fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
@@ -165,6 +166,7 @@ void kernel_main() {
             noc0_dest_noc_addr,
             pkt_hdr_forward,
             pkt_hdr_backward,
+            num_targets_backward_direction,
             fabric_connection,
             l1_read_addr,
             num_tiles_to_read_this_core * tensor0_page_size);
@@ -201,7 +203,7 @@ void kernel_main() {
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
     // Write the mcast packet (backward)
-    if (fabric_connection.has_backward_connection()) {
+    if (num_targets_backward_direction > 0 && fabric_connection.has_backward_connection()) {
         pkt_hdr->to_chip_multicast(
             tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_backward)});
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
