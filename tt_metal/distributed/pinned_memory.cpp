@@ -12,8 +12,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <context/metal_context.hpp>
-#include <tt_metal/third_party/umd/device/chip_helpers/sysmem_manager.h>
-#include <tt_metal/third_party/umd/device/chip_helpers/sysmem_buffer.h>
+#include <umd/device/chip_helpers/sysmem_manager.h>
+#include <umd/device/chip_helpers/sysmem_buffer.h>
 
 namespace tt::tt_metal {
 
@@ -39,7 +39,6 @@ PinnedMemory::PinnedMemory(
 PinnedMemory::~PinnedMemory() {
     // SysmemBuffers will be automatically cleaned up by their destructors
     device_buffers_.clear();
-    device_managers_.clear();
 }
 
 PinnedMemory::PinnedMemory(PinnedMemory&& other) noexcept
@@ -47,8 +46,7 @@ PinnedMemory::PinnedMemory(PinnedMemory&& other) noexcept
     , map_to_noc_(other.map_to_noc_)
     , owns_host_memory_(other.owns_host_memory_)
     , host_memory_base_(other.host_memory_base_)
-    , device_buffers_(std::move(other.device_buffers_))
-    , device_managers_(std::move(other.device_managers_)) {
+    , device_buffers_(std::move(other.device_buffers_)) {
     
     // Reset the other object
     other.buffer_size_ = 0;
@@ -61,7 +59,6 @@ PinnedMemory& PinnedMemory::operator=(PinnedMemory&& other) noexcept {
     if (this != &other) {
         // Clean up current resources
         device_buffers_.clear();
-        device_managers_.clear();
         
         // Move from other
         buffer_size_ = other.buffer_size_;
@@ -69,7 +66,6 @@ PinnedMemory& PinnedMemory::operator=(PinnedMemory&& other) noexcept {
         owns_host_memory_ = other.owns_host_memory_;
         host_memory_base_ = other.host_memory_base_;
         device_buffers_ = std::move(other.device_buffers_);
-        device_managers_ = std::move(other.device_managers_);
         
         // Reset the other object
         other.buffer_size_ = 0;
@@ -101,24 +97,16 @@ void PinnedMemory::initialize_from_devices(
     for (IDevice* device : devices) {
         chip_id_t device_id = device->id();
         
-        // Get the SysmemManager for this device
-        tt::umd::SysmemManager* sysmem_manager = cluster.get_chip(device_id)->get_sysmem_manager();
-        if (!sysmem_manager) {
-            throw std::runtime_error("Failed to get SysmemManager for device " + std::to_string(device_id));
-        }
-        
-        device_managers_[device_id] = sysmem_manager;
-        
-        // Create SysmemBuffer for this device
+        // Use the new cluster API methods to access SysmemManager functionality
         std::unique_ptr<tt::umd::SysmemBuffer> buffer;
         
         if (host_buffer) {
             // Map existing host memory
             void* device_buffer_ptr = static_cast<char*>(host_buffer) + device_offset;
-            buffer = sysmem_manager->map_sysmem_buffer(device_buffer_ptr, buffer_size, map_to_noc);
+            buffer = cluster.map_sysmem_buffer(device_id, device_buffer_ptr, buffer_size, map_to_noc);
         } else {
             // Allocate new memory
-            buffer = sysmem_manager->allocate_sysmem_buffer(buffer_size, map_to_noc);
+            buffer = cluster.allocate_sysmem_buffer(device_id, buffer_size, map_to_noc);
         }
         
         if (!buffer) {
@@ -131,7 +119,7 @@ void PinnedMemory::initialize_from_devices(
     
     // If we allocated our own memory, store the base pointer from the first buffer
     if (!host_buffer && !device_buffers_.empty()) {
-        host_memory_base_ = device_buffers_.begin()->second->host_addr();
+        host_memory_base_ = device_buffers_.begin()->second->get_buffer_va();
     }
 }
 
@@ -152,15 +140,15 @@ const tt::umd::SysmemBuffer& PinnedMemory::get_buffer(chip_id_t device_id) const
 }
 
 void* PinnedMemory::get_host_ptr(chip_id_t device_id) {
-    return get_buffer(device_id).host_addr();
+    return get_buffer(device_id).get_buffer_va();
 }
 
 const void* PinnedMemory::get_host_ptr(chip_id_t device_id) const {
-    return get_buffer(device_id).host_addr();
+    return get_buffer(device_id).get_buffer_va();
 }
 
 uint64_t PinnedMemory::get_device_addr(chip_id_t device_id) const {
-    return get_buffer(device_id).device_addr();
+    return get_buffer(device_id).get_device_io_addr();
 }
 
 std::vector<chip_id_t> PinnedMemory::get_device_ids() const {
