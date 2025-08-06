@@ -20,6 +20,7 @@ from .format_arg_mapping import (
     L1BufferLocations,
     MathFidelity,
     MathOperation,
+    StochasticRounding,
     Transpose,
     format_tile_sizes,
 )
@@ -134,6 +135,11 @@ def generate_build_header(
     math_transpose_faces = str(test_config.get("math_transpose_faces", False)).lower()
     header_content.append(
         f"constexpr bool MATH_TRANSPOSE_FACES = {math_transpose_faces};"
+    )
+    # Stochastic Rounding
+    stochastic_rnd = test_config.get("stochastic_rnd", StochasticRounding.No)
+    header_content.append(
+        f"constexpr auto STOCHASTIC_RND = ckernel::{stochastic_rnd.value};"
     )
 
     # Fused Test L1 to L1 : Input of first run is used as input for the second run ...
