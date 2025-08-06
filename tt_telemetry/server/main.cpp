@@ -294,11 +294,18 @@ int main() {
 
     // JSON test
     messages::EndpointDefinitionMessage msg {
-        .endpoints = { { "from", "to" } }
+        .endpoints = { { 200, "from", "to" } }
     };
 
     nlohmann::json j = msg;
     std::cout << "json: " << j << std::endl;;
+
+    messages::EndpointStateChangeMessage msg2 {
+        .endpoints = { { 100, true } }
+    };
+
+    j = msg2;
+    std::cout << "json: " << j << std::endl;
 
     // Web server
     TelemetryServer server;
