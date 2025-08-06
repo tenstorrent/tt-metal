@@ -31,28 +31,28 @@ void kernel_main() {
     const uint32_t Ht = get_arg_val<uint32_t>(12);
     const uint32_t Wt = get_arg_val<uint32_t>(13);
     const uint32_t cND = get_arg_val<uint32_t>(14);  // collapsed dims > 5
-    const uint32_t src_addr_b = get_arg_val<uint32_t>(15);
-    const uint32_t nD_stride_b = get_arg_val<uint32_t>(16);
-    const uint32_t d_stride_b = get_arg_val<uint32_t>(17);
-    const uint32_t n_stride_b = get_arg_val<uint32_t>(18);
-    const uint32_t c_stride_b = get_arg_val<uint32_t>(19);
-    const uint32_t src_num_tiles_b = get_arg_val<uint32_t>(20);
+    const uint32_t true_addr = get_arg_val<uint32_t>(15);
+    const uint32_t true_nD_stride = get_arg_val<uint32_t>(16);
+    const uint32_t true_d_stride = get_arg_val<uint32_t>(17);
+    const uint32_t true_n_stride = get_arg_val<uint32_t>(18);
+    const uint32_t true_c_stride = get_arg_val<uint32_t>(19);
+    const uint32_t true_num_tiles = get_arg_val<uint32_t>(20);
 
-    constexpr auto cb_id_src = tt::CBIndex::c_0;
-    constexpr auto cb_id_src_b = tt::CBIndex::c_1;
-#if !SRC_SHARDED
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const DataFormat src_data_format = get_dataformat(cb_id_src);
-    const InterleavedAddrGenFast<src_is_dram> src = {
-        .bank_base_address = src_addr, .page_size = src_tile_bytes, .data_format = src_data_format};
+    constexpr auto predicate_cb = tt::CBIndex::c_0;
+    constexpr auto true_cb = tt::CBIndex::c_1;
+#if !SRC_SHARDED_PREDICATE
+    constexpr bool predicate_is_dram = get_compile_time_arg_val(0) == 1;
+    const uint32_t predicate_tile_bytes = get_tile_size(predicate_cb);
+    const DataFormat predicate_data_format = get_dataformat(predicate_cb);
+    const InterleavedAddrGenFast<predicate_is_dram> predicate_addr_gen = {
+        .bank_base_address = src_addr, .page_size = predicate_tile_bytes, .data_format = predicate_data_format};
 #endif
-#if !SRC_SHARDED_B
-    constexpr bool src_is_dram_b = get_compile_time_arg_val(2) == 1;
-    const uint32_t src_tile_bytes_b = get_tile_size(cb_id_src_b);
-    const DataFormat src_data_format_b = get_dataformat(cb_id_src_b);
-    const InterleavedAddrGenFast<src_is_dram_b> src_b = {
-        .bank_base_address = src_addr_b, .page_size = src_tile_bytes_b, .data_format = src_data_format_b};
+#if !SRC_SHARDED_TRUE
+    constexpr bool true_is_dram = get_compile_time_arg_val(2) == 1;
+    const uint32_t true_tile_bytes = get_tile_size(true_cb);
+    const DataFormat true_data_format = get_dataformat(true_cb);
+    const InterleavedAddrGenFast<true_is_dram> true_addr_gen = {
+        .bank_base_address = true_addr, .page_size = true_tile_bytes, .data_format = true_data_format};
 #endif
     constexpr uint32_t onetile = 1;
     constexpr bool has_sharding = get_compile_time_arg_val(1) == 1;
@@ -75,7 +75,7 @@ void kernel_main() {
 
     // this is the INPUT tile offset
     uint32_t tile_offset = start_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride;
-#if !SRC_BCAST
+#if !SRC_BCAST_PREDICATE
     tile_offset += start_th * Wt;
 #endif
     uint32_t next_c_shift = c_stride - HtWt;
@@ -83,15 +83,15 @@ void kernel_main() {
     uint32_t next_d_shift = d_stride - n_stride * N;
     uint32_t next_nd_shift = nD_stride - d_stride * D;
 
-    uint32_t tile_offset_b =
-        start_nd * nD_stride_b + start_d * d_stride_b + start_n * n_stride_b + start_c * c_stride_b;
-#if !SRC_BCAST_B
-    tile_offset_b += start_th * Wt;
+    uint32_t true_tile_offset =
+        start_nd * true_nD_stride + start_d * true_d_stride + start_n * true_n_stride + start_c * true_c_stride;
+#if !SRC_BCAST_TRUE
+    true_tile_offset += start_th * Wt;
 #endif
-    uint32_t next_c_shift_b = c_stride_b - HtWt;
-    uint32_t next_n_shift_b = n_stride_b - c_stride_b * C;
-    uint32_t next_d_shift_b = d_stride_b - n_stride_b * N;
-    uint32_t next_nd_shift_b = nD_stride_b - d_stride_b * D;
+    uint32_t true_next_c_shift = true_c_stride - HtWt;
+    uint32_t true_next_n_shift = true_n_stride - true_c_stride * C;
+    uint32_t true_next_d_shift = true_d_stride - true_n_stride * N;
+    uint32_t true_next_nd_shift = true_nD_stride - true_d_stride * D;
 
     // DEBUG: Print main loop info
     DPRINT << "Starting main tile read loop, dst_num_tiles = " << dst_num_tiles << ENDL();
@@ -103,46 +103,46 @@ void kernel_main() {
             for (uint32_t n = start_n; n < N && num_tiles_read < dst_num_tiles; ++n, start_c = 0) {
                 for (uint32_t c = start_c; c < C && num_tiles_read < dst_num_tiles; ++c, start_th = 0) {
                     for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
-#if SRC_BCAST
-                        cb_reserve_back(cb_id_src, onetile);
-#if !SRC_SHARDED
-                        uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
-                        noc_async_read_tile(tile_offset + th, src, l1_write_addr_src);
+#if SRC_BCAST_PREDICATE
+                        cb_reserve_back(predicate_cb, onetile);
+#if !SRC_SHARDED_PREDICATE
+                        uint32_t l1_write_addr_predicate = get_write_ptr(predicate_cb);
+                        noc_async_read_tile(tile_offset + th, predicate_addr_gen, l1_write_addr_predicate);
                         noc_async_read_barrier();
 #endif
-                        FILL_TILE_WITH_FIRST_COLUMN(cb_id_src);
-                        cb_push_back(cb_id_src, onetile);
+                        FILL_TILE_WITH_FIRST_COLUMN(predicate_cb);
+                        cb_push_back(predicate_cb, onetile);
 #endif
-#if SRC_BCAST_B
-                        cb_reserve_back(cb_id_src_b, onetile);
-#if !SRC_SHARDED_B
-                        uint32_t l1_write_addr_src_b = get_write_ptr(cb_id_src_b);
-                        noc_async_read_tile(tile_offset_b + th, src_b, l1_write_addr_src_b);
+#if SRC_BCAST_TRUE
+                        cb_reserve_back(true_cb, onetile);
+#if !SRC_SHARDED_TRUE
+                        uint32_t l1_write_addr_true = get_write_ptr(true_cb);
+                        noc_async_read_tile(true_tile_offset + th, true_addr_gen, l1_write_addr_true);
                         noc_async_read_barrier();
 #endif
-                        FILL_TILE_WITH_FIRST_COLUMN_B(cb_id_src_b);
-                        cb_push_back(cb_id_src_b, onetile);
+                        FILL_TILE_WITH_FIRST_COLUMN_B(true_cb);
+                        cb_push_back(true_cb, onetile);
 #endif
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {
-#if !SRC_BCAST
-                            cb_reserve_back(cb_id_src, onetile);
-#if !SRC_SHARDED
-                            uint32_t l1_write_addr = get_write_ptr(cb_id_src);
-                            noc_async_read_tile(tile_offset + tw, src, l1_write_addr);
+#if !SRC_BCAST_PREDICATE
+                            cb_reserve_back(predicate_cb, onetile);
+#if !SRC_SHARDED_PREDICATE
+                            uint32_t l1_write_addr_predicate = get_write_ptr(predicate_cb);
+                            noc_async_read_tile(tile_offset + tw, predicate_addr_gen, l1_write_addr_predicate);
                             noc_async_read_barrier();
 #endif
-                            cb_push_back(cb_id_src, onetile);
+                            cb_push_back(predicate_cb, onetile);
 #endif
-#if !SRC_BCAST_B
-                            cb_reserve_back(cb_id_src_b, onetile);
-#if !SRC_SHARDED_B
-                            uint32_t l1_write_addr_b = get_write_ptr(cb_id_src_b);
-                            noc_async_read_tile(tile_offset_b + tw, src_b, l1_write_addr_b);
+#if !SRC_BCAST_TRUE
+                            cb_reserve_back(true_cb, onetile);
+#if !SRC_SHARDED_TRUE
+                            uint32_t l1_write_addr_true = get_write_ptr(true_cb);
+                            noc_async_read_tile(true_tile_offset + tw, true_addr_gen, l1_write_addr_true);
                             noc_async_read_barrier();
 #endif
-#if !SRC_SHARDED_B
-                            cb_push_back(cb_id_src_b, onetile);
+#if !SRC_SHARDED_TRUE
+                            cb_push_back(true_cb, onetile);
 #endif
 #endif
                         }
@@ -150,15 +150,15 @@ void kernel_main() {
                             // next row of tiles should start at the first column
                             start_tw = 0;
                         }
-#if !SRC_BCAST && !SRC_SHARDED
+#if !SRC_BCAST_PREDICATE && !SRC_SHARDED_PREDICATE
                         tile_offset += Wt;
 #endif
-#if !SRC_BCAST_B && !SRC_SHARDED_B
-                        tile_offset_b += Wt;
+#if !SRC_BCAST_TRUE && !SRC_SHARDED_TRUE
+                        true_tile_offset += Wt;
 #endif
                     }
-#if !SRC_SHARDED
-#if SRC_BCAST
+#if !SRC_SHARDED_PREDICATE
+#if SRC_BCAST_PREDICATE
                     // same as following logically
                     // tile_offset += HtWt;
                     // tile_offset += next_c_shift;
@@ -167,33 +167,33 @@ void kernel_main() {
                     tile_offset += next_c_shift;
 #endif
 #endif
-#if !SRC_SHARDED_B
-#if SRC_BCAST_B
-                    tile_offset_b += c_stride_b;
+#if !SRC_SHARDED_TRUE
+#if SRC_BCAST_TRUE
+                    true_tile_offset += true_c_stride;
 #else
-                    tile_offset_b += next_c_shift_b;
+                    true_tile_offset += true_next_c_shift;
 #endif
 #endif
                 }
-#if !SRC_SHARDED
+#if !SRC_SHARDED_PREDICATE
                 tile_offset += next_n_shift;
 #endif
-#if !SRC_SHARDED_B
-                tile_offset_b += next_n_shift_b;
+#if !SRC_SHARDED_TRUE
+                true_tile_offset += true_next_n_shift;
 #endif
             }
-#if !SRC_SHARDED
+#if !SRC_SHARDED_PREDICATE
             tile_offset += next_d_shift;
 #endif
-#if !SRC_SHARDED_B
-            tile_offset_b += next_d_shift_b;
+#if !SRC_SHARDED_TRUE
+            true_tile_offset += true_next_d_shift;
 #endif
         }
-#if !SRC_SHARDED
+#if !SRC_SHARDED_PREDICATE
         tile_offset += next_nd_shift;
 #endif
-#if !SRC_SHARDED_B
-        tile_offset_b += next_nd_shift_b;
+#if !SRC_SHARDED_TRUE
+        true_tile_offset += true_next_nd_shift;
 #endif
     }
 }
