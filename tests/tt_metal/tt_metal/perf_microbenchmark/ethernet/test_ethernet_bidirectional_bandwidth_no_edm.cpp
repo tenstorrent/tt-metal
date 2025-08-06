@@ -100,16 +100,6 @@ std::tuple<tt_metal::Program, tt_metal::Program> build(
 
     // Kernel Setup
 
-    auto rt_args = [&](bool send_channels_at_offset_0) -> std::vector<uint32_t> {
-        return std::vector<uint32_t>{
-            static_cast<uint32_t>(tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-                tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED)),
-            static_cast<uint32_t>(num_samples),
-            static_cast<uint32_t>(sample_page_size),
-            static_cast<uint32_t>(max_channels_per_direction),
-            static_cast<uint32_t>(send_channels_at_offset_0)};
-    };
-
     local_kernel = tt_metal::CreateKernel(
         program0,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/ethernet_bidirectional_ubench.cpp",

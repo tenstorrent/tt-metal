@@ -2257,7 +2257,6 @@ int main(int argc, char** argv) {
                 LogTest, "Device {} is not valid. Highest valid device id = {}.", test_device_id_g, num_devices - 1);
             throw std::runtime_error("Invalid Device Id.");
         }
-        int device_id_l = test_device_id_g;
 
         tt_metal::IDevice* device = tt_metal::CreateDevice(test_device_id_g);
         tt_metal::IDevice* device_r = device;

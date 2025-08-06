@@ -483,7 +483,7 @@ bool validation_mixed_df(
     auto num_datums_per_cb = kt * nt * 32 * 32 / num_blocks * cb_num_blocks / num_receivers;
     int start_index = 0;
     int fifo_size = kt * 32 / num_blocks * cb_num_blocks * nt * 32 * 2 / num_receivers;
-    int fifo_size_page_aligned, page_size, num_pages, layer_transfer_size, fifo_wr_ptr = 0;
+    int page_size, layer_transfer_size, fifo_wr_ptr = 0;
     for (int l = 0; l < num_mixed_df_layers; ++l) {
         if (l % 2 == 0) {  // fp16
             page_size = 2048;
@@ -731,7 +731,7 @@ int main(int argc, char** argv) {
         int device_id = 0;
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
-        CoreCoord dram_bank_coord = CoreCoord{0, 0};
+        [[maybe_unused]] CoreCoord dram_bank_coord = CoreCoord{0, 0};
         CoreCoord dram_reader_core_coord = CoreCoord{0, 0};
         CoreRangeSet dram_reader_core{std::set<CoreRange>{CoreRange{dram_reader_core_coord}}};
         CoreRange l1_receiver_core_coord_range = CoreRange(CoreCoord{0, 0});
@@ -909,7 +909,7 @@ int main(int argc, char** argv) {
                 }
             }
             Finish(device->command_queue());
-            for (auto& program : programs) {
+            for ([[maybe_unused]] auto& program : programs) {
                 tt_metal::detail::ReadDeviceProfilerResults(device);
             }
         }

@@ -711,7 +711,7 @@ int main(int argc, char** argv) {
         int device_id = 0;
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
-        CoreCoord dram_bank_coord = CoreCoord{0, 0};
+        [[maybe_unused]] CoreCoord dram_bank_coord = CoreCoord{0, 0};
         CoreCoord dram_reader_core_coord = CoreCoord{0, 0};
         CoreRangeSet dram_reader_core{std::set<CoreRange>{CoreRange{dram_reader_core_coord}}};
         CoreRange l1_receiver_core_coord_range = CoreRange(CoreCoord{0, 0});
@@ -901,7 +901,7 @@ int main(int argc, char** argv) {
                 }
             }
             Finish(device->command_queue());
-            for (auto& program : programs) {
+            for ([[maybe_unused]] auto& program : programs) {
                 tt_metal::detail::ReadDeviceProfilerResults(device);
             }
         }
