@@ -178,12 +178,12 @@ def import_device_profile_log(logPath):
             for core, coreData in deviceData["cores"].items():
                 for risc, riscData in coreData["riscs"].items():
                     riscData["timeseries"].sort(key=lambda x: x[1])
-                    for marker, timestamp, attachedData in riscData["timeseries"]:
+                    for marker, _, _ in riscData["timeseries"]:
                         # ERISC dispatch is EOL, some models still use it. Need to check and drop it here until it is fully removed.
                         if (
                             "CQ-DISPATCH" in marker["zone_name"] or "CQ-PREFETCH" in marker["zone_name"]
                         ) and "ERISC" not in risc:
-                            dispatchCores.add((chipID, core, risc))
+                            dispatchCores.add((chipID, core))
 
     # Sort all timeseries
     sort_timeseries(devicesData)
@@ -343,7 +343,7 @@ def get_dispatch_core_ops(timeseries):
 
 def get_dispatch_core_ops_core_to_device(chipID, deviceData):
     deviceDispatchCores = set()
-    for chip, core, risc in dispatchCores:
+    for chip, core in dispatchCores:
         if chip == chipID:
             deviceDispatchCores.add(core)
 
@@ -358,10 +358,6 @@ def get_dispatch_core_ops_core_to_device(chipID, deviceData):
 
 
 def risc_to_core_timeseries(devicesData, detectOps):
-    dispatchCoresNoRisc = set()
-    for chip, core, risc in dispatchCores:
-        dispatchCoresNoRisc.add((chip, core))
-
     for chipID, deviceData in devicesData["devices"].items():
         for core, coreData in deviceData["cores"].items():
             tmpTimeseries = []
@@ -373,7 +369,7 @@ def risc_to_core_timeseries(devicesData, detectOps):
 
             ops = []
             if detectOps:
-                if (chipID, core) in dispatchCoresNoRisc:
+                if (chipID, core) in dispatchCores:
                     ops = get_dispatch_core_ops(tmpTimeseries)
                 else:
                     ops = get_ops(tmpTimeseries)
