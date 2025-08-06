@@ -39,6 +39,11 @@ struct CorePageStride {
 };
 
 tt::tt_metal::operation::ProgramWithCallbacks reshard_multi_core(
-    const Tensor& input, Tensor& output, Tensor& rt_args_config_0, Tensor& rt_args_config_1);
+    const Tensor& input,
+    Tensor& output,
+    Tensor& rt_args_config_0,
+    Tensor& rt_args_config_1,
+    std::unordered_map<CoreCoord, std::vector<PageStride>> output_core_to_page_range_pair,
+    uint32_t MAX_RT_ARGS_WIDTH);
 
 }  // namespace ttnn::operations::data_movement::detail
