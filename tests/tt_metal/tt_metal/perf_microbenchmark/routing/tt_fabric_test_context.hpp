@@ -198,11 +198,20 @@ public:
                         auto dst_node_ids = this->fixture_->get_dst_node_ids_from_hops(
                             sync_sender.device, single_direction_hops, sync_traffic_parameters.chip_send_type);
 
+                        // for 2d, we need to spcify the mcast start node id
+                        std::optional<FabricNodeId> mcast_start_node_id = std::nullopt;
+                        if (fixture_->is_2d_fabric() &&
+                            sync_traffic_parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
+                            mcast_start_node_id =
+                                fixture_->get_mcast_start_node_id(sync_sender.device, single_direction_hops);
+                        }
+
                         TestTrafficSenderConfig sync_config = {
                             .parameters = sync_traffic_parameters,
                             .src_node_id = sync_sender.device,
                             .dst_node_ids = dst_node_ids,   // Empty for multicast sync
                             .hops = single_direction_hops,  // Use already single-direction hops
+                            .mcast_start_node_id = mcast_start_node_id,
                             .dst_logical_core = dummy_dst_core,
                             .target_address = sync_address,
                             .atomic_inc_address = sync_address,
@@ -542,6 +551,13 @@ private:
             }
         }
 
+        // for 2d, we need to spcify the mcast start node id
+        // TODO: in future, we should be able to specify the mcast start node id in the traffic config
+        std::optional<FabricNodeId> mcast_start_node_id = std::nullopt;
+        if (fixture_->is_2d_fabric() && traffic_config.parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
+            mcast_start_node_id = fixture_->get_mcast_start_node_id(src_node_id, hops.value());
+        }
+
         uint32_t dst_noc_encoding = this->fixture_->get_worker_noc_encoding(dst_logical_core);
         uint32_t sender_id = fixture_->get_worker_id(traffic_config.src_node_id, src_logical_core);
 
@@ -553,6 +569,7 @@ private:
             .src_node_id = traffic_config.src_node_id,
             .dst_node_ids = dst_node_ids,
             .hops = hops,
+            .mcast_start_node_id = mcast_start_node_id,
             .dst_logical_core = dst_logical_core,
             .target_address = target_address,
             .atomic_inc_address = atomic_inc_address,

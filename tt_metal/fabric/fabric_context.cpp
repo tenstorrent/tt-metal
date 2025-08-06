@@ -66,6 +66,13 @@ bool FabricContext::is_2D_topology(tt::tt_fabric::Topology topology) {
     return topology == tt::tt_fabric::Topology::Mesh || topology == tt::tt_fabric::Topology::Torus;
 }
 
+bool FabricContext::is_dynamic_routing_config(tt::tt_fabric::FabricConfig fabric_config) {
+    return fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y ||
+           fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY;
+}
+
 size_t FabricContext::get_packet_header_size_bytes() const {
     if (this->is_2D_routing_enabled()) {
         return (this->is_dynamic_routing_enabled()) ? sizeof(tt::tt_fabric::MeshPacketHeader)
@@ -174,12 +181,7 @@ tt::tt_fabric::Topology FabricContext::get_fabric_topology() const { return this
 
 bool FabricContext::is_2D_routing_enabled() const { return is_2D_topology(topology_); }
 
-bool FabricContext::is_dynamic_routing_enabled() const {
-    return fabric_config_ == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC ||
-           fabric_config_ == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X ||
-           fabric_config_ == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y ||
-           fabric_config_ == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY;
-}
+bool FabricContext::is_dynamic_routing_enabled() const { return is_dynamic_routing_config(fabric_config_); }
 
 bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions direction) const {
     if (topology_ == Topology::Ring) {

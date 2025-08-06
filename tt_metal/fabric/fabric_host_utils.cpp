@@ -141,7 +141,7 @@ void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_conf
         mode |= (ROUTING_MODE_2D | ROUTING_MODE_TORUS);
     }
 
-    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
+    if (tt::tt_fabric::FabricContext::is_dynamic_routing_config(fabric_config)) {
         mode |= ROUTING_MODE_DYNAMIC;
     } else {
         mode |= ROUTING_MODE_LOW_LATENCY;

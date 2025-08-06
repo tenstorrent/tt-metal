@@ -268,6 +268,7 @@ struct TestTrafficSenderConfig {
     FabricNodeId src_node_id;
     std::vector<FabricNodeId> dst_node_ids;
     std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
+    std::optional<FabricNodeId> mcast_start_node_id;
     CoreCoord dst_logical_core;
     size_t target_address;
     std::optional<size_t> atomic_inc_address;
@@ -319,12 +320,18 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
             args.insert(args.end(), unicast_args.begin(), unicast_args.end());
         } else if (this->parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
             TT_FATAL(!this->dst_node_ids.empty(), "2D multicast should have at least one destination node.");
-            const auto& dst_rep_node_id = this->dst_node_ids[0];  // Representative destination
+
+            const auto& dst_node_id =
+                this->mcast_start_node_id.value_or(this->dst_node_ids[0]);  // Representative destination
             auto adjusted_hops = *(this->hops);
+
+            log_info(
+                tt::LogTest, "hops: {}, src node id: {}, start node id: {}", *(this->hops), src_node_id, dst_node_id);
 
             // Handle dynamic routing by adjusting hops
             bool is_dynamic_routing = (this->parameters.routing_type == RoutingType::Dynamic);
             if (is_dynamic_routing) {
+                log_info(tt::LogTest, "dynamic routing enabled");
                 auto north_hops = hops->count(RoutingDirection::N) > 0 ? hops->at(RoutingDirection::N) : 0;
                 auto south_hops = hops->count(RoutingDirection::S) > 0 ? hops->at(RoutingDirection::S) : 0;
                 auto east_hops = hops->count(RoutingDirection::E) > 0 ? hops->at(RoutingDirection::E) : 0;
@@ -344,11 +351,12 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
                 if (north_hops == 0 && south_hops == 0 && west_hops > 0) {
                     adjusted_hops[RoutingDirection::W] -= 1;
                 }
+
+                log_info(tt::LogTest, "original hops: {}, adjusted hops: {}", *(this->hops), adjusted_hops);
             }
 
             // chip_id and mesh_id is unused for low latency 2d mesh mcast
-            const auto mcast_fields =
-                ChipMulticastFields2D(dst_rep_node_id.chip_id, *dst_rep_node_id.mesh_id, adjusted_hops);
+            const auto mcast_fields = ChipMulticastFields2D(dst_node_id.chip_id, *dst_node_id.mesh_id, adjusted_hops);
             const auto mcast_args = mcast_fields.get_args();
             args.insert(args.end(), mcast_args.begin(), mcast_args.end());
         } else {

@@ -101,7 +101,8 @@ public:
         const std::unordered_map<RoutingDirection, uint32_t>& hops) const = 0;
     virtual std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         const FabricNodeId& src_node_id, const RoutingDirection& direction) const = 0;
-
+    virtual FabricNodeId get_mcast_start_node_id(
+        const FabricNodeId& src_node_id, const std::unordered_map<RoutingDirection, uint32_t>& hops) const = 0;
     virtual std::pair<std::unordered_map<RoutingDirection, uint32_t>, uint32_t> get_sync_hops_and_val(
         const FabricNodeId& src_device, const std::vector<FabricNodeId>& devices) const = 0;
     virtual std::vector<uint32_t> get_forwarding_link_indices_in_direction(

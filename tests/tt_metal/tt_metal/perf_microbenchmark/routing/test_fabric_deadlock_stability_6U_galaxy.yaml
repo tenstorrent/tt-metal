@@ -3,249 +3,569 @@ allocation_policies:
       max_configs_per_core: 1
 
 Tests:
-# # ================================================
-# # 1D Ring (low latency)
-# # ================================================
-#   - name: "LinearMcastEast"
-#     sync: true
-
-#     fabric_setup:
-#       topology: Ring
-
-#     defaults:
-#       ftype: mcast
-#       ntype: unicast_write
-#       size: 512
-#       num_packets: 5000
-#       destination:
-#         hops:
-#           E: 3
-
-#     patterns:
-#       - type: all_devices_uniform_pattern
-#         iterations: 5
-
-#   - name: "LinearMcastWest"
-#     sync: true
-
-#     fabric_setup:
-#       topology: Ring
-
-#     defaults:
-#       ftype: mcast
-#       ntype: unicast_write
-#       size: 512
-#       num_packets: 5000
-#       destination:
-#         hops:
-#           W: 3
-
-#     patterns:
-#       - type: all_devices_uniform_pattern
-#         iterations: 5
-
-#   - name: "LinearMcastNorth"
-#     sync: true
-
-#     fabric_setup:
-#       topology: Ring
-
-#     defaults:
-#       ftype: mcast
-#       ntype: unicast_write
-#       size: 512
-#       num_packets: 5000
-#       destination:
-#         hops:
-#           N: 7
-
-#     patterns:
-#       - type: all_devices_uniform_pattern
-#         iterations: 5
-
-#   - name: "LinearMcastSouth"
-#     sync: true
-
-#     fabric_setup:
-#       topology: Ring
-
-#     defaults:
-#       ftype: mcast
-#       ntype: unicast_write
-#       size: 512
-#       num_packets: 5000
-#       destination:
-#         hops:
-#           S: 7
-
-#     patterns:
-#       - type: all_devices_uniform_pattern
-#         iterations: 5
-
 # ================================================
-# 2D (low latency) - remove (only for debug)
+# 1D Ring (low latency)
 # ================================================
-  - name: "2DLowLatencyMcastEast"
+  - name: "LinearMcastEast"
+    sync: true
 
     fabric_setup:
-      topology: Mesh
+      topology: Ring
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          E: 3
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
+
+  - name: "LinearMcastWest"
+    sync: true
+
+    fabric_setup:
+      topology: Ring
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          W: 3
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
+
+  - name: "LinearMcastNorth"
+    sync: true
+
+    fabric_setup:
+      topology: Ring
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          N: 7
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
+
+  - name: "LinearMcastSouth"
+    sync: true
+
+    fabric_setup:
+      topology: Ring
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          S: 7
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
+
+# ================================================
+# 2D Torus (XY) (low latency)
+# ================================================
+  - name: "TorusXYLowLatencyMcastEast"
+    sync: true
+
+    fabric_setup:
+      topology: Torus
+      torus_config: "XY"
+      routing_type: LowLatency
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          E: 3
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
+
+  - name: "TorusXYLowLatencyMcastWest"
+    sync: true
+
+    fabric_setup:
+      topology: Torus
+      torus_config: "XY"
+      routing_type: LowLatency
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          W: 3
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
+
+  - name: "TorusXYLowLatencyMcastNorth"
+    sync: true
+
+    fabric_setup:
+      topology: Torus
+      torus_config: "XY"
+      routing_type: LowLatency
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          N: 7
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
+
+  - name: "TorusXYLowLatencyMcastSouth"
+    sync: true
+
+    fabric_setup:
+      topology: Torus
+      torus_config: "XY"
+      routing_type: LowLatency
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          S: 7
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
+
+  - name: "TorusXYLowLatencyMcastNorthEast"
+    sync: true
+
+    fabric_setup:
+      topology: Torus
+      torus_config: "XY"
+      routing_type: LowLatency
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          N: 7
+          E: 2
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
+
+  - name: "TorusXYLowLatencyMcastNorthWest"
+    sync: true
+
+    fabric_setup:
+      topology: Torus
+      torus_config: "XY"
+      routing_type: LowLatency
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          N: 7
+          W: 2
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
+
+  - name: "TorusXYLowLatencyMcastSouthEast"
+    sync: true
+
+    fabric_setup:
+      topology: Torus
+      torus_config: "XY"
       routing_type: "LowLatency"
 
     defaults:
-      ftype: unicast
+      ftype: mcast
       ntype: unicast_write
       size: 512
-      num_packets: 100
+      num_packets: 5000
+      destination:
+        hops:
+          S: 7
+          E: 2
 
     patterns:
-      - type: all_to_all
-        iterations: 1
+      - type: all_devices_uniform_pattern
+        iterations: 5
 
-
-# ================================================
-# 2D (low latency) - remove (only for debug)
-# ================================================
-  - name: "2DTorusDebug"
+  - name: "TorusXYLowLatencyMcastSouthWest"
+    sync: true
 
     fabric_setup:
       topology: Torus
       torus_config: "XY"
-      routing_type: "LowLatency"
+      routing_type: LowLatency
 
-    senders:
-      - device: [0, 1]
-        patterns:
-          - ftype: unicast
-            ntype: unicast_write
-            size: 512
-            num_packets: 100
-            destination:
-              device: [0, 2]
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          S: 7
+          W: 2
 
-  - name: "2DTorusDebugMcast"
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
+
+  - name: "TorusXYLowLatencyMcastAllDirs"
+    sync: true
 
     fabric_setup:
       topology: Torus
       torus_config: "XY"
-      routing_type: "LowLatency"
+      routing_type: LowLatency
 
-    senders:
-      - device: [0, 1]
-        patterns:
-          - ftype: mcast
-            ntype: unicast_write
-            size: 512
-            num_packets: 100
-            destination:
-              hops:
-                S: 1
-                E: 1
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          N: 3
+          S: 4
+          E: 1
+          W: 2
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
 
 # ================================================
-# 2D Torus (low latency)
+# 2D Torus (XY) (dynamic routing)
 # ================================================
-  # - name: "TorusXYLowLatencyMcastEast"
-  #   #sync: true
+  - name: "TorusXYDynamicMcastEast"
+    sync: true
 
-  #   fabric_setup:
-  #     topology: Torus
-  #     torus_config: "XY"
-  #     routing_type: "LowLatency"
+    fabric_setup:
+      topology: Torus
+      torus_config: "XY"
+      routing_type: Dynamic
 
-  #   defaults:
-  #     ftype: mcast
-  #     ntype: unicast_write
-  #     size: 512
-  #     num_packets: 5000
-  #     destination:
-  #       hops:
-  #         E: 3
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          E: 3
 
-  #   patterns:
-  #     - type: all_devices_uniform_pattern
-  #       iterations: 5
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
 
-  # - name: "TorusXYLowLatencyMcastWest"
-  #   #sync: true
+  - name: "TorusXYDynamicMcastWest"
+    sync: true
 
-  #   fabric_setup:
-  #     topology: Torus
-  #     torus_config: "XY"
-  #     routing_type: "LowLatency"
+    fabric_setup:
+      topology: Torus
+      torus_config: "XY"
+      routing_type: Dynamic
 
-  #   defaults:
-  #     ftype: mcast
-  #     ntype: unicast_write
-  #     size: 512
-  #     num_packets: 5000
-  #     destination:
-  #       hops:
-  #         W: 3
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          W: 3
 
-  #   patterns:
-  #     - type: all_devices_uniform_pattern
-  #       iterations: 5
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
 
-  # - name: "TorusXYLowLatencyMcastNorth"
-  #   #sync: true
+  - name: "TorusXYDynamicMcastNorth"
+    sync: true
 
-  #   fabric_setup:
-  #     topology: Torus
-  #     torus_config: "XY"
-  #     routing_type: "LowLatency"
+    fabric_setup:
+      topology: Torus
+      torus_config: "XY"
+      routing_type: Dynamic
 
-  #   defaults:
-  #     ftype: mcast
-  #     ntype: unicast_write
-  #     size: 512
-  #     num_packets: 5000
-  #     destination:
-  #       hops:
-  #         N: 7
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          N: 7
 
-  #   patterns:
-  #     - type: all_devices_uniform_pattern
-  #       iterations: 5
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
 
-  # - name: "TorusXYLowLatencyMcastSouth"
-  #   #sync: true
+  - name: "TorusXYDynamicMcastSouth"
+    sync: true
 
-  #   fabric_setup:
-  #     topology: Torus
-  #     torus_config: "XY"
-  #     routing_type: "LowLatency"
+    fabric_setup:
+      topology: Torus
+      torus_config: "XY"
+      routing_type: Dynamic
 
-  #   defaults:
-  #     ftype: mcast
-  #     ntype: unicast_write
-  #     size: 512
-  #     num_packets: 5000
-  #     destination:
-  #       hops:
-  #         S: 7
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          S: 7
 
-  #   patterns:
-  #     - type: all_devices_uniform_pattern
-  #       iterations: 5
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
 
-  # - name: "TorusXYLowLatencyMcastNorthEast"
-  #   #sync: true
+  - name: "TorusXYDynamicMcastNorthEast"
+    sync: true
 
-  #   fabric_setup:
-  #     topology: Torus
-  #     torus_config: "XY"
-  #     routing_type: "LowLatency"
+    fabric_setup:
+      topology: Torus
+      torus_config: "XY"
+      routing_type: Dynamic
 
-  #   defaults:
-  #     ftype: mcast
-  #     ntype: unicast_write
-  #     size: 512
-  #     num_packets: 5000
-  #     destination:
-  #       hops:
-  #         N: 7
-  #         E: 2
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          N: 7
+          E: 2
 
-  #   patterns:
-  #     - type: all_devices_uniform_pattern
-  #       iterations: 5
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
+
+  - name: "TorusXYDynamicMcastNorthWest"
+    sync: true
+
+    fabric_setup:
+      topology: Torus
+      torus_config: "XY"
+      routing_type: Dynamic
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          N: 7
+          W: 2
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
+
+  - name: "TorusXYDynamicMcastSouthEast"
+    sync: true
+
+    fabric_setup:
+      topology: Torus
+      torus_config: "XY"
+      routing_type: Dynamic
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          S: 7
+          E: 2
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
+
+  - name: "TorusXYDynamicMcastSouthWest"
+    sync: true
+
+    fabric_setup:
+      topology: Torus
+      torus_config: "XY"
+      routing_type: Dynamic
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          S: 7
+          W: 2
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
+
+  - name: "TorusXYDynamicMcastAllDirs"
+    sync: true
+
+    fabric_setup:
+      topology: Torus
+      torus_config: "XY"
+      routing_type: Dynamic
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          N: 3
+          S: 4
+          E: 1
+          W: 2
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
+
+# ================================================
+# 2D Torus (X) (low latency)
+# ================================================
+  - name: "TorusXLowLatencyMcastEast"
+    sync: true
+
+    fabric_setup:
+      topology: Torus
+      torus_config: X
+      routing_type: LowLatency
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          E: 3
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
+
+  - name: "TorusXLowLatencyMcastWest"
+    sync: true
+
+    fabric_setup:
+      topology: Torus
+      torus_config: X
+      routing_type: LowLatency
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          W: 3
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
+
+# ================================================
+# 2D Torus (Y) (low latency)
+# ================================================
+  - name: "TorusYLowLatencyMcastNorth"
+    sync: true
+
+    fabric_setup:
+      topology: Torus
+      torus_config: Y
+      routing_type: LowLatency
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          N: 7
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5
+
+  - name: "TorusYLowLatencyMcastSouth"
+    sync: true
+
+    fabric_setup:
+      topology: Torus
+      torus_config: Y
+      routing_type: LowLatency
+
+    defaults:
+      ftype: mcast
+      ntype: unicast_write
+      size: 512
+      num_packets: 5000
+      destination:
+        hops:
+          S: 7
+
+    patterns:
+      - type: all_devices_uniform_pattern
+        iterations: 5

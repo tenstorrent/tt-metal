@@ -1064,7 +1064,7 @@ private:
             resolve_missing_params(iteration_test);
 
             // After expansion and resolution, apply universal transformations like mcast splitting.
-            split_all_unnicast_or_multicast_patterns(iteration_test);
+            split_all_unicast_or_multicast_patterns(iteration_test);
 
             // Convert to resolved TestConfig
             TestConfig resolved_test = resolve_test_config(iteration_test);
@@ -1594,7 +1594,7 @@ private:
         }
     }
 
-    void split_all_unnicast_or_multicast_patterns(ParsedTestConfig& test) {
+    void split_all_unicast_or_multicast_patterns(ParsedTestConfig& test) {
         // This function iterates through all sender patterns and splits any multi-direction
         // multicast hops.
         for (auto& sender : test.senders) {

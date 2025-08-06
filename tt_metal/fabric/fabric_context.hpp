@@ -28,6 +28,7 @@ public:
     static tt::tt_fabric::Topology get_topology_from_config(tt::tt_fabric::FabricConfig fabric_config);
 
     static bool is_2D_topology(tt::tt_fabric::Topology topology);
+    static bool is_dynamic_routing_config(tt::tt_fabric::FabricConfig fabric_config);
 
     tt::tt_fabric::Topology get_fabric_topology() const;
     bool is_2D_routing_enabled() const;

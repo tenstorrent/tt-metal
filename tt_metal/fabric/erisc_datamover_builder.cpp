@@ -140,6 +140,11 @@ static uint32_t get_vc0_downstream_edm_count(const bool is_2D_routing) {
                          : FabricEriscDatamoverConfig::num_downstream_edms_vc0;
 }
 
+static size_t get_dateline_sender_channel_skip_idx(const bool is_2D_routing) {
+    return is_2D_routing ? FabricEriscDatamoverConfig::dateline_sender_channel_skip_idx_2d
+                         : FabricEriscDatamoverConfig::dateline_sender_channel_skip_idx;
+}
+
 FabricRiscConfig::FabricRiscConfig(uint32_t risc_id) :
     noc_(risc_id == 0 ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1),
     enable_handshake_(true),
@@ -540,7 +545,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
                 // set num_sender_buffer_slots
                 fill_sender_buffer_slots(
                     num_sender_buffer_slots,
-                    this->dateline_sender_channel_skip_idx,
+                    get_dateline_sender_channel_skip_idx(true /* is_2D_routing */),
                     default_num_sender_buffer_slots,
                     dateline_num_sender_buffer_slots);
                 // set remote sender buffer slots equal to local sender, since remote is also dateline
@@ -762,7 +767,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     log_trace(tt::LogOp, "Available channel buffering space: {}", this->available_channel_buffering_space);
 
     auto skip_current_sender_channel = [&](uint32_t idx) -> bool {
-        return (idx == this->dateline_sender_channel_skip_idx && is_dateline) ||
+        return (idx == get_dateline_sender_channel_skip_idx(is_2D_routing) && is_dateline) ||
                (idx == this->dateline_upstream_sender_channel_skip_idx && is_dateline_upstream) ||
                (idx == this->dateline_upstream_adjcent_sender_channel_skip_idx && is_dateline_upstream_adj_dev);
     };

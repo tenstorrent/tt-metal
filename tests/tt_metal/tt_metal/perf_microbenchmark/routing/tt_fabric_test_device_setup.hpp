@@ -245,6 +245,12 @@ inline void TestSender::add_config(TestTrafficSenderConfig config) {
         outgoing_direction = this->test_device_ptr_->get_forwarding_direction(config.hops.value());
         outgoing_link_indices =
             this->test_device_ptr_->get_forwarding_link_indices_in_direction(outgoing_direction.value());
+        log_info(
+            tt::LogTest,
+            "hops: {}, outgoing dir: {}, outgoing links: {}",
+            config.hops.value(),
+            outgoing_direction,
+            outgoing_link_indices);
     } else {
         const auto dst_node_id = config.dst_node_ids[0];
         const auto src_node_id = this->test_device_ptr_->get_node_id();
