@@ -76,7 +76,7 @@ jobs:
               - models/experimental/swin_s/tests/perf/
               - models/experimental/yolov5x/tests/perf/
               - models/experimental/vovnet/tests/perf/
-              - models/experimental/yolov12x/tests/perf/
+              - models/demos/yolov12x/tests/perf/
               - models/demos/ufld_v2/tests/perf/
               - models/experimental/efficientnetb0/tests/perf/
 
