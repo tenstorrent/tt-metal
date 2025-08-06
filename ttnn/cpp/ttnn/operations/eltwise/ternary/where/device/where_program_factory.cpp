@@ -78,6 +78,7 @@ void set_or_update_runtime_arguments(
         // Declare variables for TTT column broadcast case that will be used by both reader and writer
         uint32_t aD = 1, aN = 1, aC = 1, aHt = 1, aWt = 1, aND = 1;
         uint32_t bD = 1, bN = 1, bC = 1, bHt = 1, bWt = 1, bND = 1, b_num_tiles = 0;  // Initialize to 0 like binary_ng
+        uint32_t fD = 1, fN = 1, fC = 1, fHt = 1, fWt = 1, fND = 1, f_num_tiles = 0;  // false tensor vars
         uint32_t cD = 1, cN = 1, cC = 1, cHt = 1, cWt = 1, cND = 1,
                  c_current_shard_width = 0;  // Initialize to 0 like binary_ng
         uint32_t a_num_tiles = 0;            // Initialize to 0 like binary_ng
@@ -88,6 +89,7 @@ void set_or_update_runtime_arguments(
             // For TTT column broadcast, calculate has_sharding
             has_sharding = predicate_tensor.memory_config().is_sharded() ||
                            value_true_tensor.value().memory_config().is_sharded() ||
+                           value_false_tensor.value().memory_config().is_sharded() ||
                            output.memory_config().is_sharded();
         }
 
@@ -97,11 +99,13 @@ void set_or_update_runtime_arguments(
             const auto out_rank = output.logical_shape().rank();
             aND = 1;  // predicate nD (simplified for now)
             bND = 1;  // value_true nD (simplified for now)
+            fND = 1;  // value_false nD (simplified for now)
             cND = 1;  // output nD (simplified for now)
 
             // Extract shape dimensions using binary_ng approach
             const auto predicate_shape = predicate_tensor.padded_shape();
             const auto value_true_shape = value_true_tensor.value().padded_shape();
+            const auto value_false_shape = value_false_tensor.value().padded_shape();
             const auto output_shape = output.padded_shape();
             const auto& tile = output.tensor_spec().tile();
 
@@ -119,6 +123,13 @@ void set_or_update_runtime_arguments(
             bHt = value_true_shape[-2] / tile.get_height();
             bWt = value_true_shape[-1] / tile.get_width();
 
+            // Get shape dims for value_false (f) - using actual false tensor shape
+            fD = value_false_shape.rank() >= 5 ? value_false_shape[-5] : 1;
+            fN = value_false_shape[-4];
+            fC = value_false_shape[-3];
+            fHt = value_false_shape[-2] / tile.get_height();
+            fWt = value_false_shape[-1] / tile.get_width();
+
             // Get shape dims for output (c)
             cD = output_shape.rank() >= 5 ? output_shape[-5] : 1;
             cN = output_shape[-4];
@@ -131,9 +142,10 @@ void set_or_update_runtime_arguments(
             if (has_sharding) {
                 a_num_tiles = aHt * aWt;  // predicate tiles per core
                 b_num_tiles = bHt * bWt;  // value_true tiles per core
+                f_num_tiles = fHt * fWt;  // value_false tiles per core
                 c_current_shard_width = cWt;
             }
-            // If not sharded, a_num_tiles, b_num_tiles, c_current_shard_width remain 0 (like binary_ng)
+            // If not sharded, a_num_tiles, b_num_tiles, f_num_tiles, c_current_shard_width remain 0 (like binary_ng)
         }
 
         // Set reader runtime arguments based on variant
@@ -171,33 +183,33 @@ void set_or_update_runtime_arguments(
             // Use extended reader_runtime_args format for 3 tensors
             // Note: Added complete false tensor args (addr + strides + num_tiles) as args 21-26
             std::array<uint32_t, 27> reader_runtime_args = {
-                predicate_tensor.buffer()->address(),           // 0: a.buffer()->address()
-                c_start_id,                                     // 1: c_start_id
-                a_num_tiles,                                    // 2: a_num_tiles
-                num_tiles_per_core,                             // 3: c_num_tiles
-                c_current_shard_width,                          // 4: c_current_shard_width
-                aHt * aWt * aC * aN * aD * (aND > 1),           // 5: a stride calculations
-                aHt * aWt * aC * aN * (aD > 1),                 // 6
-                aHt * aWt * aC * (aN > 1),                      // 7
-                aHt * aWt * (aC > 1),                           // 8
-                cD,                                             // 9
-                cN,                                             // 10
-                cC,                                             // 11
-                cHt,                                            // 12
-                cWt,                                            // 13
-                cND,                                            // 14
-                value_true_tensor.value().buffer()->address(),  // 15: true_addr
-                bHt * bWt * bC * bN * bD * (bND > 1),           // 16: true stride calculations
-                bHt * bWt * bC * bN * (bD > 1),                 // 17
-                bHt * bWt * bC * (bN > 1),                      // 18
-                bHt * bWt * (bC > 1),                           // 19
-                b_num_tiles,                                    // 20: true_num_tiles
-                value_true_tensor.value().buffer()->address(),  // 21: false_addr (using same as true for now)
-                bHt * bWt * bC * bN * bD * (bND > 1),           // 22: false stride calculations (same as true for now)
-                bHt * bWt * bC * bN * (bD > 1),                 // 23
-                bHt * bWt * bC * (bN > 1),                      // 24
-                bHt * bWt * (bC > 1),                           // 25
-                b_num_tiles,                                    // 26: false_num_tiles (same as true for now)
+                predicate_tensor.buffer()->address(),            // 0: a.buffer()->address()
+                c_start_id,                                      // 1: c_start_id
+                a_num_tiles,                                     // 2: a_num_tiles
+                num_tiles_per_core,                              // 3: c_num_tiles
+                c_current_shard_width,                           // 4: c_current_shard_width
+                aHt * aWt * aC * aN * aD * (aND > 1),            // 5: a stride calculations
+                aHt * aWt * aC * aN * (aD > 1),                  // 6
+                aHt * aWt * aC * (aN > 1),                       // 7
+                aHt * aWt * (aC > 1),                            // 8
+                cD,                                              // 9
+                cN,                                              // 10
+                cC,                                              // 11
+                cHt,                                             // 12
+                cWt,                                             // 13
+                cND,                                             // 14
+                value_true_tensor.value().buffer()->address(),   // 15: true_addr
+                bHt * bWt * bC * bN * bD * (bND > 1),            // 16: true stride calculations
+                bHt * bWt * bC * bN * (bD > 1),                  // 17
+                bHt * bWt * bC * (bN > 1),                       // 18
+                bHt * bWt * (bC > 1),                            // 19
+                b_num_tiles,                                     // 20: true_num_tiles
+                value_false_tensor.value().buffer()->address(),  // 21: false_addr (using actual false tensor)
+                fHt * fWt * fC * fN * fD * (fND > 1),            // 22: false stride calculations
+                fHt * fWt * fC * fN * (fD > 1),                  // 23
+                fHt * fWt * fC * (fN > 1),                       // 24
+                fHt * fWt * (fC > 1),                            // 25
+                f_num_tiles,                                     // 26: false_num_tiles
             };
 
             // DEBUG: Print WHERE reader args
