@@ -77,6 +77,21 @@ def num_cores_to_rectangle_grid(num_cores, device):
     return (x, y)
 
 
+def gen_input_tensor_per_device(cluster_shape, in_shape, default_value=0, increment=1):
+    seed = default_value
+    col_tensors = []
+    for i in range(cluster_shape[0]):
+        row_tensors = []
+        for j in range(cluster_shape[1]):
+            base = torch.ones(1, 1, in_shape[-2], in_shape[-1]) * seed
+            row_tensors.append(base)
+            seed += increment
+        row_concat = torch.cat(row_tensors, dim=1)
+        col_tensors.append(row_concat)
+    output = torch.cat(col_tensors, dim=0)
+    return output
+
+
 def run_llama_all_gather_matmul_impl(
     mesh_device,
     # shape params shared by AG and MM
@@ -295,8 +310,10 @@ def run_llama_all_gather_matmul_impl(
         ),
     )
     logger.info(f"Input shape: {in0_shape[2:]}, Padded shape: {[M, K_per_device_per_shard * input_num_cores]}")
-    # in0_tensor = torch.randn(in0_shape)
-    in0_tensor = torch.ones(in0_shape)
+    in0_tensor = torch.randn(in0_shape)
+    # in0_tensor = torch.ones(in0_shape)*2
+    # in0_tensor = gen_input_tensor_per_device(cluster_shape, in0_shape, default_value=1, increment=1)
+    # breakpoint()
     tt_input_tensor = ttnn.from_torch(
         in0_tensor,
         device=mesh_device,
@@ -306,8 +323,8 @@ def run_llama_all_gather_matmul_impl(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
     )
 
-    # in1_tensor = torch.randn(in1_shape)
-    in1_tensor = torch.ones(in1_shape) * 2
+    in1_tensor = torch.randn(in1_shape)
+    # in1_tensor = torch.ones(in1_shape) * 3
     tt_in1_tensor = ttnn.from_torch(
         in1_tensor,
         device=mesh_device,
@@ -327,7 +344,6 @@ def run_llama_all_gather_matmul_impl(
             memory_config=intermediate_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
         )
-        # breakpoint()
         tt_intermediate_tensors.append(tt_intermediate_tensor)
 
     aggregated_tensor = torch.zeros(aggregated_shape)
@@ -339,17 +355,18 @@ def run_llama_all_gather_matmul_impl(
         memory_config=aggregated_mem_config,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
     )
-    # breakpoint()
+
     # All Gather Replicate Golden
     output_tensor_goldens_list = []
     for i in range(num_iters):
         # Golden for all gather part
-        golden_shape = intermediate_shape
-        golden_shape[cluster_axis] = 1
-        golden = in0_tensor.transpose(-2, cluster_axis).reshape(golden_shape).squeeze(cluster_axis)
+        golden_Ashape = intermediate_shape
+        golden_Ashape[cluster_axis] = 1
+        golden_A = in0_tensor.transpose(-2, cluster_axis).reshape(golden_Ashape).squeeze(cluster_axis)
+        golden_A = golden_A.unsqueeze(cluster_axis).repeat(1, intermediate_num_cores, 1, 1)
         # TODO: Add golden for replicate part
 
-        output_tensor_goldens_list.append(golden)
+        output_tensor_goldens_list.append(golden_A @ in1_tensor)
 
     ##################################
     ##### Run the op
@@ -375,10 +392,9 @@ def run_llama_all_gather_matmul_impl(
                 compute_kernel_config=compute_kernel_config,
                 dtype=output_dtype,
             )
-            # breakpoint()
 
             # TODO: Change when actual output is integrated
-            out = tt_intermediate_tensors[i % num_buffers]
+            # out = tt_intermediate_tensors[i % num_buffers]
 
             if not trace_mode:
                 ttnn.synchronize_device(mesh_device)
@@ -418,18 +434,23 @@ def run_llama_all_gather_matmul_impl(
     def validate(tt_out_tensor, output_tensor):
         for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
             # get_device_tensors returns row major, so we need to select the correct golden tensor
-            if cluster_axis == 0:
-                output_tensor_ = output_tensor[i % cluster_shape[not (cluster_axis)]]
-            else:
-                output_tensor_ = output_tensor[i // cluster_shape[cluster_axis]]
+            # if cluster_axis == 0:
+            #     output_tensor_ = output_tensor[i % cluster_shape[not (cluster_axis)]]
+            # else:
+            #     output_tensor_ = output_tensor[i // cluster_shape[cluster_axis]]
+            row_index = i // cluster_shape[1]
+            col_index = i % cluster_shape[1]
+            output_tensor_ = output_tensor[row_index, col_index]
+            tt_output_tensor = t.cpu().to_torch().squeeze(0).squeeze(0)
+            # print(f"i: {i}, row_index: {row_index}, col_index: {col_index}")
 
-            tt_output_tensor = t.cpu().to_torch()
-
+            # print(f"tt_output_tensor: {tt_output_tensor}")
+            # print(f"output_tensor_: {output_tensor_}")
             if in0_dtype == ttnn.bfloat16:
                 eq, output = comp_pcc(tt_output_tensor, output_tensor_)
             else:
                 eq, output = comp_pcc(tt_output_tensor, output_tensor_)
-            # assert eq, f"{i} FAILED: {output}"
+            assert eq, f"{i} FAILED: {output}"
         logger.info(f"PCC output is: {output}")
 
     if validate_all:
@@ -441,7 +462,6 @@ def run_llama_all_gather_matmul_impl(
         tt_out_tensor = tt_outs[-1]
         output_tensor = output_tensor_goldens_list[-1]
         validate(tt_out_tensor, output_tensor)
-        # breakpoint()
 
     assert (
         mesh_device.num_program_cache_entries() == 1 or mesh_device.num_program_cache_entries() == num_iters
