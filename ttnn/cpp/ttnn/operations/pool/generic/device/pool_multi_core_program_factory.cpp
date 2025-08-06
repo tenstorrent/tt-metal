@@ -323,10 +323,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t in_cb_sz = 0;
     uint32_t in_nblocks_c = 1;
     if (params.is_wide_reduction) {
-        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_HW;
+        in_cb_sz = params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH * params.num_tilized_rows;
         in_nblocks_c = std::ceil((float)params.in_ntiles_c / params.MAX_TILES_PER_REDUCTION);
     } else {
-        in_cb_sz = params.in_ntiles_c * tt::constants::TILE_HW;
+        in_cb_sz = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.num_tilized_rows;
     }
 
     // reader output == input to tilize

@@ -50,6 +50,7 @@ struct FactoryParameters {
     bool is_large_kernel;
     uint32_t MAX_TILES_PER_REDUCTION;
     bool is_wide_reduction;
+    uint32_t num_tilized_rows;
 };
 
 uint32_t get_bf16_pool_scalar(
