@@ -252,7 +252,7 @@ def test_cross_attention_transformer_text_inference(
                     full_text_row_masked_out_mask_11SD=tt_full_text_mask_expand_11SD,
                     xattn_caches=tt_xattn_cache,
                     current_pos=None,
-                    rot_mats=rot_mats,
+                    rot_mats_global=rot_mats,
                     user_id=b,
                     mode=mode,
                     text_only_inference=TEXT_ONLY,
@@ -347,7 +347,7 @@ def test_cross_attention_transformer_text_inference(
                 full_text_row_masked_out_mask_11SD=tt_full_text_mask_expand_11SD,
                 xattn_caches=tt_xattn_cache,
                 current_pos=tt_position_id,
-                rot_mats=rot_mats,
+                rot_mats_global=rot_mats,
                 mode=mode,
                 text_only_inference=TEXT_ONLY,
             )
