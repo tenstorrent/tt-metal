@@ -102,19 +102,19 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const uint32_t buffering_factor = experts_per_device;
 
     // input sharded buffer
-    constexpr auto data_cb_id = tt::CBIndex::c_0;
+    const auto data_cb_id = tt::CBIndex::c_0;
     CircularBufferConfig cb_data_config =
         CircularBufferConfig(buffering_factor * aligned_input_page_size_bytes, {{data_cb_id, input_data_format}})
             .set_page_size(data_cb_id, aligned_input_page_size_bytes);
 
     // full mapping buffer
-    constexpr auto mapping_tensor_cb_id = tt::CBIndex::c_1;
+    const auto mapping_tensor_cb_id = tt::CBIndex::c_1;
     CircularBufferConfig cb_mapping_tensor_config =
         CircularBufferConfig(aligned_mapping_page_size_bytes, {{mapping_tensor_cb_id, mapping_data_format}})
             .set_page_size(mapping_tensor_cb_id, aligned_mapping_page_size_bytes);
 
     // scratch space to store and share indices of per device experts
-    constexpr auto local_experts_cb_id = tt::CBIndex::c_2;
+    const auto local_experts_cb_id = tt::CBIndex::c_2;
     using local_experts_t = uint16_t;
     const auto aligned_local_expert_page_size_bytes =
         tt::align(experts_per_device * sizeof(local_experts_t), l1_alignment);
@@ -124,14 +124,14 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
             .set_page_size(local_experts_cb_id, aligned_local_expert_page_size_bytes);
 
     // metadata page buffer
-    constexpr auto metadata_cb_id = tt::CBIndex::c_3;
+    const auto metadata_cb_id = tt::CBIndex::c_3;
     CircularBufferConfig cb_metadata_config =
         CircularBufferConfig(aligned_metadata_page_size_bytes, {{metadata_cb_id, metadata_data_format}})
             .set_page_size(metadata_cb_id, aligned_metadata_page_size_bytes);
 
     // client interface
     constexpr auto num_headers = 2;  // data unicast headers and atomic inc "multicast" headers
-    constexpr auto client_interface_cb_id = tt::CBIndex::c_4;
+    const auto client_interface_cb_id = tt::CBIndex::c_4;
     CircularBufferConfig client_interface_cb_config =
         CircularBufferConfig(num_headers * CLIENT_INTERFACE_SIZE, {{client_interface_cb_id, tt::DataFormat::UInt32}})
             .set_page_size(client_interface_cb_id, CLIENT_INTERFACE_SIZE);
@@ -254,10 +254,15 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         sender_core,
         writer_config);
 
+    constexpr auto start_idx = 0;
+    const auto end_idx = batch_size * seq_size;
     std::vector<uint32_t> reader_runtime_args = {
         mapping_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
         metadata_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
         input_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
+        start_idx,
+        end_idx
+
     };
 
     std::vector<uint32_t> writer_runtime_args = {
@@ -265,9 +270,8 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         operation_attributes.cross_device_semaphore.address(),
     };
     for (auto& neighbor : neighbors) {
-        auto neighbor_coordinate = mesh_view.find_device(neighbor->id());
         uint32_t link_id = 0;
-        const auto neighbor_fabric_id = get_fabric_node_id_from_physical_chip_id(neighbor->id());
+        const auto neighbor_fabric_id = mesh_device->get_fabric_node_id(neighbor);
         append_fabric_connection_rt_args(
             fabric_node_id, neighbor_fabric_id, link_id, program, sender_core, writer_runtime_args);
     }

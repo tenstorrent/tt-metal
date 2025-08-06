@@ -24,11 +24,10 @@ using sliding_window::SlidingWindowConfig;
 
 namespace conv_transpose2d {
 
-template <typename T>
 Result conv_transpose2d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    T* device,
+    MeshDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
@@ -294,8 +293,7 @@ Result conv_transpose2d(
         conv_config.enable_act_double_buffer,
         conv_config.enable_weights_double_buffer,
         conv_config.full_inner_dim,
-        conv_config.enable_split_reader,
-        conv_config.enable_subblock_padding);
+        conv_config.enable_split_reader);
     if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
         conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
     }

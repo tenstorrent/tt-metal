@@ -3,13 +3,6 @@ This demo shows how ViT Base patch16-224 runs on WH - N150, N300 devices.
 
 ### Note:
 
-- On N300, make sure to use `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml` with the pytest.
-
-- Or, make sure to set the following environment variable in the terminal:
-  ```sh
-  export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-  ```
-
 - To obtain the perf reports through profiler, please build with following command:
   ```sh
   ./build_metal.sh -p

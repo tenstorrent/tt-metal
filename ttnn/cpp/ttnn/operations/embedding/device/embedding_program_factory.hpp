@@ -271,7 +271,8 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     KernelHandle writer_kernel_id = 0;
     // TODO: We can use the second risc to do more work in parallel
     if (!output_sharded) {
-        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)out_is_dram};
+        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+        tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
         // Tilized writer
         writer_kernel_id = tt_metal::CreateKernel(

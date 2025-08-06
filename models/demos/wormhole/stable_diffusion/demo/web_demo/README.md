@@ -5,14 +5,6 @@ Stable Diffusion is a latent text-to-image diffusion model capable of generating
 
 ## How to Run
 
-> [!NOTE]
->
-> If you are using Wormhole, you must set the `WH_ARCH_YAML` environment variable.
->
-> ```
-> export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-> ```
-
 > In order to post the generated image from the SD model to your local computer, make sure to ssh into the port 8501:
 > ```
 > ssh -L8501:localhost:8501 username@IP_ADDRESS

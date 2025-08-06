@@ -6,12 +6,6 @@ This demo is designed to run Mamba-2.8b on  a `wormhole_b0` card and generate ou
 
 ### How to Run
 
-To get the best performance during decode we can use the 8x8 core grid. To enable it run the following command:
-
-```
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-```
-
 To run the demo using pre-written prompts for a batch of 32 users run:
 
 ```

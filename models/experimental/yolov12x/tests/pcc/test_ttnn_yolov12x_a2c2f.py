@@ -10,9 +10,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.yolov12x.reference import yolov12x
 from models.experimental.yolov12x.tt.a2c2f import TtnnA2C2f
 from models.experimental.yolov12x.tt.model_preprocessing import (
-    create_yolov12x_input_tensors,
+    create_yolov12x_input_tensors_submodules,
     create_yolov12x_model_parameters,
 )
+from models.experimental.yolov12x.common import YOLOV12_L1_SMALL_SIZE
 
 
 @pytest.mark.parametrize(
@@ -112,7 +113,7 @@ from models.experimental.yolov12x.tt.model_preprocessing import (
         ),  # 4
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV12_L1_SMALL_SIZE}], indirect=True)
 def test_yolov12x_a2c2f(
     device,
     reset_seeds,
@@ -158,7 +159,7 @@ def test_yolov12x_a2c2f(
         shortcut,
     )
     torch_module.eval()
-    torch_input, ttnn_input = create_yolov12x_input_tensors(
+    torch_input, ttnn_input = create_yolov12x_input_tensors_submodules(
         device,
         batch_size=fwd_input_shape[0],
         input_channels=fwd_input_shape[1],

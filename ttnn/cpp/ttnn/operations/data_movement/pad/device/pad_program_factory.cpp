@@ -73,7 +73,12 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     bfloat16 bfloat_zero = bfloat16(0.0f);
-    uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_zero, bfloat_pad_value});
+    uint32_t packed_pad_value;
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
+        packed_pad_value = pad_value;
+    } else {
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_zero, bfloat_pad_value});
+    }
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
@@ -210,7 +215,12 @@ operation::ProgramWithCallbacks pad_tile(
     tt::tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
-    uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+    uint32_t packed_pad_value;
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
+        packed_pad_value = pad_value;
+    } else {
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+    }
 
     uint32_t num_unpadded_Xt = a.padded_shape()[3] / TILE_WIDTH;
     uint32_t num_total_Xt = output_shape[3] / TILE_WIDTH;
@@ -247,12 +257,9 @@ operation::ProgramWithCallbacks pad_tile(
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
-                                                      (std::uint32_t)src0_is_dram};
-    std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
-                                                      (std::uint32_t)src0_cb_index,
-                                                      (std::uint32_t)src1_cb_index};
+    std::vector<uint32_t> reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    std::vector<uint32_t> writer_compile_time_args = {src0_cb_index, src1_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
     // Tilized reader
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -512,7 +519,12 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     bfloat16 bfloat_zero = bfloat16(0.0f);
-    uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_zero, bfloat_pad_value});
+    uint32_t packed_pad_value;
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
+        packed_pad_value = pad_value;
+    } else {
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_zero, bfloat_pad_value});
+    }
 
     KernelHandle reader_kernel_id = CreateKernel(
         program,
@@ -833,7 +845,12 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
-    uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+    uint32_t packed_pad_value;
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
+        packed_pad_value = pad_value;
+    } else {
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+    }
 
     bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
     bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
@@ -1242,7 +1259,12 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
     tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
 
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
-    uint32_t packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+    uint32_t packed_pad_value;
+    if (a.dtype() == DataType::INT32 || a.dtype() == DataType::UINT32) {
+        packed_pad_value = pad_value;
+    } else {
+        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
+    }
 
     std::vector<uint32_t> reader_ct_args = {(std::uint32_t)stick_size_padded, (std::uint32_t)shard_height_padded};
 
@@ -1383,6 +1405,10 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
         padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&bfloat_pad_value_bits);
     } else if (input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) {
         padding_value_as_u32 = *reinterpret_cast<uint32_t*>(&pad_value);
+    } else if (
+        input_tensor.dtype() == tt::tt_metal::DataType::INT32 ||
+        input_tensor.dtype() == tt::tt_metal::DataType::UINT32) {
+        padding_value_as_u32 = static_cast<uint32_t>(pad_value);  // for INT32 and UINT32
     } else {
         TT_THROW("ttnn.pad: unsupported data type for pad_rm_sharded_stickwise");
     }

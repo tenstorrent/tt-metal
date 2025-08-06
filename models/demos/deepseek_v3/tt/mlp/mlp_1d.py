@@ -6,9 +6,11 @@ from pathlib import Path
 from typing import Any, final
 
 import torch
+import ttnn.experimental
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
     FromWeightConfig,
@@ -16,7 +18,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MeshDeviceStub,
     MulConfig,
     OpConfigBase,
-    ReduceScatterConfig,
+    ReduceScatterAsyncConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
@@ -31,8 +33,10 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     save_and_get_path,
 )
 from models.demos.deepseek_v3.utils.run_config import (
+    MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
     ModelPrefillConfig,
+    ModelState,
     RunDecodeConfig,
     RunPrefillConfig,
     WeightConfig,
@@ -45,7 +49,7 @@ class MLP1D(AbstractModule):
     NOTE: This is not the MLP we will use for DeepSeek-R1, but we do use it as a base class for the other MLPs.
     """
 
-    WEIGHT_TORCH_DTYPE = torch.float32
+    WEIGHT_TORCH_DTYPE = torch.bfloat16
     WEIGHT_DTYPE = ttnn.bfloat4_b
 
     @dataclass
@@ -193,13 +197,13 @@ class MLP1D(AbstractModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             ),
-            "reduce_scatter": ReduceScatterConfig(
+            "reduce_scatter_async": ReduceScatterAsyncConfig(
                 dim=-1,  # We are scattering across the feature dimension (last one)
                 cluster_axis=1,  # Reduce-scatter across the mesh rows
                 mesh_device=MeshDeviceStub(mesh_device.shape),
                 math_op=ttnn.ReduceType.Sum,
-                topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
             ),
             "input_memory_config": ttnn.DRAM_MEMORY_CONFIG,  # RMSNorm must provide this shard spec as its output
             "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -292,10 +296,10 @@ class MLP1D(AbstractModule):
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
             ),
-            "reduce_scatter": ReduceScatterConfig(
-                dim=-1,  # We are scattering across the feature dimension (last one)
-                cluster_axis=1,  # Reduce-scatter across the mesh rows
+            "reduce_scatter_async": ReduceScatterAsyncConfig(
                 mesh_device=MeshDeviceStub(mesh_device.shape),
+                cluster_axis=1,  # Reduce-scatter across the mesh rows
+                dim=-1,  # We are scattering across the feature dimension (last one)
                 math_op=ttnn.ReduceType.Sum,
                 topology=ttnn.Topology.Linear,  # One row of Galaxy does not form a ring
                 memory_config=output_memory_config,
@@ -339,6 +343,27 @@ class MLP1D(AbstractModule):
             tile_layout=True,
             use_height_and_width_as_shard_shape=True,
         )
+
+    @classmethod
+    def create_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL1D) -> ModelState:
+        """Create the model state for this module.
+
+        Args:
+            hf_config: HuggingFace model configuration object
+            mesh_device: TTNN mesh device the model will be placed later on
+            ccl: CCL1D instance for async CCLs
+
+        Returns:
+            ModelState containing the state information for this module
+        """
+        return {
+            MESH_DEVICE_STATE_DICT_KEY: mesh_device,
+            "reduce_scatter_async": {
+                "from_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
+                "to_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
+                "num_links": ccl.get_max_links(1),
+            },
+        }
 
     @classmethod
     def _get_prefill_pc(
@@ -402,7 +427,7 @@ class MLP1D(AbstractModule):
         ttnn.deallocate(activated)
 
         # Reduce-scatter across devices to sum partial results
-        output = ttnn.reduce_scatter(output, **cfg["reduce_scatter"])
+        output = ttnn.experimental.reduce_scatter_async(output, **cfg["reduce_scatter_async"])
 
         # De-chunk the output if the input was chunked
         _, num_chunks, _, output_dim = output.shape
@@ -430,7 +455,7 @@ class MLP1D(AbstractModule):
         ttnn.deallocate(activated)
 
         # Add reduce-scatter
-        output = ttnn.reduce_scatter(w2_out, **cfg["reduce_scatter"])
+        output = ttnn.experimental.reduce_scatter_async(w2_out, **cfg["reduce_scatter_async"])
         ttnn.deallocate(w2_out)
 
         assert output.memory_config() == cfg["output_memory_config"]

@@ -151,6 +151,15 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
     uint32_t num_downstream_edms = get_downstream_edm_count(topology);
     // Global
     size_t next_l1_addr = tt::tt_metal::hal::get_erisc_l1_unreserved_base();
+
+    // https://github.com/tenstorrent/tt-metal/issues/26354 to track fix for this hack where we always set aside the
+    // memory for the telemetry buffer in Blackhole
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_telemetry() || tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+        // Avoid a bug on BH, always allocate the space for the telemetry buffer
+        this->perf_telemetry_buffer_address = next_l1_addr;
+        next_l1_addr += 32;
+    }
+
     this->handshake_addr = next_l1_addr;
     next_l1_addr += eth_channel_sync_size;
 
@@ -937,6 +946,16 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         false);
 }
 
+void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(std::vector<uint32_t>& ct_args) const {
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    uint32_t telemetry_mode = static_cast<uint32_t>(
+        rtoptions.get_enable_fabric_telemetry() ? 1 : 0);
+    ct_args.push_back(telemetry_mode);
+
+    // Add telemetry buffer address (16B aligned)
+    ct_args.push_back(static_cast<uint32_t>(config.perf_telemetry_buffer_address));
+}
+
 std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_t risc_id) const {
     TT_ASSERT(this->local_fabric_node_id != this->peer_fabric_node_id);
 
@@ -1167,6 +1186,11 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     // Special marker to help with identifying misalignment bugs
     ct_args.push_back(0x10c0ffee);
 
+    get_telemetry_compile_time_args(ct_args);
+
+    // Special marker 2
+    ct_args.push_back(0x20c0ffee);
+
     bool multi_txq_enabled = config.sender_txq_id != config.receiver_txq_id;
     if (multi_txq_enabled) {
         for (size_t i = 0; i < num_sender_channels; i++) {
@@ -1183,7 +1207,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         }
     }
 
-    ct_args.push_back(0x20c0ffee);
+    ct_args.push_back(0x30c0ffee);
     return ct_args;
 }
 

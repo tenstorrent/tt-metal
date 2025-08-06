@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::data_movement::scatter {
 
@@ -127,35 +128,27 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     constexpr const char* writer_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/scatter/device/kernels/dataflow/writer_scatter.cpp";
 
-    const std::vector<uint32_t> compile_time_args{
-        {input_tensor_is_dram,
-         index_tensor_is_dram,
-         src_tensor_is_dram,
-         output_tensor_is_dram,
-         input_tensor.buffer()->address(),
-         index_tensor.buffer()->address(),
-         src_tensor.buffer()->address(),
-         output_tensor.buffer()->address(),
-         static_cast<uint32_t>(ScatterCB::INPUT),
-         static_cast<uint32_t>(ScatterCB::INDEX),
-         static_cast<uint32_t>(ScatterCB::SRC),
-         static_cast<uint32_t>(ScatterCB::DST),
-         input_stick_size,
-         index_stick_size,
-         source_stick_size,
-         output_stick_size,
-         input_stick_size_bytes,
-         index_stick_size_bytes,
-         source_stick_size_bytes,
-         output_stick_size_bytes,
-         input_stick_size_bytes_log2,
-         index_stick_size_bytes_log2,
-         source_stick_size_bytes_log2,
-         output_stick_size_bytes_log2,
-         is_input_stick_size_bytes_pow2_min_32,
-         is_index_stick_size_bytes_pow2_min_32,
-         is_source_stick_size_bytes_pow2_min_32,
-         is_output_stick_size_bytes_pow2_min_32}};
+    std::vector<uint32_t> compile_time_args{
+        input_tensor.buffer()->address(),
+        index_tensor.buffer()->address(),
+        src_tensor.buffer()->address(),
+        output_tensor.buffer()->address(),
+        static_cast<uint32_t>(ScatterCB::INPUT),
+        static_cast<uint32_t>(ScatterCB::INDEX),
+        static_cast<uint32_t>(ScatterCB::SRC),
+        static_cast<uint32_t>(ScatterCB::DST),
+        input_stick_size,
+        index_stick_size,
+        source_stick_size,
+        output_stick_size,
+        input_stick_size_bytes,
+        index_stick_size_bytes,
+        source_stick_size_bytes,
+        output_stick_size_bytes};
+    tt::tt_metal::TensorAccessorArgs(*input_buffer).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*index_buffer).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(compile_time_args);
 
     auto reader_kernel =
         create_kernel(program, reader_kernel_path, all_cores, ReaderDataMovementConfig{compile_time_args});

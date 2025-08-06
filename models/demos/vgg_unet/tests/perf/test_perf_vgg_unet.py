@@ -11,15 +11,15 @@ from models.perf.device_perf_utils import check_device_perf, prep_device_perf_re
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 60.188],
+        [1, 119],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
-def test_perf_device_vgg_unet(batch_size, expected_perf):
+def test_perf_device_bare_metal_vgg_unet(batch_size, expected_perf):
     subdir = "ttnn_vgg_unet"
     num_iterations = 1
     margin = 0.03
-    command = f"pytest models/demos/vgg_unet/tests/pcc/test_vgg_unet.py"
+    command = f"pytest models/demos/vgg_unet/tests/pcc/test_vgg_unet.py::test_vgg_unet[0-pretrained_weight_false]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"

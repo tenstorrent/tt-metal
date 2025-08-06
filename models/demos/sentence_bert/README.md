@@ -4,12 +4,6 @@
 
 Wormhole N150, N300
 
-**Note:** On N300, make sure to use `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml` with the pytest.
-
-Or, make sure to set the following environment variable in the terminal:
-```
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-```
 
 To obtain the perf reports through profiler, please build with following command:
 ```
@@ -38,16 +32,30 @@ pytest --disable-warnings models/demos/sentence_bert/tests/pcc/test_ttnn_sentenc
 
 ###  Performant Model with Trace+2CQ
 > **Note:** SentenceBERT uses BERT-base as its backbone model.
+
+#### Single Device (BS=8):
+
 - End-to-end performance with mean-pooling post-processing is **408 sentences per second**
 
-
-Use the following command to run the performant Model with Trace+2CQs (without mean-pooling):
+Use the following command to run the performant Model with Trace+2CQs:
 
 ```
-pytest --disable-warnings models/demos/sentence_bert/tests/perf/test_sentence_bert_e2e_performant.py
+pytest --disable-warnings models/demos/sentence_bert/tests/perf/test_sentence_bert_e2e_performant.py::test_e2e_performant_sentencebert
+```
+
+#### Multi Device (DP=2, N300):
+
+- End-to-end performance with mean-pooling post-processing is **757 sentences per second**
+
+Use the following command to run the performant Model with Trace+2CQs:
+
+```
+pytest --disable-warnings models/demos/sentence_bert/tests/perf/test_sentence_bert_e2e_performant.py::test_e2e_performant_sentencebert_dp
 ```
 
 ### Performant Demo with Trace+2CQ
+
+#### Single Device (BS=8):
 
 Use the following command to run the performant Demo with Trace+2CQs:
 
@@ -55,11 +63,23 @@ Use the following command to run the performant Demo with Trace+2CQs:
 pytest --disable-warnings models/demos/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference
 ```
 
+#### Multi Device (DP=2, N300):
+
+Use the following command to run the performant Demo with Trace+2CQs:
+
+```
+pytest --disable-warnings models/demos/sentence_bert/demo/demo.py::test_sentence_bert_demo_inference_dp
+```
+
+
 ### Performant Interactive Demo with Trace+2CQ
+
 - This script demonstrates a simple semantic search using a Turkish Sentence-BERT model. It loads a knowledge base from a text file (`knowledge_base.txt`), encodes all entries, and waits for user input. For each query, it returns the most semantically similar entry from the knowledge base using cosine similarity.
 - Run the interactive demo using the command below. For every user input, the top-matching knowledge base entry along with its similarity score will be displayed.
 - Type `exit` to quit the interactive demo.
 - Modify the `knowledge_base.txt` file to customize the knowledge base with your own turkish input sentences.
+
+#### Single Device (BS=8):
 
 Use the following command to run the performant interactive Demo with Trace+2CQs:
 
@@ -67,13 +87,31 @@ Use the following command to run the performant interactive Demo with Trace+2CQs
 pytest --disable-warnings models/demos/sentence_bert/demo/interactive_demo.py::test_interactive_demo_inference
 ```
 
+#### Multi Device (DP=2, N300):
+
+Use the following command to run the performant interactive Demo with Trace+2CQs:
+
+```
+pytest --disable-warnings models/demos/sentence_bert/demo/interactive_demo.py::test_interactive_demo_inference_dp
+```
+
 ### Performant Dataset evaluation with Trace+2CQ
 
 - dataset source: [STSb Turkish](https://github.com/emrecncelik/sts-benchmark-tr) (Semantic textual similarity dataset for the Turkish language)
 - Adjust the `num_samples` parameter to control the number of dataset samples used during evaluation.
 
+#### Single Device (BS=8):
+
 Use the following command to run the performant dataset evaluation with Trace+2CQs:
 
 ```
 pytest --disable-warnings models/demos/sentence_bert/demo/dataset_evaluation.py::test_sentence_bert_eval
+```
+
+#### Multi Device (DP=2, N300):
+
+Use the following command to run the performant dataset evaluation with Trace+2CQs:
+
+```
+pytest --disable-warnings models/demos/sentence_bert/demo/dataset_evaluation.py::test_sentence_bert_eval_dp
 ```
