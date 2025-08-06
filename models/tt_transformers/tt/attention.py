@@ -426,7 +426,6 @@ class Attention(LightweightModule):
             sharded=True,
             dtype=self.ccl_dtype,
             topology=self.ccl_topology,
-            is_galaxy=self.TG,
         )
 
         if self.TG:
@@ -585,20 +584,6 @@ class Attention(LightweightModule):
 
                 ttnn.deallocate(all_gather_output)
 
-                # _, dense_out_sharded = ttnn.experimental.all_gather_matmul_async(
-                #     attn_output_cat,
-                #     self.wo,
-                #     persistent_output_buffer=None,
-                #     dim=3,
-                #     multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                #     all_gather_core_grid_offset=(0, 4),
-                #     num_links=1,
-                #     barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                #     program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
-                #     compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
-                #     memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
-                #     memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
-                # )
             ttnn.deallocate(attn_output_cat)
             dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
             return dense_out_sharded
@@ -662,7 +647,6 @@ class Attention(LightweightModule):
                 sharded=True,
                 dtype=self.ccl_dtype,
                 use_composite=True if self.hidden_size == 8192 else False,
-                is_galaxy=self.TG,
             )
 
             if not self.TG:
@@ -716,7 +700,6 @@ class Attention(LightweightModule):
             num_all_gather_links=self.num_all_gather_links,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.ccl_dtype,
-            is_galaxy=self.TG,
         )
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
@@ -920,7 +903,6 @@ class Attention(LightweightModule):
                 topology=self.ccl_topology,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.ccl_dtype,
-                is_galaxy=self.TG,
             )
 
         return output_11SH
