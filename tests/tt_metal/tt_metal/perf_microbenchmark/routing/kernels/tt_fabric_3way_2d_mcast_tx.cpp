@@ -34,12 +34,9 @@ inline void setup_connection_and_headers(
     volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
     uint64_t noc_dest_addr,
     uint32_t packet_payload_size_bytes) {
-    //DPRINT << "setup_connection_and_headers: opening connection..." << ENDL();
     // connect to edm
     connection.open();
-    //DPRINT << "setup_connection_and_headers: setting header..." << ENDL();
     packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_dest_addr}, packet_payload_size_bytes);
-    //DPRINT << "setup_connection_and_headers: completed" << ENDL();
 }
 
 inline void send_packet(
