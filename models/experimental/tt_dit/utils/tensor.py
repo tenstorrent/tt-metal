@@ -6,7 +6,9 @@ import torch
 import ttnn
 
 
-def bf16_tensor(x: torch.Tensor, device: ttnn.Device | None = None, mesh_axis=None, shard_dim=None) -> ttnn.Tensor:
+def bf16_tensor(
+    x: torch.Tensor, device: ttnn.Device | None = None, mesh_axis=None, shard_dim=None, layout=ttnn.TILE_LAYOUT
+) -> ttnn.Tensor:
     assert (mesh_axis is None) == (shard_dim is None)
     mesh_mapper = None
     if mesh_axis is not None:
@@ -16,7 +18,7 @@ def bf16_tensor(x: torch.Tensor, device: ttnn.Device | None = None, mesh_axis=No
 
     return ttnn.from_torch(
         x,
-        layout=ttnn.TILE_LAYOUT,
+        layout=layout,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         device=device,

@@ -21,9 +21,10 @@ class CCLManager:
         # Setup semaphores
         self._init_subdevice()
 
-        # Initialize semaphores for reduce scatter
+        # Initialize semaphores for reduce scatter and all gather
         self._init_semaphores()
         self.rs_ping_pong_idx = 0
+        self.ag_ping_pong_idx = 0
 
     def _init_subdevice(self):
         compute_grid_size = self.mesh_device.compute_with_storage_grid_size()
@@ -40,9 +41,15 @@ class CCLManager:
 
     def _init_semaphores(self):
         # Initialize semaphores for reduce scatter ping pong
-        n_sems = 3 * 2  # 3 semaphores * 2 for ping pong
+        rs_n_sems = 3 * 2  # 3 semaphores * 2 for ping pong
         self.rs_ping_pong_semaphores = [
-            ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(n_sems)
+            ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(rs_n_sems)
+        ]
+
+        # Initialize semaphores for all gather ping pong
+        ag_n_sems = 2 * 2  # 2 semaphores * 2 for ping pong (2 buffers)
+        self.ag_ping_pong_semaphores = [
+            ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(ag_n_sems)
         ]
 
     def get_rs_ping_pong_buffer(self, shape, dim, mesh_axis):
@@ -83,6 +90,41 @@ class CCLManager:
 
         return self._ping_pong_buffer_cache[cache_key][current_idx]
 
+    def get_ag_ping_pong_buffer(self, shape, dim, mesh_axis):
+        """
+        Get or create ping pong buffers for all gather operations.
+        Caches buffers based on shape, dim, and mesh_axis.
+
+        Args:
+            shape: Tensor shape tuple
+            dim: Dimension for the operation
+            mesh_axis: Mesh axis for parallelization
+
+        Returns:
+            Current ping pong buffer (alternates between two buffers)
+        """
+        # Create cache key from the parameters (use different namespace than rs)
+        cache_key = ("ag", tuple(shape), dim, mesh_axis)
+
+        # Create buffers if not cached
+        if cache_key not in self._ping_pong_buffer_cache:
+            # Create two buffers for ping pong
+            buffers = []
+            output_buffer_shape = list(shape)
+            output_buffer_shape[dim] *= self.mesh_device.shape[mesh_axis]  # All gather increases size
+            for _ in range(2):
+                output_buffer = bf16_tensor(torch.empty(output_buffer_shape), device=self.mesh_device)
+                buffers.append(output_buffer)
+
+            self._ping_pong_buffer_cache[cache_key] = buffers
+            self._ping_pong_buffer_indices[cache_key] = 0
+
+        # Get current buffer and alternate index
+        current_idx = self._ping_pong_buffer_indices[cache_key]
+        self._ping_pong_buffer_indices[cache_key] = 1 - current_idx
+
+        return self._ping_pong_buffer_cache[cache_key][current_idx]
+
     def get_rs_ping_pong_semaphore(self):
         """
         Get semaphores for reduce scatter ping pong operations.
@@ -95,7 +137,21 @@ class CCLManager:
         self.rs_ping_pong_idx = (cur_idx + 1) % 2
         return self.rs_ping_pong_semaphores[cur_idx * n_sems : (cur_idx + 1) * n_sems]
 
+    def get_ag_ping_pong_semaphore(self):
+        """
+        Get semaphores for all gather ping pong operations.
+
+        Returns:
+            List of 3 semaphores for the current ping pong cycle
+        """
+        cur_idx = self.ag_ping_pong_idx
+        n_sems = 2
+        self.ag_ping_pong_idx = (cur_idx + 1) % 2
+        return self.ag_ping_pong_semaphores[cur_idx * n_sems : (cur_idx + 1) * n_sems]
+
     def reset_global_semaphores(self):
         """Reset all global semaphores to 0"""
         for sem in self.rs_ping_pong_semaphores:
+            ttnn.reset_global_semaphore_value(sem, 0)
+        for sem in self.ag_ping_pong_semaphores:
             ttnn.reset_global_semaphore_value(sem, 0)
