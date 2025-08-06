@@ -30,6 +30,14 @@ def custom_preprocessor(model, name):
 
 def create_yolov12x_input_tensors(device, batch_size=1, input_channels=3, input_height=640, input_width=640):
     torch_input_tensor = torch.randn(batch_size, input_channels, input_height, input_width)
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    return torch_input_tensor, ttnn_input_tensor
+
+
+def create_yolov12x_input_tensors_submodules(device, batch_size=1, input_channels=3, input_height=640, input_width=640):
+    torch_input_tensor = torch.randn(batch_size, input_channels, input_height, input_width)
     ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
     ttnn_input_tensor = ttnn_input_tensor.reshape(
         1,
