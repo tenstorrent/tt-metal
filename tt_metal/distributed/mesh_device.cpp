@@ -9,6 +9,7 @@
 #include <mesh_device.hpp>
 #include <mesh_device_view.hpp>
 #include <tt_stl/small_vector.hpp>
+#include <tt-metalium/pinned_memory.hpp>
 #include <sub_device.hpp>
 #include <system_mesh.hpp>
 #include <maybe_remote.hpp>
@@ -1047,5 +1048,29 @@ const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_i
 }
 
 std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
+
+std::unique_ptr<PinnedMemory> MeshDevice::pin_memory(
+    const MeshCoordinateRangeSet& coordinate_range_set, void* host_buffer, size_t buffer_size, bool map_to_noc) {
+    // Extract all coordinates from the range set
+    std::vector<MeshCoordinate> coordinates = coordinate_range_set.coords();
+
+    // Convert coordinates to devices
+    std::vector<IDevice*> devices;
+    devices.reserve(coordinates.size());
+
+    for (const auto& coord : coordinates) {
+        if (view_->contains(coord)) {
+            if (auto device = view_->get_device(coord)) {
+                devices.push_back(device);
+            }
+        }
+    }
+
+    if (devices.empty()) {
+        throw std::invalid_argument("No valid devices found in the specified coordinate range set");
+    }
+
+    return std::unique_ptr<PinnedMemory>(new PinnedMemory(devices, host_buffer, buffer_size, map_to_noc));
+}
 
 }  // namespace tt::tt_metal::distributed
