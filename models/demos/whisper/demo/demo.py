@@ -239,9 +239,7 @@ def run_generate(
             return output
 
 
-def create_functional_whisper_for_conditional_generation_inference_pipeline(
-    ttnn_model, device, model_repo="openai/whisper-large-v3"
-):
+def create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn_model, device, model_repo):
     """
     Returns a callable with signature (data, sampling_rate, stream), where data is is a 1D numpy array
     and sampling_rate is an int representing the sampling rate used to acquire data, and stream turns
@@ -249,7 +247,7 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(
     the callable returns the full decoded output.
 
     Args:
-        ttnn_model: The compiled TTNN model
+        ttnn_model: The TTNN model
         device: The target device
         model_repo: HuggingFace model repository ID. Must be one of the supported models.
     """
@@ -387,9 +385,7 @@ def run_demo_whisper_for_audio_classification_dataset(ttnn_model, device):
     logger.info(predicted_label)
 
 
-def run_demo_whisper_for_conditional_generation_inference(
-    input_path, ttnn_model, device, num_inputs, model_repo="openai/whisper-large-v3"
-):
+def run_demo_whisper_for_conditional_generation_inference(input_path, ttnn_model, device, num_inputs, model_repo):
     torch.manual_seed(0)
 
     # instantiate model inference pipeline
@@ -424,7 +420,7 @@ def run_demo_whisper_for_conditional_generation_inference(
     return avg_ttft, avg_decode_throughput
 
 
-def run_demo_whisper_for_conditional_generation_dataset(ttnn_model, device, model_repo="openai/whisper-large-v3"):
+def run_demo_whisper_for_conditional_generation_dataset(ttnn_model, device, model_repo):
     torch.manual_seed(0)
 
     # instantiate model inference pipeline
