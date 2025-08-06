@@ -257,7 +257,6 @@ void kernel_main() {
 
                         // Will have more cases once scatter-write supports more than 2 distinct addresses
                         switch (tiles_to_put_in_current_packet) {
-#ifdef ARCH_WORMHOLE
                             case 2: {
                                 uint32_t tile_one_id = input_tile_id_start + row_offset + pages_read_in_row;
                                 pages_read_in_row++;
@@ -291,7 +290,6 @@ void kernel_main() {
                                 tiles_read_in_current_direction += 2;
                                 break;
                             }
-#endif
                             case 1:
                             default: {
                                 uint32_t tile_id = input_tile_id_start + row_offset + pages_read_in_row;

@@ -10,7 +10,7 @@ from models.experimental.yolov5x.tt.model_preprocessing import (
     create_yolov5x_input_tensors,
     create_yolov5x_model_parameters_detect,
 )
-from models.experimental.yolov5x.common import load_torch_model
+from models.experimental.yolov5x.common import load_torch_model, YOLOV5X_L1_SMALL_SIZE
 
 
 @pytest.mark.parametrize(
@@ -19,7 +19,7 @@ from models.experimental.yolov5x.common import load_torch_model
         ([1, 320, 80, 80], [1, 640, 40, 40], [1, 1280, 20, 20]),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 83000}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": YOLOV5X_L1_SMALL_SIZE}], indirect=True)
 def test_yolov5x_Detect(
     device,
     reset_seeds,
