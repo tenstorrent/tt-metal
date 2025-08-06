@@ -73,6 +73,8 @@ jobs:
               - models/demos/wormhole/vit/demo/
               - models/experimental/yolov5x/tests/perf/
               - models/experimental/vovnet/tests/perf/
+              - models/experimental/yolov12x/tests/perf/
+              - models/demos/ufld_v2/tests/perf/
 
     name: "${{ matrix.model-group.name }} ${{ matrix.test-info.name }}"
     defaults:
