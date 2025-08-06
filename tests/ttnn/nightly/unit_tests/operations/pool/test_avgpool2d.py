@@ -120,8 +120,8 @@ def run_avg_pool2d(
     if divisor_override is not None:
         if count_include_pad or ceil_mode:
             pytest.skip("divisor_override paired with count_include_pad or ceil_mode is trivial and not useful to test")
-    if count_include_pad and padding == (0, 0):
-        pytest.skip("count_include_pad paired with no padding is trivial and not useful to test")
+    # if count_include_pad and padding == (0, 0):
+    #     pytest.skip("count_include_pad paired with no padding is trivial and not useful to test")
     if ceil_mode:
         if stride == (1, 1):
             pytest.skip("ceiling mode with stride (1, 1) is trivial and not useful to test")

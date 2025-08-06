@@ -246,7 +246,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
-    FactoryParameters params = get_factory_parameters(num_shards_c, input, kernel_h, kernel_w, pool_type);
+    FactoryParameters params = get_factory_parameters(num_shards_c, input, kernel_h, kernel_w, in_c, pool_type);
     uint32_t pad_h = pad_t + pad_b;
     uint32_t pad_w = pad_l + pad_r;
     const bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
@@ -255,7 +255,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const auto& input_shape = input.padded_shape();
     const auto& output_shape = output.padded_shape();
     const uint32_t in_nbytes_c = in_c / num_shards_c * params.nbytes;  // row of input (channels)
-    const uint32_t in_nbytes_padded_c = input_shape[3] / num_shards_c * in_nbytes;
+    const uint32_t in_nbytes_padded_c = input_shape[3] / num_shards_c * params.nbytes;
 
     TT_FATAL(
         input_shape[3] % num_shards_c == 0,
@@ -263,13 +263,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         input_shape[3],
         num_shards_c);
     const uint32_t in_aligned_nbytes_c =
-        is_wide_reduction &&
-                (input_shape[3] / num_shards_c) % (MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH) != 0
+        params.is_wide_reduction &&
+                (input_shape[3] / num_shards_c) % (params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH) != 0
             ? tt::round_up(
-                  (input_shape[3] / num_shards_c) % (MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH),
+                  (input_shape[3] / num_shards_c) % (params.MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH),
                   tt::constants::TILE_WIDTH) *
-                  in_nbytes
-            : tt::round_up(input_shape[3] / num_shards_c, tt::constants::TILE_WIDTH) * in_nbytes;
+                  params.nbytes
+            : tt::round_up(input_shape[3] / num_shards_c, tt::constants::TILE_WIDTH) * params.nbytes;
 
     TT_FATAL(dilation_h == 1 && dilation_w == 1, "Dilation is not yet supported by the maxpool reader");
 
@@ -423,13 +423,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_aligned_nbytes_c,            // 4
         in_w,                           // 5
         input_shape[3] / num_shards_c,  // 6
-        params.split_reader,                   // enable split reader //7
+        params.split_reader,            // enable split reader //7
         0,                              // split reader id //8
         bf16_scalar,                    // 9
         bf16_init_value,                // 10
         in_nblocks_c,                   // 11
         in_cb_sz,                       // 12
-        max_rows_for_reduction,         // 13
+        params.max_rows_for_reduction,  // 13
         ceil_pad_w,                     // 14
         in_cb_id_0,                     // 15
         in_cb_id_1,                     // 16
@@ -443,7 +443,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         config_cb_id,                   // 24
         in_nbytes_c,                    // 25
         in_nbytes_padded_c,             // 26
-        params.multi_buffering_factor,         // 27
+        params.multi_buffering_factor,  // 27
         stride_w};                      // 28
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
@@ -470,13 +470,13 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
      * output cb
      */
     std::vector<uint32_t> compute_ct_args = {
-        params.in_ntiles_c,                    // 0
-        kernel_h * kernel_w,                 // 1
-        params.split_reader,                   // 2
+        params.in_ntiles_c,             // 0
+        kernel_h * kernel_w,            // 1
+        params.split_reader,            // 2
         out_nhw_per_core,               // 3
         input_shape[3] / num_shards_c,  // 4
         in_nblocks_c,                   // 5
-        params.max_rows_for_reduction,         // 6
+        params.max_rows_for_reduction,  // 6
         in_cb_id_0,                     // 7
         in_cb_id_1,                     // 8
         in_scalar_cb_id_0,              // 9
