@@ -10,6 +10,11 @@ name: PR Gate
 #   This includes the cost of checking out the code, preparing a runner, etc.
 # - Individual test cases must be less than 1s.
 
+run-name: >-
+  ${{ github.event_name == 'merge_group' && github.event.action == 'destroyed' && format('Merge Queue ({0} {1})', github.event.merge_group.reason, github.sha) ||
+      github.event_name == 'merge_group' && format('Merge Queue Queued {0} by {1}', github.sha, github.actor) ||
+      '' }}
+
 on:
   workflow_dispatch:
     inputs:
