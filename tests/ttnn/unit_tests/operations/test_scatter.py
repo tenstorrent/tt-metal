@@ -89,18 +89,18 @@ def test_scatter_spec(input_shape, dim, index_and_source_shape, input_dtype, ind
 @pytest.mark.parametrize(
     "input_shape, dim, index_and_source_shape, input_dtype, index_dtype, layout, expected_num_cache_entries",
     [
-        ([100], -1, [80], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE, 4),
+        ([100], -1, [80], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE, 5),
         ([2, 30, 200], -1, [2, 30, 200], ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR, 1),
-        ([1, 1, 20, 20, 200], -1, [1, 1, 20, 20, 20], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE, 4),
+        ([1, 1, 20, 20, 200], -1, [1, 1, 20, 20, 20], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.TILE, 5),
         ([2, 2, 2, 2, 2, 2, 2, 2], -1, [2, 2, 2, 2, 2, 2, 2, 2], ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR, 1),
         ([10, 1, 10, 1, 10], 0, [10, 1, 10, 1, 10], ttnn.bfloat16, ttnn.uint16, ttnn.Layout.ROW_MAJOR, 3),
         ([1, 151936], -1, [1, 151936], ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR, 1),
         ([50, 20], 0, [50, 20], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 4),
-        ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 5),
+        ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 6),
         ([10, 10, 10, 10, 10], 0, [10, 10, 10, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 3),
-        ([10, 10, 10, 10, 10], 2, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 5),
+        ([10, 10, 10, 10, 10], 2, [10, 10, 10, 10, 10], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 6),
         ([10, 10, 10, 10, 10], 2, [10, 10, 10, 10, 10], ttnn.float32, ttnn.int32, ttnn.Layout.ROW_MAJOR, 3),
-        ([50, 200], 0, [50, 200], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 6),
+        ([50, 200], 0, [50, 200], ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE, 7),
         ##################
         # these cases fail due to the to_layout precision issue (fp32 tiled <-> row-major) : #23405
         # ([10, 50, 10, 50, 100], -1, [10, 50, 10, 50, 100], ttnn.float32, ttnn.uint16, ttnn.Layout.TILE),

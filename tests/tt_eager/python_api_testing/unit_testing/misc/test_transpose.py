@@ -142,7 +142,7 @@ def test_transpose_hc_program_cache(dtype, device):
     H = 32 * 4
     W = 32 * 3
     input_shape = (N, C, H, W)
-    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=2, input_dtype=dtype)
+    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=1, input_dtype=dtype)
 
     # changing shape
     N = 1
@@ -150,7 +150,7 @@ def test_transpose_hc_program_cache(dtype, device):
     H = H * 3
     W = W
     input_shape = (N, C, H, W)
-    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=4, input_dtype=dtype)
+    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=2, input_dtype=dtype)
 
     # changing shape, single core
     N = 1
@@ -158,7 +158,7 @@ def test_transpose_hc_program_cache(dtype, device):
     H = 32
     W = 32
     input_shape = (N, C, H, W)
-    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=6, input_dtype=dtype)
+    transpose(input_shape, device, dim0=1, dim1=-2, expected_program_cache_size=3, input_dtype=dtype)
 
 
 @pytest.mark.parametrize(

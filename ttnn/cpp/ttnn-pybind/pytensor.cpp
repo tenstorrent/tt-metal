@@ -411,9 +411,16 @@ PyTensorHostConversionStrategy prepare_conversion_strategy(
     };
 
     auto do_host_conversion_through_fallback = [&]() {
-        if (ttnn_fallback_type_mapping(dtype).has_value()) {
+        if (tensor.attr("dtype").equal(torch.attr("int64")) && !dtype.has_value()) {
+            res.host_side_conversion = true;
+            res.construct_with_data_type = DataType::UINT32;
+            res.torch_convert_dtype = "int32";
+            res.construct_with_layout = layout.value_or(Layout::ROW_MAJOR);
+        } else if (ttnn_fallback_type_mapping(dtype).has_value()) {
             res.torch_convert_dtype = ttnn_fallback_type_mapping(dtype).value();
         } else if (!is_torch_and_ttnn_type_identical(dtype, tensor)) {
+            res.torch_convert_dtype = ttnn_unsupported_type_mapping(tensor.attr("dtype")).value();
+        } else if (ttnn_unsupported_type_mapping(tensor.attr("dtype")).has_value()) {
             res.torch_convert_dtype = ttnn_unsupported_type_mapping(tensor.attr("dtype")).value();
         }
 
