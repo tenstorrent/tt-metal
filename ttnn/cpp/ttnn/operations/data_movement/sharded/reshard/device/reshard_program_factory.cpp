@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reshard_program_factory.hpp"
+#include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
 
 #include <algorithm>
 
@@ -17,63 +18,6 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement::detail {
-
-enum class ReshardStridesInRange { ALL_STRIDES, FIRST_HALF, SECOND_HALF };
-
-std::vector<uint32_t> get_runtime_args_for_given_ranges(
-    const std::vector<uint32_t>& physical_core_coords,
-    const std::vector<PageStride>& page_stride_vector,
-    const uint32_t output_page_offset,
-    const uint32_t& input_addr,
-    const uint32_t starting_range,
-    const uint32_t ending_range,
-    const ReshardStridesInRange reshard_strides_in_range = ReshardStridesInRange::ALL_STRIDES) {
-    std::vector<uint32_t> runtime_args = physical_core_coords;
-    runtime_args.push_back(input_addr);
-    runtime_args.push_back(0);
-    runtime_args.push_back(ending_range - starting_range);
-    runtime_args.push_back(output_page_offset);
-    uint32_t num_output_pages = 0;
-
-    for (uint32_t range_id = starting_range; range_id < ending_range; range_id++) {
-        PageStride ps = page_stride_vector[range_id];
-        uint32_t num_strides;
-        uint32_t start_core_x;
-        uint32_t start_core_y;
-        uint32_t start_data;
-        if (reshard_strides_in_range == ReshardStridesInRange::ALL_STRIDES) {
-            num_strides = ps.num_strides;
-            start_core_x = ps.start_core.x;
-            start_core_y = ps.start_core.y;
-            start_data = ps.start_data;
-        } else {
-            if (reshard_strides_in_range == ReshardStridesInRange::FIRST_HALF) {
-                num_strides = ps.num_strides / 2;
-                start_core_x = ps.start_core.x;
-                start_core_y = ps.start_core.y;
-                start_data = ps.start_data;
-            } else {
-                uint32_t strides_in_first_half = ps.num_strides / 2;
-                num_strides = ps.num_strides - (strides_in_first_half);
-                start_core_x = ps.start_core.x + (strides_in_first_half * ps.stride.core.x);
-                start_core_y = ps.start_core.y + (strides_in_first_half * ps.stride.core.y);
-                start_data = ps.start_data + (strides_in_first_half * ps.start_data);
-            }
-        }
-        if (num_strides > 0) {
-            uint32_t core_start_stride =
-                (start_core_x << 24) | (start_core_y << 16) | (ps.stride.core.x << 8) | ps.stride.core.y;
-            runtime_args.push_back((uint32_t)core_start_stride);  // start_x
-            uint32_t stride_data_start = (ps.stride.data << 16) | (start_data);
-            runtime_args.push_back((uint32_t)stride_data_start);  // stride_data
-            uint32_t stride_size_num_strides = (ps.stride_size << 16) | (num_strides << 8) | ((uint32_t)ps.skip);
-            runtime_args.push_back((uint32_t)stride_size_num_strides);  // stride_size
-            num_output_pages += ps.stride_size * num_strides;
-        }
-    }
-    runtime_args[physical_core_coords.size() + 1] = num_output_pages;
-    return runtime_args;
-}
 
 template <bool is_reader>
 operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& input, Tensor& output) {
@@ -234,49 +178,8 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-Tensor construct_per_core_host_tensor(
-    const std::unordered_map<CoreCoord, std::vector<uint32_t>>& core_to_data, uint32_t MAX_RT_ARGS_WIDTH) {
-    uint32_t max_width = MAX_RT_ARGS_WIDTH;
-
-    // Create shape based on number of cores and max width
-    ttnn::Shape tensor_shape({static_cast<uint32_t>(core_to_data.size()), static_cast<uint32_t>(max_width)});
-
-    // Sort cores to ensure consistent ordering
-    std::vector<CoreCoord> ordered_cores;
-    ordered_cores.reserve(core_to_data.size());
-    for (const auto& [core, _] : core_to_data) {
-        ordered_cores.push_back(core);
-    }
-    std::sort(ordered_cores.begin(), ordered_cores.end(), [](const CoreCoord& a, const CoreCoord& b) {
-        return (a.y < b.y) || (a.y == b.y && a.x < b.x);
-    });
-
-    // Flatten data from all cores into single vector with padding
-    std::vector<uint32_t> flattened_data;
-    flattened_data.reserve(core_to_data.size() * max_width);
-
-    for (const auto& core : ordered_cores) {
-        const auto& data = core_to_data.at(core);
-        flattened_data.insert(flattened_data.end(), data.begin(), data.end());
-
-        // Add padding if needed
-        if (data.size() < max_width) {
-            flattened_data.insert(flattened_data.end(), max_width - data.size(), 0);
-        }
-    }
-
-    // Create host buffer and tensor
-    auto config_buffer = tt::tt_metal::HostBuffer(std::move(flattened_data));
-    return Tensor(std::move(config_buffer), tensor_shape, DataType::UINT32, Layout::ROW_MAJOR);
-}
-
-operation::ProgramWithCallbacks reshard_multi_core_generic(
-    const Tensor& input,
-    Tensor& output,
-    Tensor& rt_args_config_0,
-    Tensor& rt_args_config_1,
-    std::unordered_map<CoreCoord, std::vector<PageStride>> output_core_to_page_range_pair,
-    uint32_t MAX_RT_ARGS_WIDTH) {
+operation::ProgramWithCallbacks reshard_multi_core_generic(const std::vector<Tensor>& inputs, Tensor& output) {
+    auto input = inputs.at(0);
     auto device = input.device();
 
     tt::tt_metal::Program program{};
@@ -316,6 +219,17 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(
             .set_globally_allocated_address(*output.buffer());
     auto cb_dst0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_dst_config);
 
+    tt::tt_metal::KernelHandle kernel_id_0;
+    tt::tt_metal::KernelHandle kernel_id_1;
+    bool rt_gt_256 = false;
+
+    std::unordered_map<CoreCoord, std::vector<detail::PageStride>> output_core_to_page_range_pair;
+    if (input.buffer()->page_size() != output.buffer()->page_size()) {
+        output_core_to_page_range_pair = get_core_page_ranges_diff_width(input.buffer(), output.buffer(), input);
+    } else {
+        output_core_to_page_range_pair = get_core_page_ranges(input.buffer(), output.buffer());
+    }
+
     std::vector<uint32_t> physical_core_coords;
     physical_core_coords.reserve(grid.x * grid.y);
     for (uint32_t i = 0; i < grid.x; i++) {
@@ -351,46 +265,39 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(
             page_stride_vector.size());
         rt_config_map_1[core] = runtime_args_1;
     }
-
-    tt::tt_metal::KernelHandle kernel_id_0;
-    tt::tt_metal::KernelHandle kernel_id_1;
-    bool rt_gt_256 = false;
-    for (const auto& core : cores) {
-        const auto& runtime_args_0 = rt_config_map_0.at(core);
-        const auto& runtime_args_1 = rt_config_map_1.at(core);
-
-        // If runtime args are larger than 256, we need to use circular buffers
-        if (runtime_args_0.size() > 256 || runtime_args_1.size() > 256) {
+    for (const auto& [core, rt_args] : rt_config_map_0) {
+        if (rt_args.size() > 256 || rt_config_map_1[core].size() > 256) {
             rt_gt_256 = true;
             break;
         }
     }
+    CBHandle cb_rt_args_0 = 0;
+    CBHandle cb_rt_args_1 = 0;
     if (rt_gt_256) {
-        auto runtime_args_tensor_0 = construct_per_core_host_tensor(rt_config_map_0, MAX_RT_ARGS_WIDTH);
-        auto runtime_args_tensor_1 = construct_per_core_host_tensor(rt_config_map_1, MAX_RT_ARGS_WIDTH);
-
-        tt::tt_metal::memcpy(rt_args_config_0, runtime_args_tensor_0);
-        tt::tt_metal::memcpy(rt_args_config_1, runtime_args_tensor_1);
+        auto device_runtime_args_0 = inputs.at(1);
+        auto device_runtime_args_1 = inputs.at(2);
         constexpr uint32_t rt_args_cb_index_0 = 17;
         constexpr uint32_t rt_args_cb_index_1 = 18;
 
         // CB config for first runtime args tensor
-        tt::tt_metal::CircularBufferConfig cb_rt_args_config_0 =
+        auto cb_rt_args_config_0 =
             tt::tt_metal::CircularBufferConfig(
-                rt_args_config_0.logical_shape()[1] * sizeof(uint32_t), {{rt_args_cb_index_0, tt::DataFormat::Int32}})
-                .set_page_size(rt_args_cb_index_0, rt_args_config_0.logical_shape()[1] * sizeof(uint32_t))
-                .set_globally_allocated_address(*rt_args_config_0.buffer());
+                device_runtime_args_0.logical_shape()[1] * sizeof(uint32_t),
+                {{rt_args_cb_index_0, tt::DataFormat::Int32}})
+                .set_page_size(rt_args_cb_index_0, device_runtime_args_0.logical_shape()[1] * sizeof(uint32_t))
+                .set_globally_allocated_address(*device_runtime_args_0.buffer());
 
         // CB config for second runtime args tensor
-        tt::tt_metal::CircularBufferConfig cb_rt_args_config_1 =
+        auto cb_rt_args_config_1 =
             tt::tt_metal::CircularBufferConfig(
-                rt_args_config_1.logical_shape()[1] * sizeof(uint32_t), {{rt_args_cb_index_1, tt::DataFormat::Int32}})
-                .set_page_size(rt_args_cb_index_1, rt_args_config_1.logical_shape()[1] * sizeof(uint32_t))
-                .set_globally_allocated_address(*rt_args_config_1.buffer());
+                device_runtime_args_1.logical_shape()[1] * sizeof(uint32_t),
+                {{rt_args_cb_index_1, tt::DataFormat::Int32}})
+                .set_page_size(rt_args_cb_index_1, device_runtime_args_1.logical_shape()[1] * sizeof(uint32_t))
+                .set_globally_allocated_address(*device_runtime_args_1.buffer());
 
         // Create the circular buffers
-        auto cb_rt_args_0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_rt_args_config_0);
-        auto cb_rt_args_1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_rt_args_config_1);
+        cb_rt_args_0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_rt_args_config_0);
+        cb_rt_args_1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_rt_args_config_1);
 
         kernel_id_0 = tt::tt_metal::CreateKernel(
             program,
@@ -427,16 +334,15 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(
                 {dst_cb_index, (uint32_t)grid.x, (uint32_t)grid.y, page_size, unit_size}));
 
         for (const auto& core : cores) {
-            const auto& runtime_args_0 = rt_config_map_0.at(core);
-            const auto& runtime_args_1 = rt_config_map_1.at(core);
-
             // Set runtime args for each core
-            tt::tt_metal::SetRuntimeArgs(program, kernel_id_0, core, runtime_args_0);
-            tt::tt_metal::SetRuntimeArgs(program, kernel_id_1, core, runtime_args_1);
+            auto rt_args_0 = rt_config_map_0[core];
+            auto rt_args_1 = rt_config_map_1[core];
+            tt::tt_metal::SetRuntimeArgs(program, kernel_id_0, core, rt_args_0);
+            tt::tt_metal::SetRuntimeArgs(program, kernel_id_1, core, rt_args_1);
         }
     }
     auto override_runtime_arguments_callback =
-        [kernel_id_0, kernel_id_1, rt_gt_256, cb_dst0, grid, cores, rt_args_config_0, rt_args_config_1](
+        [kernel_id_0, kernel_id_1, rt_gt_256, cb_dst0, cb_rt_args_0, cb_rt_args_1, grid, cores](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -455,6 +361,10 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(
                     runtime_args_1[grid.x + grid.y] = input_addr;
                 }
             } else {
+                const auto& tensor_rt_args0 = input_tensors.at(1);
+                const auto& tensor_rt_args1 = input_tensors.at(2);
+                UpdateDynamicCircularBufferAddress(program, cb_rt_args_0, *tensor_rt_args0.buffer());
+                UpdateDynamicCircularBufferAddress(program, cb_rt_args_1, *tensor_rt_args1.buffer());
                 for (auto core : cores) {
                     auto& runtime_args_0 = runtime_args_0_by_core[core.x][core.y];
                     auto& runtime_args_1 = runtime_args_1_by_core[core.x][core.y];
@@ -590,13 +500,8 @@ operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& inp
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
-operation::ProgramWithCallbacks reshard_multi_core(
-    const Tensor& input,
-    Tensor& output,
-    Tensor& rt_args_config_0,
-    Tensor& rt_args_config_1,
-    std::unordered_map<CoreCoord, std::vector<PageStride>> output_core_to_page_range_pair,
-    uint32_t MAX_RT_ARGS_WIDTH) {
+operation::ProgramWithCallbacks reshard_multi_core(const std::vector<Tensor>& inputs, Tensor& output) {
+    auto input = inputs.at(0);
     if (input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
         output.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
         if (output.memory_config().buffer_type() == BufferType::L1) {
@@ -614,8 +519,7 @@ operation::ProgramWithCallbacks reshard_multi_core(
             return reshard_multi_core_same_height<false>(input, output);
         }
     } else {
-        return reshard_multi_core_generic(
-            input, output, rt_args_config_0, rt_args_config_1, output_core_to_page_range_pair, MAX_RT_ARGS_WIDTH);
+        return reshard_multi_core_generic(inputs, output);
     }
 }
 

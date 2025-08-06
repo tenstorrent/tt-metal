@@ -8,42 +8,6 @@
 
 namespace ttnn::operations::data_movement::detail {
 
-// start is inclusive, end is exclusive
-struct PageRange {
-    uint32_t start;
-    uint32_t end;
-};
-
-struct Stride {
-    CoreCoord core;
-    uint32_t data;
-};
-
-struct PageStride {
-    CoreCoord start_core;
-    uint32_t start_data;
-    uint32_t stride_size;  // number of pages per stride
-    Stride stride;
-    uint32_t num_strides;
-    bool skip;
-};
-
-struct CorePageRange {
-    CoreCoord core;
-    PageRange range;
-};
-
-struct CorePageStride {
-    CoreCoord core;
-    PageStride page_stride;
-};
-
-tt::tt_metal::operation::ProgramWithCallbacks reshard_multi_core(
-    const Tensor& input,
-    Tensor& output,
-    Tensor& rt_args_config_0,
-    Tensor& rt_args_config_1,
-    std::unordered_map<CoreCoord, std::vector<PageStride>> output_core_to_page_range_pair,
-    uint32_t MAX_RT_ARGS_WIDTH);
+tt::tt_metal::operation::ProgramWithCallbacks reshard_multi_core(const std::vector<Tensor>& inputs, Tensor& output);
 
 }  // namespace ttnn::operations::data_movement::detail
