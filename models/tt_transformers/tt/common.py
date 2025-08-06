@@ -9,7 +9,7 @@ from typing import Optional
 
 import torch
 from loguru import logger
-from pydantic import BaseModel, Field, AliasChoices
+from pydantic import AliasChoices, BaseModel, Field
 
 import ttnn
 
@@ -43,7 +43,9 @@ class RopeScalingType(str, Enum):
 class RopeScaling(BaseModel):
     """RoPE scaling configuration."""
 
-    rope_type: RopeScalingType = Field(validation_alias=AliasChoices("rope_type", "type"), exclude=True, description="RoPE scaling type")
+    rope_type: RopeScalingType = Field(
+        validation_alias=AliasChoices("rope_type", "type"), exclude=True, description="RoPE scaling type"
+    )
     factor: float
     original_max_position_embeddings: Optional[int] = None
 
