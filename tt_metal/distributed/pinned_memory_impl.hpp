@@ -24,7 +24,7 @@ using chip_id_t = int;
 
 /**
  * @brief Implementation class for PinnedMemory using pimpl pattern
- * 
+ *
  * This class contains all the implementation details that were previously
  * in the public PinnedMemory interface.
  */
@@ -38,10 +38,7 @@ public:
      * @param map_to_noc Whether to map the buffer to the NOC
      */
     PinnedMemoryImpl(
-        const std::vector<IDevice*>& devices,
-        void* host_buffer,
-        size_t buffer_size,
-        bool map_to_noc = false);
+        const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc = false);
 
     ~PinnedMemoryImpl();
 
@@ -75,17 +72,14 @@ public:
 
 private:
     void initialize_from_devices(
-        const std::vector<IDevice*>& devices,
-        void* host_buffer,
-        size_t buffer_size,
-        bool map_to_noc);
+        const std::vector<IDevice*>& devices, void* host_buffer, size_t buffer_size, bool map_to_noc);
 
     size_t buffer_size_;
     bool map_to_noc_;
-    
+
     // Map from device ID to SysmemBuffer (keyed by MMIO device ID)
     std::unordered_map<chip_id_t, std::unique_ptr<tt::umd::SysmemBuffer>> device_buffers_;
-    
+
     // Map from logical device ID to its associated MMIO device ID
     std::unordered_map<chip_id_t, chip_id_t> device_to_mmio_map_;
 };
