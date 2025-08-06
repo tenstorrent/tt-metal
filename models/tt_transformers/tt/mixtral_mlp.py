@@ -17,8 +17,7 @@ class TtMixtralMLP(LightweightModule):
         self.dtypes = dtypes
         self.model_args = args
         self.model_config = args.get_model_config()
-
-        base_name = lambda expert_num: f"layers.{layer_num}. .experts.{expert_num}"
+        base_name = lambda expert_num: f"layers.{layer_num}.block_sparse_moe.experts.{expert_num}"
         torch_weight = lambda name: torch.concat(
             [
                 self.state_dict[f"{base_name(expert_num)}.{name}.weight"].permute(1, 0).unsqueeze(0).unsqueeze(0)
