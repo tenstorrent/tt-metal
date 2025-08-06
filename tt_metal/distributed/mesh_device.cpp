@@ -1032,7 +1032,7 @@ const std::unique_ptr<Allocator>& MeshDevice::allocator(SubDeviceId sub_device_i
 
 std::shared_ptr<distributed::MeshDevice> MeshDevice::get_mesh_device() { return shared_from_this(); }
 
-std::unique_ptr<PinnedMemory> MeshDevice::create_pinned_memory(
+std::unique_ptr<PinnedMemory> MeshDevice::pin_memory(
     const MeshCoordinateRangeSet& coordinate_range_set,
     void* host_buffer,
     size_t buffer_size,
