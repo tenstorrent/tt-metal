@@ -78,10 +78,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t& output_stick_size_bytes = output_stick_size * output_datum_size;
 
     // check if row byte sizes are at least 32 and a power of 2 (for InterleavedAddrGen)
-    const uint32_t is_input_stick_size_bytes_pow2_min_32 = is_pow2_min32(input_stick_size_bytes);
-    const uint32_t is_index_stick_size_bytes_pow2_min_32 = is_pow2_min32(index_stick_size_bytes);
-    const uint32_t is_source_stick_size_bytes_pow2_min_32 = is_pow2_min32(source_stick_size_bytes);
-    const uint32_t is_output_stick_size_bytes_pow2_min_32 = is_pow2_min32(output_stick_size_bytes);
 
     // for InterleavedAddrGen
 

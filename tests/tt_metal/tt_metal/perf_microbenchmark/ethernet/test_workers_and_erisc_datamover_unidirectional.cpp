@@ -498,8 +498,7 @@ bool RunWriteBWTest(
         (uint32_t)receiver_device->ethernet_core_from_logical_core(eth_receiver_core).y,
         chip1_worker_semaphore_id};
 
-    CBHandle cb_src0_receiver_workers =
-        CreateCircularBuffer(receiver_program, chip1_receiver_worker_core, cb_src0_config);
+    CreateCircularBuffer(receiver_program, chip1_receiver_worker_core, cb_src0_config);
     auto device_1_edm_receiver_worker_receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
         receiver_side_reader_worker_kernel_path,

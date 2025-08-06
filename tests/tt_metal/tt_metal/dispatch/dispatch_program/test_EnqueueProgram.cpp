@@ -1021,8 +1021,7 @@ void test_my_coordinates(
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = tt::tt_metal::CreateProgram();
-    KernelHandle kernel =
-        create_kernel(processor_class, program, CoreRangeSet{cr}, compile_args, k_kernel_path, idle_eth);
+    create_kernel(processor_class, program, CoreRangeSet{cr}, compile_args, k_kernel_path, idle_eth);
 
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(cq_id), workload, false);

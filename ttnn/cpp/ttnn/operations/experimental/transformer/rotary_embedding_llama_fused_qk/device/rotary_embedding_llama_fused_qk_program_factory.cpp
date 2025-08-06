@@ -131,8 +131,7 @@ operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_shard
         tt_metal::CircularBufferConfig(
             num_interm_tiles * input_single_tile_size, {{rotated_input_interm_cb_index, input_cb_data_format}})
             .set_page_size(rotated_input_interm_cb_index, input_single_tile_size);
-    auto cb_rotated_input_interm =
-        tt_metal::CreateCircularBuffer(program, all_cores_bb, cb_rotated_input_interm_config);
+    tt_metal::CreateCircularBuffer(program, all_cores_bb, cb_rotated_input_interm_config);
 
     uint32_t cos_interm_cb_index = CBIndex::c_25;
     tt_metal::CircularBufferConfig cb_cos_interm_config =

@@ -517,8 +517,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
         all_cores,
         tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
-    bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_page_size);
-
     // Tilized writer
     KernelHandle writer_kernel_id = 0;
     if (!output_sharded) {
@@ -734,7 +732,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
         all_cores,
         tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
-    bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_page_size);
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)output_page_size};
     TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 

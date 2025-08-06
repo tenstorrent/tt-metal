@@ -63,8 +63,7 @@ void RunTest(DPrintFixture* fixture, IDevice* device, const bool add_active_eth_
         cores,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-    KernelHandle trisc_kernel_id =
-        CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/misc/print_simple.cpp", cores, ComputeConfig{});
+    CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/misc/print_simple.cpp", cores, ComputeConfig{});
 
     for (const CoreCoord& core : cores) {
         UpdateGoldenOutput(golden_output, device, "BR");
