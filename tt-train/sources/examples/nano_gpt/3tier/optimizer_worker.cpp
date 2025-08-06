@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
     fmt::print("Size {}, Rank {}: Initializing MPI context\n", *distributed_ctx.size(), *distributed_ctx.rank());
     argv = app.ensure_utf8(argv);
 
-    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespear_nanogpt_3tier.yaml";
+    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespeare_nanogpt_3tier.yaml";
 
     std::vector<int> aggregator_and_optimizer_ranks = {*distributed_ctx.rank() - 1, *distributed_ctx.rank()};
 
