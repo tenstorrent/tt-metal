@@ -17,6 +17,18 @@
 /// This file defines the SmallVector class.
 ///
 //===----------------------------------------------------------------------===//
+// tt_stl: adapted from llvm/ADT/SmallVector.h.
+//
+// Modifications include:
+// - Replaced LLVM-specific macros (`LLVM_NODISCARD`, `LLVM_LIKELY`, `LLVM_UNLIKELY`) with standard C++ equivalents.
+// - Added `cbegin`, `cend`, `rcbegin`, and `rcend` methods to `SmallVectorTemplateCommon`.
+// - Made the default constructor `SmallVectorBase() = delete;` public.
+// - Changed `emplace_back` for SmallVectorImpl and `growAndEmplaceBack` for SmallVectorTemplateBase
+//   to use brace `{}` initialization instead of parentheses `()` to enable aggregate initialization.
+// - Removed the `LLVM_GSL_OWNER` annotation.
+// - Renamed the `llvm` namespace to `ttsl::detail::llvm`.
+// - Replaced header guards with `#pragma once`.
+//
 
 #pragma once
 
@@ -402,7 +414,7 @@ protected:
         // Grow manually in case one of Args is an internal reference.
         size_t NewCapacity;
         T* NewElts = mallocForGrow(0, NewCapacity);
-        ::new ((void*)(NewElts + this->size())) T(std::forward<ArgTypes>(Args)...);
+        ::new ((void*)(NewElts + this->size())) T{std::forward<ArgTypes>(Args)...};
         moveElementsForGrow(NewElts);
         takeAllocationForGrow(NewElts, NewCapacity);
         this->set_size(this->size() + 1);

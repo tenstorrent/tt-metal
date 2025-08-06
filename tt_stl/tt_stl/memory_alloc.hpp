@@ -19,6 +19,14 @@
 /// failure instead of returning null pointer.
 ///
 //===----------------------------------------------------------------------===//
+// tt_stl: adapted from MemAlloc.h
+//
+// Modifications include:
+// - Removed LLVM_ATTRIBUTE_RETURNS_NOALIAS
+// - Replaced LLVM_ATTRIBUTE_RETURNS_NONNULL with standard C++ equivalents
+// - Replaced report_bad_alloc_error with throwing std::bad_alloc
+// - Removed unused functions: allocate_buffer, deallocate_buffer
+// - Added ttsl::detail:: prefix to LLVM namespace
 
 #ifndef LLVM_SUPPORT_MEMALLOC_H
 #define LLVM_SUPPORT_MEMALLOC_H
@@ -28,7 +36,7 @@
 
 namespace ttsl::detail::llvm {
 
-inline void* safe_malloc(size_t Sz) {
+[[nodiscard]] inline void* safe_malloc(size_t Sz) {
     void* Result = std::malloc(Sz);
     if (Result == nullptr) {
         // It is implementation-defined whether allocation occurs if the space
@@ -37,12 +45,12 @@ inline void* safe_malloc(size_t Sz) {
         if (Sz == 0) {
             return safe_malloc(1);
         }
-        throw std::runtime_error("Allocation failed");
+        throw std::bad_alloc();
     }
     return Result;
 }
 
-inline void* safe_calloc(size_t Count, size_t Sz) {
+[[nodiscard]] inline void* safe_calloc(size_t Count, size_t Sz) {
     void* Result = std::calloc(Count, Sz);
     if (Result == nullptr) {
         // It is implementation-defined whether allocation occurs if the space
@@ -51,12 +59,12 @@ inline void* safe_calloc(size_t Count, size_t Sz) {
         if (Count == 0 || Sz == 0) {
             return safe_malloc(1);
         }
-        throw std::runtime_error("Allocation failed");
+        throw std::bad_alloc();
     }
     return Result;
 }
 
-inline void* safe_realloc(void* Ptr, size_t Sz) {
+[[nodiscard]] inline void* safe_realloc(void* Ptr, size_t Sz) {
     void* Result = std::realloc(Ptr, Sz);
     if (Result == nullptr) {
         // It is implementation-defined whether allocation occurs if the space
@@ -65,30 +73,10 @@ inline void* safe_realloc(void* Ptr, size_t Sz) {
         if (Sz == 0) {
             return safe_malloc(1);
         }
-        throw std::runtime_error("Allocation failed");
+        throw std::bad_alloc();
     }
     return Result;
 }
-
-/// Allocate a buffer of memory with the given size and alignment.
-///
-/// When the compiler supports aligned operator new, this will use it to
-/// handle even over-aligned allocations.
-///
-/// However, this doesn't make any attempt to leverage the fancier techniques
-/// like posix_memalign due to portability. It is mostly intended to allow
-/// compatibility with platforms that, after aligned allocation was added, use
-/// reduced default alignment.
-void* allocate_buffer(size_t Size, size_t Alignment);
-
-/// Deallocate a buffer of memory with the given size and alignment.
-///
-/// If supported, this will used the sized delete operator. Also if supported,
-/// this will pass the alignment to the delete operator.
-///
-/// The pointer must have been allocated with the corresponding new operator,
-/// most likely using the above helper.
-void deallocate_buffer(void* Ptr, size_t Size, size_t Alignment);
 
 }  // namespace ttsl::detail::llvm
 #endif

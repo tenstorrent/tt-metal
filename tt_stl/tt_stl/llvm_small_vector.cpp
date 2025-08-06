@@ -16,6 +16,11 @@
 // This file implements the SmallVector class.
 //
 //===----------------------------------------------------------------------===//
+// tt_stl: modified from llvm/ADT/SmallVector.cpp
+// Modifications include:
+// - Twine dependency removed
+// - Removed report_fatal_error(Twine(Reason))
+// - Added ttsl::detail:: prefix to LLVM namespace
 
 #include "llvm_small_vector.hpp"
 
