@@ -132,16 +132,9 @@ or
 export LLAMA_DIR=<path_to_meta_downloaded_model_directory>
 ```
 
-On N150, N300 and LoudBox / QuietBox you should also set:
-
-```
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-```
-
 Description of these environment variables:
 - `HF_MODEL` is the HuggingFace org/name of the model you want to run or the path to the downloaded Huggingface weights.
 - `LLAMA_DIR` sets the path for Meta-provided Llama3 model weights if you are not using HuggingFace.
-- `WH_ARCH_YAML` sets the dispatch over ethernet cores. This is optional for N150 and required for N300 and LoudBox / QuietBox, enabling a full core grid utilization (8x8), allowing for maximum performance of LLama3 models. Do not set this for TG.
 - `TT_CACHE_PATH` is optional. It sets the path for ttnn's weight cache files. See below for more details.
 - `MESH_DEVICE` is optional. It allows you to use fewer devices than are available. See below for more details.
 

@@ -20,6 +20,7 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
+#include "umd/device/types/cluster_descriptor_types.h"
 
 namespace ttnn::operations::generic::test {
 
@@ -239,7 +240,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpUnaryReluSharded) {
     ASSERT_TRUE(allclose);
 }
 
-TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpBinaryEltwiseAdd) {
+TEST_F(TTNNFixtureWithDevice, TestGenericOpBinaryEltwiseAdd) {
     const std::vector<std::pair<std::string, std::string>> defines_eltwise_add = {
         {"ELTWISE_OP", "add_tiles"},
         {"ELTWISE_OP_TYPE", "EltwiseBinaryType::ELWADD"},
@@ -310,8 +311,8 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpBinaryEltwiseAdd) {
     TensorAccessorArgs(*device_input_tensor_a.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(*device_input_tensor_b.buffer()).append_to(reader_compile_time_args);
 
-    uint32_t dst_is_dram = device_output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    const KernelDescriptor::CompileTimeArgs writer_compile_time_args = {dst_cb_index, dst_is_dram};
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {dst_cb_index};
+    TensorAccessorArgs(*device_output_tensor.buffer()).append_to(writer_compile_time_args);
 
     // setup runtime arguments for data movement kernels
     uint32_t num_cores_total = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
@@ -349,8 +350,6 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpBinaryEltwiseAdd) {
             num_tiles_per_core = num_tiles_per_core_group_2;
             block_cnt_per_core = block_cnt_per_core_group_2;
             block_size_per_core = block_size_per_core_group_2;
-        } else {
-            continue;
         }
 
         reader_rt_args_per_core[core_x][core_y] = {
@@ -395,7 +394,7 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpBinaryEltwiseAdd) {
         .core_ranges = all_cores,
         .compile_time_args = {},
         .defines = defines_eltwise_add,
-        .runtime_args = writer_rt_args_per_core,
+        .runtime_args = compute_rt_args_per_core,
         .common_runtime_args = {},
         .config = tt::tt_metal::ComputeConfigDescriptor{},
     };
@@ -414,7 +413,10 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpBinaryEltwiseAdd) {
     ASSERT_TRUE(allclose);
 }
 
-TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpMatmul) {
+TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_board_type(0) == tt::umd::BoardType::P150) {
+        GTEST_SKIP();
+    }
     log_info(tt::LogTest, "Running ttnn matmul");
     uint32_t Mt_original = 10;
     uint32_t Kt_original = 2;
@@ -540,10 +542,11 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpMatmul) {
 
     uint32_t src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     uint32_t src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {src0_is_dram, src1_is_dram};
+    uint32_t last_ktile_w = input_tensor_a.logical_shape()[-1] % tt::constants::TILE_WIDTH;
+    const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {src0_is_dram, src1_is_dram, last_ktile_w};
 
-    uint32_t dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    const KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(uint32_t)output_cb_index, dst_is_dram};
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(uint32_t)output_cb_index};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     log_info(tt::LogTest, "num_cores: {}, num_core_x: {}, num_core_y: {}", num_cores, num_cores_x, num_cores_y);
     KernelDescriptor::RuntimeArgs reader_rt_args_per_core(
@@ -604,7 +607,7 @@ TEST_F(TTNNFixtureWithDevice, DISABLED_TestGenericOpMatmul) {
         .kernel_source =
             "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         .core_ranges = all_device_cores_set,
-        .compile_time_args = reader_compile_time_args,
+        .compile_time_args = writer_compile_time_args,
         .runtime_args = writer_rt_args_per_core,
         .common_runtime_args = {},
         .config = tt::tt_metal::WriterConfigDescriptor{},
@@ -713,8 +716,10 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
         .format_descriptors = {output_cb_format_descriptor},
     };
 
-    const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {is_dram_input};
-    const KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(std::uint32_t)cb_out_id, is_dram_input};
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args;
+    TensorAccessorArgs(*device_input_tensor.buffer()).append_to(reader_compile_time_args);
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(std::uint32_t)cb_out_id};
+    TensorAccessorArgs(*device_output_tensor.buffer()).append_to(writer_compile_time_args);
 
     // only core (0, 0) is used
     const KernelDescriptor::CoreRuntimeArgs reader_rt_args = {

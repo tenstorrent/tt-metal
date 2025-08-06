@@ -1157,3 +1157,42 @@ def test_unary_hardswish_bf8b_ttnn(input_shapes, low, high, device):
 
     assert_allclose(output_tensor, golden_tensor, atol=0.025)
     assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.9999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([100])),
+        (torch.Size([64, 32])),
+        (torch.Size([3, 128, 32])),
+        (torch.Size([1, 3, 320, 384])),
+        (torch.Size([1, 1, 32, 320, 12])),
+    ),
+)
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.bfloat16, ttnn.bfloat8_b),
+    ],
+)
+@pytest.mark.parametrize(
+    "min_val, max_val",
+    [
+        (-2.0, 2.0),
+        (-26.5, 33.6),
+        (-0.5, 21.0),
+    ],
+)
+def test_unary_hardtanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, min_val, max_val, device):
+    in_data1 = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
+    input_tensor1 = ttnn.from_torch(in_data1, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        in_data1 = ttnn.to_torch(input_tensor1, dtype=torch_dtype)
+
+    output_tensor = ttnn.hardtanh(input_tensor1, min_val=min_val, max_val=max_val)
+    golden_function = ttnn.get_golden_function(ttnn.hardtanh)
+    golden_tensor = golden_function(in_data1, min_val=min_val, max_val=max_val)
+
+    assert_equal(golden_tensor, ttnn.to_torch(output_tensor))
