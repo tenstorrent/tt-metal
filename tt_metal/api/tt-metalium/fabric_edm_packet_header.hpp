@@ -91,6 +91,10 @@ static_assert(
 struct NocUnicastCommandHeader {
     uint64_t noc_address;
 };
+struct NocReadCommandHeader {
+    uint64_t noc_address;
+    uint64_t event;
+};
 #define NOC_SCATTER_WRITE_MAX_CHUNKS 2
 struct NocUnicastScatterCommandHeader {
     uint64_t noc_address[NOC_SCATTER_WRITE_MAX_CHUNKS];
@@ -143,6 +147,7 @@ struct NocMulticastAtomicIncCommandHeader {
 };
 static_assert(sizeof(NocUnicastCommandHeader) == 8, "NocUnicastCommandHeader size is not 8 bytes");
 static_assert(sizeof(NocMulticastCommandHeader) == 8, "NocMulticastCommandHeader size is not 8 bytes");
+static_assert(sizeof(NocReadCommandHeader) == 16, "NocReadCommandHeader size is not 16 bytes");
 static_assert(sizeof(NocUnicastInlineWriteCommandHeader) == 16, "NocMulticastCommandHeader size is not 16 bytes");
 static_assert(sizeof(NocUnicastAtomicIncCommandHeader) == 16, "NocUnicastCommandHeader size is not 16 bytes");
 static_assert(
@@ -156,6 +161,7 @@ union NocCommandFields {
     NocUnicastAtomicIncFusedCommandHeader unicast_seminc_fused;
     NocMulticastAtomicIncCommandHeader mcast_seminc;
     NocUnicastScatterCommandHeader unicast_scatter_write;
+    NocReadCommandHeader read;
 };
 static_assert(sizeof(NocCommandFields) == 24, "CommandFields size is not 24 bytes");
 
@@ -216,6 +222,21 @@ struct PacketHeaderBase {
 #else
         // Called from the host. Always NOC0 address not edm_to_local_chip_noc
         this->command_fields.unicast_write = noc_unicast_command_header;
+#endif
+        return *static_cast<Derived*>(this);
+    }
+
+    inline Derived& to_noc_read(const NocReadCommandHeader& noc_read_command_header, size_t payload_size_bytes) {
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+        // This may only be called from the host
+        ASSERT(false);
+        DPRINT << "!to_noc_read" << ENDL();
+        while (true) {
+        }
+#else
+        this->noc_send_type = NOC_READ;
+        this->payload_size_bytes = payload_size_bytes;
+        this->command_fields.read = noc_read_command_header;
 #endif
         return *static_cast<Derived*>(this);
     }
