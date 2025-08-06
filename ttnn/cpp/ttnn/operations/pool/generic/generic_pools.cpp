@@ -129,7 +129,7 @@ static Tensor pool2d_invoke(
                                                                                       : tt::constants::TILE_WIDTH;
         }
 
-        auto input_tensor_shape = input_tensor.logical_shape();
+        auto input_tensor_shape = input_tensor.padded_shape();
         uint32_t input_tensor_width_snapped_to_channels_alignment =
             tt::round_up(input_tensor_shape[3], num_cores_c * input_channels_alignment);
 
@@ -140,7 +140,6 @@ static Tensor pool2d_invoke(
              input_tensor_width_snapped_to_channels_alignment});
 
         input_tensor_sharded = input_tensor.reshape(input_tensor_shape, input_padded_shape);
-        log_info(tt::LogOp, "input_padded_tensor shape: {}", input_tensor_sharded.logical_shape());
 
         auto sharded_mem_config = conv::create_sharded_memory_config_from_parallel_config(
             input_padded_shape, parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
