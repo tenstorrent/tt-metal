@@ -193,7 +193,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     const auto num_metadata_pages = metadata_tensor.buffer()->num_pages();
 
     const auto [core_page_increments, all_cores] =
-        split_work_to_cores_even_multiples(grid, num_metadata_pages, reduction_size);
+        tt::tt_metal::split_work_to_cores_even_multiples(grid, num_metadata_pages, reduction_size);
 
     const auto mapping_tensor_addr = mapping_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address();
     const auto metadata_tensor_addr = metadata_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address();
