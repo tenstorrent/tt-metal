@@ -456,14 +456,14 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         value_true_tensor_cb = cb1;
         value_true_tensor_cb_handle = cb1_handle;
 
-        // Create CB for value_false (use same tensor as value_true for now)
+        // Create CB for value_false (using actual false tensor)
         auto [cb2, cb2_handle] = create_cb(
             tt::CBIndex::c_2,
             program,
             all_device_cores,
-            value_true_single_tile_size,
+            value_false_single_tile_size,  // Using actual false tensor size
             num_tiles_per_cb,
-            value_true_data_format);
+            value_false_data_format);  // Using actual false tensor format
         value_false_tensor_cb = cb2;
         value_false_tensor_cb_handle = cb2_handle;
     } else {
@@ -542,13 +542,13 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args);
 
     } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
-        // TTT with column broadcast: pass all 3 CB handles like regular TTT case
+        // TTT with column broadcast: pass all 3 CB handles with proper DRAM flags
         reader_config = tt_metal::ReaderDataMovementConfig(
             {predicate_is_dram,
              predicate_tensor_cb,
              value_true_is_dram,
              value_true_tensor_cb,
-             value_true_is_dram,  // Use same DRAM flag for false_cb since it's the same tensor
+             value_false_is_dram,  // Use actual false tensor DRAM flag
              value_false_tensor_cb},
             reader_defines);
     } else {

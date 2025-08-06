@@ -25,14 +25,14 @@ def torch_equal_nan(a, b):
     [
         # ((1, 1, 1024, 1024), (1, 1, 1, 1024), (1, 1, 1024, 1024)),
         # ((1, 1, 32, 32), (1, 1, 32, 32), (1, 1, 32, 32)),  # LLK
-        ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1024)),  # LLK
+        ((1, 1, 1024, 1024), (1, 1, 1024, 1024), (1, 1, 1024, 1)),  # LLK
         # ((3, 2, 3, 64, 128), (3, 2, 3, 64, 128), (3, 2, 3, 64, 128)),  # LLK
         # ((256,), (256,), (256,)),  # LLK
     ],
 )
 @pytest.mark.parametrize("scalar", [15.5])
 @pytest.mark.parametrize("variant", ["TTT"])
-@pytest.mark.parametrize("condition", [1])
+@pytest.mark.parametrize("condition", [0])
 def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, device):
     torch.manual_seed(0)
     C = torch.ones(c_shape, dtype=torch.float32) * condition
