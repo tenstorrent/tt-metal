@@ -44,7 +44,6 @@ concurrency:
     ${{ github.workflow }}-
     ${{ (github.ref_protected && github.run_id)
         || github.event.pull_request.number
-        # || (github.event_name == 'merge_group' && join(slice(split(github.event.merge_group.head_ref, '-'), 0, -1), '-'))
         || github.ref }}-
     ${{ inputs.build-type || 'default' }}
   cancel-in-progress: true
@@ -65,7 +64,6 @@ jobs:
           echo "github.run_id: ${{ github.run_id }}"
           echo "github.event.pull_request.number: ${{ github.event.pull_request.number }}"
           echo "github.event.merge_group.head_ref: ${{ github.event.merge_group.head_ref }}"
-          echo "github.event.merge_group.head_ref (without SHA): ${{ join(slice(split(github.event.merge_group.head_ref, '-'), 0, -1), '-') }}"
           echo "github.ref: ${{ github.ref }}"
           echo "inputs.build-type: ${{ inputs.build-type }}"
           echo "github.workflow: ${{ github.workflow }}"
