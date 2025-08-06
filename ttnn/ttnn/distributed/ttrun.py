@@ -251,7 +251,6 @@ def main(ctx: click.Context, rank_binding: Path, dry_run: bool, verbose: bool, m
         - TT_METAL_HOME: TT-Metal installation directory
         - PYTHONPATH: Python module search path
         - TT_MESH_GRAPH_DESC_PATH: Path to mesh graph descriptor
-        - GTEST_OUTPUT: If GTEST_OUTPUT is set to a directory, a subdirectory will be created for each rank.
 
     See examples/ttrun/ for example configuration files.
     """
