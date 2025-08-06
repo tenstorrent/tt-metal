@@ -165,9 +165,6 @@ private:
     
     // Map from device ID to SysmemBuffer
     std::unordered_map<chip_id_t, std::unique_ptr<tt::umd::SysmemBuffer>> device_buffers_;
-    
-    // Map from device ID to SysmemManager (for cleanup and operations)
-    std::unordered_map<chip_id_t, tt::umd::SysmemManager*> device_managers_;
 };
 
 }  // namespace tt::tt_metal 
