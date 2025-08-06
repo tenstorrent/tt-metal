@@ -137,10 +137,10 @@ void PagedUpdateCacheDeviceOperation::validate(
         if (optional_input_tensors.at(0)->is_sharded()) {
             uint32_t in_num_cores_cur_pos = optional_input_tensors.at(0)->shard_spec().value().grid.num_cores();
             TT_FATAL(
-                input_tensor.padded_shape()[1] == num_indices,
-                "Number of update_idxs ({}) should match batch size ({})",
+                input_tensor.logical_shape()[1] == num_indices,
+                "Number of update_idxs ({}) should match batch size ({}) if sharded",
                 num_indices,
-                input_tensor.padded_shape()[1]);
+                input_tensor.logical_shape()[1]);
             TT_FATAL(
                 in_num_cores_cur_pos == num_cores_cur_pos,
                 "Number of cores sharded on L1 ({}) should match dimension of update_idxs at 0 ({})",

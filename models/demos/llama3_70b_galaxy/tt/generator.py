@@ -432,18 +432,20 @@ class Generator:
         logger.info("Done Compiling Model")
 
         # Get inputs ready for trace run
-        device_inputs = self.model.prepare_inputs_decode(
+        tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt = self.model.prepare_inputs_decode(
             tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
         )
-        # host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table=page_table)
-        # device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
 
+        # Save the buffer addresses for preallocated tensors
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        tt_out_tok = self.model.ttnn_decode_forward(*device_inputs, kv_cache=kv_cache)
+        tt_out_tok = self.model.ttnn_decode_forward(
+            tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt, kv_cache=kv_cache
+        )
 
+        # Try allocating our persistent tensors here and verifying it matches the address that trace captured
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
-        return trace_id, tt_out_tok, *device_inputs
+        return trace_id, tt_out_tok, tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt
 
     def _decode_forward_trace_text(
         self,
@@ -489,18 +491,14 @@ class Generator:
             self.trace_inputs_text = device_inputs
             self.trace_output_text = tt_out_tok
         if reset_inputs:
-            host_inputs = []
-            decode_inputs = self.model.prepare_decode_inputs_host(
+            host_inputs = self.model.prepare_decode_inputs_host(
                 tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
             )
-            for i, input_tensor in enumerate(decode_inputs):
-                if input_tensor.storage_type() == ttnn.StorageType.HOST:
-                    host_inputs.append(input_tensor)
-                else:
-                    host_inputs.append(None)
+            shard_specs = self.model.prepare_decode_shard_configs(is_cur_pos_sharded, is_page_table_sharded)
             device_inputs = copy_host_to_device(
                 host_tensors=host_inputs,
                 device_tensors=self.trace_inputs_text,
+                shard_specs=shard_specs,
             )
 
         trace_tok_rm = self._decode_forward_trace_text(

@@ -255,30 +255,39 @@ def test_llama_model_inference(
         all_outputs_ref = []
 
     # Initial positions
-    current_pos = torch.tensor([generation_start_pos for _ in range(batch)])
+    current_pos_dram = torch.tensor([generation_start_pos for _ in range(batch_size)])
+    is_cur_pos_sharded = True
+    if is_cur_pos_sharded:
+        current_pos_sram = torch.tensor(
+            [[generation_start_pos for _ in range(batch_size)]] * model_args.sub_core_grids.num_cores()
+        )
+        cur_pos_shard_spec = ttnn.ShardSpec(model_args.sub_core_grids, (1, batch_size), ttnn.ShardOrientation.ROW_MAJOR)
+        cur_pos_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cur_pos_shard_spec
+        )
     current_pos_tensor = ttnn.from_torch(
-        current_pos,
+        current_pos_sram if is_cur_pos_sharded else current_pos_dram,
         device=mesh_device,
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, 1 if is_cur_pos_sharded else 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
+        memory_config=cur_pos_memory_config if is_cur_pos_sharded else None,
     )
     all_pccs = []
 
     try:
         for i in range(generation_length):
             logger.info(f"[Llama3 Model] Generating token {i}")
-
             decode_input = model_args.prepare_residual_tensor_decode(
                 tt_decode_input,
                 model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
             )
 
             # Get cos/sin matrices for the current position of each user
-            rot_mats = tt_model.rope_setup.get_rm_rot_mats(current_pos)
+            rot_mats = tt_model.rope_setup.get_rm_rot_mats(current_pos_dram)
 
             # Run TT model
             tt_out = tt_model(
@@ -307,19 +316,12 @@ def test_llama_model_inference(
 
             if run_ref_pt:  # Run reference model
                 # In this test all users have the same position
-                ref_output = reference_model(pt_decode_input, current_pos[0])
+                ref_output = reference_model(pt_decode_input, current_pos_dram[0])
 
             # Increment position
-            current_pos = torch.tensor([generation_start_pos + i for _ in range(batch)])
-            current_pos_tensor = ttnn.from_torch(
-                current_pos,
-                device=mesh_device,
-                dtype=ttnn.int32,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    mesh_device,
-                    dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
-                    mesh_shape=model_args.cluster_shape,
-                ),
+            ttnn.plus_one(
+                current_pos_tensor,
+                sub_core_grids=model_args.sub_core_grids,
             )
 
             # Append the generated token to the list of outputs

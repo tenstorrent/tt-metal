@@ -269,34 +269,40 @@ class TtTransformer(LightweightModule):
         transformed_device_inputs = self.transform_prefill_inputs_device(*device_inputs)
         return transformed_device_inputs
 
-    def prepare_inputs_decode(self, *inputs):
+    def prepare_inputs_decode(self, tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
         Its implementation can take advantage of a few other functions which the
         model must implement.
         """
-        host_tensors = []
-        device_tensors = []
-        decode_inputs = self.prepare_decode_inputs_host(*inputs)
-        for input_tensor in decode_inputs:
-            if input_tensor.storage_type() == ttnn.StorageType.HOST:
-                host_tensors.append(input_tensor)
-                device_tensors.append(None)
-            elif (
-                input_tensor.storage_type() == ttnn.StorageType.DEVICE
-                and input_tensor.memory_config().nd_shard_spec == None
-            ):
-                # This case has yet to be seen in Llama.
-                # If passing existing device tensors that are not sharded is needed, it shoule be handled here
-                pass
-            else:
-                host_tensors.append(None)
-                device_tensors.append(input_tensor)
+        host_tensors = self.prepare_decode_inputs_host(
+            tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
+        )
+        shard_specs = self.prepare_decode_shard_configs(is_cur_pos_sharded, is_page_table_sharded)
         device_inputs = copy_host_to_device(
-            host_tensors, device_tensors, mesh_device=self.mesh_device
+            host_tensors, mesh_device=self.mesh_device, shard_specs=shard_specs
         )  # Helper function
         return device_inputs
+
+    def prepare_decode_shard_configs(self, is_cur_pos_sharded=False, is_page_table_sharded=False):
+        """
+        Prepares the sharding configuration for cur_pos and page_table tensors
+        """
+        cur_pos_memory_config = None
+        page_table_memory_config = None
+        if is_cur_pos_sharded:
+            cur_pos_shard_spec = ttnn.ShardSpec(
+                self.args.sub_core_grids,
+                (1, self.args.max_batch_size // self.mesh_device.shape[1]),
+                ttnn.ShardOrientation.ROW_MAJOR,
+            )
+            cur_pos_memory_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cur_pos_shard_spec
+            )
+        if is_page_table_sharded:
+            pass  # TODO: implement page table sharding
+        return [None, cur_pos_memory_config, None, page_table_memory_config]
 
     def prepare_decode_inputs_host(
         self, tokens, current_pos, page_table=None, is_cur_pos_sharded=False, is_page_table_sharded=False
@@ -328,20 +334,15 @@ class TtTransformer(LightweightModule):
         if is_cur_pos_sharded:
             cur_pos_shard_dim = 1
             current_pos = current_pos.repeat(self.args.sub_core_grids.num_cores(), 1)
-            cur_pos_shard_spec = ttnn.ShardSpec(self.args.sub_core_grids, (1, B), ttnn.ShardOrientation.ROW_MAJOR)
-            cur_pos_memory_config = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cur_pos_shard_spec
-            )
         current_pos_tt = ttnn.from_torch(
             current_pos,
-            device=self.mesh_device if is_cur_pos_sharded else None,
+            device=None,
             dtype=ttnn.int32,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
                 dims=(None, cur_pos_shard_dim) if (self.args.is_galaxy and B > 1) else (None, None),
                 mesh_shape=self.args.cluster_shape,
             ),
-            memory_config=cur_pos_memory_config if is_cur_pos_sharded else None,
         )
 
         if page_table is not None:

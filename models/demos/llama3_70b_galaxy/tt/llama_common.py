@@ -208,31 +208,27 @@ def num_to_core_range_set(x):
     )
 
 
-def copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):
+def copy_host_to_device(host_tensors, device_tensors=None, shard_specs=None, mesh_device=None):
     """
     Helper function which copies host tensors to device tensors.
     If no device_tensors are provided, it creates new device tensors and returns them.
-    If device tensors are provided, it should be of equal length to host tensors with following cases supported:
-    - 1. no host tensor is provided, then a device tensor is expected to be created
-    - 2. if host tensor is provided but no device tensor, it creaters new device tensors
-    - 3. if host tensor is provided as well as device tensor, it copies data to the device tensor already created
     """
-    assert mesh_device is not None, "mesh_device is required when device_tensors is None"
     if device_tensors is None:
+        assert mesh_device is not None, "mesh_device is required when device_tensors is None"
         ret = []
         for i in range(len(host_tensors)):
-            on_device = ttnn.to_device(host_tensors[i], device=mesh_device) if host_tensors[i] else None
+            if shard_specs and shard_specs[i] is not None:
+                on_device = host_tensors[i].to(mesh_device, shard_specs[i]) if host_tensors[i] else None
+            else:
+                on_device = ttnn.to_device(host_tensors[i], device=mesh_device) if host_tensors[i] else None
             ret.append(on_device)
         return ret
     else:
         for i in range(len(host_tensors)):
             if host_tensors[i] is None:
+                assert device_tensors[i] is None
                 continue
-            if host_tensors[i] and not device_tensors[i]:
-                on_device = ttnn.to_device(host_tensors[i], device=mesh_device)
-                device_tensors[i] = on_device
-            if host_tensors[i] and device_tensors[i]:
-                ttnn.copy_host_to_device_tensor(host_tensors[i], device_tensors[i])
+            ttnn.copy_host_to_device_tensor(host_tensors[i], device_tensors[i])
         return device_tensors
 
 

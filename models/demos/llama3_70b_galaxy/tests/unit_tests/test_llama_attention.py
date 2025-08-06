@@ -72,12 +72,6 @@ def test_llama_attention_inference(
     mesh_device,
     reset_seeds,
 ):
-    sub_core_grids = ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 0)),
-        ]
-    )
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 
@@ -182,9 +176,9 @@ def test_llama_attention_inference(
     cur_pos_mesh_shard_dim = 1 if is_cur_pos_sharded else 0
     if is_cur_pos_sharded:
         current_pos_sram = torch.tensor(
-            [[generation_start_pos for _ in range(batch_size)]] * sub_core_grids.num_cores()
+            [[generation_start_pos for _ in range(batch_size)]] * model_args.sub_core_grids.num_cores()
         )
-        cur_pos_shard_spec = ttnn.ShardSpec(sub_core_grids, (1, batch_size), ttnn.ShardOrientation.ROW_MAJOR)
+        cur_pos_shard_spec = ttnn.ShardSpec(model_args.sub_core_grids, (1, batch_size), ttnn.ShardOrientation.ROW_MAJOR)
         cur_pos_memory_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cur_pos_shard_spec
         )
@@ -256,7 +250,7 @@ def test_llama_attention_inference(
         # Increment position
         ttnn.plus_one(
             current_pos_tensor,
-            sub_core_grids=sub_core_grids,
+            sub_core_grids=model_args.sub_core_grids,
         )
         check_kv_cache = True
         if check_kv_cache:
