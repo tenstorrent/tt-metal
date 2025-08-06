@@ -20,7 +20,8 @@ void kernel_main() {
         reinterpret_cast<const tt_l1_ptr uint32_t*>(local_config_data_l1_addr);
 
     uint32_t arg_index = num_x_cores + num_y_cores;
-    const uint32_t input_shard_addr = local_config_data[arg_index++];
+    const uint32_t input_shard_addr = get_arg_val<uint32_t>(0);
+    arg_index++;
     const uint32_t num_output_pages = local_config_data[arg_index++];
     const uint32_t num_ranges = local_config_data[arg_index++];
     const uint32_t output_page_offset = local_config_data[arg_index++];

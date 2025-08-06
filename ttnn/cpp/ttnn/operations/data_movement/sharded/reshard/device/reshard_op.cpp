@@ -131,12 +131,88 @@ ReshardDeviceOperation::create_op_performance_model(
     return result;
 }
 
+Tensor construct_per_core_host_tensor(
+    const std::unordered_map<CoreCoord, std::vector<uint32_t>>& core_to_data, uint32_t MAX_RT_ARGS_WIDTH) {
+    uint32_t max_width = MAX_RT_ARGS_WIDTH;
+
+    // Create shape based on number of cores and max width
+    ttnn::Shape tensor_shape({static_cast<uint32_t>(core_to_data.size()), static_cast<uint32_t>(max_width)});
+
+    // Sort cores to ensure consistent ordering
+    std::vector<CoreCoord> ordered_cores;
+    ordered_cores.reserve(core_to_data.size());
+    for (const auto& [core, _] : core_to_data) {
+        ordered_cores.push_back(core);
+    }
+    std::sort(ordered_cores.begin(), ordered_cores.end(), [](const CoreCoord& a, const CoreCoord& b) {
+        return (a.y < b.y) || (a.y == b.y && a.x < b.x);
+    });
+
+    // Flatten data from all cores into single vector with padding
+    std::vector<uint32_t> flattened_data;
+    flattened_data.reserve(core_to_data.size() * max_width);
+
+    for (const auto& core : ordered_cores) {
+        const auto& data = core_to_data.at(core);
+        flattened_data.insert(flattened_data.end(), data.begin(), data.end());
+
+        // Add padding if needed
+        if (data.size() < max_width) {
+            flattened_data.insert(flattened_data.end(), max_width - data.size(), 0);
+        }
+    }
+
+    // Create host buffer and tensor
+    auto config_buffer = tt::tt_metal::HostBuffer(std::move(flattened_data));
+    return Tensor(std::move(config_buffer), tensor_shape, DataType::UINT32, Layout::ROW_MAJOR);
+}
+
+Tensor move_per_core_config_to_device(
+    const Tensor& host_tensor, const CoreRangeSet& grid, distributed::MeshDevice* device) {
+    // Create shard spec for the config tensor
+    // Each core gets a row of the tensor
+    const std::array<uint32_t, 2> shard_shape = {1, host_tensor.logical_shape()[1]};
+    auto shard_spec = tt::tt_metal::ShardSpec(grid, shard_shape, ShardOrientation::ROW_MAJOR);
+
+    // Create memory config for device tensor
+    auto mem_config = MemoryConfig(TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec);
+
+    return host_tensor.to_device(device, mem_config);
+}
+
 operation::ProgramWithCallbacks ReshardDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> empty_data;
+    auto output_grid = output_tensor.shard_spec().value().grid;
+    auto output_cores = corerange_to_cores(output_grid);
+
+    // Estimate number of RT args: Each page stride range needs:
+    // 1. Header (4 values): input_addr, num_output_pages, num_ranges, output_page_offset
+    // 2. Each range has around 9 values
+    uint32_t header_size = 4;
+    uint32_t values_per_range = 9;
+
+    uint32_t num_cores = output_cores.size();
+    uint32_t pages_per_shard =
+        output_tensor.shard_spec().value().shape[0] * output_tensor.shard_spec().value().shape[1];
+    uint32_t estimated_ranges = pages_per_shard / output_tensor.buffer()->page_size();
+
+    uint32_t estimated_args = header_size + (estimated_ranges * values_per_range);
+    uint32_t MAX_RT_ARGS_WIDTH = ((estimated_args + 31) / 32) * 32;
+
+    for (auto core : output_cores) {
+        empty_data[core].resize(MAX_RT_ARGS_WIDTH, 0);
+    }
+    auto rt_args_host_0 = construct_per_core_host_tensor(empty_data, MAX_RT_ARGS_WIDTH);
+    auto rt_args_host_1 = construct_per_core_host_tensor(empty_data, MAX_RT_ARGS_WIDTH);
+
+    auto local_rt_args_config_0 = move_per_core_config_to_device(rt_args_host_0, output_grid, output_tensor.device());
+    auto local_rt_args_config_1 = move_per_core_config_to_device(rt_args_host_1, output_grid, output_tensor.device());
+
     if (CMAKE_UNIQUE_NAMESPACE::is_valid_for_legacy_reshard(input_tensor, output_tensor.memory_config())) {
-        return detail::reshard_multi_core(input_tensor, output_tensor);
+        return detail::reshard_multi_core(input_tensor, output_tensor, local_rt_args_config_0, local_rt_args_config_1);
     } else {
         return detail::nd_reshard_multi_core(input_tensor, output_tensor);
     }
