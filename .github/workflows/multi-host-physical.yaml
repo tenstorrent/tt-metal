@@ -43,7 +43,7 @@ jobs:
         env:
           CONTAINER_HOME: "/home/ansible"
         with:
-          docker_image: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          docker_image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:c2417bb0778b77d3092bd2f4a4c4269123d25b05
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
             -e TT_METAL_HOME=${{ github.workspace }}
