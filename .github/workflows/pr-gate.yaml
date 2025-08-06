@@ -68,7 +68,6 @@ jobs:
           echo "inputs.build-type: ${{ inputs.build-type }}"
           echo "github.workflow: ${{ github.workflow }}"
           echo "github.event_name: ${{ github.event_name }}"
-          echo "github.event.pull_request.draft: ${{ github.event.pull_request.draft }}"
           echo "github context: ${{ toJSON(github) }}"
 
   asan-build:
