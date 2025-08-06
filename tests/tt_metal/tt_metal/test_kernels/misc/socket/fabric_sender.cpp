@@ -58,7 +58,6 @@ void kernel_main() {
     uint64_t receiver_noc_coord_addr = get_noc_addr(sender_socket.downstream_noc_x, sender_socket.downstream_noc_y, 0);
 
     uint32_t outstanding_data_size = data_size;
-    uint32_t i = 0;
     // Sends 1 page at a time and does handshake with receiver, can be optimized
     // to notify receiver after writing larger chunks
     while (outstanding_data_size) {
@@ -74,13 +73,9 @@ void kernel_main() {
         data_addr += page_size;
         outstanding_data_size -= page_size;
         socket_push_pages(sender_socket, 1);
-        DPRINT << "sender pushed page " << i << "\n";
 
         fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
-        DPRINT << "sender notified receiver " << i << "\n";
-        i++;
     }
-    DPRINT << "sender done\n";
     socket_barrier(sender_socket);
     // Write updated socket configs to the L1 config buffer (were cached on stack during kernel execution)
     update_socket_config(sender_socket);

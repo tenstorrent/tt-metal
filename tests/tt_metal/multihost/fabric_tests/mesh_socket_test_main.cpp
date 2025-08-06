@@ -29,8 +29,7 @@ int main(int argc, char* argv[]) {
     }
 
     // Create parser and parse the configuration
-    MeshSocketYamlParser parser;
-    MeshSocketTestConfiguration config = parser.parse_file(yaml_file_path.value());
+    MeshSocketTestConfiguration config = MeshSocketYamlParser::parse_file(yaml_file_path.value());
 
     log_info(tt::LogTest, "Successfully parsed YAML configuration from: {}", yaml_file_path.value());
 

@@ -128,3 +128,5 @@ tests:
     pattern_expansions:
       - type: "all_to_all"
         core_coord: [0, 0]
+      - type: "all_to_all"
+        core_coord: [0, 1]

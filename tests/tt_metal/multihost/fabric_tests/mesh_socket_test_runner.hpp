@@ -21,172 +21,44 @@ using ControlPlane = tt::tt_fabric::ControlPlane;
 
 namespace tt::tt_fabric::mesh_socket_tests {
 
-/**
- * @brief Main test runner class that manages MeshDevice and MeshSocket lifetimes
- * and orchestrates socket test execution using the existing socket_send_recv_utils.
- */
 class MeshSocketTestRunner {
 public:
-    /**
-     * @brief Construct a new MeshSocketTestRunner
-     *
-     * @param config The parsed YAML configuration containing test definitions
-     */
     explicit MeshSocketTestRunner(const MeshSocketTestConfiguration& config);
 
-    /**
-     * @brief Destructor - ensures proper cleanup of all resources
-     */
     ~MeshSocketTestRunner();
 
     // Delete copy constructor and assignment operator to prevent accidental copying
     MeshSocketTestRunner(const MeshSocketTestRunner&) = delete;
     MeshSocketTestRunner& operator=(const MeshSocketTestRunner&) = delete;
 
-    /**
-     * @brief Initialize the test environment and MeshDevice
-     *
-     * @throws std::runtime_error if initialization fails
-     */
     void initialize();
-
-    /**
-     * @brief Run all tests defined in the configuration
-     *
-     * @throws std::runtime_error if any test fails
-     */
     void run_all_tests();
-
-    /**
-     * @brief Run a specific test by name
-     *
-     * @param test_name Name of the test to run
-     * @throws std::runtime_error if test not found or execution fails
-     */
     void run_test_by_name(const std::string& test_name);
-
-    /**
-     * @brief Clean up all resources and close MeshDevice
-     */
     void cleanup();
 
-    /**
-     * @brief Get the current MeshDevice (for advanced usage)
-     *
-     * @return std::shared_ptr<tt::tt_metal::distributed::MeshDevice>
-     */
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> get_mesh_device() const;
-
-    /**
-     * @brief Get the mesh graph
-     *
-     * @return const tt::tt_fabric::MeshGraph&
-     */
     const tt::tt_fabric::MeshGraph& get_mesh_graph() const;
-
-    /**
-     * @brief Get the local mesh ID
-     *
-     * @return const tt::tt_fabric::MeshId&
-     */
     const tt::tt_fabric::MeshId& get_local_mesh_id() const;
-
-    /**
-     * @brief Get the rank to mesh mapping
-     *
-     * @return const std::unordered_map<Rank, tt::tt_fabric::MeshId>&
-     */
     const std::unordered_map<Rank, tt::tt_fabric::MeshId>& get_rank_to_mesh_mapping() const;
 
 private:
     void initialize_and_validate_custom_physical_config(const PhysicalMeshConfig& physical_mesh_config);
-
-    /**
-     * @brief Run a specific test configuration
-     *
-     * @param test The test configuration to execute
-     */
     void run_test(const ParsedTestConfig& test);
-
-    /**
-     * @brief Initialize the MeshDevice based on fabric configuration
-     */
     void initialize_mesh_device();
-
-    /**
-     * @brief Setup fabric configuration before device initialization
-     */
     void setup_fabric_configuration();
-
-    /**
-     * @brief Expand test configurations from TestConfig to ParsedTestConfig
-     */
     void expand_test_configurations();
 
-    /**
-     * @brief Create MeshSockets for a given test configuration
-     *
-     * @param test The test configuration
-     * @return std::vector<tt::tt_metal::distributed::MeshSocket> Vector of created sockets
-     */
     std::vector<tt::tt_metal::distributed::MeshSocket> create_sockets_for_test(const ParsedTestConfig& test);
-
-    /**
-     * @brief Convert TestSocketConfig to tt::tt_metal::distributed::SocketConfig
-     *
-     * @param socket_config The YAML-parsed socket configuration
-     * @param memory_config The memory configuration for the socket
-     * @return tt::tt_metal::distributed::SocketConfig
-     */
     tt::tt_metal::distributed::SocketConfig convert_to_socket_config(
         const TestSocketConfig& socket_config, const ParsedMemoryConfig& memory_config);
 
-    /**
-     * @brief Convert SocketConnectionConfig to tt::tt_metal::distributed::SocketConnection
-     *
-     * @param connection_config The YAML-parsed connection configuration
-     * @return tt::tt_metal::distributed::SocketConnection
-     */
     tt::tt_metal::distributed::SocketConnection convert_to_socket_connection(
         const SocketConnectionConfig& connection_config);
 
-    /**
-     * @brief Execute socket test using the test_socket_send_recv utility function
-     *
-     * @param socket The MeshSocket to test
-     * @param test The test configuration containing memory and iteration settings
-     */
     void execute_socket_test(tt::tt_metal::distributed::MeshSocket& socket, const ParsedTestConfig& test);
-
-    /**
-     * @brief Get the current distributed context
-     *
-     * @return std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>
-     */
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> get_distributed_context() const;
-
-    /**
-     * @brief Validate that the current rank can participate in the given test
-     *
-     * @param test The test configuration to validate
-     * @return true if current rank should participate, false otherwise
-     */
     bool should_participate_in_test(const ParsedTestConfig& test) const;
-
-    /**
-     * @brief Log test execution details
-     *
-     * @param test The test being executed
-     * @param socket_index Index of the socket being tested
-     * @param total_sockets Total number of sockets in the test
-     */
     void log_test_execution(const ParsedTestConfig& test, size_t socket_index, size_t total_sockets) const;
-
-    /**
-     * @brief Create rank to mesh mapping using distributed allgather
-     *
-     * @return std::unordered_map<Rank, tt::tt_fabric::MeshId>
-     */
     std::unordered_map<Rank, tt::tt_fabric::MeshId> create_rank_to_mesh_mapping();
 
     // Configuration and state

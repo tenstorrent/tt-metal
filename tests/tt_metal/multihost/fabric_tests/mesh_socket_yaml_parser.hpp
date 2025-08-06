@@ -126,66 +126,53 @@ class MeshSocketTestRunner;
 // Main YAML parser class
 class MeshSocketYamlParser {
 public:
-    MeshSocketYamlParser() = default;
-    ~MeshSocketYamlParser() = default;
-
     // Main parsing method
-    MeshSocketTestConfiguration parse_file(const std::string& yaml_file_path);
+    static MeshSocketTestConfiguration parse_file(const std::string& yaml_file_path);
 
     // Two-stage parsing: YAML -> TestConfig -> ParsedTestConfig
-    std::vector<TestConfig> parse_raw_test_configs(const YAML::Node& tests_node);
-    std::vector<ParsedTestConfig> expand_test_configs(
+    static std::vector<TestConfig> parse_raw_test_configs(const YAML::Node& tests_node);
+    static std::vector<ParsedTestConfig> expand_test_configs(
         const std::vector<TestConfig>& test_configs, const MeshSocketTestRunner& test_runner);
-
-    // Validation methods
-    static void validate_configuration(const MeshSocketTestConfiguration& config);
 
     // Print configuration for debugging
     static void print_test_configuration(const MeshSocketTestConfiguration& config);
 
 private:
+    MeshSocketYamlParser() = delete;
     // Parsing helper methods
-    PhysicalMeshConfig parse_physical_mesh(const YAML::Node& node);
-    FabricConfig parse_fabric_config(const YAML::Node& node);
-    TestConfig parse_test_config(const YAML::Node& node);
-    TestSocketConfig parse_socket_config(const YAML::Node& node);
-    SocketConnectionConfig parse_connection_config(const YAML::Node& node);
-    EndpointConfig parse_endpoint_config(const YAML::Node& node);
-    MemoryConfig parse_memory_config(const YAML::Node& node);
-    PatternExpansionConfig parse_pattern_expansion(const YAML::Node& node);
+    static PhysicalMeshConfig parse_physical_mesh(const YAML::Node& node);
+    static FabricConfig parse_fabric_config(const YAML::Node& node);
+    static TestConfig parse_test_config(const YAML::Node& node);
+    static TestSocketConfig parse_socket_config(const YAML::Node& node);
+    static SocketConnectionConfig parse_connection_config(const YAML::Node& node);
+    static EndpointConfig parse_endpoint_config(const YAML::Node& node);
+    static MemoryConfig parse_memory_config(const YAML::Node& node);
+    static PatternExpansionConfig parse_pattern_expansion(const YAML::Node& node);
 
     // Pattern expansion methods
-    std::vector<ParsedTestConfig> expand_test_config(
+    static std::vector<ParsedTestConfig> expand_test_config(
         const TestConfig& test_config, const MeshSocketTestRunner& test_runner);
-    std::vector<TestSocketConfig> expand_pattern(
+    static std::vector<TestSocketConfig> expand_pattern(
         const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestRunner& test_runner);
-    std::vector<TestSocketConfig> expand_all_to_all_pattern(
+    static std::vector<TestSocketConfig> expand_all_to_all_pattern(
         const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestRunner& test_runner);
-    std::vector<TestSocketConfig> expand_random_pairing_pattern(
+    static std::vector<TestSocketConfig> expand_random_pairing_pattern(
         const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestRunner& test_runner);
 
     // Memory config expansion methods
-    std::vector<ParsedMemoryConfig> expand_memory_config(const MemoryConfig& memory_config);
+    static std::vector<ParsedMemoryConfig> expand_memory_config(const MemoryConfig& memory_config);
 
     // Utility parsing methods
-    MeshCoordinate parse_mesh_coordinate(const YAML::Node& node);
-    CoreCoord parse_core_coordinate(const YAML::Node& node);
-    PatternType parse_pattern_type(const std::string& pattern_string);
-    std::vector<std::vector<eth_coord_t>> parse_eth_coord_mapping(const YAML::Node& node);
+    static MeshCoordinate parse_mesh_coordinate(const YAML::Node& node);
+    static CoreCoord parse_core_coordinate(const YAML::Node& node);
+    static PatternType parse_pattern_type(const std::string& pattern_string);
+    static std::vector<std::vector<eth_coord_t>> parse_eth_coord_mapping(const YAML::Node& node);
 
     // Validation helper methods
-    static void validate_test_config(const TestConfig& test);
-    static void validate_parsed_test_config(const ParsedTestConfig& test);
-    static void validate_socket_config(const TestSocketConfig& socket);
     static void validate_memory_config(const MemoryConfig& memory);
-    static void validate_parsed_memory_config(const ParsedMemoryConfig& memory);
-    static void validate_endpoint_config(const EndpointConfig& endpoint);
-    static void validate_pattern_expansion_config(const PatternExpansionConfig& pattern);
-    static void validate_fabric_config(const FabricConfig& fabric_config);
-    static void validate_physical_mesh_config(const PhysicalMeshConfig& physical_mesh_config);
 
     // Error handling
-    void throw_parse_error(const std::string& message, const YAML::Node& node = YAML::Node());
+    static void throw_parse_error(const std::string& message, const YAML::Node& node = YAML::Node());
 };
 
 }  // namespace tt::tt_fabric::mesh_socket_tests
