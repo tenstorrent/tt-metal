@@ -14,7 +14,7 @@ inline sfpi::vFloat silu_sigmoid_piecewise_linear_positive(sfpi::vFloat val) {
     v_if(val <= 1.0f) {
         result = 0.2415f * val + 0.5f;  // linear appx as y = 0.2415f + 0.5
     }
-    v_elseif(val < 7.71f) {
+    v_elseif(val < 7.0f) {
         result = POLYVAL5<sfpi::vFloat>(
             -3.82558889e-04f, 9.22008486e-03f, -8.34694910e-02f, 3.39967832e-01f, 4.66254244e-01f, val);
     }
