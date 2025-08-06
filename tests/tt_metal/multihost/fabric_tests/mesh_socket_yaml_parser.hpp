@@ -77,8 +77,6 @@ struct TestSocketConfig {
     Rank receiver_rank;
 };
 
-// TODO: remove this and just have optional vector of PatternType instead in TestConfig. Do not do this unless I am
-// sure.
 struct PatternExpansionConfig {
     PatternType type;  // "all_to_all" or "random_pairing"
     CoreCoord core_coord;  // Core coordinate to use for connections

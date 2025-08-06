@@ -186,14 +186,10 @@ std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_to_all_pattern(
     const PatternExpansionConfig& pattern, const TestConfig& test_config, const MeshSocketTestRunner& test_runner) {
     std::vector<TestSocketConfig> sockets;
 
-    // Get mesh graph from test runner
     const auto& mesh_graph = test_runner.get_mesh_graph();
-
-    // Get rank to mesh mapping from test runner
     const auto& rank_to_mesh_id = test_runner.get_rank_to_mesh_mapping();
-
-    // Use core coordinate from pattern configuration
     const CoreCoord& core_coord = pattern.core_coord;
+
     // Create all-to-all connections between ranks
     for (const auto& [sender_rank, sender_mesh_id] : rank_to_mesh_id) {
         for (const auto& [receiver_rank, recv_mesh_id] : rank_to_mesh_id) {
@@ -238,7 +234,6 @@ std::vector<TestSocketConfig> MeshSocketYamlParser::expand_random_pairing_patter
 std::vector<ParsedMemoryConfig> MeshSocketYamlParser::expand_memory_config(const MemoryConfig& memory_config) {
     std::vector<ParsedMemoryConfig> expanded_configs;
 
-    // Generate all combinations of memory parameters
     for (uint32_t fifo_size : memory_config.fifo_size) {
         for (uint32_t page_size : memory_config.page_size) {
             for (uint32_t data_size : memory_config.data_size) {
@@ -313,7 +308,7 @@ TestConfig MeshSocketYamlParser::parse_test_config(const YAML::Node& node) {
     TT_FATAL(node["memory_config"].IsDefined(), "Test configuration missing required 'memory_config' field");
     test.memory_config = parse_memory_config(node["memory_config"]);
     validate_memory_config(test.memory_config);
-    // Parse explicit sockets (optional)
+
     if (node["sockets"].IsDefined()) {
         TT_FATAL(node["sockets"].IsSequence(), "'sockets' must be a list");
         std::vector<TestSocketConfig> sockets;
@@ -323,7 +318,6 @@ TestConfig MeshSocketYamlParser::parse_test_config(const YAML::Node& node) {
         test.sockets = sockets;
     }
 
-    // Parse pattern expansions (optional)
     if (node["pattern_expansions"].IsDefined()) {
         TT_FATAL(node["pattern_expansions"].IsSequence(), "'pattern_expansions' must be a list");
         std::vector<PatternExpansionConfig> patterns;
@@ -344,9 +338,7 @@ TestConfig MeshSocketYamlParser::parse_test_config(const YAML::Node& node) {
 TestSocketConfig MeshSocketYamlParser::parse_socket_config(const YAML::Node& node) {
     TestSocketConfig socket;
 
-    // Parse connections
     if (node["connections"].IsDefined()) {
-        // Multi-connection socket
         TT_FATAL(node["connections"].IsSequence(), "'connections' must be a list");
         for (const auto& conn_node : node["connections"]) {
             socket.connections.push_back(parse_connection_config(conn_node));
@@ -355,7 +347,6 @@ TestSocketConfig MeshSocketYamlParser::parse_socket_config(const YAML::Node& nod
         throw_parse_error("Socket must define either 'connections'", node);
     }
 
-    // Parse sender and receiver ranks (required)
     TT_FATAL(node["sender_rank"].IsDefined(), "Socket missing required 'sender_rank' field");
     TT_FATAL(node["receiver_rank"].IsDefined(), "Socket missing required 'receiver_rank' field");
     socket.sender_rank = Rank{node["sender_rank"].as<uint32_t>()};
@@ -382,7 +373,6 @@ EndpointConfig MeshSocketYamlParser::parse_endpoint_config(const YAML::Node& nod
 MemoryConfig MeshSocketYamlParser::parse_memory_config(const YAML::Node& node) {
     MemoryConfig memory;
 
-    // Parse fifo_size - can be single value or array
     if (node["fifo_size"].IsDefined()) {
         if (node["fifo_size"].IsSequence()) {
             memory.fifo_size = node["fifo_size"].as<std::vector<uint32_t>>();
@@ -391,7 +381,6 @@ MemoryConfig MeshSocketYamlParser::parse_memory_config(const YAML::Node& node) {
         }
     }
 
-    // Parse page_size - can be single value or array
     if (node["page_size"].IsDefined()) {
         if (node["page_size"].IsSequence()) {
             memory.page_size = node["page_size"].as<std::vector<uint32_t>>();
@@ -399,8 +388,6 @@ MemoryConfig MeshSocketYamlParser::parse_memory_config(const YAML::Node& node) {
             memory.page_size = {node["page_size"].as<uint32_t>()};
         }
     }
-
-    // Parse data_size - can be single value or array
     if (node["data_size"].IsDefined()) {
         if (node["data_size"].IsSequence()) {
             memory.data_size = node["data_size"].as<std::vector<uint32_t>>();
@@ -409,15 +396,12 @@ MemoryConfig MeshSocketYamlParser::parse_memory_config(const YAML::Node& node) {
         }
     }
 
-    // Parse num_transactions - can be single value or array
     if (node["num_transactions"].IsDefined()) {
         if (node["num_transactions"].IsSequence()) {
             memory.num_transactions = node["num_transactions"].as<std::vector<uint32_t>>();
         } else {
             memory.num_transactions = {node["num_transactions"].as<uint32_t>()};
         }
-    } else {
-        memory.num_transactions = {20};  // Default value
     }
 
     return memory;

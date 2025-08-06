@@ -16,7 +16,6 @@
 #include "impl/context/metal_context.hpp"
 
 using MeshId = tt::tt_fabric::MeshId;
-using MeshShape = tt::tt_fabric::MeshShape;
 using ControlPlane = tt::tt_fabric::ControlPlane;
 
 namespace tt::tt_fabric::mesh_socket_tests {
@@ -27,18 +26,12 @@ public:
 
     ~MeshSocketTestRunner();
 
-    // Delete copy constructor and assignment operator to prevent accidental copying
-    MeshSocketTestRunner(const MeshSocketTestRunner&) = delete;
-    MeshSocketTestRunner& operator=(const MeshSocketTestRunner&) = delete;
-
     void initialize();
     void run_all_tests();
     void run_test_by_name(const std::string& test_name);
     void cleanup();
 
-    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> get_mesh_device() const;
     const tt::tt_fabric::MeshGraph& get_mesh_graph() const;
-    const tt::tt_fabric::MeshId& get_local_mesh_id() const;
     const std::unordered_map<Rank, tt::tt_fabric::MeshId>& get_rank_to_mesh_mapping() const;
 
 private:
@@ -68,13 +61,9 @@ private:
     tt::tt_metal::distributed::multihost::Rank local_rank_;
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> distributed_context_;
 
-    // Test execution state
-    std::unordered_map<std::string, size_t> test_name_to_index_;
-
     // Control plane and mesh configuration
     ControlPlane* control_plane_ptr_;
     MeshId local_mesh_id_;
-    MeshShape mesh_shape_;
     std::unordered_map<Rank, tt::tt_fabric::MeshId> rank_to_mesh_mapping_;
 
     // Default test parameters
