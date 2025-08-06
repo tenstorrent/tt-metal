@@ -173,6 +173,55 @@ def import_device_profile_log(logPath):
                 "cores": {core: {"riscs": {risc: {"timeseries": [(timerID, timeData, attachedData)]}}}}
             }
 
+    def sort_timeseries_and_find_min(devicesData):
+        globalMinTS = (1 << 64) - 1
+        globalMinRisc = "BRISC"
+        globalMinCore = (0, 0)
+
+        foundRange = set()
+        for chipID, deviceData in devicesData["devices"].items():
+            for core, coreData in deviceData["cores"].items():
+                for risc, riscData in coreData["riscs"].items():
+                    riscData["timeseries"].sort(key=lambda x: x[1])
+                    firstTimeID, firsTimestamp, firstStatData = riscData["timeseries"][0]
+                    if globalMinTS > firsTimestamp:
+                        globalMinTS = firsTimestamp
+                        globalMinCore = core
+                        globalMinRisc = risc
+            deviceData.update(
+                dict(metadata=dict(global_min=dict(ts=globalMinTS, risc=globalMinRisc, core=globalMinCore)))
+            )
+
+        for chipID, deviceData in devicesData["devices"].items():
+            for core, coreData in deviceData["cores"].items():
+                for risc, riscData in coreData["riscs"].items():
+                    riscData["timeseries"].sort(key=lambda x: x[1])
+                    for marker, timestamp, attachedData in riscData["timeseries"]:
+                        shiftedTS = timestamp - globalMinTS
+                        # ERISC dispatch is EOL, some models still use it. Need to check and drop it here until it is fully removed.
+                        if (
+                            "CQ-DISPATCH" in marker["zone_name"] or "CQ-PREFETCH" in marker["zone_name"]
+                        ) and "ERISC" not in risc:
+                            dispatchCores.add((chipID, core, risc))
+                    riscData["timeseries"].insert(
+                        0,
+                        (
+                            {"id": 0, "zone_name": "", "type": "", "src_line": "", "src_file": ""},
+                            deviceData["metadata"]["global_min"]["ts"],
+                            0,
+                        ),
+                    )
+
+        if foundRange:
+            for chipID, deviceData in devicesData["devices"].items():
+                for core, coreData in deviceData["cores"].items():
+                    for risc, riscData in coreData["riscs"].items():
+                        if (chipID, core, risc) not in foundRange:
+                            riscData["timeseries"] = []
+
+    # Sort all timeseries and find global min timestamp
+    sort_timeseries_and_find_min(devicesData)
+
     return devicesData
 
 
