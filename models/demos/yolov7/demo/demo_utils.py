@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import glob
-import os
 import random
 import re
 import time
@@ -11,7 +10,6 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import requests
 import torch
 import torchvision
 from loguru import logger
@@ -49,90 +47,6 @@ def letterbox(
     left, right = int(round(dw - 0.1)), int(round(dw + 0.1))
     img = cv2.copyMakeBorder(img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=color)
     return img  # , ratio, (dw, dh)
-
-
-IMG_FORMATS = {"bmp", "dng", "jpeg", "jpg", "mpo", "png", "tif", "tiff", "webp", "pfm", "heic"}
-
-
-def imread(filename: str, flags: int = cv2.IMREAD_COLOR):
-    return cv2.imdecode(np.fromfile(filename, np.uint8), flags)
-
-
-class LoadImages:
-    def __init__(self, path, batch=1, img_size=640, stride=32):
-        files = []
-        for p in sorted(path) if isinstance(path, (list, tuple)) else [path]:
-            a = str(Path(p).absolute())
-            if os.path.isdir(a):
-                for f in os.listdir(a):
-                    if f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp")):
-                        files.append(os.path.join(a, f))
-            elif os.path.isfile(a):
-                files.append(a)
-            else:
-                raise FileNotFoundError(f"{p} does not exist or is not a valid file/directory")
-
-        images = []
-        for f in files:
-            suffix = f.split(".")[-1].lower()
-            if suffix in IMG_FORMATS:
-                images.append(f)
-        ni = len(images)
-        self.img_size = img_size
-        self.stride = stride
-        self.files = images
-        self.nf = ni
-        self.ni = ni
-        self.bs = batch
-        self.mode = "image"
-        assert self.nf > 0, f"No images found in {p}. Supported formats are: {img_formats}"
-
-    def __iter__(self):
-        self.count = 0
-        return self
-
-    def __next__(self):
-        paths, imgs, info = [], [], []
-        while len(imgs) < self.bs:
-            if self.count >= self.nf:
-                if imgs:
-                    return paths, imgs, info
-                else:
-                    raise StopIteration
-
-            path = self.files[self.count]
-            im0 = imread(path)
-            if im0 is None:
-                logger.warning(f"WARNING ⚠️ Image Read Error {path}")
-            else:
-                paths.append(path)
-                imgs.append(im0)
-                info.append(f"image {self.count + 1}/{self.nf} {path}: ")
-            self.count += 1
-            if self.count >= self.ni:
-                break
-
-        return paths, imgs, info
-
-    def __len__(self):
-        return self.nf
-
-
-def load_coco_class_names():
-    url = "https://raw.githubusercontent.com/pjreddie/darknet/master/data/coco.names"
-    path = f"models/demos/yolov4/demo/coco.names"
-    response = requests.get(url)
-    try:
-        response = requests.get(url, timeout=5)
-        if response.status_code == 200:
-            return response.text.strip().split("\n")
-    except requests.RequestException:
-        pass
-    if os.path.exists(path):
-        with open(path, "r") as f:
-            return [line.strip() for line in f.readlines()]
-
-    raise Exception("Failed to fetch COCO class names from both online and local sources.")
 
 
 def plot_one_box(x, img, color=None, label=None, line_thickness=3):
