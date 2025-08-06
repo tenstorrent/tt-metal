@@ -41,34 +41,37 @@ void kernel_main() {
     uint32_t current_stick = block_height * start_block_id;
 
     for (uint32_t b = start_block_id; b < end_block_id; b++) {
-        cb_wait_front(cb_id_out0, num_tiles_per_block_row);
+        {
+            DeviceZoneScopedN("Write");
+            cb_wait_front(cb_id_out0, num_tiles_per_block_row);
 
-        uint64_t base_l1_read_addr = get_read_ptr(cb_id_out0);
+            uint64_t base_l1_read_addr = get_read_ptr(cb_id_out0);
 
-        for (uint32_t in_block_row = 0; in_block_row < block_height; ++in_block_row) {
-            uint32_t curr_index = current_stick % (in_width * in_height);
-            uint32_t curr_batch = current_stick / (in_width * in_height);
-            uint32_t x = curr_index / in_width;
-            uint32_t y = curr_index % in_width;
+            for (uint32_t in_block_row = 0; in_block_row < block_height; ++in_block_row) {
+                uint32_t curr_index = current_stick % (in_width * in_height);
+                uint32_t curr_batch = current_stick / (in_width * in_height);
+                uint32_t x = curr_index / in_width;
+                uint32_t y = curr_index % in_width;
 
-            uint64_t read_addr = base_l1_read_addr + in_block_row * output_page_size;
+                uint64_t read_addr = base_l1_read_addr + in_block_row * output_page_size;
 
-            // calculate the start index where writer will start writing the data.
-            // total --> scale_h * scale_w times data will be written to the DRAM.
-            // offset calcutes the relative position of the data in the stick.
-            uint32_t start_index = curr_batch * width * height + (scale_h * x) * width + scale_w * y;
+                // calculate the start index where writer will start writing the data.
+                // total --> scale_h * scale_w times data will be written to the DRAM.
+                // offset calcutes the relative position of the data in the stick.
+                uint32_t start_index = curr_batch * width * height + (scale_h * x) * width + scale_w * y;
 
-            for (uint32_t j = 0; j < scale_h; j++) {
-                for (uint32_t k = 0; k < scale_w; k++) {
-                    uint64_t offset = j * width + k;
+                for (uint32_t j = 0; j < scale_h; j++) {
+                    for (uint32_t k = 0; k < scale_w; k++) {
+                        uint64_t offset = j * width + k;
 
-                    uint64_t dst_noc_addr_1 = get_noc_addr((start_index + offset), s0);
-                    noc_async_write(read_addr, dst_noc_addr_1, output_page_size);
+                        uint64_t dst_noc_addr_1 = get_noc_addr((start_index + offset), s0);
+                        noc_async_write(read_addr, dst_noc_addr_1, output_page_size);
+                    }
                 }
+                noc_async_write_barrier();
+                current_stick++;
             }
-            current_stick++;
+            cb_pop_front(cb_id_out0, num_tiles_per_block_row);
         }
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, num_tiles_per_block_row);
     }
 }

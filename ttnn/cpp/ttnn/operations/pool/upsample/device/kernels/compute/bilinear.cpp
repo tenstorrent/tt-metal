@@ -32,12 +32,14 @@ inline void reduce_h_fused(const uint32_t in_cb_id, const uint32_t in_scalar_cb_
             0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
             2 /* unpack 2 faces ) */,
             unpA_face_r_dim);
+        ckernel::tensix_sync();
     }
     {
         DeviceZoneScopedN("DoReduction");
         for (uint32_t c_i = 0; c_i < tiles_per_reduction; ++c_i) {
             reduce_tile_math(c_i, 2 /* reduce 2 faces */);
         }
+        ckernel::tensix_sync();
     }
     cb_pop_front(in_cb_id, 4);
 
@@ -49,6 +51,7 @@ inline void reduce_h_fused(const uint32_t in_cb_id, const uint32_t in_scalar_cb_
     {
         DeviceZoneScopedN("PackUntilize");
         pack_untilize_dest<tiles_per_reduction>(out_cb_id, 1, 0, 1, 2); /* pack 1 row (1x32) */
+        ckernel::tensix_sync();
     }
     {
         DeviceZoneScopedN("TileRegsRelease");

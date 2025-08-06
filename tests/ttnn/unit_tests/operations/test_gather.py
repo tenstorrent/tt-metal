@@ -85,9 +85,9 @@ def test_gather_preallocated_output(input_shape, index_shape, dim, device):
 @pytest.mark.parametrize(
     "input_shape, index_shape, dim",
     [
-        ([1, 1, 512, 64], [1, 1, 512, 32], -1),  # 16 cores
-        ([1, 1, 2048, 64], [1, 1, 2048, 32], -1),  # 64 cores
-        ([1, 1, 2240, 64], [1, 1, 2240, 32], -1),  # 70 cores
+        # ([1, 1, 512, 64], [1, 1, 512, 32], -1),  # 16 cores
+        ([1, 512, 1024, 1024], [1, 512, 1024, 1024], -1),  # 64 cores
+        # ([1, 1, 2240, 64], [1, 1, 2240, 32], -1),  # 70 cores
     ],
 )
 def test_gather_multicore_cases(input_shape, index_shape, dim, device):

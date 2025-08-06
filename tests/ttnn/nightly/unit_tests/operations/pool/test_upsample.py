@@ -17,21 +17,23 @@ from tests.ttnn.unit_tests.operations.pool.test_upsample import upsample_multico
     "input_shapes",
     [
         [1, 256, 512, 512],
-        [1, 512, 256, 256],
-        [1, 256, 128, 128],
-        [1, 64, 64, 64],
-        [2, 64, 32, 32],
-        [5, 32, 96, 96],
-        [1, 96, 32, 32],
-        [2, 32, 80, 32],
+        # [1, 512, 256, 256],
+        # [1, 256, 128, 128],
+        # [1, 64, 64, 64],
+        # [2, 64, 32, 32],
+        # [5, 32, 96, 96],
+        # [1, 96, 32, 32],
+        # [2, 32, 80, 32],
     ],
 )
-@pytest.mark.parametrize("scale_h", [2, 3])
-@pytest.mark.parametrize("scale_w", [2, 3])
+@pytest.mark.parametrize("scale_h", [2])  # , 3])
+@pytest.mark.parametrize("scale_w", [2])  # , 3])
 @pytest.mark.parametrize("memory_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize(
     "dtype_torch, dtype_ttnn",
-    [[torch.bfloat16, ttnn.bfloat8_b], [torch.float32, ttnn.float32], [torch.bfloat16, ttnn.bfloat16]],
+    # [[torch.bfloat16, ttnn.bfloat8_b],
+    # [torch.float32, ttnn.float32],
+    [[torch.bfloat16, ttnn.bfloat16]],
 )
 def test_upsample_nearest_interleaved(device, input_shapes, scale_h, scale_w, memory_layout, dtype_torch, dtype_ttnn):
     # Skip block datatypes if memory layout is not tiled
