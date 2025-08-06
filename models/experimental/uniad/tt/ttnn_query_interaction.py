@@ -50,66 +50,66 @@ class TtQueryInteractionModule:
         value = ttnn.reshape(tgt, (tgt.shape[0], 1, tgt.shape[1]))
         value = ttnn.to_layout(value, ttnn.TILE_LAYOUT)
 
-        # tgt2 = self.self_attn(q[:, None], k[:, None], value=tgt[:, None])[0][:, 0]  # torch
-        tgt2 = self.self_attn(q, k, value=value)[0]  # torch
+        if q.shape[0] > 0 and k.shape[0] > 0:
+            tgt2 = self.self_attn(q, k, value=value)[0]
 
-        tgt2 = ttnn.to_torch(tgt2)
-        tgt = ttnn.to_torch(tgt)
+            tgt2 = ttnn.to_torch(tgt2)
+            tgt = ttnn.to_torch(tgt)
 
-        tgt2 = tgt2[:, 0]
+            tgt2 = tgt2[:, 0]
 
-        tgt = ttnn.from_torch(tgt, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        tgt2 = ttnn.from_torch(tgt2, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            tgt = ttnn.from_torch(tgt, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+            tgt2 = ttnn.from_torch(tgt2, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
-        tgt = ttnn.layer_norm(
-            tgt,
-            weight=self.params.norm1.weight,
-            bias=self.params.norm1.bias,
-            epsilon=self.eps,
-        )
+            tgt = ttnn.layer_norm(
+                tgt,
+                weight=self.params.norm1.weight,
+                bias=self.params.norm1.bias,
+                epsilon=self.eps,
+            )
 
-        x = ttnn.linear(tgt, self.params.linear1.weight, bias=self.params.linear1.bias)
-        x = ttnn.relu(x)
-        tgt2 = ttnn.linear(x, self.params.linear2.weight, bias=self.params.linear2.bias)
-
-        # tgt = tgt + tgt2
-        tgt = ttnn.layer_norm(
-            tgt,
-            weight=self.params.norm2.weight,
-            bias=self.params.norm2.bias,
-            epsilon=self.eps,
-        )
-
-        if self.update_query_pos:
-            x = ttnn.linear(tgt, self.params.linear_pos1.weight, bias=self.params.linear_pos1.bias)
+            x = ttnn.linear(tgt, self.params.linear1.weight, bias=self.params.linear1.bias)
             x = ttnn.relu(x)
-            query_pos2 = ttnn.linear(x, self.params.linear_pos2.weight, bias=self.params.linear_pos2.bias)
+            tgt2 = ttnn.linear(x, self.params.linear2.weight, bias=self.params.linear2.bias)
 
-            query_pos = ttnn.layer_norm(
-                query_pos,
-                weight=self.params.norm_pos.weight,
-                bias=self.params.norm_pos.bias,
+            # tgt = tgt + tgt2
+            tgt = ttnn.layer_norm(
+                tgt,
+                weight=self.params.norm2.weight,
+                bias=self.params.norm2.bias,
+                epsilon=self.eps,
+            )
+
+            if self.update_query_pos:
+                x = ttnn.linear(tgt, self.params.linear_pos1.weight, bias=self.params.linear_pos1.bias)
+                x = ttnn.relu(x)
+                query_pos2 = ttnn.linear(x, self.params.linear_pos2.weight, bias=self.params.linear_pos2.bias)
+
+                query_pos = ttnn.layer_norm(
+                    query_pos,
+                    weight=self.params.norm_pos.weight,
+                    bias=self.params.norm_pos.bias,
+                    epsilon=self.eps,
+                )
+
+                track_instances.query = ttnn.to_torch(track_instances.query)
+                track_instances.query[:, : dim // 2] = ttnn.to_torch(query_pos)
+                track_instances.query = ttnn.from_torch(track_instances.query, device=self.device)
+
+            x = ttnn.linear(tgt, self.params.linear_feat1.weight, bias=self.params.linear_feat1.bias)
+            x = ttnn.relu(x)
+            query_feat2 = ttnn.linear(x, self.params.linear_feat2.weight, bias=self.params.linear_feat2.bias)
+
+            query_feat = ttnn.layer_norm(
+                query_feat,
+                weight=self.params.norm_feat.weight,
+                bias=self.params.norm_feat.bias,
                 epsilon=self.eps,
             )
 
             track_instances.query = ttnn.to_torch(track_instances.query)
-            track_instances.query[:, : dim // 2] = ttnn.to_torch(query_pos)
+            track_instances.query[:, dim // 2 :] = ttnn.to_torch(query_feat)
             track_instances.query = ttnn.from_torch(track_instances.query, device=self.device)
-
-        x = ttnn.linear(tgt, self.params.linear_feat1.weight, bias=self.params.linear_feat1.bias)
-        x = ttnn.relu(x)
-        query_feat2 = ttnn.linear(x, self.params.linear_feat2.weight, bias=self.params.linear_feat2.bias)
-
-        query_feat = ttnn.layer_norm(
-            query_feat,
-            weight=self.params.norm_feat.weight,
-            bias=self.params.norm_feat.bias,
-            epsilon=self.eps,
-        )
-
-        track_instances.query = ttnn.to_torch(track_instances.query)
-        track_instances.query[:, dim // 2 :] = ttnn.to_torch(query_feat)
-        track_instances.query = ttnn.from_torch(track_instances.query, device=self.device)
 
         return track_instances
 
