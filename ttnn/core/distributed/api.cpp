@@ -149,13 +149,4 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards) {
         TensorTopology{});
 }
 
-std::vector<int> get_t3k_physical_device_ids_ring() {
-    using namespace tt::tt_metal::distributed;
-    auto& instance = SystemMesh::instance();
-    TT_FATAL(instance.shape() == instance.local_shape(), "System mesh must be fully local");
-    auto num_devices = instance.shape().mesh_size();
-    TT_FATAL(num_devices == 8, "T3000 ring topology only works with 8 devices");
-    return extract_locals(instance.get_mapped_devices(MeshShape(1, 8)).device_ids);
-}
-
 }  // namespace ttnn::distributed
