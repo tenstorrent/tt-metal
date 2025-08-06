@@ -4,15 +4,26 @@
 
 #pragma once
 
-#include <umd/device/types/xy_pair.h>
 #include <utility>
-#include <vector>
 #include <memory>
-#include "fabric_lite.hpp"
+
+#include "host_api.hpp"
+#include "tt_metal.hpp"
+#include "lite_fabric.hpp"
+
 #include "kernel_types.hpp"
 #include "program.hpp"
+#include "rtoptions.hpp"
 #include "tt_cluster.hpp"
-#include "tt_memory.h"
+#include "assert.hpp"
+#include "context/metal_context.hpp"
+#include "hal_types.hpp"
+#include "jit_build/build_env_manager.hpp"
+#include "impl/kernels/kernel_impl.hpp"
+#include "core_coord.hpp"
+#include "data_types.hpp"
+#include <umd/device/types/xy_pair.h>
+#include <tt-metalium/control_plane.hpp>
 
 namespace lite_fabric {
 
@@ -33,24 +44,25 @@ struct TunnelDescriptor {
 };
 
 struct SystemDescriptor {
-    std::unordered_map<chip_id_t, uint32_t> enabled_eth_channels;
+    std::map<chip_id_t, uint32_t> enabled_eth_channels;
     std::vector<TunnelDescriptor> tunnels_from_mmio;
 };
 
 uint32_t GetEthChannelMask(chip_id_t device_id);
-
-void SetResetState(std::shared_ptr<tt::Cluster> cluster, tt_cxy_pair virtual_core, bool assert_reset);
-
-void SetPC(std::shared_ptr<tt::Cluster> cluster, tt_cxy_pair virtual_core, uint32_t pc_addr, uint32_t pc_val);
 
 SystemDescriptor GetSystemDescriptor2Devices(
     const std::map<chip_id_t, tt::tt_metal::IDevice*>& devices,
     chip_id_t mmio_device_id,
     chip_id_t connected_device_id);
 
-// Returns the binary and local init scratch address for a kernel
+uint32_t GetLocalInitAddr(std::shared_ptr<tt::tt_metal::Kernel> kernel);
+
 std::pair<const ll_api::memory&, uint32_t> GetBinaryMetadata(
     uint32_t build_id, tt::tt_metal::Program& pgm, tt::tt_metal::KernelHandle kernel_handle);
+
+void SetResetState(std::shared_ptr<tt::Cluster> cluster, tt_cxy_pair virtual_core, bool assert_reset);
+
+void SetPC(std::shared_ptr<tt::Cluster> cluster, tt_cxy_pair virtual_core, uint32_t pc_addr, uint32_t pc_val);
 
 void wait_for_state(tt::Cluster& cluster, tt_cxy_pair virtual_core, lite_fabric::InitState state);
 

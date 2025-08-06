@@ -64,17 +64,13 @@ constexpr uint8_t NUM_TRANSACTION_IDS = 4;
 
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_NUM_BUFFERS_ARRAY = {8};
 
-constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_NUM_BUFFERS_ARRAY = {16};
+constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_NUM_BUFFERS_ARRAY = {8};
 
 constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_ARRAY = RECEIVER_NUM_BUFFERS_ARRAY;
 
 static_assert(NUM_SENDER_CHANNELS == 1);
 
 constexpr uint32_t CHANNEL_BUFFER_SIZE = 4096 + sizeof(tt::tt_fabric::LowLatencyPacketHeader);
-
-constexpr uint32_t CHANNEL_BUFFER_SLOTS = 8;
-
-constexpr uint32_t DOWNSTREAM_SENDER_NUM_BUFFERS = CHANNEL_BUFFER_SLOTS;
 
 constexpr size_t RECEIVER_CHANNEL_BASE_ID = NUM_SENDER_CHANNELS;
 constexpr size_t SENDER_CHANNEL_BASE_ID = 0;

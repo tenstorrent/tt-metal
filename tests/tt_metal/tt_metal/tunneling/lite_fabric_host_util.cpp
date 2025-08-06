@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "lite_fabric_host.hpp"
+#include "lite_fabric_host_util.hpp"
 #include <tt-logger/tt-logger.hpp>
 
 namespace {

@@ -4,18 +4,19 @@
 
 #include <stdint.h>
 #include <cstdint>
+#include <tuple>
 #include <utility>
 
 #include "blackhole/dev_mem_map.h"
 #include "blackhole/noc_nonblocking_api.h"
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "debug/pause.h"
 #include "eth_chan_noc_mapping.h"
 #include "lite_fabric.hpp"
+#include "fabric_edm_packet_header.hpp"
 #include "init-fsm-basic.h"
 #include "lite_fabric_constants.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp"
+#include "lite_fabric_channel_util.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_transaction_id_tracker.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
@@ -106,15 +107,15 @@ FORCE_INLINE void send_next_data(
     while (internal_::eth_txq_is_busy(sender_txq_id));
     internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 
-    host_interface.d2h.sender_fabric_read_index =
-        tt::tt_fabric::wrap_increment<SENDER_NUM_BUFFERS_ARRAY[0]>(host_interface.d2h.sender_fabric_read_index);
+    host_interface.d2h.fabric_sender_channel_index =
+        tt::tt_fabric::wrap_increment<SENDER_NUM_BUFFERS_ARRAY[0]>(host_interface.d2h.fabric_sender_channel_index);
 
     remote_receiver_buffer_index = tt::tt_fabric::BufferIndex{
         tt::tt_fabric::wrap_increment<RECEIVER_NUM_BUFFERS_ARRAY[0]>(remote_receiver_buffer_index.get())};
     receiver_buffer_channel.set_cached_next_buffer_slot_addr(
         receiver_buffer_channel.get_buffer_address(remote_receiver_buffer_index));
     sender_buffer_channel.set_cached_next_buffer_slot_addr(sender_buffer_channel.get_buffer_address(
-        tt::tt_fabric::BufferIndex{(uint8_t)host_interface.d2h.sender_fabric_read_index}));
+        tt::tt_fabric::BufferIndex{(uint8_t)host_interface.d2h.fabric_sender_channel_index}));
     remote_receiver_num_free_slots--;
     // update the remote reg
     static constexpr uint32_t packets_to_forward = 1;
@@ -129,12 +130,13 @@ FORCE_INLINE void run_sender_channel_step(
     tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS_ARRAY[0]>& remote_receiver_channel,
     bool on_mmio_chip) {
     bool receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
-    bool has_unsent_packet = host_interface.h2d.sender_host_write_index != host_interface.d2h.sender_fabric_read_index;
+    bool has_unsent_packet =
+        host_interface.h2d.sender_host_write_index != host_interface.d2h.fabric_sender_channel_index;
     bool can_send = receiver_has_space_for_packet && has_unsent_packet;
 
     if (can_send) {
         DPRINT << "S: host write index: " << (uint32_t)host_interface.h2d.sender_host_write_index
-               << ", fabric read index: " << (uint32_t)host_interface.d2h.sender_fabric_read_index << ENDL();
+               << ", fabric read index: " << (uint32_t)host_interface.d2h.fabric_sender_channel_index << ENDL();
         DPRINT << "S: Receiver has space for packet: " << (uint32_t)receiver_has_space_for_packet
                << ", has unsent packet: " << (uint32_t)has_unsent_packet << ", can send: " << (uint32_t)can_send
                << ENDL();
@@ -176,9 +178,6 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
                    << " Destination Address: " << HEX() << dest_address << " Size: " << DEC()
                    << (uint32_t)payload_size_bytes << ENDL();
 
-            // noc_async_write(payload_start_address, dest_address, payload_size_bytes,
-            // tt::tt_fabric::edm_to_local_chip_noc); noc_async_write_barrier(tt::tt_fabric::edm_to_local_chip_noc);
-
             noc_async_write_one_packet_with_trid<true, false>(
                 payload_start_address,
                 dest_address,
@@ -192,35 +191,34 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
         case tt::tt_fabric::NocSendType::NOC_READ: {
             if (!on_mmio_chip) {
                 auto& host_interface = lite_fabric->host_interface;
-
-                const auto src_address =
-                    header.command_fields.unicast_write.noc_address;  // didn't rename command_field for read
+                const auto src_address = header.command_fields.read.noc_address;
+                // This assumes nobody else is using the sender channel on device 1 because
+                // the tunnel depth is only 1 at the moment
                 uint32_t dst_address = sender_buffer_channel.get_cached_next_buffer_slot_addr();
                 uint32_t payload_dst_address = dst_address + sizeof(PACKET_HEADER_TYPE);
 
-                DPRINT << "R: NOC_READ src_address: " << HEX() << src_address << " dst_address: " << payload_dst_address
-                       << DEC() << ENDL();
-                // copy the header to the dst_address and then offset
-                tt_l1_ptr PACKET_HEADER_TYPE* copy_packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(dst_address);
-                *copy_packet_header = header;
+                DPRINT << "R: NOC_READ src_address: " << HEX() << src_address << " dst_address: " << dst_address
+                       << DEC() << " event: " << header.command_fields.read.event << ENDL();
 
-                noc_async_read(
-                    src_address, payload_dst_address, payload_size_bytes, tt::tt_fabric::edm_to_local_chip_noc);
-                noc_async_read_barrier(tt::tt_fabric::edm_to_local_chip_noc);
+                // Create packet header for writing back
+                tt_l1_ptr tt::tt_fabric::LowLatencyPacketHeader* packet_header_in_sender_ch =
+                    reinterpret_cast<tt::tt_fabric::LowLatencyPacketHeader*>(dst_address);
+                *packet_header_in_sender_ch = header;
+                // Read the data into the buffer
+                // This is safe only if the data at the sender buffer slot has been flushed out
+                // We rely on the host to not do a read until the received data has been read out
+                DPRINT << "Read into buffer" << ENDL();
+                noc_async_read(src_address, payload_dst_address, payload_size_bytes);
+                noc_async_read_barrier();
+                DPRINT << "Read into buffer done" << ENDL();
 
-                // weird ... we read and then write back immediately but first 32B of payload are incorrect (values from
-                // the previous run)
-                noc_async_write(
-                    dst_address,
-                    src_address + payload_size_bytes,
-                    payload_size_bytes,
-                    tt::tt_fabric::edm_to_local_chip_noc);
-                noc_async_write_barrier(tt::tt_fabric::edm_to_local_chip_noc);
-
-                // update the write pointer in the sender channel... not really host interface but allows next iteration
-                // to run
+                // Tell ourselves there is data to send
+                // NOTE: sender_buffer_channel index will be incremented in send_next_data
                 host_interface.h2d.sender_host_write_index = tt::tt_fabric::wrap_increment<SENDER_NUM_BUFFERS_ARRAY[0]>(
                     host_interface.h2d.sender_host_write_index);
+            } else {
+                DPRINT << "NOC_READ Event " << DEC() << header.command_fields.read.event << " Address " << HEX()
+                       << (uint32_t)packet_start << ENDL();
             }
 
         } break;
@@ -281,9 +279,9 @@ FORCE_INLINE void run_receiver_channel_step(
     bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
     bool can_send_completion = unflushed_writes && next_trid_flushed;
     if (on_mmio_chip) {
-        can_send_completion = can_send_completion &&
-                              (((host_interface.d2h.receiver_fabric_write_index + 1) % RECEIVER_NUM_BUFFERS_ARRAY[0]) !=
-                               host_interface.h2d.receiver_host_read_index);
+        can_send_completion =
+            can_send_completion && (((host_interface.d2h.fabric_receiver_channel_index + 1) %
+                                     RECEIVER_NUM_BUFFERS_ARRAY[0]) != host_interface.h2d.receiver_host_read_index);
     }
 
     if (can_send_completion) {
@@ -291,9 +289,9 @@ FORCE_INLINE void run_receiver_channel_step(
         receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
         completion_counter.increment();
         if (on_mmio_chip) {
-            host_interface.d2h.receiver_fabric_write_index =
+            host_interface.d2h.fabric_receiver_channel_index =
                 tt::tt_fabric::wrap_increment<RECEIVER_NUM_BUFFERS_ARRAY[0]>(
-                    host_interface.d2h.receiver_fabric_write_index);
+                    host_interface.d2h.fabric_receiver_channel_index);
         }
     }
 }
@@ -338,6 +336,7 @@ void kernel_main() {
         CHANNEL_BUFFER_SIZE,
         sizeof(PACKET_HEADER_TYPE),
         RECEIVER_CHANNEL_BASE_ID);
+    lite_fabric::init_receiver_headers(remote_receiver_channels);
 
     // initialize the local sender channel worker interfaces
     local_sender_channels.init(
@@ -356,12 +355,12 @@ void kernel_main() {
     // Must initialize to match what's on the host
     structs->host_interface.init();
 
+    bool on_mmio_chip = structs->config.is_mmio;
     DPRINT << "Routing Enabled " << structs->config.routing_enabled
            << " Init on MMIO = " << (uint32_t)structs->config.is_mmio << " Host IF at 0x" << HEX()
            << (uint32_t)&host_interface << DEC() << ENDL();
     lite_fabric::routing_init(&structs->config);
 
-    bool on_mmio_chip = structs->config.is_mmio;
     while (structs->config.routing_enabled) {
         invalidate_l1_cache();
 
@@ -372,6 +371,7 @@ void kernel_main() {
             remote_receiver_channels.template get<0>(),
             on_mmio_chip);
 
+        invalidate_l1_cache();
         run_receiver_channel_step(
             remote_receiver_channels.template get<0>(),
             receiver_channel_pointers_ch0,
