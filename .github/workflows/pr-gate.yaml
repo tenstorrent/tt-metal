@@ -59,6 +59,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Debug
+        env:
+          GITHUB_CONTEXT: ${{ toJSON(github) }}
         run: |
           echo "github.ref_protected: ${{ github.ref_protected }}"
           echo "github.run_id: ${{ github.run_id }}"
@@ -68,7 +70,7 @@ jobs:
           echo "inputs.build-type: ${{ inputs.build-type }}"
           echo "github.workflow: ${{ github.workflow }}"
           echo "github.event_name: ${{ github.event_name }}"
-          echo "github context: ${{ toJSON(github) }}"
+          echo "github context: $GITHUB_CONTEXT"
 
   asan-build:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
