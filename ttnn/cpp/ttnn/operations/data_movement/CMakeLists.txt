@@ -75,6 +75,9 @@ target_sources(
         indexed_fill/device/indexed_fill_op.cpp
         indexed_fill/device/indexed_fill_op_multi_core_program_factory.cpp
         indexed_fill/indexed_fill.cpp
+        moe_expert_token_remap/moe_expert_token_remap.cpp
+        moe_expert_token_remap/device/moe_expert_token_remap_device_operation.cpp
+        moe_expert_token_remap/device/moe_expert_token_remap_program_factory.cpp
         move/device/move_device_operation.cpp
         move/device/move_program_factory.cpp
         move/move.cpp
