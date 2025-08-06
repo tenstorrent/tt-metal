@@ -118,17 +118,6 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num1, uint32_t n
     return divisor;
 }
 
-// If shard width is tile width, and it is allowed to have half tile shard width, and we have enough cores to do it,
-// double number of cores
-static uint32_t set_shard_width_to_half_tile_if_possible(
-    uint32_t num_cores, uint32_t channels_ntiles, uint32_t max_num_cores, bool width_shard_half_tile_possible) {
-    if (width_shard_half_tile_possible && (div_up(channels_ntiles, num_cores) == 1) &&
-        (2 * num_cores <= max_num_cores)) {
-        return 2 * num_cores;
-    }
-    return num_cores;
-}
-
 ParallelConfig determine_parallel_config(
     const TensorMemoryLayout shard_layout,
     uint32_t batch_size,
