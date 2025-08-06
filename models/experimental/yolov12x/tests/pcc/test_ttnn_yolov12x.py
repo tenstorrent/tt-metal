@@ -8,7 +8,7 @@ import pytest
 
 from models.utility_functions import run_for_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.yolov12x.common import load_torch_model
+from models.experimental.yolov12x.common import load_torch_model, YOLOV12_L1_SMALL_SIZE
 from models.experimental.yolov12x.reference import yolov12x
 from models.experimental.yolov12x.tt.yolov12x import YoloV12x
 from models.experimental.yolov12x.tt.model_preprocessing import (
@@ -20,7 +20,7 @@ from models.experimental.yolov12x.tt.model_preprocessing import (
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 32768}],
+    [{"l1_small_size": YOLOV12_L1_SMALL_SIZE}],
     indirect=True,
     ids=["0"],
 )
@@ -40,8 +40,7 @@ def test_yolov12x(use_pretrained_weight, device, reset_seeds, model_location_gen
 
     if use_pretrained_weight:
         torch_model = load_torch_model(model_location_generator)
-
-    state_dict = torch_model.state_dict()
+        state_dict = torch_model.state_dict()
 
     state_dict = torch_model.state_dict() if state_dict is None else state_dict
 
@@ -57,6 +56,6 @@ def test_yolov12x(use_pretrained_weight, device, reset_seeds, model_location_gen
     parameters = create_yolov12x_model_parameters(torch_model, torch_input, device)
     ttnn_model = YoloV12x(device, parameters)
     ttnn_output = ttnn_model(ttnn_input)
-    ttnn_output = ttnn.to_torch(ttnn_output[0])
+    ttnn_output = ttnn.to_torch(ttnn_output)
 
     assert_with_pcc(torch_output[0], ttnn_output, 0.99)
