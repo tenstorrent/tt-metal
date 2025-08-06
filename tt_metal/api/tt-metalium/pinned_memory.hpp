@@ -84,6 +84,13 @@ public:
      */
     bool has_device(chip_id_t device_id) const;
 
+    /**
+     * @brief Check if the pinned memory is usable from NOC for a specific device
+     * @param device_id The device ID to check
+     * @return True if the device can access the buffer via NOC (i.e., map_to_noc is true and device is MMIO-capable)
+     */
+    bool usable_from_noc(chip_id_t device_id) const;
+
 private:
     friend class distributed::MeshDevice;
 

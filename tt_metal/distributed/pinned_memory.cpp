@@ -180,6 +180,16 @@ bool PinnedMemoryImpl::has_device(chip_id_t device_id) const {
     return device_to_mmio_map_.find(device_id) != device_to_mmio_map_.end();
 }
 
+bool PinnedMemoryImpl::usable_from_noc(chip_id_t device_id) const {
+    // Check if mapped to NOC and device is its own MMIO device (i.e., MMIO-capable)
+    auto mmio_it = device_to_mmio_map_.find(device_id);
+    if (mmio_it == device_to_mmio_map_.end()) {
+        return false;  // Device not found
+    }
+    
+    return map_to_noc_ && (mmio_it->second == device_id);
+}
+
 // PinnedMemory pimpl wrapper implementation
 PinnedMemory::PinnedMemory(
     const std::vector<IDevice*>& devices,
@@ -224,6 +234,10 @@ std::vector<chip_id_t> PinnedMemory::get_device_ids() const {
 
 bool PinnedMemory::has_device(chip_id_t device_id) const {
     return pImpl->has_device(device_id);
+}
+
+bool PinnedMemory::usable_from_noc(chip_id_t device_id) const {
+    return pImpl->usable_from_noc(device_id);
 }
 
 }  // namespace tt::tt_metal 
