@@ -38,6 +38,7 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
             output_layout (ttnn.Layout, optional): Defaults to `None`.
             num_out_blocks (int, optional): Defaults to `None`.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration for the op. Defaults to `None`.
+            negative_mask (ttnn.Tensor, optional): Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -58,7 +59,8 @@ void bind_normalization_group_norm_operation(pybind11::module& module) {
             py::arg("inplace") = true,
             py::arg("output_layout") = std::nullopt,
             py::arg("num_out_blocks") = std::nullopt,
-            py::arg("compute_kernel_config") = std::nullopt});
+            py::arg("compute_kernel_config") = std::nullopt,
+            py::arg("negative_mask") = std::nullopt});
 }
 void bind_normalization_group_norm(py::module& module) { bind_normalization_group_norm_operation(module); }
 
