@@ -30,21 +30,24 @@ on:
       - synchronize
       - ready_for_review
   merge_group:
+    types:
+      - checks_requested
+      - destroyed
   push:
     branches:
       - main # Builds on main will populate the shared ccache to speed up builds on branches
 
 concurrency:
   # Groups to control cancelling of obsolete runs.
-  # main (or any protected branch): run_id (read: never cancel other jobs)
+  # main (or any protected branch): run_id (ie: never cancel other jobs)
   # PRs: PR #
-  # Merge Queue: A value unique to each PR (merge_group.head_ref)
-  # All others: commit ID (read: never cancel other jobs)
+  # Merge Queue: branch name; will be paired with the 'destroyed' trigger to cause a cancel when it leaves or moves in the queue.
+  #              See https://github.com/orgs/community/discussions/137976#discussioncomment-14004793
+  # All others: branch name (ie: one run per branch)
   group: >-
     ${{ github.workflow }}-
-    ${{ github.ref_protected && github.run_id
+    ${{ (github.ref_protected && github.run_id)
         || github.event.pull_request.number
-        || github.event.merge_group.head_ref
         || github.ref }}-
     ${{ inputs.build-type || 'default' }}
   cancel-in-progress: true
@@ -56,23 +59,8 @@ permissions:
   packages: write
 
 jobs:
-  debug-concurrency:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Debug
-        run: |
-          echo "github.ref_protected: ${{ github.ref_protected }}"
-          echo "github.run_id: ${{ github.run_id }}"
-          echo "github.event.pull_request.number: ${{ github.event.pull_request.number }}"
-          echo "github.event.merge_group.head_ref: ${{ github.event.merge_group.head_ref }}"
-          echo "github.ref: ${{ github.ref }}"
-          echo "inputs.build-type: ${{ inputs.build-type }}"
-          echo "github.workflow: ${{ github.workflow }}"
-          echo "github.event_name: ${{ github.event_name }}"
-          echo "github.event.pull_request.draft: ${{ github.event.pull_request.draft }}"
-
   asan-build:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -85,7 +73,7 @@ jobs:
       skip-tt-train: true
 
   find-changed-files:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-latest
     outputs:
       cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
@@ -141,7 +129,7 @@ jobs:
       product: tt-nn
 
   build:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
