@@ -11,10 +11,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 from models.experimental.vovnet.tt.sequential_append_list import TtSequentialAppendList
 from models.experimental.vovnet.tt.model_preprocessing import custom_preprocessor
-from models.experimental.vovnet.common import load_torch_model
+from models.experimental.vovnet.common import load_torch_model, VOVNET_L1_SMALL_SIZE
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": VOVNET_L1_SMALL_SIZE}], indirect=True)
 def test_sequential_append_list_inference(device, reset_seeds, model_location_generator):
     STAGE_INDEX = 0
     BLOCK_INDEX = 0

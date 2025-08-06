@@ -285,12 +285,20 @@ jobs:
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
+      - name: vovnet tests
+        uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
+        with:
+          model_name: "VoVNet"
+          commands: |
+            pytest models/experimental/vovnet/tests/perf -m models_device_performance_bare_metal
+
       - name: yolov12x tests
         uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
         with:
           model_name: "yolov12x"
           commands: |
             pytest models/experimental/yolov12x/tests/perf -m models_device_performance_bare_metal
+
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
