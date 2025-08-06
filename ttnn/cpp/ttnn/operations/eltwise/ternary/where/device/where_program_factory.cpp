@@ -234,46 +234,13 @@ void set_or_update_runtime_arguments(
             handle_args(program, reader_kernel_id, core, reader_runtime_args);
         }
 
-        // Writer runtime args - different format for TTT column broadcast (binary_ng style)
-        if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
-            // Use binary_ng style writer runtime args for TTT column broadcast (16 args)
-            std::array writer_runtime_args = {
-                value_true_tensor.value().buffer()->address(),  // src_addr
-                output.buffer()->address(),                     // dst_addr
-                start_tile_id,                                  // start_tile_id
-                b_num_tiles,                                    // src_num_tiles
-                num_tiles_per_core,                             // dst_num_tiles
-                c_current_shard_width,                          // dst_shard_width
-                bHt * bWt * bC * bN * bD * (bND > 1),           // nD_stride
-                bHt * bWt * bC * bN * (bD > 1),                 // d_stride
-                bHt * bWt * bC * (bN > 1),                      // n_stride
-                bHt * bWt * (bC > 1),                           // c_stride
-                cD,                                             // D
-                cN,                                             // N
-                cC,                                             // C
-                cHt,                                            // Ht
-                cWt,                                            // Wt
-                cND                                             // cND (collapsed dims > 5)
-            };
-
-            // DEBUG: Print WHERE writer args
-            std::cout << "\n=== WHERE WRITER ARGS (TTT COL_BCAST) core(" << core.x << "," << core.y
-                      << ") ===" << std::endl;
-            for (size_t i = 0; i < writer_runtime_args.size(); ++i) {
-                std::cout << "  arg[" << i << "] = " << writer_runtime_args[i] << std::endl;
-            }
-            std::cout << "===========================================" << std::endl;
-
-            handle_args(program, writer_kernel_id, core, writer_runtime_args);
-        } else {
-            // Use original 3-argument format for other cases
-            std::array writer_runtime_args = {
-                output.buffer()->address(),
-                num_tiles_per_core,
-                start_tile_id,
-            };
-            handle_args(program, writer_kernel_id, core, writer_runtime_args);
-        }
+        // Writer runtime args - use simple unary format (3 args: dst_addr, num_tiles, start_id)
+        std::array writer_runtime_args = {
+            output.buffer()->address(),  // dst_addr
+            num_tiles_per_core,          // num_tiles
+            start_tile_id                // start_id
+        };
+        handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
         // Compute runtime args - binary_ng style for TTT column broadcast
         if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
@@ -617,20 +584,10 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         writer_defines["DST_SHARDED"] = output_sharded ? "1" : "0";
     }
 
-    tt_metal::WriterDataMovementConfig writer_config;
-    if (broadcast_type == WhereBroadcastType::COL_BCAST) {
-        // Use binary_ng style writer config with defines (only 3 compile time args)
-        bool has_sharding = predicate_tensor.memory_config().is_sharded() ||
-                            value_true_tensor.value().memory_config().is_sharded() ||
-                            output.memory_config().is_sharded();
-        writer_config = tt_metal::WriterDataMovementConfig(
-            {value_true_is_dram, output_is_dram, has_sharding}, std::move(writer_defines));
-    } else {
-        // Use original config for non-broadcast cases (with TensorAccessorArgs)
-        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_tensor_cb};
-        tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
-        writer_config = tt_metal::WriterDataMovementConfig(writer_compile_time_args);
-    }
+    // Use unary writer config for all cases (consistent with other writer variants)
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_tensor_cb};
+    tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    tt_metal::WriterDataMovementConfig writer_config = tt_metal::WriterDataMovementConfig(writer_compile_time_args);
 
     auto writer_kernel_id = tt_metal::CreateKernel(
         program, get_kernel_file_path(kernel_config.writer_kernel), all_device_cores, writer_config);
