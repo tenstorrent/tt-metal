@@ -408,8 +408,6 @@ set_target_properties(
 )
 
 file(GLOB_RECURSE api api/*)
-list(FILTER api EXCLUDE REGEX "/CMakeLists\\\\.txt$") # Because there is at least 1 CMakeLists.txt file in the api directory, we need to exclude them from the api target
-
 target_sources(
     ttnncpp
     PUBLIC
@@ -613,8 +611,6 @@ set(FixmeOpIncDirs
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
 )
-
-add_subdirectory(api/ttnn)
 
 add_subdirectory(cpp/ttnn/operations/bernoulli)
 add_subdirectory(cpp/ttnn/operations/ccl)
