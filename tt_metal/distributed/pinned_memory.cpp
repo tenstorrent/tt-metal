@@ -12,8 +12,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <context/metal_context.hpp>
-#include <third_party/umd/device/chip_helpers/sysmem_manager.h>
-#include <third_party/umd/device/chip_helpers/sysmem_buffer.h>
+#include <tt_metal/third_party/umd/device/chip_helpers/sysmem_manager.h>
+#include <tt_metal/third_party/umd/device/chip_helpers/sysmem_buffer.h>
 
 namespace tt::tt_metal {
 

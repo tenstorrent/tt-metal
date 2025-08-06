@@ -1056,7 +1056,7 @@ std::unique_ptr<PinnedMemory> MeshDevice::create_pinned_memory(
         throw std::invalid_argument("No valid devices found in the specified coordinate range set");
     }
     
-    return std::make_unique<PinnedMemory>(devices, buffer_size, map_to_noc);
+    return std::unique_ptr<PinnedMemory>(new PinnedMemory(devices, buffer_size, map_to_noc));
 }
 
 std::unique_ptr<PinnedMemory> MeshDevice::create_pinned_memory(
@@ -1084,7 +1084,7 @@ std::unique_ptr<PinnedMemory> MeshDevice::create_pinned_memory(
         throw std::invalid_argument("No valid devices found in the specified coordinate range set");
     }
     
-    return std::make_unique<PinnedMemory>(devices, host_buffer, buffer_size, map_to_noc);
+    return std::unique_ptr<PinnedMemory>(new PinnedMemory(devices, host_buffer, buffer_size, map_to_noc));
 }
 
 }  // namespace tt::tt_metal::distributed
