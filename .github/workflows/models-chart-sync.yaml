@@ -1,0 +1,33 @@
+name: Check Featured Models Chart Sync
+
+on:
+  pull_request:
+    paths:
+      - './README.md'
+      - './models/README.md'
+
+jobs:
+  model-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Check if model README charts match
+        run: |
+          python ./.github/scripts/utils/models-chart-sync.py > sync_output.txt
+          if grep -q "❌" sync_output.txt; then
+            cat sync_output.txt
+            echo "ERROR: Some featured models are missing or mismatched in the full list."
+            echo "Please ensure all featured models (tt-metal/README.md) are correctly listed in the full model list (tt-metal/models/README.md)."
+            exit 1
+          fi
+          cat sync_output.txt
+          echo "SUCCESS: All featured models are matched in the full list."
