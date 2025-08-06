@@ -196,6 +196,30 @@ void MAIN {
             cb_push_back(cb_x2, blk);
             REL();
         }
+
+        // Accumulate x^2 into (∑x^2)/n
+        if constexpr (FLOAT32_DTYPE) {
+            reconfig_data_format(cb_x2, cb_scaler);
+        }
+        cb_reserve_back(cb_ex2, 1);
+        reduce_init(cb_x2, cb_scaler, cb_ex2);
+        ACQ();
+        cb_wait_front(cb_x2, Wt);
+        // cb_wait_front(cb_xmm, Wt);
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            // reduce
+            for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                reduce_tile(cb_x2, cb_scaler, wt + wtr, scaler0, dst0);
+            }
+            // reduce_tile(cb_xmm, cb_scaler, wt+wtr, scaler0, dst0);
+        }
+        cb_pop_front(cb_x2, Wt);
+        pack_tile(dst0, cb_ex2);
+        reduce_uninit();
+        REL();
+
+        cb_push_back(cb_ex2, 1);
+        cb_wait_front(cb_ex2, 1);
 #endif
 
 #if defined RMSNORM and not defined FUSED_PRE_ADD
