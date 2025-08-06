@@ -104,6 +104,14 @@ struct Conv2dConfig {
     bool enable_kernel_stride_folding = false;
     // ===============================================================
 
+    // Conv2D currently returns 2D Shaped Tensors, with the Batch, Height & Width folded into the first (non-1)
+    // dimension. If true, the Conv2D operation will return correctly shaped 4D tensors, similar to PyTorch. Currently
+    // most models work with only 2D shaped tensors, so this is false by default to maintain compatibility with existing
+    // models. This flag is present to enable both 2D and 4D Shaped Tensors while the models are ported over to use 4D
+    // Shaped Tensors. Once all models are ported, this flag will be removed and Conv2D will always return 4D shaped
+    // tensors.
+    bool use_4D_shapes = false;
+
     static constexpr auto attribute_names = std::make_tuple(
         "weights_dtype",
         "activation",
@@ -245,6 +253,7 @@ struct OptimizedConvNew {
     bool full_inner_dim;
     bool enable_split_reader;
     uint32_t pre_op_l1_allocation_size_bytes;
+    bool use_4D_shapes = false;
     OptimizedConvNew(
         const sliding_window::SlidingWindowConfig& sliding_window_config,
         uint32_t output_channels,
@@ -261,7 +270,8 @@ struct OptimizedConvNew {
         bool enable_act_double_buffer,
         bool enable_weights_double_buffer,
         bool full_inner_dim,
-        bool enable_split_reader) :
+        bool enable_split_reader,
+        bool use_4D_shapes) :
         output_channels(output_channels),
         groups(groups),
         sliding_window_config(sliding_window_config),
@@ -277,7 +287,8 @@ struct OptimizedConvNew {
         enable_act_double_buffer(enable_act_double_buffer),
         enable_weights_double_buffer(enable_weights_double_buffer),
         full_inner_dim(full_inner_dim),
-        enable_split_reader(enable_split_reader) {}
+        enable_split_reader(enable_split_reader),
+        use_4D_shapes(use_4D_shapes) {}
 
     void validate(
         const std::vector<Tensor>& input_tensors,
@@ -345,7 +356,8 @@ Tensor optimized_conv_new(
     bool enable_act_double_buffer = false,
     bool enable_weights_double_buffer = false,
     bool full_inner_dim = false,
-    bool enable_split_reader = false);
+    bool enable_split_reader = false,
+    bool use_4D_shapes = false);
 
 // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2, otherwise
 // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation

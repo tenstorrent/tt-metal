@@ -115,6 +115,7 @@ def run_conv(
     enable_weights_double_buffer=False,
     bs_full_inner_dim=False,
     sharded_cfg=None,
+    use_4D_shapes=False,
 ):
     if isinstance(device, ttnn.MeshDevice) and len(device.get_device_ids()) > 1:
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when running on multiple devices"
@@ -233,6 +234,7 @@ def run_conv(
         in_place=in_place,
         enable_kernel_stride_folding=enable_kernel_stride_folding,
         full_inner_dim=bs_full_inner_dim,
+        use_4D_shapes=use_4D_shapes,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -300,9 +302,12 @@ def run_conv(
     out = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
     # out is in row major layout and NHWC shape
     # NHWC to NCHW
-    out = out.reshape(total_batch_size, out_height, out_width, out.shape[-1])
-    out = out[:, :, :, :output_channels]
-
+    if use_4D_shapes:
+        out = out[:, :, :out_width, :output_channels]
+        out = out.reshape(total_batch_size, out_height, out_width, output_channels)
+    else:
+        out = out[:, :, :, :output_channels]
+        out = out.reshape(total_batch_size, out_height, out_width, output_channels)
     ref = torch.permute(ref, (0, 2, 3, 1))
 
     if not fp32_accum:

@@ -313,6 +313,7 @@ void py_bind_conv2d(py::module& module) {
             bool,
             bool,
             bool,
+            bool,
             bool>(),
         py::kw_only(),
         py::arg("weights_dtype") = std::nullopt,
@@ -332,7 +333,8 @@ void py_bind_conv2d(py::module& module) {
         py::arg("full_inner_dim") = false,
         py::arg("enable_split_reader") = false,
         py::arg("in_place") = false,
-        py::arg("enable_kernel_stride_folding") = false);
+        py::arg("enable_kernel_stride_folding") = false,
+        py::arg("use_4D_shapes") = false);
     py_conv_config.def_readwrite("weights_dtype", &Conv2dConfig::weights_dtype, R"doc(
         Optional argument which specifies the data type of the preprocessed weights & bias tensor if the Conv2D op is responsible for preparing the weights.
         Supports ttnn.bfloat16 and ttnn.bfloat8_b.
@@ -457,6 +459,14 @@ void py_bind_conv2d(py::module& module) {
         5. Input tensor data type is not BFLOAT8_B.
 
         ===============================================================
+        )doc");
+
+    py_conv_config.def_readwrite("use_4D_shapes", &Conv2dConfig::use_4D_shapes, R"doc(
+        Conv2D currently returns 2D Shaped Tensors, with the Batch, Height & Width folded into the first (non-1) dimension.
+        If true, the Conv2D operation will return correctly shaped 4D tensors, similar to PyTorch.
+        Currently most models work with only 2D shaped tensors, so this is false by default to maintain compatibility with existing models.
+        This flag is present to enable both 2D and 4D Shaped Tensors while the models are ported over to use 4D Shaped Tensors.
+        Once all models are ported, this flag will be removed and Conv2D will always return 4D shaped tensors.
         )doc");
 
     py_conv_config.def("__repr__", [](const Conv2dConfig& config) { return fmt::format("{}", config); });

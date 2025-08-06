@@ -42,7 +42,8 @@ Tensor optimized_conv_new(
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
     bool full_inner_dim,
-    bool enable_split_reader) {
+    bool enable_split_reader,
+    bool use_4D_shapes) {
     TT_FATAL(b.layout() == Layout::TILE,
              "Weights should be in TILE layout.");  // Weights should already be formatted
     const auto& ashape = input_tensor_shape;
@@ -72,7 +73,8 @@ Tensor optimized_conv_new(
         enable_act_double_buffer,
         enable_weights_double_buffer,
         full_inner_dim,
-        enable_split_reader);
+        enable_split_reader,
+        use_4D_shapes);
     IDevice* device = a.device();
 
     optimized_conv_op.pre_op_l1_allocation_size_bytes =
@@ -130,8 +132,14 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
     auto padded_shape_w = parallelization_config.num_cores_nhw *
                           parallelization_config.per_core_out_matrix_height_ntile * tt::constants::TILE_HEIGHT;
     auto padded_shape_c = tt::round_up(this->output_channels, tt::constants::TILE_WIDTH);
-    ttnn::Shape output_shape({1, 1, shape_w, shape_c});
-    ttnn::Shape padded_output_shape({1, 1, padded_shape_w, padded_shape_c});
+    // auto padded_shape_w = this->untilize_out ? conv_output_w : tt::round_up(conv_output_w, TILE_WIDTH);
+    // auto padded_shape_c = this->untilize_out ? shape_c : tt::round_up(this->output_channels, TILE_WIDTH);
+    ttnn::Shape output_shape;
+    if (use_4D_shapes) {
+        output_shape = ttnn::Shape({batch_size, conv_output_h, conv_output_w, shape_c});
+    } else {
+        output_shape = ttnn::Shape({1, 1, shape_w, shape_c});
+    }
 
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     if (this->memory_config.is_sharded()) {
@@ -149,15 +157,13 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
                 tt::tt_metal::PageConfig(output_layout),
                 mem_config,
                 tt::tt_metal::Alignment(
-                    {tt::constants::TILE_HEIGHT,
+                    {(output_layout == Layout::TILE || (!use_4D_shapes)) ? tt::constants::TILE_HEIGHT : 1,
                      tt::constants::TILE_WIDTH})  // Conv2D always outputs in tile multiples, even if output layout is
                                                   // Row Major.
                 ))};
     }
     return {TensorSpec(
-        output_shape,
-        tt::tt_metal::TensorLayout::fromPaddedShape(
-            dtype, tt::tt_metal::PageConfig(output_layout), memory_config, output_shape, padded_output_shape))};
+        output_shape, tt::tt_metal::TensorLayout(dtype, tt::tt_metal::PageConfig(output_layout), memory_config))};
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
