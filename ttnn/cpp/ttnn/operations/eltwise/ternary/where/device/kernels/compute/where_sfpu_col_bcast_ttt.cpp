@@ -21,20 +21,32 @@ ALWI void process_tile(
     uint32_t num_tiles_per_cycle) {
     using namespace ckernel;
 
-#if BCAST_INPUT
-#define CB_BCAST true_cb
-#define CB_OTHER predicate_cb
-#else
-#define CB_BCAST predicate_cb
-#define CB_OTHER true_cb
+    // 3-tensor broadcast-aware synchronization - wait for broadcast CB outside loop
+#if BCAST_TRUE
+    cb_wait_front(true_cb, num_tiles_per_cycle);  // true_cb is broadcast
+#elif BCAST_PRED
+    cb_wait_front(predicate_cb, num_tiles_per_cycle);  // predicate_cb is broadcast
+#elif BCAST_FALSE
+    cb_wait_front(false_cb, num_tiles_per_cycle);  // false_cb is broadcast
 #endif
 
-    PREPROCESS(BCAST_OP, CB_BCAST, CB_BCAST, cb_out, num_tiles_per_cycle);
-    cb_wait_front(CB_BCAST, num_tiles_per_cycle);
-
     for (uint32_t j = tile_start; j < freq; ++j) {
-        PREPROCESS(OTHER_OP, CB_OTHER, CB_OTHER, cb_out, num_tiles_per_cycle);
-        cb_wait_front(CB_OTHER, num_tiles_per_cycle);
+        // Wait for non-broadcast CBs inside loop
+#if BCAST_TRUE
+        cb_wait_front(predicate_cb, num_tiles_per_cycle);
+        cb_wait_front(false_cb, num_tiles_per_cycle);
+#elif BCAST_PRED
+        cb_wait_front(true_cb, num_tiles_per_cycle);
+        cb_wait_front(false_cb, num_tiles_per_cycle);
+#elif BCAST_FALSE
+        cb_wait_front(predicate_cb, num_tiles_per_cycle);
+        cb_wait_front(true_cb, num_tiles_per_cycle);
+#else
+        // No broadcast case - wait for all CBs inside loop
+        cb_wait_front(predicate_cb, num_tiles_per_cycle);
+        cb_wait_front(true_cb, num_tiles_per_cycle);
+        cb_wait_front(false_cb, num_tiles_per_cycle);
+#endif
 
         cb_reserve_back(cb_out, num_tiles_per_cycle);
 
@@ -70,9 +82,33 @@ ALWI void process_tile(
         tile_regs_release();
 
         cb_push_back(cb_out, num_tiles_per_cycle);
-        cb_pop_front(CB_OTHER, num_tiles_per_cycle);
+
+        // Pop non-broadcast CBs inside loop
+#if BCAST_TRUE
+        cb_pop_front(predicate_cb, num_tiles_per_cycle);
+        cb_pop_front(false_cb, num_tiles_per_cycle);
+#elif BCAST_PRED
+        cb_pop_front(true_cb, num_tiles_per_cycle);
+        cb_pop_front(false_cb, num_tiles_per_cycle);
+#elif BCAST_FALSE
+        cb_pop_front(predicate_cb, num_tiles_per_cycle);
+        cb_pop_front(true_cb, num_tiles_per_cycle);
+#else
+        // No broadcast case - pop all CBs inside loop
+        cb_pop_front(predicate_cb, num_tiles_per_cycle);
+        cb_pop_front(true_cb, num_tiles_per_cycle);
+        cb_pop_front(false_cb, num_tiles_per_cycle);
+#endif
     }
-    cb_pop_front(CB_BCAST, num_tiles_per_cycle);
+
+    // Pop broadcast CB outside loop
+#if BCAST_TRUE
+    cb_pop_front(true_cb, num_tiles_per_cycle);
+#elif BCAST_PRED
+    cb_pop_front(predicate_cb, num_tiles_per_cycle);
+#elif BCAST_FALSE
+    cb_pop_front(false_cb, num_tiles_per_cycle);
+#endif
 }
 
 void MAIN {
