@@ -144,10 +144,13 @@ create_distributed_contexts(const std::vector<MeshId>& mesh_ids, const MeshGraph
     const auto& global_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
     if (mesh_ids.size() == 1 && mesh_graph.get_host_ranks(mesh_ids.front()).size() == 1) {
         distributed_contexts.emplace(mesh_ids.front(), global_context);
+        std::cout << "create_distributed_contexts: single-host, single-mesh, mesh id is " << *mesh_ids.front()
+                  << std::endl;
         return distributed_contexts;
     }
 
     for (const auto mesh_id : mesh_ids) {
+        std::cout << "create_distributed_contexts: mesh id is " << *mesh_id << std::endl;
         std::vector<int> ranks;
         for (const auto& [_, host_rank_id] : mesh_graph.get_host_ranks(mesh_id)) {
             ranks.push_back(*host_rank_id);
@@ -373,7 +376,10 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
     return local_mesh_binding;
 }
 
-ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
+void ControlPlane::init_control_plane(
+    const std::string& mesh_graph_desc_file,
+    std::optional<std::reference_wrapper<const std::map<FabricNodeId, chip_id_t>>>
+        logical_mesh_chip_id_to_physical_chip_id_mapping) {
     this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
     this->local_mesh_binding_ = this->initialize_local_mesh_binding();
 
@@ -386,28 +392,23 @@ ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     // Printing, only enabled with log_debug
     this->routing_table_generator_->mesh_graph->print_connectivity();
 
-    // Initialize the control plane routers based on mesh graph
-    const auto& logical_mesh_chip_id_to_physical_chip_id_mapping =
-        this->get_logical_chip_to_physical_chip_mapping(mesh_graph_desc_file);
-    this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping);
-    // Query and generate intermesh ethernet links per physical chip
+    if (logical_mesh_chip_id_to_physical_chip_id_mapping.has_value()) {
+        this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
+    } else {
+        this->load_physical_chip_mapping(get_logical_chip_to_physical_chip_mapping(mesh_graph_desc_file));
+    }
     this->initialize_intermesh_eth_links();
     this->generate_local_intermesh_link_table();
+}
+
+ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
+    init_control_plane(mesh_graph_desc_file, std::nullopt);
 }
 
 ControlPlane::ControlPlane(
     const std::string& mesh_graph_desc_file,
     const std::map<FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
-    this->routing_table_generator_ = std::make_unique<RoutingTableGenerator>(mesh_graph_desc_file);
-    this->local_mesh_binding_ = this->initialize_local_mesh_binding();
-    // Printing, only enabled with log_debug
-    this->routing_table_generator_->mesh_graph->print_connectivity();
-
-    // Initialize the control plane routers based on mesh graph
-    this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping);
-    // Query and generate intermesh ethernet links per physical chip
-    this->initialize_intermesh_eth_links();
-    this->generate_local_intermesh_link_table();
+    init_control_plane(mesh_graph_desc_file, logical_mesh_chip_id_to_physical_chip_id_mapping);
 }
 
 void ControlPlane::load_physical_chip_mapping(

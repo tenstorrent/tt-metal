@@ -117,7 +117,7 @@ run_t3000_tt_metal_multiprocess_tests() {
 }
 
 run_t3000_ttnn_multiprocess_tests() {
-  tt-run --mpi-args "--allow-run-as-root" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/ttnn/unit_tests_ttnn_multihost_ccl_ops
+  tt-run --mpi-args "--allow-run-as-root" --rank-binding tests/tt_metal/distributed/config/2x2_multiprocess_rank_bindings.yaml ./build/test/ttnn/multiprocess/unit_tests_multiprocess
 }
 
 run_t3000_falcon7b_tests() {

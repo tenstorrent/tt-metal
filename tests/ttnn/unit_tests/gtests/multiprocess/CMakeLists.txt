@@ -3,7 +3,8 @@ target_sources(
     unit_tests_multiprocess
     PRIVATE
         main.cpp
-        test_all_gather.cpp
+        test_host_all_gather.cpp
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost/fabric_tests/intermesh_routing_test_utils.cpp
 )
 set_target_properties(
     unit_tests_multiprocess

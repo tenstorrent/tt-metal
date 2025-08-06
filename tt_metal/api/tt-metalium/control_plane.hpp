@@ -190,6 +190,11 @@ private:
     // Check if the provided mesh is local to this host
     bool is_local_mesh(MeshId mesh_id) const;
 
+    void init_control_plane(
+        const std::string& mesh_graph_desc_file,
+        std::optional<std::reference_wrapper<const std::map<FabricNodeId, chip_id_t>>>
+            logical_mesh_chip_id_to_physical_chip_id_mapping = std::nullopt);
+
     uint16_t routing_mode_ = 0;  // ROUTING_MODE_UNDEFINED
     // TODO: remove this from local node control plane. Can get it from the global control plane
     std::unique_ptr<RoutingTableGenerator> routing_table_generator_;

@@ -35,7 +35,7 @@ using ::tt::tt_metal::TensorSpec;
 
 using BigMeshDualRankTest2x4 = tt::tt_metal::MeshDevice2x4Fixture;
 
-TEST_F(BigMeshDualRankTest2x4, AllGather) {
+TEST_F(BigMeshDualRankTest2x4, HostAllGather) {
     constexpr int num_devices = 8;
     ASSERT_EQ(mesh_device_->num_devices(), num_devices);
 
