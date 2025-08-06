@@ -601,6 +601,42 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
+Tensor construct_per_core_host_tensor(
+    const std::unordered_map<CoreCoord, std::vector<uint32_t>>& core_to_data, uint32_t MAX_RT_ARGS_WIDTH) {
+    uint32_t max_width = MAX_RT_ARGS_WIDTH;
+
+    // Create shape based on number of cores and max width
+    ttnn::Shape tensor_shape({static_cast<uint32_t>(core_to_data.size()), static_cast<uint32_t>(max_width)});
+
+    // Sort cores to ensure consistent ordering
+    std::vector<CoreCoord> ordered_cores;
+    ordered_cores.reserve(core_to_data.size());
+    for (const auto& [core, _] : core_to_data) {
+        ordered_cores.push_back(core);
+    }
+    std::sort(ordered_cores.begin(), ordered_cores.end(), [](const CoreCoord& a, const CoreCoord& b) {
+        return (a.y < b.y) || (a.y == b.y && a.x < b.x);
+    });
+
+    // Flatten data from all cores into single vector with padding
+    std::vector<uint32_t> flattened_data;
+    flattened_data.reserve(core_to_data.size() * max_width);
+
+    for (const auto& core : ordered_cores) {
+        const auto& data = core_to_data.at(core);
+        flattened_data.insert(flattened_data.end(), data.begin(), data.end());
+
+        // Add padding if needed
+        if (data.size() < max_width) {
+            flattened_data.insert(flattened_data.end(), max_width - data.size(), 0);
+        }
+    }
+
+    // Create host buffer and tensor
+    auto config_buffer = tt::tt_metal::HostBuffer(std::move(flattened_data));
+    return Tensor(std::move(config_buffer), tensor_shape, DataType::UINT32, Layout::ROW_MAJOR);
+}
+
 operation::ProgramWithCallbacks reshard_multi_core_generic(
     const Tensor& input, Tensor& output, Tensor& rt_args_config_0, Tensor& rt_args_config_1) {
     auto device = input.device();
@@ -707,10 +743,8 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(
         uint32_t estimated_args = header_size + (estimated_ranges * values_per_range);
         uint32_t MAX_RT_ARGS_WIDTH = ((estimated_args + 31) / 32) * 32;
 
-        auto runtime_args_tensor_0 =
-            ttnn::operations::data_movement::construct_per_core_host_tensor(rt_config_map_0, MAX_RT_ARGS_WIDTH);
-        auto runtime_args_tensor_1 =
-            ttnn::operations::data_movement::construct_per_core_host_tensor(rt_config_map_1, MAX_RT_ARGS_WIDTH);
+        auto runtime_args_tensor_0 = construct_per_core_host_tensor(rt_config_map_0, MAX_RT_ARGS_WIDTH);
+        auto runtime_args_tensor_1 = construct_per_core_host_tensor(rt_config_map_1, MAX_RT_ARGS_WIDTH);
 
         tt::tt_metal::memcpy(rt_args_config_0, runtime_args_tensor_0);
         tt::tt_metal::memcpy(rt_args_config_1, runtime_args_tensor_1);
