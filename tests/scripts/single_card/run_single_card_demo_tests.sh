@@ -336,6 +336,11 @@ run_yolov6l_demo() {
 
 }
 
+run_yolov12x_demo() {
+
+  pytest -n auto --disable-warnings  models/demos/yolov12x/demo/demo.py --timeout 600
+
+}
 
 main() {
   # For CI pipeline - source func commands but don't execute tests if not invoked directly
