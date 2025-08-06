@@ -9,10 +9,10 @@ import ttnn
 from models.experimental.vovnet.tt.conv_norm_act import TtConvNormAct
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.vovnet.tt.model_preprocessing import custom_preprocessor
-from models.experimental.vovnet.common import load_torch_model
+from models.experimental.vovnet.common import load_torch_model, VOVNET_L1_SMALL_SIZE
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": VOVNET_L1_SMALL_SIZE}], indirect=True)
 def test_vovnet_conv_norm_act_inference(device, reset_seeds, model_location_generator):
     base_address = f"stem.{0}"
     model = load_torch_model(model_location_generator)
