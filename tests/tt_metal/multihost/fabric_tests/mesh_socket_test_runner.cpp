@@ -341,14 +341,11 @@ std::unordered_map<Rank, tt::tt_fabric::MeshId> MeshSocketTestRunner::create_ran
     // Does not work with Big Mesh case
     auto world_size = *distributed_context_->size();
 
-    // Send this rank's mesh_id
-    uint32_t local_mesh_id_val = *local_mesh_id_;
-    std::vector<std::byte> send_buffer(sizeof(uint32_t));
-    std::memcpy(send_buffer.data(), &local_mesh_id_val, sizeof(uint32_t));
-
     // Receive all ranks' mesh_ids
     std::vector<std::byte> recv_buffer(sizeof(uint32_t) * world_size);
-    distributed_context_->all_gather(tt::stl::Span<std::byte>(send_buffer), tt::stl::Span<std::byte>(recv_buffer));
+    distributed_context_->all_gather(
+        tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&local_mesh_id_), sizeof(local_mesh_id_)),
+        tt::stl::Span<std::byte>(recv_buffer));
 
     // Build rank_to_mesh_id mapping (rank i has mesh_id at position i)
     std::unordered_map<Rank, tt::tt_fabric::MeshId> rank_to_mesh_id;
