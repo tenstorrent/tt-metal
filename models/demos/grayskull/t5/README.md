@@ -1,22 +1,19 @@
-# t5 Model
+# T5
+
+## Platforms:
+    Grayskull
 
 ## Introduction
 Text-To-Text Transfer Transformer (T5)  is an encoder-decoder model which reframes all NLP tasks into a unified text-to-text-format where the input and output are always text strings.
 With this model, tasks are seamlessly executed by adding a specific prefix to the input. For instance, summarization tasks begin with 'summarize:'. This flexibility enables T5 to excel across a wide range of tasks.
 
-## Details
+## Prerequisites
+- Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
+- Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
-The entry point to the T5 model is `t5_for_conditional_generation` in `ttnn_optimized_functional_t5.py`. The model picks up certain configs and weights from huggingface pretrained model. `t5-small` and `google/flan-t5-small` versions from huggingface are used as reference.
-
-
-# t5 Model for Conditional Generation
-In the demo of conditional generation, the model accepts input text, and it provides a summarized version of the input text.
-
-## Inputs
-Inputs for the demo are provided from `input_data.json` by default. If you need to change the inputs or provide a different path, modify the input_path parameter in the command accordingly. We recommend against modifying the input_data.json file directly.
 
 ## How to Run
-
+### T5 for Conditional Generation
 - Use the following command to run T5 for conditional generation demo using `t5-small`.
 ```
 pytest --disable-warnings --input-path="models/demos/grayskull/t5/demo/input_data_cg.json" models/demos/grayskull/t5/demo/conditional_generation_demo.py::test_t5_demo_for_summarize[8-128-64-t5-small]
@@ -44,18 +41,7 @@ pytest --disable-warnings models/demos/grayskull/t5/demo/conditional_generation_
 pytest --disable-warnings models/demos/grayskull/t5/demo/conditional_generation_demo.py::test_t5_demo_for_summarize_dataset[8-128-64-google/flan-t5-small]
 ```
 
-## Results
-The input is fed into the T5 model for conditional generation, and the output will be a summarized and simplified version of the input text.
-
-
-# t5 model for Question Answering
-In the demo of Question Answering, the model accepts input text as context and a question. Subsequently, the model generates an answer corresponding to the question within the provided context. The input is formatted with the prefixes "context" and "question" to distinguish between the context and the question respectively.
-
-## Inputs
-Inputs by default are provided from `input_data_qa.json`. If you wish you to change the inputs or provide a different path to `test_functional_t5_demo`.
-
-## How to run
-
+### T5 for Question Answering
 - Use the following command to run the functional t5 demo for Question and Answering.
 ```
 pytest --disable-warnings --input-path="models/demos/grayskull/t5/demo/input_data_qa.json" models/demos/grayskull/t5/demo/question_answering_demo.py::test_functional_t5_demo
@@ -72,6 +58,23 @@ This file is expected to have exactly 8 inputs.
 pytest --disable-warnings models/demos/grayskull/t5/demo/question_answering_demo.py::test_functional_t5_demo_squadv2
 ```
 
-## Results
+## Details
+The entry point to the T5 model is `t5_for_conditional_generation` in `ttnn_optimized_functional_t5.py`. The model picks up certain configs and weights from huggingface pretrained model. `t5-small` and `google/flan-t5-small` versions from huggingface are used as reference.
 
+### t5 Model for Conditional Generation
+In the demo of conditional generation, the model accepts input text, and it provides a summarized version of the input text.
+
+#### Inputs
+Inputs for the demo are provided from `input_data.json` by default. If you need to change the inputs or provide a different path, modify the input_path parameter in the command accordingly. We recommend against modifying the input_data.json file directly.
+
+#### Results
+The input is fed into the T5 model for conditional generation, and the output will be a summarized and simplified version of the input text.
+
+### T5 for Question Answering
+In the demo of Question Answering, the model accepts input text as context and a question. Subsequently, the model generates an answer corresponding to the question within the provided context. The input is formatted with the prefixes "context" and "question" to distinguish between the context and the question respectively.
+
+#### Inputs
+Inputs by default are provided from `input_data_qa.json`. If you wish you to change the inputs or provide a different path to `test_functional_t5_demo`.
+
+#### Results
 The T5 model receives input in the form of a question along with its context. The T5 model then generates an answer corresponding to the question posed within that context.

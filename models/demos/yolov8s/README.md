@@ -1,73 +1,48 @@
 # Yolov8s
 
-### Platforms:
-    WH - N150, N300
-
-### Note:
-
-To obtain the perf reports through profiler, please build with following command:
-```
-./build_metal.sh -p
-```
+## Platforms:
+    Wormhole (n150, n300)
 
 ## Introduction
+YOLOv8 is one of the recent iterations in the YOLO series of real-time object detectors, offering cutting-edge performance in terms of accuracy and speed.
 
-YOLOv8 is one of the recent iterations in the YOLO series of real-time object detectors, offering cutting-edge performance in terms of accuracy and speed. Resource link - [source](https://github.com/ultralytics/ultralytics/blob/main/ultralytics/models/yolo/model.py)
+Resource link - [source](https://github.com/ultralytics/ultralytics/blob/main/ultralytics/models/yolo/model.py)
 
-### Details
+## Prerequisites
+- Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
+- Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
+  - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
 
-- The entry point to the yolov8s is located at:`models/demos/yolov8s/tt/ttnn_yolov8s.py`
-- Batch Size :1
-- Supported Input Resolution - (640,640) (Height,Width)
-- Dataset used for evaluation - **COCO-2017**
-
-### How to Run:
-
-Use the following command to run the model :
-- The entry point to the `yolov8s` is located at : `models/demos/yolov8s/tt/ttnn_yolov8s.py`.
-- Batch Size : `1` (Single Device), `2` (Multi Device).
-- Supported Input Resolution - `(640, 640)` - (Height, Width).
-
-
-## How to Run:
-Use the following command(s) to run the model :
-
+## How to Run
+Use the following command(s) to run the model:
 ```
 pytest --disable-warnings models/demos/yolov8s/tests/pcc/test_yolov8s.py::test_yolov8s_640
 ```
 
 ### Model performant running with Trace+2CQ
-
 #### Single Device (BS=1):
-
 - end-2-end perf is `175` FPS
-
 ```
 pytest --disable-warnings models/demos/yolov8s/tests/perf/test_e2e_performant.py
 ```
 
-#### Multi Device (DP=2, N300):
-
+#### Multi Device (DP=2, n300):
 - end-2-end perf is `370` FPS
-
 ```
 pytest --disable-warnings models/demos/yolov8s/tests/test_e2e_performant.py::test_run_yolov8s_trace_2cqs_dp_inference[wormhole_b0-1-device_params0]
 ```
 
 ### Demo
-
-#### Note: Output images will be saved in the `models/demos/yolov8s/demo/runs/<model_type>` folder.
+Note: Output images will be saved in the `models/demos/yolov8s/demo/runs/<model_type>` folder.
 
 ### Single Device (BS=1):
-
-- Use the following command to run the Demo with Trace+2CQs :
+- Use the following command to run the Demo with Trace+2CQs:
     ```
     pytest models/demos/yolov8s/demo/demo.py::test_demo[res0-True-tt_model-1-models/demos/yolov8s/demo/images-device_params0]
     ```
 
-### Multi Device (DP=2, N300):
-
-- Use the following command to run the Demo with Trace+2CQs on Multi Device :
+### Multi Device (DP=2, n300):
+- Use the following command to run the Demo with Trace+2CQs on Multi Device:
     ```
     pytest models/demos/yolov8s/demo/demo.py::test_demo_dp[wormhole_b0-res0-True-tt_model-1-models/demos/yolov8s/demo/images-device_params0]
     ```
@@ -77,13 +52,18 @@ pytest --disable-warnings models/demos/yolov8s/tests/test_e2e_performant.py::tes
   pytest pytest models/demos/yolov8s/demo/demo.py::test_demo_dp[wormhole_b0-res0-True-tt_model-1-models/demos/yolov8s/demo/images-device_params0]
   ```
 
-#### Note: The post-processing is performed using PyTorch.
+### Web Demo
+- Try the interactive web demo at [yolov8s/web_demo](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov8s/web_demo/README.md)
+
+## Details
+- The entry point to the yolov8s is located at:`models/demos/yolov8s/tt/ttnn_yolov8s.py`
+- Batch Size :1
+- Supported Input Resolution - (640,640) (Height,Width)
+- Dataset used for evaluation - **COCO-2017**
+- The post-processing is performed using PyTorch.
 
 ### Inputs
 The demo receives inputs from `models/demos/yolov8s/demo/images` dir by default. To test the model on different input data, it is recommended to add a new image file to this directory.
 
 ### Outputs
-A runs folder will be created inside the `models/demos/yolov8s/demo/` directory. For reference, the model output will be stored in the `models/demos/yolov8s/demo/runs/torch_model` directory, while the TTNN model output will be stored in the `models/demos/yolov8s/demo/runs/tt_model` directory.
-
-### Web Demo
-- Try the interactive web demo [instructions](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/yolov8s/README.md)
+A runs folder will be created inside the `models/demos/yolov8s/demo/` directory. For reference, the model output will be stored in the torch_model directory, while the TTNN model output will be stored in the tt_model directory.
