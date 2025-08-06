@@ -62,15 +62,12 @@ def _get_rich_table(
                 coord = ttnn.MeshCoordinate(row_idx, col_idx)
                 locality = "Local\n" if view.is_local(coord) else "Remote\n"
                 locality = "" if fully_local else locality
-                device_id = (
-                    f"Dev. ID: {mesh_device.get_device_id(ttnn.MeshCoordinate(row_idx, col_idx))}\n"
-                    if view.is_local(coord)
-                    else "Unknown\n"
-                )
+                device_id = mesh_device.get_device_id(ttnn.MeshCoordinate(row_idx, col_idx))
+                device_id_str = f"Dev. ID: {device_id}\n" if view.is_local(coord) else "Unknown\n"
                 coords = f"({row_idx}, {col_idx})\n"
                 annotation = annotate_cell(device_id) if annotate_cell and device_id is not None else ""
 
-                cell_content = Text(f"{locality}{device_id}{coords}{annotation}", justify="center")
+                cell_content = Text(f"{locality}{device_id_str}{coords}{annotation}", justify="center")
                 cell_content.truncate(CELL_SIZE * 4, overflow="ellipsis")  # 4 lines max
             except AttributeError as e:
                 logger.error("Error formatting cell content at row {}, col {}: {}.", row_idx, col_idx, e)
@@ -90,32 +87,57 @@ def visualize_mesh_device(mesh_device: "ttnn.MeshDevice", tensor: "ttnn.Tensor" 
     Visualize the device mesh and the given tensor (if specified).
     """
     from rich.console import Console
-    from rich.style import Style
+
+    mesh_table = _get_rich_table(mesh_device)
+    Console().print(mesh_table)
+
+
+# def group_devices_by_tensor_shards(tensor: "ttnn.Tensor"):
+#     """
+#     Map tensor shards to devices that the shards are replicated on.
+#     """
+#     mesh_device = tensor.device()
+#     shards = ttnn.get_device_tensors(tensor)
+#     topology = tensor.get_tensor_topology()
+#     coords = topology.mesh_coords()
+#     shard_to_device = {}
+
+#     for coord in coords:
+#         dev_id = mesh_device.get_device_id(coord)
+#         shard = shards[dev_id]
+
+
+def visualize_tensor(tensor: "ttnn.Tensor"):
+    """
+    Visualize tensor distribution across the mesh.
+    """
+    from rich.console import Console
     from loguru import logger
 
-    style_cell, annotate_cell = None, None
-    if tensor is not None:
-        try:
-            mapped_devices = set(device.id() for device in tensor.devices())
-        except Exception as e:
-            logger.error(f"Error getting devices for tensor: {e}")
-            mapped_devices = set()
+    mesh_device = tensor.device()
+    try:
+        shards = ttnn.get_device_tensors(tensor)
 
-        def color_mapped_devices(device_id):
-            try:
-                return Style(bgcolor="dark_green") if device_id in mapped_devices else None
-            except Exception as e:
-                logger.error(f"Error getting device ID: {e}")
-                return None
+        def annotate_with_shard_info(device_id):
+            """Add shard information to device cells"""
+            if device_id < len(shards):
+                shard = shards[device_id]
+                shape_str = str(list(shard.shape))
+                dtype_str = str(shard.dtype).split(".")[-1]
+                layout_str = str(shard.layout).split(".")[-1]
 
-        def annotate_with_tensor_shape(device_id):
-            return f"{tensor.shape}" if device_id in mapped_devices else ""
+                # TODO: Shard number is same as device id for now, this will break when shards are replicated
+                #       Need to update this when we can group devices by shard
+                return f"Shard {device_id}\nShape: {shape_str}\nDtype: {dtype_str}\nLayout: {layout_str}"
+            return ""
 
-        style_cell = color_mapped_devices
-        annotate_cell = annotate_with_tensor_shape
+        # Generate the mesh table with shard annotations
+        mesh_table = _get_rich_table(mesh_device, annotate_cell=annotate_with_shard_info)
 
-    mesh_table = _get_rich_table(mesh_device, style_cell=style_cell, annotate_cell=annotate_cell)
-    Console().print(mesh_table)
+        Console().print(mesh_table)
+
+    except Exception as e:
+        logger.error(f"Error visualizing tensor: {e}")
 
 
 def visualize_system_mesh():
