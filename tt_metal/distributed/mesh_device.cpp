@@ -20,6 +20,7 @@
 #include <cstddef>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <source_location>
 #include <unordered_map>
 #include <utility>
@@ -227,41 +228,51 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     size_t worker_l1_size) {
-    std::shared_ptr<ScopedDevices> scoped_devices;
-    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
-    if (config.physical_device_ids().empty()) {
-        auto mapped_devices = SystemMesh::instance().get_mapped_devices(config.mesh_shape(), config.offset());
-        fabric_node_ids = std::move(mapped_devices.fabric_node_ids);
-        scoped_devices = std::make_shared<ScopedDevices>(
-            mapped_devices.device_ids,
-            l1_small_size,
-            trace_region_size,
-            num_command_queues,
-            worker_l1_size,
-            dispatch_core_config);
-    } else {
-        // Initialize fabric node ids manually.
-        // TODO: #22087 - Remove this code path.
-        const auto& supplied_ids = config.physical_device_ids();
-        for (int i = 0; i < supplied_ids.size(); i++) {
-            auto fabric_node_id =
-                MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(supplied_ids[i]);
-            fabric_node_ids.push_back(fabric_node_id);
+    auto [scoped_devices, fabric_node_ids, mesh_shape] =
+        [&]() -> std::tuple<std::shared_ptr<ScopedDevices>, std::vector<tt::tt_fabric::FabricNodeId>, MeshShape> {
+        if (config.physical_device_ids().empty()) {
+            auto mapped_devices = SystemMesh::instance().get_mapped_devices(config.mesh_shape(), config.offset());
+            return std::make_tuple(
+                std::make_shared<ScopedDevices>(
+                    mapped_devices.device_ids,
+                    l1_small_size,
+                    trace_region_size,
+                    num_command_queues,
+                    worker_l1_size,
+                    dispatch_core_config),
+                mapped_devices.fabric_node_ids,
+                mapped_devices.mesh_shape);
+        } else {
+            // Initialize fabric node ids manually.
+            // TODO: #22087 - Remove this code path.
+            std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+            TT_FATAL(
+                config.mesh_shape().has_value(), "Mesh shape must be provided when physical device ids are supplied");
+            const auto& supplied_ids = config.physical_device_ids();
+            for (int i = 0; i < supplied_ids.size(); i++) {
+                auto fabric_node_id =
+                    MetalContext::instance().get_control_plane().get_fabric_node_id_from_physical_chip_id(
+                        supplied_ids[i]);
+                fabric_node_ids.push_back(fabric_node_id);
+            }
+            return std::make_tuple(
+                std::make_shared<ScopedDevices>(
+                    wrap_to_maybe_remote(supplied_ids),
+                    l1_small_size,
+                    trace_region_size,
+                    num_command_queues,
+                    worker_l1_size,
+                    dispatch_core_config),
+                fabric_node_ids,
+                config.mesh_shape().value());
         }
-        scoped_devices = std::make_shared<ScopedDevices>(
-            wrap_to_maybe_remote(supplied_ids),
-            l1_small_size,
-            trace_region_size,
-            num_command_queues,
-            worker_l1_size,
-            dispatch_core_config);
-    }
+    }();
 
     auto local_root_devices = extract_locals(scoped_devices->root_devices());
 
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices),
-        std::make_unique<MeshDeviceView>(config.mesh_shape(), scoped_devices->root_devices(), fabric_node_ids),
+        std::make_unique<MeshDeviceView>(mesh_shape, scoped_devices->root_devices(), fabric_node_ids),
         std::shared_ptr<MeshDevice>());
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, worker_l1_size, l1_bank_remap);
