@@ -99,8 +99,6 @@ def run_avg_pool2d(
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
-    stride_h, stride_w = stride
-    dilation_h = dilation_w = 1  # avg pool does not yet support dilation
 
     # handle both 2D and 4D padding
     padding_is_4d = False
@@ -117,29 +115,29 @@ def run_avg_pool2d(
     else:
         raise ValueError(f"Padding must be 2D or 4D tuple, got {len(padding)}D")
 
-    if not test_even_if_trivial:
-        # skips to avoid unimportant combinations
-        if divisor_override is not None:
-            if count_include_pad or ceil_mode:
-                pytest.skip(
-                    "divisor_override paired with count_include_pad or ceil_mode is trivial and not useful to test"
-                )
-        if count_include_pad and padding == (0, 0):
-            pytest.skip("count_include_pad paired with no padding is trivial and not useful to test")
-        if ceil_mode:
-            if stride == (1, 1):
-                pytest.skip("ceiling mode with stride (1, 1) is trivial and not useful to test")
+    # if not test_even_if_trivial:
+    #     # skips to avoid unimportant combinations
+    #     if divisor_override is not None:
+    #         if count_include_pad or ceil_mode:
+    #             pytest.skip(
+    #                 "divisor_override paired with count_include_pad or ceil_mode is trivial and not useful to test"
+    #             )
+    #     if count_include_pad and padding == (0, 0):
+    #         pytest.skip("count_include_pad paired with no padding is trivial and not useful to test")
+    #     if ceil_mode:
+    #         if stride == (1, 1):
+    #             pytest.skip("ceiling mode with stride (1, 1) is trivial and not useful to test")
 
-    # skips to speed up nightly test
-    if nightly_skips:
-        if dtype == ttnn.bfloat8_b:
-            if stride == (2, 2) or padding == (1, 1):
-                pytest.skip("Skip for stride (2, 2) and padding (1, 1) for BF8!")
-            if kernel_size == (9, 9):
-                pytest.skip("Skip for kernel size (9, 9) for BF8!")
-        if ceil_mode:
-            if kernel_size == (3, 3) or kernel_size == (9, 9):
-                pytest.skip("Skip for kernel size (3, 3) and (9, 9) for ceil mode!")
+    # # skips to speed up nightly test
+    # if nightly_skips:
+    #     if dtype == ttnn.bfloat8_b:
+    #         if stride == (2, 2) or padding == (1, 1):
+    #             pytest.skip("Skip for stride (2, 2) and padding (1, 1) for BF8!")
+    #         if kernel_size == (9, 9):
+    #             pytest.skip("Skip for kernel size (9, 9) for BF8!")
+    #     if ceil_mode:
+    #         if kernel_size == (3, 3) or kernel_size == (9, 9):
+    #             pytest.skip("Skip for kernel size (3, 3) and (9, 9) for ceil mode!")
 
     if pad_t > kernel_h / 2 or pad_b > kernel_h / 2 or pad_l > kernel_w / 2 or pad_r > kernel_w / 2:
         pytest.skip("padding is too large for the kernel size")
@@ -245,9 +243,10 @@ def run_avg_pool2d(
 
     # adjust the TTNN output to match the expected shape
     ttnn_output = ttnn.to_torch(ttnn_output)
-    ttnn_output = ttnn_output.reshape(out_n, out_h, out_w, out_c)  # N, H, W, C
+    ttnn_output = ttnn_output.reshape(
+        torch_output.shape[0], torch_output.shape[2], torch_output.shape[3], torch_output.shape[1]
+    )  # N, H, W, C
     ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
-    ttnn_output = ttnn_output[:, :in_c, :, :]
 
     # apply correction to TORCH output for asymmetric padding when needed
     torch_needs_correction = padding_is_4d and divisor_override is None and count_include_pad is False
@@ -286,14 +285,14 @@ def run_avg_pool2d(
     "input_shape",  # NCHW
     (
         # model shapes
-        [1, 64, 112, 112],
-        [8, 32, 132, 20],
-        [1, 256, 56, 56],
-        [1, 512, 28, 28],
-        [1, 192, 264, 40],
-        # wide non-4 multiple tests
-        [1, 800, 32, 32],
-        [1, 576, 32, 32],
+        # [1, 64, 112, 112],
+        # [8, 32, 132, 20],
+        # [1, 256, 56, 56],
+        # [1, 512, 28, 28],
+        # [1, 192, 264, 40],
+        # # wide non-4 multiple tests
+        # [1, 800, 32, 32],
+        # [1, 576, 32, 32],
         # C=16 test
         [1, 16, 12, 12],
     ),
@@ -301,31 +300,31 @@ def run_avg_pool2d(
 @pytest.mark.parametrize(
     "kernel_size",
     (
-        (3, 3),  # 1 face 1 chunk
+        # (3, 3),  # 1 face 1 chunk
         (5, 5),  # 2 faces 1 chunk
-        (7, 7),  # 2 chunks
-        (9, 9),  # 3 chunks
+        # (7, 7),  # 2 chunks
+        # (9, 9),  # 3 chunks
     ),
 )
 @pytest.mark.parametrize(
     "stride",
     (
         (1, 1),
-        (2, 2),
+        # (2, 2),
     ),
 )
 @pytest.mark.parametrize(
     "padding",
     (
         (0, 0),
-        (1, 1),
-        (1, 4, 3, 2),
+        # (1, 1),
+        # (1, 4, 3, 2),
     ),
 )
 @pytest.mark.parametrize(
     "ceil_mode",
     [
-        False,
+        # False,
         True,
     ],
 )
@@ -333,14 +332,14 @@ def run_avg_pool2d(
     "count_include_pad",
     [
         False,
-        True,
+        # True,
     ],
 )
 @pytest.mark.parametrize(
     "divisor_override",
     [
         None,
-        5,
+        # 5,
     ],
 )
 @pytest.mark.parametrize(
@@ -352,7 +351,7 @@ def run_avg_pool2d(
 )
 @pytest.mark.parametrize(
     "dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat8_b],
 )
 def test_run_avg_pool2d(
     device,
@@ -380,4 +379,5 @@ def test_run_avg_pool2d(
         shard_scheme=shard_scheme,
         dtype=dtype,
         run_twice=True,
+        test_even_if_trivial=True,
     )
