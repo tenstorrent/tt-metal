@@ -23,13 +23,16 @@ def load_coco_class_names():
     return class_names
 
 
+# Read image using OpenCV from a file path (handles Unicode paths)
 def imread(filename: str, flags: int = cv2.IMREAD_COLOR):
     return cv2.imdecode(np.fromfile(filename, np.uint8), flags)
 
 
+# Supported image file extensions
 IMG_FORMATS = {"bmp", "dng", "jpeg", "jpg", "mpo", "png", "tif", "tiff", "webp", "pfm", "heic"}
 
 
+# Data loader for image files
 class LoadImages:
     def __init__(self, path, batch=1, vid_stride=1):
         files = []
@@ -52,11 +55,11 @@ class LoadImages:
         ni = len(images)
 
         self.files = images
-        self.nf = ni
-        self.ni = ni
+        self.nf = ni  # number of files
+        self.ni = ni  # number of images
         self.mode = "image"
         self.vid_stride = vid_stride
-        self.bs = batch
+        self.bs = batch  # batch size
         if self.nf == 0:
             raise FileNotFoundError(f"No images or videos found in {p}")
 
