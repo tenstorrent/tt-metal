@@ -50,24 +50,35 @@ struct SystemDescriptor {
 
 uint32_t GetEthChannelMask(chip_id_t device_id);
 
-SystemDescriptor GetSystemDescriptor2Devices(
-    const std::map<chip_id_t, tt::tt_metal::IDevice*>& devices,
-    chip_id_t mmio_device_id,
-    chip_id_t connected_device_id);
+SystemDescriptor GetSystemDescriptor2Devices(chip_id_t mmio_device_id, chip_id_t connected_device_id);
 
 uint32_t GetLocalInitAddr(std::shared_ptr<tt::tt_metal::Kernel> kernel);
 
 std::pair<const ll_api::memory&, uint32_t> GetBinaryMetadata(
     uint32_t build_id, tt::tt_metal::Program& pgm, tt::tt_metal::KernelHandle kernel_handle);
 
-void SetResetState(std::shared_ptr<tt::Cluster> cluster, tt_cxy_pair virtual_core, bool assert_reset);
+std::pair<const ll_api::memory&, uint32_t> GetBinaryMetadata(std::string path, const tt::tt_metal::Hal& hal);
 
-void SetPC(std::shared_ptr<tt::Cluster> cluster, tt_cxy_pair virtual_core, uint32_t pc_addr, uint32_t pc_val);
+void SetResetState(tt::Cluster& cluster, tt_cxy_pair virtual_core, bool assert_reset);
 
-void wait_for_state(tt::Cluster& cluster, tt_cxy_pair virtual_core, lite_fabric::InitState state);
+void SetResetState(tt::Cluster& cluster, const SystemDescriptor& desc, bool assert_reset);
+
+void SetPC(tt::Cluster& cluster, tt_cxy_pair virtual_core, uint32_t pc_addr, uint32_t pc_val);
+
+void SetPC(tt::Cluster& cluster, const SystemDescriptor& desc, uint32_t pc_addr, uint32_t pc_val);
+
+void WaitForState(tt::Cluster& cluster, tt_cxy_pair virtual_core, lite_fabric::InitState state);
+
+void WaitForState(tt::Cluster& cluster, const SystemDescriptor& desc, lite_fabric::InitState state);
 
 std::unique_ptr<tt::tt_metal::Program> LaunchLiteFabricWithMetal(
     std::map<chip_id_t, tt::tt_metal::IDevice*>& devices, const SystemDescriptor& desc);
+
+void LaunchLiteFabric(
+    tt::Cluster& cluster,
+    const tt::tt_metal::Hal& hal,
+    const SystemDescriptor& desc,
+    const std::filesystem::path& elf_path);
 
 void TerminateLiteFabric(tt::Cluster& cluster, const SystemDescriptor& desc);
 

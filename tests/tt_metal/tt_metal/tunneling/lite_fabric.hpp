@@ -71,6 +71,8 @@ enum class InitState : uint16_t {
     ETH_HANDSHAKE_LOCAL,
     // Ready for traffic
     READY,
+    // Terminated
+    TERMINATED,
 };
 
 struct LiteFabricConfig {

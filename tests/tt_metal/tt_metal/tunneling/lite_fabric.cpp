@@ -4,87 +4,84 @@
 
 #include <stdint.h>
 #include <cstdint>
-#include <tuple>
-#include <utility>
 
+#include "tt_metal/api/tt-metalium/hal_types.hpp"
 #include "blackhole/dev_mem_map.h"
 #include "blackhole/noc_nonblocking_api.h"
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 #include "eth_chan_noc_mapping.h"
 #include "lite_fabric.hpp"
 #include "fabric_edm_packet_header.hpp"
+#include "firmware_common.h"
 #include "init-fsm-basic.h"
 #include "lite_fabric_constants.hpp"
+#include "lite_fabric_channels.hpp"
 #include "lite_fabric_channel_util.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_transaction_id_tracker.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
-// taken from fabric_erisc_datamover.cpp ... commonize!
-// Forward‐declare the Impl primary template:
-template <template <uint8_t> class ChannelType, auto& BufferSizes, typename Seq>
-struct ChannelPointersTupleImpl;
+#define BEGIN_MAIN_FUNCTION()                                                           \
+    IF_NOT_METAL_LAUNCH(int main())                                                     \
+    IF_METAL_LAUNCH(void kernel_main()) {                                               \
+        IF_NOT_METAL_LAUNCH(configure_csr();)                                           \
+        IF_NOT_METAL_LAUNCH(noc_index = NOC_INDEX;)                                     \
+        IF_NOT_METAL_LAUNCH(do_crt1((uint32_t*)MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH);) \
+        IF_NOT_METAL_LAUNCH(noc_bank_table_init(MEM_AERISC_BANK_TO_NOC_SCRATCH);)       \
+        IF_NOT_METAL_LAUNCH(risc_init();)                                               \
+        IF_NOT_METAL_LAUNCH(noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);)                     \
+        IF_NOT_METAL_LAUNCH(for (uint32_t n = 0; n < NUM_NOCS; n++) { noc_local_state_init(n); })
 
-// Provide the specialization that actually holds the tuple and `get<>`:
-template <template <uint8_t> class ChannelType, auto& BufferSizes, size_t... Is>
-struct ChannelPointersTupleImpl<ChannelType, BufferSizes, std::index_sequence<Is...>> {
-    std::tuple<ChannelType<BufferSizes[Is]>...> channel_ptrs;
-
-    template <size_t I>
-    constexpr auto& get() {
-        return std::get<I>(channel_ptrs);
-    }
-};
-
-// Simplify the “builder” so that make() returns the Impl<…> directly:
-template <template <uint8_t> class ChannelType, auto& BufferSizes>
-struct ChannelPointersTuple {
-    static constexpr size_t N = std::size(BufferSizes);
-
-    static constexpr auto make() {
-        return ChannelPointersTupleImpl<ChannelType, BufferSizes, std::make_index_sequence<N>>{};
-    }
-};
-
-/*
- * Tracks receiver channel pointers (from sender side)
- */
-template <uint8_t RECEIVER_NUM_BUFFERS>
-struct OutboundReceiverChannelPointers {
-    uint32_t num_free_slots = RECEIVER_NUM_BUFFERS;
-    tt::tt_fabric::BufferIndex remote_receiver_buffer_index{0};
-    size_t cached_next_buffer_slot_addr = 0;
-
-    FORCE_INLINE bool has_space_for_packet() const { return num_free_slots; }
-};
-
-/*
- * Tracks receiver channel pointers (from receiver side). Must call reset() before using.
- */
-template <uint8_t RECEIVER_NUM_BUFFERS>
-struct ReceiverChannelPointers {
-    tt::tt_fabric::ChannelCounter<RECEIVER_NUM_BUFFERS> wr_sent_counter;
-    tt::tt_fabric::ChannelCounter<RECEIVER_NUM_BUFFERS> wr_flush_counter;
-    tt::tt_fabric::ChannelCounter<RECEIVER_NUM_BUFFERS> ack_counter;
-    tt::tt_fabric::ChannelCounter<RECEIVER_NUM_BUFFERS> completion_counter;
-    std::array<uint8_t, RECEIVER_NUM_BUFFERS> src_chan_ids;
-
-    FORCE_INLINE void set_src_chan_id(tt::tt_fabric::BufferIndex buffer_index, uint8_t src_chan_id) {
-        src_chan_ids[buffer_index.get()] = src_chan_id;
+// End the main function
+#define END_MAIN_FUNCTION()        \
+    IF_NOT_METAL_LAUNCH(return 0;) \
+    IF_METAL_LAUNCH(return;)       \
     }
 
-    FORCE_INLINE uint8_t get_src_chan_id(tt::tt_fabric::BufferIndex buffer_index) const {
-        return src_chan_ids[buffer_index.get()];
-    }
+#if !defined(tt_l1_ptr)
+#define tt_l1_ptr __attribute__((rvtt_l1_ptr))
+#endif
 
-    FORCE_INLINE void reset() {
-        wr_sent_counter.reset();
-        wr_flush_counter.reset();
-        ack_counter.reset();
-        completion_counter.reset();
-    }
-};
+// Define METAL_LAUNCH if lite_fabric is being launched by Metal
+#if !defined(METAL_LAUNCH)
+#define IF_NOT_METAL_LAUNCH(x) x
+#define IF_METAL_LAUNCH(x)
+
+uint8_t noc_index __attribute__((used));
+
+uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
+uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
+uint32_t noc_nonposted_writes_acked[NUM_NOCS] __attribute__((used));
+uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
+uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
+
+uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr* sem_l1_base[tt::tt_metal::NumHalProgrammableCoreTypes] __attribute__((used));
+
+uint8_t my_x[NUM_NOCS] __attribute__((used));
+uint8_t my_y[NUM_NOCS] __attribute__((used));
+
+// Not initialized anywhere yet
+uint8_t my_logical_x_ __attribute__((used));
+uint8_t my_logical_y_ __attribute__((used));
+uint8_t my_relative_x_ __attribute__((used));
+uint8_t my_relative_y_ __attribute__((used));
+
+// These arrays are stored in local memory of FW, but primarily used by the kernel which shares
+// FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
+uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
+int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
+
+#else
+
+#include "debug/dprint.h"
+
+#define IF_NOT_METAL_LAUNCH(x)
+#define IF_METAL_LAUNCH(x) x
+#endif
 
 FORCE_INLINE void send_next_data(
     tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS_ARRAY[0]>& sender_buffer_channel,
@@ -296,7 +293,9 @@ FORCE_INLINE void run_receiver_channel_step(
     }
 }
 
-void kernel_main() {
+BEGIN_MAIN_FUNCTION() {
+    invalidate_l1_cache();
+
     auto structs = reinterpret_cast<volatile lite_fabric::LiteFabricMemoryMap*>(MEM_AERISC_FABRIC_LITE_CONFIG);
 
     volatile lite_fabric::HostToLiteFabricInterface<SENDER_NUM_BUFFERS_ARRAY[0], CHANNEL_BUFFER_SIZE>& host_interface =
@@ -359,6 +358,7 @@ void kernel_main() {
     DPRINT << "Routing Enabled " << structs->config.routing_enabled
            << " Init on MMIO = " << (uint32_t)structs->config.is_mmio << " Host IF at 0x" << HEX()
            << (uint32_t)&host_interface << DEC() << ENDL();
+
     lite_fabric::routing_init(&structs->config);
 
     while (structs->config.routing_enabled) {
@@ -389,4 +389,6 @@ void kernel_main() {
     noc_async_atomic_barrier();
 
     DPRINT << "lite_fabric: out " << (uint32_t)structs->config.routing_enabled << ENDL();
+    structs->config.current_state = lite_fabric::InitState::TERMINATED;
 }
+END_MAIN_FUNCTION()
