@@ -909,7 +909,7 @@ bool MeshDevice::initialize(
     cq_shared_state->sub_device_cq_owner.resize(1);
 
     const auto& allocator = reference_device()->allocator();
-    sub_device_manager_tracker_ = std::make_shared<SubDeviceManagerTracker>(
+    sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
         this, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
 
     // Share the tracker with all individual devices

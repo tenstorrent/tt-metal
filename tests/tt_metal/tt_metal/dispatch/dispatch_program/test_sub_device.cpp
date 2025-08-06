@@ -229,7 +229,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicPrograms) {
         mesh_device->reset_sub_device_stall_group();
     }
     distributed::Synchronize(mesh_device.get(), std::nullopt);
-    detail::DumpDeviceProfileResults(mesh_device->get_devices()[0]);
+    detail::ReadDeviceProfilerResults(mesh_device->get_devices()[0]);
 }
 
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
@@ -298,7 +298,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceBasicProgramsReuse) {
         mesh_device->reset_sub_device_stall_group();
     }
     distributed::Synchronize(mesh_device.get(), std::nullopt);
-    detail::DumpDeviceProfileResults(mesh_device->get_devices()[0]);
+    detail::ReadDeviceProfilerResults(mesh_device->get_devices()[0]);
 }
 
 // Ensure each core in the sub device aware of their own logical coordinate. Same binary used in multiple sub devices.
