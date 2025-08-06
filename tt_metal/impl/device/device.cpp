@@ -180,15 +180,10 @@ void Device::initialize_default_sub_device_state(
         CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1})),
         CoreRangeSet(std::move(active_eth_core_ranges))})};
 
-    auto tracker = std::make_shared<SubDeviceManagerTracker>(
+    sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
         this,
         this->initialize_allocator(l1_small_size, trace_region_size, worker_l1_unreserved_start, l1_bank_remap),
         sub_devices);
-    sub_device_manager_tracker_ = tracker;
-}
-
-void Device::set_sub_device_manager_tracker(std::shared_ptr<SubDeviceManagerTracker> tracker) {
-    sub_device_manager_tracker_ = tracker;
 }
 
 std::unique_ptr<Allocator> Device::initialize_allocator(
@@ -481,7 +476,7 @@ bool Device::close() {
     this->disable_and_clear_program_cache();
     this->set_program_cache_misses_allowed(true);
 
-    sub_device_manager_tracker_.reset();
+    sub_device_manager_tracker_.reset(nullptr);
 
     this->compute_cores_.clear();
     this->storage_only_cores_.clear();

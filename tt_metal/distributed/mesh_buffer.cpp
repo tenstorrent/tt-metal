@@ -124,7 +124,7 @@ void MeshBuffer::initialize_device_buffers() {
             device_local_config_.buffer_type,
             device_local_config_.sharding_args,
             device_local_config_.bottom_up,
-            /*sub_device_id*/ std::nullopt);  // TODO: sub_device_id is unsupported
+            /*sub_device_id=*/std::nullopt);  // TODO: sub_device_id is unsupported
         return buffer;
     };
 

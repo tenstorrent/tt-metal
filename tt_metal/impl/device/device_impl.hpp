@@ -183,8 +183,6 @@ public:
     std::shared_ptr<distributed::MeshDevice> get_mesh_device() override;
     void set_mesh_device(std::shared_ptr<distributed::MeshDevice> mesh_device) { this->mesh_device = mesh_device; };
 
-    void set_sub_device_manager_tracker(std::shared_ptr<SubDeviceManagerTracker> tracker);
-
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
 
@@ -212,7 +210,7 @@ private:
     chip_id_t id_;
     std::vector<std::vector<chip_id_t>> tunnels_from_mmio_;
 
-    std::shared_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
+    std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
 
     bool initialized_ = false;
 

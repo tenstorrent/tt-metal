@@ -1011,8 +1011,6 @@ void test_my_coordinates(
     // All logical cores
     CoreRangeSet cr{CoreRange{{2, 2}, {6, 6}}};
 
-    auto device = mesh_device->get_devices()[0];
-
     uint32_t cb_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
     std::vector<uint32_t> compile_args{
         cb_addr,
@@ -1029,7 +1027,8 @@ void test_my_coordinates(
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(cq_id), workload, false);
     Finish(mesh_device->mesh_command_queue(cq_id));
 
-    tt::tt_metal::verify_kernel_coordinates(processor_class, cr, device, tt::tt_metal::SubDeviceId{0}, cb_addr);
+    tt::tt_metal::verify_kernel_coordinates(
+        processor_class, cr, mesh_device.get(), tt::tt_metal::SubDeviceId{0}, cb_addr);
 }
 
 void test_basic_dispatch_functions(std::shared_ptr<distributed::MeshDevice> mesh_device, int cq_id) {
