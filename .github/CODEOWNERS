@@ -239,7 +239,7 @@ models/demos/t3000/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-
 models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
 models/demos/t3000/sentence_bert @atupe-tt @tenstorrent/cse-developer-ttnn
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
-models/demos/whisper @skhorasganiTT @uaydonat
+models/demos/whisper @skhorasganiTT @djordje-tt @uaydonat
 models/demos/grayskull @uaydonat @yieldthought @cglagovichTT
 models/demos/yolov4 @dvartaniansTT @mbahnasTT @rdraskicTT @mbezuljTT @tenstorrent/metalium-developers-convolutions
 models/demos/**/*resnet* @tenstorrent/metalium-developers-convolutions @mradosavljevicTT
