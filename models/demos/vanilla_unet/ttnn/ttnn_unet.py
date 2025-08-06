@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.experimental.vanilla_unet.ttnn.common import Conv, ConvTranspose
+from models.demos.vanilla_unet.ttnn.common import Conv, ConvTranspose
 
 
 class TtUnet:

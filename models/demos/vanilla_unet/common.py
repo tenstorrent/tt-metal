@@ -5,14 +5,15 @@
 import os
 
 import torch
-from models.experimental.vanilla_unet.reference.unet import UNet
+
+from models.demos.vanilla_unet.reference.unet import UNet
 
 
 def load_torch_model(model_location_generator=None):
     if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
-        weights_path = "models/experimental/vanilla_unet/unet.pt"
+        weights_path = "models/demos/vanilla_unet/unet.pt"
         if not os.path.exists(weights_path):
-            os.system("bash models/experimental/vanilla_unet/weights_download.sh")
+            os.system("bash models/demos/vanilla_unet/weights_download.sh")
     else:
         weights_path = (
             model_location_generator("vision-models/unet_vanilla", model_subdir="", download_if_ci_v2=True) / "unet.pt"

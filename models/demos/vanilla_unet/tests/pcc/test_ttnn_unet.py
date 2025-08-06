@@ -4,14 +4,15 @@
 
 import pytest
 import torch
-import ttnn
-from ttnn.model_preprocessing import preprocess_model_parameters, fold_batch_norm2d_into_conv2d
-from models.utility_functions import skip_for_grayskull
-from models.experimental.vanilla_unet.reference.unet import UNet
-from models.experimental.vanilla_unet.ttnn.ttnn_unet import TtUnet
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from loguru import logger
-from models.experimental.vanilla_unet.common import load_torch_model
+from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, preprocess_model_parameters
+
+import ttnn
+from models.demos.vanilla_unet.common import load_torch_model
+from models.demos.vanilla_unet.reference.unet import UNet
+from models.demos.vanilla_unet.ttnn.ttnn_unet import TtUnet
+from models.utility_functions import skip_for_grayskull
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def create_custom_preprocessor(device):
