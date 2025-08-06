@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+from typing import Callable
 
 import pytest
 import torch
@@ -14,7 +15,7 @@ from models.tt_cnn.tt.executor import (
     TracedModelExecutor,
 )
 from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal
 
 
 @dataclass
@@ -25,11 +26,27 @@ class TestShapeConfig:
 
 
 def create_input_tensors(input_shape, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG, device=None):
-    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=ttnn.bfloat16, layout=layout, memory_config=memory_config, device=device
     )
     return ttnn_input_tensor, torch_input_tensor
+
+
+def create_identity_test_model(input_shape, should_deallocate_input_tensor=True):
+    def run(l1_input_tensor):
+        assert l1_input_tensor.storage_type() == ttnn.StorageType.DEVICE, "Model expects input tensor to be on device"
+        assert (
+            l1_input_tensor.memory_config().buffer_type == ttnn.BufferType.L1
+        ), "Model expects input tensor to be in L1"
+        assert input_shape == l1_input_tensor.shape, "Unexpected input shape"
+        return ttnn.identity(l1_input_tensor)
+
+    def run_reference(torch_input_tensor):
+        assert input_shape == torch_input_tensor.shape, "Unexpected input shape"
+        return torch_input_tensor
+
+    return run, run_reference
 
 
 def create_test_model(input_shape, should_deallocate_input_tensor=True):
@@ -39,7 +56,6 @@ def create_test_model(input_shape, should_deallocate_input_tensor=True):
             l1_input_tensor.memory_config().buffer_type == ttnn.BufferType.L1
         ), "Model expects input tensor to be in L1"
         assert input_shape == l1_input_tensor.shape, "Unexpected input shape"
-
         x = ttnn.tilize(l1_input_tensor)
         if should_deallocate_input_tensor:
             ttnn.deallocate(l1_input_tensor)
@@ -99,9 +115,9 @@ SHAPE_CONFIGS = [
         l1_cores=1,
     ),
     TestShapeConfig(
-        input_shape=(1, 1, 512, 32),
-        dram_cores=2,
-        l1_cores=4,
+        input_shape=(1, 1, 512, 64),
+        dram_cores=4,
+        l1_cores=8,
     ),
 ]
 
@@ -161,17 +177,22 @@ def create_pipeline_for_executor_config(
 @pytest.mark.parametrize("executor_config", EXECUTOR_CONFIGS, ids=lambda cfg: cfg.name)
 @pytest.mark.parametrize("shape_config", SHAPE_CONFIGS, ids=lambda cfg: f"shape_{cfg.input_shape}")
 @pytest.mark.parametrize(
+    "create_model", [create_test_model, create_identity_test_model], ids=["relu_model", "identity_model"]
+)
+@pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": 16384, "trace_region_size": 32768, "num_command_queues": 2}],
     indirect=True,
 )
-def test_executor_single_runs(device, executor_config: ExecutorTestConfig, shape_config: TestShapeConfig):
+def test_executor_single_runs(
+    device, executor_config: ExecutorTestConfig, shape_config: TestShapeConfig, create_model: Callable
+):
     """Test basic functionality across all executor types with parameterized configurations"""
     input_shape = shape_config.input_shape
     dram_cores = shape_config.dram_cores
     l1_cores = shape_config.l1_cores
 
-    model, reference_model = create_test_model(input_shape)
+    model, reference_model = create_model(input_shape)
 
     pipe = create_pipeline_for_executor_config(executor_config, model, device, input_shape, dram_cores, l1_cores)
     executor = pipe.executor
@@ -197,22 +218,27 @@ def test_executor_single_runs(device, executor_config: ExecutorTestConfig, shape
         assert (
             output.storage_type() == ttnn.StorageType.HOST
         ), f"Output {i} should be on host for {executor_config.name}"
-        assert_with_pcc(ttnn.to_torch(output), reference_output, 0.99999)
+        assert_equal(ttnn.to_torch(output), reference_output)
 
 
 @pytest.mark.parametrize("executor_config", EXECUTOR_CONFIGS, ids=lambda cfg: cfg.name)
 @pytest.mark.parametrize("shape_config", SHAPE_CONFIGS, ids=lambda cfg: f"shape_{cfg.input_shape}")
 @pytest.mark.parametrize(
+    "create_model", [create_test_model, create_identity_test_model], ids=["relu_model", "identity_model"]
+)
+@pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": 16384, "trace_region_size": 32768, "num_command_queues": 2}],
     indirect=True,
 )
-def test_executor_multiple_runs(device, executor_config: ExecutorTestConfig, shape_config: TestShapeConfig):
+def test_executor_multiple_runs(
+    device, executor_config: ExecutorTestConfig, shape_config: TestShapeConfig, create_model: Callable
+):
     """Test multiple execution rounds across all executor types"""
     input_shape = shape_config.input_shape
     dram_cores = shape_config.dram_cores
     l1_cores = shape_config.l1_cores
-    model, reference_model = create_test_model(input_shape)
+    model, reference_model = create_model(input_shape)
 
     pipe = create_pipeline_for_executor_config(executor_config, model, device, input_shape, dram_cores, l1_cores)
 
@@ -243,21 +269,26 @@ def test_executor_multiple_runs(device, executor_config: ExecutorTestConfig, sha
     ), f"Expected {len(total_references)} total outputs for {executor_config.name}"
 
     for i, (output, reference_output) in enumerate(zip(total_outputs, total_references)):
-        assert_with_pcc(ttnn.to_torch(output), reference_output, 0.99999)
+        assert_equal(ttnn.to_torch(output), reference_output)
 
 
 @pytest.mark.parametrize("executor_config", EXECUTOR_CONFIGS, ids=lambda cfg: cfg.name)
 @pytest.mark.parametrize("shape_config", SHAPE_CONFIGS, ids=lambda cfg: f"shape_{cfg.input_shape}")
 @pytest.mark.parametrize(
+    "create_model", [create_test_model, create_identity_test_model], ids=["relu_model", "identity_model"]
+)
+@pytest.mark.parametrize(
     "device_params",
     [{"l1_small_size": 16384, "trace_region_size": 32768, "num_command_queues": 2}],
     indirect=True,
 )
-def test_executor_with_preallocated_outputs(device, executor_config: ExecutorTestConfig, shape_config: TestShapeConfig):
+def test_executor_with_preallocated_outputs(
+    device, executor_config: ExecutorTestConfig, shape_config: TestShapeConfig, create_model: Callable
+):
     input_shape = shape_config.input_shape
     dram_cores = shape_config.dram_cores
     l1_cores = shape_config.l1_cores
-    model, reference_model = create_test_model(input_shape)
+    model, reference_model = create_model(input_shape)
 
     pipe = create_pipeline_for_executor_config(executor_config, model, device, input_shape, dram_cores, l1_cores)
 
@@ -293,8 +324,7 @@ def test_executor_with_preallocated_outputs(device, executor_config: ExecutorTes
         assert (
             output.storage_type() == ttnn.StorageType.HOST
         ), f"Preallocated output {i} should be on host for {executor_config.name}"
-        assert_with_pcc(
+        assert_equal(
             ttnn.to_torch(output),
             reference_output,
-            0.99999,
         )

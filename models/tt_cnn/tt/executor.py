@@ -491,6 +491,8 @@ class MultiCQTracedModelWithSeparateIOExecutor(Executor):
         # Begin trace capture and run model
         self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=self.CQ_OPS)
         self.output_tensor = self.model(l1_input_tensor)
+        if l1_input_tensor.is_allocated():
+            ttnn.deallocate(l1_input_tensor, force=True)  # Needed if model does not deallocate its input
 
         # Allocate persistent L1 input tensor and validate address consistency
         self._allocate_and_validate_l1_tensor(spec, input_trace_addr)
