@@ -76,7 +76,6 @@ void kernel_main() {
     constexpr uint8_t replicate_group_devices = num_devices;
 #endif
 
-    ASSERT(batch_size % replicate_group_devices == 0, "Batch size must be divisible by number of devices");
     constexpr uint32_t Replicate_Group = (replicate_axis == ReplicateGroup::NONE)   ? mesh_rows * mesh_cols
                                          : (replicate_axis == ReplicateGroup::COLS) ? mesh_rows
                                                                                     : mesh_cols;
