@@ -454,7 +454,6 @@ bool DeviceData::validate_host(std::unordered_set<CoreCoord>& validated_cores, c
     uint32_t* results = (uint32_t*)this->base_data_addr[static_cast<int>(CoreType::PCIE)];
 
     int fail_count = 0;
-    bool done = false;
     for (int data_index = 0; data_index < host_data.data.size(); data_index++) {
         validated_cores.insert(this->host_core);
         if (host_data.data[data_index] != results[host_data_index] && fail_count < 20) {
@@ -622,7 +621,6 @@ inline void generate_random_payload(
     bool is_mcast = false,
     bool prepend_cmd = false) {
     static uint32_t coherent_count = 0;
-    const uint32_t bank_id = 0;  // No interleaved pages here.
 
     // Host data puts the command in the datastream...
     if (prepend_cmd) {
@@ -737,7 +735,6 @@ inline void generate_random_packed_large_payload(
     static uint32_t coherent_count = 0;
     const uint32_t bank_id = 0;  // No interleaved pages here.
 
-    bool first_core = true;
     CoreCoord first_worker = range.start_coord;
     uint32_t data_base = generated_data.size();
     for (uint32_t i = 0; i < size_words; i++) {
@@ -925,7 +922,6 @@ inline void gen_dispatcher_multicast_write_cmd(
 
     CoreCoord physical_start = device->worker_core_from_logical_core(worker_core_range.start_coord);
     CoreCoord physical_end = device->worker_core_from_logical_core(worker_core_range.end_coord);
-    const uint32_t bank_id = 0;  // No interleaved pages here.
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR;
     cmd.write_linear.noc_xy_addr = tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(

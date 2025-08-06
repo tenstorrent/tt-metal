@@ -1190,7 +1190,6 @@ struct test_traffic_t {
         double total_tx_bw = 0.0;
         double total_tx_bw_2 = 0.0;
         uint64_t total_tx_words_sent = 0;
-        uint64_t total_rx_words_checked = 0;
         uint64_t max_tx_elapsed_cycles = 0;
         for (uint32_t i = 0; i < num_tx_workers; i++) {
             uint64_t tx_words_sent = get_64b_result(tx_results[i], TT_FABRIC_WORD_CNT_INDEX);
@@ -1319,11 +1318,6 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_rx_x = 0;
     constexpr uint32_t default_rx_y = 3;
 
-    constexpr uint32_t default_mux_x = 0;
-    constexpr uint32_t default_mux_y = 1;
-    constexpr uint32_t default_demux_x = 0;
-    constexpr uint32_t default_demux_y = 2;
-
     constexpr uint32_t default_prng_seed = 0xFFFFFFFF;
     constexpr uint32_t default_data_kb_per_tx = 1024 * 1024;
 
@@ -1350,7 +1344,6 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_rx_disable_data_check = 0;
     constexpr uint32_t default_rx_disable_header_check = 0;
 
-    constexpr uint32_t src_endpoint_start_id = 4;
     constexpr uint32_t dest_endpoint_start_id = 11;
 
     // constexpr uint32_t num_endpoints = 1;

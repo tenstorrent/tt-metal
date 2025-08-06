@@ -203,7 +203,6 @@ TEST(FreeListOptTest, CoalescingAfterResetShrink) {
     allocator.deallocate(a.value());
 
     allocator.shrink_size(1_KiB);
-    auto d = allocator.allocate(2_KiB);
     allocator.reset_size();
     auto e = allocator.allocate(2_KiB);
     ASSERT_TRUE(e.has_value());

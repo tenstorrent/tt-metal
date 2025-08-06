@@ -77,7 +77,6 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     auto global_buffer = CreateBuffer(global_shard_config);
     Program program = CreateProgram();
 
-    uint32_t cb_size = k_local_l1_size;
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(k_local_l1_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
@@ -285,7 +284,6 @@ TEST_F(CommandQueueSingleCardFixture, TensixActiveEthTestSubDeviceBasicEthProgra
 // Ensure each core in the sub device aware of their own logical coordinate. Same binary used in multiple sub devices.
 TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinates) {
     auto* device = devices_[0];
-    uint32_t local_l1_size = 3200;
     // Make 2 sub devices.
     // origin means top left.
     // for sub_device_1 = 0,0. so relative coordinates are the same as logical.
@@ -336,7 +334,6 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixActiveEthTestSubDeviceMyLogic
     auto* device = devices_[0];
     CoreRangeSet sub_device_1_worker_cores{CoreRange({0, 0}, {2, 2})};
     SubDevice sub_device_1(std::array{sub_device_1_worker_cores});
-    uint32_t num_iters = 5;
     if (!does_device_have_active_eth_cores(device)) {
         GTEST_SKIP() << "Skipping test because device " << device->id() << " does not have any active ethernet cores";
     }
@@ -489,7 +486,6 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceProgramReuseRtas) {
 }
 
 TEST_F(MultiCommandQueueSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
-    constexpr uint32_t k_num_iters = 5;
     auto* device = device_;
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(CoreRange({3, 3}, {3, 3}))});

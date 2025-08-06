@@ -326,7 +326,6 @@ Graph: []
 
     // The control plane should have a valid binding inferred from MPI rank
     auto mesh_binding = control_plane->get_local_mesh_id_bindings()[0];
-    auto host_binding = control_plane->get_local_host_rank_id_binding();
 
     // We can't predict which mesh/host will be assigned (depends on MPI rank),
     // but we can verify that a valid binding was established

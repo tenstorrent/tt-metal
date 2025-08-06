@@ -77,13 +77,12 @@ bool SimpleTiledL1WriteCBRead(
 
     tt_metal::Program program = tt_metal::CreateProgram();
     const uint32_t cb_index = 0;
-    const uint32_t output_cb_index = 16;
     const CoreCoord phys_core = device->worker_core_from_logical_core(core);
 
     tt_metal::CircularBufferConfig l1_cb_config =
         tt_metal::CircularBufferConfig(byte_size, {{cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(cb_index, page_size);
-    auto l1_cb = tt_metal::CreateCircularBuffer(program, core, l1_cb_config);
+    tt_metal::CreateCircularBuffer(program, core, l1_cb_config);
     std::map<std::string, std::string> defines = {{"INTERFACE_WITH_L1", "1"}};
     uint32_t bank_id = device->allocator()->get_bank_ids_from_logical_core(tt_metal::BufferType::L1, core)[0];
     auto reader_kernel = tt_metal::CreateKernel(

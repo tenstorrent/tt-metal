@@ -50,7 +50,6 @@ using namespace tt::tt_metal;
 static constexpr uint32_t elements_in_tile = 32 * 32;
 
 static std::vector<uint32_t> GenerateInputTile(tt::DataFormat data_format) {
-    uint32_t tile_size_bytes = tile_size(data_format);
     std::vector<uint32_t> u32_vec;
     if (data_format == tt::DataFormat::Float32) {
         u32_vec.resize(elements_in_tile);
@@ -230,10 +229,10 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, tt::DataFormat data
     uint32_t tile_size = detail::TileSize(data_format);
     CircularBufferConfig cb_src0_config = CircularBufferConfig(tile_size, {{CBIndex::c_0, data_format}})
                                               .set_page_size(CBIndex::c_0, tile_size);
-    CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
     CircularBufferConfig cb_intermed_config =
         CircularBufferConfig(tile_size, {{CBIndex::c_1, data_format}}).set_page_size(CBIndex::c_1, tile_size);
-    CBHandle cb_intermed = tt_metal::CreateCircularBuffer(program, core, cb_intermed_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_intermed_config);
 
     // Dram buffer to send data to, device will read it out of here to print
     tt_metal::InterleavedBufferConfig dram_config{

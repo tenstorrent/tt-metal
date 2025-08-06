@@ -96,8 +96,7 @@ std::tuple<tt_metal::Program, tt_metal::Program> build(
     tt_metal::Program program0;
     tt_metal::Program program1;
 
-    std::vector<uint32_t> const& ct_args = {};
-    constexpr std::size_t num_links = 0;
+    const std::vector<uint32_t>& ct_args = {};
 
     // Kernel Setup
 

@@ -56,11 +56,6 @@ int main(int argc, char** argv) {
     constexpr uint32_t default_gk_x = 0;
     constexpr uint32_t default_gk_y = 9;
 
-    constexpr uint32_t default_mux_x = 0;
-    constexpr uint32_t default_mux_y = 1;
-    constexpr uint32_t default_demux_x = 0;
-    constexpr uint32_t default_demux_y = 2;
-
     constexpr uint32_t default_prng_seed = 0x100;
     constexpr uint32_t default_data_kb_per_tx = 1024 * 1024;
     constexpr uint32_t default_max_packet_size_words = 0x100;
@@ -605,7 +600,6 @@ int main(int argc, char** argv) {
 
         if (pass) {
             double total_tx_bw = 0.0;
-            uint64_t total_rx_words_checked = 0;
             for (uint32_t i = 0; i < num_src_endpoints; i++) {
                 uint64_t tx_words_sent = get_64b_result(tx_results[i], TT_FABRIC_WORD_CNT_INDEX);
                 uint64_t tx_elapsed_cycles = get_64b_result(tx_results[i], TT_FABRIC_CYCLES_INDEX);

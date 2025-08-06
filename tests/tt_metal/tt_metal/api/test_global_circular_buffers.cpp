@@ -34,8 +34,6 @@ TEST_F(DispatchFixture, TensixCreateGlobalCircularBuffers) {
         std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {{CoreCoord(0, 0), cores}};
         auto global_cb = tt::tt_metal::experimental::CreateGlobalCircularBuffer(
             device, sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
-        auto buffer_address = global_cb.buffer_address();
-        auto config_address = global_cb.config_address();
     }
     {
         std::vector<std::pair<CoreCoord, CoreRangeSet>> sender_receiver_core_mapping = {
@@ -62,7 +60,6 @@ TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
     CoreRangeSet sender_cores = CoreRangeSet(CoreRange(sender_core));
     CoreRangeSet receiver_cores(CoreRange({1, 1}, {2, 2}));
     CoreRangeSet dummy_receiver_cores(CoreRange({3, 3}, {3, 3}));
-    uint32_t global_cb_size = 3200;
     uint32_t cb_page_size = 32;
     tt::DataFormat tile_format = tt::DataFormat::Float16_b;
     auto all_cores = sender_cores.merge(receiver_cores).merge(dummy_receiver_cores);
@@ -76,7 +73,7 @@ TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
         device, dummy_sender_receiver_core_mapping, 3200, tt::tt_metal::BufferType::L1);
     {
         tt::tt_metal::Program program = CreateProgram();
-        tt::tt_metal::KernelHandle blank_kernel = tt::tt_metal::CreateKernel(
+        tt::tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/dataflow/blank.cpp",
             all_cores,
@@ -101,7 +98,7 @@ TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
     }
     {
         tt::tt_metal::Program program = CreateProgram();
-        tt::tt_metal::KernelHandle blank_kernel = tt::tt_metal::CreateKernel(
+        tt::tt_metal::CreateKernel(
             program,
             "tt_metal/kernels/dataflow/blank.cpp",
             all_cores,

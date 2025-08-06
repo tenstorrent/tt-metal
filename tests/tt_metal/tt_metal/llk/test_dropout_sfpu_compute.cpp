@@ -119,10 +119,8 @@ bool test_dropout_standalone(
             .buffer_type = tt_metal::BufferType::DRAM};
 
         std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
-        const uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
 
         std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
-        const uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
         /*
          * Use circular buffers to set input and output buffers that the
@@ -133,14 +131,14 @@ bool test_dropout_standalone(
         CircularBufferConfig cb_src0_config =
             CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src0_cb_index, single_tile_size);
-        CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
         constexpr uint32_t output_cb_index = CBIndex::c_16;
         constexpr uint32_t num_output_tiles = 2;
         CircularBufferConfig cb_output_config =
             CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(output_cb_index, single_tile_size);
-        CBHandle cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         /*
          * Specify data movement kernels for reading/writing data to/from
@@ -168,7 +166,7 @@ bool test_dropout_standalone(
             {"SFPU_OP_DROPOUT_INCLUDE", "1"},
         };
 
-        KernelHandle eltwise_sfpu_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/dropout_sfpu.cpp",
             core,

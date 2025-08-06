@@ -120,7 +120,6 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
 }
 
 TEST(NOC, TensixVerifyNocNodeIDs) {
-    auto arch = tt::get_arch_from_string(get_umd_arch_name());
     tt::tt_metal::IDevice* device;
     const unsigned int device_id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
     device = tt::tt_metal::CreateDevice(device_id);

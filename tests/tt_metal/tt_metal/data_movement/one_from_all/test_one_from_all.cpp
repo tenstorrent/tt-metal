@@ -43,7 +43,6 @@ bool run_dm(IDevice* device, const OneFromAllConfig& test_config) {
     size_t total_subordinate_cores = test_config.subordinate_core_set.num_cores();
 
     const size_t transaction_size_bytes = test_config.transaction_size_pages * test_config.page_size_bytes;
-    const size_t total_size_bytes = test_config.num_of_transactions * transaction_size_bytes * total_subordinate_cores;
 
     // Obtain L1 Address for Storing Data
     // NOTE: We don't know if the whole block of memory is actually available.
@@ -68,8 +67,6 @@ bool run_dm(IDevice* device, const OneFromAllConfig& test_config) {
     }
     // Assigns a "safe" L1 local address for the master and subordinate cores
     uint32_t l1_base_address = master_l1_info.base_address;
-
-    const size_t subordinate_size_bytes = test_config.num_of_transactions * transaction_size_bytes;
 
     // Compile-time arguments for kernels
     vector<uint32_t> gatherer_compile_args = {
@@ -155,7 +152,6 @@ TEST_F(DeviceFixture, TensixDataMovementOneFromAllPacketSizes) {
     // Cores
     CoreCoord master_core_coord = {0, 0};
     CoreRangeSet subordinate_core_set = {CoreRange(CoreCoord(1, 1), CoreCoord(4, 4))};
-    size_t total_subordinate_cores = subordinate_core_set.num_cores();
 
     for (uint32_t num_of_transactions = 1; num_of_transactions <= max_transactions; num_of_transactions *= 4) {
         for (uint32_t transaction_size_pages = 1; transaction_size_pages <= max_transaction_size_pages;

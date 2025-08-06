@@ -142,7 +142,7 @@ int main(int argc, char** argv) {
                         tt_metal::CircularBufferConfig(
                             cb_tiles * single_tile_size, {{cb_index, tt::DataFormat::Float16_b}})
                             .set_page_size(cb_index, single_tile_size);
-                    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_config);
+                    tt_metal::CreateCircularBuffer(program, core, cb_config);
                 }
             }
 
@@ -171,7 +171,7 @@ int main(int argc, char** argv) {
                     .compile_args = writer_compile_args});
 
             vector<uint32_t> compute_compile_args = {uint32_t(core_group_idx)};
-            auto compute_kernel = tt_metal::CreateKernel(
+            tt_metal::CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/perf_microbenchmark/7_kernel_launch/"
                 "kernels/"

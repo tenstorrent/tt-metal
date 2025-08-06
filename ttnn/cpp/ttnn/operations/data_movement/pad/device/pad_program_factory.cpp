@@ -852,11 +852,8 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
         packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
     }
 
-    bool dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM;
     bool src_stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size);
-    uint32_t src_log2_stick_size = src_stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
     bool dst_stick_size_is_power_of_two = is_power_of_two_at_least_32(stick_size_padded);
-    uint32_t dst_log2_stick_size = dst_stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size_padded) : 0;
     std::vector<uint32_t> reader_ct_args = {
         (std::uint32_t)N + front_pad[-4],
         (std::uint32_t)H + front_pad[-2],

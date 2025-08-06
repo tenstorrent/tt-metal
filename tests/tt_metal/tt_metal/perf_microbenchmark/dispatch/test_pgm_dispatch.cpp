@@ -273,7 +273,7 @@ bool initialize_program(
         for (int j = 0; j < info.n_cbs; j++) {
             tt_metal::CircularBufferConfig cb_config =
                 tt_metal::CircularBufferConfig(16, {{j, tt::DataFormat::Float16_b}}).set_page_size(j, 16);
-            auto cb = tt_metal::CreateCircularBuffer(program, cbg, cb_config);
+            tt_metal::CreateCircularBuffer(program, cbg, cb_config);
         }
         cbg.start_coord = {cbg.end_coord.x + 1, cbg.end_coord.y};
         cbg.end_coord = cbg.start_coord;

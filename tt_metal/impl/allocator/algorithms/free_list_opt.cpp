@@ -225,7 +225,6 @@ size_t FreeListOpt::allocate_in_block(size_t block_index, DeviceAddr alloc_size,
         size_t free_block_size = offset;
         DeviceAddr free_block_address = block_address_[block_index];
         ssize_t prev_block = block_prev_block_[block_index];
-        ssize_t next_block = block_next_block_[block_index];
         block_size_[block_index] -= offset;
         block_address_[block_index] += offset;
         size_t new_block_index = alloc_meta_block(free_block_address, free_block_size, prev_block, block_index, false);

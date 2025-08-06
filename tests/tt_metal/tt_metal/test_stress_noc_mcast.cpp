@@ -37,7 +37,6 @@
 
 using namespace tt;
 
-const uint32_t CB_ELEMENTS = 2048;
 const uint32_t DEFAULT_SECONDS = 10;
 const uint32_t DEFAULT_TARGET_WIDTH = 1;
 const uint32_t DEFAULT_TARGET_HEIGHT = 1;

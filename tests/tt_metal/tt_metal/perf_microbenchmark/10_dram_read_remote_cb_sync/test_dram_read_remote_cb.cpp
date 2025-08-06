@@ -166,7 +166,7 @@ create_programs(
     tt_metal::CircularBufferConfig reader_cb_config =
         tt_metal::CircularBufferConfig(reader_cb_size, {{reader_cb_index, tile_format}})
             .set_page_size(reader_cb_index, single_tile_size);
-    auto reader_cb = tt_metal::CreateCircularBuffer(sender_program, dram_reader_core, reader_cb_config);
+    tt_metal::CreateCircularBuffer(sender_program, dram_reader_core, reader_cb_config);
 
     auto global_cb = tt_metal::experimental::CreateGlobalCircularBuffer(
         device, sender_receiver_core_mapping, padded_global_cb_size, tt_metal::BufferType::L1);
@@ -201,10 +201,9 @@ create_programs(
 
     // L1 receiver CB
     uint32_t receiver_cb_index = 31;
-    uint32_t receiver_page_size = 32;
     tt_metal::CircularBufferConfig receiver_cb_config = tt_metal::CircularBufferConfig(receiver_cb_size);
     receiver_cb_config.remote_index(receiver_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
-    auto receiver_cb = tt_metal::experimental::CreateCircularBuffer(
+    tt_metal::experimental::CreateCircularBuffer(
         receiver_program, l1_receiver_cores, receiver_cb_config, global_cb);
 
     log_info(tt::LogTest, "reader_cb_size: {}", reader_cb_size);
@@ -723,9 +722,6 @@ int main(int argc, char** argv) {
         uint32_t output_size = input_size / num_blocks * cb_num_blocks;
         uint32_t kt = k / 32;
         uint32_t nt = n / 32;
-        uint32_t block_h = kt / num_blocks;
-        uint32_t block_w = nt;
-        uint32_t num_datums_per_tile = 32 * 32;
 
         uint32_t single_tile_size = tt_metal::detail::TileSize(tile_format);
 
@@ -738,7 +734,6 @@ int main(int argc, char** argv) {
 
         CoreCoord dram_bank_coord = CoreCoord{0, 0};
         CoreCoord dram_reader_core_coord = CoreCoord{0, 0};
-        CoreRange dram_reader_core_coord_range = CoreRange(dram_reader_core_coord);
         CoreRangeSet dram_reader_core{std::set<CoreRange>{CoreRange{dram_reader_core_coord}}};
         CoreRange l1_receiver_core_coord_range = CoreRange(CoreCoord{0, 0});
         if (device->arch() == tt::ARCH::GRAYSKULL) {

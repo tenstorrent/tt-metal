@@ -382,7 +382,6 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
 
         auto input_buffer = CreateBuffer(
             tt_metal::InterleavedBufferConfig{device, cfg.size_bytes, cfg.page_size_bytes, cfg.input_buffer_type});
-        bool input_is_dram = cfg.input_buffer_type == tt_metal::BufferType::DRAM;
         tt_metal::detail::WriteToBuffer(input_buffer, inputs[i]);
         output_buffers.emplace_back(CreateBuffer(tt_metal::InterleavedBufferConfig{
             device, cfg.size_bytes * sender_receivers.size(), cfg.page_size_bytes, cfg.output_buffer_type}));

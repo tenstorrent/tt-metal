@@ -687,7 +687,6 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
         device_input_tensor.device());
 
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor.dtype());
-    uint32_t is_dram_input = device_input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
     CoreCoord core = {0, 0};
     CoreRange core_range = {core, core};

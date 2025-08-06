@@ -825,7 +825,6 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
 
     // Reader compile-time args
     // Data is 32 byte aligned
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
         // interleaved accessor args
         (std::uint32_t)src0_cb_index,

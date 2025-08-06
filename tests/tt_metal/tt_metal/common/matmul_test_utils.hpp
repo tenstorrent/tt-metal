@@ -67,7 +67,6 @@ inline std::vector<bfloat16> get_col_slice(
 
 inline void print_faces(std::vector<bfloat16> data, std::string name) {
     std::cout << name << ": " << std::endl;
-    int index = 0;
 
     int tile_index = 0;
     int face_index = 0;
@@ -137,9 +136,7 @@ inline bool move_tiles_to_dram(
     tt_metal::IDevice* device, std::vector<uint32_t> tensor, int tiles_r, int tiles_c, std::shared_ptr<Buffer> buffer) {
     bool pass = true;
     int tile_size = 512;  // 32*32 packed into uint32_t
-    int tile_size_bytes = 32 * 32 * 2;
     int start_index = 0;
-    int tile_id = 0;
     CommandQueue& cq = device->command_queue();
     std::vector<uint32_t> tile;
     std::vector<uint32_t> tiles;

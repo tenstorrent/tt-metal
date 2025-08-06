@@ -78,7 +78,6 @@ inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_eth_s
     IDevice* device, const SubDevice& sub_device_1, const SubDevice& sub_device_2) {
     auto waiter_coord = sub_device_2.cores(HalProgrammableCoreType::ACTIVE_ETH).ranges().at(0).start_coord;
     auto waiter_core = CoreRangeSet(CoreRange(waiter_coord, waiter_coord));
-    auto waiter_core_physical = device->ethernet_core_from_logical_core(waiter_coord);
     auto tensix_waiter_coord = sub_device_2.cores(HalProgrammableCoreType::TENSIX).ranges().at(0).start_coord;
     auto tensix_waiter_core = CoreRangeSet(CoreRange(tensix_waiter_coord, tensix_waiter_coord));
     auto tensix_waiter_core_physical = device->worker_core_from_logical_core(tensix_waiter_coord);

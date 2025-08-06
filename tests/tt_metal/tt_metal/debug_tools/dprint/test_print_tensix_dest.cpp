@@ -273,7 +273,7 @@ static DramBuffer prepare_reader(tt_metal::IDevice* device,
         tt_metal::CreateBuffer(create_dram_interleaved_config(device, config.get_input_buffer_size()));
 
     // Create input circular buffer
-    auto input_circular_buffer = create_circular_buffer(
+    create_circular_buffer(
         program, config.core, DEFAULT_INPUT_CB_INDEX, config.data_format, config.get_input_buffer_size());
 
     // Create reader kernel
@@ -300,7 +300,7 @@ static DramBuffer prepare_writer(tt_metal::IDevice* device, tt_metal::Program& p
         tt_metal::CreateBuffer(create_dram_interleaved_config(device, config.get_output_buffer_size()));
 
     // Create output circular buffer
-    auto output_circular_buffer = create_circular_buffer(
+    create_circular_buffer(
         program, config.core, DEFAULT_OUTPUT_CB_INDEX, config.data_format, config.get_output_buffer_size());
 
     // Create writer kernel

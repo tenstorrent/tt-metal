@@ -160,14 +160,14 @@ void matmul_tile(
         tt_metal::CircularBufferConfig(
             num_input_tiles * single_tile_size_bfp16b, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size_bfp16b);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t src1_cb_index = 1;
     tt_metal::CircularBufferConfig cb_src1_config =
         tt_metal::CircularBufferConfig(
             num_input_tiles * single_tile_size_bfp16b, {{src1_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src1_cb_index, single_tile_size_bfp16b);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
     std::shared_ptr<tt_metal::Buffer> src2_dram_buffer;
     std::shared_ptr<tt_metal::Buffer> dst1_dram_buffer;
@@ -184,7 +184,7 @@ void matmul_tile(
             tt_metal::CircularBufferConfig(
                 num_input_tiles * single_tile_size_bfp16b, {{src2_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src2_cb_index, single_tile_size_bfp16b);
-        auto cb_src2 = tt_metal::CreateCircularBuffer(program, core, cb_src2_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_src2_config);
     } else if (cfg.test_init_short) {  // This will be dummy input in uint16_t
         uint32_t in2_id = 2;
         uint32_t out1_id = 17;
@@ -205,13 +205,13 @@ void matmul_tile(
             tt_metal::CircularBufferConfig(
                 num_input_tiles * single_tile_size_bfp16b, {{in2_id, tt::DataFormat::UInt16}})
                 .set_page_size(in2_id, single_tile_size_bfp16b);
-        auto cb_src2 = tt_metal::CreateCircularBuffer(program, core, cb_src2_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_src2_config);
 
         tt_metal::CircularBufferConfig cb_dst1_config =
             tt_metal::CircularBufferConfig(
                 num_input_tiles * single_tile_size_bfp16b, {{out1_id, tt::DataFormat::UInt16}})
                 .set_page_size(out1_id, single_tile_size_bfp16b);
-        auto cb_dst1 = tt_metal::CreateCircularBuffer(program, core, cb_dst1_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_dst1_config);
     }
 
     uint32_t ouput_cb_index = 16;
@@ -227,7 +227,7 @@ void matmul_tile(
             tt_metal::CircularBufferConfig(dram_buffer_size_out0, partials_and_out_data_format_spec)
                 .set_page_size(ouput_cb_index, single_tile_size_out0)
                 .set_page_size(intermediate_cb_index, single_tile_size_out0);
-        auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         reader_l1_args = {
             src0_dram_buffer->address(),
@@ -247,7 +247,7 @@ void matmul_tile(
                 num_output_tiles * single_tile_size_out0,
                 {{ouput_cb_index, (cfg.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)}})
                 .set_page_size(ouput_cb_index, single_tile_size_out0);
-        auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
         reader_l1_args = {
             src0_dram_buffer->address(),
@@ -283,7 +283,7 @@ void matmul_tile(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-    auto mm_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         cfg.compute_kernel,
         core,

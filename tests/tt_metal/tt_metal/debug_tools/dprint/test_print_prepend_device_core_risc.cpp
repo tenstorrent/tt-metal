@@ -51,13 +51,13 @@ void RunTest(DPrintFixture* fixture, IDevice* device, const bool add_active_eth_
     CoreRange cores({0, 0}, {0, 1});
     Program program = Program();
 
-    KernelHandle brisc_kernel_id = CreateKernel(
+    CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/print_simple.cpp",
         cores,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    KernelHandle ncrisc_kernel_id = CreateKernel(
+    CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/print_simple.cpp",
         cores,
@@ -77,7 +77,7 @@ void RunTest(DPrintFixture* fixture, IDevice* device, const bool add_active_eth_
     if (add_active_eth_kernel) {
         const std::unordered_set<CoreCoord>& active_eth_cores = device->get_active_ethernet_cores(true);
         CoreRangeSet crs(std::set<CoreRange>(active_eth_cores.begin(), active_eth_cores.end()));
-        KernelHandle erisc_kernel_id = CreateKernel(
+        CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/misc/print_simple.cpp",
             crs,

@@ -291,7 +291,7 @@ Fold::MultiCoreDRAMFold::cached_program_t fold_multi_core_row_major_interleaved(
         CircularBufferConfig(
             double_buffer * aligned_stick_nbytes * stride_w * stride_h, {{cb_src0_index, cb_data_format}})
             .set_page_size(cb_src0_index, aligned_stick_nbytes * stride_w * stride_h);
-    auto cb_src0 = CreateCircularBuffer(program, all_cores, src_cb_config);
+    CreateCircularBuffer(program, all_cores, src_cb_config);
 
     // Create reader kernel
     std::vector<uint32_t> compile_time_args(

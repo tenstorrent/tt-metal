@@ -43,7 +43,6 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& shape = input_tensor.padded_shape();
     uint32_t W = shape[-1], H = (input_tensor.physical_volume() / (shape[0] * shape[-1])), NC = shape[0];
-    uint32_t HW = H * W;
 
     bool mask_padded_data = false;
     uint32_t num_datum_padded = 0;
@@ -99,8 +98,6 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
     auto src0_buffer = input_tensor.buffer();
     auto out0_buffer = output_tensor.buffer();
-
-    uint32_t num_tiles = input_tensor.physical_volume() / TILE_HW;
 
     uint32_t block_size =
         fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
@@ -257,13 +254,13 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     if (use_large_kernel) {
         auto c_intermedsum_config = CircularBufferConfig(im1_t * im_tile_size, {{tt::CBIndex::c_12, im_cb_data_format}})
                                         .set_page_size(tt::CBIndex::c_12, im_tile_size);
-        auto cb_intermedsum_id = CreateCircularBuffer(program, all_device_cores, c_intermedsum_config);
+        CreateCircularBuffer(program, all_device_cores, c_intermedsum_config);
         auto c_intermedmax_config = CircularBufferConfig(im1_t * im_tile_size, {{tt::CBIndex::c_15, im_cb_data_format}})
                                         .set_page_size(tt::CBIndex::c_15, im_tile_size);
-        auto cb_intermedmax_id = CreateCircularBuffer(program, all_device_cores, c_intermedmax_config);
+        CreateCircularBuffer(program, all_device_cores, c_intermedmax_config);
         auto c_recip_config = CircularBufferConfig(im1_t * im_tile_size, {{tt::CBIndex::c_16, im_cb_data_format}})
                                   .set_page_size(tt::CBIndex::c_16, im_tile_size);
-        auto cb_recip_id = CreateCircularBuffer(program, all_device_cores, c_recip_config);
+        CreateCircularBuffer(program, all_device_cores, c_recip_config);
     }
     auto c_in2_config = CircularBufferConfig(in2_t * scalar_tile_size, {{tt::CBIndex::c_2, scalar_cb_data_format}})
                             .set_page_size(tt::CBIndex::c_2, scalar_tile_size);
@@ -438,7 +435,6 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
 
             const auto shape = input_tensors.at(0).padded_shape();
             uint32_t W = shape[-1], H = (input_tensors.at(0).physical_volume() / (shape[0] * shape[-1])), NC = shape[0];
-            uint32_t HW = H * W;
 
             uint32_t Wt = W / TILE_WIDTH;
             uint32_t Ht = H / TILE_HEIGHT;
@@ -452,7 +448,6 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
                 num_datum_padded = W - W_unpadded;
             }
 
-            int32_t num_tiles = input_tensors.at(0).physical_volume() / TILE_HW;
             uint32_t block_size =
                 fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
 
@@ -479,7 +474,6 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             TT_FATAL(Wt % block_size == 0, "Wt {} must be divisible by block size {}", Wt, block_size);
             TT_FATAL((block_size != -1), "Wt {} must be divisible by one of the numbers in the range from 8 to 1.", Wt);
 
-            uint32_t NCHt = NC * Ht;
             uint32_t num_tile_rows = NC * Ht;
             auto all_device_cores = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
             auto
@@ -637,8 +631,6 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
     const auto& shape = input_tensor.padded_shape();
     uint32_t M = shape[2] * shape[0];
     uint32_t K = shape[3] * shape[1];
-    uint32_t Mt = M / TILE_WIDTH;
-    uint32_t Kt = K / TILE_WIDTH;
     uint32_t num_cores_per_batch = (shape[1] * shape[2] * shape[3]) / (input_tensor.shard_spec().value().shape[0] *
                                                                        input_tensor.shard_spec().value().shape[1]);
 
@@ -648,8 +640,6 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
     }
     uint32_t mask_Ht = mask_H / TILE_HEIGHT;
     // block
-    uint32_t block_w = block_wt * TILE_WIDTH;
-    uint32_t block_h = block_ht * TILE_WIDTH;
     uint32_t num_subblocks_w = block_wt / subblock_wt;
 
     // single tile sizes
@@ -663,7 +653,6 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
     auto src0_buffer = input_tensor.buffer();
     auto out0_buffer = output_tensor.buffer();
     // num tiles
-    uint32_t num_tiles = input_tensor.physical_volume() / TILE_HW;
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
@@ -787,7 +776,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
         softmax_defines["NUMERIC_STABLE"] = "1";
     }
     softmax_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
-    auto softmax_kernels_id = CreateKernel(
+    CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/softmax/device/kernels/compute/softmax_sharded.cpp",
         all_device_cores,
@@ -807,7 +796,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
     // in1 scalar
     auto c_in1_config = CircularBufferConfig(in1_CB_size, {{tt::CBIndex::c_1, scalar_cb_data_format}})
                             .set_page_size(tt::CBIndex::c_1, scalar_tile_size);
-    auto cb_in1_id = CreateCircularBuffer(program, all_device_cores, c_in1_config);
+    CreateCircularBuffer(program, all_device_cores, c_in1_config);
     // in2 in3 attn scale mask
     std::optional<CBHandle> cb_intermed2_id;
     std::optional<CBHandle> cb_in2_id;
@@ -842,20 +831,20 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
     // im0 for exp(x)
     auto c_intermed0_config = CircularBufferConfig(im0_CB_size, {{tt::CBIndex::c_6, im_cb_data_format}})
                                   .set_page_size(tt::CBIndex::c_6, im_tile_size);
-    auto cb_intermed0_id = CreateCircularBuffer(program, all_device_cores, c_intermed0_config);
+    CreateCircularBuffer(program, all_device_cores, c_intermed0_config);
     // im1 for 1/sum(exp(x))
     auto c_intermed1_config = CircularBufferConfig(im1_CB_size, {{tt::CBIndex::c_7, im_cb_data_format}})
                                   .set_page_size(tt::CBIndex::c_7, im_tile_size);
-    auto cb_intermed1_id = CreateCircularBuffer(program, all_device_cores, c_intermed1_config);
+    CreateCircularBuffer(program, all_device_cores, c_intermed1_config);
     if (numeric_stable) {
         // cb_max
         auto c_intermed3_config = CircularBufferConfig(max_CB_size, {{tt::CBIndex::c_9, im_cb_data_format}})
                                       .set_page_size(tt::CBIndex::c_9, im_tile_size);
-        auto cb_intermed3_id = CreateCircularBuffer(program, all_device_cores, c_intermed3_config);
+        CreateCircularBuffer(program, all_device_cores, c_intermed3_config);
         // cb_x
         auto c_intermed4_config = CircularBufferConfig(x_CB_size, {{tt::CBIndex::c_10, im_cb_data_format}})
                                       .set_page_size(tt::CBIndex::c_10, im_tile_size);
-        auto cb_intermed4_id = CreateCircularBuffer(program, all_device_cores, c_intermed4_config);
+        CreateCircularBuffer(program, all_device_cores, c_intermed4_config);
     }
 
     // Runtime Args

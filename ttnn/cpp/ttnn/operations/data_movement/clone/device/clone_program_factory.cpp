@@ -57,8 +57,6 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
 
     auto input_buffer = input.buffer();
     auto output_buffer = output.buffer();
-    bool input_is_dram = input_buffer->buffer_type() == BufferType::DRAM;
-    bool output_is_dram = output_buffer->buffer_type() == BufferType::DRAM;
 
     std::vector<uint32_t> reader_compile_time_args, writer_compile_time_args;
     if (tilized) {

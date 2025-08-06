@@ -554,7 +554,6 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
 
     // reader
 
-    uint32_t src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     uint32_t num_tiles_2d = a.padded_shape()[-1] * a.padded_shape()[-2] / TILE_HW;
 
     auto log_shape = output.logical_shape();
@@ -1047,7 +1046,6 @@ operation::ProgramWithCallbacks untilize_multi_core(
     }
 
     // Writer compile-time args
-    bool output_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     uint32_t output_num_blocks_across_width = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
         output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {

@@ -194,7 +194,6 @@ bool RunWriteBWTest(
     auto output_buffer = CreateBuffer(InterleavedBufferConfig{
         receiver_device, test_config.size_bytes, test_config.page_size_bytes, test_config.output_buffer_type});
 
-    bool output_is_dram = test_config.output_buffer_type == BufferType::DRAM;
     tt_metal::detail::WriteToBuffer(output_buffer, all_zeros);
     const uint32_t dram_output_buffer_base_addr = output_buffer->address();
 
@@ -327,7 +326,7 @@ bool RunWriteBWTest(
     // TODO
     std::vector<uint32_t> chip0_sender_worker_reader_runtime_args{dram_input_buf_base_addr};
 
-    CBHandle cb_src0_sender_workers = CreateCircularBuffer(sender_program, chip0_sender_worker_core, cb_src0_config);
+    CreateCircularBuffer(sender_program, chip0_sender_worker_core, cb_src0_config);
     auto device_0_edm_sender_worker_reader_kernel = tt_metal::CreateKernel(
         sender_program,
         sender_side_reader_worker_kernel_path,

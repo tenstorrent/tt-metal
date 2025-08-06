@@ -44,7 +44,6 @@ bool run_dm(IDevice* device, const OneToOneConfig& test_config) {
 
     // Buffer Parameters
     const size_t bytes_per_transaction = test_config.pages_per_transaction * test_config.bytes_per_page;
-    const size_t total_size_bytes = bytes_per_transaction * test_config.num_of_transactions;
 
     // (Logical) Core coordinates and ranges
     CoreRangeSet master_core_set({CoreRange(test_config.master_core_coord)});

@@ -129,7 +129,6 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
     auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                     ? input_tensor_q.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-    uint32_t s = input_tensor_k.logical_shape()[-2];
 
     // Use k_chunk_size as override; if k_chunk_size == 0, figure it out in kernels
     // uint32_t k_chunk_size = get_chunk_size(s);
@@ -291,7 +290,6 @@ ttnn::Tensor ExecutePagedFlashMultiLatentAttentionDecode::invoke(
     auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                     ? input_tensor_q.device()->arch()
                     : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
-    uint32_t s = input_tensor_k.logical_shape()[-2];
 
     // Use k_chunk_size as override; if k_chunk_size == 0, figure it out in kernels
     // uint32_t k_chunk_size = get_chunk_size(s);
