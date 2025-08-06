@@ -66,6 +66,7 @@ public:
     size_t get_buffer_size() const { return buffer_size_; }
     std::vector<chip_id_t> get_device_ids() const;
     bool has_device(chip_id_t device_id) const;
+    bool usable_from_noc(chip_id_t device_id) const;
 
 private:
     void initialize_from_devices(
