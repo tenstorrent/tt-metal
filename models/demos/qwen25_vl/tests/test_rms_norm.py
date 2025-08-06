@@ -36,6 +36,7 @@ from models.utility_functions import comp_allclose, comp_pcc
         14308,  # from 3B test image
     ),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_rms_norm_inference(
     max_seq_len,
     batch_size,
