@@ -27,7 +27,7 @@ Resource link - [source](https://github.com/cfzd/Ultra-Fast-Lane-Detection-v2)
 Use the following command to run the model :
 
 ```
-pytest --disable-warnings tests/ttnn/integration_tests/ufld_v2/test_ttnn_ufld_v2.py::test_ufld_v2_model
+pytest --disable-warnings models/demos/ufld_v2/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model
 ```
 
 ### Performant Model with Trace+2CQ
