@@ -264,4 +264,4 @@ class TtnnDetect:
         ttnn.deallocate(z)
         ttnn.deallocate(yb)
 
-        return [out, [y1, y2, y3]]
+        return out
