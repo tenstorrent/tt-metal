@@ -13,7 +13,7 @@ from models.utility_functions import is_wormhole_b0
     (
         (True, 128, {"prefill_t/s": 10900, "decode_t/s": 3630, "decode_t/s/u": 14.1}, False, None),
         (True, 1024, {"prefill_t/s": 12200, "decode_t/s": 3434, "decode_t/s/u": 13.4}, False, None),
-        (True, 2048, {"prefill_t/s": 10700, "decode_t/s": 3000, "decode_t/s/u": 11.7}, False, None),
+        (True, 2048, {"prefill_t/s": 11600, "decode_t/s": 3174, "decode_t/s/u": 12.4}, False, None),
         (True, 128, None, False, None),
         (True, 1024, None, False, None),
         (True, 2048, None, False, None),
