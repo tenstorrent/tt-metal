@@ -245,6 +245,7 @@ def run_mesh_partition_test(
     [
         {
             "trace_region_size": 10000,
+            "dispatch_core_type": ttnn.DispatchCoreType.WORKER,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
         }
     ],
@@ -301,6 +302,7 @@ def test_mesh_partition(
     [
         {
             "trace_region_size": 16384,
+            "dispatch_core_type": ttnn.DispatchCoreType.WORKER,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.ROW,
         }
     ],
