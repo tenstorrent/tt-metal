@@ -21,7 +21,7 @@ void bind_reduction_moe_operation(py::module& module) {
         R"doc(moe(input_tensor: ttnn.Tensor, expert_mask_tensor: ttnn.Tensor, topk_mask_tensor: ttnn.Tensor, k: int, out : Optional[ttnn.Tensor] = std::nullopt, memory_config: MemoryConfig = std::nullopt, queue_id : [int] = 0) -> ttnn.Tensor
 
             Returns the weight of the zero-th MoE expert.
-            Input tensor must have BBFLOAT16 data type and TILE_LAYOUT layout.
+            Input tensor must have BFLOAT16 data type and TILE_LAYOUT layout.
             expert_mask_tensor and topk_mask_tensor must have BFLOAT16 data type and TILE_LAYOUT layout.
 
             Output value tensor will have the same data type as input tensor and output.
@@ -42,6 +42,16 @@ void bind_reduction_moe_operation(py::module& module) {
                 * :attr:`memory_config`: Memory Config of the output tensors
                 * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensors
                 * :attr:`queue_id` (Optional[uint8]): command queue id
+
+            Example:
+                >>> N, C, H, W = 1, 1, 32, 64
+                >>> k = 32
+
+                >>> input_tensor = ttnn.rand([N, C, H, W], device=device)
+                >>> expert_mask = ttnn.zeros([N, C, 1, W], device=device)
+                >>> topE_mask = ttnn.zeros([N, C, 1, k],  device=device)
+
+                >>> ttnn.moe(input_tensor, expert_mask, topE_mask, k)
         )doc";
 
     using OperationType = decltype(ttnn::moe);

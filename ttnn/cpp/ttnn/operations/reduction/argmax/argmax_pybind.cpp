@@ -18,19 +18,13 @@ void bind_reduction_argmax_operation(py::module& module) {
 
             Returns the indices of the maximum value of elements in the ``input`` tensor
             If no ``dim`` is provided, it will return the indices of maximum value of all elements in given ``input``
-            If no ``keepdim`` is provided, it will default to `False`.
 
-            Currently this op only support dimension-specific reduction on last dimension.
+            The input tensor must be in ROW_MAJOR layout.
+            Currently this op only supports dimension-specific reduction on the last dimension.
 
             Input tensor support bfloat16, float32, uint32, int32, uint16 data types and ROW_MAJOR layout.
 
             Output tensor will have UINT32 data type.
-
-            Equivalent pytorch code:
-
-            .. code-block:: python
-
-                return torch.argmax(input_tensor, dim=dim, keepdim=keepdim)
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
@@ -45,6 +39,9 @@ void bind_reduction_argmax_operation(py::module& module) {
             Returns:
                 List of ttnn.Tensor: the output tensor.
 
+            Example:
+                >>> input_tensor = ttnn.rand([1, 1, 32, 64], device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+                >>> output = ttnn.argmax(input_tensor, dim=-1, keepdim=True)
         )doc";
 
     using OperationType = decltype(ttnn::argmax);

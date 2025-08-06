@@ -21,9 +21,12 @@ void bind_reduction_prod_operation(py::module& module, const unary_operation_t& 
 
             Computes the product of all elements on specified ``dim`` of the ``input`` tensor.
 
-            If no ``dim`` is provided (or ``dim`` is set to `None`), it will compute the product of all elements in the ``input`` tensor.
-            If ``keepdim`` is `True`, the resulting tensor will have a similar shape as the ``input`` tensor, but with the specified ``dim`` reduced to 1. This is not supported when taking the product across all dimensions.
+            If no ``dim`` is provided (or ``dim`` is set to `None`), it will compute the full product of every element in the ``input`` tensor.
+            When using this full-product mode, the input tensor must be bfloat16.
+
+            If ``keepdim`` is `True`, the resulting tensor will have a similar shape as the ``input`` tensor, but with the specified ``dim`` reduced to 1.
             Otherwise, the target ``dim`` will be squeezed, resulting in an output tensor with one less dimension than the ``input`` tensor.
+            Setting ``keepdim`` to `True` is not supported when computing the full product, as this operation results in a scalar.
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
@@ -37,8 +40,7 @@ void bind_reduction_prod_operation(py::module& module, const unary_operation_t& 
                 List of ttnn.Tensor: the output tensor.
 
             Example::
-
-                >>> tensor = ttnn.from_torch(torch.tensor((1, 2), dtype=torch.bfloat16), device=device)
+                >>> tensor = ttnn.rand((1,2), device=device)
                 >>> output = {1}(tensor, dim=0)
                 >>> output_all_dims = {1}(tensor)
         )doc",
