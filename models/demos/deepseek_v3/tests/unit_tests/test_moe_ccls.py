@@ -103,6 +103,28 @@ def partition_batch_on_mesh(tt_input, dim, memory_config, cluster_axis=0):
     return tt_out_tensor
 
 
+def gather_batch_on_mesh(tt_input, mesh_device, dim, cluster_axis, memory_config):
+    mesh_shape = tuple(mesh_device.shape)
+    compute_grid_size = mesh_device.compute_with_storage_grid_size()
+    cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+    )
+    semaphore = ttnn.create_global_semaphore(mesh_device, cores, 0)
+
+    """Gather tensor along specified dimension across mesh cluster axis."""
+    tt_out_tensor = ttnn.experimental.all_gather_async(
+        tt_input,
+        mesh_device=mesh_device,
+        cluster_axis=cluster_axis,
+        dim=dim,
+        multi_device_global_semaphore=semaphore,
+        num_links=3,
+        memory_config=memory_config,
+        topology=ttnn.Topology.Linear,
+    )
+    return tt_out_tensor
+
+
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize(
     "mode,seq_len",
@@ -280,3 +302,54 @@ def test_batch_partitioning_on_mesh(
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, 0.9999)
     assert passing, f"Batch partitioning test failed: {pcc_message} for mode={mode}, seq_len={seq_len}"
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "mode,seq_len",
+    [
+        ("decode", 128),
+        ("prefill", 2048),
+    ],
+)
+def test_batch_gather_on_mesh(
+    mesh_device,
+    hf_config,
+    mode,
+    seq_len,
+):
+    torch.manual_seed(0)
+
+    batch_size = 1
+    mesh_shape = tuple(mesh_device.shape)
+
+    torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size)
+
+    # Convert input to TTNN
+    if mode == "decode":
+        memory_config = ttnn.DRAM_MEMORY_CONFIG  # L1_MEMORY_CONFIG has PCC issue
+    else:
+        memory_config = ttnn.DRAM_MEMORY_CONFIG
+
+    tt_input = ttnn.from_torch(
+        torch_input.unsqueeze(0),
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=mesh_shape),
+        dtype=ttnn.bfloat16,
+        memory_config=memory_config,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    tt_output = gather_batch_on_mesh(tt_input, mesh_device, -2, 0, memory_config)
+
+    # Compare outputs - at this point all devices should have the same data as the source row
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_shape),
+    )[0]
+    # Cleanup
+    ttnn.deallocate(tt_input)
+    ttnn.deallocate(tt_output)
+
+    passing, pcc_message = comp_pcc(torch_input, tt_output_torch, 0.9999)
+    assert passing, f"Batch gather test failed: {pcc_message} for mode={mode}, seq_len={seq_len}"
