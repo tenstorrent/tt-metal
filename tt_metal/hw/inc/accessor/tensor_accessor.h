@@ -9,6 +9,7 @@
 #include "array_wrapper.h"
 #include "dspec.h"
 #include "helpers.h"
+#include "compile_time_args.h"
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "dataflow_api_addrgen.h"
@@ -280,57 +281,23 @@ namespace tensor_accessor::detail {
 template <typename... Args, uint32_t... Indexes>
 auto make_tensor_accessor_tuple(
     const std::tuple<Args...>& args,
-    uint32_t page_size,
-    uint32_t address_arg_index_start,
-    uint32_t address_arg_index_stride,
+    uint32_t address_rt_arg_index_start,
+    uint32_t page_size_ct_arg_index_start,
     std::integer_sequence<uint32_t, Indexes...>) {
     return std::make_tuple(TensorAccessor(
         std::get<Indexes>(args),
-        get_arg_val<uint32_t>(address_arg_index_start + Indexes * address_arg_index_stride),
-        page_size)...);
-}
-template <typename... Args, uint32_t... Indexes>
-auto make_tensor_accessor_tuple(
-    const std::tuple<Args...>& args,
-    uint32_t page_size_index_start,
-    uint32_t page_size_index_stride,
-    uint32_t address_arg_index_start,
-    uint32_t address_arg_index_stride,
-    std::integer_sequence<uint32_t, Indexes...>) {
-    return std::make_tuple(TensorAccessor(
-        std::get<Indexes>(args),
-        get_arg_val<uint32_t>(address_arg_index_start + Indexes * address_arg_index_stride),
-        get_arg_val<uint32_t>(page_size_index_start + Indexes * page_size_index_stride))...);
+        get_arg_val<uint32_t>(address_rt_arg_index_start + Indexes),
+        kernel_compile_time_args[page_size_ct_arg_index_start + Indexes])...);
 }
 }  // namespace tensor_accessor::detail
 
 template <typename... Args>
 auto make_tensor_accessor_tuple(
-    const std::tuple<Args...>& args,
-    uint32_t page_size,
-    uint32_t address_arg_index_start,
-    uint32_t address_arg_index_stride) {
+    const std::tuple<Args...>& args, uint32_t address_rt_arg_index_start, uint32_t page_size_ct_arg_index_start) {
     return tensor_accessor::detail::make_tensor_accessor_tuple(
         args,
-        page_size,
-        address_arg_index_start,
-        address_arg_index_stride,
-        std::make_integer_sequence<uint32_t, sizeof...(Args)>());
-}
-
-template <typename... Args>
-auto make_tensor_accessor_tuple(
-    const std::tuple<Args...>& args,
-    uint32_t page_size_index_start,
-    uint32_t page_size_index_stride,
-    uint32_t address_arg_index_start,
-    uint32_t address_arg_index_stride) {
-    return tensor_accessor::detail::make_tensor_accessor_tuple(
-        args,
-        page_size_index_start,
-        page_size_index_stride,
-        address_arg_index_start,
-        address_arg_index_stride,
+        address_rt_arg_index_start,
+        page_size_ct_arg_index_start,
         std::make_integer_sequence<uint32_t, sizeof...(Args)>());
 }
 
@@ -340,18 +307,18 @@ public:
 
     template <typename Accessor>
     AbstractTensorAccessor(const Accessor& accessor) : accessor_ptr(&accessor) {
-        get_addr_fn = [](const void* accessor, uint32_t page_idx) {
+        get_noc_addr_fn = [](const void* accessor, uint32_t page_idx) {
             return static_cast<const Accessor*>(accessor)->get_noc_addr(page_idx);
         };
     }
 
-    uint64_t get_addr(uint32_t page_idx) const { return get_addr_fn(accessor_ptr, page_idx); }
+    uint64_t get_noc_addr(uint32_t page_idx) const { return get_noc_addr_fn(accessor_ptr, page_idx); }
 
 private:
-    using AddressGeneratorFn = uint64_t (*)(const void*, uint32_t);
+    using GetNocAddrFn = uint64_t (*)(const void*, uint32_t);
 
     const void* accessor_ptr = nullptr;
-    AddressGeneratorFn get_addr_fn = nullptr;
+    GetNocAddrFn get_noc_addr_fn = nullptr;
 };
 
 namespace tensor_accessor::detail {

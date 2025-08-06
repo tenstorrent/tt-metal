@@ -15,7 +15,8 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t num_tensors = get_compile_time_arg_val(1);
-    constexpr auto tensor_accessor_args = make_tensor_accessor_args_tuple<num_tensors, 2>();
+    constexpr uint32_t page_size_base_idx = 2;
+    constexpr auto tensor_accessor_args = make_tensor_accessor_args_tuple<num_tensors, 2 + num_tensors>();
 
     // ublocks size defined in tiles
     constexpr uint32_t ublock_size_tiles = 1;
@@ -28,7 +29,7 @@ void kernel_main() {
     constexpr uint32_t tile_id_per_tensor_offset = num_tiles_per_block_base_offset + num_tensors;
 
     auto tensor_accessors_tuple =
-        make_tensor_accessor_tuple(tensor_accessor_args, tile_size_bytes, src_addr_base_idx, 1);
+        make_tensor_accessor_tuple(tensor_accessor_args, src_addr_base_idx, page_size_base_idx);
     auto abstract_tensor_accessors = make_abstract_tensor_accessors(tensor_accessors_tuple);
 
     tt_l1_ptr uint32_t* arg_ptr = (tt_l1_ptr uint32_t*)get_arg_addr(src_addr_base_idx);
@@ -42,7 +43,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_tiles; ++i) {
         cb_reserve_back(cb_id_in, ublock_size_tiles);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in);
-        auto read_addr = abstract_tensor_accessors[curr_tensor].get_addr(tile_id_per_tensor[curr_tensor]);
+        auto read_addr = abstract_tensor_accessors[curr_tensor].get_noc_addr(tile_id_per_tensor[curr_tensor]);
         noc_async_read(read_addr, l1_write_addr, tile_size_bytes);
         noc_async_read_barrier();
         cb_push_back(cb_id_in, ublock_size_tiles);

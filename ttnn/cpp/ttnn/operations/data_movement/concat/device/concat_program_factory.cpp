@@ -753,7 +753,6 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     std::vector<uint32_t> src_addr(num_input_tensors);
     std::vector<uint32_t> num_pages_per_block(num_input_tensors);
     std::vector<uint32_t> page_id_per_tensor(num_input_tensors);
-    // Only used for RM
     std::vector<uint32_t> page_size_per_tensor(num_input_tensors);
 
     uint32_t num_accum_pages = 1;
@@ -805,6 +804,7 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         for (uint32_t i = 0; i < num_input_tensors; ++i) {
             auto buffer = input_tensors[i].buffer();
             src_addr[i] = buffer->address();
+            page_size_per_tensor[i] = buffer->page_size();
             uint32_t dim_pages = input_tensors[i].padded_shape()[dim] / scale_factor;
             num_pages_per_block[i] = num_accum_pages * dim_pages;
             num_output_pages_per_block += num_accum_pages * dim_pages;
@@ -814,18 +814,15 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
     common_reader_kernel_args.insert(common_reader_kernel_args.end(), src_addr.begin(), src_addr.end());
     common_reader_kernel_args.insert(
         common_reader_kernel_args.end(), num_pages_per_block.begin(), num_pages_per_block.end());
-    if (rm_layout) {
-        common_reader_kernel_args.insert(
-            common_reader_kernel_args.end(), page_size_per_tensor.begin(), page_size_per_tensor.end());
-    }
 
     // Reader compile-time args
     // Data is 32 byte aligned
     std::vector<uint32_t> reader_compile_time_args = {
-        // interleaved accessor args
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)num_input_tensors,
     };
+    reader_compile_time_args.insert(
+        reader_compile_time_args.end(), page_size_per_tensor.begin(), page_size_per_tensor.end());
     for (uint32_t i = 0; i < num_input_tensors; ++i) {
         TensorAccessorArgs(*input_tensors[i].buffer()).append_to(reader_compile_time_args);
     }
