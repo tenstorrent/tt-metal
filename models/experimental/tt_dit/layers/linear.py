@@ -12,9 +12,10 @@ class Linear:
     Linear layer with replicated weights
     """
 
-    def __init__(self, in_features, out_features, bias=True, mesh_device=None, init=False):
+    def __init__(self, in_features, out_features, bias=True, activation=None, mesh_device=None, init=False):
         self.in_features = in_features
         self.out_features = out_features
+        self.activation = activation
         self.mesh_device = mesh_device
         if init:
             self.weight = bf16_tensor(torch.randn(in_features, out_features), device=self.mesh_device)
@@ -41,7 +42,7 @@ class Linear:
             self.bias = None
 
     def __call__(self, x):
-        return ttnn.linear(x, self.weight, bias=self.bias)
+        return ttnn.linear(x, self.weight, bias=self.bias, activation=self.activation)
 
 
 class ColParallelLinear:
@@ -49,9 +50,12 @@ class ColParallelLinear:
     Linear layer with column parallel weights
     """
 
-    def __init__(self, in_features, out_features, bias=True, mesh_device=None, mesh_axis=0, init=False):
+    def __init__(
+        self, in_features, out_features, bias=True, activation=None, mesh_device=None, mesh_axis=0, init=False
+    ):
         self.in_features = in_features
         self.out_features = out_features
+        self.activation = activation
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
         if init:
@@ -87,7 +91,7 @@ class ColParallelLinear:
         Expects x to be replicated.
         Return output fractured on columns.
         """
-        return ttnn.linear(x, self.weight, bias=self.bias)
+        return ttnn.linear(x, self.weight, bias=self.bias, activation=self.activation)
 
 
 class RowParallelLinear:
@@ -96,10 +100,19 @@ class RowParallelLinear:
     """
 
     def __init__(
-        self, in_features, out_features, bias=True, mesh_device=None, mesh_axis=0, ccl_manager=None, init=False
+        self,
+        in_features,
+        out_features,
+        bias=True,
+        activation=None,
+        mesh_device=None,
+        mesh_axis=0,
+        ccl_manager=None,
+        init=False,
     ):
         self.in_features = in_features
         self.out_features = out_features
+        self.activation = activation
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
         self.ccl_manager = ccl_manager
@@ -142,7 +155,7 @@ class RowParallelLinear:
         Expects x to be column fractured.
         Return output fractured on columns.
         """
-        output = ttnn.linear(x, self.weight, bias=self.bias)
+        output = ttnn.linear(x, self.weight, bias=self.bias, activation=self.activation)
 
         if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
             output = ttnn.experimental.reduce_scatter_minimal_async(

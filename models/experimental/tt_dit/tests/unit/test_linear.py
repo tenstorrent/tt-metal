@@ -186,9 +186,7 @@ def test_col_parallel_linear(
         # False,
     ],
 )
-@pytest.mark.parametrize(
-    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 716800}], indirect=True
-)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_row_parallel_linear(
     mesh_device: ttnn.MeshDevice,
     B: int,
