@@ -35,14 +35,18 @@ on:
       - main # Builds on main will populate the shared ccache to speed up builds on branches
 
 concurrency:
-  # Use github.run_id on main branch (or any protected branch)
-  # This ensure that no runs get cancelled on main
-  # Use github.event.pull_request.number on pull requests, so it's unique per pull request
-  # and will cancel obsolete runs
-  # Use github.ref on other branches, so it's unique per branch
-  # Possibly PRs can also just use `github.ref`, but for now just copy/pasting from
-  # https://www.meziantou.net/how-to-cancel-github-workflows-when-pushing-new-commits-on-a-branch.htm
-  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.event.pull_request.number || github.ref }}-${{ inputs.build-type || 'default' }}
+  # Groups to control cancelling of obsolete runs.
+  # main (or any protected branch): run_id (read: never cancel other jobs)
+  # PRs: PR #
+  # Merge Queue: A value unique to each PR (merge_group.head_ref)
+  # All others: commit ID (read: never cancel other jobs)
+  group: >-
+    ${{ github.workflow }}-
+    ${{ github.ref_protected && github.run_id
+        || github.event.pull_request.number
+        || github.event.merge_group.head_ref
+        || github.ref }}-
+    ${{ inputs.build-type || 'default' }}
   cancel-in-progress: true
 
 permissions:
@@ -52,6 +56,21 @@ permissions:
   packages: write
 
 jobs:
+  debug-concurrency:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug
+        run: |
+          echo "github.ref_protected: ${{ github.ref_protected }}"
+          echo "github.run_id: ${{ github.run_id }}"
+          echo "github.event.pull_request.number: ${{ github.event.pull_request.number }}"
+          echo "github.event.merge_group.head_ref: ${{ github.event.merge_group.head_ref }}"
+          echo "github.ref: ${{ github.ref }}"
+          echo "inputs.build-type: ${{ inputs.build-type }}"
+          echo "github.workflow: ${{ github.workflow }}"
+          echo "github.event_name: ${{ github.event_name }}"
+          echo "github.event.pull_request.draft: ${{ github.event.pull_request.draft }}"
+
   asan-build:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     uses: ./.github/workflows/build-artifact.yaml

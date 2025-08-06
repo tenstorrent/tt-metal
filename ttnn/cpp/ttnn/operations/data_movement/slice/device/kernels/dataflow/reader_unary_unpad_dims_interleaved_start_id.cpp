@@ -8,6 +8,7 @@
 void kernel_main() {
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
     constexpr uint32_t num_dims = get_compile_time_arg_val(1);
+    constexpr auto src_args = TensorAccessorArgs<2>();
     const uint32_t src_addr = get_common_arg_val<uint32_t>(0);
 
     volatile tt_l1_ptr uint32_t* num_unpadded_tiles = (volatile tt_l1_ptr uint32_t*)(get_common_arg_addr(1));
@@ -19,12 +20,9 @@ void kernel_main() {
     tt_l1_ptr uint32_t* id_per_dim = (tt_l1_ptr uint32_t*)(get_arg_addr(2));
 
     constexpr uint32_t tile_size = get_tile_size(cb_id_in0);
-    constexpr DataFormat data_format = get_dataformat(cb_id_in0);
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(2) == 1;
     // In and out are assumed to be same dataformat
-    const InterleavedAddrGenFast<src0_is_dram> s0 = {
-        .bank_base_address = src_addr, .page_size = tile_size, .data_format = data_format};
+    const auto s0 = TensorAccessor(src_args, src_addr, tile_size);
 
     uint32_t src_tile_id = start_id;
 

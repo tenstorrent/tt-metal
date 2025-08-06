@@ -4,13 +4,6 @@
 
 Wormhole N150, N300
 
-**Note:** On N300, make sure to use `WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml` with the pytest.
-
-Or, make sure to set the following environment variable in the terminal:
-```
-export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-```
-
 To obtain the perf reports through profiler, please build with following command:
 ```
 ./build_metal.sh -p
@@ -34,7 +27,7 @@ Resource link - [source](https://github.com/cfzd/Ultra-Fast-Lane-Detection-v2)
 Use the following command to run the model :
 
 ```
-pytest --disable-warnings tests/ttnn/integration_tests/ufld_v2/test_ttnn_ufld_v2.py::test_ufld_v2_model
+pytest --disable-warnings models/demos/ufld_v2/tests/pcc/test_ttnn_ufld_v2.py::test_ufld_v2_model
 ```
 
 ### Performant Model with Trace+2CQ

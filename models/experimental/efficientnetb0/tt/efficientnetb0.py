@@ -53,7 +53,6 @@ class EfficientNetb0Conv2D:
             deallocate_activation=False,
             enable_act_double_buffer=False,
             enable_split_reader=False,
-            enable_subblock_padding=False,
             output_layout=self.output_layout,
             reallocate_halo_output=False,
             reshard_if_not_optimal=False,
@@ -384,6 +383,19 @@ class Efficientnetb0:
         self.l1_bias = parameters["l1"]["bias"]
 
     def __call__(self, x):
+        N, C, H, W = x.shape
+        min_channels = 16  # Padding from image channels (3) to min channels (16)
+        if C < min_channels:
+            channel_padding_needed = min_channels - C
+            nchw = ttnn.pad(x, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
+        else:
+            nchw = x
+        nhwc = ttnn.permute(nchw, (0, 2, 3, 1))
+        ttnn.deallocate(nchw)
+        ttnn.deallocate(x)
+        nhwc = ttnn.reallocate(nhwc)
+        x = ttnn.reshape(nhwc, [1, 1, nhwc.shape[0] * nhwc.shape[1] * nhwc.shape[2], nhwc.shape[-1]])
+
         x = self._conv_stem(x)
         x = x * ttnn.sigmoid_accurate(x)
 
