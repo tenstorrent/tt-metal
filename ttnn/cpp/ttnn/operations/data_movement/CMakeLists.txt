@@ -190,6 +190,8 @@ target_sources(
             tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_dims_split_rows_multicore.cpp
             tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp
             untilize/device/kernels/compute/common.cpp
+            untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp
+            tilize/device/kernels/compute/tilize_wh.cpp
 )
 
 install(
