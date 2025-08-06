@@ -12,6 +12,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "device/where_device_operation.hpp"
+#include "device/where_utils.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -85,8 +86,20 @@ Tensor WhereOperation::invoke(
             // TTT case: tensor-tensor-tensor
             const auto& t_true = std::get<Tensor>(value_true);
             const auto& t_false = std::get<Tensor>(value_false);
-            if (ternary_utils::have_same_shape(t_true, predicate) &&
-                ternary_utils::have_same_shape(predicate, t_false)) {
+
+            // Check for exact shape match or broadcast-compatible shapes
+            bool shapes_compatible =
+                (ternary_utils::have_same_shape(t_true, predicate) &&
+                 ternary_utils::have_same_shape(predicate, t_false));
+
+            if (!shapes_compatible) {
+                // Check if shapes are broadcast-compatible using our broadcast detection
+                auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
+                    predicate.logical_shape(), t_true.logical_shape(), t_false.logical_shape());
+                shapes_compatible = (broadcast_type != ttnn::operations::ternary::WhereBroadcastType::NONE);
+            }
+
+            if (shapes_compatible) {
                 log_info(tt::LogOp, "Where LLK - TTT");
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(predicate.dtype());
