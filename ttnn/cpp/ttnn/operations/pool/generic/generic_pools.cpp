@@ -169,13 +169,8 @@ static Tensor pool2d_invoke(
         tt::round_up(output_nhw, num_cores_nhw * (is_out_tiled ? tt::constants::TILE_HEIGHT : 1));
     uint32_t output_shard_height_padded = output_nhw_padded / num_cores_nhw;
     uint32_t output_c = channels;
-    uint32_t output_c_padded = tt::round_up(
-        output_c,
-        num_cores_c *
-            (is_out_tiled ? tt::constants::TILE_WIDTH
-             : shard_layout == TensorMemoryLayout::WIDTH_SHARDED || shard_layout == TensorMemoryLayout::BLOCK_SHARDED
-                 ? 16
-                 : 16));
+    uint32_t output_c_padded =
+        tt::round_up(output_c, num_cores_c * (input_tensor.dtype() == DataType::BFLOAT8_B ? 32 : 16));
     uint32_t output_shard_width_padded = output_c_padded / num_cores_c;
     log_debug(
         tt::LogOp,
