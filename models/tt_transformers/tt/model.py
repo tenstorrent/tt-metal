@@ -350,7 +350,7 @@ class Transformer(LightweightModule):
             ttnn.plus_one(rot_mat_idxs)
 
             # Update input tokens with sampled tokens for the next iteration
-            ttnn.copy(tt_logits.reshape((1, 1, 1, 32)), x)
+            ttnn.copy(tt_logits.reshape(x.shape), x)
 
         return tt_logits
 
