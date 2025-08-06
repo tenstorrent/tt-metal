@@ -991,15 +991,11 @@ def run_for_grayskull(reason_str="only runs for Grayskull"):
 def get_devices_for_t3000(all_devices, num_devices):
     """
     all_devices comes from fixture which devices in order from 0 to 7.
-    First 4 devices are PCIE devices so we can just extract and return.
-    For 8 devices, return in a ring pattern.
     """
     assert num_devices <= len(all_devices), "Not enough devices detected!"
 
-    if num_devices <= 4:
+    if num_devices <= 4 or num_devices == 8:
         return all_devices[:num_devices]
-    elif num_devices == 8:
-        return all_devices
     else:
         raise NotImplementedError("Only supports 1, 2, 3, 4, and 8 chip configurations!")
 
