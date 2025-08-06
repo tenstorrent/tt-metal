@@ -283,6 +283,16 @@ jobs:
           commands: |
             pytest models/experimental/swin_v2/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+
+      - name: swin_s tests
+        uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
+        with:
+          model_name: "swin_s"
+          commands: |
+            pytest models/experimental/swin_s/tests/perf -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: yolov5x tests
         uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
@@ -290,6 +300,33 @@ jobs:
           model_name: "yolov5x"
           commands: |
             pytest models/experimental/yolov5x/tests/perf -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+
+      - name: vovnet tests
+        uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
+        with:
+          model_name: "VoVNet"
+          commands: |
+            pytest models/experimental/vovnet/tests/perf -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+
+      - name: yolov12x tests
+        uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
+        with:
+          model_name: "yolov12x"
+          commands: |
+            pytest models/experimental/yolov12x/tests/perf -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+
+      - name: efficientnetb0 tests
+        uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
+        with:
+          model_name: "efficientnetb0"
+          commands: |
+            pytest models/experimental/efficientnetb0/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
