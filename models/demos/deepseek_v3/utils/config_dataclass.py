@@ -240,9 +240,9 @@ class AllToAllDispatchConfig(OpConfigBase):
     """Common parameters for a ttnn.all_to_all_dispatch op"""
 
     cluster_axis: int
-    num_links: int
     memory_config: ttnn.MemoryConfig
-    global_semaphore: object
+    num_links: int | None = None
+    global_semaphore: object | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
     subdevice_id: int | None = None
 
@@ -251,10 +251,10 @@ class AllToAllDispatchConfig(OpConfigBase):
 class AllToAllCombineConfig(OpConfigBase):
     """Common parameters for a ttnn.all_to_all_combine op"""
 
-    num_links: int
-    memory_config: ttnn.MemoryConfig
     axis: int
-    global_semaphore: object
+    memory_config: ttnn.MemoryConfig
+    num_links: int | None = None
+    global_semaphore: object | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
 
 
@@ -263,3 +263,21 @@ class RepeatConfig(OpConfigBase):
     """Common parameters for a ttnn.repeat op"""
 
     repeat_dims: ttnn.Shape
+
+
+@dataclass
+class TopKFallbackConfig(OpConfigBase):
+    """Common parameters for a ttnn.topk_fallback op"""
+
+    mesh_device: ttnn.Device
+    dtype: ttnn.DataType
+    memory_config: ttnn.MemoryConfig
+    use_bitonic_sort: bool = False
+
+
+@dataclass
+class LinearFallbackConfig(OpConfigBase):
+    """Common parameters for a ttnn.linear_fallback op"""
+
+    mesh_device: ttnn.Device
+    dtype: ttnn.DataType

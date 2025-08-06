@@ -12,18 +12,15 @@ void kernel_main() {
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_sticks = get_arg_val<uint32_t>(1);
-    const uint32_t stick_size = get_arg_val<uint32_t>(2);
     const uint32_t num_tiles_per_block = get_arg_val<uint32_t>(3);
     const uint32_t block_width_size = get_arg_val<uint32_t>(4);
     const uint32_t num_full_blocks_in_row = get_arg_val<uint32_t>(5);
     const uint32_t start_stick_id = get_arg_val<uint32_t>(8);
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool stick_size_is_power_of_two = get_compile_time_arg_val(1) == 1;
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
+    constexpr uint32_t stick_size = get_compile_time_arg_val(0);
+    constexpr auto src_tensor_args = TensorAccessorArgs<1>();
 
-    const auto s = get_interleaved_addr_gen<src0_is_dram, stick_size_is_power_of_two>(
-        src_addr, stick_size, log_base_2_of_page_size);
+    const auto s = TensorAccessor(src_tensor_args, src_addr, stick_size);
 
     uint64_t base_src_noc_addr[tile_height];
 

@@ -4,27 +4,35 @@
 
 import pytest
 import torch
-from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight, preprocess_model_parameters
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_mlp import SegformerMLP
+from models.demos.segformer.tt.common import get_mesh_mappers, preprocess_linear_bias, preprocess_linear_weight
 from models.demos.segformer.tt.ttnn_segformer_mlp import TtSegformerMLP
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def create_custom_preprocessor(device):
-    def custom_preprocessor(model, name, ttnn_module_args):
+def create_custom_mesh_preprocessor(mesh_mapper=None):
+    def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
+        return custom_preprocessor(model, name, mesh_mapper)
+
+    def custom_preprocessor(model, name, mesh_mapper=None):
         parameters = {}
         if isinstance(model, SegformerMLP):
             parameters["proj"] = {}
-            parameters["proj"]["weight"] = preprocess_linear_weight(model.proj.weight, dtype=ttnn.bfloat8_b)
-            parameters["proj"]["bias"] = preprocess_linear_bias(model.proj.bias, dtype=ttnn.bfloat8_b)
+            parameters["proj"]["weight"] = preprocess_linear_weight(
+                model.proj.weight, dtype=ttnn.bfloat8_b, mesh_mapper=mesh_mapper
+            )
+            parameters["proj"]["bias"] = preprocess_linear_bias(
+                model.proj.bias, dtype=ttnn.bfloat8_b, mesh_mapper=mesh_mapper
+            )
 
         return parameters
 
-    return custom_preprocessor
+    return custom_mesh_preprocessor
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -68,9 +76,11 @@ def test_segformer_mlp(
     )
 
     torch_output = reference_model(torch_input_tensor)
-
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device), device=device
+        initialize_model=lambda: reference_model,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=device,
     )
 
     ttnn_model = TtSegformerMLP()

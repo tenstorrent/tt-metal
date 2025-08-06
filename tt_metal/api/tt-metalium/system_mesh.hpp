@@ -40,19 +40,24 @@ public:
     // Returns the local shape of the system mesh; this is the local mesh shape in distributed context
     const MeshShape& local_shape() const;
 
-    // Wrapper structure with device IDs and fabric node IDs ordered in row-major order according to the requested
-    // `shape`.
+    // Wrapper structure with device IDs, fabric node IDs, and mesh shape ordered in row-major order according to the
+    // requested `shape`.
     struct MappedDevices {
         // Device ID is set for host-local devices only.
         std::vector<MaybeRemote<int>> device_ids;
 
         // Fabric node ID is set for host-local and host-remote devices globally.
         std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+
+        // Shape of requested mesh if provided, otherwise the system mesh global shape.
+        MeshShape mesh_shape;
     };
 
     // Returns devices that should be mapped to a MeshDevice according to the shape and offset.
+    // If `shape` is not provided, the system mesh global shape is used.
+    // If `offset` is not provided, an N-dimensional zero-coordinate is used (based on system mesh dims).
     MappedDevices get_mapped_devices(
-        const MeshShape& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
+        const std::optional<MeshShape>& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
 };
 
 }  // namespace tt::tt_metal::distributed
