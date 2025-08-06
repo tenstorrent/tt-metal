@@ -81,8 +81,6 @@ private:
 
     size_t buffer_size_;
     bool map_to_noc_;
-    bool owns_host_memory_;
-    void* host_memory_base_;
     
     // Map from device ID to SysmemBuffer (keyed by MMIO device ID)
     std::unordered_map<chip_id_t, std::unique_ptr<tt::umd::SysmemBuffer>> device_buffers_;

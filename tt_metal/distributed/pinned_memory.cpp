@@ -24,7 +24,7 @@ PinnedMemoryImpl::PinnedMemoryImpl(
     void* host_buffer,
     size_t buffer_size,
     bool map_to_noc)
-    : buffer_size_(buffer_size), map_to_noc_(map_to_noc), owns_host_memory_(false), host_memory_base_(host_buffer) {
+    : buffer_size_(buffer_size), map_to_noc_(map_to_noc) {
     
     initialize_from_devices(devices, host_buffer, buffer_size, map_to_noc);
 }
@@ -37,16 +37,12 @@ PinnedMemoryImpl::~PinnedMemoryImpl() {
 PinnedMemoryImpl::PinnedMemoryImpl(PinnedMemoryImpl&& other) noexcept
     : buffer_size_(other.buffer_size_)
     , map_to_noc_(other.map_to_noc_)
-    , owns_host_memory_(other.owns_host_memory_)
-    , host_memory_base_(other.host_memory_base_)
     , device_buffers_(std::move(other.device_buffers_))
     , device_to_mmio_map_(std::move(other.device_to_mmio_map_)) {
     
     // Reset the other object
     other.buffer_size_ = 0;
     other.map_to_noc_ = false;
-    other.owns_host_memory_ = false;
-    other.host_memory_base_ = nullptr;
 }
 
 PinnedMemoryImpl& PinnedMemoryImpl::operator=(PinnedMemoryImpl&& other) noexcept {
@@ -57,16 +53,12 @@ PinnedMemoryImpl& PinnedMemoryImpl::operator=(PinnedMemoryImpl&& other) noexcept
         // Move from other
         buffer_size_ = other.buffer_size_;
         map_to_noc_ = other.map_to_noc_;
-        owns_host_memory_ = other.owns_host_memory_;
-        host_memory_base_ = other.host_memory_base_;
         device_buffers_ = std::move(other.device_buffers_);
         device_to_mmio_map_ = std::move(other.device_to_mmio_map_);
         
         // Reset the other object
         other.buffer_size_ = 0;
         other.map_to_noc_ = false;
-        other.owns_host_memory_ = false;
-        other.host_memory_base_ = nullptr;
     }
     return *this;
 }
@@ -120,11 +112,6 @@ void PinnedMemoryImpl::initialize_from_devices(
     // Store the MMIO buffers and device mappings
     device_buffers_ = std::move(mmio_buffers);
     device_to_mmio_map_ = std::move(device_to_mmio_map);
-    
-    // If we allocated our own memory, store the base pointer from the first buffer
-    if (!host_buffer && !device_buffers_.empty()) {
-        host_memory_base_ = device_buffers_.begin()->second->get_buffer_va();
-    }
 }
 
 tt::umd::SysmemBuffer& PinnedMemoryImpl::get_buffer(chip_id_t device_id) {
