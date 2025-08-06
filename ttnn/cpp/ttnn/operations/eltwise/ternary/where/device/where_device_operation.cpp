@@ -143,10 +143,17 @@ TensorSpec WhereDeviceOperation::compute_output_specs(
     }
 
     // Determine output shape based on broadcast pattern
-    auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
-        tensor_args.predicate.logical_shape(),
-        tensor_args.value_true.value().logical_shape(),
-        tensor_args.value_false.value().logical_shape());
+    // For TST/TTS variants, one of the values is a scalar, so we need to handle that case
+    auto predicate_shape = tensor_args.predicate.logical_shape();
+
+    auto broadcast_type = ttnn::operations::ternary::WhereBroadcastType::NONE;
+    if (args.where_variant == WhereVariant::TTT) {
+        // Only compute broadcast type for TTT variant where both values are tensors
+        broadcast_type = ttnn::operations::ternary::get_broadcast_type(
+            predicate_shape,
+            tensor_args.value_true.value().logical_shape(),
+            tensor_args.value_false.value().logical_shape());
+    }
 
     const auto output_shape = [&]() {
         if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::COL_BCAST) {
@@ -164,8 +171,17 @@ TensorSpec WhereDeviceOperation::compute_output_specs(
                 return false_shape;  // false tensor has largest width
             }
         } else {
-            // Default to predicate shape for non-broadcast cases
-            return tensor_args.predicate.logical_shape();
+            // For TST/TTS variants or non-broadcast TTT, use the non-scalar tensor's shape
+            if (args.where_variant == WhereVariant::TTS) {
+                // value_false is scalar, so output shape matches predicate/value_true
+                return predicate_shape;
+            } else if (args.where_variant == WhereVariant::TST) {
+                // value_true is scalar, so output shape matches predicate/value_false
+                return predicate_shape;
+            } else {
+                // TTT non-broadcast case - default to predicate shape
+                return predicate_shape;
+            }
         }
     }();
 
