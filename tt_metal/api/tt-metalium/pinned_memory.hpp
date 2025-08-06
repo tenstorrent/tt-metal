@@ -35,55 +35,10 @@ using chip_id_t = int;
  * mapping, and access to pinned system memory that can be accessed by the devices.
  */
 class PinnedMemory {
+    // MeshDevice is responsible for creating PinnedMemory instances
+    friend class distributed::MeshDevice;
+
 public:
-    /**
-     * @brief Construct PinnedMemory from a MeshDevice
-     * @param mesh_device The mesh device to allocate buffers for
-     * @param buffer_size Size of buffer to allocate per device
-     * @param map_to_noc Whether to map the buffer to the NOC
-     */
-    PinnedMemory(
-        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-        size_t buffer_size,
-        bool map_to_noc = false);
-
-    /**
-     * @brief Construct PinnedMemory from a vector of devices
-     * @param devices Vector of devices to allocate buffers for
-     * @param buffer_size Size of buffer to allocate per device
-     * @param map_to_noc Whether to map the buffer to the NOC
-     */
-    PinnedMemory(
-        const std::vector<IDevice*>& devices,
-        size_t buffer_size,
-        bool map_to_noc = false);
-
-    /**
-     * @brief Construct PinnedMemory by mapping existing host memory
-     * @param mesh_device The mesh device to map buffers for
-     * @param host_buffer Existing host memory to map (must be at least buffer_size * num_devices)
-     * @param buffer_size Size of buffer per device
-     * @param map_to_noc Whether to map the buffer to the NOC
-     */
-    PinnedMemory(
-        const std::shared_ptr<distributed::MeshDevice>& mesh_device,
-        void* host_buffer,
-        size_t buffer_size,
-        bool map_to_noc = false);
-
-    /**
-     * @brief Construct PinnedMemory by mapping existing host memory to devices
-     * @param devices Vector of devices to map buffers for
-     * @param host_buffer Existing host memory to map (must be at least buffer_size * num_devices)
-     * @param buffer_size Size of buffer per device
-     * @param map_to_noc Whether to map the buffer to the NOC
-     */
-    PinnedMemory(
-        const std::vector<IDevice*>& devices,
-        void* host_buffer,
-        size_t buffer_size,
-        bool map_to_noc = false);
-
     ~PinnedMemory();
 
     // Delete copy constructor and assignment operator
@@ -173,6 +128,30 @@ public:
     void read_from_device(chip_id_t device_id, void* dest, size_t size, size_t offset = 0);
 
 private:
+    /**
+     * @brief Construct PinnedMemory from a vector of devices
+     * @param devices Vector of devices to allocate buffers for
+     * @param buffer_size Size of buffer to allocate per device
+     * @param map_to_noc Whether to map the buffer to the NOC
+     */
+    PinnedMemory(
+        const std::vector<IDevice*>& devices,
+        size_t buffer_size,
+        bool map_to_noc = false);
+
+    /**
+     * @brief Construct PinnedMemory by mapping existing host memory to devices
+     * @param devices Vector of devices to map buffers for
+     * @param host_buffer Existing host memory to map (must be at least buffer_size * num_devices)
+     * @param buffer_size Size of buffer per device
+     * @param map_to_noc Whether to map the buffer to the NOC
+     */
+    PinnedMemory(
+        const std::vector<IDevice*>& devices,
+        void* host_buffer,
+        size_t buffer_size,
+        bool map_to_noc = false);
+
     void initialize_from_devices(
         const std::vector<IDevice*>& devices,
         void* host_buffer,
