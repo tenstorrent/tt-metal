@@ -99,16 +99,6 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     ttnn::Shape padded_output_shape({1, 1, out_nhw_padded, out_c_padded});
     ttnn::Shape output_shape({1, 1, out_nhw, out_c});
 
-    auto shard_grid = mem_config.is_sharded() ? mem_config.shard_spec()->grid : sliding_window_config.core_range_set;
-    auto orientation = mem_config.is_sharded() ? mem_config.shard_spec()->orientation : ShardOrientation::ROW_MAJOR;
-
-    uint32_t total_height_tiles = out_nhw_padded / tile_rows;
-
-    std::array<uint32_t, 2> shard_shape = {
-        (total_height_tiles / num_cores_nhw) * tile_rows, out_c_padded};  // For example, 1 row per tile height
-    auto shard_spec = tt::tt_metal::ShardSpec{shard_grid, shard_shape, orientation};
-    mem_config = mem_config.with_shard_spec(shard_spec);
-
     return TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
