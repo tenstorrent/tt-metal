@@ -2,20 +2,21 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttnn
-import os
 import pytest
 import torch
 from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
     fold_batch_norm2d_into_conv2d,
     infer_ttnn_module_args,
-    preprocess_linear_weight,
     preprocess_linear_bias,
+    preprocess_linear_weight,
+    preprocess_model_parameters,
 )
-from models.demos.ufld_v2.reference.ufld_v2_model import TuSimple34, BasicBlock
-from models.demos.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
+
+import ttnn
+from models.demos.ufld_v2.common import load_torch_model
+from models.demos.ufld_v2.reference.ufld_v2_model import BasicBlock, TuSimple34
 from models.demos.ufld_v2.ttnn.ttnn_basic_block import TtnnBasicBlock
+from models.demos.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -361,21 +362,9 @@ def test_ufld_v2_basic_block(device, batch_size, input_channels, height, width):
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_ufld_v2_model(device, batch_size, input_channels, height, width, use_pretrained_weight, min_channels=8):
-    torch_model = TuSimple34(input_height=height, input_width=width)
-    torch_model.to(torch.bfloat16)
-    torch_model.eval()
+    torch_model = load_torch_model().to(torch.bfloat16)
     torch_input_tensor = torch.randn((batch_size, input_channels, height, width), dtype=torch.bfloat16)
     torch_output = torch_model(torch_input_tensor)
-    if use_pretrained_weight:
-        weights_path = "models/demos/ufld_v2/tusimple_res34.pth"
-        if not os.path.exists(weights_path):
-            os.system("bash models/demos/ufld_v2/weights_download.sh")
-            state_dict = torch.load(weights_path)
-            new_state_dict = {}
-            for key, value in state_dict["model"].items():
-                new_key = key.replace("model.", "res_model.")
-                new_state_dict[new_key] = value
-            torch_model.load_state_dict(new_state_dict)
     n, c, h, w = torch_input_tensor.shape
     ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     ttnn_input_tensor = ttnn_input_tensor.to(device, ttnn.L1_MEMORY_CONFIG)
