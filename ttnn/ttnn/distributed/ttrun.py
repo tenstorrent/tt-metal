@@ -144,7 +144,7 @@ def build_mpi_command(config: TTRunConfig, program: List[str], mpi_args: Optiona
 
     # Build per-rank application contexts
     mesh_to_host_rank_id = defaultdict(int)
-    for i, binding in enumerate(config.rank_bindings):
+    for i, binding in sorted(enumerate(config.rank_bindings), key=lambda x: x[1].rank):
         if i > 0:
             cmd.append(":")
 

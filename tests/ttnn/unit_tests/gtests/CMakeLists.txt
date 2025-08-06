@@ -117,6 +117,7 @@ add_executable(unit_tests_ttnn_multihost_ccl_ops)
 target_sources(
     unit_tests_ttnn_multihost_ccl_ops
     PRIVATE
+        multihost_ccl/main.cpp
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost/fabric_tests/intermesh_routing_test_utils.cpp
         multihost_ccl/test_send_recv_ops.cpp
 )
