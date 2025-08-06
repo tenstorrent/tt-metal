@@ -110,10 +110,11 @@ struct DistributionSpec {
         shard_volume_rt(other.shard_volume_rt) {
         // Copy the buffer arrays and fix self-references
         if constexpr (!has_static_rank) {
-            std::memcpy(shard_grid_rt_buf.value, other.shard_grid_rt_buf.value, rank_rt);
-            std::memcpy(shard_grid_strides_rt_buf.value, other.shard_grid_strides_rt_buf.value, rank_rt);
-            std::memcpy(tensor_strides_rt_buf.value, other.tensor_strides_rt_buf.value, rank_rt);
-            std::memcpy(shard_strides_rt_buf.value, other.shard_strides_rt_buf.value, rank_rt);
+            std::memcpy(shard_grid_rt_buf.value, other.shard_grid_rt_buf.value, sizeof(uint32_t) * rank_rt);
+            std::memcpy(
+                shard_grid_strides_rt_buf.value, other.shard_grid_strides_rt_buf.value, sizeof(uint32_t) * rank_rt);
+            std::memcpy(tensor_strides_rt_buf.value, other.tensor_strides_rt_buf.value, sizeof(uint32_t) * rank_rt);
+            std::memcpy(shard_strides_rt_buf.value, other.shard_strides_rt_buf.value, sizeof(uint32_t) * rank_rt);
             update_spans_pointers();
         }
     }
