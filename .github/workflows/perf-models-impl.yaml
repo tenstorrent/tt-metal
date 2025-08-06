@@ -68,7 +68,7 @@ jobs:
               - models/demos/mobilenetv2/tests/perf/
               - models/demos/vgg_unet/tests/
               - models/demos/yolov9c/tests/perf/
-              - models/experimental/vanilla_unet/tests/perf/
+              - models/demos/vanilla_unet/tests/perf/
               - models/demos/yolov8x/tests/perf/
               # e2e performant test is present in .../vit/demo folder only
               - models/demos/wormhole/vit/demo/
