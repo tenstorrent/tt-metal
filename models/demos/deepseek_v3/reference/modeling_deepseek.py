@@ -357,7 +357,7 @@ class DeepseekV3MLP(nn.Module):
 
 
 class MoEGate(nn.Module):
-    def __init__(self, config, use_bitonic_sort=True):
+    def __init__(self, config, use_bitonic_sort=False, fp32_logits=False):
         super().__init__()
         self.config = config
         self.top_k = config.num_experts_per_tok
@@ -381,17 +381,22 @@ class MoEGate(nn.Module):
         self.topk_fn = torch.topk
         if self.use_bitonic_sort:
             self.topk_fn = topk_bitonic
+        self.fp32_logits = fp32_logits
 
     def reset_parameters(self) -> None:
         import torch.nn.init as init
 
         init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        nn.init.normal_(self.e_score_correction_bias, mean=0.0, std=1e-4)
 
     def forward(self, hidden_states):
         bsz, seq_len, h = hidden_states.shape
         ### compute gating score
         hidden_states = hidden_states.view(-1, h)
-        logits = F.linear(hidden_states.type(torch.float32), self.weight.type(torch.float32), None)
+        if self.fp32_logits:
+            logits = F.linear(hidden_states.type(torch.float32), self.weight.type(torch.float32), None)
+        else:
+            logits = F.linear(hidden_states, self.weight, None)
         if self.scoring_func == "sigmoid":
             scores = logits.sigmoid()
         else:
