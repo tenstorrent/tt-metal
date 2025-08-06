@@ -460,7 +460,7 @@ void run_benchmark_timing_loop(
     std::shared_ptr<MeshDevice> mesh_device) {
     constexpr std::size_t cq_id = 0;
     auto execute_func = executor.execute_programs;
-    for (auto _ : state) {
+    for ([[maybe_unused]] auto _ : state) {
         auto start = std::chrono::system_clock::now();
         if (info.use_trace) {
             ReplayTrace(mesh_device.get(), cq_id, tid, false);

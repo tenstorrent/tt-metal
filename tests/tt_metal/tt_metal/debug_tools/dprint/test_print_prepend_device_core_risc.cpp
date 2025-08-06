@@ -65,7 +65,7 @@ void RunTest(DPrintFixture* fixture, IDevice* device, const bool add_active_eth_
 
     CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/misc/print_simple.cpp", cores, ComputeConfig{});
 
-    for (const CoreCoord& core : cores) {
+    for ([[maybe_unused]] const CoreCoord& core : cores) {
         UpdateGoldenOutput(golden_output, device, "BR");
         UpdateGoldenOutput(golden_output, device, "NC");
         UpdateGoldenOutput(golden_output, device, "TR0");
@@ -82,7 +82,7 @@ void RunTest(DPrintFixture* fixture, IDevice* device, const bool add_active_eth_
             crs,
             EthernetConfig{.noc = NOC::NOC_0});
 
-        for (const CoreCoord& core : active_eth_cores) {
+        for ([[maybe_unused]] const CoreCoord& core : active_eth_cores) {
             UpdateGoldenOutput(golden_output, device, "ER");
         }
     }

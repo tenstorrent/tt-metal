@@ -390,7 +390,7 @@ bool matmul_large_block(
 
     tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, writer_rt_args);
 
-    CoreCoord debug_core = {1, 1};
+    [[maybe_unused]] CoreCoord debug_core = {1, 1};
 
     fixture->RunProgram(device, program);
     std::vector<uint32_t> result_vec;

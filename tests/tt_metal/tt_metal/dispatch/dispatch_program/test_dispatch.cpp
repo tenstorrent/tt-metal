@@ -131,7 +131,7 @@ TEST_F(DispatchFixture, EthTestBlank) {
 
     if (eth_cores.size() > 0) {
         CoreCoord eth_core = *eth_cores.begin();
-        CoreCoord phys_eth_core = device->virtual_core_from_logical_core(eth_core, CoreType::ETH);
+        [[maybe_unused]] CoreCoord phys_eth_core = device->virtual_core_from_logical_core(eth_core, CoreType::ETH);
         CreateKernel(
             program,
             "tt_metal/kernels/dataflow/blank.cpp",
@@ -185,7 +185,7 @@ TEST_F(DispatchFixture, EthTestInitLocalMemory) {
 
     if (eth_cores.size() > 0) {
         CoreCoord eth_core = *eth_cores.begin();
-        CoreCoord phys_eth_core = device->virtual_core_from_logical_core(eth_core, CoreType::ETH);
+        [[maybe_unused]] CoreCoord phys_eth_core = device->virtual_core_from_logical_core(eth_core, CoreType::ETH);
         CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp",

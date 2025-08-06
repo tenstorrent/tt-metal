@@ -373,7 +373,7 @@ static bool reader_datacopy_writer(
     auto output_dram_buffer = prepare_writer(device, program, config);
 
     // Prepare compute kernel
-    auto compute_kernel = prepare_compute(program, config);
+    [[maybe_unused]] auto compute_kernel = prepare_compute(program, config);
 
     // Generate input data
     auto input_data = generate_inputs(config);
