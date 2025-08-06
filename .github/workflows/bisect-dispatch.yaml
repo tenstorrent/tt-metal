@@ -92,7 +92,8 @@ jobs:
           GIT_COMMITTER_NAME: "GitHub Actions"
           GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
+          ./create_venv.sh
+          source ${{ github.workspace }}/venv/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
           ./tests/scripts/tt_bisect.sh -t ${{ inputs.timeout }} -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} -p "${{ inputs.patch }}"
