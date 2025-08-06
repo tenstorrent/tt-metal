@@ -18,8 +18,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef LLVM_ADT_SMALLVECTOR_H
-#define LLVM_ADT_SMALLVECTOR_H
+#pragma once
 
 #include <algorithm>
 #include <cassert>
@@ -1336,5 +1335,3 @@ inline void swap(ttsl::detail::llvm::SmallVector<T, N>& LHS, ttsl::detail::llvm:
 }
 
 }  // end namespace std
-
-#endif  // LLVM_ADT_SMALLVECTOR_H
