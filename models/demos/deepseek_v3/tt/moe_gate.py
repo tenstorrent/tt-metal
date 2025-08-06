@@ -149,8 +149,9 @@ class MoEGate(AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         mode: str,
-        topk_fallback: bool = True,
-        use_bitonic_sort: bool = True,
+        linear_fallback: bool = False,
+        topk_fallback: bool = False,
+        use_bitonic_sort: bool = False,
     ) -> ModelDecodeConfig | ModelPrefillConfig:
         """Generate decode configuration for this module.
         Note: topk_fallback and use_bitonic_sort are defaulted to True and not required in future when we have equivalent topk op.
@@ -159,6 +160,7 @@ class MoEGate(AbstractModule):
             hf_config: HuggingFace model configuration object
             mesh_device: TTNN mesh device the model will be placed later on
             mode: "decode" or "prefill"
+            linear_fallback: whether to use linear fallback
             topk_fallback: whether to use topk fallback
             use_bitonic_sort: whether to use bitonic sort
         Returns:
@@ -228,7 +230,7 @@ class MoEGate(AbstractModule):
                 memory_config=memory_config,
                 use_bitonic_sort=use_bitonic_sort,
             ),
-            "linear_fallback": False,
+            "linear_fallback": linear_fallback,
             "linear_fallback_config": LinearFallbackConfig(
                 mesh_device=mesh_device,
                 dtype=ttnn.bfloat16,
@@ -243,20 +245,22 @@ class MoEGate(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        topk_fallback: bool = True,
-        use_bitonic_sort: bool = True,
+        linear_fallback: bool = False,
+        topk_fallback: bool = False,
+        use_bitonic_sort: bool = False,
     ) -> ModelDecodeConfig:
-        return cls.model_config(hf_config, mesh_device, "decode", topk_fallback, use_bitonic_sort)
+        return cls.model_config(hf_config, mesh_device, "decode", linear_fallback, topk_fallback, use_bitonic_sort)
 
     @classmethod
     def prefill_model_config(
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        topk_fallback: bool = True,
-        use_bitonic_sort: bool = True,
+        linear_fallback: bool = False,
+        topk_fallback: bool = False,
+        use_bitonic_sort: bool = False,
     ) -> ModelPrefillConfig:
-        return cls.model_config(hf_config, mesh_device, "prefill", topk_fallback, use_bitonic_sort)
+        return cls.model_config(hf_config, mesh_device, "prefill", linear_fallback, topk_fallback, use_bitonic_sort)
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:

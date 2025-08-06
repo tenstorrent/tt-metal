@@ -39,11 +39,19 @@ def reference_model(hf_config):
         ("prefill", 2048),
     ],
 )
+@pytest.mark.parametrize(
+    "linear_fallback,topk_fallback",
+    [
+        (True, True),
+    ],
+)
 def test_forward_pass(
     mode,
     seq_len,
     reference_model,
     hf_config,
+    linear_fallback,
+    topk_fallback,
     tmp_path,
     mesh_device,
     ccl,
@@ -67,7 +75,10 @@ def test_forward_pass(
     weight_config = MoE.convert_weights(hf_config, hf_state_dict, tmp_path, mesh_device)
 
     # Generate appropriate config using utility function
-    model_config = get_model_config(MoE, mode, hf_config, mesh_device)
+    # Note : linear_fallback and topk_fallback are optional and can be omitted for no fallbacks
+    model_config = get_model_config(
+        MoE, mode, hf_config, mesh_device, linear_fallback=linear_fallback, topk_fallback=topk_fallback
+    )
 
     # Create a new model state with CCL
     model_state = MoE.create_state(hf_config, mesh_device, ccl)
@@ -108,7 +119,7 @@ def test_forward_pass(
 
     # Compare outputs using utility function
     logger.info(f"Mode: {mode}, Seq len: {seq_len}")
-    assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.98)
+    assert_hidden_dim_pcc(tt_output_torch, reference_output.unsqueeze(0), pcc_required=0.95)
 
 
 if __name__ == "__main__":

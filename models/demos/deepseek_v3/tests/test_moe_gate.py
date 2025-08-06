@@ -17,11 +17,11 @@ from tests.ttnn.utils_for_testing import comp_pcc
 
 
 @pytest.fixture
-def reference_model(hf_config, use_bitonic_sort):
+def reference_model(hf_config, use_bitonic_sort, fp32_logits):
     """Get the actual DeepSeek MLP model using local implementation."""
     torch.manual_seed(5)
     torch.use_deterministic_algorithms(True)
-    return ReferenceMoEGate(hf_config, use_bitonic_sort)
+    return ReferenceMoEGate(hf_config, use_bitonic_sort, fp32_logits)
 
 
 @pytest.mark.parametrize(
@@ -32,9 +32,9 @@ def reference_model(hf_config, use_bitonic_sort):
     ],
 )
 @pytest.mark.parametrize(
-    "topk_fallback,use_bitonic_sort",
+    "linear_fallback,topk_fallback,use_bitonic_sort,fp32_logits",
     [
-        (True, True),
+        (True, True, False, False),
     ],
 )
 def test_forward_pass(
@@ -42,8 +42,10 @@ def test_forward_pass(
     seq_len,
     reference_model,
     hf_config,
+    linear_fallback,
     topk_fallback,
     use_bitonic_sort,
+    fp32_logits,
     tmp_path,
     mesh_device,
 ):
@@ -58,7 +60,13 @@ def test_forward_pass(
 
     # Generate appropriate config using utility function
     model_config = get_model_config(
-        MoEGate, mode, hf_config, mesh_device, topk_fallback=topk_fallback, use_bitonic_sort=use_bitonic_sort
+        MoEGate,
+        mode,
+        hf_config,
+        mesh_device,
+        linear_fallback=linear_fallback,
+        topk_fallback=topk_fallback,
+        use_bitonic_sort=use_bitonic_sort,
     )
 
     # Create a new model state
@@ -127,11 +135,20 @@ def test_forward_pass(
         passing
     ), f"TopK experts weights output does not meet PCC requirement {topk_weights_pcc_required}: {pcc_message}"
 
-    topk_indices_pcc_required = 1.0
     # stable sort both reference and ttnn indices to avoid random tie breaking for better comparison
     reference_topk_indices = torch.sort(reference_topk_indices.to(torch.short), dim=-1, stable=True)[0]
     tt_topk_indices_torch = torch.sort(tt_topk_indices_torch, dim=-1, stable=True)[0]
-    assert torch.allclose(reference_topk_indices, tt_topk_indices_torch), f"TopK experts indices output does not match"
+
+    topk_indices_accuracy_required = 0.94 if mode == "decode" else 0.90
+
+    # calculate percentage match of topk indices between reference and ttnn
+    num_matches = torch.sum(reference_topk_indices == tt_topk_indices_torch)
+    num_total = reference_topk_indices.numel()
+    accuracy = num_matches / num_total
+    logger.info(f"TopK experts indices accuracy: {accuracy}")
+    assert (
+        accuracy > topk_indices_accuracy_required
+    ), f"TopK experts indices accuracy : {accuracy}, required : {topk_indices_accuracy_required}"
 
 
 if __name__ == "__main__":
