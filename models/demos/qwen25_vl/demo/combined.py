@@ -5,7 +5,6 @@
 
 import os
 
-import nltk
 import pytest
 import torch
 from loguru import logger
@@ -35,6 +34,7 @@ def test_qwen_vl_end_to_end(
     mesh_device,
     reset_seeds,
     ensure_gc,
+    ensure_nltk,
     use_tt_vision,
 ):
     """Test end-to-end Qwen2.5-VL model with options to replace vision component."""
@@ -75,7 +75,7 @@ def test_qwen_vl_end_to_end(
     if use_tt_vision:
         # Create the TorchVisionTransformer wrapper using the original vision model as reference
         model_args = VisionModelArgs(mesh_device, max_batch_size=1, max_seq_len=max_new_tokens)
-        model.visual = DropInVisionTransformer(model.visual, model_args, debug=True)  # show PCC
+        model.model.visual = DropInVisionTransformer(model.visual, model_args, debug=True)  # show PCC
 
     # Run inference
     logger.info("Running model generation...")
@@ -91,12 +91,6 @@ def test_qwen_vl_end_to_end(
     logger.info(f"Generated output: {output_text}")
     assert len(output_text) > 0, "No output generated from the model"
     logger.info(f"Expected output : {expected_output}")
-
-    # Token-level BLEU score (standard for text generation)
-    try:
-        nltk.data.find("tokenizers/punkt_tab")
-    except LookupError:
-        nltk.download("punkt_tab", quiet=True)
 
     reference = [word_tokenize(expected_output.lower())]
     candidate = word_tokenize(output_text.lower())
