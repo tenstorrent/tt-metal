@@ -41,6 +41,7 @@ class Allocator;
 class CommandQueue;
 class SubDevice;
 class SystemMemoryManager;
+class PinnedMemory;
 namespace program_cache {
 namespace detail {
 struct ProgramCache;
@@ -313,6 +314,32 @@ public:
     // Currently expose users to the dispatch thread pool through the MeshDevice
     void enqueue_to_thread_pool(std::function<void()>&& f);
     void wait_for_thread_pool();
+
+    /**
+     * @brief Create a PinnedMemory instance for a specific set of mesh coordinates
+     * @param coordinate_range_set Set of mesh coordinates to create pinned memory for
+     * @param buffer_size Size of buffer to allocate per device
+     * @param map_to_noc Whether to map the buffer to the NOC
+     * @return Unique pointer to the created PinnedMemory instance
+     */
+    std::unique_ptr<PinnedMemory> create_pinned_memory(
+        const MeshCoordinateRangeSet& coordinate_range_set,
+        size_t buffer_size,
+        bool map_to_noc = false);
+
+    /**
+     * @brief Create a PinnedMemory instance by mapping existing host memory for a specific set of mesh coordinates
+     * @param coordinate_range_set Set of mesh coordinates to create pinned memory for
+     * @param host_buffer Existing host memory to map (must be at least buffer_size * num_devices)
+     * @param buffer_size Size of buffer per device
+     * @param map_to_noc Whether to map the buffer to the NOC
+     * @return Unique pointer to the created PinnedMemory instance
+     */
+    std::unique_ptr<PinnedMemory> create_pinned_memory(
+        const MeshCoordinateRangeSet& coordinate_range_set,
+        void* host_buffer,
+        size_t buffer_size,
+        bool map_to_noc = false);
     static std::shared_ptr<MeshDevice> create(
         const MeshDeviceConfig& config,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
