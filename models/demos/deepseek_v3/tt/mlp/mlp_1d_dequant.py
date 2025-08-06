@@ -30,69 +30,39 @@ class MLP1DDequant(MLP1D):
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
         weight_block_height, weight_block_width = hf_config.quantization_config["weight_block_size"]
-
-        # Check if state_dict has "weight_scale_inv" key
-        # Allows the use of random weights, which do not have "weight_scale_inv" key
-        use_quant = any(any("weight_scale_inv" in key for key in sd.keys()) for sd in state_dict)
-
-        if use_quant:
-            return {
-                models_name: {
-                    "input_tensor_b": save_and_get_path(
-                        output_path / f"{models_name}.input_tensor_b",
-                        cls.convert_quantized_metaweight(
-                            get_state_dicts(
-                                state_dict,
-                                f"{hf_name}.weight",
-                                shape=(out_features, in_features),
-                                dtype=cls.WEIGHT_TORCH_DTYPE,
-                            ),
-                            get_state_dicts(
-                                state_dict,
-                                f"{hf_name}.weight_scale_inv",
-                                shape=(
-                                    ttnn.core.divup(out_features, weight_block_height),
-                                    ttnn.core.divup(in_features, weight_block_width),
-                                ),
-                                dtype=cls.WEIGHT_SCALE_INV_TORCH_DTYPE,
-                            ),
-                            mesh_device,
-                            is_w2=is_w2,
-                            metaweight_block_size=(1, weight_block_height, weight_block_width),
+        return {
+            models_name: {
+                "input_tensor_b": save_and_get_path(
+                    output_path / f"{models_name}.input_tensor_b",
+                    cls.convert_quantized_metaweight(
+                        get_state_dicts(
+                            state_dict,
+                            f"{hf_name}.weight",
+                            shape=(out_features, in_features),
+                            dtype=cls.WEIGHT_TORCH_DTYPE,
                         ),
-                    )
-                }
-                for hf_name, models_name, is_w2 in [
-                    ("gate_proj", "w1", False),
-                    ("down_proj", "w2", True),
-                    ("up_proj", "w3", False),
-                ]
-                for in_features, out_features in [cls.get_weight_shape(hf_config, is_w2)]
-            }
-        else:
-            return {
-                models_name: {
-                    "input_tensor_b": save_and_get_path(
-                        output_path / f"{models_name}.input_tensor_b",
-                        cls.convert_metaweight(
-                            get_state_dicts(
-                                state_dict,
-                                f"{hf_name}.weight",
-                                shape=(out_features, in_features),
-                                dtype=torch.float32,
+                        get_state_dicts(
+                            state_dict,
+                            f"{hf_name}.weight_scale_inv",
+                            shape=(
+                                ttnn.core.divup(out_features, weight_block_height),
+                                ttnn.core.divup(in_features, weight_block_width),
                             ),
-                            mesh_device,
-                            is_w2=is_w2,
+                            dtype=cls.WEIGHT_SCALE_INV_TORCH_DTYPE,
                         ),
-                    )
-                }
-                for hf_name, models_name, is_w2 in [
-                    ("gate_proj", "w1", False),
-                    ("down_proj", "w2", True),
-                    ("up_proj", "w3", False),
-                ]
-                for in_features, out_features in [cls.get_weight_shape(hf_config, is_w2)]
+                        mesh_device,
+                        is_w2=is_w2,
+                        metaweight_block_size=(1, weight_block_height, weight_block_width),
+                    ),
+                )
             }
+            for hf_name, models_name, is_w2 in [
+                ("gate_proj", "w1", False),
+                ("down_proj", "w2", True),
+                ("up_proj", "w3", False),
+            ]
+            for in_features, out_features in [cls.get_weight_shape(hf_config, is_w2)]
+        }
 
     @final
     @classmethod

@@ -5,7 +5,7 @@
 import json
 import os
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 import safetensors.torch
 import torch
@@ -14,7 +14,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.scripts.generate_test_inputs_outputs import __file__ as REFERENCE_IO_SCRIPT_NAME
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
-from models.demos.deepseek_v3.utils.config_helpers import SEQ_LEN_CHUNK_SIZE
+from models.demos.deepseek_v3.utils.config_helpers import SEQ_LEN_CHUNK_SIZE, dequantize
 from models.utility_functions import comp_pcc
 
 
@@ -39,6 +39,60 @@ def load_state_dict(model_path: Path, module_path: str):
         for safetensor_state_dict in [safetensors.torch.load_file(model_path / safetensor_file_path)]
         for weight_name in weight_names
     }
+
+
+def add_inv_scale_to_state_dict(
+    state_dict: dict[str, torch.Tensor],
+    block_shape: Sequence[int],
+    weight_names: list[str] = [
+        "up_proj",
+        "down_proj",
+        "gate_proj",
+        "kv_a_proj_with_mqa",
+        "kv_b_proj",
+        "q_a_proj",
+        "q_b_proj",
+        "o_proj",
+    ],
+) -> dict[str, torch.Tensor]:
+    """Adds inverse scale weights to the state_dict for specified weight names.
+    If no weight names are specified, all tensors will have weight names added to them"""
+    output_state_dict: dict[str, torch.Tensor] = {}
+    for name, tensor in state_dict.items():
+        if weight_names and not any(name.endswith(weight_name + ".weight") for weight_name in weight_names):
+            output_state_dict[name] = tensor
+            continue
+        # If the name matches any of the specified weight names, generate the inverse scale weight
+        # and add it to the output state_dict.
+        tensor_quant, dequant_scale = generate_inv_scale_weight(tensor, block_shape)
+        output_state_dict[name] = tensor_quant
+        output_state_dict[name + "scale_inv"] = dequant_scale
+
+    r: dict[str, torch.Tensor] = {
+        key: val
+        for name, tensor in state_dict.items()
+        for key, val in (
+            [(name, tensor)]
+            if not weight_names or any(name.endswith(weight_name + ".weight") for weight_name in weight_names)
+            else [(name, tensor), (name + "scale_inv", tensor)]
+        )
+    }
+    return r
+
+
+def generate_inv_scale_weight(tensor: torch.Tensor, block_shape: Sequence[int]) -> tuple[torch.Tensor, torch.Tensor]:
+    """Generates the inverse scale weight for a given tensor."""
+    assert tensor.ndim >= len(block_shape), f"Tensor must have more dimensions than the block shape dimensions"
+    inv_scale_weight = torch.randn(
+        (
+            *tensor.shape[: -len(block_shape)],
+            *(
+                (tensor.shape[-len(block_shape) + idx] + block_dim - 1) // block_dim
+                for idx, block_dim in enumerate(block_shape)
+            ),
+        )
+    )
+    return dequantize(tensor, 1.0 / inv_scale_weight), inv_scale_weight
 
 
 def load_reference_io_tensors_for_module(
