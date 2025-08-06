@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import pytest
 import torch
 from loguru import logger
@@ -28,6 +30,18 @@ from models.tt_cnn.tt.pipeline import (
 from models.utility_functions import profiler, run_for_wormhole_b0
 
 NUM_VALIDATION_IMAGES_IMAGENET = 49920
+
+
+def load_imagenet_dataset(model_location_generator=None, model_version="ImageNet_data"):
+    if model_location_generator is not None and "TT_GH_CI_INFRA" in os.environ:
+        dataset_path = (
+            model_location_generator("vision-models/mobilenetv2/ImageNet_data", model_subdir="", download_if_ci_v2=True)
+            / "data"
+        )
+    else:
+        dataset_path = model_version
+    print("path is ", dataset_path)
+    return str(dataset_path)
 
 
 def run_mobilenetv2_imagenet_demo(
@@ -92,10 +106,15 @@ def run_mobilenetv2_imagenet_demo(
         profiler.start(f"compile")
         pipe.compile(host_input_tensor)
         profiler.end(f"compile")
-
-        input_loc = str(model_location_generator("ImageNet_data"))
+        model_version = "microsoft/resnet-50"
+        image_processor = AutoImageProcessor.from_pretrained(model_version)
+        logger.info("ImageNet-1k validation Dataset")
+        # input_loc = "/home/ubuntu/venkatesh_latest/tt-metal/models/demos/mobilenetv2/demo/images"
+        # input_loc = str(model_location_generator("ImageNet_data"))
+        input_loc = load_imagenet_dataset(model_location_generator)
+        print("location is ", input_loc)
+        # location is  /tmp/ttnn_model_cache/model_weights/vision-models/mobilenetv2/ImageNet_data/data
         data_loader = get_data_loader(input_loc, batch_size, iterations, entire_imagenet_dataset)
-
         input_tensors_all = []
         input_labels_all = []
         for iter in tqdm(range(iterations), desc="Preparing images"):
@@ -126,7 +145,9 @@ def run_mobilenetv2_imagenet_demo(
             predictions = []
             output = outputs[iter]
             labels = input_labels_all[iter]
-            output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
+            profiler.start(f"run")
+            output = mobilenetv2_trace_2cq.run(torch_input_tensor)
+            output = ttnn.to_torch(output, mesh_composer=mobilenetv2_trace_2cq.test_infra.output_mesh_composer)
             prediction = output.argmax(dim=-1)
 
             for i in range(batch_size):

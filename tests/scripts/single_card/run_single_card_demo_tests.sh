@@ -298,17 +298,17 @@ run_yolov8s_perf() {
 }
 
 
-# run_mobilenetv2_perf(){
+run_mobilenetv2_perf(){
 
- # mobilenetv2 demo
- # comment until HF Imagenet-1k Dataset is accessible in CIv2 env
-#  pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo_dp --timeout 600
+#  mobilenetv2 demo
+#  comment until HF Imagenet-1k Dataset is accessible in CIv2 env
+ pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo_dp --timeout 600
 
- # mobilenetv2 eval
-  # comment until HF Imagenet-1k Dataset is accessible in CIv2 env
-  # pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp --timeout 600
+#  mobilenetv2 eval
+#   comment until HF Imagenet-1k Dataset is accessible in CIv2 env
+#   pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp --timeout 600
 
-# }
+}
 
 run_yolov8s_world_perf() {
 
