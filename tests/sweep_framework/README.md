@@ -189,8 +189,7 @@ def mesh_device_fixture():
 
     assert ttnn.get_num_devices() >= 8, "Not T3000!"
 
-    device_ids = ttnn.get_t3k_physical_device_ids_ring()
-    num_devices_requested = len(device_ids)
+    num_devices_requested = 8
 
     mesh_device = ttnn.open_mesh_device(
         ttnn.MeshShape(1, num_devices_requested),
