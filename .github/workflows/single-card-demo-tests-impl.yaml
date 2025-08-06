@@ -51,7 +51,7 @@ jobs:
                     { name: "sentence_bert", runner-label: "N150", performance: false, cmd: run_sentencebert_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
                     { name: "yolov11", runner-label: "N150", performance: false, cmd: run_yolov11_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
                     { name: "yolov9c", runner-label: "N150", performance: false, cmd: run_yolov9c_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
-                    { name: "mobilenetv2", runner-label: "N150", performance: false, cmd: run_mobilenetv2_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
+                    # { name: "mobilenetv2", runner-label: "N150", performance: false, cmd: run_mobilenetv2_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
                     { name: "yolov8s_world", runner-label: "N150", performance: false, cmd: run_yolov8s_world_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
                     { name: "ufld_v2", runner-label: "N150", performance: false, cmd: run_ufld_v2_func, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
                    { name: "vanilla_unet", runner-label: "N150", performance: false, cmd: run_vanilla_unet_demo, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (keerthana-r-mcw)
@@ -84,7 +84,7 @@ jobs:
                    { name: "yolov8x", runner-label: "N300", performance: false, cmd: run_yolov8x_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
                    { name: "yolov8s", runner-label: "N300", performance: false, cmd: run_yolov8s_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
                     { name: "yolov9c", runner-label: "N300", performance: false, cmd: run_yolov9c_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
-                    { name: "mobilenetv2", runner-label: "N300", performance: false, cmd: run_mobilenetv2_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
+                    # { name: "mobilenetv2", runner-label: "N300", performance: false, cmd: run_mobilenetv2_perf, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
                     { name: "ufld_v2", runner-label: "N300", performance: false, cmd: run_ufld_v2_func, owner_id: U056BK5U81E, civ2-compatible: true}, # Dalar Vartanians
                     { name: "mistral7b", runner-label: "N150", performance: false, cmd: run_mistral7b_perf, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati
                     { name: "mistral7b", runner-label: "N300", performance: true, cmd: run_mistral7b_perf, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati

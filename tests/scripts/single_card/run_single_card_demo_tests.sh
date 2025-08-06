@@ -66,7 +66,8 @@ run_segformer_func() {
   pytest --disable-warnings models/demos/segformer/demo/demo_for_semantic_segmentation.py::test_demo_semantic_segmentation --timeout 600; fail+=$?
 
   #Segformer Classification Demo
-  pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py::test_segformer_classification_demo --timeout 600; fail+=$?
+  # comment until HF Imagenet-1k Dataset is accessible in CIv2 env
+  # pytest --disable-warnings models/demos/segformer/demo/demo_for_image_classification.py::test_segformer_classification_demo --timeout 600; fail+=$?
 
   #Segformer Segmentation Eval
   pytest --disable-warnings models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer --timeout 600; fail+=$?
@@ -86,7 +87,7 @@ run_yolov11_func() {
  pytest --disable-warnings models/demos/yolov11/demo/demo.py --timeout 600; fail+=$?
 
  #Yolov11 Eval
- WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/experimental/yolo_eval/evaluate.py::test_yolov11n --timeout 600; fail+=$?
+ pytest --disable-warnings models/experimental/yolo_eval/evaluate.py::test_yolov11n --timeout 600; fail+=$?
 
 }
 
@@ -297,15 +298,17 @@ run_yolov8s_perf() {
 }
 
 
-run_mobilenetv2_perf(){
+# run_mobilenetv2_perf(){
 
  # mobilenetv2 demo
- pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo_dp --timeout 600
+ # comment until HF Imagenet-1k Dataset is accessible in CIv2 env
+#  pytest models/demos/mobilenetv2/demo/demo.py::test_mobilenetv2_imagenet_demo_dp --timeout 600
 
  # mobilenetv2 eval
-  pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp --timeout 600
+  # comment until HF Imagenet-1k Dataset is accessible in CIv2 env
+  # pytest models/experimental/classification_eval/classification_eval.py::test_mobilenetv2_image_classification_eval_dp --timeout 600
 
-}
+# }
 
 run_yolov8s_world_perf() {
 

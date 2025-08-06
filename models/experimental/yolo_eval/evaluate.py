@@ -296,7 +296,7 @@ def evaluation(
             elif model_name in ["YOLOv10"]:
                 preds = model.run(ttnn_im.permute(0, 3, 1, 2))
                 preds = ttnn.to_torch(preds, dtype=torch.float32)
-            elif model_name == "YOLOv9c":
+            elif model_name in ["YOLOv9c", "YOLOv8s"]:
                 preds_temp = model.run(ttnn_im)
                 preds = ttnn.clone(preds_temp[0])
                 preds = ttnn.to_torch(preds, dtype=torch.float32)
