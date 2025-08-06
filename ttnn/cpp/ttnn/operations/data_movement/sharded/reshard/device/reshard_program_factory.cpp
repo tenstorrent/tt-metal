@@ -707,8 +707,10 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(
         uint32_t estimated_args = header_size + (estimated_ranges * values_per_range);
         uint32_t MAX_RT_ARGS_WIDTH = ((estimated_args + 31) / 32) * 32;
 
-        auto runtime_args_tensor_0 = construct_per_core_host_tensor(rt_config_map_0, MAX_RT_ARGS_WIDTH);
-        auto runtime_args_tensor_1 = construct_per_core_host_tensor(rt_config_map_1, MAX_RT_ARGS_WIDTH);
+        auto runtime_args_tensor_0 =
+            ttnn::operations::data_movement::construct_per_core_host_tensor(rt_config_map_0, MAX_RT_ARGS_WIDTH);
+        auto runtime_args_tensor_1 =
+            ttnn::operations::data_movement::construct_per_core_host_tensor(rt_config_map_1, MAX_RT_ARGS_WIDTH);
 
         tt::tt_metal::memcpy(rt_args_config_0, runtime_args_tensor_0);
         tt::tt_metal::memcpy(rt_args_config_1, runtime_args_tensor_1);
