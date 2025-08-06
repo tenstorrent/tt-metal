@@ -129,16 +129,18 @@ def test_forward_pass(
     state_dicts = [state_dict] * num_rows
     weight_config = DecoderBlockClass.convert_weights(hf_config, state_dicts, tmp_path, mesh_device)
 
+    is_padding_layer = [False] * num_rows
     if mode == "prefill":
-        model_config = DecoderBlockClass.prefill_model_config(hf_config, mesh_device)
+        model_config = DecoderBlockClass.prefill_model_config(hf_config, mesh_device, is_padding_layer)
     else:
-        model_config = DecoderBlockClass.decode_model_config(hf_config, mesh_device)
+        model_config = DecoderBlockClass.decode_model_config(hf_config, mesh_device, is_padding_layer)
 
     # Create a new model state
     model_state = DecoderBlockClass.create_state(
         hf_config,
         mesh_device,
         paged_config=paged_config,
+        is_padding_layer=is_padding_layer,
         ccl=ccl,
     )
 

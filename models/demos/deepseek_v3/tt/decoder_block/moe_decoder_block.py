@@ -55,8 +55,14 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        is_padding_layer: tuple[bool, ...],
     ) -> ModelPrefillConfig:
-        return MoE.prefill_model_config(hf_config, mesh_device)
+        assert mesh_device.shape[0] == len(
+            is_padding_layer
+        ), "Number of mesh device rows must match the number of padding or non-padding layers"
+        return [
+            None if is_padding else MoE.prefill_model_config(hf_config, mesh_device) for is_padding in is_padding_layer
+        ]
 
     @classmethod
     @abstractmethod
@@ -64,8 +70,14 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        is_padding_layer: tuple[bool, ...],
     ) -> ModelDecodeConfig:
-        return MoE.decode_model_config(hf_config, mesh_device)
+        assert mesh_device.shape[0] == len(
+            is_padding_layer
+        ), "Number of mesh device rows must match the number of padding or non-padding layers"
+        return [
+            None if is_padding else MoE.decode_model_config(hf_config, mesh_device) for is_padding in is_padding_layer
+        ]
 
     @classmethod
     @abstractmethod
@@ -73,9 +85,12 @@ class MoEDecoderBlock(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        is_padding_layer: tuple[bool, ...],
         ccl: CCL1D,
     ) -> ModelState:
-        return MoE.create_state(hf_config, mesh_device, ccl)
+        return [
+            None if is_padding else MoE.create_state(hf_config, mesh_device, ccl) for is_padding in is_padding_layer
+        ]
 
     @classmethod
     @abstractmethod
