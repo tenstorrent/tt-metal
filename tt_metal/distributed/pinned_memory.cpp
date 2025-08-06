@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/pinned_memory.hpp>
+#include "pinned_memory_impl.hpp"
 
 #include <stdexcept>
 #include <algorithm>
@@ -17,7 +18,8 @@
 
 namespace tt::tt_metal {
 
-PinnedMemory::PinnedMemory(
+// PinnedMemoryImpl implementation
+PinnedMemoryImpl::PinnedMemoryImpl(
     const std::vector<IDevice*>& devices,
     void* host_buffer,
     size_t buffer_size,
@@ -27,12 +29,12 @@ PinnedMemory::PinnedMemory(
     initialize_from_devices(devices, host_buffer, buffer_size, map_to_noc);
 }
 
-PinnedMemory::~PinnedMemory() {
+PinnedMemoryImpl::~PinnedMemoryImpl() {
     // SysmemBuffers will be automatically cleaned up by their destructors
     device_buffers_.clear();
 }
 
-PinnedMemory::PinnedMemory(PinnedMemory&& other) noexcept
+PinnedMemoryImpl::PinnedMemoryImpl(PinnedMemoryImpl&& other) noexcept
     : buffer_size_(other.buffer_size_)
     , map_to_noc_(other.map_to_noc_)
     , owns_host_memory_(other.owns_host_memory_)
@@ -47,7 +49,7 @@ PinnedMemory::PinnedMemory(PinnedMemory&& other) noexcept
     other.host_memory_base_ = nullptr;
 }
 
-PinnedMemory& PinnedMemory::operator=(PinnedMemory&& other) noexcept {
+PinnedMemoryImpl& PinnedMemoryImpl::operator=(PinnedMemoryImpl&& other) noexcept {
     if (this != &other) {
         // Clean up current resources
         device_buffers_.clear();
@@ -69,7 +71,7 @@ PinnedMemory& PinnedMemory::operator=(PinnedMemory&& other) noexcept {
     return *this;
 }
 
-void PinnedMemory::initialize_from_devices(
+void PinnedMemoryImpl::initialize_from_devices(
     const std::vector<IDevice*>& devices,
     void* host_buffer,
     size_t buffer_size,
@@ -81,6 +83,10 @@ void PinnedMemory::initialize_from_devices(
     
     if (buffer_size == 0) {
         throw std::invalid_argument("Buffer size must be greater than 0");
+    }
+    
+    if (!host_buffer) {
+        throw std::invalid_argument("PinnedMemory only supports mapping existing host memory. Use constructor with host_buffer parameter.");
     }
     
     // Get the cluster to access SysmemManagers
@@ -95,10 +101,6 @@ void PinnedMemory::initialize_from_devices(
         chip_id_t mmio_device_id = cluster.get_associated_mmio_device(device_id);
         device_to_mmio_map[device_id] = mmio_device_id;
         unique_mmio_devices.insert(mmio_device_id);
-    }
-    
-    if (!host_buffer) {
-        throw std::invalid_argument("PinnedMemory only supports mapping existing host memory. Use constructor with host_buffer parameter.");
     }
     
     // Create one buffer per unique MMIO device, all mapping the same host memory
@@ -125,7 +127,7 @@ void PinnedMemory::initialize_from_devices(
     }
 }
 
-tt::umd::SysmemBuffer& PinnedMemory::get_buffer(chip_id_t device_id) {
+tt::umd::SysmemBuffer& PinnedMemoryImpl::get_buffer(chip_id_t device_id) {
     // Find the MMIO device for this logical device
     auto mmio_it = device_to_mmio_map_.find(device_id);
     if (mmio_it == device_to_mmio_map_.end()) {
@@ -140,7 +142,7 @@ tt::umd::SysmemBuffer& PinnedMemory::get_buffer(chip_id_t device_id) {
     return *buffer_it->second;
 }
 
-const tt::umd::SysmemBuffer& PinnedMemory::get_buffer(chip_id_t device_id) const {
+const tt::umd::SysmemBuffer& PinnedMemoryImpl::get_buffer(chip_id_t device_id) const {
     // Find the MMIO device for this logical device
     auto mmio_it = device_to_mmio_map_.find(device_id);
     if (mmio_it == device_to_mmio_map_.end()) {
@@ -155,19 +157,19 @@ const tt::umd::SysmemBuffer& PinnedMemory::get_buffer(chip_id_t device_id) const
     return *buffer_it->second;
 }
 
-void* PinnedMemory::get_host_ptr(chip_id_t device_id) {
+void* PinnedMemoryImpl::get_host_ptr(chip_id_t device_id) {
     return get_buffer(device_id).get_buffer_va();
 }
 
-const void* PinnedMemory::get_host_ptr(chip_id_t device_id) const {
+const void* PinnedMemoryImpl::get_host_ptr(chip_id_t device_id) const {
     return get_buffer(device_id).get_buffer_va();
 }
 
-uint64_t PinnedMemory::get_device_addr(chip_id_t device_id) const {
+uint64_t PinnedMemoryImpl::get_device_addr(chip_id_t device_id) const {
     return get_buffer(device_id).get_device_io_addr();
 }
 
-std::vector<chip_id_t> PinnedMemory::get_device_ids() const {
+std::vector<chip_id_t> PinnedMemoryImpl::get_device_ids() const {
     std::vector<chip_id_t> device_ids;
     device_ids.reserve(device_to_mmio_map_.size());
     
@@ -179,11 +181,11 @@ std::vector<chip_id_t> PinnedMemory::get_device_ids() const {
     return device_ids;
 }
 
-bool PinnedMemory::has_device(chip_id_t device_id) const {
+bool PinnedMemoryImpl::has_device(chip_id_t device_id) const {
     return device_to_mmio_map_.find(device_id) != device_to_mmio_map_.end();
 }
 
-void PinnedMemory::write_to_device(chip_id_t device_id, const void* src, size_t size, size_t offset) {
+void PinnedMemoryImpl::write_to_device(chip_id_t device_id, const void* src, size_t size, size_t offset) {
     if (offset + size > buffer_size_) {
         throw std::invalid_argument("Write operation exceeds buffer size");
     }
@@ -192,13 +194,71 @@ void PinnedMemory::write_to_device(chip_id_t device_id, const void* src, size_t 
     std::memcpy(dest_ptr, src, size);
 }
 
-void PinnedMemory::read_from_device(chip_id_t device_id, void* dest, size_t size, size_t offset) {
+void PinnedMemoryImpl::read_from_device(chip_id_t device_id, void* dest, size_t size, size_t offset) {
     if (offset + size > buffer_size_) {
         throw std::invalid_argument("Read operation exceeds buffer size");
     }
     
     const void* src_ptr = static_cast<const char*>(get_host_ptr(device_id)) + offset;
     std::memcpy(dest, src_ptr, size);
+}
+
+// PinnedMemory pimpl wrapper implementation
+PinnedMemory::PinnedMemory(
+    const std::vector<IDevice*>& devices,
+    void* host_buffer,
+    size_t buffer_size,
+    bool map_to_noc)
+    : pImpl(std::make_unique<PinnedMemoryImpl>(devices, host_buffer, buffer_size, map_to_noc)) {
+}
+
+PinnedMemory::~PinnedMemory() = default;
+
+PinnedMemory::PinnedMemory(PinnedMemory&& other) noexcept = default;
+PinnedMemory& PinnedMemory::operator=(PinnedMemory&& other) noexcept = default;
+
+tt::umd::SysmemBuffer& PinnedMemory::get_buffer(chip_id_t device_id) {
+    return pImpl->get_buffer(device_id);
+}
+
+const tt::umd::SysmemBuffer& PinnedMemory::get_buffer(chip_id_t device_id) const {
+    return pImpl->get_buffer(device_id);
+}
+
+void* PinnedMemory::get_host_ptr(chip_id_t device_id) {
+    return pImpl->get_host_ptr(device_id);
+}
+
+const void* PinnedMemory::get_host_ptr(chip_id_t device_id) const {
+    return pImpl->get_host_ptr(device_id);
+}
+
+uint64_t PinnedMemory::get_device_addr(chip_id_t device_id) const {
+    return pImpl->get_device_addr(device_id);
+}
+
+size_t PinnedMemory::get_buffer_size() const {
+    return pImpl->get_buffer_size();
+}
+
+size_t PinnedMemory::get_num_devices() const {
+    return pImpl->get_num_devices();
+}
+
+std::vector<chip_id_t> PinnedMemory::get_device_ids() const {
+    return pImpl->get_device_ids();
+}
+
+bool PinnedMemory::has_device(chip_id_t device_id) const {
+    return pImpl->has_device(device_id);
+}
+
+void PinnedMemory::write_to_device(chip_id_t device_id, const void* src, size_t size, size_t offset) {
+    pImpl->write_to_device(device_id, src, size, offset);
+}
+
+void PinnedMemory::read_from_device(chip_id_t device_id, void* dest, size_t size, size_t offset) {
+    pImpl->read_from_device(device_id, dest, size, offset);
 }
 
 }  // namespace tt::tt_metal 
