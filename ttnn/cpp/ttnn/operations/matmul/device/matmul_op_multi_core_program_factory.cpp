@@ -187,7 +187,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core(
 
             auto dst_dram_buffer = output_tensors.at(0).buffer();
 
-            for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
+            for (uint32_t i = 0; i < num_cores; i++) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
                 {

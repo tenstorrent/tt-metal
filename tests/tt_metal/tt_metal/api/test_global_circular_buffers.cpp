@@ -109,8 +109,7 @@ TEST_F(DispatchFixture, TensixProgramGlobalCircularBuffersAPI) {
         tt::tt_metal::CircularBufferConfig global_cb_config = tt::tt_metal::CircularBufferConfig(cb_page_size);
         global_cb_config.remote_index(remote_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
         global_cb_config.index(local_cb_index).set_page_size(cb_page_size).set_data_format(tile_format);
-        auto remote_cb =
-            tt::tt_metal::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, global_cb);
+        tt::tt_metal::experimental::CreateCircularBuffer(program, receiver_cores, global_cb_config, global_cb);
         tt::tt_metal::detail::CompileProgram(device, program);
         EXPECT_THROW(program.finalize_offsets(device), std::exception);
     }

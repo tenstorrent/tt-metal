@@ -1441,7 +1441,6 @@ int main(int argc, char **argv) {
     uint32_t rx_disable_data_check = test_args::get_command_option_uint32(input_args, "--rx_disable_data_check", default_rx_disable_data_check);
     uint32_t rx_disable_header_check = test_args::get_command_option_uint32(input_args, "--rx_disable_header_check", default_rx_disable_header_check);
     bool tx_skip_pkt_content_gen = test_args::has_command_option(input_args, "--tx_skip_pkt_content_gen");
-    uint32_t dump_stat_json = test_args::get_command_option_uint32(input_args, "--dump_stat_json", default_dump_stat_json);
     std::string output_dir = test_args::get_command_option(input_args, "--output_dir", std::string(default_output_dir));
     bool disable_txrx_timeout = test_args::has_command_option(input_args, "--disable_txrx_timeout");
     uint32_t tx_pkt_dest_size_choice = (uint8_t)test_args::get_command_option_uint32(
@@ -1615,7 +1614,6 @@ int main(int argc, char **argv) {
         }
 
         // init traffic
-        chip_id_t tx_chip_id, rx_chip_id;
         for (auto& [tx_chip_id, rx_chip_ids] : test_board.tx_rx_map) {
             if (num_allocated_devices >= num_traffic_devices) {
                 break;

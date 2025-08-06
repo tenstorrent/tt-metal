@@ -172,8 +172,7 @@ create_programs(
         device, sender_receiver_core_mapping, padded_global_cb_size, tt_metal::BufferType::L1);
     tt_metal::CircularBufferConfig writer_cb_config = tt_metal::CircularBufferConfig(receiver_cb_size);
     writer_cb_config.remote_index(writer_cb_index).set_page_size(single_tile_size).set_data_format(tile_format);
-    auto writer_cb =
-        tt_metal::experimental::CreateCircularBuffer(sender_program, dram_reader_core, writer_cb_config, global_cb);
+    tt_metal::experimental::CreateCircularBuffer(sender_program, dram_reader_core, writer_cb_config, global_cb);
 
     // mixed cb dataformat
     uint32_t next_layer_num_blocks = num_blocks * 2;
