@@ -62,15 +62,9 @@ constexpr uint32_t e_depth = get_compile_time_arg_val(24);
 constexpr uint32_t w_depth = get_compile_time_arg_val(25);
 constexpr uint32_t n_depth = get_compile_time_arg_val(26);
 constexpr uint32_t s_depth = get_compile_time_arg_val(27);
-constexpr uint32_t router_mode = get_compile_time_arg_val(28);
 
-#ifdef FVC_MODE_PULL
-volatile fabric_pull_client_interface_t* client_interface =
-    (volatile fabric_pull_client_interface_t*)client_interface_addr;
-#else
 volatile fabric_push_client_interface_t* client_interface =
     (volatile fabric_push_client_interface_t*)client_interface_addr;
-#endif
 
 uint32_t target_address;
 uint32_t noc_offset;
@@ -144,7 +138,6 @@ void kernel_main() {
             dst_addr,                   // destination write address
             max_packet_size_words * 16  // number of bytes to write to remote destination
         );
-#ifndef FVC_MODE_PULL
 #ifdef LOW_LATENCY_ROUTING
         uint32_t outgoing_direction = get_next_hop_router_direction(dest_device >> 16, dest_device & 0xFFFF);
         if constexpr (data_mode == ClientDataMode::PACKETIZED_DATA) {
@@ -161,7 +154,6 @@ void kernel_main() {
                 dest_device & 0xFFFF);
         }
 #endif
-#endif
     }
 
     // notify the controller kernel that this worker is ready to proceed
@@ -172,66 +164,6 @@ void kernel_main() {
     // all tx workers are ready to send data
     while (*(volatile tt_l1_ptr uint32_t*)signal_address == 0);
 
-#ifdef FVC_MODE_PULL
-    uint32_t pull_size_bytes = max_packet_size_words * 16;
-    if constexpr (data_mode == ClientDataMode::RAW_DATA) {
-        // In raw data mode, client data buffer dones not contain packet header.
-        // Packet header is referenced from client interface header buffer.
-        // The Data to pull in this case is packet size - packet header.
-        pull_size_bytes -= PACKET_HEADER_SIZE_BYTES;
-    }
-    fabric_setup_pull_request<(ClientDataMode)data_mode>(
-        client_interface,        // fabric client interface
-        data_buffer_start_addr,  // source address in sender’s memory
-        pull_size_bytes          // number of bytes to write to remote destination
-    );
-
-    uint64_t start_timestamp = get_timestamp();
-
-    while (true) {
-        client_interface->local_pull_request.pull_request.words_read = 0;
-        if constexpr (mcast_data) {
-            fabric_async_write_multicast<
-                (ClientDataMode)data_mode,
-                AsyncWriteMode::SEND_PR,
-                RoutingType::ROUTING_TABLE>(
-                client_interface,
-                0,                       // the network plane to use for this transaction
-                data_buffer_start_addr,  // source address in sender’s memory
-                dest_device >> 16,
-                dest_device & 0xFFFF,
-                dst_addr,                    // destination write address
-                max_packet_size_words * 16,  // number of bytes to write to remote destination
-                e_depth,
-                w_depth,
-                n_depth,
-                s_depth);
-        } else {
-            fabric_async_write<(ClientDataMode)data_mode, AsyncWriteMode::SEND_PR, RoutingType::ROUTING_TABLE>(
-                client_interface,
-                0,                       // the network plane to use for this transaction
-                data_buffer_start_addr,  // source address in sender’s memory
-                dest_device >> 16,
-                dest_device & 0xFFFF,
-                dst_addr,                   // destination write address
-                max_packet_size_words * 16  // number of bytes to write to remote destination
-            );
-        }
-
-        data_words_sent += max_packet_size_words;
-        packet_count++;
-        uint32_t words_written = client_interface->local_pull_request.pull_request.words_written;
-        while (client_interface->local_pull_request.pull_request.words_read != words_written) {
-#pragma GCC unroll 4
-            for (int i = 0; i < 4; i++) {
-                asm("nop");
-            }
-        }
-        if (data_words_sent >= total_data_words) {
-            break;
-        }
-    }
-#else
     fabric_client_connect(client_interface, 0, dest_device >> 16, dest_device & 0xFFFF);
     uint64_t start_timestamp = get_timestamp();
     uint32_t* payload = (uint32_t*)data_buffer_start_addr;
@@ -256,13 +188,9 @@ void kernel_main() {
     }
     noc_async_writes_flushed();
 
-#endif
-
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 
-#ifndef FVC_MODE_PULL
     fabric_client_disconnect(client_interface);
-#endif
 
     uint64_t num_packets = packet_count;
     set_64b_result(test_results, data_words_sent, TT_FABRIC_WORD_CNT_INDEX);

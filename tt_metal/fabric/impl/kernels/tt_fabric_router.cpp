@@ -12,16 +12,6 @@
 using namespace tt::tt_fabric;
 
 router_state_t router_state __attribute__((aligned(16)));
-#ifdef FVC_MODE_PULL
-fvc_outbound_pull_state_t fvc_outbound_state __attribute__((aligned(16)));  // replicate for each fvc
-#endif
-#ifdef FVCC_SUPPORT
-fvcc_inbound_state_t fvcc_inbound_state __attribute__((aligned(16)));    // inbound fabric virtual control channel
-fvcc_outbound_state_t fvcc_outbound_state __attribute__((aligned(16)));  // outbound fabric virtual control channel
-#endif
-volatile local_pull_request_t local_pull_request_temp __attribute__((aligned(16)));  // replicate for each fvc
-volatile local_pull_request_t* local_pull_request = &local_pull_request_temp;        // replicate for each fvc
-
 constexpr uint32_t fvc_data_buf_size_words = get_compile_time_arg_val(0);
 constexpr uint32_t fvc_data_buf_size_bytes = fvc_data_buf_size_words * PACKET_WORD_SIZE_BYTES;
 constexpr uint32_t kernel_status_buf_addr_arg = get_compile_time_arg_val(1);
@@ -37,8 +27,6 @@ bool terminated_subordinate_routers = false;
 
 // careful, may be null
 tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(kernel_status_buf_addr_arg);
-volatile tt_l1_ptr chan_req_buf* fvc_outbound_req_buf =
-    reinterpret_cast<tt_l1_ptr chan_req_buf*>(FABRIC_ROUTER_REQ_QUEUE_START);
 volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
     reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
 
@@ -46,15 +34,11 @@ volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
 
 void kernel_main() {
     tt_fabric_init();
-#ifdef FVC_MODE_PULL
-    fvc_inbound_pull_state_t fvc_inbound_state;
-#else
     fvc_inbound_push_state_t fvc_inbound_state;
     fvc_outbound_push_state_t fvc_outbound_state[4];
     volatile tt_l1_ptr fabric_push_client_queue_t* client_queue =
         reinterpret_cast<tt_l1_ptr fabric_push_client_queue_t*>(FABRIC_ROUTER_CLIENT_QUEUE_START);
     zero_l1_buf((tt_l1_ptr uint32_t*)client_queue, sizeof(fabric_push_client_queue_t));
-#endif
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
     uint32_t rt_args_idx = 0;
@@ -67,19 +51,10 @@ void kernel_main() {
     router_state.sync_in = 0;
     router_state.sync_out = 0;
 
-    zero_l1_buf((tt_l1_ptr uint32_t*)fvc_outbound_req_buf, sizeof(chan_req_buf));
-    zero_l1_buf((tt_l1_ptr uint32_t*)FVCC_IN_BUF_START, FVCC_IN_BUF_SIZE);
-    zero_l1_buf((tt_l1_ptr uint32_t*)FVCC_OUT_BUF_START, FVCC_OUT_BUF_SIZE);
     write_kernel_status(kernel_status, TT_FABRIC_WORD_CNT_INDEX, (uint32_t)&router_state);
     write_kernel_status(kernel_status, TT_FABRIC_WORD_CNT_INDEX + 1, (uint32_t)&fvc_outbound_state);
     write_kernel_status(kernel_status, TT_FABRIC_STATUS_INDEX + 1, (uint32_t)&fvc_inbound_state);
 
-#ifdef FVC_MODE_PULL
-    fvc_outbound_state.init(FABRIC_ROUTER_DATA_BUF_START, fvc_data_buf_size_words / 2);
-    fvc_inbound_state.init(
-        FABRIC_ROUTER_DATA_BUF_START + (fvc_data_buf_size_words * PACKET_WORD_SIZE_BYTES / 2),
-        fvc_data_buf_size_words / 2);
-#else
     fvc_outbound_state[0].init(
         0, FABRIC_ROUTER_DATA_BUF_START, FABRIC_ROUTER_OUTBOUND_BUF_SIZE / PACKET_WORD_SIZE_BYTES);
     fvc_outbound_state[1].init(
@@ -98,16 +73,6 @@ void kernel_main() {
     fvc_inbound_state.init(
         FABRIC_ROUTER_DATA_BUF_START + 4 * FABRIC_ROUTER_OUTBOUND_BUF_SIZE,
         FABRIC_ROUTER_INBOUND_BUF_SIZE / PACKET_WORD_SIZE_BYTES);
-#endif
-
-#ifdef FVCC_SUPPORT
-    fvcc_outbound_state.init(
-        FVCC_OUT_BUF_START, FVCC_SYNC_BUF_START, FVCC_IN_BUF_START, (uint32_t)&fvcc_inbound_state.inbound_wrptr);
-    fvcc_inbound_state.init(
-        FVCC_IN_BUF_START,
-        (uint32_t)&fvcc_outbound_state.remote_rdptr,
-        get_noc_addr_helper(gk_message_addr_h, gk_message_addr_l) + offsetof(gatekeeper_info_t, gk_msg_buf));
-#endif
 
     if (!wait_all_src_dest_ready(&router_state, timeout_cycles)) {
         write_kernel_status(kernel_status, TT_FABRIC_STATUS_INDEX, TT_FABRIC_STATUS_TIMEOUT);
@@ -127,12 +92,10 @@ void kernel_main() {
         wait_for_notification(FABRIC_ROUTER_SYNC_SEM, sync_val);
     }
 
-#ifndef FVC_MODE_PULL
     fvc_inbound_state.register_with_routers<FVC_MODE_ROUTER>(routing_table->my_device_id);
     uint32_t curr_outbound_buffer = 0;
     uint32_t next_outbound_buffer = 1;
     uint32_t eth_outbound_wrptr = 0;
-#endif
     uint64_t start_timestamp = get_timestamp();
 
     write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX, 0xff000001);
@@ -142,49 +105,6 @@ void kernel_main() {
     tt_l1_ptr launch_msg_t* const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_msg_rd_ptr]);
     while (1) {
         // Handle Ethernet Outbound Data
-#ifdef FVC_MODE_PULL
-        if (!fvc_req_buf_is_empty(fvc_outbound_req_buf) && fvc_req_valid(fvc_outbound_req_buf)) {
-            uint32_t req_index = fvc_outbound_req_buf->rdptr.ptr & CHAN_REQ_BUF_SIZE_MASK;
-            chan_request_entry_t* req = (chan_request_entry_t*)fvc_outbound_req_buf->chan_req + req_index;
-            pull_request_t* pull_req = &req->pull_request;
-            uint32_t flags = pull_req->flags;
-            if (flags & (FORWARD | PACK_N_FORWARD)) {
-                if (flags == FORWARD) {
-                    // Data is packetized.
-                    fvc_outbound_state.pull_data_to_fvc_buffer<true>(pull_req, NULL);
-                } else {
-                    // Data is not packetized.
-                    // Packet header is in req_index + 1 entry of outbound request buffer.
-                    uint32_t header_index = (req_index + 1) & CHAN_REQ_BUF_SIZE_MASK;
-                    chan_request_entry_t* header_ptr =
-                        (chan_request_entry_t*)fvc_outbound_req_buf->chan_req + header_index;
-                    fvc_outbound_state.pull_data_to_fvc_buffer<false>(pull_req, &header_ptr->pull_request);
-                }
-                if (fvc_outbound_state.packet_words_remaining == 0 ||
-                    fvc_outbound_state.pull_words_in_flight >= FVC_SYNC_THRESHOLD) {
-                    fvc_outbound_state.total_words_to_forward += fvc_outbound_state.pull_words_in_flight;
-                    fvc_outbound_state.pull_words_in_flight = 0;
-                    fvc_outbound_state.forward_data_from_fvc_buffer<true>();
-                    // noc_async_read_barrier();
-                    update_pull_request_words_cleared(pull_req);
-                }
-            } else if (req->bytes[47] == INLINE_FORWARD) {
-                fvc_outbound_state.move_data_to_fvc_buffer(pull_req);
-            }
-
-            if (fvc_outbound_state.packet_in_progress == 1 and fvc_outbound_state.packet_words_remaining == 0) {
-                // clear the flags field to invalidate pull request slot.
-                // flags will be set to non-zero by next requestor.
-                req_buf_advance_rdptr((chan_req_buf*)fvc_outbound_req_buf);
-                fvc_outbound_state.packet_in_progress = 0;
-            }
-            loop_count = 0;
-        }
-
-        if (fvc_outbound_state.total_words_to_forward) {
-            fvc_outbound_state.forward_data_from_fvc_buffer<false>();
-        }
-#else
         if (fvc_outbound_state[curr_outbound_buffer].forward_data_from_fvc_buffer(eth_outbound_wrptr)) {
             loop_count = 0;
         } else {
@@ -194,7 +114,6 @@ void kernel_main() {
             }
             next_outbound_buffer = (next_outbound_buffer + 1) & 0x3;
         }
-#endif
 
         // Handle Ethernet Inbound Data
         if (fvc_inbound_state.get_curr_packet_valid<FVC_MODE_ROUTER>()) {
@@ -206,11 +125,6 @@ void kernel_main() {
             write_kernel_status(kernel_status, TT_FABRIC_STATUS_INDEX, TT_FABRIC_STATUS_BAD_HEADER);
             return;
         }
-#endif
-
-#ifdef FVCC_SUPPORT
-        fvcc_inbound_state.fvcc_handler();
-        fvcc_outbound_state.fvcc_handler();
 #endif
 
         loop_count++;

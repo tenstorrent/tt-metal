@@ -24,18 +24,9 @@ inline void send_packet(
     uint16_t dst_dev_id,
     uint64_t dst_addr,
     uint32_t size) {
-#ifdef FVC_MODE_PULL
-    fabric_async_write<ClientDataMode::PACKETIZED_DATA, AsyncWriteMode::ALL, RoutingType::ROUTING_TABLE>(
-#else
     fabric_async_write<ClientDataMode::PACKETIZED_DATA, AsyncWriteMode::ALL>(
-#endif
         client_interface, routing_plane, src_addr, dst_mesh_id, dst_dev_id, dst_addr, size);
-
-#ifdef FVC_MODE_PULL
-    fabric_wait_for_pull_request_flushed(client_interface);
-#else
     noc_async_writes_flushed();
-#endif
 }
 
 void kernel_main() {
@@ -76,19 +67,11 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* poll_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_notification_address);
 
-#ifdef FVC_MODE_PULL
-        volatile fabric_pull_client_interface_t* client_interface =
-            reinterpret_cast<volatile fabric_pull_client_interface_t*>(client_interface_addr);
-#else
         volatile fabric_push_client_interface_t* client_interface =
             reinterpret_cast<volatile fabric_push_client_interface_t*>(client_interface_addr);
-#endif
-
         fabric_endpoint_init<RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);
 
-#ifndef FVC_MODE_PULL
         fabric_client_connect(client_interface, routing_plane, dest_mesh_id, dest_dev_id);
-#endif
 
         uint64_t dst_noc_addr = get_noc_addr_helper(remote_controller_noc_encoding, remote_notification_address);
 
@@ -116,9 +99,7 @@ void kernel_main() {
 
         while (*poll_addr != CONTROLLER_HANDSHAKE_END);
 
-#ifndef FVC_MODE_PULL
         fabric_client_disconnect(client_interface);
-#endif
     }
 
     tt_l1_ptr uint32_t* mcast_sem = reinterpret_cast<tt_l1_ptr uint32_t*>(0x100000);
