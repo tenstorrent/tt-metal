@@ -248,7 +248,7 @@ models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/metalium-dev
 models/demos/ufld_v2 @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/demos/vgg_unet @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/experimental/openpdn_mnist @tenstorrent/cse-developer-ttnn
-models/experimental/vanilla_unet @dvartaniansTT @tenstorrent/cse-developer-ttnn
+models/demos/vanilla_unet @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/demos/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn
 models/experimental/grok @yieldthought @uaydonat
 models/demos/wormhole/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat

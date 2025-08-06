@@ -4,7 +4,7 @@
 
 
 import ttnn
-from models.experimental.vanilla_unet.runner.performant_runner_infra import VanillaUNetPerformanceRunnerInfra
+from models.demos.vanilla_unet.runner.performant_runner_infra import VanillaUNetPerformanceRunnerInfra
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
